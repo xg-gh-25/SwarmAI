@@ -1,0 +1,210 @@
+@import "tailwindcss";
+
+@theme {
+  --font-family-sans: 'Space Grotesk', system-ui, sans-serif;
+
+  /* Colors */
+  --color-primary: #2b6cee;
+  --color-primary-hover: #1d5cd6;
+  --color-primary-light: #3d7ef0;
+
+  --color-dark-bg: #101622;
+  --color-dark-card: #1a1f2e;
+  --color-dark-hover: #252b3d;
+  --color-dark-border: #2d3548;
+
+  --color-muted: #9da6b9;
+
+  --color-status-online: #22c55e;
+  --color-status-offline: #6b7280;
+  --color-status-error: #ef4444;
+  --color-status-warning: #f59e0b;
+  --color-status-success: #22c55e;
+}
+
+/* Base styles */
+html {
+  font-size: 14px; /* Desktop-optimized base size (default: 16px) */
+  font-family: var(--font-family-sans);
+}
+
+body {
+  background-color: var(--color-dark-bg);
+  color: white;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--color-dark-card);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-dark-border);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-muted);
+}
+
+/* Material Icons */
+.material-symbols-outlined {
+  font-variation-settings:
+    'FILL' 0,
+    'wght' 400,
+    'GRAD' 0,
+    'opsz' 24;
+}
+
+/* Custom utilities */
+.glass-effect {
+  background: rgba(26, 31, 46, 0.8);
+  backdrop-filter: blur(10px);
+}
+
+/* Highlight.js Dark Theme - Custom for our dark UI */
+.hljs {
+  background: transparent !important;
+  color: #e6edf3;
+}
+
+.hljs-comment,
+.hljs-quote {
+  color: #8b949e;
+  font-style: italic;
+}
+
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-addition {
+  color: #ff7b72;
+}
+
+.hljs-number,
+.hljs-string,
+.hljs-meta .hljs-meta-string,
+.hljs-literal,
+.hljs-doctag,
+.hljs-regexp {
+  color: #a5d6ff;
+}
+
+.hljs-title,
+.hljs-section,
+.hljs-name,
+.hljs-selector-id,
+.hljs-selector-class {
+  color: #d2a8ff;
+}
+
+.hljs-attribute,
+.hljs-attr,
+.hljs-variable,
+.hljs-template-variable,
+.hljs-class .hljs-title,
+.hljs-type {
+  color: #79c0ff;
+}
+
+.hljs-symbol,
+.hljs-bullet,
+.hljs-subst,
+.hljs-meta,
+.hljs-meta .hljs-keyword,
+.hljs-selector-attr,
+.hljs-selector-pseudo,
+.hljs-link {
+  color: #ffa657;
+}
+
+.hljs-built_in,
+.hljs-deletion {
+  color: #ffa198;
+}
+
+.hljs-formula {
+  background: #161b22;
+}
+
+.hljs-emphasis {
+  font-style: italic;
+}
+
+.hljs-strong {
+  font-weight: bold;
+}
+
+/* Function names */
+.hljs-title.function_,
+.hljs-title.class_ {
+  color: #d2a8ff;
+}
+
+/* Parameters */
+.hljs-params {
+  color: #e6edf3;
+}
+
+/* Operators */
+.hljs-operator {
+  color: #ff7b72;
+}
+
+/* Properties */
+.hljs-property {
+  color: #79c0ff;
+}
+
+/* Punctuation */
+.hljs-punctuation {
+  color: #e6edf3;
+}
+
+/* Slide-in animations for immersive chat UI */
+@keyframes slide-in-left {
+  from {
+    transform: translateX(-100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+@keyframes slide-in-top {
+  from {
+    transform: translateY(-100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.animate-slide-in-left {
+  animation: slide-in-left 0.2s ease-out forwards;
+}
+
+.animate-slide-in-top {
+  animation: slide-in-top 0.25s ease-out forwards;
+}
+
+.animate-fade-in {
+  animation: fade-in 0.15s ease-out forwards;
+}

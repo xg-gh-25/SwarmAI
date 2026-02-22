@@ -1,0 +1,58 @@
+import { useEffect } from 'react';
+import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { Layout } from './components/common';
+import ChatPage from './pages/ChatPage';
+import AgentsPage from './pages/AgentsPage';
+import SkillsPage from './pages/SkillsPage';
+import MCPPage from './pages/MCPPage';
+import PluginsPage from './pages/PluginsPage';
+import DashboardPage from './pages/DashboardPage';
+import SettingsPage from './pages/SettingsPage';
+import { initializeBackend } from './services/tauri';
+
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      staleTime: 1000 * 60 * 5, // 5 minutes
+      retry: 1,
+    },
+  },
+});
+
+// Check if running in development mode
+const isDev = import.meta.env.DEV;
+
+export default function App() {
+  // Auto-start backend sidecar in production mode
+  useEffect(() => {
+    if (!isDev) {
+      // In production, start the Tauri sidecar
+      initializeBackend().then((port) => {
+        console.log(`Backend sidecar started on port ${port}`);
+      }).catch((error) => {
+        console.error('Failed to start backend sidecar:', error);
+      });
+    } else {
+      console.log('Development mode: using manual backend on port 8000');
+    }
+  }, []);
+
+  return (
+    <QueryClientProvider client={queryClient}>
+      <BrowserRouter>
+        <Routes>
+          <Route path="/" element={<Layout />}>
+            <Route index element={<DashboardPage />} />
+            <Route path="chat" element={<ChatPage />} />
+            <Route path="agents" element={<AgentsPage />} />
+            <Route path="skills" element={<SkillsPage />} />
+            <Route path="mcp" element={<MCPPage />} />
+            <Route path="plugins" element={<PluginsPage />} />
+            <Route path="settings" element={<SettingsPage />} />
+          </Route>
+        </Routes>
+      </BrowserRouter>
+    </QueryClientProvider>
+  );
+}

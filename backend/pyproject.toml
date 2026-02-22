@@ -1,0 +1,62 @@
+[project]
+name = "agent-platform-backend"
+version = "4.0.0"
+description = "AI Agent Platform Backend with Claude Agent SDK"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    # FastAPI and server
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.34.0",
+    "python-multipart>=0.0.12",
+    # Data validation
+    "pydantic>=2.10.0",
+    "pydantic-settings>=2.6.0",
+    # Claude Agent SDK
+    "claude-agent-sdk==0.1.20",
+    # AWS SDK (for production DynamoDB)
+    "boto3>=1.35.0",
+    "aioboto3>=13.0.0",
+    # SQLite (for desktop app)
+    "aiosqlite>=0.20.0",
+    # Authentication
+    "python-jose[cryptography]>=3.3.0",
+    "passlib[bcrypt]>=1.7.4",
+    "bcrypt>=4.0.0",
+    # Rate limiting
+    "slowapi>=0.1.9",
+    # Utilities
+    "pyyaml>=6.0.0",
+    "anyio>=4.0.0",
+    "altgraph",
+    "macholib",
+    "pyinstaller>=6.18.0",
+    "pyinstaller-hooks-contrib==2025.11",
+    "setuptools>=80.9.0"
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.24.0",
+    "httpx>=0.27.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["."]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+python_files = ["test_*.py"]
+
+[tool.uv]
+dev-dependencies = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.24.0",
+    "httpx>=0.27.0",
+]

@@ -1,0 +1,25 @@
+[package]
+name = "claude-agent-platform"
+version = "0.0.1-beta"
+description = "Claude Agent Platform - AI Agent Desktop Application"
+authors = ["Claude Agent Platform Team"]
+edition = "2021"
+
+[lib]
+name = "claude_agent_platform_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+tauri-plugin-shell = "2"
+tauri-plugin-fs = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-notification = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["sync", "time"] }
+portpicker = "0.1"

@@ -1,0 +1,119 @@
+{
+  "version": "1.0.0",
+  "description": "Curated list of recommended skills for Claude Agent Platform",
+  "categories": [
+    {
+      "id": "productivity",
+      "name": "Productivity",
+      "description": "Skills to boost your productivity"
+    },
+    {
+      "id": "development",
+      "name": "Development",
+      "description": "Skills for software development"
+    },
+    {
+      "id": "data",
+      "name": "Data & Analytics",
+      "description": "Skills for data processing and analysis"
+    },
+    {
+      "id": "communication",
+      "name": "Communication",
+      "description": "Skills for content creation and communication"
+    }
+  ],
+  "skills": [
+    {
+      "id": "xlsx-skill",
+      "name": "Excel/Spreadsheet Skill",
+      "description": "Create, edit, and analyze Excel spreadsheets with formulas, formatting, and data visualization",
+      "category": "data",
+      "git_url": "https://github.com/anthropics/claude-code-xlsx-skill",
+      "author": "Anthropic",
+      "featured": true
+    },
+    {
+      "id": "docx-skill",
+      "name": "Word Document Skill",
+      "description": "Create and edit Word documents with formatting, tracked changes, and comments",
+      "category": "productivity",
+      "git_url": "https://github.com/anthropics/claude-code-docx-skill",
+      "author": "Anthropic",
+      "featured": true
+    },
+    {
+      "id": "pptx-skill",
+      "name": "PowerPoint Skill",
+      "description": "Create and edit PowerPoint presentations with layouts and speaker notes",
+      "category": "productivity",
+      "git_url": "https://github.com/anthropics/claude-code-pptx-skill",
+      "author": "Anthropic",
+      "featured": true
+    },
+    {
+      "id": "pdf-skill",
+      "name": "PDF Toolkit Skill",
+      "description": "Extract text, merge, split, and process PDF documents",
+      "category": "productivity",
+      "git_url": "https://github.com/anthropics/claude-code-pdf-skill",
+      "author": "Anthropic",
+      "featured": true
+    },
+    {
+      "id": "deep-research-skill",
+      "name": "Deep Research Skill",
+      "description": "Conduct comprehensive multi-source research with citations and analysis",
+      "category": "productivity",
+      "git_url": "https://github.com/anthropics/claude-code-deep-research-skill",
+      "author": "Anthropic",
+      "featured": true
+    },
+    {
+      "id": "commit-skill",
+      "name": "Git Commit Skill",
+      "description": "Create well-structured git commits with conventional commit messages",
+      "category": "development",
+      "git_url": "https://github.com/anthropics/claude-code-commit-skill",
+      "author": "Anthropic",
+      "featured": false
+    },
+    {
+      "id": "code-review-skill",
+      "name": "Code Review Skill",
+      "description": "Review pull requests with detailed feedback and suggestions",
+      "category": "development",
+      "git_url": "https://github.com/anthropics/claude-code-review-skill",
+      "author": "Anthropic",
+      "featured": false
+    },
+    {
+      "id": "frontend-design-skill",
+      "name": "Frontend Design Skill",
+      "description": "Create distinctive, production-grade frontend interfaces",
+      "category": "development",
+      "git_url": "https://github.com/anthropics/claude-code-frontend-skill",
+      "author": "Anthropic",
+      "featured": false
+    },
+    {
+      "id": "mcp-builder-skill",
+      "name": "MCP Server Builder Skill",
+      "description": "Guide for creating high-quality MCP servers for LLM integrations",
+      "category": "development",
+      "git_url": "https://github.com/anthropics/claude-code-mcp-builder-skill",
+      "author": "Anthropic",
+      "featured": false
+    },
+    {
+      "id": "ai-writer-skill",
+      "name": "AI Tech Writer Skill",
+      "description": "Create high-quality AI technology articles and technical content",
+      "category": "communication",
+      "git_url": "https://github.com/anthropics/claude-code-ai-writer-skill",
+      "author": "Anthropic",
+      "featured": false
+    }
+  ],
+  "lastUpdated": "2025-01-14T00:00:00Z"
+}

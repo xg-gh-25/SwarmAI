@@ -1,0 +1,346 @@
+import { useState, useEffect } from 'react';
+import { SearchBar, Button, Modal, SkeletonTable, ResizableTable, ResizableTableCell, ConfirmDialog } from '../components/common';
+import type { MCPServer, MCPServerCreateRequest } from '../types';
+import { mcpService } from '../services/mcp';
+
+// MCP table column configuration
+const MCP_COLUMNS = [
+  { key: 'name', header: 'Server Name', initialWidth: 180, minWidth: 120 },
+  { key: 'connectionType', header: 'Connection Type', initialWidth: 140, minWidth: 100 },
+  { key: 'endpoint', header: 'Endpoint', initialWidth: 300, minWidth: 150 },
+  { key: 'description', header: 'Description', initialWidth: 250, minWidth: 120 },
+  { key: 'actions', header: 'Actions', initialWidth: 100, minWidth: 80, align: 'right' as const },
+];
+
+export default function MCPPage() {
+  const [servers, setServers] = useState<MCPServer[]>([]);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const [selectedServer, setSelectedServer] = useState<MCPServer | null>(null);
+  const [isInitialLoading, setIsInitialLoading] = useState(true);
+
+  // Delete confirmation state
+  const [deleteTarget, setDeleteTarget] = useState<MCPServer | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  // Fetch MCP servers on mount
+  useEffect(() => {
+    const fetchServers = async () => {
+      try {
+        const data = await mcpService.list();
+        setServers(data);
+      } catch (error) {
+        console.error('Failed to fetch MCP servers:', error);
+      } finally {
+        setIsInitialLoading(false);
+      }
+    };
+    fetchServers();
+  }, []);
+
+  const filteredServers = servers.filter((server) =>
+    server.name.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
+  const handleDeleteClick = (server: MCPServer) => {
+    setDeleteTarget(server);
+  };
+
+  const handleDeleteConfirm = async () => {
+    if (!deleteTarget) return;
+    setIsDeleting(true);
+    try {
+      await mcpService.delete(deleteTarget.id);
+      setServers((prev) => prev.filter((server) => server.id !== deleteTarget.id));
+      setDeleteTarget(null);
+    } catch (error) {
+      console.error('Failed to delete MCP server:', error);
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  const handleSave = async (data: MCPServerCreateRequest, serverId?: string) => {
+    try {
+      if (serverId) {
+        const updated = await mcpService.update(serverId, data);
+        setServers((prev) =>
+          prev.map((s) => (s.id === updated.id ? updated : s))
+        );
+      } else {
+        const created = await mcpService.create(data);
+        setServers((prev) => [...prev, created]);
+      }
+      setIsAddModalOpen(false);
+      setSelectedServer(null);
+    } catch (error) {
+      console.error('Failed to save MCP server:', error);
+    }
+  };
+
+  return (
+    <div className="p-8">
+      {/* Header */}
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h1 className="text-2xl font-bold text-white">MCP Server Management</h1>
+          <p className="text-muted mt-1">Configure MCP servers for your agents.</p>
+        </div>
+        <Button icon="add" onClick={() => setIsAddModalOpen(true)}>
+          Add MCP Server
+        </Button>
+      </div>
+
+      {/* Search */}
+      <div className="mb-6">
+        <SearchBar
+          value={searchQuery}
+          onChange={setSearchQuery}
+          placeholder="Search servers..."
+          className="w-96"
+        />
+      </div>
+
+      {/* MCP Servers Table */}
+      <div className="bg-dark-card border border-dark-border rounded-xl overflow-hidden">
+        {isInitialLoading ? (
+          <SkeletonTable rows={5} columns={5} />
+        ) : (
+          <ResizableTable columns={MCP_COLUMNS}>
+            {filteredServers.map((server) => (
+              <tr
+                key={server.id}
+                className="border-b border-dark-border hover:bg-dark-hover transition-colors"
+              >
+                <ResizableTableCell>
+                  <span className="text-white font-medium">{server.name}</span>
+                </ResizableTableCell>
+                <ResizableTableCell>
+                  <span className="px-2 py-1 text-xs font-medium bg-primary/10 text-primary rounded uppercase">
+                    {server.connectionType}
+                  </span>
+                </ResizableTableCell>
+                <ResizableTableCell>
+                  <span className="text-muted" title={server.endpoint}>
+                    {server.endpoint || '-'}
+                  </span>
+                </ResizableTableCell>
+                <ResizableTableCell>
+                  <span className="text-muted" title={server.description || ''}>
+                    {server.description || '-'}
+                  </span>
+                </ResizableTableCell>
+                <ResizableTableCell align="right">
+                  <div className="flex items-center justify-end gap-2">
+                    <button
+                      onClick={() => setSelectedServer(server)}
+                      className="p-2 rounded-lg text-muted hover:text-white hover:bg-dark-hover transition-colors"
+                      title="Edit server"
+                    >
+                      <span className="material-symbols-outlined text-xl">edit</span>
+                    </button>
+                    <button
+                      onClick={() => handleDeleteClick(server)}
+                      className="p-2 rounded-lg text-muted hover:text-status-error hover:bg-status-error/10 transition-colors"
+                      title="Delete server"
+                    >
+                      <span className="material-symbols-outlined text-xl">delete</span>
+                    </button>
+                  </div>
+                </ResizableTableCell>
+              </tr>
+            ))}
+
+            {filteredServers.length === 0 && (
+              <tr>
+                <td colSpan={5} className="px-6 py-12 text-center">
+                  <span className="material-symbols-outlined text-4xl text-muted mb-2">dns</span>
+                  <p className="text-muted">No MCP servers found</p>
+                </td>
+              </tr>
+            )}
+          </ResizableTable>
+        )}
+      </div>
+
+      {/* Add/Edit Modal */}
+      <Modal
+        isOpen={isAddModalOpen || selectedServer !== null}
+        onClose={() => {
+          setIsAddModalOpen(false);
+          setSelectedServer(null);
+        }}
+        title={selectedServer ? 'Edit MCP Server' : 'Add MCP Server'}
+        size="lg"
+      >
+        <MCPServerForm
+          server={selectedServer}
+          onClose={() => {
+            setIsAddModalOpen(false);
+            setSelectedServer(null);
+          }}
+          onSave={handleSave}
+        />
+      </Modal>
+
+      {/* Delete Confirmation Dialog */}
+      <ConfirmDialog
+        isOpen={deleteTarget !== null}
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={handleDeleteConfirm}
+        title="Delete MCP Server"
+        message={
+          <>
+            Are you sure you want to delete <strong>{deleteTarget?.name}</strong>?
+            <br />
+            <span className="text-sm">This action cannot be undone.</span>
+          </>
+        }
+        confirmText="Delete"
+        cancelText="Cancel"
+        variant="danger"
+        isLoading={isDeleting}
+      />
+    </div>
+  );
+}
+
+// MCP Server Form Component
+function MCPServerForm({
+  server,
+  onClose,
+  onSave,
+}: {
+  server: MCPServer | null;
+  onClose: () => void;
+  onSave: (data: MCPServerCreateRequest, serverId?: string) => void;
+}) {
+  const [name, setName] = useState(server?.name || '');
+  const [description, setDescription] = useState(server?.description || '');
+  const [connectionType, setConnectionType] = useState<'stdio' | 'sse' | 'http'>(
+    server?.connectionType || 'stdio'
+  );
+  const [command, setCommand] = useState(
+    server?.connectionType === 'stdio' ? (server.config.command as string) : ''
+  );
+  const [args, setArgs] = useState(
+    server?.connectionType === 'stdio' ? (server.config.args as string[]).join(' ') : ''
+  );
+  const [url, setUrl] = useState(
+    server?.connectionType !== 'stdio' ? (server?.config.url as string) || '' : ''
+  );
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+
+    let config: Record<string, unknown> = {};
+
+    if (connectionType === 'stdio') {
+      config = { command, args: args.split(' ').filter(Boolean) };
+    } else {
+      config = { url };
+    }
+
+    const data: MCPServerCreateRequest = {
+      name,
+      description: description || undefined,
+      connectionType,
+      config,
+    };
+
+    onSave(data, server?.id);
+  };
+
+  return (
+    <form onSubmit={handleSubmit} className="space-y-4">
+      <div>
+        <label className="block text-sm font-medium text-muted mb-2">Server Name</label>
+        <input
+          type="text"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="e.g., filesystem-server"
+          required
+          className="w-full px-4 py-2 bg-dark-bg border border-dark-border rounded-lg text-white placeholder:text-muted focus:outline-none focus:border-primary"
+        />
+      </div>
+
+      <div>
+        <label className="block text-sm font-medium text-muted mb-2">Description</label>
+        <input
+          type="text"
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+          placeholder="e.g., File system access for workspace"
+          className="w-full px-4 py-2 bg-dark-bg border border-dark-border rounded-lg text-white placeholder:text-muted focus:outline-none focus:border-primary"
+        />
+      </div>
+
+      <div>
+        <label className="block text-sm font-medium text-muted mb-2">Connection Type</label>
+        <div className="flex gap-4">
+          {(['stdio', 'sse', 'http'] as const).map((type) => (
+            <label key={type} className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="radio"
+                name="connectionType"
+                value={type}
+                checked={connectionType === type}
+                onChange={(e) => setConnectionType(e.target.value as typeof connectionType)}
+                className="w-4 h-4 border-dark-border bg-dark-bg text-primary focus:ring-primary"
+              />
+              <span className="text-white uppercase">{type}</span>
+            </label>
+          ))}
+        </div>
+      </div>
+
+      {connectionType === 'stdio' ? (
+        <>
+          <div>
+            <label className="block text-sm font-medium text-muted mb-2">Command</label>
+            <input
+              type="text"
+              value={command}
+              onChange={(e) => setCommand(e.target.value)}
+              placeholder="e.g., npx"
+              required
+              className="w-full px-4 py-2 bg-dark-bg border border-dark-border rounded-lg text-white placeholder:text-muted focus:outline-none focus:border-primary"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-muted mb-2">Arguments</label>
+            <input
+              type="text"
+              value={args}
+              onChange={(e) => setArgs(e.target.value)}
+              placeholder="e.g., -y @modelcontextprotocol/server-filesystem /workspace"
+              className="w-full px-4 py-2 bg-dark-bg border border-dark-border rounded-lg text-white placeholder:text-muted focus:outline-none focus:border-primary"
+            />
+          </div>
+        </>
+      ) : (
+        <div>
+          <label className="block text-sm font-medium text-muted mb-2">URL</label>
+          <input
+            type="url"
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+            placeholder={connectionType === 'sse' ? 'http://server:port/sse' : 'http://server:port'}
+            required
+            className="w-full px-4 py-2 bg-dark-bg border border-dark-border rounded-lg text-white placeholder:text-muted focus:outline-none focus:border-primary"
+          />
+        </div>
+      )}
+
+      <div className="flex gap-3 pt-4">
+        <Button type="button" variant="secondary" onClick={onClose}>
+          Cancel
+        </Button>
+        <Button type="submit" className="flex-1">
+          {server ? 'Save Changes' : 'Add Server'}
+        </Button>
+      </div>
+    </form>
+  );
+}

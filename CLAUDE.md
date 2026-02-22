@@ -1,0 +1,284 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Project Overview
+
+This is an AI Agent Platform that enables users to create, manage, and chat with customizable AI agents powered by **Claude Agent SDK**. The platform has two deployment modes:
+
+| Mode | Frontend | Backend | Database | Skill Storage |
+|------|----------|---------|----------|---------------|
+| **Desktop** (primary) | Tauri 2.0 + React | Python FastAPI sidecar | SQLite | Local filesystem + Git |
+| **Cloud** | React (S3/CloudFront) | FastAPI (ECS Fargate) | DynamoDB | S3 |
+
+The **desktop version** (`desktop/` directory) is the primary development target.
+
+## Development Commands
+
+### Desktop Development (Primary)
+
+```bash
+cd desktop
+
+# Install dependencies
+npm install
+
+# Configure environment (required: set ANTHROPIC_API_KEY)
+cp backend.env.example ../backend/.env
+# Edit ../backend/.env and add your API key
+
+# Development mode (hot reload)
+npm run tauri:dev
+
+# Build production
+npm run build:all      # Full build: backend + frontend + Tauri
+npm run build:backend  # Only Python backend (PyInstaller)
+npm run tauri:build    # Only Tauri app (requires backend built first)
+
+# Testing
+npm run test           # Watch mode
+npm run test:run       # Single run
+npm run lint
+```
+
+### Backend Development
+
+```bash
+cd backend
+
+# Setup (using uv - recommended)
+uv venv && source .venv/bin/activate
+uv pip install -r requirements.txt
+
+# Run development server
+python main.py
+# or: uvicorn main:app --reload --port 8000
+
+# Testing
+pytest
+pytest tests/test_agent_manager.py -v
+```
+
+### Development Ports
+
+| Service | Port | Notes |
+|---------|------|-------|
+| Vite (desktop dev) | 1420 | HMR on 1421 |
+| Python backend | 8000 | Dynamic in production |
+| Vite (web dev) | 5173 | If running web version |
+
+## Architecture Overview
+
+### High-Level Data Flow
+
+```
+User Input → React Frontend → FastAPI Backend → AgentManager
+                                                     ↓
+                                            ClaudeSDKClient
+                                                     ↓
+                                            Claude Code CLI
+                                                     ↓
+                                            SSE Streaming → UI
+```
+
+### Desktop-Specific Architecture
+
+```
+Tauri App
+├── React Frontend (Vite bundle)
+├── Rust Core (lib.rs)
+│   ├── Sidecar lifecycle management
+│   ├── Dynamic port assignment
+│   └── IPC bridge (Tauri commands)
+└── Python Backend (PyInstaller sidecar)
+    ├── FastAPI server
+    ├── SQLite database
+    └── ClaudeSDKClient
+```
+
+**Key Desktop Concepts:**
+- Python backend runs as a **sidecar process** managed by Tauri
+- Port is dynamically assigned via `portpicker` in Rust
+- Frontend uses `getBackendPort()` from `services/tauri.ts` to get the port
+- Data stored in platform-specific directories:
+  - macOS: `~/Library/Application Support/Owork/`
+  - Linux: `~/.local/share/owork/`
+
+### Backend Structure
+
+```
+backend/
+├── main.py                   # FastAPI entry point
+├── config.py                 # Settings (database_type: sqlite|dynamodb)
+├── routers/                  # API endpoints (agents, skills, mcp, chat, plugins)
+├── core/
+│   ├── agent_manager.py     # ClaudeSDKClient wrapper, hooks, security
+│   ├── session_manager.py   # Conversation session storage
+│   └── workspace_manager.py # Per-agent isolated workspaces
+├── database/
+│   ├── sqlite.py            # Desktop: SQLite implementation
+│   └── dynamodb.py          # Cloud: DynamoDB implementation
+└── schemas/                  # Pydantic models
+```
+
+### Frontend Structure (Desktop)
+
+```
+desktop/
+├── src/
+│   ├── services/
+│   │   ├── api.ts           # Axios client with dynamic port
+│   │   ├── tauri.ts         # Tauri IPC bridge
+│   │   └── *.ts             # Service modules with toCamelCase()
+│   ├── pages/               # Route components
+│   ├── components/          # UI components
+│   └── types/               # TypeScript interfaces
+├── src-tauri/
+│   ├── src/lib.rs          # Rust: sidecar management, CLI detection
+│   ├── binaries/           # PyInstaller output goes here
+│   └── tauri.conf.json     # Tauri configuration
+└── scripts/
+    ├── build.sh            # Full build script
+    └── build-backend.sh    # PyInstaller packaging
+```
+
+## API Data Naming Convention (CRITICAL)
+
+**Backend uses `snake_case`, Frontend uses `camelCase`.**
+
+Transformation functions in `desktop/src/services/*.ts` handle conversion:
+
+| Service | File | Functions |
+|---------|------|-----------|
+| Agents | `agents.ts` | `toSnakeCase()`, `toCamelCase()` |
+| Skills | `skills.ts` | `toCamelCase()` |
+| MCP | `mcp.ts` | `toCamelCase()` |
+| Chat | `chat.ts` | `toSessionCamelCase()`, `toMessageCamelCase()` |
+
+**When adding new fields:**
+
+1. Add to backend Pydantic model (`backend/schemas/*.py`) - `snake_case`
+2. Add to frontend TypeScript interface (`desktop/src/types/index.ts`) - `camelCase`
+3. **Update the corresponding `toCamelCase()` function** - this is commonly forgotten!
+
+## Claude Agent SDK Usage
+
+```python
+from claude_agent_sdk import ClaudeSDKClient, ClaudeAgentOptions, HookMatcher
+
+options = ClaudeAgentOptions(
+    system_prompt="...",
+    model="claude-sonnet-4-20250514",
+    permission_mode="bypassPermissions",  # or "default", "acceptEdits", "plan"
+    cwd="/path/to/workspace",
+    setting_sources=['project', 'user'],  # For global user mode
+    allowed_tools=["Bash", "Read", "Write", "Edit", "Glob", "Grep", "Skill"],
+    mcp_servers={"server": {"type": "stdio", "command": "...", "args": [...]}},
+    hooks={"PreToolUse": [HookMatcher(matcher='Bash', hooks=[hook_fn])]}
+)
+
+async with ClaudeSDKClient(options=options) as client:
+    await client.query("Hello!")
+    async for message in client.receive_response():
+        # Process streaming messages
+```
+
+**Built-in Tools:** `Bash`, `Read`, `Write`, `Edit`, `Glob`, `Grep`, `WebFetch`, `Skill`, `TodoWrite`, `NotebookEdit`
+
+## Security Architecture
+
+Four-layer defense-in-depth model (see `SECURITY.md` for details):
+
+1. **Workspace Isolation**: Per-agent directories in `/tmp/agent-platform-workspaces/{agent_id}/`
+2. **Skill Access Control**: PreToolUse hook validates authorized skills
+3. **File Tool Access Control**: Permission handler validates file paths
+4. **Bash Command Protection**: Regex parsing blocks absolute paths outside workspace
+
+**Agent Modes:**
+- `globalUserMode: false` (default): Restricted to agent workspace
+- `globalUserMode: true`: Full file access, uses `~/` as working directory
+- `enableHumanApproval: true`: Dangerous commands prompt user confirmation
+
+## Environment Variables
+
+```env
+# Required
+ANTHROPIC_API_KEY=sk-ant-xxx
+
+# Database (desktop uses sqlite)
+DATABASE_TYPE=sqlite
+
+# Optional
+DEFAULT_MODEL=claude-sonnet-4-5-20250929
+CLAUDE_CODE_USE_BEDROCK=false
+DEBUG=true
+HOST=127.0.0.1
+PORT=8000
+RATE_LIMIT_PER_MINUTE=1000
+```
+
+## Key Patterns
+
+### Adding a New Agent Field
+
+1. Backend schema: `backend/schemas/agent.py`
+2. Database: `backend/database/sqlite.py` (add column)
+3. Agent manager: `backend/core/agent_manager.py` (use in `_build_options()`)
+4. Frontend types: `desktop/src/types/index.ts`
+5. Frontend service: `desktop/src/services/agents.ts` (both `toSnakeCase` and `toCamelCase`)
+6. Frontend UI: `desktop/src/pages/AgentsPage.tsx`
+
+### SSE Streaming Events
+
+```json
+{"type": "assistant", "content": [...], "model": "..."}
+{"type": "tool_use", "content": [...]}
+{"type": "tool_result", "content": [...]}
+{"type": "ask_user_question", "toolUseId": "...", "questions": [...]}
+{"type": "permission_request", "requestId": "...", "toolName": "...", "reason": "..."}
+{"type": "result", "sessionId": "...", "durationMs": ..., "totalCostUsd": ...}
+{"type": "error", "error": "..."}
+```
+
+### Debugging
+
+```bash
+# Backend logs
+tail -f logs/backend.log | grep -E "(PRE-TOOL|BLOCKED|ERROR)"
+
+# Security events
+tail -f logs/backend.log | grep "FILE ACCESS DENIED\|BASH FILE ACCESS\|BLOCKED.*Skill"
+
+# SSE stream
+# Browser DevTools → Network → Filter: stream
+```
+
+## Design System
+
+- **Font**: Space Grotesk
+- **Colors**: Primary `#2b6cee`, Background `#101622`, Card `#1a1f2e`
+- **Icons**: Material Symbols Outlined
+- **Styling**: Tailwind CSS 4.x with dark mode
+
+## Build Outputs
+
+**Desktop (macOS):**
+```
+desktop/src-tauri/target/release/bundle/
+├── dmg/Owork_*.dmg
+└── macos/Owork.app
+```
+
+**Desktop (Linux):**
+```
+desktop/src-tauri/target/release/bundle/
+├── deb/owork_*.deb
+└── appimage/owork_*.AppImage
+```
+
+## Related Documentation
+
+- [SECURITY.md](./SECURITY.md) - Complete security architecture
+- [SKILLS_GUIDE.md](./SKILLS_GUIDE.md) - Creating and using skills
+- [ARCHITECTURE.md](./ARCHITECTURE.md) - Cloud deployment architecture
+- [desktop/BUILD_GUIDE.md](./desktop/BUILD_GUIDE.md) - Desktop build instructions (Chinese)
