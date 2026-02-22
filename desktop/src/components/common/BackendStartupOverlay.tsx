@@ -33,11 +33,14 @@ export default function BackendStartupOverlay({ onReady }: BackendStartupOverlay
   const checkHealth = useCallback(async (): Promise<boolean> => {
     try {
       const port = getBackendPort();
-      const response = await axios.get(`http://localhost:${port}/health`, {
+      console.log(`[Health Check] Checking health on port ${port}...`);
+      const response = await axios.get(`http://127.0.0.1:${port}/health`, {
         timeout: 3000,
       });
+      console.log(`[Health Check] Response:`, response.data);
       return response.data?.status === 'healthy';
-    } catch {
+    } catch (error) {
+      console.error(`[Health Check] Failed:`, error);
       return false;
     }
   }, []);
@@ -79,16 +82,19 @@ export default function BackendStartupOverlay({ onReady }: BackendStartupOverlay
     // First initialize backend to ensure port is set, then start polling
     const startHealthPolling = async () => {
       try {
+        console.log('[Startup] Calling initializeBackend()...');
         // Wait for backend initialization to complete (this sets the correct port)
         const port = await initializeBackend();
-        console.log(`Backend initialized on port ${port}, starting health polling...`);
+        console.log(`[Startup] initializeBackend() returned port: ${port}`);
+        console.log(`[Startup] getBackendPort() returns: ${getBackendPort()}`);
 
         if (!mounted) return;
 
         // Start polling after backend is initialized
+        console.log('[Startup] Starting health polling in 500ms...');
         timeoutId = setTimeout(pollHealth, 500);
       } catch (error) {
-        console.error('Failed to initialize backend:', error);
+        console.error('[Startup] Failed to initialize backend:', error);
         if (mounted) {
           setStatus('error');
           setErrorMessage(`Failed to initialize backend: ${error}`);
