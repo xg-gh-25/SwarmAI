@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { getVersion } from '@tauri-apps/api/app';
 import { tauriService, BackendStatus, getBackendPort, setBackendPort } from '../services/tauri';
 import { settingsService, APIConfigurationResponse, BedrockAuthType } from '../services/settings';
 import { Dropdown } from '../components/common';
@@ -72,12 +73,28 @@ export default function SettingsPage() {
   const [gitBashPath, setGitBashPath] = useState<string | null>(null);
   const [checkingDependencies, setCheckingDependencies] = useState(false);
 
+  // App version
+  const [appVersion, setAppVersion] = useState<string>('');
+
   useEffect(() => {
     // Load status first (which syncs the port), then load API config
     const init = async () => {
       await loadStatus();
       await loadAPIConfig();
       await checkSystemDependencies();
+
+      // Get app version from Tauri (only in production)
+      if (!isDev) {
+        try {
+          const version = await getVersion();
+          setAppVersion(version);
+        } catch (error) {
+          console.error('Failed to get app version:', error);
+          setAppVersion('unknown');
+        }
+      } else {
+        setAppVersion('dev');
+      }
     };
     init();
   }, []);
@@ -612,7 +629,7 @@ export default function SettingsPage() {
         <div className="space-y-2 text-sm">
           <div className="flex items-center justify-between">
             <span className="text-gray-400">Version</span>
-            <span className="text-white">0.0.1-beta</span>
+            <span className="text-white">{appVersion || 'Loading...'}</span>
           </div>
           <div className="flex items-center justify-between">
             <span className="text-gray-400">Platform</span>

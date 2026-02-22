@@ -32,6 +32,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -57,6 +58,15 @@
   "plugins": {
     "shell": {
       "open": true
+    },
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEYyNDY2RjQ1NjUzNzgzMTAKUldRUWd6ZGxSVzlHOHF3b1Y3TlhTSVFEUyt1dnlwRkhpYUFnQlhWN1k4UjdERzBVdm9OR1c0TTkK",
+      "endpoints": [
+        "__UPDATER_ENDPOINT__"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
     }
   }
 }
