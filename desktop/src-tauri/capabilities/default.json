@@ -40,6 +40,8 @@
     "fs:allow-read",
     "fs:allow-write",
     "dialog:default",
-    "notification:default"
+    "notification:default",
+    "updater:default",
+    "process:allow-restart"
   ]
 }
