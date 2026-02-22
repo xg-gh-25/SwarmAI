@@ -68,8 +68,12 @@ jobs:
       - name: Create backend .env file
         working-directory: ./backend
         run: |
-          echo "DATABASE_TYPE=sqlite" > .env
-          echo "ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}" >> .env
+          cp .env.example .env
+          # Replace API key if secret is set
+          if [ -n "${{ secrets.ANTHROPIC_API_KEY }}" ]; then
+            sed -i.bak 's/ANTHROPIC_API_KEY=.*/ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}/' .env
+            rm -f .env.bak
+          fi
 
       - name: Build Python backend
         working-directory: ./desktop
@@ -144,8 +148,12 @@ jobs:
       - name: Create backend .env file
         working-directory: ./backend
         run: |
-          echo "DATABASE_TYPE=sqlite" > .env
-          echo "ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}" >> .env
+          cp .env.example .env
+          # Replace API key if secret is set
+          if [ -n "${{ secrets.ANTHROPIC_API_KEY }}" ]; then
+            sed -i.bak 's/ANTHROPIC_API_KEY=.*/ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}/' .env
+            rm -f .env.bak
+          fi
 
       - name: Build Python backend
         working-directory: ./desktop
