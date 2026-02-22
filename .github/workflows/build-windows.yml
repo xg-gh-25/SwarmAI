@@ -39,11 +39,38 @@ jobs:
       - name: Upload MSI installer
         uses: actions/upload-artifact@v4
         with:
-          name: windows-msi-installer
+          name: Owork-Windows-msi
           path: desktop/src-tauri/target/release/bundle/msi/*.msi
 
       - name: Upload NSIS installer
         uses: actions/upload-artifact@v4
         with:
-          name: windows-nsis-installer
+          name: Owork-Windows-nsis
           path: desktop/src-tauri/target/release/bundle/nsis/*.exe
+
+  # Create release when triggered by tag
+  create-release:
+    needs: [build-windows]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: List downloaded artifacts
+        run: find artifacts -type f -name "*.msi" -o -name "*.exe"
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/**/*.msi
+            artifacts/**/*.exe
+          draft: true
+          generate_release_notes: true
+          name: "Owork ${{ github.ref_name }} (Windows)"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
