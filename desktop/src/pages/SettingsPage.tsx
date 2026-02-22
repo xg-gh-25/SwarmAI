@@ -2,6 +2,14 @@ import { useState, useEffect } from 'react';
 import { getVersion } from '@tauri-apps/api/app';
 import { tauriService, BackendStatus, getBackendPort, setBackendPort } from '../services/tauri';
 import { settingsService, APIConfigurationResponse, BedrockAuthType } from '../services/settings';
+import {
+  checkForUpdates,
+  downloadAndInstallUpdate,
+  restartApp,
+  formatBytes,
+  UpdateProgress,
+} from '../services/updater';
+import { Update } from '@tauri-apps/plugin-updater';
 import { Dropdown } from '../components/common';
 
 // Check if running in development mode
@@ -75,6 +83,12 @@ export default function SettingsPage() {
 
   // App version
   const [appVersion, setAppVersion] = useState<string>('');
+
+  // Update state
+  const [updateState, setUpdateState] = useState<'idle' | 'checking' | 'available' | 'downloading' | 'ready' | 'error'>('idle');
+  const [availableUpdate, setAvailableUpdate] = useState<Update | null>(null);
+  const [updateProgress, setUpdateProgress] = useState<UpdateProgress | null>(null);
+  const [updateError, setUpdateError] = useState<string | null>(null);
 
   useEffect(() => {
     // Load status first (which syncs the port), then load API config
@@ -206,6 +220,50 @@ export default function SettingsPage() {
       setMessage({ type: 'error', text: `Failed to save: ${error}` });
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleCheckForUpdates = async () => {
+    setUpdateState('checking');
+    setUpdateError(null);
+    try {
+      const update = await checkForUpdates();
+      if (update) {
+        setAvailableUpdate(update);
+        setUpdateState('available');
+      } else {
+        setUpdateState('idle');
+        setMessage({ type: 'success', text: 'You are using the latest version!' });
+      }
+    } catch (error) {
+      console.error('Update check failed:', error);
+      setUpdateError(error instanceof Error ? error.message : 'Failed to check for updates');
+      setUpdateState('error');
+    }
+  };
+
+  const handleDownloadUpdate = async () => {
+    if (!availableUpdate) return;
+    setUpdateState('downloading');
+    setUpdateError(null);
+    try {
+      await downloadAndInstallUpdate(availableUpdate, (progress) => {
+        setUpdateProgress(progress);
+      });
+      setUpdateState('ready');
+    } catch (error) {
+      console.error('Download failed:', error);
+      setUpdateError(error instanceof Error ? error.message : 'Download failed');
+      setUpdateState('error');
+    }
+  };
+
+  const handleRestartApp = async () => {
+    try {
+      await restartApp();
+    } catch (error) {
+      console.error('Restart failed:', error);
+      setUpdateError(error instanceof Error ? error.message : 'Restart failed');
     }
   };
 
@@ -626,7 +684,7 @@ export default function SettingsPage() {
       {/* About */}
       <section className="bg-[#1a1f2e] rounded-lg p-6">
         <h2 className="text-lg font-semibold text-white mb-4">About</h2>
-        <div className="space-y-2 text-sm">
+        <div className="space-y-3 text-sm">
           <div className="flex items-center justify-between">
             <span className="text-gray-400">Version</span>
             <span className="text-white">{appVersion || 'Loading...'}</span>
@@ -635,6 +693,106 @@ export default function SettingsPage() {
             <span className="text-gray-400">Platform</span>
             <span className="text-white">{platformInfo.platform}</span>
           </div>
+
+          {/* Update Section - only in production */}
+          {!isDev && (
+            <div className="pt-3 border-t border-gray-700">
+              {/* Idle state - show check button */}
+              {updateState === 'idle' && (
+                <button
+                  onClick={handleCheckForUpdates}
+                  className="w-full px-4 py-2 bg-[#101622] text-white rounded-lg hover:bg-[#2b6cee] transition-colors flex items-center justify-center gap-2"
+                >
+                  <span className="material-symbols-outlined text-lg">update</span>
+                  Check for Updates
+                </button>
+              )}
+
+              {/* Checking state */}
+              {updateState === 'checking' && (
+                <div className="flex items-center justify-center gap-2 py-2 text-gray-400">
+                  <span className="material-symbols-outlined animate-spin text-lg">progress_activity</span>
+                  Checking for updates...
+                </div>
+              )}
+
+              {/* Update available */}
+              {updateState === 'available' && availableUpdate && (
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2 text-green-400">
+                    <span className="material-symbols-outlined">new_releases</span>
+                    <span>Version {availableUpdate.version} available!</span>
+                  </div>
+                  {availableUpdate.body && (
+                    <div className="bg-[#101622] rounded p-3 text-xs text-gray-400 max-h-24 overflow-y-auto">
+                      {availableUpdate.body}
+                    </div>
+                  )}
+                  <button
+                    onClick={handleDownloadUpdate}
+                    className="w-full px-4 py-2 bg-[#2b6cee] text-white rounded-lg hover:bg-[#2b6cee]/80 transition-colors flex items-center justify-center gap-2"
+                  >
+                    <span className="material-symbols-outlined text-lg">download</span>
+                    Download & Install
+                  </button>
+                </div>
+              )}
+
+              {/* Downloading state */}
+              {updateState === 'downloading' && updateProgress && (
+                <div className="space-y-2">
+                  <div className="flex justify-between text-xs text-gray-400">
+                    <span>Downloading...</span>
+                    <span>
+                      {updateProgress.total
+                        ? `${formatBytes(updateProgress.downloaded)} / ${formatBytes(updateProgress.total)}`
+                        : formatBytes(updateProgress.downloaded)}
+                    </span>
+                  </div>
+                  <div className="h-2 bg-[#101622] rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-[#2b6cee] transition-all duration-300"
+                      style={{ width: `${updateProgress.percentage}%` }}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* Ready to restart */}
+              {updateState === 'ready' && (
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2 text-green-400">
+                    <span className="material-symbols-outlined">check_circle</span>
+                    <span>Update downloaded! Restart to apply.</span>
+                  </div>
+                  <button
+                    onClick={handleRestartApp}
+                    className="w-full px-4 py-2 bg-[#2b6cee] text-white rounded-lg hover:bg-[#2b6cee]/80 transition-colors flex items-center justify-center gap-2"
+                  >
+                    <span className="material-symbols-outlined text-lg">restart_alt</span>
+                    Restart Now
+                  </button>
+                </div>
+              )}
+
+              {/* Error state */}
+              {updateState === 'error' && (
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2 text-red-400">
+                    <span className="material-symbols-outlined">error</span>
+                    <span className="text-xs">{updateError || 'Update failed'}</span>
+                  </div>
+                  <button
+                    onClick={handleCheckForUpdates}
+                    className="w-full px-4 py-2 bg-[#101622] text-white rounded-lg hover:bg-[#2b6cee] transition-colors flex items-center justify-center gap-2"
+                  >
+                    <span className="material-symbols-outlined text-lg">refresh</span>
+                    Try Again
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </section>
     </div>
