@@ -128,11 +128,11 @@ macOS 可能会阻止未签名的应用运行。如果遇到「无法打开 Owor
 1. 打开「系统偏好设置」→「安全性与隐私」
 2. 点击「通用」标签
 3. 点击「仍要打开」按钮
-
 或者使用终端命令：
 ```bash
-xattr -cr /Applications/Owork.app
+sudo xattr -cr /Applications/Owork.app
 ```
+
 
 ---
 

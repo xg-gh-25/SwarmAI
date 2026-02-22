@@ -63,8 +63,12 @@ Owork 是一个功能强大的 AI Agent 管理平台，让您可以：
 1. 下载 `Owork_x.x.x_aarch64.dmg`
 2. 双击打开 DMG 文件
 3. 将 Owork.app 拖拽到 Applications 文件夹
-4. 启动 Owork
-
+4. 注意如果运行提示“文件损坏”，需要在终端执行以下命令
+```shell
+# 移除隔离属性
+sudo xattr -cr /Applications/Owork.app
+```
+5. 启动 Owork
 #### 2. 配置 API
 
 启动后进入 Settings 页面配置：

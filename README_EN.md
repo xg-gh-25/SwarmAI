@@ -65,7 +65,11 @@ Owork is a powerful AI Agent management platform that enables you to:
 1. Download `Owork_x.x.x_aarch64.dmg`
 2. Double-click to open the DMG file
 3. Drag Owork.app to the Applications folder
-4. Launch Owork
+4. If you encounter “File Damaged”, please execute command in the terminal
+```shell
+# remove isolation
+sudo xattr -cr /Applications/Owork.app
+```
 
 #### 2. Configure API
 
