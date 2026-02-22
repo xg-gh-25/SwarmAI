@@ -1,12 +1,12 @@
 [package]
-name = "claude-agent-platform"
-version = "0.0.1-beta"
-description = "Claude Agent Platform - AI Agent Desktop Application"
-authors = ["Claude Agent Platform Team"]
+name = "owork"
+version = "0.0.1"
+description = "Owork - AI Agent Desktop Application"
+authors = ["Owork Team"]
 edition = "2021"
 
 [lib]
-name = "claude_agent_platform_lib"
+name = "owork_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
