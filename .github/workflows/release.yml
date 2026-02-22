@@ -252,6 +252,10 @@ jobs:
           cp "$WINDOWS_UPDATER" "release/${WINDOWS_UPDATER_NAME}"
           cp "$WINDOWS_SIG" "release/${WINDOWS_UPDATER_NAME}.sig"
 
+          # Create Windows zip for direct browser download
+          WINDOWS_ZIP_NAME="Owork_${VERSION}_x64-setup.zip"
+          cd release && zip "${WINDOWS_ZIP_NAME}" "${WINDOWS_UPDATER_NAME}" && cd ..
+
           # Set outputs for update manifest
           echo "macos_aarch64_file=${MACOS_UPDATER_NAME}" >> $GITHUB_OUTPUT
           echo "windows_x64_file=${WINDOWS_UPDATER_NAME}" >> $GITHUB_OUTPUT
@@ -311,5 +315,6 @@ jobs:
             release/*.dmg
             release/*.exe
             release/*.msi
+            release/*.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
