@@ -57,41 +57,94 @@ cat > "$BUILD_DIR/desktop_main.py" << 'EOF'
 #!/usr/bin/env python3
 """Desktop application entry point for the backend server."""
 import sys
-import argparse
 import os
-import asyncio
-import signal
+import platform
+import traceback
+from pathlib import Path
+from datetime import datetime
 
-# Set environment for desktop mode
-os.environ.setdefault("DATABASE_TYPE", "sqlite")
-os.environ.setdefault("CLAUDE_CODE_USE_BEDROCK", "false")
+def get_log_dir() -> Path:
+    """Get the log directory based on platform."""
+    if platform.system() == "Darwin":
+        log_dir = Path.home() / "Library" / "Application Support" / "Owork" / "logs"
+    elif platform.system() == "Windows":
+        log_dir = Path.home() / "AppData" / "Local" / "Owork" / "logs"
+    else:
+        log_dir = Path.home() / ".local" / "share" / "owork" / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    return log_dir
 
-# Import and run the FastAPI app
-import uvicorn
-from main import app
+def write_startup_log(message: str):
+    """Write a startup log message before main logging is initialized."""
+    try:
+        log_file = get_log_dir() / "startup.log"
+        timestamp = datetime.now().isoformat()
+        with open(log_file, "a", encoding="utf-8") as f:
+            f.write(f"[{timestamp}] {message}\n")
+        # Also print to stdout for Tauri to capture
+        print(f"[STARTUP] {message}", flush=True)
+    except Exception as e:
+        print(f"[STARTUP ERROR] Failed to write log: {e}", flush=True)
 
 def main():
+    write_startup_log("Desktop backend starting...")
+    write_startup_log(f"Python version: {sys.version}")
+    write_startup_log(f"Platform: {platform.system()} {platform.machine()}")
+    write_startup_log(f"Executable: {sys.executable}")
+    write_startup_log(f"Working directory: {os.getcwd()}")
+
+    # Set environment for desktop mode BEFORE any imports
+    os.environ.setdefault("DATABASE_TYPE", "sqlite")
+    os.environ.setdefault("CLAUDE_CODE_USE_BEDROCK", "false")
+    write_startup_log(f"DATABASE_TYPE: {os.environ.get('DATABASE_TYPE')}")
+
+    try:
+        write_startup_log("Importing argparse...")
+        import argparse
+
+        write_startup_log("Importing asyncio...")
+        import asyncio
+
+        write_startup_log("Importing uvicorn...")
+        import uvicorn
+
+        write_startup_log("Importing main app...")
+        from main import app
+        write_startup_log("All imports successful!")
+
+    except Exception as e:
+        error_msg = f"Import error: {type(e).__name__}: {e}\n{traceback.format_exc()}"
+        write_startup_log(error_msg)
+        sys.exit(1)
+
     parser = argparse.ArgumentParser(description="Claude Agent Platform Backend")
     parser.add_argument("--port", type=int, default=8000, help="Port to run on")
     parser.add_argument("--host", type=str, default="127.0.0.1", help="Host to bind to")
     args = parser.parse_args()
 
+    write_startup_log(f"Starting server on {args.host}:{args.port}")
     print(f"Starting backend server on {args.host}:{args.port}", flush=True)
 
-    # Configure uvicorn for PyInstaller compatibility
-    config = uvicorn.Config(
-        app,
-        host=args.host,
-        port=args.port,
-        log_level="info",
-        loop="asyncio",  # Use asyncio loop explicitly
-        reload=False,    # Disable reload in bundled app
-        workers=1,       # Single worker for bundled app
-    )
-    server = uvicorn.Server(config)
+    try:
+        # Configure uvicorn for PyInstaller compatibility
+        config = uvicorn.Config(
+            app,
+            host=args.host,
+            port=args.port,
+            log_level="info",
+            loop="asyncio",  # Use asyncio loop explicitly
+            reload=False,    # Disable reload in bundled app
+            workers=1,       # Single worker for bundled app
+        )
+        server = uvicorn.Server(config)
 
-    # Run the server
-    asyncio.run(server.serve())
+        # Run the server
+        write_startup_log("Starting uvicorn server...")
+        asyncio.run(server.serve())
+    except Exception as e:
+        error_msg = f"Server error: {type(e).__name__}: {e}\n{traceback.format_exc()}"
+        write_startup_log(error_msg)
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
