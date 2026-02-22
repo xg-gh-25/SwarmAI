@@ -93,6 +93,12 @@ def main():
     write_startup_log(f"Executable: {sys.executable}")
     write_startup_log(f"Working directory: {os.getcwd()}")
 
+    # Fix Windows asyncio event loop policy for uvicorn compatibility
+    if platform.system() == "Windows":
+        import asyncio
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+        write_startup_log("Set Windows event loop policy to WindowsSelectorEventLoopPolicy")
+
     # Set environment for desktop mode BEFORE any imports
     os.environ.setdefault("DATABASE_TYPE", "sqlite")
     os.environ.setdefault("CLAUDE_CODE_USE_BEDROCK", "false")
@@ -127,6 +133,7 @@ def main():
 
     try:
         # Configure uvicorn for PyInstaller compatibility
+        write_startup_log(f"Creating uvicorn config for {args.host}:{args.port}...")
         config = uvicorn.Config(
             app,
             host=args.host,
@@ -136,11 +143,15 @@ def main():
             reload=False,    # Disable reload in bundled app
             workers=1,       # Single worker for bundled app
         )
+        write_startup_log("Uvicorn config created successfully")
+
         server = uvicorn.Server(config)
+        write_startup_log("Uvicorn server instance created")
 
         # Run the server
-        write_startup_log("Starting uvicorn server...")
+        write_startup_log("Starting uvicorn server.serve()...")
         asyncio.run(server.serve())
+        write_startup_log("Server stopped normally")
     except Exception as e:
         error_msg = f"Server error: {type(e).__name__}: {e}\n{traceback.format_exc()}"
         write_startup_log(error_msg)
