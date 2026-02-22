@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::env;
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 use tauri_plugin_shell::ShellExt;
 use tauri_plugin_shell::process::CommandChild;
 use tokio::sync::Mutex;
@@ -428,11 +428,47 @@ pub fn run() {
             check_nodejs_version,
             check_python_version,
         ])
-        .setup(|_app| {
+        .setup(|app| {
             // Backend will be started by frontend via initializeBackend()
             // This allows proper error handling in the UI
+
+            // Open DevTools automatically in debug builds or when OWORK_DEBUG is set
+            #[cfg(debug_assertions)]
+            {
+                if let Some(window) = app.get_webview_window("main") {
+                    window.open_devtools();
+                }
+            }
+
+            // Also check for OWORK_DEBUG env var to enable in release builds
+            #[cfg(not(debug_assertions))]
+            {
+                if std::env::var("OWORK_DEBUG").is_ok() {
+                    if let Some(window) = app.get_webview_window("main") {
+                        window.open_devtools();
+                    }
+                }
+            }
+
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            if let tauri::RunEvent::Exit = event {
+                // Clean up backend process on exit
+                let state = app_handle.state::<SharedBackendState>();
+                let state_clone = state.inner().clone();
+
+                // Use blocking task to ensure cleanup completes
+                tauri::async_runtime::block_on(async {
+                    let mut backend = state_clone.lock().await;
+                    if let Some(child) = backend.child.take() {
+                        let _ = child.kill();
+                        println!("Backend process terminated on exit");
+                    }
+                    backend.running = false;
+                });
+            }
+        });
 }

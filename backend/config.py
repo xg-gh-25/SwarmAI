@@ -42,7 +42,7 @@ class Settings(BaseSettings):
     port: int = 8000
 
     # CORS - include Tauri origins for desktop app
-    cors_origins: list[str] = ["http://localhost:5173", "http://localhost:3000", "http://localhost:1420", "tauri://localhost", "https://tauri.localhost"]
+    cors_origins: list[str] = ["http://localhost:5173", "http://localhost:3000", "http://localhost:1420", "tauri://localhost", "https://tauri.localhost", "http://tauri.localhost"]
 
     # Database type: "dynamodb" for cloud deployment, "sqlite" for desktop app
     database_type: str = "dynamodb"

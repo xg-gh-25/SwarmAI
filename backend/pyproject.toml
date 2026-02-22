@@ -3,7 +3,7 @@ name = "agent-platform-backend"
 version = "4.0.0"
 description = "AI Agent Platform Backend with Claude Agent SDK"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.14"
 dependencies = [
     # FastAPI and server
     "fastapi>=0.115.0",
