@@ -69,6 +69,11 @@ export const tauriService = {
   async checkPythonVersion(): Promise<string> {
     return invoke<string>('check_python_version');
   },
+
+  // Check Git Bash path (Windows only)
+  async checkGitBashPath(): Promise<string> {
+    return invoke<string>('check_git_bash_path');
+  },
 };
 
 // Initialize backend connection

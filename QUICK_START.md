@@ -72,6 +72,7 @@ xattr -cr /Applications/Owork.app
 
 Windows 可能显示 SmartScreen 警告。点击「更多信息」→「仍要运行」即可。
 
+需要安装Git bash 系统依赖：https://git-scm.com/downloads/win
 
 #### 从源码构建（所有平台）
 
