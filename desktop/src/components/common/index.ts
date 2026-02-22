@@ -30,3 +30,4 @@ export {
 } from './SkeletonLoader';
 export { ResizableTable, ResizableTableCell } from './ResizableTable';
 export { default as BackendStartupOverlay } from './BackendStartupOverlay';
+export { default as UpdateNotification } from './UpdateNotification';
