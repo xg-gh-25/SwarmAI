@@ -9,7 +9,6 @@ import MCPPage from './pages/MCPPage';
 import PluginsPage from './pages/PluginsPage';
 import DashboardPage from './pages/DashboardPage';
 import SettingsPage from './pages/SettingsPage';
-import { initializeBackend } from './services/tauri';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -24,18 +23,12 @@ const queryClient = new QueryClient({
 const isDev = import.meta.env.DEV;
 
 export default function App() {
-  // Auto-start backend sidecar in production mode
+  // Log mode on startup
   useEffect(() => {
-    if (!isDev) {
-      // In production, start the Tauri sidecar
-      initializeBackend().then((port) => {
-        console.log(`Backend sidecar started on port ${port}`);
-      }).catch((error) => {
-        console.error('Failed to start backend sidecar:', error);
-      });
-    } else {
+    if (isDev) {
       console.log('Development mode: using manual backend on port 8000');
     }
+    // In production mode, BackendStartupOverlay handles backend initialization
   }, []);
 
   return (
