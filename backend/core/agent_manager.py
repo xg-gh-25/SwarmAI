@@ -1028,9 +1028,9 @@ class AgentManager:
                             logger.error(f"SDK error traceback:\n{error_traceback}")
                             # Try to get more details from the exception
                             if hasattr(e, 'stderr'):
-                                logger.error(f"SDK stderr: {e.stderr}")
+                                logger.error(f"SDK stderr: {e.stderr}")  # type: ignore[attr-defined]
                             if hasattr(e, 'stdout'):
-                                logger.error(f"SDK stdout: {e.stdout}")
+                                logger.error(f"SDK stdout: {e.stdout}")  # type: ignore[attr-defined]
                             await combined_queue.put({"source": "error", "error": str(e), "detail": error_traceback})
                         finally:
                             # Signal that SDK stream is done
@@ -1155,9 +1155,10 @@ class AgentManager:
                                 if formatted.get('type') == 'ask_user_question':
                                     logger.info(f"AskUserQuestion detected, stopping to wait for user input")
                                     # Save assistant message before returning
-                                    if assistant_content:
+                                    sdk_session = session_context.get("sdk_session_id")
+                                    if assistant_content and sdk_session:
                                         await self._save_message(
-                                            session_id=session_context["sdk_session_id"],
+                                            session_id=sdk_session,
                                             role="assistant",
                                             content=assistant_content,
                                             model=assistant_model
@@ -1170,9 +1171,10 @@ class AgentManager:
                                     request_id = formatted.get('requestId')
                                     logger.info(f"Permission request detected from message: {request_id}, stopping to wait for user decision")
                                     # Save assistant message before returning
-                                    if assistant_content:
+                                    sdk_session = session_context.get("sdk_session_id")
+                                    if assistant_content and sdk_session:
                                         await self._save_message(
-                                            session_id=session_context["sdk_session_id"],
+                                            session_id=sdk_session,
                                             role="assistant",
                                             content=assistant_content,
                                             model=assistant_model
@@ -1368,6 +1370,7 @@ class AgentManager:
         # Collect assistant response content for saving
         assistant_content = []
         assistant_model = None
+        forwarder_task = None  # Initialize before try block for finally clause
 
         try:
             logger.info(f"Creating ClaudeSDKClient for answer continuation with resume={session_id}...")
@@ -1381,7 +1384,6 @@ class AgentManager:
 
                 # Create event queue for this conversation to handle permission requests
                 event_queue = asyncio.Queue()
-                forwarder_task = None
 
                 # Background task to forward permission requests for this session
                 async def permission_request_forwarder():
@@ -1587,132 +1589,6 @@ class AgentManager:
             "decision": decision,
         }
         logger.info(f"Permission decision processed, original stream will handle execution")
-        return
-
-        # OLD CODE - should not be reached
-        # Collect assistant response content for saving
-        assistant_content = []
-        assistant_model = None
-
-        try:
-            logger.info(f"Creating ClaudeSDKClient for permission continuation with resume={session_id}...")
-            async with ClaudeSDKClient(options=options) as client:
-                # Store client for potential interruption
-                self._clients[session_id] = client
-
-                # Send the decision as a user message
-                await client.query(decision_message)
-                logger.info(f"Permission decision sent, waiting for response...")
-
-                # Create event queue for this conversation to handle permission requests
-                event_queue = asyncio.Queue()
-                forwarder_task = None
-
-                # Background task to forward permission requests for this session
-                async def permission_request_forwarder():
-                    """Monitor global queue and forward requests for this session."""
-                    try:
-                        while True:
-                            request = await _permission_request_queue.get()
-                            if request.get("sessionId") == session_id:
-                                logger.info(f"Forwarding permission request {request.get('requestId')} to event queue")
-                                await event_queue.put({"type": "permission_request", **request})
-                            else:
-                                await _permission_request_queue.put(request)
-                                await asyncio.sleep(0.01)
-                    except asyncio.CancelledError:
-                        logger.debug("Permission request forwarder cancelled")
-                        raise
-
-                # Start the forwarder task
-                forwarder_task = asyncio.create_task(permission_request_forwarder())
-
-                message_count = 0
-                async for message in client.receive_response():
-                    message_count += 1
-                    logger.debug(f"Received message {message_count}: {type(message).__name__}")
-
-                    # Skip SystemMessage (init message)
-                    if isinstance(message, SystemMessage):
-                        logger.debug(f"Skipping SystemMessage with subtype: {message.subtype}")
-                        continue
-
-                    # Check for queued permission requests BEFORE formatting message
-                    while not event_queue.empty():
-                        try:
-                            queued_event = event_queue.get_nowait()
-                            logger.info(f"Emitting queued permission request: {queued_event.get('requestId')}")
-                            yield queued_event
-                        except asyncio.QueueEmpty:
-                            break
-
-                    formatted = await self._format_message(message, agent_config, session_id)
-                    if formatted:
-                        logger.debug(f"Formatted message type: {formatted.get('type')}")
-
-                        # Collect content for saving
-                        if formatted.get('type') == 'assistant' and formatted.get('content'):
-                            assistant_content.extend(formatted['content'])
-                            assistant_model = formatted.get('model')
-
-                        yield formatted
-
-                        # If this is an AskUserQuestion, stop and wait for user input
-                        if formatted.get('type') == 'ask_user_question':
-                            logger.info(f"AskUserQuestion detected, stopping to wait for user input")
-                            if assistant_content:
-                                await self._save_message(
-                                    session_id=session_id,
-                                    role="assistant",
-                                    content=assistant_content,
-                                    model=assistant_model
-                                )
-                            return
-
-                        # Note: permission_request type shouldn't appear here anymore
-                        # The hook now suspends execution until user responds, then continues naturally
-
-                    if isinstance(message, ResultMessage):
-                        logger.info(f"Conversation continued successfully. Total messages: {message_count}")
-
-                        # Save assistant message
-                        if assistant_content:
-                            await self._save_message(
-                                session_id=session_id,
-                                role="assistant",
-                                content=assistant_content,
-                                model=assistant_model
-                            )
-
-                        yield {
-                            "type": "result",
-                            "session_id": session_id,
-                            "duration_ms": getattr(message, 'duration_ms', 0),
-                            "total_cost_usd": getattr(message, 'total_cost_usd', None),
-                            "num_turns": getattr(message, 'num_turns', 1),
-                        }
-
-        except Exception as e:
-            import traceback
-            error_traceback = traceback.format_exc()
-            logger.error(f"Error continuing conversation with permission decision: {e}")
-            logger.error(f"Full traceback:\n{error_traceback}")
-            yield {
-                "type": "error",
-                "error": str(e),
-                "detail": error_traceback,
-            }
-        finally:
-            # Cancel forwarder task if it exists
-            if forwarder_task and not forwarder_task.done():
-                forwarder_task.cancel()
-                try:
-                    await forwarder_task
-                except asyncio.CancelledError:
-                    pass
-                logger.debug("Forwarder task cancelled")
-
-            self._clients.pop(session_id, None)
 
     async def disconnect_all(self):
         """Disconnect all active clients."""

@@ -216,7 +216,7 @@ fi
 
 # Verify key local modules are accessible from current directory
 echo "Verifying local modules are importable..."
-python -c "
+DATABASE_TYPE=sqlite python -c "
 import sys
 sys.path.insert(0, '.')
 import main
