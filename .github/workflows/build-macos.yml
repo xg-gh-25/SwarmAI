@@ -4,10 +4,6 @@ on:
   push:
     tags:
       - 'v*'
-    paths:
-      - 'desktop/**'
-      - 'backend/**'
-      - '.github/workflows/build-macos.yml'
   workflow_dispatch:
     inputs:
       build_intel:
@@ -15,6 +11,9 @@ on:
         required: false
         default: false
         type: boolean
+
+permissions:
+  contents: write
 
 jobs:
   build-macos:
