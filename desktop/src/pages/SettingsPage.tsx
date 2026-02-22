@@ -224,10 +224,12 @@ export default function SettingsPage() {
   };
 
   const handleCheckForUpdates = async () => {
+    console.log('[Settings] Starting update check...');
     setUpdateState('checking');
     setUpdateError(null);
     try {
       const update = await checkForUpdates();
+      console.log('[Settings] Update check result:', update);
       if (update) {
         setAvailableUpdate(update);
         setUpdateState('available');
@@ -236,7 +238,7 @@ export default function SettingsPage() {
         setMessage({ type: 'success', text: 'You are using the latest version!' });
       }
     } catch (error) {
-      console.error('Update check failed:', error);
+      console.error('[Settings] Update check failed:', error);
       setUpdateError(error instanceof Error ? error.message : 'Failed to check for updates');
       setUpdateState('error');
     }

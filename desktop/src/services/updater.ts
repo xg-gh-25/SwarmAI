@@ -15,16 +15,14 @@ export interface UpdateInfo {
 
 /**
  * Check for available updates
- * Returns null if no update available or check fails
+ * Returns null if no update available
+ * Throws error if check fails
  */
 export async function checkForUpdates(): Promise<Update | null> {
-  try {
-    const update = await check();
-    return update;
-  } catch (error) {
-    console.error('Failed to check for updates:', error);
-    return null;
-  }
+  console.log('[Updater] Checking for updates...');
+  const update = await check();
+  console.log('[Updater] Check result:', update ? `Update available: ${update.version}` : 'No update available');
+  return update;
 }
 
 /**
