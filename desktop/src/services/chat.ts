@@ -145,6 +145,10 @@ export const chatService = {
               }
               try {
                 const event: StreamEvent = JSON.parse(data);
+                // Ignore heartbeat messages - they're just for keeping the connection alive
+                if (event.type === 'heartbeat') {
+                  continue;
+                }
                 onMessage(event);
               } catch {
                 // Ignore parse errors for incomplete data
@@ -268,6 +272,10 @@ export const chatService = {
               }
               try {
                 const event: StreamEvent = JSON.parse(data);
+                // Ignore heartbeat messages - they're just for keeping the connection alive
+                if (event.type === 'heartbeat') {
+                  continue;
+                }
                 onMessage(event);
               } catch {
                 // Ignore parse errors
@@ -375,6 +383,10 @@ export const chatService = {
               }
               try {
                 const event: StreamEvent = JSON.parse(data);
+                // Ignore heartbeat messages - they're just for keeping the connection alive
+                if (event.type === 'heartbeat') {
+                  continue;
+                }
                 onMessage(event);
               } catch {
                 // Ignore parse errors

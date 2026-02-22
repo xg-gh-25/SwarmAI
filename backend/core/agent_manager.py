@@ -1708,6 +1708,7 @@ Current task: Create a skill named "{skill_name}" that {skill_description}"""
             "allowed_tools": ["Bash", "Read", "Write", "Edit", "Glob", "Grep", "Skill","TodoWrite","Task"],
             "permission_mode": "bypassPermissions",
             "working_directory": settings.agent_workspace_dir,
+            "global_user_mode": False,  # Use workspace dir, not home dir
             "enable_tool_logging": True,
             "enable_safety_checks": True,
             "model": model or "claude-sonnet-4-5-20250929",  # Default to Sonnet 4.5

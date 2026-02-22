@@ -64,9 +64,13 @@ jobs:
       - name: Set dev version
         working-directory: ./desktop
         run: |
-          VERSION="0.0.0-dev.$(date +%Y%m%d%H%M%S)"
+          # Semver: MAJOR.MINOR.PATCH (no leading zeros allowed)
+          # Use Unix timestamp modulo 65535 for MSI compatibility
+          BUILD=$(( $(date +%s) % 65535 ))
+          VERSION="0.1.${BUILD}"
           jq --arg v "$VERSION" '.version = $v' src-tauri/tauri.conf.json > tmp.json && mv tmp.json src-tauri/tauri.conf.json
           echo "Built version: $VERSION"
+          cat src-tauri/tauri.conf.json | grep version
 
       - name: Configure updater endpoint (placeholder)
         working-directory: ./desktop
@@ -142,9 +146,13 @@ jobs:
         working-directory: ./desktop
         shell: bash
         run: |
-          VERSION="0.0.0-dev.$(date +%Y%m%d%H%M%S)"
+          # Semver: MAJOR.MINOR.PATCH (no leading zeros allowed)
+          # Use Unix timestamp modulo 65535 for MSI compatibility
+          BUILD=$(( $(date +%s) % 65535 ))
+          VERSION="0.1.${BUILD}"
           jq --arg v "$VERSION" '.version = $v' src-tauri/tauri.conf.json > tmp.json && mv tmp.json src-tauri/tauri.conf.json
           echo "Built version: $VERSION"
+          cat src-tauri/tauri.conf.json | grep version
 
       - name: Configure updater endpoint (placeholder)
         working-directory: ./desktop

@@ -190,6 +190,7 @@ export function ToolSelector({ selectedTools, onChange, className }: ToolSelecto
                 <div className="flex items-center gap-3">
                   {/* Category Toggle */}
                   <button
+                    type="button"
                     onClick={(e) => {
                       e.stopPropagation();
                       toggleCategoryAll(category);
@@ -237,6 +238,7 @@ export function ToolSelector({ selectedTools, onChange, className }: ToolSelecto
                           <p className="text-xs text-muted">{tool.description}</p>
                         </div>
                         <button
+                          type="button"
                           onClick={() => toggleTool(tool.id)}
                           className={clsx(
                             'w-8 h-4 rounded-full transition-colors relative',
