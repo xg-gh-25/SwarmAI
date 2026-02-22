@@ -127,8 +127,23 @@ fi
 # Create PyInstaller spec file for better control
 cat > backend.spec << EOF
 # -*- mode: python ; coding: utf-8 -*-
+from PyInstaller.utils.hooks import collect_submodules
 
 block_cipher = None
+
+# Collect all submodules for packages that have dynamic imports
+hiddenimports = []
+hiddenimports += collect_submodules('routers')
+hiddenimports += collect_submodules('schemas')
+hiddenimports += collect_submodules('database')
+hiddenimports += collect_submodules('core')
+hiddenimports += collect_submodules('middleware')
+hiddenimports += collect_submodules('uvicorn')
+hiddenimports += collect_submodules('fastapi')
+hiddenimports += collect_submodules('starlette')
+hiddenimports += collect_submodules('pydantic')
+hiddenimports += collect_submodules('pydantic_settings')
+hiddenimports += collect_submodules('anyio')
 
 a = Analysis(
     ['desktop_main.py'],
@@ -137,32 +152,7 @@ a = Analysis(
     datas=[
         # Include any data files needed
     ],
-    hiddenimports=[
-        # Uvicorn modules
-        'uvicorn.logging',
-        'uvicorn.loops',
-        'uvicorn.loops.auto',
-        'uvicorn.protocols',
-        'uvicorn.protocols.http',
-        'uvicorn.protocols.http.auto',
-        'uvicorn.protocols.websockets',
-        'uvicorn.protocols.websockets.auto',
-        'uvicorn.lifespan',
-        'uvicorn.lifespan.on',
-        # FastAPI and Pydantic
-        'fastapi',
-        'fastapi.responses',
-        'fastapi.middleware',
-        'fastapi.middleware.cors',
-        'pydantic',
-        'pydantic_settings',
-        # Database
-        'aiosqlite',
-        'sqlite3',
-        # Async support
-        'anyio',
-        'anyio._backends',
-        'anyio._backends._asyncio',
+    hiddenimports=hiddenimports + [
         # Claude Agent SDK
         'claude_agent_sdk',
         # passlib handlers for auth module
@@ -171,6 +161,9 @@ a = Analysis(
         'passlib.handlers.sha2_crypt',
         'passlib.handlers.argon2',
         'bcrypt',
+        # Database
+        'aiosqlite',
+        'sqlite3',
         # Rate limiting
         'slowapi',
         'slowapi.errors',
@@ -180,53 +173,8 @@ a = Analysis(
         # Backend local modules - CRITICAL for bundling
         'main',
         'config',
-        # Routers
-        'routers',
-        'routers.agents',
-        'routers.auth',
-        'routers.chat',
-        'routers.mcp',
-        'routers.plugins',
-        'routers.settings',
-        'routers.skills',
-        'routers.workspace',
-        # Schemas
-        'schemas',
-        'schemas.agent',
-        'schemas.auth',
-        'schemas.error',
-        'schemas.marketplace',
-        'schemas.mcp',
-        'schemas.message',
-        'schemas.permission',
-        'schemas.settings',
-        'schemas.skill',
-        'schemas.workspace',
-        # Database layer
-        'database',
-        'database.base',
-        'database.sqlite',
-        'database.dynamodb',
-        # Core modules
-        'core',
-        'core.agent_manager',
-        'core.auth',
-        'core.exceptions',
-        'core.local_skill_manager',
-        'core.plugin_manager',
-        'core.session_manager',
-        'core.skill_manager',
-        'core.workspace_manager',
-        # Middleware
-        'middleware',
-        'middleware.auth',
-        'middleware.error_handler',
-        'middleware.rate_limit',
         # Additional dependencies that may be dynamically imported
         'email_validator',
-        'starlette',
-        'starlette.responses',
-        'starlette.middleware',
         'httptools',
         'websockets',
         'watchfiles',
@@ -276,18 +224,7 @@ EOF
 
 # Build with PyInstaller
 echo "Running PyInstaller..."
-pyinstaller backend.spec --clean --noconfirm \
-    --collect-submodules routers \
-    --collect-submodules schemas \
-    --collect-submodules database \
-    --collect-submodules core \
-    --collect-submodules middleware \
-    --collect-submodules uvicorn \
-    --collect-submodules fastapi \
-    --collect-submodules starlette \
-    --collect-submodules pydantic \
-    --collect-submodules pydantic_settings \
-    --collect-submodules anyio
+pyinstaller backend.spec --clean --noconfirm
 
 # Copy the built binary to output directory
 SOURCE_BINARY="dist/python-backend${BINARY_EXT}"
