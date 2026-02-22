@@ -166,46 +166,142 @@ else
 fi
 
 # Install dependencies
+# Extract dependencies from pyproject.toml and install them separately
+# This ensures local modules (routers, core, etc.) remain as top-level modules in current dir
+
+echo "Extracting and installing dependencies..."
+
 # Use python -m pip on Windows to avoid pip self-upgrade issues
 if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" ]]; then
     python -m pip install --upgrade pip
-    python -m pip install pyinstaller
-    python -m pip install -e .
+    python -m pip install pyinstaller pyinstaller-hooks-contrib
+    # Install project dependencies (but not the project itself as a package)
+    python -m pip install \
+        "fastapi>=0.115.0" \
+        "uvicorn[standard]>=0.34.0" \
+        "python-multipart>=0.0.12" \
+        "pydantic>=2.10.0" \
+        "pydantic-settings>=2.6.0" \
+        "claude-agent-sdk==0.1.20" \
+        "boto3>=1.35.0" \
+        "aioboto3>=13.0.0" \
+        "aiosqlite>=0.20.0" \
+        "python-jose[cryptography]>=3.3.0" \
+        "passlib[bcrypt]>=1.7.4" \
+        "bcrypt>=4.0.0" \
+        "slowapi>=0.1.9" \
+        "pyyaml>=6.0.0" \
+        "anyio>=4.0.0"
 else
     pip install --upgrade pip
-    pip install pyinstaller
-    pip install -e .
+    pip install pyinstaller pyinstaller-hooks-contrib
+    # Install project dependencies (but not the project itself as a package)
+    pip install \
+        "fastapi>=0.115.0" \
+        "uvicorn[standard]>=0.34.0" \
+        "python-multipart>=0.0.12" \
+        "pydantic>=2.10.0" \
+        "pydantic-settings>=2.6.0" \
+        "claude-agent-sdk==0.1.20" \
+        "boto3>=1.35.0" \
+        "aioboto3>=13.0.0" \
+        "aiosqlite>=0.20.0" \
+        "python-jose[cryptography]>=3.3.0" \
+        "passlib[bcrypt]>=1.7.4" \
+        "bcrypt>=4.0.0" \
+        "slowapi>=0.1.9" \
+        "pyyaml>=6.0.0" \
+        "anyio>=4.0.0"
 fi
+
+# Verify key local modules are accessible from current directory
+echo "Verifying local modules are importable..."
+python -c "
+import sys
+sys.path.insert(0, '.')
+import main
+import config
+import routers
+import core
+import schemas
+import database
+import middleware
+print('All local modules verified!')
+"
 
 # Create PyInstaller spec file for better control
 cat > backend.spec << EOF
 # -*- mode: python ; coding: utf-8 -*-
-from PyInstaller.utils.hooks import collect_submodules
+from PyInstaller.utils.hooks import collect_submodules, collect_data_files
+import os
 
 block_cipher = None
 
-# Collect all submodules for packages that have dynamic imports
+# Collect submodules for installed packages
 hiddenimports = []
-hiddenimports += collect_submodules('routers')
-hiddenimports += collect_submodules('schemas')
-hiddenimports += collect_submodules('database')
-hiddenimports += collect_submodules('core')
-hiddenimports += collect_submodules('middleware')
 hiddenimports += collect_submodules('uvicorn')
 hiddenimports += collect_submodules('fastapi')
 hiddenimports += collect_submodules('starlette')
 hiddenimports += collect_submodules('pydantic')
 hiddenimports += collect_submodules('pydantic_settings')
 hiddenimports += collect_submodules('anyio')
+hiddenimports += collect_submodules('slowapi')
+
+# Add local modules explicitly (these are in the current directory, not installed packages)
+local_modules = [
+    # Main entry
+    'main',
+    'config',
+    # Routers
+    'routers',
+    'routers.agents',
+    'routers.auth',
+    'routers.chat',
+    'routers.mcp',
+    'routers.plugins',
+    'routers.settings',
+    'routers.skills',
+    'routers.workspace',
+    # Schemas
+    'schemas',
+    'schemas.agent',
+    'schemas.auth',
+    'schemas.error',
+    'schemas.marketplace',
+    'schemas.mcp',
+    'schemas.message',
+    'schemas.permission',
+    'schemas.settings',
+    'schemas.skill',
+    'schemas.workspace',
+    # Database
+    'database',
+    'database.base',
+    'database.sqlite',
+    'database.dynamodb',
+    # Core
+    'core',
+    'core.agent_manager',
+    'core.auth',
+    'core.exceptions',
+    'core.local_skill_manager',
+    'core.plugin_manager',
+    'core.session_manager',
+    'core.skill_manager',
+    'core.workspace_manager',
+    # Middleware
+    'middleware',
+    'middleware.auth',
+    'middleware.error_handler',
+    'middleware.rate_limit',
+]
 
 a = Analysis(
     ['desktop_main.py'],
-    pathex=['.'],
+    pathex=[os.getcwd()],  # Add current directory to path
     binaries=[],
-    datas=[
-        # Include any data files needed
-    ],
-    hiddenimports=hiddenimports + [
+    datas=[],
+    hiddenimports=hiddenimports + local_modules + [
         # Claude Agent SDK
         'claude_agent_sdk',
         # passlib handlers for auth module
