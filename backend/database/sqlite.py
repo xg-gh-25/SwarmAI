@@ -419,6 +419,7 @@ class SQLiteDatabase(BaseDatabase):
         title TEXT,
         status TEXT DEFAULT 'active',
         metadata TEXT DEFAULT '{}',
+        work_dir TEXT,
         last_accessed TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
@@ -603,6 +604,18 @@ class SQLiteDatabase(BaseDatabase):
             await conn.execute("ALTER TABLE agents ADD COLUMN plugin_ids TEXT DEFAULT '[]'")
             await conn.commit()
             logger.info("Migration complete: plugin_ids column added")
+
+        # Migration: Add work_dir column to sessions table (added 2026-01-25)
+        # Stores the working directory for session continuity (e.g., when answering AskUserQuestion)
+        cursor = await conn.execute("PRAGMA table_info(sessions)")
+        session_columns = await cursor.fetchall()
+        session_column_names = [col[1] for col in session_columns]
+
+        if "work_dir" not in session_column_names:
+            logger.info("Running migration: Adding work_dir column to sessions table")
+            await conn.execute("ALTER TABLE sessions ADD COLUMN work_dir TEXT")
+            await conn.commit()
+            logger.info("Migration complete: work_dir column added")
 
     @property
     def agents(self) -> SQLiteTable:
