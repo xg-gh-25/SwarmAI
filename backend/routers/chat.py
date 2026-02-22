@@ -16,11 +16,16 @@ from core.exceptions import (
 import json
 import asyncio
 import logging
+import time
 from datetime import datetime
+from typing import AsyncIterator
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# SSE heartbeat interval in seconds (keeps connection alive during long operations)
+SSE_HEARTBEAT_INTERVAL = 15
 
 
 def create_sse_error(code: str, message: str, detail: str = None, suggested_action: str = None) -> str:
@@ -35,6 +40,78 @@ def create_sse_error(code: str, message: str, detail: str = None, suggested_acti
     if suggested_action:
         error_data["suggested_action"] = suggested_action
     return f"data: {json.dumps(error_data)}\n\n"
+
+
+def create_sse_heartbeat() -> str:
+    """Create an SSE heartbeat message to keep the connection alive."""
+    return f"data: {json.dumps({'type': 'heartbeat', 'timestamp': time.time()})}\n\n"
+
+
+async def sse_with_heartbeat(
+    message_generator: AsyncIterator[dict],
+    heartbeat_interval: int = SSE_HEARTBEAT_INTERVAL
+) -> AsyncIterator[str]:
+    """Wrap an async message generator with heartbeat support.
+
+    Sends heartbeat messages at regular intervals when no data is being sent,
+    keeping the SSE connection alive during long operations.
+
+    Args:
+        message_generator: The async generator that yields message dicts
+        heartbeat_interval: Seconds between heartbeats (default: 15)
+
+    Yields:
+        SSE-formatted strings (data messages and heartbeats)
+    """
+    message_queue: asyncio.Queue = asyncio.Queue()
+    generator_done = False
+
+    async def consume_messages():
+        """Consume messages from the generator and put them in the queue."""
+        nonlocal generator_done
+        try:
+            async for msg in message_generator:
+                await message_queue.put(("message", msg))
+        except Exception as e:
+            await message_queue.put(("error", e))
+        finally:
+            # Signal completion by putting a sentinel value
+            await message_queue.put(("done", None))
+            generator_done = True
+
+    # Start consuming messages in the background
+    consumer_task = asyncio.create_task(consume_messages())
+
+    try:
+        while True:
+            try:
+                # Wait for a message with timeout for heartbeat
+                item_type, item = await asyncio.wait_for(
+                    message_queue.get(),
+                    timeout=heartbeat_interval
+                )
+
+                if item_type == "done":
+                    # Generator finished, exit loop
+                    break
+                elif item_type == "message":
+                    yield f"data: {json.dumps(item)}\n\n"
+                elif item_type == "error":
+                    raise item
+
+            except asyncio.TimeoutError:
+                # No message received within heartbeat interval, send heartbeat
+                if not generator_done:
+                    logger.debug("Sending SSE heartbeat")
+                    yield create_sse_heartbeat()
+    finally:
+        # Ensure the consumer task is properly cleaned up
+        if not consumer_task.done():
+            consumer_task.cancel()
+            try:
+                await consumer_task
+            except asyncio.CancelledError:
+                pass
 
 
 @router.post("/stream")
@@ -62,7 +139,8 @@ async def chat_stream(request: Request):
             suggested_action="Please check the agent ID and try again"
         )
 
-    async def generate():
+    async def message_generator():
+        """Generate messages from the agent conversation."""
         try:
             logger.info(f"Starting chat stream for agent {chat_request.agent_id}, add_dirs={chat_request.add_dirs}")
             async for msg in agent_manager.run_conversation(
@@ -75,14 +153,15 @@ async def chat_stream(request: Request):
                 add_dirs=chat_request.add_dirs,
             ):
                 logger.debug(f"Yielding message: {msg.get('type')}")
-                yield f"data: {json.dumps(msg)}\n\n"
+                yield msg
         except asyncio.TimeoutError:
             logger.error("Agent response timed out")
-            yield create_sse_error(
-                code="AGENT_TIMEOUT",
-                message="Agent response timed out. Your conversation has been saved.",
-                suggested_action="Please try again"
-            )
+            yield {
+                "type": "error",
+                "code": "AGENT_TIMEOUT",
+                "message": "Agent response timed out. Your conversation has been saved.",
+                "suggested_action": "Please try again"
+            }
         except Exception as e:
             import traceback
             error_traceback = traceback.format_exc()
@@ -91,28 +170,31 @@ async def chat_stream(request: Request):
             logger.error(f"Full traceback:\n{error_traceback}")
             # Determine error type and provide appropriate response
             if "timeout" in error_message.lower():
-                yield create_sse_error(
-                    code="AGENT_TIMEOUT",
-                    message="Agent response timed out. Your conversation has been saved.",
-                    suggested_action="Please try again"
-                )
+                yield {
+                    "type": "error",
+                    "code": "AGENT_TIMEOUT",
+                    "message": "Agent response timed out. Your conversation has been saved.",
+                    "suggested_action": "Please try again"
+                }
             elif "connection" in error_message.lower() or "network" in error_message.lower():
-                yield create_sse_error(
-                    code="SERVICE_UNAVAILABLE",
-                    message="Unable to connect to the AI service",
-                    detail=error_message,
-                    suggested_action="Please check your connection and try again"
-                )
+                yield {
+                    "type": "error",
+                    "code": "SERVICE_UNAVAILABLE",
+                    "message": "Unable to connect to the AI service",
+                    "detail": error_message,
+                    "suggested_action": "Please check your connection and try again"
+                }
             else:
-                yield create_sse_error(
-                    code="AGENT_EXECUTION_ERROR",
-                    message="Agent execution failed",
-                    detail=f"{error_message}\n\nTraceback:\n{error_traceback}",
-                    suggested_action="Please try again or contact support"
-                )
+                yield {
+                    "type": "error",
+                    "code": "AGENT_EXECUTION_ERROR",
+                    "message": "Agent execution failed",
+                    "detail": f"{error_message}\n\nTraceback:\n{error_traceback}",
+                    "suggested_action": "Please try again or contact support"
+                }
 
     return StreamingResponse(
-        generate(),
+        sse_with_heartbeat(message_generator()),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -152,7 +234,8 @@ async def answer_question(request: Request):
             suggested_action="Please check the agent ID and try again"
         )
 
-    async def generate():
+    async def message_generator():
+        """Generate messages from the answer continuation."""
         try:
             logger.info(f"Answering question for agent {answer_request.agent_id}, session {answer_request.session_id}")
             async for msg in agent_manager.continue_with_answer(
@@ -164,29 +247,31 @@ async def answer_question(request: Request):
                 enable_mcp=answer_request.enable_mcp,
             ):
                 logger.debug(f"Yielding message: {msg.get('type')}")
-                yield f"data: {json.dumps(msg)}\n\n"
+                yield msg
         except asyncio.TimeoutError:
             logger.error("Agent response timed out")
-            yield create_sse_error(
-                code="AGENT_TIMEOUT",
-                message="Agent response timed out. Your conversation has been saved.",
-                suggested_action="Please try again"
-            )
+            yield {
+                "type": "error",
+                "code": "AGENT_TIMEOUT",
+                "message": "Agent response timed out. Your conversation has been saved.",
+                "suggested_action": "Please try again"
+            }
         except Exception as e:
             import traceback
             error_traceback = traceback.format_exc()
             error_message = str(e)
             logger.error(f"Error in answer-question stream: {error_message}")
             logger.error(f"Full traceback:\n{error_traceback}")
-            yield create_sse_error(
-                code="AGENT_EXECUTION_ERROR",
-                message="Agent execution failed",
-                detail=f"{error_message}\n\nTraceback:\n{error_traceback}",
-                suggested_action="Please try again or contact support"
-            )
+            yield {
+                "type": "error",
+                "code": "AGENT_EXECUTION_ERROR",
+                "message": "Agent execution failed",
+                "detail": f"{error_message}\n\nTraceback:\n{error_traceback}",
+                "suggested_action": "Please try again or contact support"
+            }
 
     return StreamingResponse(
-        generate(),
+        sse_with_heartbeat(message_generator()),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -395,7 +480,8 @@ async def permission_continue(request: Request):
             suggested_action="Please check the agent ID and try again"
         )
 
-    async def generate():
+    async def message_generator():
+        """Generate messages from the permission continuation."""
         try:
             logger.info(f"Processing permission decision for request {permission_request.request_id}: {permission_request.decision}")
             async for msg in agent_manager.continue_with_permission(
@@ -408,29 +494,31 @@ async def permission_continue(request: Request):
                 enable_mcp=body.get("enable_mcp", False),
             ):
                 logger.debug(f"Yielding message: {msg.get('type')}")
-                yield f"data: {json.dumps(msg)}\n\n"
+                yield msg
         except asyncio.TimeoutError:
             logger.error("Agent response timed out")
-            yield create_sse_error(
-                code="AGENT_TIMEOUT",
-                message="Agent response timed out. Your conversation has been saved.",
-                suggested_action="Please try again"
-            )
+            yield {
+                "type": "error",
+                "code": "AGENT_TIMEOUT",
+                "message": "Agent response timed out. Your conversation has been saved.",
+                "suggested_action": "Please try again"
+            }
         except Exception as e:
             import traceback
             error_traceback = traceback.format_exc()
             error_message = str(e)
             logger.error(f"Error in permission-continue stream: {error_message}")
             logger.error(f"Full traceback:\n{error_traceback}")
-            yield create_sse_error(
-                code="AGENT_EXECUTION_ERROR",
-                message="Agent execution failed",
-                detail=f"{error_message}\n\nTraceback:\n{error_traceback}",
-                suggested_action="Please try again or contact support"
-            )
+            yield {
+                "type": "error",
+                "code": "AGENT_EXECUTION_ERROR",
+                "message": "Agent execution failed",
+                "detail": f"{error_message}\n\nTraceback:\n{error_traceback}",
+                "suggested_action": "Please try again or contact support"
+            }
 
     return StreamingResponse(
-        generate(),
+        sse_with_heartbeat(message_generator()),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
