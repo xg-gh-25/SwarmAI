@@ -64,7 +64,12 @@ jobs:
       - name: Set dev version
         working-directory: ./desktop
         run: |
-          VERSION="0.0.0-dev.$(date +%Y%m%d%H%M%S)"
+          # Use format: 0.0.YYDDD.HHMM (YY=year, DDD=day of year, HH=hour, MM=minute)
+          # This format is compatible with both macOS and Windows MSI
+          YEAR=$(date +%y)
+          DAY_OF_YEAR=$(date +%j)
+          HOUR_MIN=$(date +%H%M)
+          VERSION="0.0.${YEAR}${DAY_OF_YEAR}.${HOUR_MIN}"
           jq --arg v "$VERSION" '.version = $v' src-tauri/tauri.conf.json > tmp.json && mv tmp.json src-tauri/tauri.conf.json
           echo "Built version: $VERSION"
 
@@ -142,7 +147,12 @@ jobs:
         working-directory: ./desktop
         shell: bash
         run: |
-          VERSION="0.0.0-dev.$(date +%Y%m%d%H%M%S)"
+          # MSI requires version format X.Y.Z.W where each part is 0-65535
+          # Use format: 0.0.YYDDD.HHMM (YY=year, DDD=day of year, HH=hour, MM=minute)
+          YEAR=$(date +%y)
+          DAY_OF_YEAR=$(date +%j)
+          HOUR_MIN=$(date +%H%M)
+          VERSION="0.0.${YEAR}${DAY_OF_YEAR}.${HOUR_MIN}"
           jq --arg v "$VERSION" '.version = $v' src-tauri/tauri.conf.json > tmp.json && mv tmp.json src-tauri/tauri.conf.json
           echo "Built version: $VERSION"
 
