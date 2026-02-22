@@ -307,7 +307,7 @@ export const SUPPORTED_FILE_TYPES = {
 } as const;
 
 export interface StreamEvent {
-  type: 'assistant' | 'tool_use' | 'tool_result' | 'result' | 'error' | 'ask_user_question' | 'session_start' | 'session_cleared' | 'permission_request' | 'permission_decision' | 'permission_acknowledged';
+  type: 'assistant' | 'tool_use' | 'tool_result' | 'result' | 'error' | 'ask_user_question' | 'session_start' | 'session_cleared' | 'permission_request' | 'permission_decision' | 'permission_acknowledged' | 'heartbeat';
   content?: ContentBlock[];
   model?: string;
   sessionId?: string;
@@ -329,6 +329,8 @@ export interface StreamEvent {
   // SessionCleared fields (for /clear command)
   oldSessionId?: string;
   newSessionId?: string;
+  // Heartbeat fields
+  timestamp?: number;
   // Error fields
   error?: string;
   message?: string;

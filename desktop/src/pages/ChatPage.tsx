@@ -49,8 +49,15 @@ export default function ChatPage() {
   // Drag and drop state
   const [isDragging, setIsDragging] = useState(false);
 
-  // Work directory state
-  const [workDir, setWorkDir] = useState<string | null>(null);
+  // Work directory state - persisted per agent
+  const [workDir, setWorkDirState] = useState<string | null>(null);
+  const isRestoringWorkDirRef = useRef(false); // Track when we're restoring from localStorage
+
+  // Wrapper to set workDir and track if it's a user action
+  const setWorkDir = (value: string | null, isRestoring = false) => {
+    isRestoringWorkDirRef.current = isRestoring;
+    setWorkDirState(value);
+  };
 
   // Slash command suggestions
   const [showCommandSuggestions, setShowCommandSuggestions] = useState(false);
@@ -111,6 +118,27 @@ export default function ChatPage() {
       localStorage.setItem('lastSelectedAgentId', selectedAgentId);
     }
   }, [selectedAgentId]);
+
+  // Load workDir from localStorage when agent changes
+  useEffect(() => {
+    if (selectedAgentId) {
+      const savedWorkDir = localStorage.getItem(`workDir_${selectedAgentId}`);
+      setWorkDir(savedWorkDir, true); // true = restoring from storage, don't reset session
+    } else {
+      setWorkDir(null, true);
+    }
+  }, [selectedAgentId]);
+
+  // Persist workDir to localStorage when it changes
+  useEffect(() => {
+    if (selectedAgentId) {
+      if (workDir) {
+        localStorage.setItem(`workDir_${selectedAgentId}`, workDir);
+      } else {
+        localStorage.removeItem(`workDir_${selectedAgentId}`);
+      }
+    }
+  }, [selectedAgentId, workDir]);
 
   // Fetch agents list
   const { data: agents = [], isLoading: isLoadingAgents } = useQuery({
@@ -178,18 +206,19 @@ export default function ChatPage() {
   const enableSkills = selectedAgent?.allowAllSkills || agentSkills.length > 0;
   const enableMCP = agentMCPs.length > 0;
 
-  // Reset session when work directory changes
+  // Reset session when work directory changes by user action (not when restoring from localStorage)
   // Changing the work directory means starting a new conversation context
-  const prevWorkDirRef = useRef<string | null>(null);
+  const prevWorkDirRef = useRef<string | null | undefined>(undefined); // undefined = uninitialized
   useEffect(() => {
-    // Skip on initial mount
-    if (prevWorkDirRef.current === null && workDir === null) {
+    // Skip if we're restoring from localStorage (agent switch or page mount)
+    if (isRestoringWorkDirRef.current) {
+      isRestoringWorkDirRef.current = false;
       prevWorkDirRef.current = workDir;
       return;
     }
 
-    // Only reset if workDir actually changed (not initial mount)
-    if (prevWorkDirRef.current !== workDir) {
+    // Only reset if workDir actually changed by user action
+    if (prevWorkDirRef.current !== undefined && prevWorkDirRef.current !== workDir) {
       prevWorkDirRef.current = workDir;
 
       // Reset session state - backend will create a new session on next message
@@ -216,6 +245,8 @@ export default function ChatPage() {
           },
         ]);
       }
+    } else {
+      prevWorkDirRef.current = workDir;
     }
   }, [workDir, selectedAgent]);
 
