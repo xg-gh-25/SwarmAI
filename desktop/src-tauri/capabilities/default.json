@@ -7,9 +7,35 @@
     "core:default",
     "core:window:allow-start-dragging",
     "opener:default",
-    "shell:allow-execute",
-    "shell:allow-spawn",
     "shell:allow-open",
+    {
+      "identifier": "shell:allow-spawn",
+      "allow": [
+        {
+          "name": "python-backend",
+          "sidecar": true,
+          "args": true
+        }
+      ]
+    },
+    {
+      "identifier": "shell:allow-execute",
+      "allow": [
+        {
+          "name": "node",
+          "args": true
+        },
+        {
+          "name": "python",
+          "args": true
+        },
+        {
+          "name": "python3",
+          "args": true
+        }
+      ]
+    },
+    "shell:allow-kill",
     "fs:default",
     "fs:allow-read",
     "fs:allow-write",

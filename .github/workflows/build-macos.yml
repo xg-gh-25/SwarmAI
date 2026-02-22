@@ -79,6 +79,18 @@ jobs:
         working-directory: ./desktop
         run: bash scripts/build-backend.sh
 
+      - name: Verify Python backend binary
+        working-directory: ./desktop
+        run: |
+          echo "=== Checking sidecar binary ==="
+          ls -la src-tauri/binaries/
+          echo ""
+          echo "=== Binary info ==="
+          file src-tauri/binaries/python-backend-* || true
+          echo ""
+          echo "=== Test binary execution ==="
+          ./src-tauri/binaries/python-backend-${{ matrix.target }} --help || echo "Binary test failed (may be expected if deps missing)"
+
       - name: Build frontend
         working-directory: ./desktop
         run: npm run build
@@ -86,6 +98,22 @@ jobs:
       - name: Build Tauri app
         working-directory: ./desktop
         run: npm run tauri build -- --target ${{ matrix.target }}
+
+      - name: Verify sidecar in app bundle
+        run: |
+          echo "=== Checking sidecar in app bundle ==="
+          APP_PATH="desktop/src-tauri/target/${{ matrix.target }}/release/bundle/macos/Owork.app"
+          if [ -d "$APP_PATH" ]; then
+            echo "App bundle exists: $APP_PATH"
+            echo ""
+            echo "=== Contents of MacOS directory ==="
+            ls -la "$APP_PATH/Contents/MacOS/" || true
+            echo ""
+            echo "=== Looking for python-backend ==="
+            find "$APP_PATH" -name "*python-backend*" -type f 2>/dev/null || echo "No python-backend found in bundle"
+          else
+            echo "App bundle not found at $APP_PATH"
+          fi
 
       - name: List build artifacts
         run: |
