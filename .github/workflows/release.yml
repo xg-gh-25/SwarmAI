@@ -289,12 +289,10 @@ jobs:
           # Upload versioned release files
           aws s3 cp release/ "s3://${S3_BUCKET}/${S3_PATH}/v${VERSION}/" \
             --recursive \
-            --exclude "update.json" \
-            --acl public-read
+            --exclude "update.json"
 
           # Upload update.json to root (always points to latest)
           aws s3 cp release/update.json "s3://${S3_BUCKET}/${S3_PATH}/update.json" \
-            --acl public-read \
             --cache-control "max-age=300"
 
       - name: Invalidate CloudFront cache
