@@ -93,12 +93,6 @@ def main():
     write_startup_log(f"Executable: {sys.executable}")
     write_startup_log(f"Working directory: {os.getcwd()}")
 
-    # Fix Windows asyncio event loop policy for uvicorn compatibility
-    if platform.system() == "Windows":
-        import asyncio
-        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-        write_startup_log("Set Windows event loop policy to WindowsSelectorEventLoopPolicy")
-
     # Set environment for desktop mode BEFORE any imports
     os.environ.setdefault("DATABASE_TYPE", "sqlite")
     os.environ.setdefault("CLAUDE_CODE_USE_BEDROCK", "false")
