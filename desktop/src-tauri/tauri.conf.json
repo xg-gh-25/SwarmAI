@@ -60,7 +60,7 @@
       "open": true
     },
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDMxQ0Y0NTU5MDY4QzEwNzcKUldSM0VJd0dXVVhQTVFVcTBtMm9Zb0NyKzRoREEvSGd0Qk5mNDVOU2o0OWF4WWJLUjJuNzEwaXAK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDFEOUQ1OUQzMDE1NkE0ODAKUldTQXBGWUIwMW1kSGFPZzhKWTkrVk9ObHFuS0I3Nkw0MzI0bGJXdlBaYzJSUXF0dEFIRzhFdXoK",
       "endpoints": [
         "__UPDATER_ENDPOINT__"
       ],
