@@ -138,6 +138,7 @@ a = Analysis(
         # Include any data files needed
     ],
     hiddenimports=[
+        # Uvicorn modules
         'uvicorn.logging',
         'uvicorn.loops',
         'uvicorn.loops.auto',
@@ -148,10 +149,21 @@ a = Analysis(
         'uvicorn.protocols.websockets.auto',
         'uvicorn.lifespan',
         'uvicorn.lifespan.on',
+        # FastAPI and Pydantic
         'fastapi',
+        'fastapi.responses',
+        'fastapi.middleware',
+        'fastapi.middleware.cors',
         'pydantic',
+        'pydantic_settings',
+        # Database
         'aiosqlite',
+        'sqlite3',
+        # Async support
+        'anyio',
+        'anyio._backends',
         'anyio._backends._asyncio',
+        # Claude Agent SDK
         'claude_agent_sdk',
         # passlib handlers for auth module
         'passlib.handlers.bcrypt',
@@ -159,6 +171,73 @@ a = Analysis(
         'passlib.handlers.sha2_crypt',
         'passlib.handlers.argon2',
         'bcrypt',
+        # Rate limiting
+        'slowapi',
+        'slowapi.errors',
+        # HTTP/SSL
+        'ssl',
+        'certifi',
+        # Backend local modules - CRITICAL for bundling
+        'main',
+        'config',
+        # Routers
+        'routers',
+        'routers.agents',
+        'routers.auth',
+        'routers.chat',
+        'routers.mcp',
+        'routers.plugins',
+        'routers.settings',
+        'routers.skills',
+        'routers.workspace',
+        # Schemas
+        'schemas',
+        'schemas.agent',
+        'schemas.auth',
+        'schemas.error',
+        'schemas.marketplace',
+        'schemas.mcp',
+        'schemas.message',
+        'schemas.permission',
+        'schemas.settings',
+        'schemas.skill',
+        'schemas.workspace',
+        # Database layer
+        'database',
+        'database.base',
+        'database.sqlite',
+        'database.dynamodb',
+        # Core modules
+        'core',
+        'core.agent_manager',
+        'core.auth',
+        'core.exceptions',
+        'core.local_skill_manager',
+        'core.plugin_manager',
+        'core.session_manager',
+        'core.skill_manager',
+        'core.workspace_manager',
+        # Middleware
+        'middleware',
+        'middleware.auth',
+        'middleware.error_handler',
+        'middleware.rate_limit',
+        # Additional dependencies that may be dynamically imported
+        'email_validator',
+        'starlette',
+        'starlette.responses',
+        'starlette.middleware',
+        'httptools',
+        'websockets',
+        'watchfiles',
+        'h11',
+        'httpcore',
+        'httpx',
+        'yaml',
+        'pyyaml',
+        'jose',
+        'python_jose',
+        'cryptography',
     ],
     hookspath=[],
     hooksconfig={},
@@ -197,7 +276,18 @@ EOF
 
 # Build with PyInstaller
 echo "Running PyInstaller..."
-pyinstaller backend.spec --clean --noconfirm
+pyinstaller backend.spec --clean --noconfirm \
+    --collect-submodules routers \
+    --collect-submodules schemas \
+    --collect-submodules database \
+    --collect-submodules core \
+    --collect-submodules middleware \
+    --collect-submodules uvicorn \
+    --collect-submodules fastapi \
+    --collect-submodules starlette \
+    --collect-submodules pydantic \
+    --collect-submodules pydantic_settings \
+    --collect-submodules anyio
 
 # Copy the built binary to output directory
 SOURCE_BINARY="dist/python-backend${BINARY_EXT}"
