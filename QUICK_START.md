@@ -160,7 +160,7 @@ macOS 可能会阻止未签名的应用运行。如果遇到「无法打开 Owor
 
 或者使用终端命令：
 ```bash
-sudo xattr -cr /Applications/Owork.app
+xattr -cr /Applications/Owork.app
 ```
 
 #### Windows
