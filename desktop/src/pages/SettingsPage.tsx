@@ -6,6 +6,37 @@ import { Dropdown } from '../components/common';
 // Check if running in development mode
 const isDev = import.meta.env.DEV;
 
+// Detect platform
+function getPlatformInfo(): { platform: string; dataDir: string; skillsDir: string; logsDir: string } {
+  const userAgent = navigator.userAgent.toLowerCase();
+
+  if (userAgent.includes('win')) {
+    return {
+      platform: 'Windows',
+      dataDir: '%LOCALAPPDATA%\\Owork\\',
+      skillsDir: '%LOCALAPPDATA%\\Owork\\skills\\',
+      logsDir: '%LOCALAPPDATA%\\Owork\\logs\\'
+    };
+  } else if (userAgent.includes('mac')) {
+    return {
+      platform: 'macOS',
+      dataDir: '~/Library/Application Support/Owork/',
+      skillsDir: '~/Library/Application Support/Owork/skills/',
+      logsDir: '~/Library/Application Support/Owork/logs/'
+    };
+  } else {
+    // Linux and other Unix-like systems
+    return {
+      platform: 'Linux',
+      dataDir: '~/.local/share/owork/',
+      skillsDir: '~/.local/share/owork/skills/',
+      logsDir: '~/.local/share/owork/logs/'
+    };
+  }
+}
+
+const platformInfo = getPlatformInfo();
+
 // AWS Region options for Bedrock
 const AWS_REGION_OPTIONS = [
   { id: 'us-east-1', name: 'US East (N. Virginia)', description: 'us-east-1' },
@@ -38,6 +69,7 @@ export default function SettingsPage() {
   // System dependencies
   const [nodejsVersion, setNodejsVersion] = useState<string | null>(null);
   const [pythonVersion, setPythonVersion] = useState<string | null>(null);
+  const [gitBashPath, setGitBashPath] = useState<string | null>(null);
   const [checkingDependencies, setCheckingDependencies] = useState(false);
 
   useEffect(() => {
@@ -184,6 +216,17 @@ export default function SettingsPage() {
       } catch (error) {
         setPythonVersion('Not installed');
         console.error('Python check failed:', error);
+      }
+
+      // Check Git Bash path (Windows only)
+      if (platformInfo.platform === 'Windows') {
+        try {
+          const bashPath = await tauriService.checkGitBashPath();
+          setGitBashPath(bashPath);
+        } catch (error) {
+          setGitBashPath('Not found');
+          console.error('Git Bash check failed:', error);
+        }
       }
     } finally {
       setCheckingDependencies(false);
@@ -448,9 +491,67 @@ export default function SettingsPage() {
                 <span className="text-green-400">{pythonVersion}</span>
               )}
             </div>
+            {platformInfo.platform === 'Windows' && (
+              <div className="flex items-center justify-between">
+                <span className="text-gray-400">Git Bash</span>
+                {gitBashPath === null ? (
+                  <span className="text-gray-500">Checking...</span>
+                ) : gitBashPath === 'Not found' ? (
+                  <span className="text-red-400">✗ Not found</span>
+                ) : (
+                  <span className="text-green-400 text-xs font-mono truncate max-w-[300px]" title={gitBashPath}>
+                    {gitBashPath}
+                  </span>
+                )}
+              </div>
+            )}
             <p className="text-xs text-gray-500 mt-2">
               System-level dependencies detected in PATH. These are not required for the app to run.
             </p>
+          </div>
+        </section>
+      )}
+
+      {/* Git Bash Warning (Windows only) */}
+      {!isDev && platformInfo.platform === 'Windows' && gitBashPath === 'Not found' && (
+        <section className="mb-8 bg-yellow-500/10 border border-yellow-500/30 rounded-lg p-6">
+          <div className="flex items-start gap-3">
+            <span className="text-yellow-500 text-xl">⚠</span>
+            <div className="flex-1">
+              <h3 className="text-yellow-500 font-semibold mb-2">Git Bash Required</h3>
+              <p className="text-gray-300 text-sm mb-3">
+                Git Bash is required for Claude Agent SDK to execute shell commands on Windows.
+                Please install Git for Windows and configure the environment variable.
+              </p>
+              <div className="space-y-2 text-sm">
+                <div>
+                  <span className="text-gray-400">1. Download and install Git for Windows:</span>
+                  <a
+                    href="https://git-scm.com/downloads/win"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="ml-2 text-[#2b6cee] hover:underline"
+                  >
+                    https://git-scm.com/downloads/win
+                  </a>
+                </div>
+                <div>
+                  <span className="text-gray-400">2. Set the environment variable:</span>
+                  <code className="ml-2 px-2 py-1 bg-[#101622] rounded text-xs text-white">
+                    CLAUDE_CODE_GIT_BASH_PATH
+                  </code>
+                </div>
+                <div className="mt-2 p-3 bg-[#101622] rounded-lg">
+                  <p className="text-gray-400 text-xs mb-1">Example (default installation path):</p>
+                  <code className="text-white text-xs font-mono">
+                    CLAUDE_CODE_GIT_BASH_PATH=C:\Program Files\Git\bin\bash.exe
+                  </code>
+                </div>
+                <p className="text-gray-500 text-xs mt-2">
+                  After setting the environment variable, restart the application and click "Refresh" above to verify.
+                </p>
+              </div>
+            </div>
           </div>
         </section>
       )}
@@ -483,13 +584,13 @@ export default function SettingsPage() {
           <div className="flex items-center justify-between">
             <span className="text-gray-400">Data Directory</span>
             <span className="text-white font-mono text-xs">
-              ~/Library/Application Support/Owork/
+              {platformInfo.dataDir}
             </span>
           </div>
           <div className="flex items-center justify-between">
             <span className="text-gray-400">Skills Directory</span>
             <span className="text-white font-mono text-xs">
-              ~/Library/Application Support/Owork/skills/
+              {platformInfo.skillsDir}
             </span>
           </div>
           <div className="flex items-center justify-between">
@@ -499,7 +600,7 @@ export default function SettingsPage() {
           <div className="flex items-center justify-between">
             <span className="text-gray-400">Logs Directory</span>
             <span className="text-white font-mono text-xs">
-              ~/Library/Application Support/Owork/logs/
+              {platformInfo.logsDir}
             </span>
           </div>
         </div>
@@ -515,7 +616,7 @@ export default function SettingsPage() {
           </div>
           <div className="flex items-center justify-between">
             <span className="text-gray-400">Platform</span>
-            <span className="text-white">macOS</span>
+            <span className="text-white">{platformInfo.platform}</span>
           </div>
         </div>
       </section>

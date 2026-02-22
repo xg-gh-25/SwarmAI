@@ -6,6 +6,9 @@ use tauri_plugin_shell::ShellExt;
 use tauri_plugin_shell::process::CommandChild;
 use tokio::sync::Mutex;
 
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+
 // Get enhanced PATH that includes common installation locations for the sidecar
 fn get_enhanced_path() -> String {
     let current_path = env::var("PATH").unwrap_or_default();
@@ -120,6 +123,7 @@ struct BackendState {
     child: Option<CommandChild>,
     port: u16,
     running: bool,
+    pid: Option<u32>,  // Store PID for process tree cleanup on Windows
 }
 
 impl Default for BackendState {
@@ -128,8 +132,28 @@ impl Default for BackendState {
             child: None,
             port: 8000,
             running: false,
+            pid: None,
         }
     }
+}
+
+// Kill process tree on Windows using taskkill
+#[cfg(target_os = "windows")]
+fn kill_process_tree(pid: u32) {
+    // Use taskkill with /T flag to kill the entire process tree
+    // /F = force, /T = tree (kill child processes), /PID = process ID
+    let _ = std::process::Command::new("taskkill")
+        .args(["/F", "/T", "/PID", &pid.to_string()])
+        .creation_flags(0x08000000) // CREATE_NO_WINDOW - hide the console window
+        .output();
+    println!("Killed process tree for PID: {}", pid);
+}
+
+// On non-Windows, just use the standard kill
+#[cfg(not(target_os = "windows"))]
+fn kill_process_tree(_pid: u32) {
+    // On Unix systems, the child.kill() should be sufficient
+    // as we handle it in the main cleanup code
 }
 
 type SharedBackendState = Arc<Mutex<BackendState>>;
@@ -173,12 +197,16 @@ async fn start_backend(
         .spawn()
         .map_err(|e| format!("Failed to spawn sidecar: {}", e))?;
 
+    // Get PID for process tree cleanup on Windows
+    let pid = child.pid();
+
     // Store the child process (short lock)
     {
         let mut backend = state.lock().await;
         backend.child = Some(child);
         backend.port = port;
         backend.running = true;
+        backend.pid = Some(pid);
     }
 
     // Spawn a task to handle sidecar output
@@ -200,6 +228,7 @@ async fn start_backend(
                     let mut backend = state_clone.lock().await;
                     backend.running = false;
                     backend.child = None;
+                    backend.pid = None;
                     break;
                 }
                 _ => {}
@@ -218,11 +247,18 @@ async fn start_backend(
 async fn stop_backend(state: tauri::State<'_, SharedBackendState>) -> Result<(), String> {
     let mut backend = state.lock().await;
 
+    // On Windows, use taskkill to kill the entire process tree
+    #[cfg(target_os = "windows")]
+    if let Some(pid) = backend.pid {
+        kill_process_tree(pid);
+    }
+
     if let Some(child) = backend.child.take() {
-        child.kill().map_err(|e| format!("Failed to kill backend: {}", e))?;
+        let _ = child.kill(); // Also try normal kill as fallback
     }
 
     backend.running = false;
+    backend.pid = None;
     Ok(())
 }
 
@@ -309,6 +345,58 @@ async fn check_nodejs_version() -> Result<String, String> {
     }
 
     Err("Node.js is not installed or not in PATH".to_string())
+}
+
+// Check Git Bash path (Windows only)
+// Returns the path if CLAUDE_CODE_GIT_BASH_PATH is set and the file exists,
+// or tries to auto-detect Git Bash in common locations
+#[tauri::command]
+async fn check_git_bash_path() -> Result<String, String> {
+    // Only relevant on Windows
+    #[cfg(not(target_os = "windows"))]
+    {
+        return Err("Not applicable on this platform".to_string());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        // First check if CLAUDE_CODE_GIT_BASH_PATH is set
+        if let Ok(git_bash_path) = env::var("CLAUDE_CODE_GIT_BASH_PATH") {
+            if std::path::Path::new(&git_bash_path).exists() {
+                return Ok(git_bash_path);
+            }
+        }
+
+        // Try to auto-detect Git Bash in common locations
+        let common_paths = vec![
+            // Default Git for Windows installation paths
+            r"C:\Program Files\Git\bin\bash.exe",
+            r"C:\Program Files (x86)\Git\bin\bash.exe",
+        ];
+
+        // Also check LOCALAPPDATA and ProgramFiles
+        if let Ok(localappdata) = env::var("LOCALAPPDATA") {
+            let path = format!(r"{}\Programs\Git\bin\bash.exe", localappdata);
+            if std::path::Path::new(&path).exists() {
+                return Ok(path);
+            }
+        }
+
+        if let Ok(programfiles) = env::var("ProgramFiles") {
+            let path = format!(r"{}\Git\bin\bash.exe", programfiles);
+            if std::path::Path::new(&path).exists() {
+                return Ok(path);
+            }
+        }
+
+        for path in common_paths {
+            if std::path::Path::new(path).exists() {
+                return Ok(path.to_string());
+            }
+        }
+
+        Err("Git Bash not found".to_string())
+    }
 }
 
 // Check Python version
@@ -427,6 +515,7 @@ pub fn run() {
             get_backend_port,
             check_nodejs_version,
             check_python_version,
+            check_git_bash_path,
         ])
         .setup(|app| {
             // Backend will be started by frontend via initializeBackend()
@@ -450,25 +539,91 @@ pub fn run() {
                 }
             }
 
+            // Set up window close handler for cleanup (especially important on Windows)
+            if let Some(window) = app.get_webview_window("main") {
+                let app_handle = app.handle().clone();
+                window.on_window_event(move |event| {
+                    if let tauri::WindowEvent::Destroyed = event {
+                        // Clean up backend process when window is destroyed
+                        let state = app_handle.state::<SharedBackendState>();
+                        let state_clone = state.inner().clone();
+
+                        tauri::async_runtime::block_on(async {
+                            let mut backend = state_clone.lock().await;
+
+                            // On Windows, use taskkill to kill the entire process tree
+                            #[cfg(target_os = "windows")]
+                            if let Some(pid) = backend.pid {
+                                kill_process_tree(pid);
+                                println!("Killed backend process tree (PID: {}) on window destroy", pid);
+                            }
+
+                            if let Some(child) = backend.child.take() {
+                                let _ = child.kill();
+                            }
+                            backend.running = false;
+                            backend.pid = None;
+                        });
+                    }
+                });
+            }
+
             Ok(())
         })
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app_handle, event| {
-            if let tauri::RunEvent::Exit = event {
-                // Clean up backend process on exit
-                let state = app_handle.state::<SharedBackendState>();
-                let state_clone = state.inner().clone();
+            match event {
+                tauri::RunEvent::Exit => {
+                    // Clean up backend process on exit
+                    let state = app_handle.state::<SharedBackendState>();
+                    let state_clone = state.inner().clone();
 
-                // Use blocking task to ensure cleanup completes
-                tauri::async_runtime::block_on(async {
-                    let mut backend = state_clone.lock().await;
-                    if let Some(child) = backend.child.take() {
-                        let _ = child.kill();
-                        println!("Backend process terminated on exit");
-                    }
-                    backend.running = false;
-                });
+                    // Use blocking task to ensure cleanup completes
+                    tauri::async_runtime::block_on(async {
+                        let mut backend = state_clone.lock().await;
+
+                        // On Windows, use taskkill to kill the entire process tree
+                        #[cfg(target_os = "windows")]
+                        if let Some(pid) = backend.pid {
+                            kill_process_tree(pid);
+                            println!("Killed backend process tree (PID: {}) on exit", pid);
+                        }
+
+                        if let Some(child) = backend.child.take() {
+                            let _ = child.kill();
+                            println!("Backend process terminated on exit");
+                        }
+                        backend.running = false;
+                        backend.pid = None;
+                    });
+                }
+                tauri::RunEvent::ExitRequested { api, .. } => {
+                    // Don't prevent exit, but ensure cleanup
+                    let _ = api; // Allow default exit behavior
+
+                    // Clean up backend process
+                    let state = app_handle.state::<SharedBackendState>();
+                    let state_clone = state.inner().clone();
+
+                    tauri::async_runtime::block_on(async {
+                        let mut backend = state_clone.lock().await;
+
+                        // On Windows, use taskkill to kill the entire process tree
+                        #[cfg(target_os = "windows")]
+                        if let Some(pid) = backend.pid {
+                            kill_process_tree(pid);
+                            println!("Killed backend process tree (PID: {}) on exit request", pid);
+                        }
+
+                        if let Some(child) = backend.child.take() {
+                            let _ = child.kill();
+                        }
+                        backend.running = false;
+                        backend.pid = None;
+                    });
+                }
+                _ => {}
             }
         });
 }
