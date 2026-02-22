@@ -180,29 +180,20 @@ jobs:
         shell: bash
         run: |
           echo "=== NSIS artifacts ==="
-          find desktop/src-tauri/target -name "*.nsis.zip" -o -name "*.nsis.zip.sig" 2>/dev/null || true
-          echo "=== Installer files ==="
           ls -lh desktop/src-tauri/target/release/bundle/nsis/ || true
 
-      - name: Upload updater artifact (nsis.zip)
+      - name: Upload updater artifact (exe)
         uses: actions/upload-artifact@v4
         with:
           name: windows-x64-updater
-          path: desktop/src-tauri/target/release/bundle/nsis/*.nsis.zip
+          path: desktop/src-tauri/target/release/bundle/nsis/*-setup.exe
           if-no-files-found: error
 
       - name: Upload updater signature
         uses: actions/upload-artifact@v4
         with:
           name: windows-x64-sig
-          path: desktop/src-tauri/target/release/bundle/nsis/*.nsis.zip.sig
-          if-no-files-found: error
-
-      - name: Upload NSIS installer
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-x64-exe
-          path: desktop/src-tauri/target/release/bundle/nsis/*.exe
+          path: desktop/src-tauri/target/release/bundle/nsis/*-setup.exe.sig
           if-no-files-found: error
 
       - name: Upload MSI installer
@@ -246,14 +237,13 @@ jobs:
           MACOS_SIG=$(find artifacts/macos-aarch64-sig -name "*.tar.gz.sig" | head -1)
           MACOS_DMG=$(find artifacts/macos-aarch64-dmg -name "*.dmg" | head -1)
 
-          # Find and copy Windows files
-          WINDOWS_UPDATER=$(find artifacts/windows-x64-updater -name "*.nsis.zip" | head -1)
-          WINDOWS_SIG=$(find artifacts/windows-x64-sig -name "*.nsis.zip.sig" | head -1)
-          WINDOWS_EXE=$(find artifacts/windows-x64-exe -name "*.exe" | head -1)
+          # Find and copy Windows files (Tauri 2.0 uses .exe directly, not .nsis.zip)
+          WINDOWS_UPDATER=$(find artifacts/windows-x64-updater -name "*-setup.exe" | head -1)
+          WINDOWS_SIG=$(find artifacts/windows-x64-sig -name "*-setup.exe.sig" | head -1)
 
           # Standardize filenames
           MACOS_UPDATER_NAME="Owork_${VERSION}_aarch64.app.tar.gz"
-          WINDOWS_UPDATER_NAME="Owork_${VERSION}_x64-setup.nsis.zip"
+          WINDOWS_UPDATER_NAME="Owork_${VERSION}_x64-setup.exe"
 
           cp "$MACOS_UPDATER" "release/${MACOS_UPDATER_NAME}"
           cp "$MACOS_SIG" "release/${MACOS_UPDATER_NAME}.sig"
@@ -261,7 +251,6 @@ jobs:
 
           cp "$WINDOWS_UPDATER" "release/${WINDOWS_UPDATER_NAME}"
           cp "$WINDOWS_SIG" "release/${WINDOWS_UPDATER_NAME}.sig"
-          cp "$WINDOWS_EXE" "release/"
 
           # Set outputs for update manifest
           echo "macos_aarch64_file=${MACOS_UPDATER_NAME}" >> $GITHUB_OUTPUT
