@@ -2,10 +2,10 @@ import { useState, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import clsx from 'clsx';
 import type { Agent, AgentCreateRequest } from '../../types';
-import { agentsService } from '../../services/agents';
 import { skillsService } from '../../services/skills';
 import { mcpService } from '../../services/mcp';
 import { pluginsService } from '../../services/plugins';
+import { settingsService } from '../../services/settings';
 import Modal from './Modal';
 import Dropdown from './Dropdown';
 import MultiSelect from './MultiSelect';
@@ -13,20 +13,29 @@ import ToolSelector, { getDefaultEnabledTools } from './ToolSelector';
 import Button from './Button';
 import { Spinner } from './SkeletonLoader';
 
-// Model options with descriptions for the Dropdown component
-const MODEL_OPTIONS = [
+// Claude models (available in both Bedrock and API Proxy modes)
+const CLAUDE_MODELS = [
   { id: 'claude-sonnet-4-5-20250929', name: 'Claude Sonnet 4.5', description: 'Best balance of speed and intelligence' },
   { id: 'claude-haiku-4-5-20251001', name: 'Claude Haiku 4.5', description: 'Fastest and most cost-effective' },
   { id: 'claude-opus-4-5-20251101', name: 'Claude Opus 4.5', description: 'Most intelligent, best for complex tasks' },
 ];
 
-// Helper to convert models array to dropdown options
-const getModelOptions = (models: string[]) => {
-  return models.map((model) => {
-    const predefined = MODEL_OPTIONS.find((opt) => opt.id === model);
-    if (predefined) return predefined;
-    return { id: model, name: model };
-  });
+// Third-party models (only available via API Proxy, not Bedrock mode)
+const THIRD_PARTY_MODELS = [
+  { id: 'minimax.minimax-m2', name: 'MiniMax-m2', description: 'MiniMax M2 model (API Proxy only)' },
+  { id: 'qwen.qwen3-next-80b-a3b', name: 'Qwen3-Next-80B-A3B', description: 'Qwen3 Next 80B (API Proxy only)' },
+  { id: 'qwen.qwen3-coder-480b-a35b-v1:0', name: 'Qwen3-Coder-480B-A35B', description: 'Qwen3 Coder 480B (API Proxy only)' },
+  { id: 'qwen.qwen3-235b-a22b-2507-v1:0', name: 'Qwen3-235B-A22B-2507', description: 'Qwen3 235B (API Proxy only)' },
+];
+
+// Helper to get model options based on API mode
+// When useBedrock is true: only show Claude models
+// When useBedrock is false (API Proxy): show Claude + third-party models
+const getModelOptions = (useBedrock: boolean) => {
+  if (useBedrock) {
+    return CLAUDE_MODELS;
+  }
+  return [...CLAUDE_MODELS, ...THIRD_PARTY_MODELS];
 };
 
 export interface AgentFormModalProps {
@@ -62,12 +71,13 @@ export default function AgentFormModal({
 
   const [isSaving, setIsSaving] = useState(false);
 
-  // Fetch models
-  const { data: models = [] } = useQuery({
-    queryKey: ['models'],
-    queryFn: agentsService.listModels,
+  // Fetch API config to check if Bedrock is enabled
+  const { data: apiConfig } = useQuery({
+    queryKey: ['apiConfig'],
+    queryFn: settingsService.getAPIConfiguration,
     enabled: isOpen,
   });
+  const useBedrock = apiConfig?.use_bedrock ?? false;
 
   // Fetch skills
   const { data: skills = [], isLoading: loadingSkills } = useQuery({
@@ -124,16 +134,17 @@ export default function AgentFormModal({
         setEnableHumanApproval(true);
       }
     }
-    // Note: models is intentionally excluded from dependencies to prevent
-    // form reset on query refetch. The second useEffect handles default model.
   }, [isOpen, agent]);
 
-  // Update default model when models list loads (for create mode)
+  // Set default model for create mode (use first available model)
   useEffect(() => {
-    if (!isEditMode && models.length > 0 && !model) {
-      setModel(models[0]);
+    if (!isEditMode && !model) {
+      const availableModels = getModelOptions(useBedrock);
+      if (availableModels.length > 0) {
+        setModel(availableModels[0].id);
+      }
     }
-  }, [models, model, isEditMode]);
+  }, [useBedrock, model, isEditMode]);
 
   // Global User Mode requires Allow All Skills - skill restrictions not supported
   useEffect(() => {
@@ -284,13 +295,21 @@ export default function AgentFormModal({
         </div>
 
         {/* Base Model */}
-        <Dropdown
-          label="Base Model"
-          options={getModelOptions(models)}
-          selectedId={model || null}
-          onChange={setModel}
-          placeholder="Select a model..."
-        />
+        <div>
+          <Dropdown
+            label="Base Model"
+            options={getModelOptions(useBedrock)}
+            selectedId={model || null}
+            onChange={setModel}
+            placeholder="Select a model..."
+          />
+          {useBedrock && (
+            <p className="mt-1 text-xs text-amber-400">
+              <span className="material-symbols-outlined text-xs align-middle mr-1">info</span>
+              Third-party models (MiniMax, Qwen) are only available when using API Proxy mode.
+            </p>
+          )}
+        </div>
 
         {/* Built-in Tools */}
         <ToolSelector selectedTools={allowedTools} onChange={setAllowedTools} />
