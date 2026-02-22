@@ -153,66 +153,49 @@ EOF
 # Navigate to build directory
 cd "$BUILD_DIR"
 
-# Create virtual environment and install dependencies
-echo "Setting up Python environment..."
+# Install dependencies using uv (fast Python package manager)
+echo "Setting up Python environment with uv..."
 
-# Use python3 on Unix, python on Windows
+# Check if uv is available, if not install it
+if ! command -v uv &> /dev/null; then
+    echo "Installing uv..."
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    export PATH="$HOME/.local/bin:$PATH"
+fi
+
+# Create virtual environment with uv
+uv venv .venv
+
+# Activate virtual environment
 if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" ]]; then
-    python -m venv .venv
     source .venv/Scripts/activate
 else
-    python3 -m venv .venv
     source .venv/bin/activate
 fi
 
-# Install dependencies
-# Extract dependencies from pyproject.toml and install them separately
+# Install dependencies using uv
 # This ensures local modules (routers, core, etc.) remain as top-level modules in current dir
+echo "Installing dependencies with uv..."
 
-echo "Extracting and installing dependencies..."
+uv pip install pyinstaller pyinstaller-hooks-contrib
 
-# Use python -m pip on Windows to avoid pip self-upgrade issues
-if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" ]]; then
-    python -m pip install --upgrade pip
-    python -m pip install pyinstaller pyinstaller-hooks-contrib
-    # Install project dependencies (but not the project itself as a package)
-    python -m pip install \
-        "fastapi>=0.115.0" \
-        "uvicorn[standard]>=0.34.0" \
-        "python-multipart>=0.0.12" \
-        "pydantic>=2.10.0" \
-        "pydantic-settings>=2.6.0" \
-        "claude-agent-sdk==0.1.20" \
-        "boto3>=1.35.0" \
-        "aioboto3>=13.0.0" \
-        "aiosqlite>=0.20.0" \
-        "python-jose[cryptography]>=3.3.0" \
-        "passlib[bcrypt]>=1.7.4" \
-        "bcrypt>=4.0.0" \
-        "slowapi>=0.1.9" \
-        "pyyaml>=6.0.0" \
-        "anyio>=4.0.0"
-else
-    pip install --upgrade pip
-    pip install pyinstaller pyinstaller-hooks-contrib
-    # Install project dependencies (but not the project itself as a package)
-    pip install \
-        "fastapi>=0.115.0" \
-        "uvicorn[standard]>=0.34.0" \
-        "python-multipart>=0.0.12" \
-        "pydantic>=2.10.0" \
-        "pydantic-settings>=2.6.0" \
-        "claude-agent-sdk==0.1.20" \
-        "boto3>=1.35.0" \
-        "aioboto3>=13.0.0" \
-        "aiosqlite>=0.20.0" \
-        "python-jose[cryptography]>=3.3.0" \
-        "passlib[bcrypt]>=1.7.4" \
-        "bcrypt>=4.0.0" \
-        "slowapi>=0.1.9" \
-        "pyyaml>=6.0.0" \
-        "anyio>=4.0.0"
-fi
+# Install project dependencies from pyproject.toml (dependencies only, not as editable package)
+uv pip install \
+    "fastapi>=0.115.0" \
+    "uvicorn[standard]>=0.34.0" \
+    "python-multipart>=0.0.12" \
+    "pydantic>=2.10.0" \
+    "pydantic-settings>=2.6.0" \
+    "claude-agent-sdk>=0.1.20" \
+    "boto3>=1.40.76" \
+    "aioboto3>=13.0.0" \
+    "aiosqlite>=0.20.0" \
+    "python-jose[cryptography]>=3.3.0" \
+    "passlib[bcrypt]>=1.7.4" \
+    "bcrypt>=4.0.0" \
+    "slowapi>=0.1.9" \
+    "pyyaml>=6.0.0" \
+    "anyio>=4.0.0"
 
 # Verify key local modules are accessible from current directory
 echo "Verifying local modules are importable..."
