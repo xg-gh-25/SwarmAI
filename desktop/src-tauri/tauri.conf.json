@@ -41,6 +41,24 @@
     "macOS": {
       "minimumSystemVersion": "10.15"
     },
+    "windows": {
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper"
+      },
+      "allowDowngrades": false,
+      "wix": {
+        "language": ["en-US"]
+      },
+      "nsis": {
+        "installerIcon": "icons/icon.ico",
+        "license": "../../LICENSE"
+      }
+    },
+    "linux": {
+      "deb": {
+        "depends": []
+      }
+    },
     "externalBin": ["binaries/python-backend"]
   },
   "plugins": {

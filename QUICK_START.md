@@ -19,8 +19,8 @@ Owork 是一个基于 Claude Agent SDK 的 AI Agent 桌面应用，支持创建�
 
 | 项目 | 要求 |
 |------|------|
-| 操作系统 | macOS 10.15+ (Catalina 或更高版本) |
-| 处理器 | Apple Silicon (M1/M2/M3) 或 Intel |
+| 操作系统 | macOS 10.15+、Windows 10/11 或 Linux (Ubuntu 20.04+) |
+| 处理器 | x86_64 或 ARM64 (Apple Silicon) |
 | 内存 | 8GB RAM (推荐 16GB) |
 | 磁盘空间 | 500MB 可用空间 |
 | 网络 | 需要互联网连接 |
@@ -38,7 +38,9 @@ Owork 是一个基于 Claude Agent SDK 的 AI Agent 桌面应用，支持创建�
 
 Node.js 是运行 Claude Code CLI 的必需依赖。
 
-#### 方式一：使用 Homebrew（推荐）
+#### macOS
+
+**方式一：使用 Homebrew（推荐）**
 
 ```bash
 # 安装 Homebrew（如果未安装）
@@ -52,7 +54,7 @@ node --version  # 应显示 v18.x.x 或更高
 npm --version   # 应显示 9.x.x 或更高
 ```
 
-#### 方式二：使用 nvm（Node 版本管理器）
+**方式二：使用 nvm（Node 版本管理器）**
 
 ```bash
 # 安装 nvm
@@ -65,16 +67,59 @@ node --version
 npm --version
 ```
 
-#### 方式三：官网下载
+#### Windows
+
+**方式一：使用官方安装包（推荐）**
 
 1. 访问 [Node.js 官网](https://nodejs.org/)
-2. 下载 macOS 安装包（LTS 版本）
-3. 双击 `.pkg` 文件并按照提示安装
-4. 打开终端验证：
-   ```bash
+2. 下载 Windows 安装包（LTS 版本）
+3. 运行 `.msi` 安装程序并按照提示安装
+4. 打开命令提示符（CMD）或 PowerShell 验证：
+   ```powershell
    node --version
    npm --version
    ```
+
+**方式二：使用 Chocolatey**
+
+```powershell
+# 以管理员身份打开 PowerShell，安装 Chocolatey（如果未安装）
+Set-ExecutionPolicy Bypass -Scope Process -Force; [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072; iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+
+# 安装 Node.js
+choco install nodejs-lts
+
+# 验证安装
+node --version
+npm --version
+```
+
+#### Linux
+
+**Ubuntu/Debian:**
+
+```bash
+# 使用 NodeSource 仓库
+curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash -
+sudo apt-get install -y nodejs
+
+# 验证安装
+node --version
+npm --version
+```
+
+**通用方式：使用 nvm**
+
+```bash
+# 安装 nvm
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash
+source ~/.bashrc
+# 安装最新 LTS 版本
+nvm install --lts
+# 验证安装
+node --version
+npm --version
+```
 
 ---
 
@@ -96,14 +141,73 @@ npm install -g @anthropic-ai/claude-code
 
 ### 3. 安装 Owork
 
-#### 方式一：使用 DMG 安装包（推荐）
+#### macOS
 
-1. 下载 `Owork_x.x.x_aarch64.dmg` 安装包
+**方式一：使用 DMG 安装包（推荐）**
+
+1. 下载 `Owork_x.x.x_aarch64.dmg`（Apple Silicon）或 `Owork_x.x.x_x86_64.dmg`（Intel）
 2. 双击打开 DMG 文件
 3. 将 `Owork.app` 拖拽到 `Applications` 文件夹
 4. 从启动台或 Applications 文件夹启动 Owork
 
-#### 方式二：从源码构建
+**首次启动注意事项：**
+
+macOS 可能会阻止未签名的应用运行。如果遇到「无法打开 Owork，因为无法验证开发者」的提示：
+
+1. 打开「系统偏好设置」→「安全性与隐私」
+2. 点击「通用」标签
+3. 点击「仍要打开」按钮
+
+或者使用终端命令：
+```bash
+sudo xattr -cr /Applications/Owork.app
+```
+
+#### Windows
+
+**方式一：使用 MSI 安装包（推荐）**
+
+1. 下载 `Owork_x.x.x_x64.msi` 安装包
+2. 双击运行安装程序
+3. 按照向导完成安装（默认安装到 `C:\Program Files\Owork\`）
+4. 从开始菜单启动 Owork
+
+**方式二：使用 NSIS 安装包**
+
+1. 下载 `Owork_x.x.x_x64-setup.exe`
+2. 运行安装程序并按照提示完成安装
+3. 从开始菜单或桌面快捷方式启动 Owork
+
+**首次启动注意事项：**
+
+Windows 可能显示 SmartScreen 警告。点击「更多信息」→「仍要运行」即可。
+
+#### Linux
+
+**Ubuntu/Debian (使用 DEB 包):**
+
+```bash
+# 下载 .deb 文件后
+sudo dpkg -i owork_x.x.x_amd64.deb
+
+# 如果有依赖问题，运行：
+sudo apt-get install -f
+
+# 从应用菜单启动，或命令行：
+owork
+```
+
+**通用 Linux (使用 AppImage):**
+
+```bash
+# 下载 .AppImage 文件后
+chmod +x owork_x.x.x_x86_64.AppImage
+
+# 运行
+./owork_x.x.x_x86_64.AppImage
+```
+
+#### 从源码构建（所有平台）
 
 ```bash
 # 克隆仓库
@@ -113,24 +217,13 @@ cd awesome-skills-claude-agents/desktop
 # 安装依赖
 npm install
 
-# 构建应用
+# 构建应用（会自动检测当前平台）
 npm run build:all
 
-# 构建产物位于
-# ./src-tauri/target/release/bundle/macos/Owork.app
-# ./src-tauri/target/release/bundle/dmg/Owork_x.x.x_aarch64.dmg
-```
-
-#### 首次启动注意事项
-
-macOS 可能会阻止未签名的应用运行。如果遇到「无法打开 Owork，因为无法验证开发者」的提示：
-
-1. 打开「系统偏好设置」→「安全性与隐私」
-2. 点击「通用」标签
-3. 点击「仍要打开」按钮
-或者使用终端命令：
-```bash
-sudo xattr -cr /Applications/Owork.app
+# 构建产物位于 ./src-tauri/target/release/bundle/
+# macOS: dmg/Owork_x.x.x_aarch64.dmg 或 macos/Owork.app
+# Windows: msi/Owork_x.x.x_x64.msi 或 nsis/Owork_x.x.x_x64-setup.exe
+# Linux: deb/owork_x.x.x_amd64.deb 或 appimage/owork_x.x.x_x86_64.AppImage
 ```
 
 
@@ -210,7 +303,9 @@ sudo xattr -cr /Applications/Owork.app
 
 ## 数据存储位置
 
-Owork 的数据存储在以下位置：
+Owork 的数据存储位置因操作系统而异：
+
+### macOS
 
 | 类型 | 路径 |
 |------|------|
@@ -219,12 +314,43 @@ Owork 的数据存储在以下位置：
 | Skills 目录 | `~/Library/Application Support/Owork/skills/` |
 | 日志目录 | `~/Library/Application Support/Owork/logs/` |
 
-### 查看日志
-
-如果遇到问题，可以查看后端日志：
-
+**查看日志：**
 ```bash
 cat ~/Library/Application\ Support/Owork/logs/backend.log
+```
+
+### Windows
+
+| 类型 | 路径 |
+|------|------|
+| 数据目录 | `%LOCALAPPDATA%\Owork\` |
+| 数据库 | `%LOCALAPPDATA%\Owork\data.db` |
+| Skills 目录 | `%LOCALAPPDATA%\Owork\skills\` |
+| 日志目录 | `%LOCALAPPDATA%\Owork\logs\` |
+
+通常对应：`C:\Users\YourUsername\AppData\Local\Owork\`
+
+**查看日志：**
+```powershell
+# PowerShell
+Get-Content $env:LOCALAPPDATA\Owork\logs\backend.log
+
+# 或使用记事本打开
+notepad $env:LOCALAPPDATA\Owork\logs\backend.log
+```
+
+### Linux
+
+| 类型 | 路径 |
+|------|------|
+| 数据目录 | `~/.local/share/owork/` |
+| 数据库 | `~/.local/share/owork/data.db` |
+| Skills 目录 | `~/.local/share/owork/skills/` |
+| 日志目录 | `~/.local/share/owork/logs/` |
+
+**查看日志：**
+```bash
+cat ~/.local/share/owork/logs/backend.log
 ```
 
 ---
@@ -273,7 +399,7 @@ claude --version
 
 ### Q: 如何完全卸载 Owork？
 
-**A:** 执行以下步骤：
+**A (macOS):**
 
 ```bash
 # 1. 删除应用
@@ -281,6 +407,39 @@ rm -rf /Applications/Owork.app
 
 # 2. 删除数据目录（可选，会删除所有数据）
 rm -rf ~/Library/Application\ Support/Owork/
+
+# 3. 删除 Claude Code CLI（可选）
+npm uninstall -g @anthropic-ai/claude-code
+```
+
+**A (Windows):**
+
+```powershell
+# 1. 使用 Windows 设置卸载
+# 「设置」→「应用」→「Owork」→「卸载」
+
+# 或使用 MSI 卸载（如果是 MSI 安装）
+# 控制面板 → 程序和功能 → Owork → 卸载
+
+# 2. 删除数据目录（可选，会删除所有数据）
+Remove-Item -Recurse -Force $env:LOCALAPPDATA\Owork
+
+# 3. 删除 Claude Code CLI（可选）
+npm uninstall -g @anthropic-ai/claude-code
+```
+
+**A (Linux):**
+
+```bash
+# 1. 卸载应用
+# DEB 安装：
+sudo apt remove owork
+
+# AppImage：直接删除文件
+rm owork_*.AppImage
+
+# 2. 删除数据目录（可选，会删除所有数据）
+rm -rf ~/.local/share/owork/
 
 # 3. 删除 Claude Code CLI（可选）
 npm uninstall -g @anthropic-ai/claude-code

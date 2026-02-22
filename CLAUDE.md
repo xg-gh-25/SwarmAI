@@ -11,7 +11,7 @@ This is an AI Agent Platform that enables users to create, manage, and chat with
 | **Desktop** (primary) | Tauri 2.0 + React | Python FastAPI sidecar | SQLite | Local filesystem + Git |
 | **Cloud** | React (S3/CloudFront) | FastAPI (ECS Fargate) | DynamoDB | S3 |
 
-The **desktop version** (`desktop/` directory) is the primary development target.
+The **desktop version** (`desktop/` directory) is the primary development target and supports **Windows, macOS, and Linux**.
 
 ## Development Commands
 
@@ -102,6 +102,7 @@ Tauri App
 - Frontend uses `getBackendPort()` from `services/tauri.ts` to get the port
 - Data stored in platform-specific directories:
   - macOS: `~/Library/Application Support/Owork/`
+  - Windows: `%LOCALAPPDATA%\Owork\` (typically `C:\Users\YourUsername\AppData\Local\Owork\`)
   - Linux: `~/.local/share/owork/`
 
 ### Backend Structure
@@ -267,6 +268,13 @@ tail -f logs/backend.log | grep "FILE ACCESS DENIED\|BASH FILE ACCESS\|BLOCKED.*
 desktop/src-tauri/target/release/bundle/
 ├── dmg/Owork_*.dmg
 └── macos/Owork.app
+```
+
+**Desktop (Windows):**
+```
+desktop/src-tauri/target/release/bundle/
+├── msi/Owork_*_x64.msi
+└── nsis/Owork_*_x64-setup.exe
 ```
 
 **Desktop (Linux):**

@@ -19,12 +19,22 @@ if [[ "$OSTYPE" == "darwin"* ]]; then
     else
         TARGET="x86_64-apple-darwin"
     fi
+    BINARY_EXT=""
 elif [[ "$OSTYPE" == "linux"* ]]; then
     if [[ $(uname -m) == "aarch64" ]]; then
         TARGET="aarch64-unknown-linux-gnu"
     else
         TARGET="x86_64-unknown-linux-gnu"
     fi
+    BINARY_EXT=""
+elif [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" ]]; then
+    # Windows (Git Bash or Cygwin)
+    if [[ $(uname -m) == "x86_64" ]]; then
+        TARGET="x86_64-pc-windows-msvc"
+    else
+        TARGET="i686-pc-windows-msvc"
+    fi
+    BINARY_EXT=".exe"
 else
     echo "Unsupported platform: $OSTYPE"
     exit 1
@@ -176,8 +186,15 @@ echo "Running PyInstaller..."
 pyinstaller backend.spec --clean --noconfirm
 
 # Copy the built binary to output directory
-OUTPUT_BINARY="$OUTPUT_DIR/python-backend-$TARGET"
-cp "dist/python-backend" "$OUTPUT_BINARY"
+SOURCE_BINARY="dist/python-backend${BINARY_EXT}"
+OUTPUT_BINARY="$OUTPUT_DIR/python-backend-$TARGET${BINARY_EXT}"
+
+if [[ ! -f "$SOURCE_BINARY" ]]; then
+    echo "Error: Built binary not found at $SOURCE_BINARY"
+    exit 1
+fi
+
+cp "$SOURCE_BINARY" "$OUTPUT_BINARY"
 chmod +x "$OUTPUT_BINARY"
 
 echo "Backend binary built successfully: $OUTPUT_BINARY"
