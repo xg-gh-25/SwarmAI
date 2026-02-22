@@ -62,10 +62,14 @@ jobs:
 
       - name: Create backend .env file
         working-directory: ./backend
-        run: |
-          echo "DATABASE_TYPE=sqlite" > .env
-          echo "ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}" >> .env
         shell: bash
+        run: |
+          cp .env.example .env
+          # Replace API key if secret is set
+          if [ -n "${{ secrets.ANTHROPIC_API_KEY }}" ]; then
+            sed -i.bak 's/ANTHROPIC_API_KEY=.*/ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}/' .env
+            rm -f .env.bak 2>/dev/null || true
+          fi
 
       - name: Build application
         working-directory: ./desktop

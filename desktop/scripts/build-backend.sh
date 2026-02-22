@@ -57,41 +57,94 @@ cat > "$BUILD_DIR/desktop_main.py" << 'EOF'
 #!/usr/bin/env python3
 """Desktop application entry point for the backend server."""
 import sys
-import argparse
 import os
-import asyncio
-import signal
+import platform
+import traceback
+from pathlib import Path
+from datetime import datetime
 
-# Set environment for desktop mode
-os.environ.setdefault("DATABASE_TYPE", "sqlite")
-os.environ.setdefault("CLAUDE_CODE_USE_BEDROCK", "false")
+def get_log_dir() -> Path:
+    """Get the log directory based on platform."""
+    if platform.system() == "Darwin":
+        log_dir = Path.home() / "Library" / "Application Support" / "Owork" / "logs"
+    elif platform.system() == "Windows":
+        log_dir = Path.home() / "AppData" / "Local" / "Owork" / "logs"
+    else:
+        log_dir = Path.home() / ".local" / "share" / "owork" / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    return log_dir
 
-# Import and run the FastAPI app
-import uvicorn
-from main import app
+def write_startup_log(message: str):
+    """Write a startup log message before main logging is initialized."""
+    try:
+        log_file = get_log_dir() / "startup.log"
+        timestamp = datetime.now().isoformat()
+        with open(log_file, "a", encoding="utf-8") as f:
+            f.write(f"[{timestamp}] {message}\n")
+        # Also print to stdout for Tauri to capture
+        print(f"[STARTUP] {message}", flush=True)
+    except Exception as e:
+        print(f"[STARTUP ERROR] Failed to write log: {e}", flush=True)
 
 def main():
+    write_startup_log("Desktop backend starting...")
+    write_startup_log(f"Python version: {sys.version}")
+    write_startup_log(f"Platform: {platform.system()} {platform.machine()}")
+    write_startup_log(f"Executable: {sys.executable}")
+    write_startup_log(f"Working directory: {os.getcwd()}")
+
+    # Set environment for desktop mode BEFORE any imports
+    os.environ.setdefault("DATABASE_TYPE", "sqlite")
+    os.environ.setdefault("CLAUDE_CODE_USE_BEDROCK", "false")
+    write_startup_log(f"DATABASE_TYPE: {os.environ.get('DATABASE_TYPE')}")
+
+    try:
+        write_startup_log("Importing argparse...")
+        import argparse
+
+        write_startup_log("Importing asyncio...")
+        import asyncio
+
+        write_startup_log("Importing uvicorn...")
+        import uvicorn
+
+        write_startup_log("Importing main app...")
+        from main import app
+        write_startup_log("All imports successful!")
+
+    except Exception as e:
+        error_msg = f"Import error: {type(e).__name__}: {e}\n{traceback.format_exc()}"
+        write_startup_log(error_msg)
+        sys.exit(1)
+
     parser = argparse.ArgumentParser(description="Claude Agent Platform Backend")
     parser.add_argument("--port", type=int, default=8000, help="Port to run on")
     parser.add_argument("--host", type=str, default="127.0.0.1", help="Host to bind to")
     args = parser.parse_args()
 
+    write_startup_log(f"Starting server on {args.host}:{args.port}")
     print(f"Starting backend server on {args.host}:{args.port}", flush=True)
 
-    # Configure uvicorn for PyInstaller compatibility
-    config = uvicorn.Config(
-        app,
-        host=args.host,
-        port=args.port,
-        log_level="info",
-        loop="asyncio",  # Use asyncio loop explicitly
-        reload=False,    # Disable reload in bundled app
-        workers=1,       # Single worker for bundled app
-    )
-    server = uvicorn.Server(config)
+    try:
+        # Configure uvicorn for PyInstaller compatibility
+        config = uvicorn.Config(
+            app,
+            host=args.host,
+            port=args.port,
+            log_level="info",
+            loop="asyncio",  # Use asyncio loop explicitly
+            reload=False,    # Disable reload in bundled app
+            workers=1,       # Single worker for bundled app
+        )
+        server = uvicorn.Server(config)
 
-    # Run the server
-    asyncio.run(server.serve())
+        # Run the server
+        write_startup_log("Starting uvicorn server...")
+        asyncio.run(server.serve())
+    except Exception as e:
+        error_msg = f"Server error: {type(e).__name__}: {e}\n{traceback.format_exc()}"
+        write_startup_log(error_msg)
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
@@ -100,58 +153,139 @@ EOF
 # Navigate to build directory
 cd "$BUILD_DIR"
 
-# Create virtual environment and install dependencies
-echo "Setting up Python environment..."
+# Install dependencies using uv (fast Python package manager)
+echo "Setting up Python environment with uv..."
 
-# Use python3 on Unix, python on Windows
+# Check if uv is available, if not install it
+if ! command -v uv &> /dev/null; then
+    echo "Installing uv..."
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    export PATH="$HOME/.local/bin:$PATH"
+fi
+
+# Create virtual environment with uv
+uv venv .venv
+
+# Activate virtual environment
 if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" ]]; then
-    python -m venv .venv
     source .venv/Scripts/activate
 else
-    python3 -m venv .venv
     source .venv/bin/activate
 fi
 
-# Install dependencies
-# Use python -m pip on Windows to avoid pip self-upgrade issues
-if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" ]]; then
-    python -m pip install --upgrade pip
-    python -m pip install pyinstaller
-    python -m pip install -e .
-else
-    pip install --upgrade pip
-    pip install pyinstaller
-    pip install -e .
-fi
+# Install dependencies using uv
+# This ensures local modules (routers, core, etc.) remain as top-level modules in current dir
+echo "Installing dependencies with uv..."
+
+uv pip install pyinstaller pyinstaller-hooks-contrib
+
+# Install project dependencies from pyproject.toml (dependencies only, not as editable package)
+uv pip install \
+    "fastapi>=0.115.0" \
+    "uvicorn[standard]>=0.34.0" \
+    "python-multipart>=0.0.12" \
+    "pydantic>=2.10.0" \
+    "pydantic-settings>=2.6.0" \
+    "claude-agent-sdk>=0.1.20" \
+    "boto3>=1.40.37" \
+    "aioboto3>=13.0.0" \
+    "aiosqlite>=0.20.0" \
+    "python-jose[cryptography]>=3.3.0" \
+    "passlib[bcrypt]>=1.7.4" \
+    "bcrypt>=4.0.0" \
+    "slowapi>=0.1.9" \
+    "pyyaml>=6.0.0" \
+    "anyio>=4.0.0"
+
+# Verify key local modules are accessible from current directory
+echo "Verifying local modules are importable..."
+DATABASE_TYPE=sqlite python -c "
+import sys
+sys.path.insert(0, '.')
+import main
+import config
+import routers
+import core
+import schemas
+import database
+import middleware
+print('All local modules verified!')
+"
 
 # Create PyInstaller spec file for better control
 cat > backend.spec << EOF
 # -*- mode: python ; coding: utf-8 -*-
+from PyInstaller.utils.hooks import collect_submodules, collect_data_files
+import os
 
 block_cipher = None
 
+# Collect submodules for installed packages
+hiddenimports = []
+hiddenimports += collect_submodules('uvicorn')
+hiddenimports += collect_submodules('fastapi')
+hiddenimports += collect_submodules('starlette')
+hiddenimports += collect_submodules('pydantic')
+hiddenimports += collect_submodules('pydantic_settings')
+hiddenimports += collect_submodules('anyio')
+hiddenimports += collect_submodules('slowapi')
+
+# Add local modules explicitly (these are in the current directory, not installed packages)
+local_modules = [
+    # Main entry
+    'main',
+    'config',
+    # Routers
+    'routers',
+    'routers.agents',
+    'routers.auth',
+    'routers.chat',
+    'routers.mcp',
+    'routers.plugins',
+    'routers.settings',
+    'routers.skills',
+    'routers.workspace',
+    # Schemas
+    'schemas',
+    'schemas.agent',
+    'schemas.auth',
+    'schemas.error',
+    'schemas.marketplace',
+    'schemas.mcp',
+    'schemas.message',
+    'schemas.permission',
+    'schemas.settings',
+    'schemas.skill',
+    'schemas.workspace',
+    # Database
+    'database',
+    'database.base',
+    'database.sqlite',
+    'database.dynamodb',
+    # Core
+    'core',
+    'core.agent_manager',
+    'core.auth',
+    'core.exceptions',
+    'core.local_skill_manager',
+    'core.plugin_manager',
+    'core.session_manager',
+    'core.skill_manager',
+    'core.workspace_manager',
+    # Middleware
+    'middleware',
+    'middleware.auth',
+    'middleware.error_handler',
+    'middleware.rate_limit',
+]
+
 a = Analysis(
     ['desktop_main.py'],
-    pathex=['.'],
+    pathex=[os.getcwd()],  # Add current directory to path
     binaries=[],
-    datas=[
-        # Include any data files needed
-    ],
-    hiddenimports=[
-        'uvicorn.logging',
-        'uvicorn.loops',
-        'uvicorn.loops.auto',
-        'uvicorn.protocols',
-        'uvicorn.protocols.http',
-        'uvicorn.protocols.http.auto',
-        'uvicorn.protocols.websockets',
-        'uvicorn.protocols.websockets.auto',
-        'uvicorn.lifespan',
-        'uvicorn.lifespan.on',
-        'fastapi',
-        'pydantic',
-        'aiosqlite',
-        'anyio._backends._asyncio',
+    datas=[],
+    hiddenimports=hiddenimports + local_modules + [
+        # Claude Agent SDK
         'claude_agent_sdk',
         # passlib handlers for auth module
         'passlib.handlers.bcrypt',
@@ -159,6 +293,31 @@ a = Analysis(
         'passlib.handlers.sha2_crypt',
         'passlib.handlers.argon2',
         'bcrypt',
+        # Database
+        'aiosqlite',
+        'sqlite3',
+        # Rate limiting
+        'slowapi',
+        'slowapi.errors',
+        # HTTP/SSL
+        'ssl',
+        'certifi',
+        # Backend local modules - CRITICAL for bundling
+        'main',
+        'config',
+        # Additional dependencies that may be dynamically imported
+        'email_validator',
+        'httptools',
+        'websockets',
+        'watchfiles',
+        'h11',
+        'httpcore',
+        'httpx',
+        'yaml',
+        'pyyaml',
+        'jose',
+        'python_jose',
+        'cryptography',
     ],
     hookspath=[],
     hooksconfig={},
