@@ -1236,7 +1236,6 @@ class AgentManager:
                     # Remove client from tracking when done
                     if session_context["sdk_session_id"]:
                         self._clients.pop(session_context["sdk_session_id"], None)
-                    logger.info(f"Client removed from tracking for session {session_context["sdk_session_id"]}")
 
         except Exception as e:
             import traceback
