@@ -187,7 +187,7 @@ uv pip install \
     "pydantic>=2.10.0" \
     "pydantic-settings>=2.6.0" \
     "claude-agent-sdk>=0.1.20" \
-    "boto3>=1.40.76" \
+    "boto3>=1.40.37" \
     "aioboto3>=13.0.0" \
     "aiosqlite>=0.20.0" \
     "python-jose[cryptography]>=3.3.0" \
