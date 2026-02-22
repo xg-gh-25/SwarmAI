@@ -127,6 +127,7 @@ def main():
 
     try:
         # Configure uvicorn for PyInstaller compatibility
+        write_startup_log(f"Creating uvicorn config for {args.host}:{args.port}...")
         config = uvicorn.Config(
             app,
             host=args.host,
@@ -136,11 +137,15 @@ def main():
             reload=False,    # Disable reload in bundled app
             workers=1,       # Single worker for bundled app
         )
+        write_startup_log("Uvicorn config created successfully")
+
         server = uvicorn.Server(config)
+        write_startup_log("Uvicorn server instance created")
 
         # Run the server
-        write_startup_log("Starting uvicorn server...")
+        write_startup_log("Starting uvicorn server.serve()...")
         asyncio.run(server.serve())
+        write_startup_log("Server stopped normally")
     except Exception as e:
         error_msg = f"Server error: {type(e).__name__}: {e}\n{traceback.format_exc()}"
         write_startup_log(error_msg)
@@ -229,6 +234,12 @@ hiddenimports += collect_submodules('pydantic')
 hiddenimports += collect_submodules('pydantic_settings')
 hiddenimports += collect_submodules('anyio')
 hiddenimports += collect_submodules('slowapi')
+hiddenimports += collect_submodules('claude_agent_sdk')
+
+# Collect data files (including bundled CLI binary from claude_agent_sdk)
+datas = []
+datas += collect_data_files('claude_agent_sdk')
+datas += collect_data_files('certifi')
 
 # Add local modules explicitly (these are in the current directory, not installed packages)
 local_modules = [
@@ -283,7 +294,7 @@ a = Analysis(
     ['desktop_main.py'],
     pathex=[os.getcwd()],  # Add current directory to path
     binaries=[],
-    datas=[],
+    datas=datas,  # Include bundled CLI from claude_agent_sdk
     hiddenimports=hiddenimports + local_modules + [
         # Claude Agent SDK
         'claude_agent_sdk',

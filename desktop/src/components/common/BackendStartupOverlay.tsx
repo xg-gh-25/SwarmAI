@@ -1,8 +1,21 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import axios from 'axios';
-import { getBackendPort } from '../../services/tauri';
+import { getBackendPort, initializeBackend } from '../../services/tauri';
 
 type StartupStatus = 'starting' | 'connected' | 'error';
+
+// Get the log directory path based on the current platform
+function getLogPath(): string {
+  const userAgent = navigator.userAgent.toLowerCase();
+  if (userAgent.includes('mac')) {
+    return '~/Library/Application Support/Owork/logs/';
+  } else if (userAgent.includes('win')) {
+    return '%LOCALAPPDATA%\\Owork\\logs\\';
+  } else {
+    // Linux and other Unix-like systems
+    return '~/.local/share/owork/logs/';
+  }
+}
 
 interface BackendStartupOverlayProps {
   onReady?: () => void;
@@ -14,14 +27,20 @@ export default function BackendStartupOverlay({ onReady }: BackendStartupOverlay
   const [isVisible, setIsVisible] = useState(true);
   const [isFadingOut, setIsFadingOut] = useState(false);
 
+  // Get platform-specific log path
+  const logPath = useMemo(() => getLogPath(), []);
+
   const checkHealth = useCallback(async (): Promise<boolean> => {
     try {
       const port = getBackendPort();
-      const response = await axios.get(`http://localhost:${port}/health`, {
+      console.log(`[Health Check] Checking health on port ${port}...`);
+      const response = await axios.get(`http://127.0.0.1:${port}/health`, {
         timeout: 3000,
       });
+      console.log(`[Health Check] Response:`, response.data);
       return response.data?.status === 'healthy';
-    } catch {
+    } catch (error) {
+      console.error(`[Health Check] Failed:`, error);
       return false;
     }
   }, []);
@@ -60,8 +79,30 @@ export default function BackendStartupOverlay({ onReady }: BackendStartupOverlay
       }
     };
 
-    // Start polling after a short delay to allow backend to initialize
-    timeoutId = setTimeout(pollHealth, 500);
+    // First initialize backend to ensure port is set, then start polling
+    const startHealthPolling = async () => {
+      try {
+        console.log('[Startup] Calling initializeBackend()...');
+        // Wait for backend initialization to complete (this sets the correct port)
+        const port = await initializeBackend();
+        console.log(`[Startup] initializeBackend() returned port: ${port}`);
+        console.log(`[Startup] getBackendPort() returns: ${getBackendPort()}`);
+
+        if (!mounted) return;
+
+        // Start polling after backend is initialized
+        console.log('[Startup] Starting health polling in 500ms...');
+        timeoutId = setTimeout(pollHealth, 500);
+      } catch (error) {
+        console.error('[Startup] Failed to initialize backend:', error);
+        if (mounted) {
+          setStatus('error');
+          setErrorMessage(`Failed to initialize backend: ${error}`);
+        }
+      }
+    };
+
+    startHealthPolling();
 
     return () => {
       mounted = false;
@@ -143,7 +184,7 @@ export default function BackendStartupOverlay({ onReady }: BackendStartupOverlay
             <div className="bg-dark-card border border-dark-border rounded-lg p-4 mt-2">
               <p className="text-sm text-muted mb-2">Please check the logs at:</p>
               <code className="text-xs text-primary bg-dark-hover px-2 py-1 rounded block">
-                ~/Library/Application Support/Owork/logs/
+                {logPath}
               </code>
             </div>
 

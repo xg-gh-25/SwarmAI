@@ -25,121 +25,11 @@ Owork 是一个基于 Claude Agent SDK 的 AI Agent 桌面应用，支持创建�
 | 磁盘空间 | 500MB 可用空间 |
 | 网络 | 需要互联网连接 |
 
-### 必需依赖
-
-- **Node.js** 18.0+ - JavaScript 运行时
-- **Claude Code CLI** - Anthropic 官方 CLI 工具
-
 ---
 
 ## 安装步骤
 
-### 1. 安装 Node.js
-
-Node.js 是运行 Claude Code CLI 的必需依赖。
-
-#### macOS
-
-**方式一：使用 Homebrew（推荐）**
-
-```bash
-# 安装 Homebrew（如果未安装）
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-
-# 安装 Node.js
-brew install node
-
-# 验证安装
-node --version  # 应显示 v18.x.x 或更高
-npm --version   # 应显示 9.x.x 或更高
-```
-
-**方式二：使用 nvm（Node 版本管理器）**
-
-```bash
-# 安装 nvm
-curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash
-\. "$HOME/.nvm/nvm.sh"
-# 安装最新 LTS 版本的 Node.js
-nvm install --lts
-# 验证安装
-node --version
-npm --version
-```
-
-#### Windows
-
-**方式一：使用官方安装包（推荐）**
-
-1. 访问 [Node.js 官网](https://nodejs.org/)
-2. 下载 Windows 安装包（LTS 版本）
-3. 运行 `.msi` 安装程序并按照提示安装
-4. 打开命令提示符（CMD）或 PowerShell 验证：
-   ```powershell
-   node --version
-   npm --version
-   ```
-
-**方式二：使用 Chocolatey**
-
-```powershell
-# 以管理员身份打开 PowerShell，安装 Chocolatey（如果未安装）
-Set-ExecutionPolicy Bypass -Scope Process -Force; [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072; iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
-
-# 安装 Node.js
-choco install nodejs-lts
-
-# 验证安装
-node --version
-npm --version
-```
-
-#### Linux
-
-**Ubuntu/Debian:**
-
-```bash
-# 使用 NodeSource 仓库
-curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash -
-sudo apt-get install -y nodejs
-
-# 验证安装
-node --version
-npm --version
-```
-
-**通用方式：使用 nvm**
-
-```bash
-# 安装 nvm
-curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash
-source ~/.bashrc
-# 安装最新 LTS 版本
-nvm install --lts
-# 验证安装
-node --version
-npm --version
-```
-
----
-
-#### 常见安装问题
-
-**权限错误：**
-```bash
-# 如果遇到 EACCES 权限错误，使用以下命令修复 npm 权限
-mkdir ~/.npm-global
-npm config set prefix '~/.npm-global'
-echo 'export PATH=~/.npm-global/bin:$PATH' >> ~/.zshrc
-source ~/.zshrc
-
-# 重新安装
-npm install -g @anthropic-ai/claude-code
-```
-
----
-
-### 3. 安装 Owork
+### 1. 安装 Owork
 
 #### macOS
 
@@ -182,30 +72,6 @@ xattr -cr /Applications/Owork.app
 
 Windows 可能显示 SmartScreen 警告。点击「更多信息」→「仍要运行」即可。
 
-#### Linux
-
-**Ubuntu/Debian (使用 DEB 包):**
-
-```bash
-# 下载 .deb 文件后
-sudo dpkg -i owork_x.x.x_amd64.deb
-
-# 如果有依赖问题，运行：
-sudo apt-get install -f
-
-# 从应用菜单启动，或命令行：
-owork
-```
-
-**通用 Linux (使用 AppImage):**
-
-```bash
-# 下载 .AppImage 文件后
-chmod +x owork_x.x.x_x86_64.AppImage
-
-# 运行
-./owork_x.x.x_x86_64.AppImage
-```
 
 #### 从源码构建（所有平台）
 
@@ -239,17 +105,28 @@ npm run build:all
 2. 点击左侧边栏的「设置」图标（齿轮图标）
 3. 在「API Configuration」区域配置 API
 
-#### 方式一：使用 Anthropic API
+#### 方式一：使用 Litellm Proxy API
 
-1. 访问 [Anthropic Console](https://console.anthropic.com/)
-2. 注册/登录账号
-3. 在「API Keys」页面创建新的 API Key
-4. 在 Owork 设置中：
+1. 使用[litellm gateway](https://docs.litellm.ai/docs/simple_proxy) 创建proxy。
    - 确保「Use AWS Bedrock」开关为关闭状态
+   - 在Base URL中填入proxy url
    - 在「API Key」输入框中粘贴你的 API Key
    - 点击「Save API Configuration」
+   - 注意在配置lite config yml文件时，需要把model_name设置成Claude 官网的Model Name 如：
+```yml
+model_list:
+  - model_name: claude-sonnet-4-5-20250929
+    litellm_params:
+      model: bedrock/global.anthropic.claude-sonnet-4-5-20250929-v1:0
+```
 
-#### 方式二：使用 AWS Bedrock
+#### 方式二：使用开源的AWS生产化Proxy方案
+
+1. 使用[Anthropic-Bedrock API Proxy](https://github.com/xiehust/anthropic_api_converter)
+2. 部署在AWS ECS上，支持API Key管理，预算分配，流量控制等，默认自动映射官网model id到bedrock model id/
+
+
+#### 方式三：使用 AWS Bedrock（中国区和香港地区网络无法直接访问Claude模型）
 
 1. 确保你有 AWS 账号并已启用 Bedrock 服务
 2. 在 AWS Console 中申请 Claude 模型访问权限
