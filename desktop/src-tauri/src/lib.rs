@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::env;
-use tauri::{Emitter, Manager};
+use tauri::Emitter;
 use tauri_plugin_shell::ShellExt;
 use tauri_plugin_shell::process::CommandChild;
 use tokio::sync::Mutex;

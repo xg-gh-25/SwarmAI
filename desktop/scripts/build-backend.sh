@@ -102,13 +102,27 @@ cd "$BUILD_DIR"
 
 # Create virtual environment and install dependencies
 echo "Setting up Python environment..."
-python3 -m venv .venv
-source .venv/bin/activate
+
+# Use python3 on Unix, python on Windows
+if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" ]]; then
+    python -m venv .venv
+    source .venv/Scripts/activate
+else
+    python3 -m venv .venv
+    source .venv/bin/activate
+fi
 
 # Install dependencies
-pip install --upgrade pip
-pip install pyinstaller
-pip install -e .
+# Use python -m pip on Windows to avoid pip self-upgrade issues
+if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "cygwin" ]]; then
+    python -m pip install --upgrade pip
+    python -m pip install pyinstaller
+    python -m pip install -e .
+else
+    pip install --upgrade pip
+    pip install pyinstaller
+    pip install -e .
+fi
 
 # Create PyInstaller spec file for better control
 cat > backend.spec << EOF

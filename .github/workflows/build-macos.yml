@@ -1,0 +1,190 @@
+name: Build macOS Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+    paths:
+      - 'desktop/**'
+      - 'backend/**'
+      - '.github/workflows/build-macos.yml'
+  workflow_dispatch:
+    inputs:
+      build_intel:
+        description: 'Also build Intel (x86_64) version'
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  build-macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Apple Silicon
+            runner: macos-latest
+            target: aarch64-apple-darwin
+            arch: aarch64
+          # Intel build is optional, controlled by workflow input
+          # - name: Intel
+          #   runner: macos-13
+          #   target: x86_64-apple-darwin
+          #   arch: x86_64
+
+    runs-on: ${{ matrix.runner }}
+    name: Build macOS (${{ matrix.name }})
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri
+
+      - name: Install frontend dependencies
+        working-directory: ./desktop
+        run: npm ci
+
+      - name: Create backend .env file
+        working-directory: ./backend
+        run: |
+          echo "DATABASE_TYPE=sqlite" > .env
+          echo "ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}" >> .env
+
+      - name: Build Python backend
+        working-directory: ./desktop
+        run: bash scripts/build-backend.sh
+
+      - name: Build frontend
+        working-directory: ./desktop
+        run: npm run build
+
+      - name: Build Tauri app
+        working-directory: ./desktop
+        run: npm run tauri build -- --target ${{ matrix.target }}
+
+      - name: List build artifacts
+        run: |
+          echo "=== DMG files ==="
+          ls -lh desktop/src-tauri/target/${{ matrix.target }}/release/bundle/dmg/ || true
+          echo "=== App bundle ==="
+          ls -lh desktop/src-tauri/target/${{ matrix.target }}/release/bundle/macos/ || true
+
+      - name: Upload DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: Owork-macOS-${{ matrix.arch }}-dmg
+          path: desktop/src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+          if-no-files-found: error
+
+      - name: Upload App Bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: Owork-macOS-${{ matrix.arch }}-app
+          path: desktop/src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app
+          if-no-files-found: warn
+          compression-level: 9
+
+  # Optional Intel build job
+  build-macos-intel:
+    if: ${{ github.event.inputs.build_intel == 'true' }}
+    runs-on: macos-13
+    name: Build macOS (Intel)
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri
+
+      - name: Install frontend dependencies
+        working-directory: ./desktop
+        run: npm ci
+
+      - name: Create backend .env file
+        working-directory: ./backend
+        run: |
+          echo "DATABASE_TYPE=sqlite" > .env
+          echo "ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}" >> .env
+
+      - name: Build Python backend
+        working-directory: ./desktop
+        run: bash scripts/build-backend.sh
+
+      - name: Build frontend
+        working-directory: ./desktop
+        run: npm run build
+
+      - name: Build Tauri app
+        working-directory: ./desktop
+        run: npm run tauri build -- --target x86_64-apple-darwin
+
+      - name: Upload DMG (Intel)
+        uses: actions/upload-artifact@v4
+        with:
+          name: Owork-macOS-x86_64-dmg
+          path: desktop/src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg
+          if-no-files-found: error
+
+  # Create release when triggered by tag
+  create-release:
+    needs: [build-macos]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: List downloaded artifacts
+        run: find artifacts -type f -name "*.dmg" -o -name "*.app"
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: artifacts/**/*.dmg
+          draft: true
+          generate_release_notes: true
+          name: "Owork ${{ github.ref_name }} (macOS)"
