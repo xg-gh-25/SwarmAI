@@ -797,6 +797,9 @@ class AgentManager:
         sdk_add_dirs = agent_config.get("add_dirs", [])
         if sdk_add_dirs:
             working_directory = sdk_add_dirs[0]
+        # Max buffer size for JSON messages (default 10MB to handle large tool outputs)
+        max_buffer_size = int(os.environ.get("MAX_BUFFER_SIZE", 10 * 1024 * 1024))
+
         return ClaudeAgentOptions(
             system_prompt=system_prompt_config,
             allowed_tools=allowed_tools if allowed_tools else None,
@@ -815,6 +818,7 @@ class AgentManager:
             resume=resume_session_id,  # Resume from previous session for multi-turn
             sandbox=sandbox_settings,  # Built-in SDK sandbox for bash isolation
             can_use_tool=file_access_handler,  # File access control
+            max_buffer_size=max_buffer_size,  # Increase buffer for large JSON messages
             # add_dirs=sdk_add_dirs if sdk_add_dirs else None,  # Additional directories for Claude to access
         )
 
