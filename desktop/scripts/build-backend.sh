@@ -234,6 +234,12 @@ hiddenimports += collect_submodules('pydantic')
 hiddenimports += collect_submodules('pydantic_settings')
 hiddenimports += collect_submodules('anyio')
 hiddenimports += collect_submodules('slowapi')
+hiddenimports += collect_submodules('claude_agent_sdk')
+
+# Collect data files (including bundled CLI binary from claude_agent_sdk)
+datas = []
+datas += collect_data_files('claude_agent_sdk')
+datas += collect_data_files('certifi')
 
 # Add local modules explicitly (these are in the current directory, not installed packages)
 local_modules = [
@@ -288,7 +294,7 @@ a = Analysis(
     ['desktop_main.py'],
     pathex=[os.getcwd()],  # Add current directory to path
     binaries=[],
-    datas=[],
+    datas=datas,  # Include bundled CLI from claude_agent_sdk
     hiddenimports=hiddenimports + local_modules + [
         # Claude Agent SDK
         'claude_agent_sdk',

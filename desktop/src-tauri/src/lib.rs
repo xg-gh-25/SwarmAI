@@ -452,6 +452,23 @@ pub fn run() {
 
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            if let tauri::RunEvent::Exit = event {
+                // Clean up backend process on exit
+                let state = app_handle.state::<SharedBackendState>();
+                let state_clone = state.inner().clone();
+
+                // Use blocking task to ensure cleanup completes
+                tauri::async_runtime::block_on(async {
+                    let mut backend = state_clone.lock().await;
+                    if let Some(child) = backend.child.take() {
+                        let _ = child.kill();
+                        println!("Backend process terminated on exit");
+                    }
+                    backend.running = false;
+                });
+            }
+        });
 }
