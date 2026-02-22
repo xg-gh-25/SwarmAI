@@ -16,7 +16,7 @@
 
 **简体中文** | [![English](https://img.shields.io/badge/lang-English-blue?style=flat)](./README_EN.md)
 
-[✨ 特性](#功能特性) • [🖥️ 桌面应用](#桌面应用-owork) • [☁️ 云端部署](#云端部署) • [🛡️ 安全性](#安全性) • [📚 文档](#文档)
+[✨ 特性](#功能特性) • [🖥️ 桌面应用](#桌面应用-owork) • [☁️ 云端部署](#云端部署) • [🛡️ 安全性](#安全性) • [📚 文档](#文档) • [📖 公众号介绍《On My Work - Owork来了》](https://mp.weixin.qq.com/s/JB2FghiYCDJYZ7BJUwjmeg)
 
 </div>
 
@@ -77,6 +77,67 @@ sudo xattr -cr /Applications/Owork.app
 - **AWS Bedrock**：开启 Bedrock 开关，配置认证信息
 
 > 📖 详细安装说明请参阅 [QUICK_START.md](./QUICK_START.md)
+
+
+**首次启动注意事项：**
+
+Windows 可能显示 SmartScreen 警告。点击「更多信息」→「仍要运行」即可。
+
+需要安装Git bash 系统依赖：https://git-scm.com/downloads/win
+
+#### 从源码构建（所有平台）
+
+```bash
+# 克隆仓库
+git clone https://github.com/xiehust/awesome-skills-claude-agents.git
+cd awesome-skills-claude-agents/desktop
+
+# 安装依赖
+npm install
+
+# 构建应用（会自动检测当前平台）
+npm run build:all
+
+# 构建产物位于 ./src-tauri/target/release/bundle/
+# macOS: dmg/Owork_x.x.x_aarch64.dmg 或 macos/Owork.app
+# Windows: msi/Owork_x.x.x_x64.msi 或 nsis/Owork_x.x.x_x64-setup.exe
+# Linux: deb/owork_x.x.x_amd64.deb 或 appimage/owork_x.x.x_x86_64.AppImage
+```
+
+
+---
+
+### 4. 配置 API
+
+启动 Owork 后，需要配置 API 才能使用 AI 功能。
+
+#### 进入设置页面
+
+1. 启动 Owork
+2. 点击左侧边栏的「设置」图标（齿轮图标）
+3. 在「API Configuration」区域配置 API
+
+#### 方式一：使用 Litellm Proxy API
+
+1. 使用[litellm gateway](https://docs.litellm.ai/docs/simple_proxy) 创建proxy。
+   - 确保「Use AWS Bedrock」开关为关闭状态
+   - 在Base URL中填入proxy url
+   - 在「API Key」输入框中粘贴你的 API Key
+   - 点击「Save API Configuration」
+   - 注意在配置lite config yml文件时，需要把model_name设置成Claude 官网的Model Name 如：
+```yml
+model_list:
+  - model_name: claude-sonnet-4-5-20250929
+    litellm_params:
+      model: bedrock/global.anthropic.claude-sonnet-4-5-20250929-v1:0
+```
+
+#### 方式二：使用开源的AWS生产化Proxy方案
+
+1. 使用[Anthropic-Bedrock API Proxy](https://github.com/xiehust/anthropic_api_converter)
+2. 部署在AWS ECS上，支持API Key管理，预算分配，流量控制等，支持同时非Claude API
+![alt text](./assets/image-2p.png)
+
 
 ### 从源码构建
 

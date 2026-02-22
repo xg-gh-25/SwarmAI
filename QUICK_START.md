@@ -124,8 +124,8 @@ model_list:
 #### 方式二：使用开源的AWS生产化Proxy方案
 
 1. 使用[Anthropic-Bedrock API Proxy](https://github.com/xiehust/anthropic_api_converter)
-2. 部署在AWS ECS上，支持API Key管理，预算分配，流量控制等，默认自动映射官网model id到bedrock model id/
-
+2. 部署在AWS ECS上，支持API Key管理，预算分配，流量控制等，默认自动映射官网model id到bedrock model id
+![alt text](./assets/image-2p.png)
 
 #### 方式三：使用 AWS Bedrock（中国区和香港地区网络无法直接访问Claude模型）
 
