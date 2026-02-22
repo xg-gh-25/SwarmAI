@@ -1,0 +1,184 @@
+name: Dev Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: 'Platform to build'
+        required: true
+        type: choice
+        options:
+          - all
+          - macos
+          - windows
+        default: 'all'
+
+env:
+  TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+  TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+
+jobs:
+  # Build macOS (Apple Silicon only)
+  build-macos:
+    if: ${{ github.event.inputs.platform == 'all' || github.event.inputs.platform == 'macos' }}
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri
+
+      - name: Install frontend dependencies
+        working-directory: ./desktop
+        run: npm ci
+
+      - name: Create backend .env file
+        working-directory: ./backend
+        run: |
+          cp .env.example .env
+          if [ -n "${{ secrets.ANTHROPIC_API_KEY }}" ]; then
+            sed -i.bak 's/ANTHROPIC_API_KEY=.*/ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}/' .env
+            rm -f .env.bak
+          fi
+
+      - name: Set dev version
+        working-directory: ./desktop
+        run: |
+          VERSION="0.0.0-dev.$(date +%Y%m%d%H%M%S)"
+          jq --arg v "$VERSION" '.version = $v' src-tauri/tauri.conf.json > tmp.json && mv tmp.json src-tauri/tauri.conf.json
+          echo "Built version: $VERSION"
+
+      - name: Configure updater endpoint (placeholder)
+        working-directory: ./desktop
+        run: |
+          sed -i.bak "s|__UPDATER_ENDPOINT__|https://example.com/update.json|g" src-tauri/tauri.conf.json
+          rm -f src-tauri/tauri.conf.json.bak
+
+      - name: Build Python backend
+        working-directory: ./desktop
+        run: bash scripts/build-backend.sh
+
+      - name: Build frontend
+        working-directory: ./desktop
+        run: npm run build
+
+      - name: Build Tauri app
+        working-directory: ./desktop
+        run: npm run tauri build -- --target aarch64-apple-darwin
+
+      - name: List build artifacts
+        run: |
+          echo "=== DMG files ==="
+          ls -lh desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/ || true
+          echo "=== Updater artifacts ==="
+          ls -lh desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/ || true
+
+      - name: Upload DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-aarch64-dmg
+          path: desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload tar.gz (updater)
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-aarch64-updater
+          path: desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/*.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+  # Build Windows
+  build-windows:
+    if: ${{ github.event.inputs.platform == 'all' || github.event.inputs.platform == 'windows' }}
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri
+
+      - name: Install dependencies
+        working-directory: ./desktop
+        run: npm install
+
+      - name: Set dev version
+        working-directory: ./desktop
+        shell: bash
+        run: |
+          VERSION="0.0.0-dev.$(date +%Y%m%d%H%M%S)"
+          jq --arg v "$VERSION" '.version = $v' src-tauri/tauri.conf.json > tmp.json && mv tmp.json src-tauri/tauri.conf.json
+          echo "Built version: $VERSION"
+
+      - name: Configure updater endpoint (placeholder)
+        working-directory: ./desktop
+        shell: bash
+        run: |
+          sed -i "s|__UPDATER_ENDPOINT__|https://example.com/update.json|g" src-tauri/tauri.conf.json
+
+      - name: Build application
+        working-directory: ./desktop
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: npm run build:all
+        shell: bash
+
+      - name: List build artifacts
+        shell: bash
+        run: |
+          echo "=== NSIS artifacts ==="
+          ls -lh desktop/src-tauri/target/release/bundle/nsis/ || true
+          echo "=== MSI artifacts ==="
+          ls -lh desktop/src-tauri/target/release/bundle/msi/ || true
+
+      - name: Upload NSIS installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64-nsis
+          path: desktop/src-tauri/target/release/bundle/nsis/*-setup.exe
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload MSI installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64-msi
+          path: desktop/src-tauri/target/release/bundle/msi/*.msi
+          if-no-files-found: warn
+          retention-days: 7
