@@ -1,18 +1,20 @@
 import { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import { SearchBar, Button, Modal, SkeletonTable, ResizableTable, ResizableTableCell, ConfirmDialog } from '../components/common';
 import type { MCPServer, MCPServerCreateRequest } from '../types';
 import { mcpService } from '../services/mcp';
 
-// MCP table column configuration
-const MCP_COLUMNS = [
-  { key: 'name', header: 'Server Name', initialWidth: 180, minWidth: 120 },
-  { key: 'connectionType', header: 'Connection Type', initialWidth: 140, minWidth: 100 },
-  { key: 'endpoint', header: 'Endpoint', initialWidth: 300, minWidth: 150 },
-  { key: 'description', header: 'Description', initialWidth: 250, minWidth: 120 },
-  { key: 'actions', header: 'Actions', initialWidth: 100, minWidth: 80, align: 'right' as const },
+// MCP table column configuration - will be translated via hook
+const getMcpColumns = (t: (key: string) => string) => [
+  { key: 'name', header: t('mcp.table.name'), initialWidth: 180, minWidth: 120 },
+  { key: 'connectionType', header: t('mcp.table.type'), initialWidth: 140, minWidth: 100 },
+  { key: 'endpoint', header: t('mcp.form.endpoint') || 'Endpoint', initialWidth: 300, minWidth: 150 },
+  { key: 'description', header: t('common.label.description'), initialWidth: 250, minWidth: 120 },
+  { key: 'actions', header: t('mcp.table.actions'), initialWidth: 100, minWidth: 80, align: 'right' as const },
 ];
 
 export default function MCPPage() {
+  const { t } = useTranslation();
   const [servers, setServers] = useState<MCPServer[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
@@ -22,6 +24,9 @@ export default function MCPPage() {
   // Delete confirmation state
   const [deleteTarget, setDeleteTarget] = useState<MCPServer | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+
+  // Get translated columns
+  const MCP_COLUMNS = getMcpColumns(t);
 
   // Fetch MCP servers on mount
   useEffect(() => {
@@ -83,11 +88,11 @@ export default function MCPPage() {
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-bold text-white">MCP Server Management</h1>
-          <p className="text-muted mt-1">Configure MCP servers for your agents.</p>
+          <h1 className="text-2xl font-bold text-white">{t('mcp.title')}</h1>
+          <p className="text-muted mt-1">{t('mcp.subtitle')}</p>
         </div>
         <Button icon="add" onClick={() => setIsAddModalOpen(true)}>
-          Add MCP Server
+          {t('mcp.addMcp')}
         </Button>
       </div>
 
@@ -96,7 +101,7 @@ export default function MCPPage() {
         <SearchBar
           value={searchQuery}
           onChange={setSearchQuery}
-          placeholder="Search servers..."
+          placeholder={t('mcp.searchPlaceholder')}
           className="w-96"
         />
       </div>
@@ -135,14 +140,14 @@ export default function MCPPage() {
                     <button
                       onClick={() => setSelectedServer(server)}
                       className="p-2 rounded-lg text-muted hover:text-white hover:bg-dark-hover transition-colors"
-                      title="Edit server"
+                      title={t('mcp.editMcp')}
                     >
                       <span className="material-symbols-outlined text-xl">edit</span>
                     </button>
                     <button
                       onClick={() => handleDeleteClick(server)}
                       className="p-2 rounded-lg text-muted hover:text-status-error hover:bg-status-error/10 transition-colors"
-                      title="Delete server"
+                      title={t('mcp.deleteMcp')}
                     >
                       <span className="material-symbols-outlined text-xl">delete</span>
                     </button>
@@ -155,7 +160,7 @@ export default function MCPPage() {
               <tr>
                 <td colSpan={5} className="px-6 py-12 text-center">
                   <span className="material-symbols-outlined text-4xl text-muted mb-2">dns</span>
-                  <p className="text-muted">No MCP servers found</p>
+                  <p className="text-muted">{t('mcp.noMcps')}</p>
                 </td>
               </tr>
             )}
@@ -170,7 +175,7 @@ export default function MCPPage() {
           setIsAddModalOpen(false);
           setSelectedServer(null);
         }}
-        title={selectedServer ? 'Edit MCP Server' : 'Add MCP Server'}
+        title={selectedServer ? t('mcp.editMcp') : t('mcp.addMcp')}
         size="lg"
       >
         <MCPServerForm
@@ -188,16 +193,16 @@ export default function MCPPage() {
         isOpen={deleteTarget !== null}
         onClose={() => setDeleteTarget(null)}
         onConfirm={handleDeleteConfirm}
-        title="Delete MCP Server"
+        title={t('mcp.deleteMcp')}
         message={
           <>
-            Are you sure you want to delete <strong>{deleteTarget?.name}</strong>?
+            {t('mcp.deleteConfirm', { name: '' })}<strong>{deleteTarget?.name}</strong>?
             <br />
-            <span className="text-sm">This action cannot be undone.</span>
+            <span className="text-sm">{t('common.message.cannotUndo')}</span>
           </>
         }
-        confirmText="Delete"
-        cancelText="Cancel"
+        confirmText={t('common.button.delete')}
+        cancelText={t('common.button.cancel')}
         variant="danger"
         isLoading={isDeleting}
       />
@@ -215,6 +220,7 @@ function MCPServerForm({
   onClose: () => void;
   onSave: (data: MCPServerCreateRequest, serverId?: string) => void;
 }) {
+  const { t } = useTranslation();
   const [name, setName] = useState(server?.name || '');
   const [description, setDescription] = useState(server?.description || '');
   const [connectionType, setConnectionType] = useState<'stdio' | 'sse' | 'http'>(
@@ -254,30 +260,30 @@ function MCPServerForm({
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
       <div>
-        <label className="block text-sm font-medium text-muted mb-2">Server Name</label>
+        <label className="block text-sm font-medium text-muted mb-2">{t('mcp.form.name')}</label>
         <input
           type="text"
           value={name}
           onChange={(e) => setName(e.target.value)}
-          placeholder="e.g., filesystem-server"
+          placeholder={t('mcp.form.namePlaceholder')}
           required
           className="w-full px-4 py-2 bg-dark-bg border border-dark-border rounded-lg text-white placeholder:text-muted focus:outline-none focus:border-primary"
         />
       </div>
 
       <div>
-        <label className="block text-sm font-medium text-muted mb-2">Description</label>
+        <label className="block text-sm font-medium text-muted mb-2">{t('mcp.form.description')}</label>
         <input
           type="text"
           value={description}
           onChange={(e) => setDescription(e.target.value)}
-          placeholder="e.g., File system access for workspace"
+          placeholder={t('mcp.form.descriptionPlaceholder')}
           className="w-full px-4 py-2 bg-dark-bg border border-dark-border rounded-lg text-white placeholder:text-muted focus:outline-none focus:border-primary"
         />
       </div>
 
       <div>
-        <label className="block text-sm font-medium text-muted mb-2">Connection Type</label>
+        <label className="block text-sm font-medium text-muted mb-2">{t('mcp.form.connectionType')}</label>
         <div className="flex gap-4">
           {(['stdio', 'sse', 'http'] as const).map((type) => (
             <label key={type} className="flex items-center gap-2 cursor-pointer">
@@ -298,35 +304,35 @@ function MCPServerForm({
       {connectionType === 'stdio' ? (
         <>
           <div>
-            <label className="block text-sm font-medium text-muted mb-2">Command</label>
+            <label className="block text-sm font-medium text-muted mb-2">{t('mcp.form.command')}</label>
             <input
               type="text"
               value={command}
               onChange={(e) => setCommand(e.target.value)}
-              placeholder="e.g., npx"
+              placeholder={t('mcp.form.commandPlaceholder')}
               required
               className="w-full px-4 py-2 bg-dark-bg border border-dark-border rounded-lg text-white placeholder:text-muted focus:outline-none focus:border-primary"
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-muted mb-2">Arguments</label>
+            <label className="block text-sm font-medium text-muted mb-2">{t('mcp.form.args')}</label>
             <input
               type="text"
               value={args}
               onChange={(e) => setArgs(e.target.value)}
-              placeholder="e.g., -y @modelcontextprotocol/server-filesystem /workspace"
+              placeholder={t('mcp.form.argsPlaceholder')}
               className="w-full px-4 py-2 bg-dark-bg border border-dark-border rounded-lg text-white placeholder:text-muted focus:outline-none focus:border-primary"
             />
           </div>
         </>
       ) : (
         <div>
-          <label className="block text-sm font-medium text-muted mb-2">URL</label>
+          <label className="block text-sm font-medium text-muted mb-2">{t('mcp.form.url')}</label>
           <input
             type="url"
             value={url}
             onChange={(e) => setUrl(e.target.value)}
-            placeholder={connectionType === 'sse' ? 'http://server:port/sse' : 'http://server:port'}
+            placeholder={t('mcp.form.urlPlaceholder')}
             required
             className="w-full px-4 py-2 bg-dark-bg border border-dark-border rounded-lg text-white placeholder:text-muted focus:outline-none focus:border-primary"
           />
@@ -335,10 +341,10 @@ function MCPServerForm({
 
       <div className="flex gap-3 pt-4">
         <Button type="button" variant="secondary" onClick={onClose}>
-          Cancel
+          {t('common.button.cancel')}
         </Button>
         <Button type="submit" className="flex-1">
-          {server ? 'Save Changes' : 'Add Server'}
+          {server ? t('common.button.saveChanges') : t('mcp.addMcp')}
         </Button>
       </div>
     </form>

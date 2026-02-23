@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import { SearchBar, Button, Modal, SkeletonTable, ResizableTable, ResizableTableCell, ConfirmDialog, AskUserQuestion, Dropdown, MarkdownRenderer } from '../components/common';
 import type { Skill, SyncResult, StreamEvent, ContentBlock, AskUserQuestion as AskUserQuestionType } from '../types';
 import { skillsService } from '../services/skills';
@@ -19,14 +20,14 @@ function formatDateTime(dateString: string): string {
   return date.toLocaleString();
 }
 
-// Table column configuration
-const SKILL_COLUMNS = [
-  { key: 'name', header: 'Skill Name', initialWidth: 180, minWidth: 120 },
-  { key: 'description', header: 'Description', initialWidth: 220, minWidth: 150 },
-  { key: 'source', header: 'Source', initialWidth: 180, minWidth: 120 },
-  { key: 'version', header: 'Version', initialWidth: 120, minWidth: 80 },
-  { key: 'updatedAt', header: 'Updated', initialWidth: 160, minWidth: 120 },
-  { key: 'actions', header: 'Actions', initialWidth: 120, minWidth: 100, align: 'right' as const },
+// Table column configuration - will be translated via hook
+const getSkillColumns = (t: (key: string) => string) => [
+  { key: 'name', header: t('skills.table.name'), initialWidth: 180, minWidth: 120 },
+  { key: 'description', header: t('skills.table.description'), initialWidth: 220, minWidth: 150 },
+  { key: 'source', header: t('skills.table.source'), initialWidth: 180, minWidth: 120 },
+  { key: 'version', header: t('skills.table.version'), initialWidth: 120, minWidth: 80 },
+  { key: 'updatedAt', header: t('common.label.updated'), initialWidth: 160, minWidth: 120 },
+  { key: 'actions', header: t('skills.table.actions'), initialWidth: 120, minWidth: 100, align: 'right' as const },
 ];
 
 // Get source display for a skill
@@ -61,6 +62,7 @@ function getSourceDisplay(skill: Skill): { label: string; icon: string; color: s
 }
 
 export default function SkillsPage() {
+  const { t } = useTranslation();
   const [skills, setSkills] = useState<Skill[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
@@ -71,6 +73,9 @@ export default function SkillsPage() {
   const [syncResult, setSyncResult] = useState<SyncResult | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Skill | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+
+  // Get translated columns
+  const SKILL_COLUMNS = getSkillColumns(t);
 
   // Fetch skills on mount
   useEffect(() => {
@@ -168,7 +173,7 @@ export default function SkillsPage() {
     <div className="p-8">
       {/* Header */}
       <div className="mb-6">
-        <h1 className="text-2xl font-bold text-white">Skill Management</h1>
+        <h1 className="text-2xl font-bold text-white">{t('skills.title')}</h1>
       </div>
 
       {/* Toolbar */}
@@ -176,7 +181,7 @@ export default function SkillsPage() {
         <SearchBar
           value={searchQuery}
           onChange={setSearchQuery}
-          placeholder="Filter by name..."
+          placeholder={t('skills.searchPlaceholder')}
           className="w-96"
         />
 
@@ -188,13 +193,13 @@ export default function SkillsPage() {
             isLoading={isRefreshing}
             disabled={isRefreshing}
           >
-            {isRefreshing ? 'Syncing...' : 'Refresh'}
+            {isRefreshing ? t('common.status.loading') : t('skills.refreshSkills')}
           </Button>
           <Button variant="secondary" icon="upload" onClick={() => setIsUploadModalOpen(true)}>
-            Upload ZIP
+            {t('skills.uploadSkill')}
           </Button>
           <Button icon="auto_awesome" onClick={() => setIsGenerateModalOpen(true)}>
-            Create with Agent
+            {t('skills.createSkill')}
           </Button>
         </div>
       </div>
@@ -248,15 +253,15 @@ export default function SkillsPage() {
                       <button
                         onClick={() => handleDeleteClick(skill)}
                         className="p-1.5 rounded-lg text-muted hover:text-status-error hover:bg-status-error/10 transition-colors"
-                        title="Delete skill"
+                        title={t('skills.deleteSkill')}
                       >
                         <span className="material-symbols-outlined text-lg">delete</span>
                       </button>
                     )}
                     {/* For plugin skills, show info that they are managed by plugin */}
                     {skill.sourceType === 'plugin' && (
-                      <span className="text-xs text-muted" title="Managed by plugin - uninstall plugin to remove">
-                        Plugin managed
+                      <span className="text-xs text-muted" title={t('skills.source.pluginManaged')}>
+                        {t('skills.source.plugin')}
                       </span>
                     )}
                   </div>
@@ -270,7 +275,7 @@ export default function SkillsPage() {
                   <span className="material-symbols-outlined text-4xl text-muted mb-2">
                     construction
                   </span>
-                  <p className="text-muted">No skills found</p>
+                  <p className="text-muted">{t('skills.noSkills')}</p>
                 </td>
               </tr>
             )}
@@ -282,7 +287,7 @@ export default function SkillsPage() {
       <Modal
         isOpen={isUploadModalOpen}
         onClose={() => setIsUploadModalOpen(false)}
-        title="Upload Skill Package"
+        title={t('skills.upload.title')}
         size="md"
       >
         <UploadSkillForm
@@ -295,7 +300,7 @@ export default function SkillsPage() {
       <Modal
         isOpen={isGenerateModalOpen}
         onClose={() => setIsGenerateModalOpen(false)}
-        title="Create Skill with Agent"
+        title={t('skills.create.title')}
         size="3xl"
       >
         <GenerateSkillForm
@@ -308,7 +313,7 @@ export default function SkillsPage() {
       <Modal
         isOpen={isSyncResultModalOpen}
         onClose={() => setIsSyncResultModalOpen(false)}
-        title="Skill Sync Complete"
+        title={t('skills.refreshSkills')}
         size="md"
       >
         <SyncResultDisplay
@@ -322,19 +327,18 @@ export default function SkillsPage() {
         isOpen={deleteTarget !== null}
         onClose={() => setDeleteTarget(null)}
         onConfirm={handleDeleteConfirm}
-        title="Delete Skill"
+        title={t('skills.deleteSkill')}
         message={
           <>
-            Are you sure you want to delete <strong className="text-white">{deleteTarget?.name}</strong>?
+            {t('skills.deleteConfirm', { name: '' })}<strong className="text-white">{deleteTarget?.name}</strong>?
             <br />
             <span className="text-sm text-status-error font-medium">
-              ⚠️ This will permanently delete ALL versions (v1-v{deleteTarget?.currentVersion || 1}), drafts, and data.
+              {t('common.message.cannotUndo')}
             </span>
-            <br />
-            <span className="text-sm">The skill will be removed from local storage, S3, and database.</span>
           </>
         }
-        confirmText="Delete All Versions"
+        confirmText={t('common.button.delete')}
+        cancelText={t('common.button.cancel')}
         isLoading={isDeleting}
       />
 
@@ -350,6 +354,7 @@ function SyncResultDisplay({
   result: SyncResult | null;
   onClose: () => void;
 }) {
+  const { t } = useTranslation();
   if (!result) return null;
 
   const hasChanges = result.added.length > 0 || result.updated.length > 0 || result.removed.length > 0;
@@ -361,15 +366,15 @@ function SyncResultDisplay({
       <div className="grid grid-cols-3 gap-4">
         <div className="bg-dark-bg border border-dark-border rounded-lg p-4 text-center">
           <p className="text-2xl font-bold text-white">{result.totalLocal}</p>
-          <p className="text-sm text-muted">Local</p>
+          <p className="text-sm text-muted">{t('skills.sync.local')}</p>
         </div>
         <div className="bg-dark-bg border border-dark-border rounded-lg p-4 text-center">
           <p className="text-2xl font-bold text-white">{result.totalPlugins}</p>
-          <p className="text-sm text-muted">From Plugins</p>
+          <p className="text-sm text-muted">{t('skills.sync.fromPlugins')}</p>
         </div>
         <div className="bg-dark-bg border border-dark-border rounded-lg p-4 text-center">
           <p className="text-2xl font-bold text-white">{result.totalDb}</p>
-          <p className="text-sm text-muted">Database</p>
+          <p className="text-sm text-muted">{t('skills.sync.database')}</p>
         </div>
       </div>
 
@@ -380,7 +385,7 @@ function SyncResultDisplay({
             <div className="bg-status-success/10 border border-status-success/30 rounded-lg p-3">
               <div className="flex items-center gap-2 mb-2">
                 <span className="material-symbols-outlined text-status-success">add_circle</span>
-                <span className="text-status-success font-medium">Added ({result.added.length})</span>
+                <span className="text-status-success font-medium">{t('skills.sync.added')} ({result.added.length})</span>
               </div>
               <div className="flex flex-wrap gap-2">
                 {result.added.map((name) => (
@@ -396,7 +401,7 @@ function SyncResultDisplay({
             <div className="bg-primary/10 border border-primary/30 rounded-lg p-3">
               <div className="flex items-center gap-2 mb-2">
                 <span className="material-symbols-outlined text-primary">sync</span>
-                <span className="text-primary font-medium">Updated ({result.updated.length})</span>
+                <span className="text-primary font-medium">{t('skills.sync.updated')} ({result.updated.length})</span>
               </div>
               <div className="flex flex-wrap gap-2">
                 {result.updated.map((name) => (
@@ -412,9 +417,9 @@ function SyncResultDisplay({
             <div className="bg-status-warning/10 border border-status-warning/30 rounded-lg p-3">
               <div className="flex items-center gap-2 mb-2">
                 <span className="material-symbols-outlined text-status-warning">warning</span>
-                <span className="text-status-warning font-medium">Orphaned Records ({result.removed.length})</span>
+                <span className="text-status-warning font-medium">{t('skills.sync.orphanedRecords')} ({result.removed.length})</span>
               </div>
-              <p className="text-sm text-muted mb-2">These database entries have no matching files:</p>
+              <p className="text-sm text-muted mb-2">{t('skills.sync.orphanedDesc')}</p>
               <div className="flex flex-wrap gap-2">
                 {result.removed.map((name) => (
                   <span key={name} className="px-2 py-1 bg-status-warning/20 text-status-warning text-sm rounded">
@@ -428,7 +433,7 @@ function SyncResultDisplay({
       ) : (
         <div className="bg-dark-bg border border-dark-border rounded-lg p-4 text-center">
           <span className="material-symbols-outlined text-3xl text-status-success mb-2">check_circle</span>
-          <p className="text-white">All skills are in sync!</p>
+          <p className="text-white">{t('skills.sync.allInSync')}</p>
         </div>
       )}
 
@@ -437,7 +442,7 @@ function SyncResultDisplay({
         <div className="bg-status-error/10 border border-status-error/30 rounded-lg p-3">
           <div className="flex items-center gap-2 mb-2">
             <span className="material-symbols-outlined text-status-error">error</span>
-            <span className="text-status-error font-medium">Errors ({result.errors.length})</span>
+            <span className="text-status-error font-medium">{t('skills.sync.errors')} ({result.errors.length})</span>
           </div>
           <div className="space-y-2">
             {result.errors.map((err, idx) => (
@@ -451,7 +456,7 @@ function SyncResultDisplay({
       )}
 
       <div className="flex justify-end pt-4">
-        <Button onClick={onClose}>Close</Button>
+        <Button onClick={onClose}>{t('common.button.close')}</Button>
       </div>
     </div>
   );
@@ -465,6 +470,7 @@ function UploadSkillForm({
   onClose: () => void;
   onUpload: (file: File, name?: string) => void;
 }) {
+  const { t } = useTranslation();
   const [name, setName] = useState('');
   const [file, setFile] = useState<File | null>(null);
   const [isUploading, setIsUploading] = useState(false);
@@ -484,18 +490,18 @@ function UploadSkillForm({
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
       <div>
-        <label className="block text-sm font-medium text-muted mb-2">Skill Name</label>
+        <label className="block text-sm font-medium text-muted mb-2">{t('skills.upload.skillName')}</label>
         <input
           type="text"
           value={name}
           onChange={(e) => setName(e.target.value)}
-          placeholder="Enter skill name (optional)"
+          placeholder={t('skills.upload.skillNamePlaceholder')}
           className="w-full px-4 py-2 bg-dark-bg border border-dark-border rounded-lg text-white placeholder:text-muted focus:outline-none focus:border-primary"
         />
       </div>
 
       <div>
-        <label className="block text-sm font-medium text-muted mb-2">ZIP File</label>
+        <label className="block text-sm font-medium text-muted mb-2">{t('skills.upload.zipFile')}</label>
         <div className="relative">
           <input
             type="file"
@@ -507,9 +513,9 @@ function UploadSkillForm({
           <div className="px-4 py-8 bg-dark-bg border border-dashed border-dark-border rounded-lg text-center">
             <span className="material-symbols-outlined text-3xl text-muted mb-2">upload_file</span>
             <p className="text-white">
-              {file ? file.name : 'Click to select or drag and drop'}
+              {file ? file.name : t('skills.upload.dropzone')}
             </p>
-            <p className="text-sm text-muted mt-1">ZIP files only</p>
+            <p className="text-sm text-muted mt-1">{t('skills.upload.zipOnly')}</p>
           </div>
         </div>
       </div>
@@ -518,10 +524,9 @@ function UploadSkillForm({
         <div className="flex items-start gap-3">
           <span className="material-symbols-outlined text-primary">info</span>
           <div>
-            <p className="text-sm text-white font-medium">Upload Process</p>
+            <p className="text-sm text-white font-medium">{t('skills.upload.uploadProcess')}</p>
             <p className="text-sm text-muted mt-1">
-              The ZIP will be extracted to the local skills directory and synced to S3.
-              It must contain a valid SKILL.md file.
+              {t('skills.upload.uploadProcessDesc')}
             </p>
           </div>
         </div>
@@ -529,10 +534,10 @@ function UploadSkillForm({
 
       <div className="flex gap-3 pt-4">
         <Button type="button" variant="secondary" className="flex-1" onClick={onClose}>
-          Cancel
+          {t('common.button.cancel')}
         </Button>
         <Button type="submit" className="flex-1" disabled={!file || isUploading} isLoading={isUploading}>
-          {isUploading ? 'Uploading...' : 'Upload'}
+          {isUploading ? t('skills.upload.uploading') : t('common.button.upload')}
         </Button>
       </div>
     </form>
@@ -547,6 +552,7 @@ function GenerateSkillForm({
   onClose: () => void;
   onGenerate: (skill: Skill) => void;
 }) {
+  const { t } = useTranslation();
   // Phase 1: Input form
   const [name, setName] = useState('');
   const [nameError, setNameError] = useState<string | null>(null);
@@ -979,12 +985,12 @@ function GenerateSkillForm({
     return (
       <div className="space-y-4">
         <div>
-          <label className="block text-sm font-medium text-muted mb-2">Skill Name</label>
+          <label className="block text-sm font-medium text-muted mb-2">{t('skills.create.nameLabel')}</label>
           <input
             type="text"
             value={name}
             onChange={(e) => handleNameChange(e.target.value)}
-            placeholder="my-skill-name (lowercase, numbers, hyphens only)"
+            placeholder={t('skills.create.namePlaceholder')}
             required
             className={`w-full px-4 py-2 bg-dark-bg border rounded-lg text-white placeholder:text-muted focus:outline-none focus:border-primary ${
               nameError ? 'border-status-error' : 'border-dark-border'
@@ -994,16 +1000,16 @@ function GenerateSkillForm({
             <p className="mt-1 text-sm text-status-error">{nameError}</p>
           )}
           <p className="mt-1 text-xs text-muted">
-            Use lowercase letters, numbers, hyphens (-) and underscores (_) only
+            {t('skills.create.nameHelp')}
           </p>
         </div>
 
         <div>
-          <label className="block text-sm font-medium text-muted mb-2">Skill Description</label>
+          <label className="block text-sm font-medium text-muted mb-2">{t('skills.create.descriptionLabel')}</label>
           <textarea
             value={description}
             onChange={(e) => setDescription(e.target.value)}
-            placeholder="Describe what this skill should do. The AI agent will create the skill based on your description."
+            placeholder={t('skills.create.descriptionPlaceholder')}
             rows={5}
             required
             className="w-full px-4 py-2 bg-dark-bg border border-dark-border rounded-lg text-white placeholder:text-muted focus:outline-none focus:border-primary resize-none"
@@ -1011,22 +1017,20 @@ function GenerateSkillForm({
         </div>
 
         <Dropdown
-          label="Model"
+          label={t('skills.create.model')}
           options={MODEL_OPTIONS}
           selectedId={selectedModel}
           onChange={setSelectedModel}
-          placeholder="Select a model..."
+          placeholder={t('skills.create.selectModel')}
         />
 
         <div className="bg-dark-bg border border-dark-border rounded-lg p-4">
           <div className="flex items-start gap-3">
             <span className="material-symbols-outlined text-primary">info</span>
             <div>
-              <p className="text-sm text-white font-medium">How it works</p>
+              <p className="text-sm text-white font-medium">{t('skills.create.howItWorks')}</p>
               <p className="text-sm text-muted mt-1">
-                An AI agent will create your skill using the skill-creator workflow.
-                You can iterate on the skill by chatting with the agent until you're satisfied.
-                Finally, click "Save Skill" to sync to S3 and save to the database.
+                {t('skills.create.howItWorksDesc')}
               </p>
             </div>
           </div>
@@ -1034,7 +1038,7 @@ function GenerateSkillForm({
 
         <div className="flex gap-3 pt-4">
           <Button type="button" variant="secondary" className="flex-1" onClick={onClose}>
-            Cancel
+            {t('common.button.cancel')}
           </Button>
           <Button
             type="button"
@@ -1042,7 +1046,7 @@ function GenerateSkillForm({
             onClick={handleStartCreation}
             disabled={!isNameValid || !description.trim()}
           >
-            Start Creating
+            {t('skills.create.startCreating')}
           </Button>
         </div>
       </div>
@@ -1057,14 +1061,14 @@ function GenerateSkillForm({
         <div className="flex items-center gap-2">
           <span className="material-symbols-outlined text-primary">smart_toy</span>
           <div>
-            <h3 className="font-medium text-white">Skill Creator Agent</h3>
-            <p className="text-xs text-muted">Creating: {name}</p>
+            <h3 className="font-medium text-white">{t('skills.create.skillCreator')}</h3>
+            <p className="text-xs text-muted">{t('skills.create.creating', { name })}</p>
           </div>
         </div>
         {isStreaming && (
           <span className="flex items-center gap-2 text-sm text-muted">
             <Spinner size="sm" />
-            Working...
+            {t('chat.thinking')}
           </span>
         )}
       </div>
@@ -1156,7 +1160,7 @@ function GenerateSkillForm({
                 </button>
               </div>
               <Button onClick={handleFinalize} isLoading={isFinalizing} disabled={isFinalizing}>
-                Save Skill
+                {isFinalizing ? t('skills.create.saving') : t('skills.create.saveSkill')}
               </Button>
             </div>
           </div>
