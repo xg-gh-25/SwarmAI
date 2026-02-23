@@ -259,7 +259,9 @@
       "args": "参数",
       "argsPlaceholder": "例如: -y @modelcontextprotocol/server-filesystem",
       "endpoint": "端点 URL",
-      "endpointPlaceholder": "https://example.com/mcp"
+      "endpointPlaceholder": "https://example.com/mcp",
+      "url": "URL",
+      "urlPlaceholder": "http://server:port"
     }
   },
   "plugins": {

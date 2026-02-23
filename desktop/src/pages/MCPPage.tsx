@@ -140,14 +140,14 @@ export default function MCPPage() {
                     <button
                       onClick={() => setSelectedServer(server)}
                       className="p-2 rounded-lg text-muted hover:text-white hover:bg-dark-hover transition-colors"
-                      title="Edit server"
+                      title={t('mcp.editMcp')}
                     >
                       <span className="material-symbols-outlined text-xl">edit</span>
                     </button>
                     <button
                       onClick={() => handleDeleteClick(server)}
                       className="p-2 rounded-lg text-muted hover:text-status-error hover:bg-status-error/10 transition-colors"
-                      title="Delete server"
+                      title={t('mcp.deleteMcp')}
                     >
                       <span className="material-symbols-outlined text-xl">delete</span>
                     </button>
@@ -220,6 +220,7 @@ function MCPServerForm({
   onClose: () => void;
   onSave: (data: MCPServerCreateRequest, serverId?: string) => void;
 }) {
+  const { t } = useTranslation();
   const [name, setName] = useState(server?.name || '');
   const [description, setDescription] = useState(server?.description || '');
   const [connectionType, setConnectionType] = useState<'stdio' | 'sse' | 'http'>(
@@ -259,30 +260,30 @@ function MCPServerForm({
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
       <div>
-        <label className="block text-sm font-medium text-muted mb-2">Server Name</label>
+        <label className="block text-sm font-medium text-muted mb-2">{t('mcp.form.name')}</label>
         <input
           type="text"
           value={name}
           onChange={(e) => setName(e.target.value)}
-          placeholder="e.g., filesystem-server"
+          placeholder={t('mcp.form.namePlaceholder')}
           required
           className="w-full px-4 py-2 bg-dark-bg border border-dark-border rounded-lg text-white placeholder:text-muted focus:outline-none focus:border-primary"
         />
       </div>
 
       <div>
-        <label className="block text-sm font-medium text-muted mb-2">Description</label>
+        <label className="block text-sm font-medium text-muted mb-2">{t('mcp.form.description')}</label>
         <input
           type="text"
           value={description}
           onChange={(e) => setDescription(e.target.value)}
-          placeholder="e.g., File system access for workspace"
+          placeholder={t('mcp.form.descriptionPlaceholder')}
           className="w-full px-4 py-2 bg-dark-bg border border-dark-border rounded-lg text-white placeholder:text-muted focus:outline-none focus:border-primary"
         />
       </div>
 
       <div>
-        <label className="block text-sm font-medium text-muted mb-2">Connection Type</label>
+        <label className="block text-sm font-medium text-muted mb-2">{t('mcp.form.connectionType')}</label>
         <div className="flex gap-4">
           {(['stdio', 'sse', 'http'] as const).map((type) => (
             <label key={type} className="flex items-center gap-2 cursor-pointer">
@@ -303,35 +304,35 @@ function MCPServerForm({
       {connectionType === 'stdio' ? (
         <>
           <div>
-            <label className="block text-sm font-medium text-muted mb-2">Command</label>
+            <label className="block text-sm font-medium text-muted mb-2">{t('mcp.form.command')}</label>
             <input
               type="text"
               value={command}
               onChange={(e) => setCommand(e.target.value)}
-              placeholder="e.g., npx"
+              placeholder={t('mcp.form.commandPlaceholder')}
               required
               className="w-full px-4 py-2 bg-dark-bg border border-dark-border rounded-lg text-white placeholder:text-muted focus:outline-none focus:border-primary"
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-muted mb-2">Arguments</label>
+            <label className="block text-sm font-medium text-muted mb-2">{t('mcp.form.args')}</label>
             <input
               type="text"
               value={args}
               onChange={(e) => setArgs(e.target.value)}
-              placeholder="e.g., -y @modelcontextprotocol/server-filesystem /workspace"
+              placeholder={t('mcp.form.argsPlaceholder')}
               className="w-full px-4 py-2 bg-dark-bg border border-dark-border rounded-lg text-white placeholder:text-muted focus:outline-none focus:border-primary"
             />
           </div>
         </>
       ) : (
         <div>
-          <label className="block text-sm font-medium text-muted mb-2">URL</label>
+          <label className="block text-sm font-medium text-muted mb-2">{t('mcp.form.url')}</label>
           <input
             type="url"
             value={url}
             onChange={(e) => setUrl(e.target.value)}
-            placeholder={connectionType === 'sse' ? 'http://server:port/sse' : 'http://server:port'}
+            placeholder={t('mcp.form.urlPlaceholder')}
             required
             className="w-full px-4 py-2 bg-dark-bg border border-dark-border rounded-lg text-white placeholder:text-muted focus:outline-none focus:border-primary"
           />
@@ -340,10 +341,10 @@ function MCPServerForm({
 
       <div className="flex gap-3 pt-4">
         <Button type="button" variant="secondary" onClick={onClose}>
-          Cancel
+          {t('common.button.cancel')}
         </Button>
         <Button type="submit" className="flex-1">
-          {server ? 'Save Changes' : 'Add Server'}
+          {server ? t('common.button.saveChanges') : t('mcp.addMcp')}
         </Button>
       </div>
     </form>
