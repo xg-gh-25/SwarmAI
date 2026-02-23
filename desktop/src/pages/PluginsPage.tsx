@@ -280,7 +280,7 @@ export default function PluginsPage() {
       <Modal
         isOpen={isInstallModalOpen}
         onClose={() => setIsInstallModalOpen(false)}
-        title={t('common.button.install') + ' Plugin'}
+        title={t('plugins.install.title')}
         size="md"
       >
         <InstallPluginModal
@@ -300,6 +300,7 @@ function InstallPluginModal({
   onClose: () => void;
   onSuccess: () => void;
 }) {
+  const { t } = useTranslation();
   const [gitUrl, setGitUrl] = useState('');
   const [branch, setBranch] = useState('main');
   const [error, setError] = useState<string | null>(null);
@@ -348,7 +349,7 @@ function InstallPluginModal({
       onClose();
     },
     onError: (err: Error) => {
-      setError(err.message || 'Failed to install plugin');
+      setError(err.message || t('plugins.install.installFailed'));
     },
   });
 
@@ -363,31 +364,31 @@ function InstallPluginModal({
       {/* Git Repository URL */}
       <div>
         <label className="block text-sm font-medium text-white mb-2">
-          Git Repository URL <span className="text-status-error">*</span>
+          {t('plugins.install.gitUrl')} <span className="text-status-error">*</span>
         </label>
         <input
           type="text"
           value={gitUrl}
           onChange={(e) => setGitUrl(e.target.value)}
-          placeholder="https://github.com/org/plugin-repo"
+          placeholder={t('plugins.install.gitUrlPlaceholder')}
           className="w-full px-4 py-2.5 bg-dark-bg border border-dark-border rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-primary"
           disabled={installMutation.isPending}
         />
         <p className="mt-1.5 text-xs text-muted">
-          Repository must contain a plugin.yaml file with skills in a skills/ directory.
+          {t('plugins.install.gitUrlHelp')}
         </p>
       </div>
 
       {/* Branch / Tag / Commit */}
       <div>
         <label className="block text-sm font-medium text-white mb-2">
-          Branch / Tag / Commit
+          {t('plugins.install.branch')}
         </label>
         <input
           type="text"
           value={branch}
           onChange={(e) => setBranch(e.target.value)}
-          placeholder="main"
+          placeholder={t('plugins.install.branchPlaceholder')}
           className="w-full px-4 py-2.5 bg-dark-bg border border-dark-border rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-primary"
           disabled={installMutation.isPending}
         />
@@ -408,14 +409,14 @@ function InstallPluginModal({
           onClick={onClose}
           disabled={installMutation.isPending}
         >
-          Cancel
+          {t('common.button.cancel')}
         </Button>
         <Button
           type="submit"
           isLoading={installMutation.isPending}
           disabled={!gitUrl.trim()}
         >
-          Install Plugin
+          {t('plugins.install.installButton')}
         </Button>
       </div>
     </form>

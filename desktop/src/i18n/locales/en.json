@@ -330,7 +330,19 @@
     },
     "uninstallPlugin": "Uninstall Plugin",
     "uninstallPlugins": "Uninstall {{count}} Plugins",
-    "confirmUninstallPlugins": "Are you sure you want to uninstall {{count}} plugins?"
+    "confirmUninstallPlugins": "Are you sure you want to uninstall {{count}} plugins?",
+    "install": {
+      "title": "Install Plugin",
+      "gitUrl": "Git Repository URL",
+      "gitUrlPlaceholder": "https://github.com/org/plugin-repo",
+      "gitUrlHelp": "Repository must contain a plugin.yaml file with skills in a skills/ directory.",
+      "branch": "Branch / Tag / Commit",
+      "branchPlaceholder": "main",
+      "installing": "Installing...",
+      "installButton": "Install Plugin",
+      "noPluginsFound": "No plugins found in repository. Repository must contain a plugin.yaml file with skills in a skills/ directory.",
+      "installFailed": "Failed to install plugin"
+    }
   },
   "settings": {
     "title": "Settings",
