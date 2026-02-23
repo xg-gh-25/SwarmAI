@@ -523,17 +523,26 @@ class TestSwarmAgentProtections:
 
         **Validates: Requirements 4.2**
         """
-        agent_id = swarm_agent_with_system_resources["agent_id"]
-        system_mcp_id = swarm_agent_with_system_resources["system_mcp_id"]
+        import asyncio
+        from database import db
 
-        # First add a user MCP while keeping system MCP
+        agent_id = swarm_agent_with_system_resources["agent_id"]
+
+        # Get ALL system MCPs from database (includes those registered at app init)
+        async def get_all_system_mcps():
+            return await db.mcp_servers.list_by_system()
+
+        all_system_mcps = asyncio.get_event_loop().run_until_complete(get_all_system_mcps())
+        all_system_mcp_ids = [m["id"] for m in all_system_mcps]
+
+        # First add a user MCP while keeping ALL system MCPs
         response = client.put(
             f"/api/agents/{agent_id}",
-            json={"mcp_ids": [system_mcp_id, user_mcp_id]}
+            json={"mcp_ids": all_system_mcp_ids + [user_mcp_id]}
         )
         assert response.status_code == 200
 
-        # Now try to remove only the system MCP (keeping user MCP)
+        # Now try to remove only one system MCP (keeping user MCP + remaining system MCPs)
         response = client.put(
             f"/api/agents/{agent_id}",
             json={"mcp_ids": [user_mcp_id]}
@@ -632,17 +641,27 @@ class TestSwarmAgentProtections:
 
         **Validates: Requirements 5.4**
         """
-        agent_id = swarm_agent_with_system_resources["agent_id"]
-        system_mcp_id = swarm_agent_with_system_resources["system_mcp_id"]
+        import asyncio
+        from database import db
 
-        # Add user MCP while keeping system MCP
+        agent_id = swarm_agent_with_system_resources["agent_id"]
+
+        # Get ALL system MCPs from database (includes those registered at app init)
+        async def get_all_system_mcps():
+            return await db.mcp_servers.list_by_system()
+
+        all_system_mcps = asyncio.get_event_loop().run_until_complete(get_all_system_mcps())
+        all_system_mcp_ids = [m["id"] for m in all_system_mcps]
+
+        # Add user MCP while keeping ALL system MCPs
         response = client.put(
             f"/api/agents/{agent_id}",
-            json={"mcp_ids": [system_mcp_id, user_mcp_id]}
+            json={"mcp_ids": all_system_mcp_ids + [user_mcp_id]}
         )
         assert response.status_code == 200
         data = response.json()
-        assert system_mcp_id in data["mcp_ids"]
+        for mcp_id in all_system_mcp_ids:
+            assert mcp_id in data["mcp_ids"]
         assert user_mcp_id in data["mcp_ids"]
 
     def test_user_mcp_unbind_from_swarm_agent_success(
@@ -653,24 +672,34 @@ class TestSwarmAgentProtections:
 
         **Validates: Requirements 5.5**
         """
-        agent_id = swarm_agent_with_system_resources["agent_id"]
-        system_mcp_id = swarm_agent_with_system_resources["system_mcp_id"]
+        import asyncio
+        from database import db
 
-        # First add user MCP
+        agent_id = swarm_agent_with_system_resources["agent_id"]
+
+        # Get ALL system MCPs from database (includes those registered at app init)
+        async def get_all_system_mcps():
+            return await db.mcp_servers.list_by_system()
+
+        all_system_mcps = asyncio.get_event_loop().run_until_complete(get_all_system_mcps())
+        all_system_mcp_ids = [m["id"] for m in all_system_mcps]
+
+        # First add user MCP while keeping ALL system MCPs
         response = client.put(
             f"/api/agents/{agent_id}",
-            json={"mcp_ids": [system_mcp_id, user_mcp_id]}
+            json={"mcp_ids": all_system_mcp_ids + [user_mcp_id]}
         )
         assert response.status_code == 200
 
-        # Now remove only the user MCP (keeping system MCP)
+        # Now remove only the user MCP (keeping ALL system MCPs)
         response = client.put(
             f"/api/agents/{agent_id}",
-            json={"mcp_ids": [system_mcp_id]}
+            json={"mcp_ids": all_system_mcp_ids}
         )
         assert response.status_code == 200
         data = response.json()
-        assert system_mcp_id in data["mcp_ids"]
+        for mcp_id in all_system_mcp_ids:
+            assert mcp_id in data["mcp_ids"]
         assert user_mcp_id not in data["mcp_ids"]
 
     # -------------------------------------------------------------------------

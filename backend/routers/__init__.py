@@ -11,6 +11,14 @@ from .tasks import router as tasks_router
 from .channels import router as channels_router
 from .system import router as system_router
 from .swarm_workspaces import router as swarm_workspaces_router
+from .todos import router as todos_router
+from .sections import router as sections_router
+from .plan_items import router as plan_items_router
+from .communications import router as communications_router
+from .artifacts import router as artifacts_router
+from .reflections import router as reflections_router
+from .search import router as search_router
+from .workspace_config import router as workspace_config_router
 
 __all__ = [
     "agents_router",
@@ -25,4 +33,12 @@ __all__ = [
     "channels_router",
     "system_router",
     "swarm_workspaces_router",
+    "todos_router",
+    "sections_router",
+    "plan_items_router",
+    "communications_router",
+    "artifacts_router",
+    "reflections_router",
+    "search_router",
+    "workspace_config_router",
 ]

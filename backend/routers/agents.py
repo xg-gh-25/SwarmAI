@@ -1,6 +1,5 @@
 """Agent CRUD API endpoints."""
 import logging
-from pathlib import Path
 from fastapi import APIRouter
 from pydantic import BaseModel
 from schemas.agent import AgentCreateRequest, AgentUpdateRequest, AgentResponse
@@ -10,9 +9,8 @@ from core.exceptions import (
     AgentNotFoundException,
     ValidationException,
 )
-from core.workspace_manager import workspace_manager
 from core.task_manager import task_manager
-from core.agent_manager import SWARM_AGENT_NAME, expand_skill_ids_with_plugins
+from core.agent_manager import SWARM_AGENT_NAME
 
 
 class WorkingDirectoryResponse(BaseModel):
@@ -85,12 +83,9 @@ async def get_agent_working_directory(agent_id: str):
 
     global_user_mode = agent.get("global_user_mode", True)  # Default to True now
 
-    if global_user_mode:
-        # Global User Mode: use home directory
-        working_dir = str(Path.home())
-    else:
-        # Isolated Mode: use per-agent workspace
-        working_dir = str(workspace_manager.get_agent_workspace(agent_id))
+    # All agents use the single SwarmWorkspace path
+    from core.initialization_manager import initialization_manager
+    working_dir = initialization_manager.get_cached_workspace_path()
 
     return WorkingDirectoryResponse(
         path=working_dir,
@@ -123,7 +118,7 @@ async def create_agent(request: AgentCreateRequest):
         "skill_ids": skill_ids,
         "allow_all_skills": allow_all_skills,
         "mcp_ids": request.mcp_ids,
-        "working_directory": None,  # Use default from settings.agent_workspace_dir
+        "working_directory": None,  # Uses cached SwarmWorkspace path via initialization_manager
         "enable_bash_tool": request.enable_bash_tool,
         "enable_file_tools": request.enable_file_tools,
         "enable_web_tools": request.enable_web_tools,
@@ -137,21 +132,6 @@ async def create_agent(request: AgentCreateRequest):
         "status": "active",
     }
     agent = await db.agents.put(agent_data)
-
-    # Build per-agent workspace with symlinks to allowed skills
-    try:
-        effective_skill_ids = await expand_skill_ids_with_plugins(
-            skill_ids, request.plugin_ids, allow_all_skills
-        )
-        await workspace_manager.rebuild_agent_workspace(
-            agent_id=agent["id"],
-            skill_ids=effective_skill_ids,
-            allow_all_skills=allow_all_skills
-        )
-        logger.info(f"Created workspace for agent {agent['id']}")
-    except Exception as e:
-        logger.error(f"Failed to create workspace for agent {agent['id']}: {e}")
-        # Don't fail agent creation if workspace creation fails
 
     return agent
 
@@ -216,30 +196,6 @@ async def update_agent(agent_id: str, request: AgentUpdateRequest):
 
     agent = await db.agents.update(agent_id, updates)
 
-    # Check if skill_ids, allow_all_skills, or plugin_ids changed - if so, rebuild workspace
-    skill_ids_changed = "skill_ids" in updates
-    allow_all_changed = "allow_all_skills" in updates
-    plugin_ids_changed = "plugin_ids" in updates
-
-    if skill_ids_changed or allow_all_changed or plugin_ids_changed:
-        try:
-            skill_ids = agent.get("skill_ids", [])
-            allow_all_skills = agent.get("allow_all_skills", False)
-            plugin_ids = agent.get("plugin_ids", [])
-
-            effective_skill_ids = await expand_skill_ids_with_plugins(
-                skill_ids, plugin_ids, allow_all_skills
-            )
-            await workspace_manager.rebuild_agent_workspace(
-                agent_id=agent_id,
-                skill_ids=effective_skill_ids,
-                allow_all_skills=allow_all_skills
-            )
-            logger.info(f"Rebuilt workspace for agent {agent_id} after skill config change")
-        except Exception as e:
-            logger.error(f"Failed to rebuild workspace for agent {agent_id}: {e}")
-            # Don't fail agent update if workspace rebuild fails
-
     return agent
 
 
@@ -283,11 +239,3 @@ async def delete_agent(agent_id: str):
     except Exception as e:
         logger.error(f"Failed to delete tasks for agent {agent_id}: {e}")
         # Don't fail agent deletion if task cleanup fails
-
-    # Clean up agent workspace
-    try:
-        await workspace_manager.delete_agent_workspace(agent_id)
-        logger.info(f"Deleted workspace for agent {agent_id}")
-    except Exception as e:
-        logger.error(f"Failed to delete workspace for agent {agent_id}: {e}")
-        # Don't fail agent deletion if workspace cleanup fails

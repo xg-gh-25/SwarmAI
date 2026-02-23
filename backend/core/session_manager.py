@@ -17,7 +17,6 @@ class SessionInfo:
     title: str = "New Chat"
     user_id: Optional[str] = None
     work_dir: Optional[str] = None  # Working directory for session continuity
-    workspace_id: Optional[str] = None  # Swarm Workspace ID for session tracking
     created_at: str = field(default_factory=lambda: datetime.now().isoformat())
     last_accessed: str = field(default_factory=lambda: datetime.now().isoformat())
 
@@ -29,7 +28,6 @@ class SessionInfo:
             "title": self.title,
             "user_id": self.user_id,
             "work_dir": self.work_dir,
-            "workspace_id": self.workspace_id,
             "created_at": self.created_at,
             "last_accessed": self.last_accessed,
         }
@@ -43,7 +41,6 @@ class SessionInfo:
             title=data.get("title", "New Chat"),
             user_id=data.get("user_id"),
             work_dir=data.get("work_dir"),
-            workspace_id=data.get("workspace_id"),
             created_at=data.get("created_at", datetime.now().isoformat()),
             last_accessed=data.get("last_accessed", datetime.now().isoformat()),
         )
@@ -63,7 +60,6 @@ class SessionManager:
         title: str = "New Chat",
         user_id: Optional[str] = None,
         work_dir: Optional[str] = None,
-        workspace_id: Optional[str] = None,
     ) -> SessionInfo:
         """Store session information in database."""
         now = datetime.now().isoformat()
@@ -78,9 +74,6 @@ class SessionManager:
             # Update work_dir if provided (don't overwrite with None)
             if work_dir is not None:
                 updates["work_dir"] = work_dir
-            # Update workspace_id if provided (don't overwrite with None)
-            if workspace_id is not None:
-                updates["workspace_id"] = workspace_id
             await db.sessions.update(session_id, updates)
             existing.update(updates)
             session_info = SessionInfo.from_dict(existing)
@@ -92,7 +85,6 @@ class SessionManager:
                 "title": title,
                 "user_id": user_id,
                 "work_dir": work_dir,
-                "workspace_id": workspace_id,
                 "created_at": now,
                 "last_accessed": now,
             }

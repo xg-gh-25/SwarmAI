@@ -236,6 +236,7 @@ class SeedDatabaseGenerator:
                 "config": json.dumps(mcp_config.get("config", {})),
                 "allowed_tools": json.dumps(mcp_config.get("allowed_tools", [])),
                 "rejected_tools": json.dumps(mcp_config.get("rejected_tools", [])),
+                "source_type": "system",
                 "endpoint": mcp_config.get("endpoint"),
                 "version": mcp_config.get("version"),
                 "is_active": 1 if mcp_config.get("is_active", True) else 0,

@@ -42,14 +42,14 @@ function StatusBadge({ status }: { status: TaskStatus }) {
   const { t } = useTranslation();
 
   const config: Record<TaskStatus, { color: string; icon: string; spin?: boolean }> = {
-    pending: { color: 'bg-gray-500/20 text-gray-400', icon: 'schedule' },
-    running: { color: 'bg-blue-500/20 text-blue-400', icon: 'sync', spin: true },
+    draft: { color: 'bg-gray-500/20 text-gray-400', icon: 'edit_note' },
+    wip: { color: 'bg-blue-500/20 text-blue-400', icon: 'sync', spin: true },
     completed: { color: 'bg-green-500/20 text-green-400', icon: 'check_circle' },
-    failed: { color: 'bg-red-500/20 text-red-400', icon: 'error' },
+    blocked: { color: 'bg-red-500/20 text-red-400', icon: 'block' },
     cancelled: { color: 'bg-gray-500/20 text-gray-400', icon: 'cancel' },
   };
 
-  const { color, icon, spin = false } = config[status] || config.pending;
+  const { color, icon, spin = false } = config[status] || config.draft;
 
   return (
     <span className={clsx('inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium', color)}>
@@ -277,7 +277,7 @@ export default function TasksPage() {
                       >
                         <span className="material-symbols-outlined text-xl">chat</span>
                       </button>
-                      {task.status === 'running' && (
+                      {task.status === 'wip' && (
                         <button
                           onClick={() => setTaskToCancel(task)}
                           title={t('tasks.actions.cancel')}

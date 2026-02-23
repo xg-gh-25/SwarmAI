@@ -10,6 +10,12 @@ import PluginsPage from './pages/PluginsPage';
 import ChannelsPage from './pages/ChannelsPage';
 import SwarmCorePage from './pages/SwarmCorePage';
 import WorkspacesPage from './pages/WorkspacesPage';
+import SignalsPage from './pages/SignalsPage';
+import ExecutePage from './pages/ExecutePage';
+import PlanPage from './pages/PlanPage';
+import CommunicatePage from './pages/CommunicatePage';
+import ArtifactsPage from './pages/ArtifactsPage';
+import ReflectionPage from './pages/ReflectionPage';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -78,6 +84,69 @@ export default function App() {
               <Route path="/channels" element={
                 <ThreeColumnLayout>
                   <ChannelsPage />
+                </ThreeColumnLayout>
+              } />
+              {/* Section pages - Daily Work Operating Loop */}
+              {/* Requirements: 15.1, 15.2 */}
+              <Route path="/signals" element={
+                <ThreeColumnLayout>
+                  <SignalsPage />
+                </ThreeColumnLayout>
+              } />
+              <Route path="/execute" element={
+                <ThreeColumnLayout>
+                  <ExecutePage />
+                </ThreeColumnLayout>
+              } />
+              <Route path="/plan" element={
+                <ThreeColumnLayout>
+                  <PlanPage />
+                </ThreeColumnLayout>
+              } />
+              <Route path="/communicate" element={
+                <ThreeColumnLayout>
+                  <CommunicatePage />
+                </ThreeColumnLayout>
+              } />
+              <Route path="/artifacts" element={
+                <ThreeColumnLayout>
+                  <ArtifactsPage />
+                </ThreeColumnLayout>
+              } />
+              <Route path="/reflection" element={
+                <ThreeColumnLayout>
+                  <ReflectionPage />
+                </ThreeColumnLayout>
+              } />
+              {/* Workspace-scoped section routes - Requirements: 15.2, 15.3 */}
+              <Route path="/workspaces/:workspaceId/signals" element={
+                <ThreeColumnLayout>
+                  <SignalsPage />
+                </ThreeColumnLayout>
+              } />
+              <Route path="/workspaces/:workspaceId/execute" element={
+                <ThreeColumnLayout>
+                  <ExecutePage />
+                </ThreeColumnLayout>
+              } />
+              <Route path="/workspaces/:workspaceId/plan" element={
+                <ThreeColumnLayout>
+                  <PlanPage />
+                </ThreeColumnLayout>
+              } />
+              <Route path="/workspaces/:workspaceId/communicate" element={
+                <ThreeColumnLayout>
+                  <CommunicatePage />
+                </ThreeColumnLayout>
+              } />
+              <Route path="/workspaces/:workspaceId/artifacts" element={
+                <ThreeColumnLayout>
+                  <ArtifactsPage />
+                </ThreeColumnLayout>
+              } />
+              <Route path="/workspaces/:workspaceId/reflection" element={
+                <ThreeColumnLayout>
+                  <ReflectionPage />
                 </ThreeColumnLayout>
               } />
             </Routes>

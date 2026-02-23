@@ -15,7 +15,7 @@ from config import settings, get_app_data_dir
 from core.agent_manager import agent_manager
 from core.swarm_workspace_manager import swarm_workspace_manager
 from utils.bundle_paths import get_resource_file
-from routers import agents_router, skills_router, mcp_router, chat_router, auth_router, workspace_router, settings_router, plugins_router, tasks_router, channels_router, system_router, swarm_workspaces_router
+from routers import agents_router, skills_router, mcp_router, chat_router, auth_router, workspace_router, settings_router, plugins_router, tasks_router, channels_router, system_router, swarm_workspaces_router, todos_router, sections_router, plan_items_router, communications_router, artifacts_router, reflections_router, search_router, workspace_config_router
 from channels.gateway import channel_gateway
 from middleware.error_handler import setup_error_handlers
 from middleware.rate_limit import limiter
@@ -246,6 +246,19 @@ app.include_router(tasks_router, prefix="/api/tasks", tags=["tasks"])
 app.include_router(channels_router, prefix="/api/channels", tags=["channels"])
 app.include_router(system_router, prefix="/api/system", tags=["system"])
 app.include_router(swarm_workspaces_router, prefix="/api", tags=["swarm-workspaces"])
+app.include_router(todos_router, prefix="/api/todos", tags=["todos"])
+app.include_router(sections_router, prefix="/api/workspaces", tags=["sections"])
+app.include_router(plan_items_router, prefix="/api/workspaces", tags=["plan-items"])
+app.include_router(communications_router, prefix="/api/workspaces", tags=["communications"])
+app.include_router(artifacts_router, prefix="/api/workspaces", tags=["artifacts"])
+app.include_router(reflections_router, prefix="/api/workspaces", tags=["reflections"])
+app.include_router(search_router, prefix="/api/search", tags=["search"])
+app.include_router(workspace_config_router, prefix="/api/workspaces", tags=["workspace-config"])
+
+# Register development-only router when DEBUG=true
+if settings.debug:
+    from routers.dev import router as dev_router
+    app.include_router(dev_router, prefix="/api/dev", tags=["dev"])
 
 
 @app.get("/health")

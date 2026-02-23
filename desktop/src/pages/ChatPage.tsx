@@ -9,18 +9,17 @@ import { skillsService } from '../services/skills';
 import { mcpService } from '../services/mcp';
 import { pluginsService } from '../services/plugins';
 import { workspaceService } from '../services/workspace';
-import { tasksService } from '../services/tasks';
-import { Spinner, ConfirmDialog, AgentFormModal } from '../components/common';
+import { tasksService, PolicyViolationError } from '../services/tasks';
+import { Spinner, ConfirmDialog, AgentFormModal, PolicyViolationToast } from '../components/common';
 import { PermissionRequestModal } from '../components/chat';
 import { FilePreviewModal } from '../components/workspace/FilePreviewModal';
-import { useFileAttachment, useSidebarState, useTabState } from '../hooks';
-import { ChatHeader, ChatInput, ChatSidebar, FileBrowserSidebar, MessageBubble, TodoRadarSidebar } from './chat/components';
+import { useFileAttachment, useTabState, useRightSidebarGroup } from '../hooks';
+import { ChatHeader, ChatInput, ChatHistorySidebar, FileBrowserSidebar, MessageBubble, TodoRadarSidebar } from './chat/components';
 import { groupSessionsByTime } from './chat/utils';
-import { createWelcomeMessage, createWorkspaceChangeMessage } from './chat/constants';
-import { DEFAULT_SIDEBAR_WIDTH, DEFAULT_RIGHT_SIDEBAR_WIDTH, MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH,
-  MIN_RIGHT_SIDEBAR_WIDTH, MAX_RIGHT_SIDEBAR_WIDTH } from './chat/constants';
+import { createWelcomeMessage, RIGHT_SIDEBAR_WIDTH_CONFIGS } from './chat/constants';
 import type { PendingQuestion } from './chat/types';
 import { useWorkspaceSelection } from '../hooks/useWorkspaceSelection';
+import { useLayout } from '../contexts/LayoutContext';
 
 export default function ChatPage() {
   const { t } = useTranslation();
@@ -40,6 +39,9 @@ export default function ChatPage() {
   // Background task mode
   const [runAsTask, setRunAsTask] = useState(() => searchParams.get('taskMode') === 'true');
 
+  // Policy violation toast state
+  const [policyViolation, setPolicyViolation] = useState<{ message: string; violations: Array<{ entityType: string; entityId: string; message: string; suggestedAction: string }> } | null>(null);
+
   // Pending states
   const [pendingQuestion, setPendingQuestion] = useState<PendingQuestion | null>(null);
   const [pendingPermission, setPendingPermission] = useState<PermissionRequest | null>(null);
@@ -58,47 +60,16 @@ export default function ChatPage() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<(() => void) | null>(null);
 
-  // Sidebar states using custom hook
-  const chatSidebar = useSidebarState({
-    storageKey: 'chatSidebarCollapsed',
-    widthStorageKey: 'chatSidebarWidth',
-    defaultCollapsed: true,
-    defaultWidth: DEFAULT_SIDEBAR_WIDTH,
-    minWidth: MIN_SIDEBAR_WIDTH,
-    maxWidth: MAX_SIDEBAR_WIDTH,
+  // Right sidebar group with mutual exclusion
+  const rightSidebars = useRightSidebarGroup({
+    defaultActive: 'todoRadar',
+    widthConfigs: RIGHT_SIDEBAR_WIDTH_CONFIGS,
   });
 
-  const rightSidebar = useSidebarState({
-    storageKey: 'rightSidebarCollapsed',
-    widthStorageKey: 'rightSidebarWidth',
-    defaultCollapsed: false,
-    defaultWidth: DEFAULT_RIGHT_SIDEBAR_WIDTH,
-    minWidth: MIN_RIGHT_SIDEBAR_WIDTH,
-    maxWidth: MAX_RIGHT_SIDEBAR_WIDTH,
-  });
+  const { selectedWorkspace, workDir } = useWorkspaceSelection();
 
-  // ToDo Radar sidebar state (Req 5.4, 5.5)
-  const todoRadarSidebar = useSidebarState({
-    storageKey: 'todoRadarSidebarCollapsed',
-    widthStorageKey: 'todoRadarSidebarWidth',
-    defaultCollapsed: true,
-    defaultWidth: 300,
-    minWidth: 200,
-    maxWidth: 500,
-  });
-
-  // Workspace selection with callback for workspace changes
-  const handleWorkspaceChanged = useCallback((workspace: typeof selectedWorkspace) => {
-    setSessionId(undefined);
-    setMessages([]);
-    setPendingQuestion(null);
-    setMessages([createWorkspaceChangeMessage(workspace?.name, workspace?.filePath)]);
-  }, []);
-
-  const { selectedWorkspace, setSelectedWorkspace, workDir } = useWorkspaceSelection({
-    selectedAgentId,
-    onWorkspaceChange: handleWorkspaceChanged,
-  });
+  // Get attached files from LayoutContext for ChatInput
+  const { attachedFiles, removeAttachedFile } = useLayout();
 
   // Data queries
   const { data: agents = [] } = useQuery({
@@ -203,8 +174,8 @@ export default function ChatPage() {
     setSessionId(undefined);
     setPendingQuestion(null);
     setMessages([createWelcomeMessage()]);
-    chatSidebar.setCollapsed(true);
-  }, [chatSidebar]);
+    // Note: Sidebar visibility is now managed by toggle buttons, no need to collapse
+  }, []);
 
   // Handle new session - creates new tab with "New Session" title (Req 2.2, 2.3)
   const handleNewSession = useCallback(() => {
@@ -253,8 +224,8 @@ export default function ChatPage() {
       setSelectedAgentId(session.agentId);
     }
     await loadSessionMessages(session.id);
-    chatSidebar.setCollapsed(true);
-  }, [selectedAgentId, loadSessionMessages, chatSidebar]);
+    // Note: Sidebar visibility is now managed by toggle buttons, no need to collapse
+  }, [selectedAgentId, loadSessionMessages]);
 
   // Handle delete session
   const handleDeleteSession = async (session: ChatSession) => {
@@ -610,7 +581,6 @@ export default function ChatPage() {
           content: hasAttachments ? content : undefined,
           enableSkills,
           enableMcp: enableMCP,
-          addDirs: workDir ? [workDir] : undefined,
         });
         setInputValue('');
         clearAttachments();
@@ -619,8 +589,15 @@ export default function ChatPage() {
         queryClient.invalidateQueries({ queryKey: ['runningTaskCount'] });
         navigate('/tasks');
       } catch (error) {
-        console.error('Failed to create task:', error);
-        alert(t('chat.taskCreateFailed'));
+        if (error instanceof PolicyViolationError) {
+          setPolicyViolation({
+            message: error.message,
+            violations: error.violations,
+          });
+        } else {
+          console.error('Failed to create task:', error);
+          alert(t('chat.taskCreateFailed'));
+        }
       }
       return;
     }
@@ -657,8 +634,6 @@ export default function ChatPage() {
         sessionId,
         enableSkills,
         enableMCP,
-        addDirs: workDir ? [workDir] : undefined,
-        workspaceId: selectedWorkspace?.id,
         workspaceContext: selectedWorkspace?.context,
       },
       createStreamHandler(assistantMessageId),
@@ -763,30 +738,11 @@ export default function ChatPage() {
         onTabSelect={handleTabSelect}
         onTabClose={handleTabClose}
         onNewSession={handleNewSession}
-        chatSidebarCollapsed={chatSidebar.collapsed}
-        todoRadarCollapsed={todoRadarSidebar.collapsed}
-        onToggleChatSidebar={chatSidebar.toggle}
-        onToggleTodoRadar={todoRadarSidebar.toggle}
+        activeSidebar={rightSidebars.activeSidebar}
+        onOpenSidebar={rightSidebars.openSidebar}
       />
 
       <div className="flex flex-1 overflow-hidden">
-        {/* Chat History Sidebar */}
-        {!chatSidebar.collapsed && (
-          <ChatSidebar
-            width={chatSidebar.width}
-            isResizing={chatSidebar.isResizing}
-            groupedSessions={groupedSessions}
-            currentSessionId={sessionId}
-            agents={agents}
-            selectedAgentId={selectedAgentId}
-            onNewChat={handleNewChat}
-            onSelectSession={handleSelectSession}
-            onDeleteSession={(session) => setDeleteConfirmSession(session)}
-            onClose={() => chatSidebar.setCollapsed(true)}
-            onMouseDown={chatSidebar.handleMouseDown}
-          />
-        )}
-
         {/* Delete Confirmation Dialog */}
         <ConfirmDialog
           isOpen={!!deleteConfirmSession}
@@ -863,7 +819,6 @@ export default function ChatPage() {
                 onToggleRunAsTask={() => setRunAsTask(!runAsTask)}
                 selectedAgentId={selectedAgentId}
                 selectedWorkspace={selectedWorkspace}
-                onWorkspaceSelect={setSelectedWorkspace}
                 attachments={attachments}
                 onAddFiles={addFiles}
                 onRemoveFile={removeFile}
@@ -877,31 +832,47 @@ export default function ChatPage() {
                 isLoadingMCPs={isLoadingMCPs}
                 isLoadingPlugins={isLoadingPlugins}
                 allowAllSkills={selectedAgent?.allowAllSkills}
+                attachedContextFiles={attachedFiles}
+                onRemoveContextFile={removeAttachedFile}
               />
             </>
           )}
         </div>
 
-        {/* Right Sidebar - File Browser */}
-        {!rightSidebar.collapsed && (
-          <FileBrowserSidebar
-            width={rightSidebar.width}
-            isResizing={rightSidebar.isResizing}
-            selectedAgentId={selectedAgentId}
-            basePath={effectiveBasePath}
-            onFileSelect={setPreviewFile}
-            onClose={() => rightSidebar.setCollapsed(true)}
-            onMouseDown={rightSidebar.handleMouseDown}
+        {/* Right Sidebars - Order: TodoRadar, ChatHistory, FileBrowser */}
+        {rightSidebars.isActive('todoRadar') && (
+          <TodoRadarSidebar
+            width={rightSidebars.widths.todoRadar.width}
+            isResizing={rightSidebars.widths.todoRadar.isResizing}
+            onMouseDown={rightSidebars.widths.todoRadar.handleMouseDown}
           />
         )}
 
-        {/* Right Sidebar - ToDo Radar (Req 5.1, 5.2, 5.3, 5.4) */}
-        {!todoRadarSidebar.collapsed && (
-          <TodoRadarSidebar
-            width={todoRadarSidebar.width}
-            isResizing={todoRadarSidebar.isResizing}
-            onClose={() => todoRadarSidebar.setCollapsed(true)}
-            onMouseDown={todoRadarSidebar.handleMouseDown}
+        {/* Chat History Sidebar */}
+        {rightSidebars.isActive('chatHistory') && (
+          <ChatHistorySidebar
+            width={rightSidebars.widths.chatHistory.width}
+            isResizing={rightSidebars.widths.chatHistory.isResizing}
+            groupedSessions={groupedSessions}
+            currentSessionId={sessionId}
+            agents={agents}
+            selectedAgentId={selectedAgentId}
+            onNewChat={handleNewChat}
+            onSelectSession={handleSelectSession}
+            onDeleteSession={(session) => setDeleteConfirmSession(session)}
+            onMouseDown={rightSidebars.widths.chatHistory.handleMouseDown}
+          />
+        )}
+
+        {/* Right Sidebar - File Browser */}
+        {rightSidebars.isActive('fileBrowser') && (
+          <FileBrowserSidebar
+            width={rightSidebars.widths.fileBrowser.width}
+            isResizing={rightSidebars.widths.fileBrowser.isResizing}
+            selectedAgentId={selectedAgentId}
+            basePath={effectiveBasePath}
+            onFileSelect={setPreviewFile}
+            onMouseDown={rightSidebars.widths.fileBrowser.handleMouseDown}
           />
         )}
       </div>
@@ -910,6 +881,23 @@ export default function ChatPage() {
       <FilePreviewModal isOpen={!!previewFile} onClose={() => setPreviewFile(null)} agentId={selectedAgentId || ''} file={previewFile} basePath={effectiveBasePath} />
       {pendingPermission && <PermissionRequestModal request={pendingPermission} onDecision={handlePermissionDecision} isLoading={isPermissionLoading} />}
       <AgentFormModal isOpen={isEditAgentOpen} onClose={() => setIsEditAgentOpen(false)} onSave={handleSaveAgent} agent={selectedAgent} />
+
+      {/* Policy Violation Toast - Req 34.4, 34.5 */}
+      {policyViolation && (
+        <PolicyViolationToast
+          message={policyViolation.message}
+          violations={policyViolation.violations}
+          onResolve={() => {
+            const wsId = selectedWorkspace?.id;
+            if (wsId) {
+              navigate(`/workspaces/${wsId}/settings`);
+            } else {
+              navigate('/settings');
+            }
+          }}
+          onDismiss={() => setPolicyViolation(null)}
+        />
+      )}
     </div>
   );
 }

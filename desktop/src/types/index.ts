@@ -182,7 +182,6 @@ export interface ChatSession {
   createdAt: string;
   lastAccessedAt: string;
   workDir?: string;
-  workspaceId?: string;
 }
 
 export interface ChatMessage {
@@ -255,8 +254,6 @@ export interface ChatRequest {
   sessionId?: string;
   enableSkills?: boolean;
   enableMCP?: boolean;
-  addDirs?: string[];  // Additional directories for Claude to access
-  workspaceId?: string;  // Swarm Workspace ID for context injection
   workspaceContext?: string;  // Workspace context to inject into system prompt
 }
 
@@ -403,6 +400,18 @@ export interface RateLimitErrorResponse extends ErrorResponse {
   retryAfter: number;
 }
 
+export interface PolicyViolationDetail {
+  entityType: string;
+  entityId: string;
+  message: string;
+  suggestedAction: string;
+}
+
+export interface PolicyViolationErrorResponse extends ErrorResponse {
+  code: 'POLICY_VIOLATION';
+  policyViolations: PolicyViolationDetail[];
+}
+
 // Error code constants
 export const ErrorCodes = {
   // Validation (400)
@@ -420,6 +429,7 @@ export const ErrorCodes = {
   SESSION_NOT_FOUND: 'SESSION_NOT_FOUND',
   // Conflict (409)
   DUPLICATE_RESOURCE: 'DUPLICATE_RESOURCE',
+  POLICY_VIOLATION: 'POLICY_VIOLATION',
   // Rate Limit (429)
   RATE_LIMIT_EXCEEDED: 'RATE_LIMIT_EXCEEDED',
   // Server (500)
@@ -633,14 +643,19 @@ export interface ChannelTypeInfo {
 
 // ============== Task Types ==============
 
-export type TaskStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+export type TaskStatus = 'draft' | 'wip' | 'blocked' | 'completed' | 'cancelled';
 
 export interface Task {
   id: string;
+  workspaceId: string | null;
   agentId: string;
   sessionId: string | null;
   status: TaskStatus;
   title: string;
+  description: string | null;
+  priority: string | null;
+  sourceTodoId: string | null;
+  blockedReason: string | null;
   model: string | null;
   createdAt: string;
   startedAt: string | null;
@@ -676,6 +691,8 @@ export interface SwarmWorkspace {
   context: string;
   icon?: string;
   isDefault: boolean;
+  isArchived: boolean;
+  archivedAt: string | null;
   createdAt: string;
   updatedAt: string;
 }

@@ -1,5 +1,6 @@
 """Application configuration settings."""
 import platform
+import secrets
 from pathlib import Path
 from pydantic_settings import BaseSettings
 from functools import lru_cache
@@ -51,7 +52,7 @@ class Settings(BaseSettings):
     debug: bool = False
 
     # Server
-    host: str = "0.0.0.0"
+    host: str = "127.0.0.1"
     port: int = 8000
 
     # CORS - include Tauri origins for desktop app
@@ -69,7 +70,7 @@ class Settings(BaseSettings):
     aws_secret_access_key: str = ""
 
     # JWT Authentication
-    jwt_secret_key: str = "your-secret-key-change-in-production"
+    jwt_secret_key: str = ""  # Set via JWT_SECRET_KEY env var; auto-generated if empty
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 15
     refresh_token_expire_days: int = 7
@@ -86,16 +87,6 @@ class Settings(BaseSettings):
     claude_code_use_bedrock: bool = True  # Use AWS Bedrock instead of Anthropic API
     claude_code_disable_experimental_betas: bool = True  # Disable experimental features
 
-    # Agent workspace directory (default: ./workspace relative to project root)
-    # This is where main skills are stored in .claude/skills/
-    agent_workspace_dir: str = str(_PROJECT_ROOT / "workspace")
-
-    # Isolated per-agent workspaces directory (OUTSIDE project tree for skill isolation)
-    # Each agent gets its own workspace with absolute symlinks to allowed skills
-    # This prevents agents from discovering skills in parent directories
-    # Default: platform-specific app data directory / workspaces
-    agent_workspaces_dir: str = str(get_app_data_dir() / "workspaces")
-
     # Built-in Sandbox Configuration (Claude Agent SDK native bash sandboxing)
     sandbox_enabled_default: bool = True  # Default sandbox state for new agents (enabled for security)
     sandbox_auto_allow_bash: bool = True  # Auto-approve bash when sandboxed
@@ -110,7 +101,10 @@ class Settings(BaseSettings):
 @lru_cache()
 def get_settings() -> Settings:
     """Get cached settings instance."""
-    return Settings()
+    s = Settings()
+    if not s.jwt_secret_key:
+        s.jwt_secret_key = secrets.token_hex(32)
+    return s
 
 
 settings = get_settings()

@@ -23,27 +23,47 @@ desktop/src/
 │   └── chat/
 │       ├── index.ts              # Barrel export
 │       ├── constants.ts          # Constants and message generators
+│       ├── constants.test.ts     # Tests for constants
 │       ├── types.ts              # Type definitions (OpenTab, PendingQuestion)
 │       ├── utils.ts              # Utility functions
+│       ├── utils.test.ts         # Tests for utils
 │       └── components/
 │           ├── index.ts          # Component barrel export
 │           ├── ChatHeader.tsx    # Header with session tabs and action buttons
-│           ├── ChatInput.tsx     # Input area with attachments
-│           ├── ChatSidebar.tsx   # Chat history sidebar (left)
+│           ├── ChatInput.tsx     # Input area with attachments and file chips
+│           ├── ChatInput.test.tsx        # Tests for ChatInput
+│           ├── ChatHistorySidebar.tsx    # Chat history sidebar (right)
 │           ├── ContentBlockRenderer.tsx  # Content block rendering
 │           ├── FileBrowserSidebar.tsx    # File browser sidebar (right)
 │           ├── MessageBubble.tsx         # Message display
 │           ├── SessionTab.tsx            # Individual session tab component
+│           ├── SessionTab.test.ts        # Tests for SessionTab
 │           ├── SessionTabBar.tsx         # Horizontal scrollable tab bar
+│           ├── SessionTabBar.test.tsx    # Tests for SessionTabBar
 │           ├── TodoRadarSidebar.tsx      # ToDo Radar sidebar (right, mock)
 │           └── ToolUseBlock.tsx          # Tool use display
+│
+├── components/
+│   └── chat/                     # Shared chat components (reusable)
+│       ├── index.ts              # Barrel export
+│       ├── AttachedFileChips.tsx         # Compact Slack-style file chips
+│       ├── AttachedFileChips.test.tsx    # Tests for AttachedFileChips
+│       ├── AttachmentPreviewCard.tsx     # Attachment preview card
+│       ├── ChatDropZone.tsx              # Drag-and-drop file zone
+│       ├── FileAttachmentButton.tsx      # File attachment button
+│       ├── FileAttachmentPreview.tsx     # File attachment preview
+│       ├── PermissionRequestModal.tsx    # HITL permission modal
+│       └── WorkspaceSelector.tsx         # Workspace selection dropdown
 │
 └── hooks/
     ├── index.ts                  # Hooks barrel export
     ├── useSidebarState.ts        # Reusable sidebar state management
+    ├── useSidebarState.test.ts   # Tests for useSidebarState
     ├── useTabState.ts            # Session tab state with localStorage persistence
+    ├── useTabState.test.ts       # Tests for useTabState
     ├── useChatSession.ts         # Chat session state (optional)
-    └── useWorkspaceSelection.ts  # Workspace selection with persistence
+    ├── useWorkspaceSelection.ts  # Workspace selection with persistence
+    └── useWorkspaceSelection.test.ts  # Tests for useWorkspaceSelection
 ```
 
 ## Component Hierarchy
@@ -60,8 +80,6 @@ ChatPage (Orchestrator)
 │       ├── New Session Button (+)
 │       ├── ToDo Radar Toggle (checklist)
 │       └── Chat History Toggle (history)
-├── ChatSidebar (conditional, left)
-│   └── Session list grouped by time
 ├── Main Chat Area
 │   ├── Messages List
 │   │   └── MessageBubble[]
@@ -71,15 +89,18 @@ ChatPage (Orchestrator)
 │   │           ├── Tool Result (tool_result)
 │   │           └── AskUserQuestion (ask_user_question)
 │   └── ChatInput
+│       ├── AttachedFileChips (compact file display)
 │       ├── FileAttachmentButton
 │       ├── WorkspaceSelector
 │       ├── Slash Command Suggestions
 │       └── Send/Stop Button
-├── FileBrowserSidebar (conditional, right)
-│   └── FileBrowser
 ├── TodoRadarSidebar (conditional, right)
 │   ├── Header (title + close)
 │   └── Mock ToDo items (Overdue, Pending)
+├── ChatHistorySidebar (conditional, right)
+│   └── Session list grouped by time
+├── FileBrowserSidebar (conditional, right)
+│   └── FileBrowser
 └── Modals
     ├── FilePreviewModal
     ├── PermissionRequestModal
@@ -109,6 +130,35 @@ Type definitions specific to chat:
 Utility functions:
 - `groupSessionsByTime()` - Groups chat sessions by time periods
 - `formatTimestamp()` - Formats timestamps for display
+
+## Shared Chat Components
+
+Located in `desktop/src/components/chat/`, these are reusable components used across the chat feature:
+
+### AttachedFileChips
+Displays attached files as compact, Slack-style removable chips above the input area:
+- Horizontal scrolling when files overflow
+- File type icons based on extension
+- Keyboard navigation (Arrow keys, Delete/Backspace to remove)
+- Full ARIA accessibility support
+- Tooltip showing full file path on hover
+
+### WorkspaceSelector
+Dropdown for selecting the active workspace context:
+- Persists selection per agent to localStorage
+- Auto-selects default workspace
+- Triggers session reset on workspace change
+
+### FileAttachmentButton
+Button to trigger file attachment dialog:
+- Supports images, PDFs, text files
+- Integrates with ChatDropZone for drag-and-drop
+
+### PermissionRequestModal
+Modal for Human-in-the-Loop (HITL) permission requests:
+- Displays tool name and arguments
+- Allow/Deny actions
+- Blocks chat until decision made
 
 ### Custom Hooks
 
@@ -190,7 +240,7 @@ The ChatPage manages these primary states:
 - Tab operations: addTab, closeTab, selectTab, updateTabTitle, etc.
 
 ### Sidebar States (via useSidebarState hook)
-- `chatSidebar` - Chat history sidebar (left)
+- `chatSidebar` - Chat history sidebar (right)
 - `rightSidebar` - File browser sidebar (right)
 - `todoRadarSidebar` - ToDo Radar sidebar (right)
 
@@ -219,15 +269,22 @@ Available commands (defined in constants.ts):
 
 Property-based tests have been implemented for core chat functionality:
 
+### Page-level Tests
 - `desktop/src/pages/chat/utils.test.ts` - Tests for `groupSessionsByTime` and `formatTimestamp`
 - `desktop/src/pages/chat/constants.test.ts` - Tests for message generators and constants
+- `desktop/src/pages/chat/components/ChatInput.test.tsx` - Tests for ChatInput component
 - `desktop/src/pages/chat/components/SessionTab.test.ts` - Tests for title truncation logic
 - `desktop/src/pages/chat/components/SessionTabBar.test.tsx` - Tests for keyboard navigation and ARIA
+
+### Shared Component Tests
+- `desktop/src/components/chat/AttachedFileChips.test.tsx` - Tests for file chips display and interaction
+
+### Hook Tests
 - `desktop/src/hooks/useSidebarState.test.ts` - Tests for sidebar state management
 - `desktop/src/hooks/useTabState.test.ts` - Tests for tab state management (30 tests)
 - `desktop/src/hooks/useWorkspaceSelection.test.ts` - Tests for workspace selection logic
 
-Run tests with: `cd desktop && npm test`
+Run tests with: `cd desktop && npm test -- --run`
 
 ## Session Tab System
 

@@ -82,6 +82,7 @@ class InitializationManager:
     def __init__(self):
         """Initialize the InitializationManager."""
         self._mode: str = "unknown"
+        self._cached_workspace_path: Optional[str] = None
     
     async def get_initialization_status(self) -> dict:
         """Get current initialization state.
@@ -134,8 +135,8 @@ class InitializationManager:
             settings = await db.app_settings.get(DEFAULT_SETTINGS_ID)
             if settings is None:
                 # Create default settings if they don't exist
-                from datetime import datetime
-                now = datetime.now().isoformat()
+                from datetime import datetime, timezone
+                now = datetime.now(timezone.utc).isoformat()
                 settings = {
                     "id": DEFAULT_SETTINGS_ID,
                     "initialization_complete": 1 if complete else 0,
@@ -202,6 +203,29 @@ class InitializationManager:
             logger.error(f"Quick validation failed with error after retries: {e}")
             return False
 
+    def get_cached_workspace_path(self) -> str:
+        """Return the cached expanded SwarmWorkspace path.
+
+        This path is set once during app init and read per-session.
+        No DB lookup occurs.
+
+        Falls back to computing from DEFAULT_WORKSPACE_CONFIG if not set.
+
+        Returns:
+            The expanded filesystem path to the SwarmWorkspace directory.
+
+        Validates: Requirements 1.1, 1.2
+        """
+        if not self._cached_workspace_path:
+            # Fallback: compute from DEFAULT_WORKSPACE_CONFIG
+            from core.swarm_workspace_manager import swarm_workspace_manager
+            self._cached_workspace_path = swarm_workspace_manager.expand_path(
+                swarm_workspace_manager.DEFAULT_WORKSPACE_CONFIG["file_path"]
+            )
+        return self._cached_workspace_path
+
+
+
     async def run_full_initialization(self) -> bool:
         """Run full initialization (skills, MCPs, agent, workspace).
         
@@ -210,6 +234,9 @@ class InitializationManager:
         - Scanning and registering default MCP servers
         - Creating/updating the default agent (SwarmAgent)
         - Creating the default workspace (SwarmWorkspace)
+        - Setting up skill symlinks in the workspace
+        - Copying templates into the workspace
+        - Caching the expanded workspace path for per-session use
         
         The initialization_complete flag is only set to True if ALL
         critical steps succeed (agent and workspace creation).
@@ -217,10 +244,12 @@ class InitializationManager:
         Returns:
             True if all critical steps succeeded, False otherwise.
         
-        Validates: Requirements 2.2, 2.3, 2.4, 2.5, 2.6
+        Validates: Requirements 1.1, 2.2, 2.3, 2.4, 2.5, 2.6, 3.2, 4.1, 8.1
         """
+        from pathlib import Path
         from core.agent_manager import ensure_default_agent
         from core.swarm_workspace_manager import swarm_workspace_manager
+        from core.agent_sandbox_manager import agent_sandbox_manager
         
         self._mode = "first_run"
         logger.info("Running full initialization...")
@@ -236,15 +265,37 @@ class InitializationManager:
                 # Do NOT set initialization_complete - this is a critical failure
                 return False
             
-            # Create default workspace
+            # Create/migrate default workspace (includes folder structure)
             # This is a critical step - failure means we don't set initialization_complete
             try:
-                await swarm_workspace_manager.ensure_default_workspace(db)
+                workspace = await swarm_workspace_manager.ensure_default_workspace(db)
                 logger.info("Default workspace ensured during full initialization")
             except Exception as e:
                 logger.error(f"Failed to ensure default workspace: {e}")
                 # Do NOT set initialization_complete - this is a critical failure
                 return False
+            
+            # Expand workspace path and run workspace setup
+            workspace_path = swarm_workspace_manager.expand_path(workspace["file_path"])
+            
+            # Setup skill symlinks (all skills, shared across agents)
+            try:
+                await agent_sandbox_manager.setup_workspace_skills(Path(workspace_path))
+                logger.info("Workspace skills set up during full initialization")
+            except Exception as e:
+                logger.error(f"Failed to setup workspace skills: {e}")
+                # Non-critical - continue initialization
+            
+            # Ensure templates in workspace
+            try:
+                agent_sandbox_manager.ensure_templates_in_directory(Path(workspace_path))
+                logger.info("Templates ensured in workspace during full initialization")
+            except Exception as e:
+                logger.error(f"Failed to ensure templates: {e}")
+                # Non-critical - continue initialization
+            
+            # Cache the expanded path for per-session use
+            self._cached_workspace_path = workspace_path
             
             # All critical steps succeeded - set the flag
             await self.set_initialization_complete(True)

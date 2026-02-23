@@ -3,5 +3,5 @@ export { FileAttachmentButton } from './FileAttachmentButton';
 export { AttachmentPreviewCard } from './AttachmentPreviewCard';
 export { FileAttachmentPreview } from './FileAttachmentPreview';
 export { WorkspaceSelector } from './WorkspaceSelector';
-export { ChatContextBar } from './ChatContextBar';
 export { ChatDropZone } from './ChatDropZone';
+export { AttachedFileChips } from './AttachedFileChips';

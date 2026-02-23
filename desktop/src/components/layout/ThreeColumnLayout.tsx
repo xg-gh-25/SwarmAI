@@ -1,8 +1,9 @@
 import { ReactNode, useState, useCallback } from 'react';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { LayoutProvider, useLayout, LAYOUT_CONSTANTS, ModalType } from '../../contexts/LayoutContext';
 import { WorkspaceExplorer } from '../workspace-explorer';
-import { ChatDropZone, ChatContextBar } from '../chat';
+import { ChatDropZone } from '../chat';
 import FileEditorModal from '../common/FileEditorModal';
 import SwarmWorkspaceWarningDialog from '../common/SwarmWorkspaceWarningDialog';
 import SkillsModal from '../modals/SkillsModal';
@@ -11,6 +12,7 @@ import AgentsModal from '../modals/AgentsModal';
 import SettingsModal from '../modals/SettingsModal';
 import WorkspacesModal from '../modals/WorkspacesModal';
 import SwarmCoreModal from '../modals/SwarmCoreModal';
+import WorkspaceSettingsModal from '../modals/WorkspaceSettingsModal';
 import type { FileTreeItem } from '../workspace-explorer/FileTreeNode';
 
 // Left sidebar width constant
@@ -49,15 +51,26 @@ function TopBar() {
 // Requirements: 2.1, 2.2, 2.3, 2.4, 2.6
 function LeftSidebar() {
   const { activeModal, openModal } = useLayout();
+  const navigate = useNavigate();
+  const location = useLocation();
 
-  // Navigation items configuration
-  // Requirements: 1.1, 1.2, 1.3, 1.4, 1.5, 1.6
+  // Modal-based navigation items
   const navItems: { icon: string; label: string; modalType: ModalType }[] = [
     { icon: 'workspaces', label: 'Workspaces', modalType: 'workspaces' },
     { icon: 'grid_view', label: 'SwarmCore', modalType: 'swarmcore' },
     { icon: 'smart_toy', label: 'Agents', modalType: 'agents' },
     { icon: 'auto_awesome', label: 'Skills', modalType: 'skills' },
     { icon: 'hub', label: 'MCP Servers', modalType: 'mcp' },
+  ];
+
+  // Section page navigation items - Requirements: 15.4, 15.5
+  const sectionNavItems: { icon: string; label: string; path: string }[] = [
+    { icon: 'notifications', label: 'Signals', path: '/signals' },
+    { icon: 'calendar_today', label: 'Plan', path: '/plan' },
+    { icon: 'play_arrow', label: 'Execute', path: '/execute' },
+    { icon: 'chat', label: 'Communicate', path: '/communicate' },
+    { icon: 'inventory_2', label: 'Artifacts', path: '/artifacts' },
+    { icon: 'psychology', label: 'Reflection', path: '/reflection' },
   ];
 
   return (
@@ -72,7 +85,7 @@ function LeftSidebar() {
       </div>
 
       {/* Navigation icons - Requirement 2.1, 2.2 */}
-      <nav className="flex-1 py-3 px-2 space-y-1" data-testid="nav-icons">
+      <nav className="flex-1 py-3 px-2 space-y-1 overflow-y-auto" data-testid="nav-icons">
         {navItems.map((item) => (
           <NavIconButton
             key={item.modalType}
@@ -81,6 +94,21 @@ function LeftSidebar() {
             isActive={activeModal === item.modalType}
             onClick={() => openModal(item.modalType)}
             data-testid={`nav-${item.modalType}`}
+          />
+        ))}
+
+        {/* Divider between modal nav and section nav */}
+        <div className="my-2 border-t border-[var(--color-border)]" />
+
+        {/* Section page navigation - Requirements: 15.4, 15.5 */}
+        {sectionNavItems.map((item) => (
+          <NavIconButton
+            key={item.path}
+            icon={item.icon}
+            label={item.label}
+            isActive={location.pathname === item.path}
+            onClick={() => navigate(item.path)}
+            data-testid={`nav-section-${item.path.slice(1)}`}
           />
         ))}
       </nav>
@@ -171,25 +199,11 @@ interface MainChatPanelProps {
 }
 
 function MainChatPanel({ children }: MainChatPanelProps) {
-  const { selectedWorkspaceScope, attachedFiles, removeAttachedFile } = useLayout();
-
-  // Get display name for workspace scope
-  const workspaceScopeDisplay = selectedWorkspaceScope === 'all' 
-    ? 'All Workspaces' 
-    : selectedWorkspaceScope;
-
   return (
     <main 
       className="flex-1 overflow-hidden bg-[var(--color-bg)] flex flex-col"
       style={{ minWidth: MIN_MAIN_CHAT_PANEL_WIDTH }}
     >
-      {/* Chat Context Bar - shows workspace scope and attached files */}
-      <ChatContextBar
-        workspaceScope={workspaceScopeDisplay}
-        attachedFiles={attachedFiles}
-        onRemoveFile={removeAttachedFile}
-      />
-      
       {/* Drop zone wrapper for drag-drop file attachment */}
       <ChatDropZone>
         {children}
@@ -200,7 +214,7 @@ function MainChatPanel({ children }: MainChatPanelProps) {
 
 // Inner layout component that uses the context
 function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
-  const { activeModal, closeModal } = useLayout();
+  const { activeModal, closeModal, workspaceSettingsId } = useLayout();
   
   // File editor state - Requirement 9.1
   const [fileEditorState, setFileEditorState] = useState<{
@@ -329,6 +343,12 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
       <MCPServersModal isOpen={activeModal === 'mcp'} onClose={closeModal} />
       <AgentsModal isOpen={activeModal === 'agents'} onClose={closeModal} />
       <SettingsModal isOpen={activeModal === 'settings'} onClose={closeModal} />
+      {/* Workspace Settings Modal - Requirement 3.14 */}
+      <WorkspaceSettingsModal
+        isOpen={activeModal === 'workspace-settings'}
+        onClose={closeModal}
+        workspaceId={workspaceSettingsId}
+      />
     </div>
   );
 }

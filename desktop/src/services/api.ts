@@ -64,7 +64,20 @@ export function parseApiError(error: AxiosError): ErrorResponse {
         message: 'Resource not found',
         suggestedAction: 'The requested resource does not exist',
       };
-    case 429:
+    case 409: {
+      // Policy violation or duplicate resource
+      // Return raw data fields so callers can inspect policy_violations
+      const detail409 = typeof data === 'object' && data !== null ? data as Record<string, unknown> : {};
+      return {
+        code: (detail409.code as string) || ErrorCodes.DUPLICATE_RESOURCE,
+        message: (detail409.message as string) || 'Conflict',
+        detail: (detail409.detail as string) || 'A conflict occurred',
+        suggestedAction: (detail409.suggested_action as string) || 'Please resolve the conflict',
+        // Preserve policy_violations for callers (snake_case from backend)
+        ...(detail409.policy_violations ? { policyViolations: detail409.policy_violations } : {}),
+      };
+    }
+    case 429: {
       const retryAfter = error.response.headers['retry-after'];
       return {
         code: ErrorCodes.RATE_LIMIT_EXCEEDED,
@@ -72,6 +85,7 @@ export function parseApiError(error: AxiosError): ErrorResponse {
         detail: `Please wait ${retryAfter || 60} seconds before trying again`,
         suggestedAction: 'Slow down your requests',
       };
+    }
     case 500:
       return {
         code: ErrorCodes.SERVER_ERROR,
@@ -155,6 +169,14 @@ export class ApiError extends Error {
 
   isServerError(): boolean {
     return this.statusCode >= 500;
+  }
+
+  isPolicyViolation(): boolean {
+    return this.response.code === ErrorCodes.POLICY_VIOLATION;
+  }
+
+  get policyViolations(): Array<{ entityType: string; entityId: string; message: string; suggestedAction: string }> | undefined {
+    return (this.response as unknown as Record<string, unknown>).policyViolations as Array<{ entityType: string; entityId: string; message: string; suggestedAction: string }> | undefined;
   }
 }
 

@@ -11,6 +11,59 @@ interface MarkdownRendererProps {
   className?: string;
 }
 
+// Default SVG dimensions when not specified
+const DEFAULT_SVG_WIDTH = 400;
+const DEFAULT_SVG_HEIGHT = 300;
+const DEFAULT_CANVAS_WIDTH = 800;
+const DEFAULT_CANVAS_HEIGHT = 600;
+
+// Zoom constraints
+const MIN_ZOOM = 0.25;
+const MAX_ZOOM = 4;
+const ZOOM_STEP = 0.25;
+const ZOOM_WHEEL_STEP = 0.1;
+
+// PNG export scale factor for better quality
+const PNG_SCALE_FACTOR = 2;
+
+interface SvgDimensions {
+  width: number;
+  height: number;
+}
+
+/**
+ * Extracts dimensions from an SVG element, checking width/height attributes and viewBox.
+ * Returns default dimensions if none are found.
+ */
+function extractSvgDimensions(
+  svgElement: SVGSVGElement,
+  defaultWidth = DEFAULT_SVG_WIDTH,
+  defaultHeight = DEFAULT_SVG_HEIGHT
+): SvgDimensions {
+  const widthAttr = svgElement.getAttribute('width');
+  const heightAttr = svgElement.getAttribute('height');
+  const viewBox = svgElement.getAttribute('viewBox');
+
+  if (widthAttr && heightAttr) {
+    return {
+      width: parseFloat(widthAttr.replace(/[^0-9.]/g, '')) || defaultWidth,
+      height: parseFloat(heightAttr.replace(/[^0-9.]/g, '')) || defaultHeight,
+    };
+  }
+
+  if (viewBox) {
+    const parts = viewBox.split(/\s+|,/);
+    if (parts.length >= 4) {
+      return {
+        width: parseFloat(parts[2]) || defaultWidth,
+        height: parseFloat(parts[3]) || defaultHeight,
+      };
+    }
+  }
+
+  return { width: defaultWidth, height: defaultHeight };
+}
+
 // Mermaid diagram modal for fullscreen view with zoom controls
 const MermaidModal = memo(function MermaidModal({
   svg,
@@ -25,6 +78,11 @@ const MermaidModal = memo(function MermaidModal({
   const [scaledSvg, setScaledSvg] = useState(svg);
   const containerRef = useRef<HTMLDivElement>(null);
 
+  // Viewport padding for modal content
+  const VIEWPORT_HORIZONTAL_PADDING = 80;
+  const VIEWPORT_VERTICAL_PADDING = 160;
+  const VIEWPORT_FILL_RATIO = 0.95; // Fill 95% of available space
+
   // Process SVG to fill viewport when modal opens
   useEffect(() => {
     if (isOpen && svg) {
@@ -33,33 +91,16 @@ const MermaidModal = memo(function MermaidModal({
       const svgElement = tempDiv.querySelector('svg');
 
       if (svgElement) {
-        // Get original dimensions
-        let origWidth = 400;
-        let origHeight = 300;
-
-        const widthAttr = svgElement.getAttribute('width');
-        const heightAttr = svgElement.getAttribute('height');
-        const viewBox = svgElement.getAttribute('viewBox');
-
-        if (widthAttr && heightAttr) {
-          origWidth = parseFloat(widthAttr.replace(/[^0-9.]/g, '')) || 400;
-          origHeight = parseFloat(heightAttr.replace(/[^0-9.]/g, '')) || 300;
-        } else if (viewBox) {
-          const parts = viewBox.split(/\s+|,/);
-          if (parts.length >= 4) {
-            origWidth = parseFloat(parts[2]) || 400;
-            origHeight = parseFloat(parts[3]) || 300;
-          }
-        }
+        const { width: origWidth, height: origHeight } = extractSvgDimensions(svgElement);
 
         // Calculate target size to fill most of the viewport
-        const viewportWidth = window.innerWidth - 80;
-        const viewportHeight = window.innerHeight - 160;
+        const viewportWidth = window.innerWidth - VIEWPORT_HORIZONTAL_PADDING;
+        const viewportHeight = window.innerHeight - VIEWPORT_VERTICAL_PADDING;
 
         // Calculate scale factor to fit viewport while maintaining aspect ratio
         const scaleX = viewportWidth / origWidth;
         const scaleY = viewportHeight / origHeight;
-        const fitScale = Math.min(scaleX, scaleY) * 0.95; // 95% of available space
+        const fitScale = Math.min(scaleX, scaleY) * VIEWPORT_FILL_RATIO;
 
         // Apply new dimensions directly to SVG
         const newWidth = Math.round(origWidth * fitScale);
@@ -69,6 +110,7 @@ const MermaidModal = memo(function MermaidModal({
         svgElement.setAttribute('height', `${newHeight}px`);
 
         // Ensure viewBox is set for proper scaling
+        const viewBox = svgElement.getAttribute('viewBox');
         if (!viewBox) {
           svgElement.setAttribute('viewBox', `0 0 ${origWidth} ${origHeight}`);
         }
@@ -89,8 +131,8 @@ const MermaidModal = memo(function MermaidModal({
     const handleWheel = (e: WheelEvent) => {
       if (e.ctrlKey || e.metaKey) {
         e.preventDefault();
-        const delta = e.deltaY > 0 ? -0.1 : 0.1;
-        setScale((prev) => Math.min(Math.max(0.25, prev + delta), 4));
+        const delta = e.deltaY > 0 ? -ZOOM_WHEEL_STEP : ZOOM_WHEEL_STEP;
+        setScale((prev) => Math.min(Math.max(MIN_ZOOM, prev + delta), MAX_ZOOM));
       }
     };
     if (isOpen) {
@@ -105,8 +147,8 @@ const MermaidModal = memo(function MermaidModal({
     };
   }, [isOpen, onClose]);
 
-  const handleZoomIn = () => setScale((prev) => Math.min(prev + 0.25, 4));
-  const handleZoomOut = () => setScale((prev) => Math.max(prev - 0.25, 0.25));
+  const handleZoomIn = () => setScale((prev) => Math.min(prev + ZOOM_STEP, MAX_ZOOM));
+  const handleZoomOut = () => setScale((prev) => Math.max(prev - ZOOM_STEP, MIN_ZOOM));
   const handleResetZoom = () => setScale(1);
 
   if (!isOpen) return null;
@@ -278,34 +320,21 @@ const MermaidDiagram = memo(function MermaidDiagram({ chart }: { chart: string }
         svgElement.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
       }
 
-      // Get dimensions from SVG - handle various dimension formats
-      let width = 800;
-      let height = 600;
-
-      const widthAttr = svgElement.getAttribute('width');
-      const heightAttr = svgElement.getAttribute('height');
-      const viewBox = svgElement.getAttribute('viewBox');
-
-      if (widthAttr && heightAttr) {
-        width = parseFloat(widthAttr.replace(/[^0-9.]/g, '')) || 800;
-        height = parseFloat(heightAttr.replace(/[^0-9.]/g, '')) || 600;
-      } else if (viewBox) {
-        const parts = viewBox.split(/\s+|,/);
-        if (parts.length >= 4) {
-          width = parseFloat(parts[2]) || 800;
-          height = parseFloat(parts[3]) || 600;
-        }
-      }
+      // Get dimensions from SVG using helper function
+      const { width, height } = extractSvgDimensions(
+        svgElement,
+        DEFAULT_CANVAS_WIDTH,
+        DEFAULT_CANVAS_HEIGHT
+      );
 
       // Set explicit dimensions on SVG for canvas rendering
       svgElement.setAttribute('width', String(width));
       svgElement.setAttribute('height', String(height));
 
       // Scale for better quality
-      const scale = 2;
       const canvas = document.createElement('canvas');
-      canvas.width = width * scale;
-      canvas.height = height * scale;
+      canvas.width = width * PNG_SCALE_FACTOR;
+      canvas.height = height * PNG_SCALE_FACTOR;
 
       const ctx = canvas.getContext('2d');
       if (!ctx) {
@@ -315,7 +344,7 @@ const MermaidDiagram = memo(function MermaidDiagram({ chart }: { chart: string }
       // Fill background with theme-appropriate color
       ctx.fillStyle = resolvedTheme === 'dark' ? '#1a1f2e' : '#ffffff';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
-      ctx.scale(scale, scale);
+      ctx.scale(PNG_SCALE_FACTOR, PNG_SCALE_FACTOR);
 
       // Convert SVG to data URL (more reliable than blob URL)
       const svgString = new XMLSerializer().serializeToString(svgElement);
@@ -455,15 +484,11 @@ const CodeBlock = memo(function CodeBlock({
 }) {
   const [copied, setCopied] = useState(false);
   const codeRef = useRef<HTMLElement>(null);
+  const isMermaid = language === 'mermaid';
 
-  // Check if this is a mermaid diagram
-  if (language === 'mermaid') {
-    return <MermaidDiagram chart={children} />;
-  }
-
-  // Apply syntax highlighting
+  // Apply syntax highlighting (only for non-mermaid code blocks)
   useEffect(() => {
-    if (codeRef.current && language) {
+    if (!isMermaid && codeRef.current && language) {
       // Reset previous highlighting
       codeRef.current.removeAttribute('data-highlighted');
       try {
@@ -472,7 +497,12 @@ const CodeBlock = memo(function CodeBlock({
         console.error('Highlight error:', err);
       }
     }
-  }, [children, language]);
+  }, [children, language, isMermaid]);
+
+  // Render mermaid diagram
+  if (isMermaid) {
+    return <MermaidDiagram chart={children} />;
+  }
 
   const handleCopy = async () => {
     try {
@@ -593,11 +623,11 @@ const markdownComponents: Record<string, React.ComponentType<any>> = {
       return <InlineCode>{children}</InlineCode>;
     }
 
-    return <CodeBlock language={match?.[1]} children={codeContent} />;
+    return <CodeBlock language={match?.[1]}>{codeContent}</CodeBlock>;
   },
 
-  // Pre tag (wrapper for code blocks)
-  pre: ({ children }) => <>{children}</>,
+  // Pre tag (wrapper for code blocks) - passes through children directly
+  pre: ({ children }) => children,
 
   // Tables
   table: ({ children }) => (

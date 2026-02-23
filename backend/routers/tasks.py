@@ -44,7 +44,13 @@ async def get_task(task_id: str):
 
 @router.post("", response_model=TaskResponse)
 async def create_task(request: TaskCreate):
-    """Create and start a new background task."""
+    """Create and start a new background task.
+
+    Validates workspace policy before execution. If required skills or MCPs
+    are disabled in the workspace, returns 409 Conflict with policy_violations.
+
+    Requirements: 26.1-26.7, 34.1-34.7
+    """
     try:
         task = await task_manager.create_task(
             agent_id=request.agent_id,
@@ -52,9 +58,14 @@ async def create_task(request: TaskCreate):
             content=request.content,
             enable_skills=request.enable_skills,
             enable_mcp=request.enable_mcp,
-            add_dirs=request.add_dirs,
+            workspace_id=request.workspace_id,
+            source_todo_id=request.source_todo_id,
+            priority=request.priority,
+            description=request.description,
         )
         return TaskResponse(**task)
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 

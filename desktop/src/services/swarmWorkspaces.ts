@@ -18,6 +18,8 @@ const toCamelCase = (data: Record<string, unknown>): SwarmWorkspace => {
     context: data.context as string,
     icon: data.icon as string | undefined,
     isDefault: (data.is_default as boolean) ?? false,
+    isArchived: (data.is_archived as boolean) ?? false,
+    archivedAt: (data.archived_at as string) ?? null,
     createdAt: data.created_at as string,
     updatedAt: data.updated_at as string,
   };
@@ -44,8 +46,12 @@ export const swarmWorkspacesService = {
    * List all swarm workspaces.
    * GET /swarm-workspaces
    */
-  async list(): Promise<SwarmWorkspace[]> {
-    const response = await api.get<Record<string, unknown>[]>('/swarm-workspaces');
+  async list(includeArchived?: boolean): Promise<SwarmWorkspace[]> {
+    const params = new URLSearchParams();
+    if (includeArchived !== undefined) params.append('include_archived', String(includeArchived));
+    const queryString = params.toString();
+    const url = queryString ? `/swarm-workspaces?${queryString}` : '/swarm-workspaces';
+    const response = await api.get<Record<string, unknown>[]>(url);
     return response.data.map(toCamelCase);
   },
 
@@ -107,5 +113,23 @@ export const swarmWorkspacesService = {
    */
   async initFolders(id: string): Promise<void> {
     await api.post(`/swarm-workspaces/${id}/init-folders`);
+  },
+
+  /**
+   * Archive a workspace (sets is_archived=true).
+   * POST /swarm-workspaces/{id}/archive
+   */
+  async archive(id: string): Promise<SwarmWorkspace> {
+    const response = await api.post<Record<string, unknown>>(`/swarm-workspaces/${id}/archive`);
+    return toCamelCase(response.data);
+  },
+
+  /**
+   * Unarchive a workspace (sets is_archived=false).
+   * POST /swarm-workspaces/{id}/unarchive
+   */
+  async unarchive(id: string): Promise<SwarmWorkspace> {
+    const response = await api.post<Record<string, unknown>>(`/swarm-workspaces/${id}/unarchive`);
+    return toCamelCase(response.data);
   },
 };

@@ -121,7 +121,7 @@ backend/
 ├── core/
 │   ├── agent_manager.py     # ClaudeSDKClient wrapper, hooks, security
 │   ├── session_manager.py   # Conversation session storage
-│   └── workspace_manager.py # Per-agent isolated workspaces
+│   └── agent_sandbox_manager.py # Per-agent isolated workspaces
 ├── database/
 │   └── sqlite.py            # SQLite implementation
 └── schemas/                  # Pydantic models

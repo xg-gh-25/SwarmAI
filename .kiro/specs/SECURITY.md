@@ -57,7 +57,7 @@ The platform implements **four security layers** that work together:
 
 ### Layer 1: Workspace Isolation
 
-**Location**: `backend/core/workspace_manager.py`
+**Location**: `backend/core/agent_sandbox_manager.py`
 
 Each agent with skills enabled gets an isolated workspace **outside the project tree**:
 
@@ -255,7 +255,7 @@ Isolated Agent Workspaces (platform-specific app data dir):
 1. Agent starts a conversation with `enable_skills=true`
 2. Agent's skill configuration changes
 
-**Code** (`workspace_manager.py:88-149`):
+**Code** (`agent_sandbox_manager.py:88-149`):
 ```python
 async def rebuild_agent_workspace(
     agent_id: str,
@@ -627,7 +627,7 @@ $(cat /etc/passwd)
 
 ### Code Locations
 
-- **Workspace Manager**: `backend/core/workspace_manager.py`
+- **Agent Sandbox Manager**: `backend/core/agent_sandbox_manager.py`
 - **Agent Manager**: `backend/core/agent_manager.py`
 - **Security Configuration**: `backend/config.py`
 - **Skill Access Control**: `agent_manager.py:163-207`
@@ -646,4 +646,4 @@ $(cat /etc/passwd)
 
 The Agent Skill Platform implements a comprehensive, multi-layered security model that provides strong isolation between agents while maintaining flexibility and usability. The defense-in-depth approach ensures that even if one layer is bypassed, other layers provide continued protection.
 
-For questions or security concerns, please review the code in `backend/core/agent_manager.py` and `backend/core/workspace_manager.py` or consult the development team.
+For questions or security concerns, please review the code in `backend/core/agent_manager.py` and `backend/core/agent_sandbox_manager.py` or consult the development team.

@@ -4,7 +4,8 @@ import clsx from 'clsx';
 interface TodoRadarSidebarProps {
   width: number;
   isResizing: boolean;
-  onClose: () => void;
+  /** Optional close handler. If not provided, close button is hidden. */
+  onClose?: () => void;
   onMouseDown: (e: React.MouseEvent) => void;
 }
 
@@ -54,13 +55,15 @@ export function TodoRadarSidebar({
           <span className="material-symbols-outlined text-primary text-lg">checklist</span>
           <span className="font-medium text-[var(--color-text)] text-sm">ToDo Radar</span>
         </div>
-        <button
-          onClick={onClose}
-          className="p-1.5 rounded-lg text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)] transition-colors"
-          aria-label={t('common.close', 'Close ToDo Radar')}
-        >
-          <span className="material-symbols-outlined text-lg">close</span>
-        </button>
+        {onClose && (
+          <button
+            onClick={onClose}
+            className="p-1.5 rounded-lg text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)] transition-colors"
+            aria-label={t('common.close', 'Close ToDo Radar')}
+          >
+            <span className="material-symbols-outlined text-lg">close</span>
+          </button>
+        )}
       </div>
 
       {/* Content */}

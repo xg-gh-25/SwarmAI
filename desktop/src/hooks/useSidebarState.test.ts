@@ -450,7 +450,395 @@ describe('useSidebarState Hook - Property-Based Tests', () => {
   });
 
   /**
-   * Property 5: Storage Key Isolation
+   * Property 5: Right-Side Resize Direction
+   * **Feature: chat-history-sidebar-relocation, Property 1: Right-Side Resize Direction**
+   * **Validates: Requirements 2.3**
+   *
+   * For any mouse drag event on a sidebar resize handle when positioned on the right side,
+   * moving the mouse left (decreasing clientX) should increase the sidebar width,
+   * and moving the mouse right (increasing clientX) should decrease the sidebar width.
+   */
+  describe('Feature: chat-history-sidebar-relocation, Property 1: Right-Side Resize Direction', () => {
+    // Helper to simulate mouse events
+    const simulateMouseMove = (clientX: number) => {
+      const event = new MouseEvent('mousemove', {
+        clientX,
+        bubbles: true,
+      });
+      document.dispatchEvent(event);
+    };
+
+    const simulateMouseUp = () => {
+      const event = new MouseEvent('mouseup', { bubbles: true });
+      document.dispatchEvent(event);
+    };
+
+    // Set a fixed window width for predictable calculations
+    const WINDOW_WIDTH = 1920;
+
+    beforeEach(() => {
+      Object.defineProperty(window, 'innerWidth', {
+        value: WINDOW_WIDTH,
+        writable: true,
+      });
+    });
+
+    it('should increase width when mouse moves left (decreasing clientX) for right-side sidebar', () => {
+      fc.assert(
+        fc.property(
+          // Generate initial clientX position (somewhere in the middle of the screen)
+          fc.integer({ min: 500, max: 1500 }),
+          // Generate a leftward movement (negative delta, meaning clientX decreases)
+          fc.integer({ min: 10, max: 200 }),
+          (initialClientX, leftwardMovement) => {
+            mockStorage.clear();
+            const config = createTestConfig({
+              position: 'right',
+              minWidth: 100,
+              maxWidth: 800,
+            });
+
+            const { result, unmount } = renderHook(() => useSidebarState(config));
+
+            // Start resizing
+            act(() => {
+              result.current.setIsResizing(true);
+            });
+
+            // Initial position
+            act(() => {
+              simulateMouseMove(initialClientX);
+            });
+            const initialWidth = result.current.width;
+
+            // Move mouse left (decrease clientX)
+            const newClientX = initialClientX - leftwardMovement;
+            act(() => {
+              simulateMouseMove(newClientX);
+            });
+            const newWidth = result.current.width;
+
+            // Stop resizing
+            act(() => {
+              simulateMouseUp();
+            });
+
+            // Property: Moving left (decreasing clientX) SHALL increase width for right-side sidebar
+            // Formula: width = window.innerWidth - clientX
+            // When clientX decreases, (window.innerWidth - clientX) increases
+            const expectedInitialWidth = WINDOW_WIDTH - initialClientX;
+            const expectedNewWidth = WINDOW_WIDTH - newClientX;
+
+            // Only check if within bounds
+            if (expectedInitialWidth >= config.minWidth && expectedInitialWidth <= config.maxWidth) {
+              expect(initialWidth).toBe(expectedInitialWidth);
+            }
+            if (expectedNewWidth >= config.minWidth && expectedNewWidth <= config.maxWidth) {
+              expect(newWidth).toBe(expectedNewWidth);
+              // The new width should be greater than initial width when moving left
+              if (expectedInitialWidth >= config.minWidth && expectedInitialWidth <= config.maxWidth) {
+                expect(newWidth).toBeGreaterThan(initialWidth);
+              }
+            }
+
+            unmount();
+          }
+        ),
+        { numRuns: 100 }
+      );
+    });
+
+    it('should decrease width when mouse moves right (increasing clientX) for right-side sidebar', () => {
+      fc.assert(
+        fc.property(
+          // Generate initial clientX position (somewhere in the middle of the screen)
+          fc.integer({ min: 500, max: 1400 }),
+          // Generate a rightward movement (positive delta, meaning clientX increases)
+          fc.integer({ min: 10, max: 200 }),
+          (initialClientX, rightwardMovement) => {
+            mockStorage.clear();
+            const config = createTestConfig({
+              position: 'right',
+              minWidth: 100,
+              maxWidth: 800,
+            });
+
+            const { result, unmount } = renderHook(() => useSidebarState(config));
+
+            // Start resizing
+            act(() => {
+              result.current.setIsResizing(true);
+            });
+
+            // Initial position
+            act(() => {
+              simulateMouseMove(initialClientX);
+            });
+            const initialWidth = result.current.width;
+
+            // Move mouse right (increase clientX)
+            const newClientX = initialClientX + rightwardMovement;
+            act(() => {
+              simulateMouseMove(newClientX);
+            });
+            const newWidth = result.current.width;
+
+            // Stop resizing
+            act(() => {
+              simulateMouseUp();
+            });
+
+            // Property: Moving right (increasing clientX) SHALL decrease width for right-side sidebar
+            // Formula: width = window.innerWidth - clientX
+            // When clientX increases, (window.innerWidth - clientX) decreases
+            const expectedInitialWidth = WINDOW_WIDTH - initialClientX;
+            const expectedNewWidth = WINDOW_WIDTH - newClientX;
+
+            // Only check if within bounds
+            if (expectedInitialWidth >= config.minWidth && expectedInitialWidth <= config.maxWidth) {
+              expect(initialWidth).toBe(expectedInitialWidth);
+            }
+            if (expectedNewWidth >= config.minWidth && expectedNewWidth <= config.maxWidth) {
+              expect(newWidth).toBe(expectedNewWidth);
+              // The new width should be less than initial width when moving right
+              if (expectedInitialWidth >= config.minWidth && expectedInitialWidth <= config.maxWidth) {
+                expect(newWidth).toBeLessThan(initialWidth);
+              }
+            }
+
+            unmount();
+          }
+        ),
+        { numRuns: 100 }
+      );
+    });
+
+    it('should calculate width correctly as window.innerWidth - clientX for right-side sidebar', () => {
+      fc.assert(
+        fc.property(
+          // Generate random clientX positions
+          fc.integer({ min: 1200, max: 1800 }),
+          (clientX) => {
+            mockStorage.clear();
+            const config = createTestConfig({
+              position: 'right',
+              minWidth: 100,
+              maxWidth: 800,
+            });
+
+            const { result, unmount } = renderHook(() => useSidebarState(config));
+
+            // Start resizing
+            act(() => {
+              result.current.setIsResizing(true);
+            });
+
+            // Move to position
+            act(() => {
+              simulateMouseMove(clientX);
+            });
+
+            // Stop resizing
+            act(() => {
+              simulateMouseUp();
+            });
+
+            // Property: Width SHALL be calculated as window.innerWidth - clientX
+            const expectedWidth = WINDOW_WIDTH - clientX;
+
+            // Only verify if within bounds
+            if (expectedWidth >= config.minWidth && expectedWidth <= config.maxWidth) {
+              expect(result.current.width).toBe(expectedWidth);
+            }
+
+            unmount();
+          }
+        ),
+        { numRuns: 100 }
+      );
+    });
+
+    it('should respect min/max width constraints during right-side resize', () => {
+      fc.assert(
+        fc.property(
+          // Generate clientX that would result in width outside bounds
+          fc.integer({ min: 0, max: WINDOW_WIDTH }),
+          (clientX) => {
+            mockStorage.clear();
+            const minWidth = 200;
+            const maxWidth = 500;
+            const config = createTestConfig({
+              position: 'right',
+              minWidth,
+              maxWidth,
+            });
+
+            const { result, unmount } = renderHook(() => useSidebarState(config));
+
+            // Start resizing
+            act(() => {
+              result.current.setIsResizing(true);
+            });
+
+            // Move to position
+            act(() => {
+              simulateMouseMove(clientX);
+            });
+
+            // Stop resizing
+            act(() => {
+              simulateMouseUp();
+            });
+
+            const calculatedWidth = WINDOW_WIDTH - clientX;
+
+            // Property: Width SHALL be clamped to min/max constraints
+            if (calculatedWidth < minWidth) {
+              // Width should remain at default (not updated) when below min
+              expect(result.current.width).toBe(config.defaultWidth);
+            } else if (calculatedWidth > maxWidth) {
+              // Width should remain at default (not updated) when above max
+              expect(result.current.width).toBe(config.defaultWidth);
+            } else {
+              // Width should be the calculated value when within bounds
+              expect(result.current.width).toBe(calculatedWidth);
+            }
+
+            unmount();
+          }
+        ),
+        { numRuns: 100 }
+      );
+    });
+
+    it('should use clientX directly for left-side sidebar (default behavior)', () => {
+      fc.assert(
+        fc.property(
+          // Generate random clientX positions within valid range
+          fc.integer({ min: 200, max: 500 }),
+          (clientX) => {
+            mockStorage.clear();
+            // No position specified = defaults to 'left'
+            const config = createTestConfig({
+              minWidth: 100,
+              maxWidth: 800,
+            });
+
+            const { result, unmount } = renderHook(() => useSidebarState(config));
+
+            // Start resizing
+            act(() => {
+              result.current.setIsResizing(true);
+            });
+
+            // Move to position
+            act(() => {
+              simulateMouseMove(clientX);
+            });
+
+            // Stop resizing
+            act(() => {
+              simulateMouseUp();
+            });
+
+            // Property: Width SHALL be clientX directly for left-side sidebar
+            expect(result.current.width).toBe(clientX);
+
+            unmount();
+          }
+        ),
+        { numRuns: 100 }
+      );
+    });
+
+    it('should have opposite resize behavior between left and right positioned sidebars', () => {
+      fc.assert(
+        fc.property(
+          // Generate two clientX positions where second is greater (rightward movement)
+          fc.integer({ min: 400, max: 600 }),
+          fc.integer({ min: 50, max: 150 }),
+          (initialClientX, movement) => {
+            mockStorage.clear();
+
+            const leftConfig = createTestConfig({
+              storageKey: 'leftSidebarCollapsed',
+              widthStorageKey: 'leftSidebarWidth',
+              position: 'left',
+              minWidth: 100,
+              maxWidth: 800,
+            });
+
+            const rightConfig = createTestConfig({
+              storageKey: 'rightSidebarCollapsed',
+              widthStorageKey: 'rightSidebarWidth',
+              position: 'right',
+              minWidth: 100,
+              maxWidth: 800,
+            });
+
+            const { result: leftResult, unmount: unmountLeft } = renderHook(() =>
+              useSidebarState(leftConfig)
+            );
+            const { result: rightResult, unmount: unmountRight } = renderHook(() =>
+              useSidebarState(rightConfig)
+            );
+
+            // Start resizing both
+            act(() => {
+              leftResult.current.setIsResizing(true);
+              rightResult.current.setIsResizing(true);
+            });
+
+            // Set initial position
+            act(() => {
+              simulateMouseMove(initialClientX);
+            });
+            const leftInitialWidth = leftResult.current.width;
+            const rightInitialWidth = rightResult.current.width;
+
+            // Move right (increase clientX)
+            const newClientX = initialClientX + movement;
+            act(() => {
+              simulateMouseMove(newClientX);
+            });
+            const leftNewWidth = leftResult.current.width;
+            const rightNewWidth = rightResult.current.width;
+
+            // Stop resizing
+            act(() => {
+              simulateMouseUp();
+            });
+
+            // Property: Moving right SHALL increase left sidebar width but decrease right sidebar width
+            // (opposite behavior)
+            const leftExpectedInitial = initialClientX;
+            const leftExpectedNew = newClientX;
+            const rightExpectedInitial = WINDOW_WIDTH - initialClientX;
+            const rightExpectedNew = WINDOW_WIDTH - newClientX;
+
+            // Verify left sidebar increases when moving right
+            if (leftExpectedInitial >= leftConfig.minWidth && leftExpectedInitial <= leftConfig.maxWidth &&
+                leftExpectedNew >= leftConfig.minWidth && leftExpectedNew <= leftConfig.maxWidth) {
+              expect(leftNewWidth).toBeGreaterThan(leftInitialWidth);
+            }
+
+            // Verify right sidebar decreases when moving right
+            if (rightExpectedInitial >= rightConfig.minWidth && rightExpectedInitial <= rightConfig.maxWidth &&
+                rightExpectedNew >= rightConfig.minWidth && rightExpectedNew <= rightConfig.maxWidth) {
+              expect(rightNewWidth).toBeLessThan(rightInitialWidth);
+            }
+
+            unmountLeft();
+            unmountRight();
+          }
+        ),
+        { numRuns: 100 }
+      );
+    });
+  });
+
+  /**
+   * Property 6: Storage Key Isolation
    * **Feature: sidebar-state-management, Property 5: Storage Key Isolation**
    *
    * Different storage keys SHALL maintain independent state.
@@ -490,6 +878,315 @@ describe('useSidebarState Hook - Property-Based Tests', () => {
           unmount1();
           unmount2();
         }),
+        { numRuns: 100 }
+      );
+    });
+  });
+
+  /**
+   * Property 7: Sidebar State Persistence Round-Trip
+   * **Feature: chat-history-sidebar-relocation, Property 2: Sidebar State Persistence Round-Trip**
+   * **Validates: Requirements 3.2, 3.3**
+   *
+   * For any valid sidebar state (collapsed boolean and width within min/max bounds),
+   * saving the state to localStorage and then loading a new component instance
+   * should restore the exact same collapsed state and width value.
+   */
+  describe('Feature: chat-history-sidebar-relocation, Property 2: Sidebar State Persistence Round-Trip', () => {
+    it('should restore exact collapsed state after round-trip', () => {
+      fc.assert(
+        fc.property(fc.boolean(), (collapsedState) => {
+          mockStorage.clear();
+          const config = createTestConfig({
+            storageKey: 'chatSidebarCollapsed',
+            widthStorageKey: 'chatSidebarWidth',
+            position: 'right',
+          });
+
+          // First instance: set and persist state
+          const { result: result1, unmount: unmount1 } = renderHook(() =>
+            useSidebarState(config)
+          );
+
+          act(() => {
+            result1.current.setCollapsed(collapsedState);
+          });
+
+          // Verify state was set
+          expect(result1.current.collapsed).toBe(collapsedState);
+
+          unmount1();
+
+          // Second instance: should restore exact same state
+          const { result: result2, unmount: unmount2 } = renderHook(() =>
+            useSidebarState(config)
+          );
+
+          // Property: Collapsed state SHALL be exactly restored after round-trip
+          expect(result2.current.collapsed).toBe(collapsedState);
+
+          unmount2();
+        }),
+        { numRuns: 100 }
+      );
+    });
+
+    it('should restore exact width value after round-trip', () => {
+      fc.assert(
+        fc.property(
+          // Generate width within valid bounds (200-500 based on default config)
+          fc.integer({ min: 200, max: 500 }),
+          (widthValue) => {
+            mockStorage.clear();
+            const config = createTestConfig({
+              storageKey: 'chatSidebarCollapsed',
+              widthStorageKey: 'chatSidebarWidth',
+              position: 'right',
+              minWidth: 200,
+              maxWidth: 500,
+            });
+
+            // Directly set width in localStorage (simulating a previous session)
+            mockStorage.setItem(config.widthStorageKey, String(widthValue));
+
+            // First instance: verify width is loaded
+            const { result: result1, unmount: unmount1 } = renderHook(() =>
+              useSidebarState(config)
+            );
+
+            expect(result1.current.width).toBe(widthValue);
+
+            unmount1();
+
+            // Second instance: should restore exact same width
+            const { result: result2, unmount: unmount2 } = renderHook(() =>
+              useSidebarState(config)
+            );
+
+            // Property: Width SHALL be exactly restored after round-trip
+            expect(result2.current.width).toBe(widthValue);
+
+            unmount2();
+          }
+        ),
+        { numRuns: 100 }
+      );
+    });
+
+    it('should restore both collapsed state and width after round-trip', () => {
+      fc.assert(
+        fc.property(
+          fc.boolean(),
+          fc.integer({ min: 200, max: 500 }),
+          (collapsedState, widthValue) => {
+            mockStorage.clear();
+            const config = createTestConfig({
+              storageKey: 'chatSidebarCollapsed',
+              widthStorageKey: 'chatSidebarWidth',
+              position: 'right',
+              minWidth: 200,
+              maxWidth: 500,
+            });
+
+            // Set both values in localStorage (simulating a previous session)
+            mockStorage.setItem(config.storageKey, String(collapsedState));
+            mockStorage.setItem(config.widthStorageKey, String(widthValue));
+
+            // First instance: verify both values are loaded
+            const { result: result1, unmount: unmount1 } = renderHook(() =>
+              useSidebarState(config)
+            );
+
+            expect(result1.current.collapsed).toBe(collapsedState);
+            expect(result1.current.width).toBe(widthValue);
+
+            unmount1();
+
+            // Second instance: should restore exact same state
+            const { result: result2, unmount: unmount2 } = renderHook(() =>
+              useSidebarState(config)
+            );
+
+            // Property: Both collapsed state AND width SHALL be exactly restored after round-trip
+            expect(result2.current.collapsed).toBe(collapsedState);
+            expect(result2.current.width).toBe(widthValue);
+
+            unmount2();
+          }
+        ),
+        { numRuns: 100 }
+      );
+    });
+
+    it('should persist state changes and restore them in new instance', () => {
+      fc.assert(
+        fc.property(
+          fc.boolean(),
+          fc.boolean(),
+          (initialCollapsed, finalCollapsed) => {
+            mockStorage.clear();
+            const config = createTestConfig({
+              storageKey: 'chatSidebarCollapsed',
+              widthStorageKey: 'chatSidebarWidth',
+              position: 'right',
+            });
+
+            // First instance: set initial state, then change it
+            const { result: result1, unmount: unmount1 } = renderHook(() =>
+              useSidebarState(config)
+            );
+
+            act(() => {
+              result1.current.setCollapsed(initialCollapsed);
+            });
+
+            act(() => {
+              result1.current.setCollapsed(finalCollapsed);
+            });
+
+            expect(result1.current.collapsed).toBe(finalCollapsed);
+
+            unmount1();
+
+            // Second instance: should restore the final state
+            const { result: result2, unmount: unmount2 } = renderHook(() =>
+              useSidebarState(config)
+            );
+
+            // Property: Final state SHALL be persisted and restored
+            expect(result2.current.collapsed).toBe(finalCollapsed);
+
+            unmount2();
+          }
+        ),
+        { numRuns: 100 }
+      );
+    });
+
+    it('should maintain state consistency across multiple round-trips', () => {
+      fc.assert(
+        fc.property(
+          fc.boolean(),
+          fc.integer({ min: 200, max: 500 }),
+          fc.integer({ min: 2, max: 5 }),
+          (collapsedState, widthValue, roundTrips) => {
+            mockStorage.clear();
+            const config = createTestConfig({
+              storageKey: 'chatSidebarCollapsed',
+              widthStorageKey: 'chatSidebarWidth',
+              position: 'right',
+              minWidth: 200,
+              maxWidth: 500,
+            });
+
+            // Set initial state
+            mockStorage.setItem(config.storageKey, String(collapsedState));
+            mockStorage.setItem(config.widthStorageKey, String(widthValue));
+
+            // Perform multiple round-trips
+            for (let i = 0; i < roundTrips; i++) {
+              const { result, unmount } = renderHook(() => useSidebarState(config));
+
+              // Property: State SHALL remain consistent across all round-trips
+              expect(result.current.collapsed).toBe(collapsedState);
+              expect(result.current.width).toBe(widthValue);
+
+              unmount();
+            }
+          }
+        ),
+        { numRuns: 100 }
+      );
+    });
+
+    it('should handle edge case width values at min/max bounds', () => {
+      fc.assert(
+        fc.property(
+          fc.boolean(),
+          fc.oneof(
+            fc.constant(200), // min bound
+            fc.constant(500), // max bound
+            fc.integer({ min: 200, max: 500 }) // within bounds
+          ),
+          (collapsedState, widthValue) => {
+            mockStorage.clear();
+            const config = createTestConfig({
+              storageKey: 'chatSidebarCollapsed',
+              widthStorageKey: 'chatSidebarWidth',
+              position: 'right',
+              minWidth: 200,
+              maxWidth: 500,
+            });
+
+            // Set state in localStorage
+            mockStorage.setItem(config.storageKey, String(collapsedState));
+            mockStorage.setItem(config.widthStorageKey, String(widthValue));
+
+            // First instance
+            const { result: result1, unmount: unmount1 } = renderHook(() =>
+              useSidebarState(config)
+            );
+
+            expect(result1.current.collapsed).toBe(collapsedState);
+            expect(result1.current.width).toBe(widthValue);
+
+            unmount1();
+
+            // Second instance: should restore exact same state including edge values
+            const { result: result2, unmount: unmount2 } = renderHook(() =>
+              useSidebarState(config)
+            );
+
+            // Property: Edge case width values SHALL be exactly restored
+            expect(result2.current.collapsed).toBe(collapsedState);
+            expect(result2.current.width).toBe(widthValue);
+
+            unmount2();
+          }
+        ),
+        { numRuns: 100 }
+      );
+    });
+
+    it('should use existing localStorage keys for backward compatibility', () => {
+      fc.assert(
+        fc.property(
+          fc.boolean(),
+          fc.integer({ min: 200, max: 500 }),
+          (collapsedState, widthValue) => {
+            mockStorage.clear();
+
+            // Use the exact localStorage keys specified in requirements
+            const COLLAPSED_KEY = 'chatSidebarCollapsed';
+            const WIDTH_KEY = 'chatSidebarWidth';
+
+            const config = createTestConfig({
+              storageKey: COLLAPSED_KEY,
+              widthStorageKey: WIDTH_KEY,
+              position: 'right',
+              minWidth: 200,
+              maxWidth: 500,
+            });
+
+            // Simulate existing user preferences from before relocation
+            mockStorage.setItem(COLLAPSED_KEY, String(collapsedState));
+            mockStorage.setItem(WIDTH_KEY, String(widthValue));
+
+            // New instance should restore existing preferences
+            const { result, unmount } = renderHook(() => useSidebarState(config));
+
+            // Property: Existing localStorage keys SHALL continue to work
+            // (Requirements 3.1: SHALL continue to use existing localStorage keys)
+            expect(result.current.collapsed).toBe(collapsedState);
+            expect(result.current.width).toBe(widthValue);
+
+            // Verify the keys used are exactly as specified
+            expect(mockStorage.getItem(COLLAPSED_KEY)).toBe(String(collapsedState));
+            expect(mockStorage.getItem(WIDTH_KEY)).toBe(String(widthValue));
+
+            unmount();
+          }
+        ),
         { numRuns: 100 }
       );
     });

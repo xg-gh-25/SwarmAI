@@ -83,5 +83,7 @@ class SwarmWorkspaceResponse(SwarmWorkspaceBase):
 
     id: str
     is_default: bool = False
+    is_archived: bool = False
+    archived_at: Optional[str] = None
     created_at: str
     updated_at: str

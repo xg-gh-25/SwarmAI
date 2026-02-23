@@ -21,7 +21,12 @@ class TaskCreate(BaseModel):
     content: Optional[list[dict]] = None
     enable_skills: bool = False
     enable_mcp: bool = False
-    add_dirs: Optional[list[str]] = None
+    workspace_id: Optional[str] = None
+    source_todo_id: Optional[str] = None
+    priority: str = "none"
+    description: Optional[str] = None
+    required_skills: Optional[list[str]] = None
+    required_mcps: Optional[list[str]] = None
 
 
 class TaskResponse(BaseModel):

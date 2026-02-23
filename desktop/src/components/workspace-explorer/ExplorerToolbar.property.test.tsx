@@ -35,6 +35,7 @@ export function validateName(name: string): string | null {
     return 'Name cannot be empty';
   }
   // Check for invalid characters (including control characters \x00-\x1f)
+  // eslint-disable-next-line no-control-regex
   const invalidChars = /[<>:"/\\|?*\x00-\x1f]/;
   if (invalidChars.test(name)) {
     return 'Name contains invalid characters';

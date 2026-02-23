@@ -102,7 +102,7 @@ class TestCreateWorkspace:
     ):
         """Test that folder structure is created on filesystem.
 
-        Validates: Requirements 2.1, 2.4
+        Validates: Requirements 2.3, 2.7, 35.1-35.6
         """
         response = client.post("/api/swarm-workspaces", json=sample_workspace_data)
         assert response.status_code == 201
@@ -110,14 +110,13 @@ class TestCreateWorkspace:
         # Verify folder structure was created
         workspace_path = sample_workspace_data["file_path"]
         expected_folders = [
-            "Context",
-            "Docs",
-            "Projects",
-            "Tasks",
-            "ToDos",
-            "Plans",
-            "Historical-Chats",
-            "Reports",
+            "Artifacts",
+            "Artifacts/Plans",
+            "Artifacts/Reports",
+            "Artifacts/Docs",
+            "Artifacts/Decisions",
+            "ContextFiles",
+            "Transcripts",
         ]
         for folder in expected_folders:
             folder_path = os.path.join(workspace_path, folder)
@@ -128,21 +127,21 @@ class TestCreateWorkspace:
     ):
         """Test that context files are created.
 
-        Validates: Requirements 2.2, 2.3, 7.1, 7.2, 7.3
+        Validates: Requirements 2.3, 29.1, 35.1
         """
         response = client.post("/api/swarm-workspaces", json=sample_workspace_data)
         assert response.status_code == 201
 
         workspace_path = sample_workspace_data["file_path"]
-        overall_path = os.path.join(workspace_path, "Context", "overall-context.md")
-        compressed_path = os.path.join(workspace_path, "Context", "compressed-context.md")
+        context_path = os.path.join(workspace_path, "ContextFiles", "context.md")
+        compressed_path = os.path.join(workspace_path, "ContextFiles", "compressed-context.md")
 
         # Verify files exist
-        assert os.path.isfile(overall_path)
+        assert os.path.isfile(context_path)
         assert os.path.isfile(compressed_path)
 
-        # Verify overall-context.md contains workspace name
-        with open(overall_path, "r", encoding="utf-8") as f:
+        # Verify context.md contains workspace name
+        with open(context_path, "r", encoding="utf-8") as f:
             content = f.read()
         assert sample_workspace_data["name"] in content
 
@@ -272,7 +271,7 @@ class TestCreateWorkspace:
 
             # Verify folder structure was created at expanded path
             assert os.path.isdir(expanded_path)
-            assert os.path.isdir(os.path.join(expanded_path, "Context"))
+            assert os.path.isdir(os.path.join(expanded_path, "Artifacts"))
         finally:
             # Cleanup
             parent_dir = os.path.expanduser("~/tmp_swarm_router_test")
@@ -644,7 +643,7 @@ class TestInitWorkspaceFolders:
     ):
         """Test that init-folders creates the folder structure on filesystem.
 
-        Validates: Requirements 2.1, 6.10
+        Validates: Requirements 2.3, 2.7, 35.1-35.6
         """
         # Create workspace
         create_response = client.post("/api/swarm-workspaces", json=sample_workspace_data)
@@ -654,16 +653,16 @@ class TestInitWorkspaceFolders:
 
         # Delete some folders to simulate missing structure
         import shutil
-        docs_path = os.path.join(workspace_path, "Docs")
-        tasks_path = os.path.join(workspace_path, "Tasks")
-        if os.path.exists(docs_path):
-            shutil.rmtree(docs_path)
-        if os.path.exists(tasks_path):
-            shutil.rmtree(tasks_path)
+        artifacts_path = os.path.join(workspace_path, "Artifacts")
+        context_files_path = os.path.join(workspace_path, "ContextFiles")
+        if os.path.exists(artifacts_path):
+            shutil.rmtree(artifacts_path)
+        if os.path.exists(context_files_path):
+            shutil.rmtree(context_files_path)
 
         # Verify folders are missing
-        assert not os.path.exists(docs_path)
-        assert not os.path.exists(tasks_path)
+        assert not os.path.exists(artifacts_path)
+        assert not os.path.exists(context_files_path)
 
         # Initialize folders
         response = client.post(f"/api/swarm-workspaces/{workspace_id}/init-folders")
@@ -671,14 +670,13 @@ class TestInitWorkspaceFolders:
 
         # Verify all folders now exist
         expected_folders = [
-            "Context",
-            "Docs",
-            "Projects",
-            "Tasks",
-            "ToDos",
-            "Plans",
-            "Historical-Chats",
-            "Reports",
+            "Artifacts",
+            "Artifacts/Plans",
+            "Artifacts/Reports",
+            "Artifacts/Docs",
+            "Artifacts/Decisions",
+            "ContextFiles",
+            "Transcripts",
         ]
         for folder in expected_folders:
             folder_path = os.path.join(workspace_path, folder)

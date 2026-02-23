@@ -142,7 +142,7 @@ async def chat_stream(request: Request):
     async def message_generator():
         """Generate messages from the agent conversation."""
         try:
-            logger.info(f"Starting chat stream for agent {chat_request.agent_id}, add_dirs={chat_request.add_dirs}")
+            logger.info(f"Starting chat stream for agent {chat_request.agent_id}")
             async for msg in agent_manager.run_conversation(
                 agent_id=chat_request.agent_id,
                 user_message=chat_request.message,
@@ -150,8 +150,6 @@ async def chat_stream(request: Request):
                 session_id=chat_request.session_id,
                 enable_skills=chat_request.enable_skills,
                 enable_mcp=chat_request.enable_mcp,
-                add_dirs=chat_request.add_dirs,
-                workspace_id=chat_request.workspace_id,
                 workspace_context=chat_request.workspace_context,
             ):
                 logger.debug(f"Yielding message: {msg.get('type')}")

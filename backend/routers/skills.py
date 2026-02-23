@@ -19,6 +19,9 @@ from schemas.skill import (
 from database import db
 from core.skill_manager import skill_manager
 from core.agent_manager import agent_manager
+from core.agent_sandbox_manager import agent_sandbox_manager
+from core.swarm_workspace_manager import swarm_workspace_manager
+from core.initialization_manager import initialization_manager
 from core.exceptions import (
     SkillNotFoundException,
     ValidationException,
@@ -30,6 +33,15 @@ import json
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+async def _resync_workspace_skills() -> None:
+    """Re-sync skill symlinks in the SwarmWorkspace after a CRUD operation."""
+    try:
+        workspace_path = initialization_manager.get_cached_workspace_path()
+        await agent_sandbox_manager.setup_workspace_skills(Path(workspace_path))
+    except Exception as e:
+        logger.error(f"Failed to re-sync workspace skills: {e}")
 
 
 @router.get("", response_model=list[SkillResponse])
@@ -108,6 +120,7 @@ async def upload_skill(
     # Sanitize skill name for use as folder name
     skill_name = re.sub(r'[^a-zA-Z0-9_-]', '-', skill_name.lower())
 
+    skill = None
     try:
         # Read file content
         zip_content = await file.read()
@@ -188,8 +201,6 @@ async def upload_skill(
             skill = await db.skills.put(skill_data)
             logger.info(f"Created new skill '{skill_name}' at: {result['local_path']}")
 
-        return skill
-
     except ValueError as e:
         raise ValidationException(
             message="Invalid skill package",
@@ -204,6 +215,10 @@ async def upload_skill(
             suggested_action="Please check the file and try again"
         )
 
+    # Best-effort resync — outside try/except so it doesn't fail the upload
+    await _resync_workspace_skills()
+    return skill
+
 
 @router.post("/refresh", response_model=SyncResultResponse)
 async def refresh_skills():
@@ -217,6 +232,7 @@ async def refresh_skills():
 
     Note: Plugin skills are managed separately by the plugin system.
     """
+    response = None
     try:
         # Get current DB skills
         db_skills = await db.skills.list()
@@ -241,7 +257,6 @@ async def refresh_skills():
         )
 
         logger.info(f"Skill refresh complete: added={len(sync_result.added)}, updated={len(sync_result.updated)}, errors={len(sync_result.errors)}")
-        return response
 
     except Exception as e:
         logger.error(f"Failed to refresh skills: {e}")
@@ -250,6 +265,9 @@ async def refresh_skills():
             detail=str(e),
             suggested_action="Please check the local skills directory and try again"
         )
+
+    await _resync_workspace_skills()
+    return response
 
 
 @router.post("/generate", response_model=SkillResponse, status_code=201)
@@ -270,6 +288,7 @@ async def generate_skill(request: SkillGenerateRequest):
         "is_system": False,
     }
     skill = await db.skills.put(skill_data)
+    await _resync_workspace_skills()
     return skill
 
 
@@ -327,6 +346,8 @@ async def delete_skill(skill_id: str):
     # Delete skill from database
     await db.skills.delete(skill_id)
     logger.info(f"Deleted skill from DB: {skill_id}")
+
+    await _resync_workspace_skills()
 
 
 @router.post("/generate-with-agent")
@@ -433,7 +454,8 @@ async def finalize_skill(request: SkillFinalizeRequest):
     logger.info(f"Finalizing skill: original='{request.skill_name}', sanitized='{skill_name}', display_name='{display_name}'")
 
     # Check if skill directory exists
-    skills_dir = Path(settings.agent_workspace_dir) / ".claude" / "skills"
+    from core.initialization_manager import initialization_manager
+    skills_dir = Path(initialization_manager.get_cached_workspace_path()) / ".claude" / "skills"
     skill_path = skills_dir / skill_name
 
     logger.info(f"Looking for skill at: {skill_path}, exists: {skill_path.exists()}")
@@ -526,8 +548,6 @@ async def finalize_skill(request: SkillFinalizeRequest):
             skill = await db.skills.put(skill_data)
             logger.info(f"Created new skill '{skill_name}' with draft at: {draft_location}")
 
-        return skill
-
     except Exception as e:
         logger.error(f"Failed to finalize skill: {e}")
         raise ValidationException(
@@ -535,6 +555,9 @@ async def finalize_skill(request: SkillFinalizeRequest):
             detail=str(e),
             suggested_action="Please check the skill files and try again"
         )
+
+    await _resync_workspace_skills()
+    return skill
 
 
 # ============== Helper Functions ==============
@@ -701,7 +724,6 @@ async def publish_skill_draft(skill_id: str, request: PublishDraftRequest | None
         await skill_manager.download_version_to_local(skill_folder_name, new_version)
 
         logger.info(f"Published skill {skill_id} as v{new_version}")
-        return updated_skill
 
     except Exception as e:
         logger.error(f"Failed to publish skill draft: {e}")
@@ -710,6 +732,9 @@ async def publish_skill_draft(skill_id: str, request: PublishDraftRequest | None
             detail=str(e),
             suggested_action="Please check S3 connectivity and try again"
         )
+
+    await _resync_workspace_skills()
+    return updated_skill
 
 
 @router.delete("/{skill_id}/draft", status_code=204)
@@ -803,7 +828,6 @@ async def rollback_skill_version(skill_id: str, request: RollbackRequest):
         await skill_manager.download_version_to_local(skill_folder_name, target_version)
 
         logger.info(f"Rolled back skill {skill_id} to v{target_version}")
-        return updated_skill
 
     except Exception as e:
         logger.error(f"Failed to rollback skill: {e}")
@@ -812,3 +836,6 @@ async def rollback_skill_version(skill_id: str, request: RollbackRequest):
             detail=str(e),
             suggested_action="Please check S3 connectivity and try again"
         )
+
+    await _resync_workspace_skills()
+    return updated_skill
