@@ -8,9 +8,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query
 
-from config import settings
 from database import db
-from core.workspace_manager import workspace_manager
 
 from schemas.workspace import (
     WorkspaceFileInfo,
@@ -46,17 +44,10 @@ async def ensure_workspace_exists(agent_id: str, workspace_root: Path, base_path
         # User-selected path doesn't exist - can't auto-create
         raise HTTPException(status_code=404, detail=f"Directory not found: {base_path}")
 
-    # Auto-create agent workspace with skills
-    agent = await db.agents.get(agent_id)
-    if not agent:
-        raise HTTPException(status_code=404, detail=f"Agent not found: {agent_id}")
-
-    skill_ids = agent.get("skill_ids", [])
-    allow_all_skills = agent.get("allow_all_skills", False)
-
-    logger.info(f"Auto-creating missing workspace for agent {agent_id}")
-    await workspace_manager.rebuild_agent_workspace(agent_id, skill_ids, allow_all_skills)
-    logger.info(f"Workspace created for agent {agent_id}")
+    # Auto-create workspace directory
+    logger.info(f"Auto-creating missing workspace directory for agent {agent_id}")
+    workspace_root.mkdir(parents=True, exist_ok=True)
+    logger.info(f"Workspace directory created: {workspace_root}")
 
 # File size limits
 MAX_TEXT_FILE_SIZE = 1 * 1024 * 1024  # 1MB for text files
@@ -116,17 +107,21 @@ IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".ico", ".
 def get_workspace_root(agent_id: str, base_path: str | None = None) -> Path:
     """Get the workspace root directory for an agent.
 
+    All agents use the single SwarmWorkspace path. If a custom base_path
+    is provided (e.g., "work in a folder" feature), that takes precedence.
+
     Args:
         agent_id: The agent ID
         base_path: Optional custom base path. If provided, uses this instead of
-                   the default agent workspace. Used for "work in a folder" feature.
+                   the default workspace. Used for "work in a folder" feature.
 
     Returns:
         The workspace root path
     """
     if base_path:
         return Path(base_path)
-    return Path(settings.agent_workspaces_dir) / agent_id
+    from core.initialization_manager import initialization_manager
+    return Path(initialization_manager.get_cached_workspace_path())
 
 
 def validate_path(workspace_root: Path, requested_path: str) -> Path:

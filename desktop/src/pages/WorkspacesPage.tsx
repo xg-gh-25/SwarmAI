@@ -55,7 +55,7 @@ export default function WorkspacesPage() {
     error,
   } = useQuery<SwarmWorkspace[]>({
     queryKey: ['swarmWorkspaces'],
-    queryFn: swarmWorkspacesService.list,
+    queryFn: () => swarmWorkspacesService.list(),
   });
 
   // Filter workspaces based on search query

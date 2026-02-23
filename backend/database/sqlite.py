@@ -5,9 +5,10 @@ import aiosqlite
 import json
 import logging
 import time
+from abc import abstractmethod
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, TypeVar, Generic
+from typing import Optional, TypeVar, Generic, ClassVar
 from uuid import uuid4
 
 from config import get_app_data_dir
@@ -16,6 +17,9 @@ from database.base import BaseTable, BaseDatabase
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T", bound=dict)
+
+# Constants
+DEFAULT_AUDIT_LOG_LIMIT: int = 100
 
 
 class SQLiteTable(BaseTable[T], Generic[T]):
@@ -354,8 +358,8 @@ class SQLitePluginsTable(SQLiteTable[T], Generic[T]):
 class SQLiteTasksTable(SQLiteTable[T], Generic[T]):
     """Specialized SQLite table for tasks with status filtering and counting."""
 
-    async def list_all(self, status: Optional[str] = None, agent_id: Optional[str] = None) -> list[T]:
-        """List all tasks, optionally filtered by status or agent_id."""
+    async def list_all(self, status: Optional[str] = None, agent_id: Optional[str] = None, workspace_id: Optional[str] = None) -> list[T]:
+        """List all tasks, optionally filtered by status, agent_id, or workspace_id."""
         async with self._get_connection() as conn:
             conn.row_factory = aiosqlite.Row
             query = "SELECT * FROM tasks WHERE 1=1"
@@ -366,6 +370,9 @@ class SQLiteTasksTable(SQLiteTable[T], Generic[T]):
             if agent_id:
                 query += " AND agent_id = ?"
                 params.append(agent_id)
+            if workspace_id:
+                query += " AND workspace_id = ?"
+                params.append(workspace_id)
             query += " ORDER BY created_at DESC"
             async with conn.execute(query, params) as cursor:
                 rows = await cursor.fetchall()
@@ -500,6 +507,475 @@ class SQLiteSwarmWorkspacesTable(SQLiteTable[T], Generic[T]):
                 return [self._row_to_dict(row) for row in rows]
 
 
+class WorkspaceScopedTable(SQLiteTable[T], Generic[T]):
+    """Base class for tables with workspace_id filtering.
+    
+    Subclasses should set:
+    - filter_field: The column name to filter by (e.g., 'status', 'focus_type', 'artifact_type')
+    - order_by: The ORDER BY clause (default: 'created_at DESC')
+    
+    This eliminates code duplication across workspace-scoped tables.
+    """
+    
+    filter_field: ClassVar[Optional[str]] = None
+    order_by: ClassVar[str] = "created_at DESC"
+    
+    async def list_by_workspace(
+        self, 
+        workspace_id: str, 
+        filter_value: Optional[str] = None
+    ) -> list[T]:
+        """List all items for a workspace, optionally filtered by filter_field."""
+        async with self._get_connection() as conn:
+            conn.row_factory = aiosqlite.Row
+            if filter_value and self.filter_field:
+                query = f"SELECT * FROM {self.table_name} WHERE workspace_id = ? AND {self.filter_field} = ? ORDER BY {self.order_by}"
+                params = (workspace_id, filter_value)
+            else:
+                query = f"SELECT * FROM {self.table_name} WHERE workspace_id = ? ORDER BY {self.order_by}"
+                params = (workspace_id,)
+            async with conn.execute(query, params) as cursor:
+                rows = await cursor.fetchall()
+                return [self._row_to_dict(row) for row in rows]
+
+    async def count_by_workspace_and_filter(self, workspace_id: str, filter_value: str) -> int:
+        """Count items by workspace and filter_field value."""
+        if not self.filter_field:
+            raise ValueError(f"filter_field not set for {self.__class__.__name__}")
+        async with self._get_connection() as conn:
+            async with conn.execute(
+                f"SELECT COUNT(*) FROM {self.table_name} WHERE workspace_id = ? AND {self.filter_field} = ?",
+                (workspace_id, filter_value)
+            ) as cursor:
+                row = await cursor.fetchone()
+                return row[0] if row else 0
+
+    async def delete_by_workspace(self, workspace_id: str) -> int:
+        """Delete all items for a workspace. Returns count of deleted items."""
+        async with self._get_connection() as conn:
+            cursor = await conn.execute(
+                f"DELETE FROM {self.table_name} WHERE workspace_id = ?",
+                (workspace_id,)
+            )
+            await conn.commit()
+            return cursor.rowcount
+
+
+class SQLiteToDosTable(WorkspaceScopedTable[T], Generic[T]):
+    """Specialized SQLite table for ToDos with workspace and status filtering."""
+    
+    filter_field: ClassVar[str] = "status"
+    order_by: ClassVar[str] = "created_at DESC"
+
+    async def list_by_status(self, status: str) -> list[T]:
+        """List all ToDos with a specific status (across all workspaces)."""
+        async with self._get_connection() as conn:
+            conn.row_factory = aiosqlite.Row
+            async with conn.execute(
+                f"SELECT * FROM {self.table_name} WHERE status = ? ORDER BY created_at DESC",
+                (status,)
+            ) as cursor:
+                rows = await cursor.fetchall()
+                return [self._row_to_dict(row) for row in rows]
+
+    # Backward-compatible alias
+    async def count_by_workspace_and_status(self, workspace_id: str, status: str) -> int:
+        """Count ToDos by workspace and status."""
+        return await self.count_by_workspace_and_filter(workspace_id, status)
+
+
+class SQLitePlanItemsTable(WorkspaceScopedTable[T], Generic[T]):
+    """Specialized SQLite table for PlanItems with workspace and focus type filtering."""
+    
+    filter_field: ClassVar[str] = "focus_type"
+    order_by: ClassVar[str] = "sort_order ASC"
+
+    # Backward-compatible alias
+    async def count_by_workspace_and_focus(self, workspace_id: str, focus_type: str) -> int:
+        """Count PlanItems by workspace and focus type."""
+        return await self.count_by_workspace_and_filter(workspace_id, focus_type)
+
+
+class SQLiteCommunicationsTable(WorkspaceScopedTable[T], Generic[T]):
+    """Specialized SQLite table for Communications with workspace and status filtering."""
+    
+    filter_field: ClassVar[str] = "status"
+    order_by: ClassVar[str] = "created_at DESC"
+
+    # Backward-compatible alias
+    async def count_by_workspace_and_status(self, workspace_id: str, status: str) -> int:
+        """Count Communications by workspace and status."""
+        return await self.count_by_workspace_and_filter(workspace_id, status)
+
+
+class SQLiteArtifactsTable(WorkspaceScopedTable[T], Generic[T]):
+    """Specialized SQLite table for Artifacts with workspace and type filtering."""
+    
+    filter_field: ClassVar[str] = "artifact_type"
+    order_by: ClassVar[str] = "created_at DESC"
+
+    # Backward-compatible alias
+    async def count_by_workspace_and_type(self, workspace_id: str, artifact_type: str) -> int:
+        """Count Artifacts by workspace and type."""
+        return await self.count_by_workspace_and_filter(workspace_id, artifact_type)
+
+
+class SQLiteArtifactTagsTable(SQLiteTable[T], Generic[T]):
+    """Specialized SQLite table for Artifact Tags."""
+
+    async def list_by_artifact(self, artifact_id: str) -> list[T]:
+        """List all tags for an artifact."""
+        async with self._get_connection() as conn:
+            conn.row_factory = aiosqlite.Row
+            async with conn.execute(
+                f"SELECT * FROM {self.table_name} WHERE artifact_id = ? ORDER BY created_at ASC",
+                (artifact_id,)
+            ) as cursor:
+                rows = await cursor.fetchall()
+                return [self._row_to_dict(row) for row in rows]
+
+    async def delete_by_artifact(self, artifact_id: str) -> int:
+        """Delete all tags for an artifact."""
+        async with self._get_connection() as conn:
+            cursor = await conn.execute(
+                f"DELETE FROM {self.table_name} WHERE artifact_id = ?",
+                (artifact_id,)
+            )
+            await conn.commit()
+            return cursor.rowcount
+
+
+class SQLiteReflectionsTable(SQLiteTable[T], Generic[T]):
+    """Specialized SQLite table for Reflections with workspace and type filtering."""
+
+    async def list_by_workspace(self, workspace_id: str, reflection_type: Optional[str] = None) -> list[T]:
+        """List all Reflections for a workspace, optionally filtered by type."""
+        async with self._get_connection() as conn:
+            conn.row_factory = aiosqlite.Row
+            if reflection_type:
+                query = f"SELECT * FROM {self.table_name} WHERE workspace_id = ? AND reflection_type = ? ORDER BY created_at DESC"
+                params = (workspace_id, reflection_type)
+            else:
+                query = f"SELECT * FROM {self.table_name} WHERE workspace_id = ? ORDER BY created_at DESC"
+                params = (workspace_id,)
+            async with conn.execute(query, params) as cursor:
+                rows = await cursor.fetchall()
+                return [self._row_to_dict(row) for row in rows]
+
+    async def count_by_workspace_and_type(self, workspace_id: str, reflection_type: str) -> int:
+        """Count Reflections by workspace and type."""
+        async with self._get_connection() as conn:
+            async with conn.execute(
+                f"SELECT COUNT(*) FROM {self.table_name} WHERE workspace_id = ? AND reflection_type = ?",
+                (workspace_id, reflection_type)
+            ) as cursor:
+                row = await cursor.fetchone()
+                return row[0] if row else 0
+
+
+class SQLiteWorkspaceSkillsTable(SQLiteTable[T], Generic[T]):
+    """Specialized SQLite table for Workspace Skills configuration."""
+
+    async def list_by_workspace(self, workspace_id: str) -> list[T]:
+        """List all skill configurations for a workspace."""
+        async with self._get_connection() as conn:
+            conn.row_factory = aiosqlite.Row
+            async with conn.execute(
+                f"SELECT * FROM {self.table_name} WHERE workspace_id = ? ORDER BY created_at ASC",
+                (workspace_id,)
+            ) as cursor:
+                rows = await cursor.fetchall()
+                return [self._row_to_dict(row) for row in rows]
+
+    async def get_by_workspace_and_skill(self, workspace_id: str, skill_id: str) -> Optional[T]:
+        """Get a specific skill configuration for a workspace."""
+        async with self._get_connection() as conn:
+            conn.row_factory = aiosqlite.Row
+            async with conn.execute(
+                f"SELECT * FROM {self.table_name} WHERE workspace_id = ? AND skill_id = ?",
+                (workspace_id, skill_id)
+            ) as cursor:
+                row = await cursor.fetchone()
+                return self._row_to_dict(row) if row else None
+
+    async def delete_by_workspace(self, workspace_id: str) -> int:
+        """Delete all skill configurations for a workspace."""
+        async with self._get_connection() as conn:
+            cursor = await conn.execute(
+                f"DELETE FROM {self.table_name} WHERE workspace_id = ?",
+                (workspace_id,)
+            )
+            await conn.commit()
+            return cursor.rowcount
+
+
+class SQLiteWorkspaceMcpsTable(SQLiteTable[T], Generic[T]):
+    """Specialized SQLite table for Workspace MCP server configuration."""
+
+    async def list_by_workspace(self, workspace_id: str) -> list[T]:
+        """List all MCP configurations for a workspace."""
+        async with self._get_connection() as conn:
+            conn.row_factory = aiosqlite.Row
+            async with conn.execute(
+                f"SELECT * FROM {self.table_name} WHERE workspace_id = ? ORDER BY created_at ASC",
+                (workspace_id,)
+            ) as cursor:
+                rows = await cursor.fetchall()
+                return [self._row_to_dict(row) for row in rows]
+
+    async def get_by_workspace_and_mcp(self, workspace_id: str, mcp_server_id: str) -> Optional[T]:
+        """Get a specific MCP configuration for a workspace."""
+        async with self._get_connection() as conn:
+            conn.row_factory = aiosqlite.Row
+            async with conn.execute(
+                f"SELECT * FROM {self.table_name} WHERE workspace_id = ? AND mcp_server_id = ?",
+                (workspace_id, mcp_server_id)
+            ) as cursor:
+                row = await cursor.fetchone()
+                return self._row_to_dict(row) if row else None
+
+    async def delete_by_workspace(self, workspace_id: str) -> int:
+        """Delete all MCP configurations for a workspace."""
+        async with self._get_connection() as conn:
+            cursor = await conn.execute(
+                f"DELETE FROM {self.table_name} WHERE workspace_id = ?",
+                (workspace_id,)
+            )
+            await conn.commit()
+            return cursor.rowcount
+
+
+class SQLiteWorkspaceKnowledgebasesTable(SQLiteTable[T], Generic[T]):
+    """Specialized SQLite table for Workspace Knowledgebases."""
+
+    async def list_by_workspace(self, workspace_id: str) -> list[T]:
+        """List all knowledgebase sources for a workspace."""
+        async with self._get_connection() as conn:
+            conn.row_factory = aiosqlite.Row
+            async with conn.execute(
+                f"SELECT * FROM {self.table_name} WHERE workspace_id = ? ORDER BY created_at ASC",
+                (workspace_id,)
+            ) as cursor:
+                rows = await cursor.fetchall()
+                return [self._row_to_dict(row) for row in rows]
+
+
+class SQLiteWorkspaceAuditLogTable(SQLiteTable[T], Generic[T]):
+    """Specialized SQLite table for Workspace Audit Log.
+
+    Overrides put() because audit_log uses changed_at instead of
+    created_at/updated_at.
+    """
+
+    async def put(self, item: T) -> T:
+        """Insert an audit log entry (audit logs are append-only)."""
+        if "id" not in item:
+            item["id"] = str(uuid4())
+
+        async with self._get_connection() as conn:
+            columns = list(item.keys())
+            placeholders = ", ".join("?" for _ in columns)
+            values = [self._serialize_value(item[col]) for col in columns]
+
+            await conn.execute(
+                f"INSERT INTO {self.table_name} ({', '.join(columns)}) VALUES ({placeholders})",
+                values
+            )
+            await conn.commit()
+        return item
+
+    async def list_by_workspace(self, workspace_id: str, limit: int = 100) -> list[T]:
+        """List audit log entries for a workspace, ordered by most recent first."""
+        async with self._get_connection() as conn:
+            conn.row_factory = aiosqlite.Row
+            async with conn.execute(
+                f"SELECT * FROM {self.table_name} WHERE workspace_id = ? ORDER BY changed_at DESC LIMIT ?",
+                (workspace_id, limit)
+            ) as cursor:
+                rows = await cursor.fetchall()
+                return [self._row_to_dict(row) for row in rows]
+
+    async def list_by_workspace_paginated(self, workspace_id: str, limit: int = 50, offset: int = 0) -> list[T]:
+        """List audit log entries for a workspace with offset pagination."""
+        async with self._get_connection() as conn:
+            conn.row_factory = aiosqlite.Row
+            async with conn.execute(
+                f"SELECT * FROM {self.table_name} WHERE workspace_id = ? ORDER BY changed_at DESC LIMIT ? OFFSET ?",
+                (workspace_id, limit, offset)
+            ) as cursor:
+                rows = await cursor.fetchall()
+                return [self._row_to_dict(row) for row in rows]
+
+    async def count_by_workspace(self, workspace_id: str) -> int:
+        """Count audit log entries for a workspace."""
+        async with self._get_connection() as conn:
+            async with conn.execute(
+                f"SELECT COUNT(*) FROM {self.table_name} WHERE workspace_id = ?",
+                (workspace_id,)
+            ) as cursor:
+                row = await cursor.fetchone()
+                return row[0] if row else 0
+
+    async def list_by_entity(self, entity_type: str, entity_id: str) -> list[T]:
+        """List audit log entries for a specific entity."""
+        async with self._get_connection() as conn:
+            conn.row_factory = aiosqlite.Row
+            async with conn.execute(
+                f"SELECT * FROM {self.table_name} WHERE entity_type = ? AND entity_id = ? ORDER BY changed_at DESC",
+                (entity_type, entity_id)
+            ) as cursor:
+                rows = await cursor.fetchall()
+                return [self._row_to_dict(row) for row in rows]
+
+
+class SQLiteChatThreadsTable(SQLiteTable[T], Generic[T]):
+    """Specialized SQLite table for Chat Threads with workspace filtering."""
+
+    async def list_by_workspace(self, workspace_id: str) -> list[T]:
+        """List all chat threads for a workspace."""
+        async with self._get_connection() as conn:
+            conn.row_factory = aiosqlite.Row
+            async with conn.execute(
+                f"SELECT * FROM {self.table_name} WHERE workspace_id = ? ORDER BY updated_at DESC",
+                (workspace_id,)
+            ) as cursor:
+                rows = await cursor.fetchall()
+                return [self._row_to_dict(row) for row in rows]
+
+    async def list_by_task(self, task_id: str) -> list[T]:
+        """List all chat threads for a task."""
+        async with self._get_connection() as conn:
+            conn.row_factory = aiosqlite.Row
+            async with conn.execute(
+                f"SELECT * FROM {self.table_name} WHERE task_id = ? ORDER BY updated_at DESC",
+                (task_id,)
+            ) as cursor:
+                rows = await cursor.fetchall()
+                return [self._row_to_dict(row) for row in rows]
+
+    async def list_by_todo(self, todo_id: str) -> list[T]:
+        """List all chat threads for a todo."""
+        async with self._get_connection() as conn:
+            conn.row_factory = aiosqlite.Row
+            async with conn.execute(
+                f"SELECT * FROM {self.table_name} WHERE todo_id = ? ORDER BY updated_at DESC",
+                (todo_id,)
+            ) as cursor:
+                rows = await cursor.fetchall()
+                return [self._row_to_dict(row) for row in rows]
+
+
+class SQLiteThreadSummariesTable(SQLiteTable[T], Generic[T]):
+    """Specialized SQLite table for Thread Summaries.
+    
+    Thread summaries only have updated_at (no created_at) since they are
+    rolling summaries that get updated over time.
+    """
+
+    async def put(self, item: T) -> T:
+        """Insert or update a thread summary."""
+        if "id" not in item:
+            item["id"] = str(uuid4())
+        item["updated_at"] = datetime.now().isoformat()
+
+        # Get existing item to decide insert vs update
+        existing = await self.get(item["id"])
+
+        async with self._get_connection() as conn:
+            if existing:
+                # Update
+                columns = [k for k in item.keys() if k != "id"]
+                set_clause = ", ".join(f"{col} = ?" for col in columns)
+                values = [self._serialize_value(item[col]) for col in columns]
+                values.append(item["id"])
+
+                await conn.execute(
+                    f"UPDATE {self.table_name} SET {set_clause} WHERE id = ?",
+                    values
+                )
+            else:
+                # Insert
+                columns = list(item.keys())
+                placeholders = ", ".join("?" for _ in columns)
+                values = [self._serialize_value(item[col]) for col in columns]
+
+                await conn.execute(
+                    f"INSERT INTO {self.table_name} ({', '.join(columns)}) VALUES ({placeholders})",
+                    values
+                )
+
+            await conn.commit()
+        return item
+
+    async def get_by_thread(self, thread_id: str) -> Optional[T]:
+        """Get the summary for a thread."""
+        async with self._get_connection() as conn:
+            conn.row_factory = aiosqlite.Row
+            async with conn.execute(
+                f"SELECT * FROM {self.table_name} WHERE thread_id = ? ORDER BY updated_at DESC LIMIT 1",
+                (thread_id,)
+            ) as cursor:
+                row = await cursor.fetchone()
+                return self._row_to_dict(row) if row else None
+
+    async def delete_by_thread(self, thread_id: str) -> int:
+        """Delete all summaries for a thread."""
+        async with self._get_connection() as conn:
+            cursor = await conn.execute(
+                f"DELETE FROM {self.table_name} WHERE thread_id = ?",
+                (thread_id,)
+            )
+            await conn.commit()
+            return cursor.rowcount
+
+
+class SQLiteChatMessagesTable(SQLiteTable[T], Generic[T]):
+    """Specialized SQLite table for Chat Messages.
+    
+    Chat messages are immutable once created, so they don't have an updated_at column.
+    """
+
+    async def put(self, item: T) -> T:
+        """Insert a chat message (messages are immutable, no updates)."""
+        if "id" not in item:
+            item["id"] = str(uuid4())
+        if "created_at" not in item:
+            item["created_at"] = datetime.now().isoformat()
+
+        async with self._get_connection() as conn:
+            columns = list(item.keys())
+            placeholders = ", ".join("?" for _ in columns)
+            values = [self._serialize_value(item[col]) for col in columns]
+
+            await conn.execute(
+                f"INSERT OR REPLACE INTO {self.table_name} ({', '.join(columns)}) VALUES ({placeholders})",
+                values
+            )
+            await conn.commit()
+        return item
+
+    async def list_by_thread(self, thread_id: str) -> list[T]:
+        """List all messages for a thread, ordered by creation time."""
+        async with self._get_connection() as conn:
+            conn.row_factory = aiosqlite.Row
+            async with conn.execute(
+                f"SELECT * FROM {self.table_name} WHERE thread_id = ? ORDER BY created_at ASC",
+                (thread_id,)
+            ) as cursor:
+                rows = await cursor.fetchall()
+                return [self._row_to_dict(row) for row in rows]
+
+    async def delete_by_thread(self, thread_id: str) -> int:
+        """Delete all messages for a thread."""
+        async with self._get_connection() as conn:
+            cursor = await conn.execute(
+                f"DELETE FROM {self.table_name} WHERE thread_id = ?",
+                (thread_id,)
+            )
+            await conn.commit()
+            return cursor.rowcount
+
+
 class SQLiteDatabase(BaseDatabase):
     """SQLite database client implementing BaseDatabase interface."""
 
@@ -541,6 +1017,7 @@ class SQLiteDatabase(BaseDatabase):
     CREATE INDEX IF NOT EXISTS idx_agents_user_id ON agents(user_id);
 
     -- Skills table
+    -- Validates: Requirements 19.2
     CREATE TABLE IF NOT EXISTS skills (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
@@ -559,6 +1036,7 @@ class SQLiteDatabase(BaseDatabase):
         created_by TEXT,
         version TEXT DEFAULT '1.0.0',
         is_system INTEGER DEFAULT 0,
+        is_privileged INTEGER DEFAULT 0,
         current_version INTEGER DEFAULT 0,
         has_draft INTEGER DEFAULT 0,
         user_id TEXT,
@@ -586,6 +1064,7 @@ class SQLiteDatabase(BaseDatabase):
     CREATE INDEX IF NOT EXISTS idx_skill_versions_skill_id ON skill_versions(skill_id);
 
     -- MCP servers table
+    -- Validates: Requirements 19.4
     CREATE TABLE IF NOT EXISTS mcp_servers (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
@@ -596,8 +1075,10 @@ class SQLiteDatabase(BaseDatabase):
         rejected_tools TEXT DEFAULT '[]',
         endpoint TEXT,
         version TEXT,
+        source_type TEXT DEFAULT 'user',
         is_active INTEGER DEFAULT 1,
         is_system INTEGER DEFAULT 0,
+        is_privileged INTEGER DEFAULT 0,
         user_id TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
@@ -732,22 +1213,31 @@ class SQLiteDatabase(BaseDatabase):
     CREATE INDEX IF NOT EXISTS idx_plugins_name ON plugins(name);
 
     -- Tasks table (background agent tasks)
+    -- Validates: Requirements 5.1, 13.2, 13.3, 13.4
     CREATE TABLE IF NOT EXISTS tasks (
         id TEXT PRIMARY KEY,
         agent_id TEXT NOT NULL,
         session_id TEXT,
         status TEXT NOT NULL DEFAULT 'pending',
         title TEXT NOT NULL,
+        description TEXT,
+        priority TEXT DEFAULT 'none' CHECK (priority IN ('high', 'medium', 'low', 'none')),
         model TEXT,
+        workspace_id TEXT,
+        source_todo_id TEXT,
+        blocked_reason TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         started_at TEXT,
         completed_at TEXT,
         error TEXT,
-        work_dir TEXT
+        work_dir TEXT,
+        FOREIGN KEY (workspace_id) REFERENCES swarm_workspaces(id) ON DELETE SET NULL,
+        FOREIGN KEY (source_todo_id) REFERENCES todos(id) ON DELETE SET NULL
     );
     CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
     CREATE INDEX IF NOT EXISTS idx_tasks_agent_id ON tasks(agent_id);
+    CREATE INDEX IF NOT EXISTS idx_tasks_workspace_id ON tasks(workspace_id);
 
     -- Channels table
     CREATE TABLE IF NOT EXISTS channels (
@@ -812,6 +1302,7 @@ class SQLiteDatabase(BaseDatabase):
     CREATE INDEX IF NOT EXISTS idx_channel_messages_session ON channel_messages(channel_session_id);
 
     -- Swarm Workspaces table
+    -- Validates: Requirements 36.1-36.11
     CREATE TABLE IF NOT EXISTS swarm_workspaces (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
@@ -819,10 +1310,245 @@ class SQLiteDatabase(BaseDatabase):
         context TEXT NOT NULL,
         icon TEXT,
         is_default INTEGER DEFAULT 0,
+        is_archived INTEGER DEFAULT 0,
+        archived_at TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_swarm_workspaces_is_default ON swarm_workspaces(is_default);
+    CREATE INDEX IF NOT EXISTS idx_swarm_workspaces_is_archived ON swarm_workspaces(is_archived);
+
+    -- ToDos table (Signals in Daily Work Operating Loop)
+    CREATE TABLE IF NOT EXISTS todos (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        description TEXT,
+        source TEXT,
+        source_type TEXT NOT NULL DEFAULT 'manual' CHECK (source_type IN ('manual', 'email', 'slack', 'meeting', 'integration')),
+        status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'overdue', 'in_discussion', 'handled', 'cancelled', 'deleted')),
+        priority TEXT NOT NULL DEFAULT 'none' CHECK (priority IN ('high', 'medium', 'low', 'none')),
+        due_date TEXT,
+        task_id TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (workspace_id) REFERENCES swarm_workspaces(id) ON DELETE CASCADE,
+        FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE SET NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_todos_workspace_id ON todos(workspace_id);
+    CREATE INDEX IF NOT EXISTS idx_todos_status ON todos(status);
+    CREATE INDEX IF NOT EXISTS idx_todos_due_date ON todos(due_date);
+    CREATE INDEX IF NOT EXISTS idx_todos_workspace_status ON todos(workspace_id, status);
+
+    -- Plan Items table (Plan section in Daily Work Operating Loop)
+    -- Validates: Requirements 22.1, 22.2, 22.3, 22.4
+    CREATE TABLE IF NOT EXISTS plan_items (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        description TEXT,
+        source_todo_id TEXT,
+        source_task_id TEXT,
+        status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'deferred', 'completed', 'cancelled')),
+        priority TEXT NOT NULL DEFAULT 'none' CHECK (priority IN ('high', 'medium', 'low', 'none')),
+        scheduled_date TEXT,
+        focus_type TEXT NOT NULL DEFAULT 'upcoming' CHECK (focus_type IN ('today', 'upcoming', 'blocked')),
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (workspace_id) REFERENCES swarm_workspaces(id) ON DELETE CASCADE,
+        FOREIGN KEY (source_todo_id) REFERENCES todos(id) ON DELETE SET NULL,
+        FOREIGN KEY (source_task_id) REFERENCES tasks(id) ON DELETE SET NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_plan_items_workspace_id ON plan_items(workspace_id);
+    CREATE INDEX IF NOT EXISTS idx_plan_items_focus_type ON plan_items(focus_type);
+    CREATE INDEX IF NOT EXISTS idx_plan_items_workspace_focus ON plan_items(workspace_id, focus_type);
+
+    -- Communications table (Communicate section in Daily Work Operating Loop)
+    -- Validates: Requirements 23.1, 23.2, 23.3, 23.4
+    CREATE TABLE IF NOT EXISTS communications (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        description TEXT,
+        recipient TEXT NOT NULL,
+        channel_type TEXT NOT NULL DEFAULT 'other' CHECK (channel_type IN ('email', 'slack', 'meeting', 'other')),
+        status TEXT NOT NULL DEFAULT 'pending_reply' CHECK (status IN ('pending_reply', 'ai_draft', 'follow_up', 'sent', 'cancelled')),
+        priority TEXT NOT NULL DEFAULT 'none' CHECK (priority IN ('high', 'medium', 'low', 'none')),
+        due_date TEXT,
+        ai_draft_content TEXT,
+        source_task_id TEXT,
+        source_todo_id TEXT,
+        sent_at TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (workspace_id) REFERENCES swarm_workspaces(id) ON DELETE CASCADE,
+        FOREIGN KEY (source_task_id) REFERENCES tasks(id) ON DELETE SET NULL,
+        FOREIGN KEY (source_todo_id) REFERENCES todos(id) ON DELETE SET NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_communications_workspace_id ON communications(workspace_id);
+    CREATE INDEX IF NOT EXISTS idx_communications_status ON communications(status);
+    CREATE INDEX IF NOT EXISTS idx_communications_workspace_status ON communications(workspace_id, status);
+
+    -- Artifacts table (Artifacts section in Daily Work Operating Loop)
+    -- Validates: Requirements 27.2, 27.3, 27.7
+    CREATE TABLE IF NOT EXISTS artifacts (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        task_id TEXT,
+        artifact_type TEXT NOT NULL DEFAULT 'other' CHECK (artifact_type IN ('plan', 'report', 'doc', 'decision', 'other')),
+        title TEXT NOT NULL,
+        file_path TEXT NOT NULL,
+        version INTEGER NOT NULL DEFAULT 1,
+        created_by TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (workspace_id) REFERENCES swarm_workspaces(id) ON DELETE CASCADE,
+        FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE SET NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_artifacts_workspace_id ON artifacts(workspace_id);
+    CREATE INDEX IF NOT EXISTS idx_artifacts_type ON artifacts(artifact_type);
+    CREATE INDEX IF NOT EXISTS idx_artifacts_workspace_type ON artifacts(workspace_id, artifact_type);
+
+    -- Artifact Tags table
+    CREATE TABLE IF NOT EXISTS artifact_tags (
+        id TEXT PRIMARY KEY,
+        artifact_id TEXT NOT NULL,
+        tag TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (artifact_id) REFERENCES artifacts(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_artifact_tags_artifact_id ON artifact_tags(artifact_id);
+    CREATE INDEX IF NOT EXISTS idx_artifact_tags_tag ON artifact_tags(tag);
+
+    -- Reflections table (Reflection section in Daily Work Operating Loop)
+    -- Validates: Requirements 28.2, 28.3, 28.4
+    CREATE TABLE IF NOT EXISTS reflections (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        reflection_type TEXT NOT NULL CHECK (reflection_type IN ('daily_recap', 'weekly_summary', 'lessons_learned')),
+        title TEXT NOT NULL,
+        file_path TEXT NOT NULL,
+        period_start TEXT NOT NULL,
+        period_end TEXT NOT NULL,
+        generated_by TEXT NOT NULL DEFAULT 'user' CHECK (generated_by IN ('user', 'agent', 'system')),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (workspace_id) REFERENCES swarm_workspaces(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_reflections_workspace_id ON reflections(workspace_id);
+    CREATE INDEX IF NOT EXISTS idx_reflections_type ON reflections(reflection_type);
+    CREATE INDEX IF NOT EXISTS idx_reflections_workspace_type ON reflections(workspace_id, reflection_type);
+
+    -- Workspace Skills junction table (Skills configuration per workspace)
+    -- Validates: Requirements 19.1
+    CREATE TABLE IF NOT EXISTS workspace_skills (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        skill_id TEXT NOT NULL,
+        enabled INTEGER DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (workspace_id) REFERENCES swarm_workspaces(id) ON DELETE CASCADE,
+        UNIQUE(workspace_id, skill_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_workspace_skills_workspace_id ON workspace_skills(workspace_id);
+
+    -- Workspace MCPs junction table (MCP server configuration per workspace)
+    -- Validates: Requirements 19.3
+    CREATE TABLE IF NOT EXISTS workspace_mcps (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        mcp_server_id TEXT NOT NULL,
+        enabled INTEGER DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (workspace_id) REFERENCES swarm_workspaces(id) ON DELETE CASCADE,
+        UNIQUE(workspace_id, mcp_server_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_workspace_mcps_workspace_id ON workspace_mcps(workspace_id);
+
+    -- Workspace Knowledgebases table (Knowledge sources per workspace)
+    -- Validates: Requirements 19.5
+    CREATE TABLE IF NOT EXISTS workspace_knowledgebases (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        source_type TEXT NOT NULL CHECK (source_type IN ('local_file', 'url', 'indexed_document', 'context_file', 'vector_index')),
+        source_path TEXT NOT NULL,
+        display_name TEXT NOT NULL,
+        metadata TEXT DEFAULT '{}',
+        excluded_sources TEXT DEFAULT '[]',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (workspace_id) REFERENCES swarm_workspaces(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_workspace_kbs_workspace_id ON workspace_knowledgebases(workspace_id);
+
+    -- Workspace Audit Log table (Configuration change tracking)
+    -- Validates: Requirements 25.2
+    CREATE TABLE IF NOT EXISTS workspace_audit_log (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        change_type TEXT NOT NULL CHECK (change_type IN ('enabled', 'disabled', 'added', 'removed', 'updated')),
+        entity_type TEXT NOT NULL CHECK (entity_type IN ('skill', 'mcp', 'knowledgebase', 'workspace_setting')),
+        entity_id TEXT NOT NULL,
+        old_value TEXT,
+        new_value TEXT,
+        changed_by TEXT NOT NULL,
+        changed_at TEXT NOT NULL,
+        FOREIGN KEY (workspace_id) REFERENCES swarm_workspaces(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_audit_log_workspace_id ON workspace_audit_log(workspace_id);
+    CREATE INDEX IF NOT EXISTS idx_audit_log_changed_at ON workspace_audit_log(changed_at);
+
+    -- Chat Threads table (Workspace-bound conversations)
+    -- Validates: Requirements 30.1, 30.3, 30.9
+    CREATE TABLE IF NOT EXISTS chat_threads (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        agent_id TEXT NOT NULL,
+        task_id TEXT,
+        todo_id TEXT,
+        mode TEXT NOT NULL DEFAULT 'explore' CHECK (mode IN ('explore', 'execute')),
+        title TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (workspace_id) REFERENCES swarm_workspaces(id) ON DELETE CASCADE,
+        FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE,
+        FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE SET NULL,
+        FOREIGN KEY (todo_id) REFERENCES todos(id) ON DELETE SET NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_chat_threads_workspace_id ON chat_threads(workspace_id);
+    CREATE INDEX IF NOT EXISTS idx_chat_threads_agent_id ON chat_threads(agent_id);
+    CREATE INDEX IF NOT EXISTS idx_chat_threads_task_id ON chat_threads(task_id);
+
+    -- Thread Summaries table (Rolling summaries for chat threads)
+    -- Validates: Requirements 30.9
+    CREATE TABLE IF NOT EXISTS thread_summaries (
+        id TEXT PRIMARY KEY,
+        thread_id TEXT NOT NULL,
+        summary_type TEXT NOT NULL DEFAULT 'rolling' CHECK (summary_type IN ('rolling', 'final')),
+        summary_text TEXT NOT NULL,
+        key_decisions TEXT DEFAULT '[]',
+        open_questions TEXT DEFAULT '[]',
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (thread_id) REFERENCES chat_threads(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_thread_summaries_thread_id ON thread_summaries(thread_id);
+    CREATE INDEX IF NOT EXISTS idx_thread_summaries_text ON thread_summaries(summary_text);
+
+    -- Chat Messages table (Messages within chat threads)
+    -- Validates: Requirements 30.3
+    CREATE TABLE IF NOT EXISTS chat_messages (
+        id TEXT PRIMARY KEY,
+        thread_id TEXT NOT NULL,
+        role TEXT NOT NULL CHECK (role IN ('user', 'assistant', 'tool', 'system')),
+        content TEXT NOT NULL,
+        tool_calls TEXT,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (thread_id) REFERENCES chat_threads(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_chat_messages_thread_id ON chat_messages(thread_id);
     """
 
     def __init__(self, db_path: str | Path | None = None):
@@ -860,6 +1586,22 @@ class SQLiteDatabase(BaseDatabase):
         self._channel_sessions = SQLiteChannelSessionsTable[dict]("channel_sessions", self.db_path)
         self._channel_messages = SQLiteChannelMessagesTable[dict]("channel_messages", self.db_path)
         self._swarm_workspaces = SQLiteSwarmWorkspacesTable[dict]("swarm_workspaces", self.db_path)
+        # Daily Work Operating Loop tables
+        self._todos = SQLiteToDosTable[dict]("todos", self.db_path)
+        self._plan_items = SQLitePlanItemsTable[dict]("plan_items", self.db_path)
+        self._communications = SQLiteCommunicationsTable[dict]("communications", self.db_path)
+        self._artifacts = SQLiteArtifactsTable[dict]("artifacts", self.db_path)
+        self._artifact_tags = SQLiteArtifactTagsTable[dict]("artifact_tags", self.db_path)
+        self._reflections = SQLiteReflectionsTable[dict]("reflections", self.db_path)
+        # Workspace configuration tables
+        self._workspace_skills = SQLiteWorkspaceSkillsTable[dict]("workspace_skills", self.db_path)
+        self._workspace_mcps = SQLiteWorkspaceMcpsTable[dict]("workspace_mcps", self.db_path)
+        self._workspace_knowledgebases = SQLiteWorkspaceKnowledgebasesTable[dict]("workspace_knowledgebases", self.db_path)
+        self._workspace_audit_log = SQLiteWorkspaceAuditLogTable[dict]("workspace_audit_log", self.db_path)
+        # Chat thread tables
+        self._chat_threads = SQLiteChatThreadsTable[dict]("chat_threads", self.db_path)
+        self._thread_summaries = SQLiteThreadSummariesTable[dict]("thread_summaries", self.db_path)
+        self._chat_messages = SQLiteChatMessagesTable[dict]("chat_messages", self.db_path)
 
     async def initialize(self) -> None:
         """Initialize database schema."""
@@ -990,6 +1732,248 @@ class SQLiteDatabase(BaseDatabase):
             await conn.commit()
             logger.info("Migration complete: initialization_complete column added")
 
+        # Migration: Add excluded_sources column to workspace_knowledgebases table (added 2026-02-25)
+        # Stores JSON array of KnowledgebaseSource IDs to exclude from inheritance
+        # Validates: Requirements 19.5
+        cursor = await conn.execute("PRAGMA table_info(workspace_knowledgebases)")
+        kb_columns = await cursor.fetchall()
+        kb_column_names = [col[1] for col in kb_columns]
+
+        if "excluded_sources" not in kb_column_names:
+            logger.info("Running migration: Adding excluded_sources column to workspace_knowledgebases table")
+            await conn.execute("ALTER TABLE workspace_knowledgebases ADD COLUMN excluded_sources TEXT DEFAULT '[]'")
+            await conn.commit()
+            logger.info("Migration complete: excluded_sources column added")
+
+        # ============================================================================
+        # Workspace Refactor Migrations (Task 1.8)
+        # Validates: Requirements 5.1, 13.2, 13.3, 13.4, 19.2, 19.4
+        # ============================================================================
+
+        # Migration: Add workspace_id, source_todo_id, blocked_reason, priority, description columns to tasks table
+        # Validates: Requirements 5.1, 13.2, 13.3, 13.4
+        # Re-fetch tasks columns in case they were updated earlier in this migration run
+        cursor = await conn.execute("PRAGMA table_info(tasks)")
+        tasks_columns = await cursor.fetchall()
+        tasks_column_names = [col[1] for col in tasks_columns]
+
+        if "workspace_id" not in tasks_column_names:
+            logger.info("Running migration: Adding workspace_id column to tasks table")
+            await conn.execute("ALTER TABLE tasks ADD COLUMN workspace_id TEXT")
+            await conn.commit()
+            logger.info("Migration complete: workspace_id column added to tasks")
+
+        if "source_todo_id" not in tasks_column_names:
+            logger.info("Running migration: Adding source_todo_id column to tasks table")
+            await conn.execute("ALTER TABLE tasks ADD COLUMN source_todo_id TEXT")
+            await conn.commit()
+            logger.info("Migration complete: source_todo_id column added to tasks")
+
+        if "blocked_reason" not in tasks_column_names:
+            logger.info("Running migration: Adding blocked_reason column to tasks table")
+            await conn.execute("ALTER TABLE tasks ADD COLUMN blocked_reason TEXT")
+            await conn.commit()
+            logger.info("Migration complete: blocked_reason column added to tasks")
+
+        if "priority" not in tasks_column_names:
+            logger.info("Running migration: Adding priority column to tasks table")
+            await conn.execute("ALTER TABLE tasks ADD COLUMN priority TEXT DEFAULT 'none'")
+            await conn.commit()
+            logger.info("Migration complete: priority column added to tasks")
+
+        if "description" not in tasks_column_names:
+            logger.info("Running migration: Adding description column to tasks table")
+            await conn.execute("ALTER TABLE tasks ADD COLUMN description TEXT")
+            await conn.commit()
+            logger.info("Migration complete: description column added to tasks")
+
+        # Create index on tasks.workspace_id if it doesn't exist
+        try:
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_workspace_id ON tasks(workspace_id)")
+            await conn.commit()
+        except Exception:
+            pass  # Index may already exist
+
+        # Migration: Add is_privileged column to skills table
+        # Validates: Requirements 19.2
+        cursor = await conn.execute("PRAGMA table_info(skills)")
+        skills_columns = await cursor.fetchall()
+        skills_column_names = [col[1] for col in skills_columns]
+
+        if "is_privileged" not in skills_column_names:
+            logger.info("Running migration: Adding is_privileged column to skills table")
+            await conn.execute("ALTER TABLE skills ADD COLUMN is_privileged INTEGER DEFAULT 0")
+            await conn.commit()
+            logger.info("Migration complete: is_privileged column added to skills")
+
+        # Migration: Add is_privileged column to mcp_servers table
+        # Validates: Requirements 19.4
+        # Re-fetch mcp_servers columns
+        cursor = await conn.execute("PRAGMA table_info(mcp_servers)")
+        mcp_columns = await cursor.fetchall()
+        mcp_column_names = [col[1] for col in mcp_columns]
+
+        if "is_privileged" not in mcp_column_names:
+            logger.info("Running migration: Adding is_privileged column to mcp_servers table")
+            await conn.execute("ALTER TABLE mcp_servers ADD COLUMN is_privileged INTEGER DEFAULT 0")
+            await conn.commit()
+            logger.info("Migration complete: is_privileged column added to mcp_servers")
+
+        # Migration: Add is_archived and archived_at columns to swarm_workspaces table
+        # Validates: Requirements 36.1-36.11
+        cursor = await conn.execute("PRAGMA table_info(swarm_workspaces)")
+        workspace_columns = await cursor.fetchall()
+        workspace_column_names = [col[1] for col in workspace_columns]
+
+        if "is_archived" not in workspace_column_names:
+            logger.info("Running migration: Adding is_archived column to swarm_workspaces table")
+            await conn.execute("ALTER TABLE swarm_workspaces ADD COLUMN is_archived INTEGER DEFAULT 0")
+            await conn.commit()
+            logger.info("Migration complete: is_archived column added to swarm_workspaces")
+
+        if "archived_at" not in workspace_column_names:
+            logger.info("Running migration: Adding archived_at column to swarm_workspaces table")
+            await conn.execute("ALTER TABLE swarm_workspaces ADD COLUMN archived_at TEXT")
+            await conn.commit()
+            logger.info("Migration complete: archived_at column added to swarm_workspaces")
+
+        # Create index on swarm_workspaces.is_archived if it doesn't exist
+        try:
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_swarm_workspaces_is_archived ON swarm_workspaces(is_archived)")
+            await conn.commit()
+        except Exception:
+            pass  # Index may already exist
+
+        # Migration: Add source_type column to mcp_servers table (added 2026-02-22)
+        # Consistent with skills table source tracking
+        # Re-fetch mcp_servers columns in case they were updated earlier
+        cursor = await conn.execute("PRAGMA table_info(mcp_servers)")
+        mcp_columns = await cursor.fetchall()
+        mcp_column_names = [col[1] for col in mcp_columns]
+
+        if "source_type" not in mcp_column_names:
+            logger.info("Running migration: Adding source_type column to mcp_servers table")
+            await conn.execute("ALTER TABLE mcp_servers ADD COLUMN source_type TEXT DEFAULT 'user'")
+            await conn.commit()
+            logger.info("Migration complete: source_type column added to mcp_servers")
+
+        # ============================================================================
+        # Workspace Refactor Data Migration (Task 1.9)
+        # Validates: Requirements 5.4, 13.7, 13.8
+        # ============================================================================
+
+        # Migration: Map existing task statuses and assign workspace_id to existing tasks
+        # Status mapping: pending→draft, running→wip, failed→blocked
+        # Assign SwarmWS.id to tasks with NULL workspace_id
+        await self._migrate_existing_task_data(conn)
+
+    async def _migrate_existing_task_data(self, conn: aiosqlite.Connection) -> None:
+        """Migrate existing task data for workspace refactor.
+        
+        This migration:
+        1. Maps legacy task statuses to new values: pending→draft, running→wip, failed→blocked
+        2. Sets workspace_id to SwarmWS.id for existing tasks with NULL workspace_id
+        
+        Uses transactions for atomicity.
+        Validates: Requirements 5.4, 13.7, 13.8
+        """
+        # Check if migration has already been run by looking for any tasks with new status values
+        # If we find tasks with 'draft', 'wip', or 'blocked' status, migration was already done
+        cursor = await conn.execute(
+            "SELECT COUNT(*) FROM tasks WHERE status IN ('draft', 'wip', 'blocked')"
+        )
+        row = await cursor.fetchone()
+        new_status_count = row[0] if row else 0
+
+        # Also check if there are any tasks with old status values that need migration
+        cursor = await conn.execute(
+            "SELECT COUNT(*) FROM tasks WHERE status IN ('pending', 'running', 'failed')"
+        )
+        row = await cursor.fetchone()
+        old_status_count = row[0] if row else 0
+
+        # Only run status migration if there are old status values to migrate
+        if old_status_count > 0:
+            logger.info(f"Running migration: Mapping {old_status_count} tasks with legacy status values")
+            
+            try:
+                # Map pending → draft
+                cursor = await conn.execute(
+                    "UPDATE tasks SET status = 'draft' WHERE status = 'pending'"
+                )
+                pending_count = cursor.rowcount
+                
+                # Map running → wip
+                cursor = await conn.execute(
+                    "UPDATE tasks SET status = 'wip' WHERE status = 'running'"
+                )
+                running_count = cursor.rowcount
+                
+                # Map failed → blocked (preserve failure context in blocked_reason if not already set)
+                # First, copy error message to blocked_reason for failed tasks that don't have blocked_reason set
+                await conn.execute(
+                    """
+                    UPDATE tasks 
+                    SET blocked_reason = COALESCE(blocked_reason, error, 'Task failed (migrated from legacy status)')
+                    WHERE status = 'failed' AND (blocked_reason IS NULL OR blocked_reason = '')
+                    """
+                )
+                
+                # Then update the status
+                cursor = await conn.execute(
+                    "UPDATE tasks SET status = 'blocked' WHERE status = 'failed'"
+                )
+                failed_count = cursor.rowcount
+                
+                await conn.commit()
+                logger.info(
+                    f"Migration complete: Status mapping done - "
+                    f"pending→draft: {pending_count}, running→wip: {running_count}, failed→blocked: {failed_count}"
+                )
+            except Exception as e:
+                logger.error(f"Migration failed during status mapping: {e}")
+                raise
+        else:
+            logger.debug("Status migration skipped: No tasks with legacy status values found")
+
+        # Migration: Set workspace_id to SwarmWS.id for existing tasks with NULL workspace_id
+        # First, get the SwarmWS workspace ID (the default workspace)
+        cursor = await conn.execute(
+            "SELECT id FROM swarm_workspaces WHERE is_default = 1"
+        )
+        row = await cursor.fetchone()
+        
+        if row:
+            swarm_ws_id = row[0]
+            
+            # Check how many tasks need workspace_id assignment
+            cursor = await conn.execute(
+                "SELECT COUNT(*) FROM tasks WHERE workspace_id IS NULL"
+            )
+            row = await cursor.fetchone()
+            null_workspace_count = row[0] if row else 0
+            
+            if null_workspace_count > 0:
+                logger.info(f"Running migration: Assigning workspace_id to {null_workspace_count} tasks with NULL workspace_id")
+                
+                try:
+                    cursor = await conn.execute(
+                        "UPDATE tasks SET workspace_id = ? WHERE workspace_id IS NULL",
+                        (swarm_ws_id,)
+                    )
+                    updated_count = cursor.rowcount
+                    await conn.commit()
+                    logger.info(f"Migration complete: Assigned workspace_id '{swarm_ws_id}' to {updated_count} tasks")
+                except Exception as e:
+                    logger.error(f"Migration failed during workspace_id assignment: {e}")
+                    raise
+            else:
+                logger.debug("Workspace assignment migration skipped: No tasks with NULL workspace_id found")
+        else:
+            # SwarmWS doesn't exist yet - this is fine, it will be created during initialization
+            # and new tasks will get the workspace_id assigned properly
+            logger.debug("Workspace assignment migration skipped: SwarmWS not found (will be created during initialization)")
+
     @property
     def agents(self) -> SQLiteTable:
         """Get the agents table."""
@@ -1069,6 +2053,71 @@ class SQLiteDatabase(BaseDatabase):
     def swarm_workspaces(self) -> SQLiteSwarmWorkspacesTable:
         """Get the swarm workspaces table."""
         return self._swarm_workspaces
+
+    @property
+    def todos(self) -> SQLiteToDosTable:
+        """Get the todos table."""
+        return self._todos
+
+    @property
+    def plan_items(self) -> SQLitePlanItemsTable:
+        """Get the plan items table."""
+        return self._plan_items
+
+    @property
+    def communications(self) -> SQLiteCommunicationsTable:
+        """Get the communications table."""
+        return self._communications
+
+    @property
+    def artifacts(self) -> SQLiteArtifactsTable:
+        """Get the artifacts table."""
+        return self._artifacts
+
+    @property
+    def artifact_tags(self) -> SQLiteArtifactTagsTable:
+        """Get the artifact tags table."""
+        return self._artifact_tags
+
+    @property
+    def reflections(self) -> SQLiteReflectionsTable:
+        """Get the reflections table."""
+        return self._reflections
+
+    @property
+    def workspace_skills(self) -> SQLiteWorkspaceSkillsTable:
+        """Get the workspace skills table."""
+        return self._workspace_skills
+
+    @property
+    def workspace_mcps(self) -> SQLiteWorkspaceMcpsTable:
+        """Get the workspace MCPs table."""
+        return self._workspace_mcps
+
+    @property
+    def workspace_knowledgebases(self) -> SQLiteWorkspaceKnowledgebasesTable:
+        """Get the workspace knowledgebases table."""
+        return self._workspace_knowledgebases
+
+    @property
+    def workspace_audit_log(self) -> SQLiteWorkspaceAuditLogTable:
+        """Get the workspace audit log table."""
+        return self._workspace_audit_log
+
+    @property
+    def chat_threads(self) -> SQLiteChatThreadsTable:
+        """Get the chat threads table."""
+        return self._chat_threads
+
+    @property
+    def thread_summaries(self) -> SQLiteThreadSummariesTable:
+        """Get the thread summaries table."""
+        return self._thread_summaries
+
+    @property
+    def chat_messages(self) -> SQLiteChatMessagesTable:
+        """Get the chat messages table."""
+        return self._chat_messages
 
     async def health_check(self) -> bool:
         """Check if the database is healthy."""

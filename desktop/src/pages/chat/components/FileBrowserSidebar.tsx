@@ -8,7 +8,8 @@ interface FileBrowserSidebarProps {
   selectedAgentId: string | null;
   basePath?: string;
   onFileSelect: (file: { path: string; name: string } | null) => void;
-  onClose: () => void;
+  /** Optional close handler. If not provided, close button is hidden. */
+  onClose?: () => void;
   onMouseDown: (e: React.MouseEvent) => void;
 }
 
@@ -48,13 +49,15 @@ export function FileBrowserSidebar({
           <span className="material-symbols-outlined text-primary text-lg">folder</span>
           <span className="font-medium text-[var(--color-text)] text-sm">Files</span>
         </div>
-        <button
-          onClick={onClose}
-          className="p-1.5 rounded-lg text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)] transition-colors"
-          aria-label="Close file browser"
-        >
-          <span className="material-symbols-outlined text-lg">close</span>
-        </button>
+        {onClose && (
+          <button
+            onClick={onClose}
+            className="p-1.5 rounded-lg text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)] transition-colors"
+            aria-label="Close file browser"
+          >
+            <span className="material-symbols-outlined text-lg">close</span>
+          </button>
+        )}
       </div>
 
       {/* File Browser Content */}

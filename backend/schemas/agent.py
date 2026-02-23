@@ -52,7 +52,7 @@ class AgentConfig(BaseModel):
     skill_ids: list[str] = Field(default_factory=list)
     allow_all_skills: bool = Field(default=False, description="If True, agent can access all available skills regardless of skill_ids")
     mcp_ids: list[str] = Field(default_factory=list)
-    working_directory: str | None = Field(default=None, description="Working directory for the agent (defaults to settings.agent_workspace_dir)")
+    working_directory: str | None = Field(default=None, description="Working directory for the agent (defaults to cached SwarmWorkspace path)")
     enable_bash_tool: bool = True
     enable_file_tools: bool = True
     enable_web_tools: bool = False

@@ -1,13 +1,15 @@
 {
   "enabled": true,
   "name": "Code Quality Analyzer",
-  "description": "Analyzes modified code for potential improvements including code smells, design patterns, and best practices. Generates suggestions for improving readability, maintainability, and performance while preserving functionality.",
+  "description": "Analyzes modified code for quality issues. Lists all suggestions with severity, then automatically fixes high-priority and medium-priority items while preserving functionality.",
   "version": "1",
   "when": {
     "type": "agentStop"
   },
   "then": {
     "type": "askAgent",
-    "prompt": "Analyze the edited file for code quality improvements. Look for:\n\n1. **Code Smells**: Long methods, duplicate code, dead code, magic numbers, complex conditionals\n2. **Design Patterns**: Opportunities to apply appropriate patterns or anti-patterns to avoid\n3. **Best Practices**: Language-specific conventions, naming, error handling, type safety\n4. **Readability**: Unclear variable names, missing comments for complex logic, inconsistent formatting\n5. **Maintainability**: Tight coupling, missing abstractions, violation of SOLID principles\n6. **Performance**: Inefficient algorithms, unnecessary computations, memory leaks\n\nProvide specific, actionable suggestions with code examples where helpful. Focus on high-impact improvements and explain the reasoning behind each suggestion. Maintain existing functionality - suggest refactors, not feature changes."
-  }
+    "prompt": "IMPORTANT: Skip this analysis entirely if the only edited files are under `.kiro/specs/`, `docs/`, or are documentation markdown files (README.md, AGENT.md, CLAUDE.md, QUICK_START.md, GITHUB_SUBMISSION.md). Only analyze actual source code changes.\n\nAnalyze the edited files for code quality issues. Follow this two-phase process:\n\n**Phase 1 — List all suggestions with severity:**\nScan for issues in these categories and list each with a severity (🔴 High, 🟡 Medium, 🟢 Low):\n1. Code Smells: Long methods, duplicate code, dead code, magic numbers, complex conditionals\n2. Design Patterns: Anti-patterns, missing appropriate patterns\n3. Best Practices: Language conventions, naming, error handling, type safety\n4. Readability: Unclear names, missing comments for complex logic, inconsistent formatting\n5. Maintainability: Tight coupling, missing abstractions, SOLID violations\n6. Performance: Inefficient algorithms, unnecessary computations, memory leaks\n\nPresent the full list as a summary table or bullet list before making any changes.\n\n**Phase 2 — Auto-fix high-priority and medium-priority items only:**\nAutomatically apply fixes ONLY for 🔴 High severity and 🟡 Medium issues. Leave  🟢 Low as suggestions for the developer to decide on. Maintain existing functionality — apply refactors, not feature changes. After fixing, briefly note which high-priority items were fixed and why."
+  },
+  "workspaceFolderName": "swarmai",
+  "shortName": "code-quality-analyzer"
 }

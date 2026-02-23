@@ -57,7 +57,7 @@ export async function downloadAndInstallUpdate(
           percentage: 0,
         });
         break;
-      case 'Progress':
+      case 'Progress': {
         downloaded += event.data.chunkLength;
         const percentage = contentLength
           ? Math.round((downloaded / contentLength) * 100)
@@ -68,6 +68,7 @@ export async function downloadAndInstallUpdate(
           percentage,
         });
         break;
+      }
       case 'Finished':
         onProgress?.({
           downloaded,

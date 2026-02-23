@@ -2,9 +2,10 @@ import { useState, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import clsx from 'clsx';
 import type { FileAttachment, SwarmWorkspace, Skill, MCPServer, Plugin } from '../../../types';
-import { FileAttachmentButton, FileAttachmentPreview, WorkspaceSelector } from '../../../components/chat';
+import { FileAttachmentButton, FileAttachmentPreview, AttachedFileChips } from '../../../components/chat';
 import { ReadOnlyChips } from '../../../components/common';
 import { SLASH_COMMANDS } from '../constants';
+import type { FileTreeItem } from '../../../components/workspace-explorer/FileTree';
 
 interface ChatInputProps {
   inputValue: string;
@@ -16,7 +17,6 @@ interface ChatInputProps {
   onToggleRunAsTask: () => void;
   selectedAgentId: string | null;
   selectedWorkspace: SwarmWorkspace | null;
-  onWorkspaceSelect: (workspace: SwarmWorkspace) => void;
   attachments: FileAttachment[];
   onAddFiles: (files: File[]) => void;
   onRemoveFile: (id: string) => void;
@@ -30,6 +30,10 @@ interface ChatInputProps {
   isLoadingMCPs: boolean;
   isLoadingPlugins: boolean;
   allowAllSkills?: boolean;
+  /** Files attached from Workspace Explorer (context files) */
+  attachedContextFiles?: FileTreeItem[];
+  /** Callback to remove a context file */
+  onRemoveContextFile?: (file: FileTreeItem) => void;
 }
 
 /**
@@ -45,7 +49,6 @@ export function ChatInput({
   onToggleRunAsTask,
   selectedAgentId,
   selectedWorkspace,
-  onWorkspaceSelect,
   attachments,
   onAddFiles,
   onRemoveFile,
@@ -59,6 +62,8 @@ export function ChatInput({
   isLoadingMCPs,
   isLoadingPlugins,
   allowAllSkills,
+  attachedContextFiles,
+  onRemoveContextFile,
 }: ChatInputProps) {
   const { t } = useTranslation();
   const [showCommandSuggestions, setShowCommandSuggestions] = useState(false);
@@ -253,6 +258,11 @@ export function ChatInput({
             </div>
           )}
 
+          {/* Attached Context Files (from Workspace Explorer) */}
+          {attachedContextFiles && attachedContextFiles.length > 0 && onRemoveContextFile && (
+            <AttachedFileChips files={attachedContextFiles} onRemoveFile={onRemoveContextFile} />
+          )}
+
           {/* Workspace Indicator */}
           {selectedWorkspace && (
             <div className="mb-3 px-3 py-2 bg-primary/10 border border-primary/30 rounded-lg flex items-center justify-between">
@@ -270,13 +280,6 @@ export function ChatInput({
           <div className="relative flex items-center gap-3">
             {/* File Attachment Button */}
             <FileAttachmentButton onFilesSelected={onAddFiles} disabled={isProcessingFiles} canAddMore={canAddMore} />
-
-            {/* Workspace Selector */}
-            <WorkspaceSelector
-              selectedWorkspaceId={selectedWorkspace?.id ?? null}
-              onSelect={onWorkspaceSelect}
-              disabled={isStreaming}
-            />
 
             {/* Slash Command Suggestions */}
             {showCommandSuggestions && filteredCommands.length > 0 && (

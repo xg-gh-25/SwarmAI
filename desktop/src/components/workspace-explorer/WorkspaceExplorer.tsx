@@ -1,425 +1,332 @@
 import { useState, useCallback, useEffect } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { useLayout } from '../../contexts/LayoutContext';
 import { swarmWorkspacesService } from '../../services/swarmWorkspaces';
-import FileTree, { type FileTreeItem } from './FileTree';
-import ExplorerToolbar from './ExplorerToolbar';
-import FileContextMenu from './FileContextMenu';
+import { sectionsService } from '../../services/sections';
+import { workspaceConfigService } from '../../services/workspaceConfig';
+import WorkspaceHeader from './WorkspaceHeader';
+import OverviewContextCard, {
+  type ContextData,
+  parseContextMd,
+  serializeContextMd,
+} from './OverviewContextCard';
+import SectionNavigation from './SectionNavigation';
+import WorkspaceFooter from './WorkspaceFooter';
+import ArtifactsFileTree from './ArtifactsFileTree';
 import ResizeHandle from './ResizeHandle';
-import AddWorkspaceDialog from './AddWorkspaceDialog';
-import { Toast } from '../common';
+import type { FileTreeItem } from './FileTreeNode';
+import RecommendedGroup from './RecommendedGroup';
+import { useViewScope } from '../../hooks/useViewScope';
 import type { SwarmWorkspace } from '../../types';
+import type { WorkspaceSection, SectionCounts } from '../../types/section';
 
 /**
- * WorkspaceExplorer component - middle column of the three-column layout
- * 
- * Displays a scope dropdown for filtering workspaces and a file tree
- * for browsing workspace contents.
- * 
- * Requirements:
- * - 3.1: Display scope dropdown showing current Workspace_Scope
- * - 3.2: Offer "All Workspaces" as default option
- * - 3.3: List all available workspaces as selectable options
- * - 3.5: Display files and folders in hierarchical tree structure
- * - 3.6: Expand or collapse folders on click
- * - 3.12: Drag files to chat to attach as context
+ * WorkspaceExplorer component - middle column of the three-column layout.
+ *
+ * Refactored to use section-based navigation following the Daily Work Operating Loop:
+ * Signals → Plan → Execute → Communicate → Artifacts → Reflection
+ *
+ * Requirements: 3.1, 9.1
  */
 
-interface WorkspaceExplorerProps {
-  /** Whether the explorer is collapsed */
+export interface WorkspaceExplorerProps {
   collapsed?: boolean;
-  /** Width of the explorer panel */
   width?: number;
-  /** Callback when collapse state changes */
   onCollapsedChange?: (collapsed: boolean) => void;
-  /** Callback when width changes (from resize handle) */
   onWidthChange?: (width: number) => void;
-  /** Callback when a file is selected */
-  onFileSelect?: (file: FileTreeItem) => void;
-  /** Callback when a file is double-clicked (for editing) */
+  onSectionClick?: (section: WorkspaceSection) => void;
+  onSubCategoryClick?: (section: WorkspaceSection, subCategory: string) => void;
+  onSearch?: (query: string) => void;
   onFileDoubleClick?: (file: FileTreeItem) => void;
-  /** Callback when a file should be attached to chat */
-  onFileAttach?: (file: FileTreeItem) => void;
 }
 
-export default function WorkspaceExplorer({ 
+const EMPTY_COUNTS: SectionCounts = {
+  signals: { total: 0, pending: 0, overdue: 0, inDiscussion: 0 },
+  plan: { total: 0, today: 0, upcoming: 0, blocked: 0 },
+  execute: { total: 0, draft: 0, wip: 0, blocked: 0, completed: 0 },
+  communicate: { total: 0, pendingReply: 0, aiDraft: 0, followUp: 0 },
+  artifacts: { total: 0, plan: 0, report: 0, doc: 0, decision: 0 },
+  reflection: { total: 0, dailyRecap: 0, weeklySummary: 0, lessonsLearned: 0 },
+};
+
+export default function WorkspaceExplorer({
   collapsed: controlledCollapsed,
   width: controlledWidth,
   onCollapsedChange,
   onWidthChange,
-  onFileSelect,
-  onFileDoubleClick,
-  onFileAttach,
+  onSectionClick,
+  onSubCategoryClick,
+  onSearch,
+  onFileDoubleClick: _onFileDoubleClick,
 }: WorkspaceExplorerProps) {
-  const queryClient = useQueryClient();
-  const { 
-    workspaceExplorerCollapsed, 
+  const {
+    workspaceExplorerCollapsed,
     workspaceExplorerWidth,
     setWorkspaceExplorerWidth,
     setWorkspaceExplorerCollapsed,
-    selectedWorkspaceScope,
-    setSelectedWorkspaceScope,
-    validateWorkspaceScope,
     isNarrowViewport,
-    attachFile,
-    attachedFiles,
-    clearAttachedFiles,
+    openModal,
+    setWorkspaceSettingsId,
   } = useLayout();
 
-  // Track selected file/folder for toolbar operations
-  const [selectedItem, setSelectedItem] = useState<FileTreeItem | null>(null);
-  
-  // Toast notification state for scope change - Requirement 6.5
-  const [scopeChangeToast, setScopeChangeToast] = useState<string | null>(null);
-  
-  // Context menu state
-  const [contextMenu, setContextMenu] = useState<{
-    item: FileTreeItem;
-    x: number;
-    y: number;
-  } | null>(null);
-
-  // Add Workspace dialog state - Requirement 10.5
-  const [isAddWorkspaceDialogOpen, setIsAddWorkspaceDialogOpen] = useState(false);
-
-  // Use controlled props if provided, otherwise use context
   const isCollapsed = controlledCollapsed ?? workspaceExplorerCollapsed;
   const explorerWidth = controlledWidth ?? workspaceExplorerWidth;
 
-  // Fetch workspaces from the service
-  const { data: workspaces = [], isLoading } = useQuery<SwarmWorkspace[]>({
-    queryKey: ['swarmWorkspaces'],
-    queryFn: swarmWorkspacesService.list,
+  // Workspace selection state - default to first workspace
+  const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string>('');
+  const [activeSection, setActiveSection] = useState<WorkspaceSection | null>(null);
+  const [isEditingContext, setIsEditingContext] = useState(false);
+  const [showArchived, setShowArchived] = useState(false);
+
+  // Fetch workspaces (include archived when toggle is on)
+  const { data: workspaces = [], isLoading: wsLoading } = useQuery<SwarmWorkspace[]>({
+    queryKey: ['swarmWorkspaces', showArchived],
+    queryFn: () => swarmWorkspacesService.list(showArchived || undefined),
   });
 
-  // Validate workspace scope when workspaces are loaded - Requirement 10.2
-  // This ensures that if a stored workspace ID is invalid, we reset to 'all'
+  // Set default selected workspace when workspaces load
   useEffect(() => {
-    if (!isLoading && workspaces.length > 0) {
-      const workspaceIds = workspaces.map(w => w.id);
-      validateWorkspaceScope(workspaceIds);
+    if (workspaces.length > 0 && !selectedWorkspaceId) {
+      const defaultWs = workspaces.find((w) => w.isDefault);
+      setSelectedWorkspaceId(defaultWs?.id ?? workspaces[0].id);
     }
-  }, [workspaces, isLoading, validateWorkspaceScope]);
+  }, [workspaces, selectedWorkspaceId]);
 
-  // Handle width change from resize handle
-  const handleWidthChange = useCallback((newWidth: number) => {
-    if (onWidthChange) {
-      onWidthChange(newWidth);
-    } else {
-      setWorkspaceExplorerWidth(newWidth);
-    }
-  }, [onWidthChange, setWorkspaceExplorerWidth]);
+  // Get selected workspace object
+  const selectedWorkspace = workspaces.find((w) => w.id === selectedWorkspaceId);
 
-  // Handle collapse toggle
-  const handleCollapseToggle = (newCollapsed: boolean) => {
+  // View scope management via hook (Requirements: 37.1-37.7)
+  const { viewScope, setViewScope, isGlobalView, effectiveWorkspaceId } = useViewScope({
+    isDefaultWorkspace: selectedWorkspace?.isDefault ?? true,
+    selectedWorkspaceId,
+  });
+
+  // Fetch section counts
+  const { data: sectionCounts = EMPTY_COUNTS } = useQuery<SectionCounts>({
+    queryKey: ['sectionCounts', effectiveWorkspaceId],
+    queryFn: () => sectionsService.getCounts(effectiveWorkspaceId),
+    enabled: !!effectiveWorkspaceId,
+  });
+
+  // Fetch workspace context
+  const { data: contextContent = '' } = useQuery<string>({
+    queryKey: ['workspaceContext', selectedWorkspaceId],
+    queryFn: () => workspaceConfigService.getContext(selectedWorkspaceId),
+    enabled: !!selectedWorkspaceId && viewScope === 'scoped',
+  });
+
+  const contextData: ContextData = contextContent
+    ? parseContextMd(contextContent)
+    : {};
+
+  // Handlers
+  const handleWidthChange = useCallback(
+    (newWidth: number) => {
+      if (onWidthChange) {
+        onWidthChange(newWidth);
+      } else {
+        setWorkspaceExplorerWidth(newWidth);
+      }
+    },
+    [onWidthChange, setWorkspaceExplorerWidth]
+  );
+
+  const handleCollapseToggle = useCallback(() => {
+    const newCollapsed = !isCollapsed;
     if (onCollapsedChange) {
       onCollapsedChange(newCollapsed);
     } else {
       setWorkspaceExplorerCollapsed(newCollapsed);
     }
-  };
+  }, [isCollapsed, onCollapsedChange, setWorkspaceExplorerCollapsed]);
 
-  // Handle scope selection change - Requirement 6.5
-  const handleScopeChange = (event: React.ChangeEvent<HTMLSelectElement>) => {
-    const newScope = event.target.value;
-    const previousScope = selectedWorkspaceScope;
-    
-    // Only process if scope actually changed
-    if (newScope === previousScope) {
+  const handleWorkspaceChange = useCallback((wsId: string) => {
+    setSelectedWorkspaceId(wsId);
+    setActiveSection(null);
+  }, []);
+
+  const handleSectionClick = useCallback(
+    (section: WorkspaceSection) => {
+      setActiveSection(section);
+      onSectionClick?.(section);
+    },
+    [onSectionClick]
+  );
+
+  const handleContextSave = useCallback(
+    async (data: ContextData) => {
+      if (!selectedWorkspaceId) return;
+      try {
+        const md = serializeContextMd(data);
+        await workspaceConfigService.updateContext(selectedWorkspaceId, md);
+      } catch (err) {
+        console.error('Failed to save context:', err);
+      }
+    },
+    [selectedWorkspaceId]
+  );
+
+  const handleNewWorkspace = useCallback(() => {
+    openModal('workspaces');
+  }, [openModal]);
+
+  const handleSettings = useCallback(() => {
+    if (selectedWorkspaceId) {
+      setWorkspaceSettingsId(selectedWorkspaceId);
+    }
+    openModal('workspace-settings');
+  }, [openModal, selectedWorkspaceId, setWorkspaceSettingsId]);
+
+  const handleArchive = useCallback(async () => {
+    if (!selectedWorkspaceId) return;
+    try {
+      await swarmWorkspacesService.archive(selectedWorkspaceId);
+    } catch (err) {
+      console.error('Failed to archive workspace:', err);
+    }
+  }, [selectedWorkspaceId]);
+
+  const handleUnarchive = useCallback(async () => {
+    if (!selectedWorkspaceId) return;
+    try {
+      await swarmWorkspacesService.unarchive(selectedWorkspaceId);
+    } catch (err) {
+      console.error('Failed to unarchive workspace:', err);
+    }
+  }, [selectedWorkspaceId]);
+
+  const handleDelete = useCallback(async () => {
+    if (!selectedWorkspaceId) return;
+    if (!window.confirm('Are you sure you want to delete this workspace? This cannot be undone.')) {
       return;
     }
-    
-    // Clear attached files when scope changes - Requirement 6.5
-    const hadAttachedFiles = attachedFiles.length > 0;
-    if (hadAttachedFiles) {
-      clearAttachedFiles();
-      // Show notification that context was cleared
-      setScopeChangeToast('Chat context cleared for new workspace scope');
+    try {
+      await swarmWorkspacesService.delete(selectedWorkspaceId);
+      // Reset to first workspace
+      const remaining = workspaces.filter((w) => w.id !== selectedWorkspaceId);
+      if (remaining.length > 0) {
+        setSelectedWorkspaceId(remaining[0].id);
+      }
+    } catch (err) {
+      console.error('Failed to delete workspace:', err);
     }
-    
-    // Update the scope
-    setSelectedWorkspaceScope(newScope);
-    // Clear selection when scope changes
-    setSelectedItem(null);
-  };
+  }, [selectedWorkspaceId, workspaces]);
 
-  // Handle file selection - track for toolbar operations
-  const handleFileSelect = useCallback((item: FileTreeItem) => {
-    setSelectedItem(item);
-    onFileSelect?.(item);
-  }, [onFileSelect]);
-
-  // Handle file system changes (refresh file tree)
-  const handleFileSystemChange = useCallback(() => {
-    // Invalidate workspace queries to refresh file tree
-    queryClient.invalidateQueries({ queryKey: ['swarmWorkspaces'] });
-  }, [queryClient]);
-
-  // Handle context menu open
-  const handleContextMenu = useCallback((event: React.MouseEvent, item: FileTreeItem) => {
-    event.preventDefault();
-    setContextMenu({
-      item,
-      x: event.clientX,
-      y: event.clientY,
-    });
-  }, []);
-
-  // Handle context menu close
-  const handleContextMenuClose = useCallback(() => {
-    setContextMenu(null);
-  }, []);
-
-  // Handle attach to chat from context menu - Requirements 3.12, 6.1, 6.2
-  const handleAttachToChat = useCallback((item: FileTreeItem) => {
-    // Use context's attachFile function for centralized state management
-    attachFile(item);
-    // Also call the prop callback if provided
-    onFileAttach?.(item);
-  }, [attachFile, onFileAttach]);
-
-  // Handle rename from context menu (placeholder - will be implemented in future task)
-  const handleRename = useCallback((item: FileTreeItem) => {
-    // TODO: Implement rename dialog in a future task
-    console.log('Rename requested for:', item.name);
-  }, []);
-
-  // Handle opening Add Workspace dialog - Requirement 10.5
-  const handleOpenAddWorkspaceDialog = useCallback(() => {
-    setIsAddWorkspaceDialogOpen(true);
-  }, []);
-
-  // Handle workspace added - refresh the workspace list
-  const handleWorkspaceAdded = useCallback(() => {
-    queryClient.invalidateQueries({ queryKey: ['swarmWorkspaces'] });
-  }, [queryClient]);
-
-  // Get the selected directory path for toolbar operations
-  const getSelectedDirectoryPath = (): string | null => {
-    if (!selectedItem) {
-      // If no item selected, use the workspace root when a specific workspace is selected
-      if (selectedWorkspaceScope !== 'all') {
-        const workspace = workspaces.find(w => w.id === selectedWorkspaceScope);
-        return workspace?.filePath ?? null;
+  // Render extra content for artifacts section (file tree)
+  const renderSectionExtra = useCallback(
+    (section: WorkspaceSection) => {
+      if (section === 'artifacts') {
+        return (
+          <ArtifactsFileTree
+            workspacePath={selectedWorkspace?.filePath}
+          />
+        );
       }
       return null;
-    }
-    // If a directory is selected, use it; otherwise use its parent
-    if (selectedItem.type === 'directory') {
-      return selectedItem.path;
-    }
-    // Get parent directory from file path
-    const lastSlash = selectedItem.path.lastIndexOf('/');
-    return lastSlash > 0 ? selectedItem.path.substring(0, lastSlash) : null;
-  };
+    },
+    [selectedWorkspace?.filePath]
+  );
 
-  // Get the workspace ID for the selected item
-  const getSelectedWorkspaceId = (): string | null => {
-    if (selectedItem) {
-      return selectedItem.workspaceId;
-    }
-    if (selectedWorkspaceScope !== 'all') {
-      return selectedWorkspaceScope;
-    }
-    return null;
-  };
-
-  // Collapsed state - show expand button
-  // Requirements: 1.6, 11.2 - Collapsible explorer with visible toggle button when collapsed
+  // Collapsed state
   if (isCollapsed) {
     return (
-      <>
-        <div 
-          className="flex-shrink-0 bg-[var(--color-bg)] border-r border-[var(--color-border)] transition-all duration-200 ease-in-out"
-          style={{ width: 24 }}
-          data-testid="workspace-explorer-collapsed"
+      <div
+        className="flex-shrink-0 bg-[var(--color-bg)] border-r border-[var(--color-border)] transition-all duration-200 ease-in-out"
+        style={{ width: 24 }}
+        data-testid="workspace-explorer-collapsed"
+      >
+        <button
+          onClick={handleCollapseToggle}
+          className={`w-6 h-full flex items-center justify-center transition-all duration-200 ease-in-out ${
+            isNarrowViewport
+              ? 'text-[var(--color-text-muted)] cursor-not-allowed opacity-50'
+              : 'text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)]'
+          }`}
+          title={isNarrowViewport ? 'Expand disabled (window too narrow)' : 'Expand workspace explorer'}
+          disabled={isNarrowViewport}
+          aria-label="Expand workspace explorer"
+          aria-expanded="false"
+          data-testid="expand-button"
         >
-          <button
-            onClick={() => handleCollapseToggle(false)}
-            className={`w-6 h-full flex items-center justify-center transition-all duration-200 ease-in-out ${
-              isNarrowViewport 
-                ? 'text-[var(--color-text-muted)] cursor-not-allowed opacity-50' 
-                : 'text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)]'
-            }`}
-            title={isNarrowViewport ? "Expand disabled (window too narrow)" : "Expand workspace explorer"}
-            disabled={isNarrowViewport}
-            aria-label="Expand workspace explorer"
-            aria-expanded="false"
-            data-testid="expand-button"
-          >
-            <span className="material-symbols-outlined text-sm transition-transform duration-200 ease-in-out">chevron_right</span>
-          </button>
-        </div>
-        {/* Scope Change Toast Notification - Requirement 6.5 */}
-        {scopeChangeToast && (
-          <Toast
-            message={scopeChangeToast}
-            type="info"
-            duration={3000}
-            onDismiss={() => setScopeChangeToast(null)}
-          />
-        )}
-      </>
+          <span className="material-symbols-outlined text-sm">chevron_right</span>
+        </button>
+      </div>
     );
   }
 
   // Expanded state
-  // Requirements: 1.6, 1.7, 11.2, 11.5 - Resizable and collapsible explorer with smooth transitions
   return (
     <div
       className="relative flex-shrink-0 bg-[var(--color-bg)] border-r border-[var(--color-border)] flex flex-col transition-all duration-200 ease-in-out"
-      style={{ 
-        width: explorerWidth,
-        minWidth: 200,
-        maxWidth: 500
-      }}
+      style={{ width: explorerWidth, minWidth: 200, maxWidth: 500 }}
       data-testid="workspace-explorer"
     >
-      {/* Resize Handle - Requirements 1.7, 11.5 */}
-      <ResizeHandle
-        currentWidth={explorerWidth}
-        onWidthChange={handleWidthChange}
-      />
-      {/* Header with collapse button - Requirements 1.6, 11.2 */}
-      <div className="h-10 flex items-center justify-between px-3 border-b border-[var(--color-border)]">
-        <span className="text-sm font-medium text-[var(--color-text)]">Explorer</span>
-        <button
-          onClick={() => handleCollapseToggle(true)}
-          className="p-1 rounded text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)] transition-all duration-200 ease-in-out"
-          title="Collapse workspace explorer"
-          aria-label="Collapse workspace explorer"
-          aria-expanded="true"
-          data-testid="collapse-button"
-        >
-          <span className="material-symbols-outlined text-sm transition-transform duration-200 ease-in-out">chevron_left</span>
-        </button>
-      </div>
+      <ResizeHandle currentWidth={explorerWidth} onWidthChange={handleWidthChange} />
 
-      {/* Scope Dropdown - Requirements 3.1, 3.2, 3.3 */}
-      <div className="px-3 py-2 border-b border-[var(--color-border)]">
-        <ScopeDropdown
-          selectedScope={selectedWorkspaceScope}
-          workspaces={workspaces}
-          isLoading={isLoading}
-          onChange={handleScopeChange}
-        />
-      </div>
-
-      {/* Toolbar - Requirements 3.7, 3.8, 3.9, 3.10 */}
-      <ExplorerToolbar
-        selectedPath={getSelectedDirectoryPath()}
-        selectedWorkspaceId={getSelectedWorkspaceId()}
-        disabled={isLoading}
-        onFileSystemChange={handleFileSystemChange}
-      />
-
-      {/* File tree - Requirements 3.5, 3.6, 10.5 */}
-      <FileTree
+      {/* Header: workspace selector, scope toggle, search */}
+      <WorkspaceHeader
         workspaces={workspaces}
-        selectedScope={selectedWorkspaceScope}
-        onFileSelect={handleFileSelect}
-        onFileDoubleClick={onFileDoubleClick}
-        onDragStart={(event, item) => {
-          // Set drag data for file attachment
-          event.dataTransfer.setData('application/json', JSON.stringify(item));
-          event.dataTransfer.effectAllowed = 'copy';
-        }}
-        onContextMenu={handleContextMenu}
-        isLoading={isLoading}
-        onAddWorkspace={handleOpenAddWorkspaceDialog}
+        selectedWorkspaceId={selectedWorkspaceId}
+        viewScope={viewScope}
+        isLoading={wsLoading}
+        showArchived={showArchived}
+        onWorkspaceChange={handleWorkspaceChange}
+        onViewScopeChange={setViewScope}
+        onShowArchivedChange={setShowArchived}
+        onSearch={onSearch}
+        onCollapseToggle={handleCollapseToggle}
       />
 
-      {/* Context Menu - Requirements 3.11, 6.1 */}
-      {contextMenu && (
-        <FileContextMenu
-          item={contextMenu.item}
-          x={contextMenu.x}
-          y={contextMenu.y}
-          onClose={handleContextMenuClose}
-          onAttachToChat={handleAttachToChat}
-          onRename={handleRename}
-          onFileSystemChange={handleFileSystemChange}
-        />
-      )}
-
-      {/* Scope Change Toast Notification - Requirement 6.5 */}
-      {scopeChangeToast && (
-        <Toast
-          message={scopeChangeToast}
-          type="info"
-          duration={3000}
-          onDismiss={() => setScopeChangeToast(null)}
-        />
-      )}
-
-      {/* Add Workspace Dialog - Requirement 10.5 */}
-      <AddWorkspaceDialog
-        isOpen={isAddWorkspaceDialogOpen}
-        onClose={() => setIsAddWorkspaceDialogOpen(false)}
-        onWorkspaceAdded={handleWorkspaceAdded}
-      />
-    </div>
-  );
-}
-
-/**
- * ScopeDropdown component - dropdown for selecting workspace scope
- * 
- * Requirements:
- * - 3.1: Display current Workspace_Scope
- * - 3.2: "All Workspaces" as default option
- * - 3.3: List all available workspaces
- */
-interface ScopeDropdownProps {
-  selectedScope: string;
-  workspaces: SwarmWorkspace[];
-  isLoading: boolean;
-  onChange: (event: React.ChangeEvent<HTMLSelectElement>) => void;
-}
-
-function ScopeDropdown({ selectedScope, workspaces, isLoading, onChange }: ScopeDropdownProps) {
-  return (
-    <div className="relative">
-      <select
-        value={selectedScope}
-        onChange={onChange}
-        disabled={isLoading}
-        className="w-full px-3 py-1.5 pr-8 text-sm rounded border border-[var(--color-border)] bg-[var(--color-bg-secondary)] text-[var(--color-text)] appearance-none cursor-pointer hover:border-[var(--color-primary)] focus:outline-none focus:ring-1 focus:ring-[var(--color-primary)] focus:border-[var(--color-primary)] disabled:opacity-50 disabled:cursor-not-allowed"
-        data-testid="scope-dropdown"
-        aria-label="Select workspace scope"
-      >
-        {/* Default "All Workspaces" option - Requirement 3.2 */}
-        <option value="all">All Workspaces</option>
-        
-        {/* Separator */}
-        {workspaces.length > 0 && (
-          <option disabled>──────────</option>
-        )}
-        
-        {/* Individual workspace options - Requirement 3.3 */}
-        {workspaces.map((workspace) => (
-          <option key={workspace.id} value={workspace.id}>
-            {workspace.isDefault ? `🔒 ${workspace.name}` : workspace.name}
-          </option>
-        ))}
-      </select>
-      
-      {/* Custom dropdown arrow */}
-      <div className="absolute inset-y-0 right-0 flex items-center pr-2 pointer-events-none">
-        <span className="material-symbols-outlined text-sm text-[var(--color-text-muted)]">
-          expand_more
-        </span>
-      </div>
-      
-      {/* Loading indicator */}
-      {isLoading && (
-        <div className="absolute inset-y-0 right-6 flex items-center">
-          <div className="w-3 h-3 border-2 border-[var(--color-primary)] border-t-transparent rounded-full animate-spin" />
+      {/* Read-only banner for archived workspaces (Requirement 36.6) */}
+      {selectedWorkspace?.isArchived && (
+        <div
+          className="mx-3 mt-2 px-3 py-2 rounded text-xs bg-[var(--color-bg-secondary)] border border-[var(--color-border)] text-[var(--color-text-muted)] flex items-center gap-2"
+          data-testid="archive-readonly-banner"
+          role="status"
+        >
+          <span>📦</span>
+          <span>This workspace is archived (read-only). Unarchive to make changes.</span>
         </div>
       )}
+
+      {/* Overview Context Card (only in scoped view) */}
+      {viewScope === 'scoped' && selectedWorkspaceId && (
+        <OverviewContextCard
+          contextData={contextData}
+          isEditing={isEditingContext}
+          onEditToggle={() => setIsEditingContext(!isEditingContext)}
+          onSave={handleContextSave}
+        />
+      )}
+
+      {/* Recommended group - only in SwarmWS Global View (opinionated cockpit) */}
+      {isGlobalView && selectedWorkspace?.isDefault && (
+        <RecommendedGroup
+          counts={sectionCounts}
+          onItemClick={(section) => handleSectionClick(section as WorkspaceSection)}
+        />
+      )}
+
+      {/* Section Navigation */}
+      <SectionNavigation
+        counts={sectionCounts}
+        activeSection={activeSection}
+        effectiveWorkspaceId={effectiveWorkspaceId}
+        onSectionClick={handleSectionClick}
+        onSubCategoryClick={onSubCategoryClick}
+        renderSectionExtra={renderSectionExtra}
+      />
+
+      {/* Footer */}
+      <WorkspaceFooter
+        isDefaultWorkspace={selectedWorkspace?.isDefault ?? true}
+        isArchived={selectedWorkspace?.isArchived ?? false}
+        onNewWorkspace={handleNewWorkspace}
+        onSettings={handleSettings}
+        onArchive={handleArchive}
+        onUnarchive={handleUnarchive}
+        onDelete={handleDelete}
+      />
     </div>
   );
 }
-
-// Export sub-components for testing
-export { ScopeDropdown };

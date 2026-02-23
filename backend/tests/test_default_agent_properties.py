@@ -142,15 +142,34 @@ class TestDefaultAgentUpdatePreservation:
 
         **Validates: Requirements 2.2**
         """
+        import asyncio
+        from database import db
+
+        # First check if the default agent is a system agent
+        get_response = client.get("/api/agents/default")
+        assert get_response.status_code == 200
+        is_system = get_response.json().get("is_system_agent", False)
+
+        # For system agents, we must include all system MCPs in the update
+        if is_system:
+            async def get_system_mcp_ids():
+                system_mcps = await db.mcp_servers.list_by_system()
+                return [m["id"] for m in system_mcps]
+            system_mcp_ids = asyncio.get_event_loop().run_until_complete(get_system_mcp_ids())
+            # Merge system MCPs with generated ones (dedup)
+            effective_mcp_ids = list(set(system_mcp_ids + mcp_ids))
+        else:
+            effective_mcp_ids = mcp_ids
+
         response = client.put(
             "/api/agents/default",
-            json={"mcp_ids": mcp_ids}
+            json={"mcp_ids": effective_mcp_ids}
         )
         assert response.status_code == 200
         data = response.json()
 
         # Verify update was applied
-        assert data["mcp_ids"] == mcp_ids
+        assert set(data["mcp_ids"]) == set(effective_mcp_ids)
         # Verify is_default remains true
         assert data["is_default"] is True
         assert data["id"] == "default"
@@ -177,8 +196,12 @@ class TestDefaultAgentUpdatePreservation:
         This tests the combined case where multiple editable properties
         are updated in a single request.
         
-        Note: For system agents, name updates are excluded from the payload.
+        Note: For system agents, name updates are excluded from the payload
+        and system MCPs must be preserved in mcp_ids.
         """
+        import asyncio
+        from database import db
+
         # Skip empty names after strip
         assume(name.strip())
 
@@ -188,11 +211,21 @@ class TestDefaultAgentUpdatePreservation:
         agent_data = get_response.json()
         is_system = agent_data.get("is_system_agent", False)
 
+        # For system agents, ensure system MCPs are included
+        if is_system:
+            async def get_system_mcp_ids():
+                system_mcps = await db.mcp_servers.list_by_system()
+                return [m["id"] for m in system_mcps]
+            system_mcp_ids = asyncio.get_event_loop().run_until_complete(get_system_mcp_ids())
+            effective_mcp_ids = list(set(system_mcp_ids + mcp_ids))
+        else:
+            effective_mcp_ids = mcp_ids
+
         # Build update payload - exclude name for system agents
         update_payload = {
             "description": description,
             "system_prompt": system_prompt,
-            "mcp_ids": mcp_ids,
+            "mcp_ids": effective_mcp_ids,
         }
         
         if not is_system:
@@ -210,7 +243,7 @@ class TestDefaultAgentUpdatePreservation:
             assert data["name"] == name
         assert data["description"] == description
         assert data["system_prompt"] == system_prompt
-        assert data["mcp_ids"] == mcp_ids
+        assert set(data["mcp_ids"]) == set(effective_mcp_ids)
 
         # Verify is_default remains true (the core property)
         assert data["is_default"] is True

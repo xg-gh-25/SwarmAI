@@ -128,7 +128,8 @@ export default function ExplorerToolbar({
     if (!name.trim()) {
       return 'Name cannot be empty';
     }
-    // Check for invalid characters
+    // Check for invalid characters (including control characters)
+    // eslint-disable-next-line no-control-regex
     const invalidChars = /[<>:"/\\|?*\x00-\x1f]/;
     if (invalidChars.test(name)) {
       return 'Name contains invalid characters';

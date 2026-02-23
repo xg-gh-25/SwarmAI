@@ -3,7 +3,7 @@ import logging
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 
 from core.exceptions import ForbiddenException, NotFoundException
 from core.swarm_workspace_manager import swarm_workspace_manager
@@ -42,9 +42,18 @@ class SwarmWorkspaceForbiddenException(ForbiddenException):
 
 
 @router.get("", response_model=list[SwarmWorkspaceResponse])
-async def list_workspaces():
-    """List all swarm workspaces."""
-    workspaces = await db.swarm_workspaces.list()
+async def list_workspaces(
+    include_archived: bool = Query(False, description="Include archived workspaces in the list"),
+):
+    """List swarm workspaces, filtering out archived by default.
+
+    By default only non-archived workspaces are returned, sorted with
+    SwarmWS (is_default) first.  Pass ``include_archived=true`` to see
+    archived workspaces as well.
+
+    Validates: Requirements 36.3, 36.4
+    """
+    workspaces = await swarm_workspace_manager.list_all(db, include_archived=include_archived)
     return [_expand_workspace_path(w) for w in workspaces]
 
 
@@ -154,6 +163,14 @@ async def update_workspace(workspace_id: str, request: SwarmWorkspaceUpdate):
             suggested_action="Please check the workspace ID and try again"
         )
 
+    # Block writes on archived workspaces
+    if existing_workspace.get("is_archived"):
+        raise SwarmWorkspaceForbiddenException(
+            code="WORKSPACE_ARCHIVED",
+            detail="Cannot modify an archived workspace",
+            suggested_action="Unarchive the workspace first to make changes"
+        )
+
     # Build update data with only provided fields
     update_data = {}
     if request.name is not None:
@@ -218,6 +235,68 @@ async def delete_workspace(workspace_id: str):
 
     # Return 204 No Content (FastAPI handles this automatically with status_code=204)
     return None
+
+@router.post("/{workspace_id}/archive", response_model=SwarmWorkspaceResponse)
+async def archive_workspace(workspace_id: str):
+    """Archive a workspace, making it read-only and hidden from default lists.
+
+    SwarmWS (the default workspace) cannot be archived.
+
+    Args:
+        workspace_id: The ID of the workspace to archive
+
+    Returns:
+        The updated workspace
+
+    Raises:
+        SwarmWorkspaceNotFoundException: If workspace doesn't exist
+        SwarmWorkspaceForbiddenException: If workspace is the default (SwarmWS)
+
+    Validates: Requirements 36.1, 36.2
+    """
+    try:
+        updated = await swarm_workspace_manager.archive(workspace_id, db)
+    except ValueError:
+        raise SwarmWorkspaceNotFoundException(
+            detail=f"Workspace with ID '{workspace_id}' does not exist",
+            suggested_action="Please check the workspace ID and try again"
+        )
+    except PermissionError:
+        raise SwarmWorkspaceForbiddenException(
+            detail="Cannot archive the default workspace (SwarmWS)",
+            suggested_action="The default workspace is always active and cannot be archived"
+        )
+
+    logger.info(f"Archived workspace '{workspace_id}'")
+    return _expand_workspace_path(updated)
+
+
+@router.post("/{workspace_id}/unarchive", response_model=SwarmWorkspaceResponse)
+async def unarchive_workspace(workspace_id: str):
+    """Unarchive a workspace, restoring full functionality.
+
+    Args:
+        workspace_id: The ID of the workspace to unarchive
+
+    Returns:
+        The updated workspace
+
+    Raises:
+        SwarmWorkspaceNotFoundException: If workspace doesn't exist
+
+    Validates: Requirements 36.10
+    """
+    try:
+        updated = await swarm_workspace_manager.unarchive(workspace_id, db)
+    except ValueError:
+        raise SwarmWorkspaceNotFoundException(
+            detail=f"Workspace with ID '{workspace_id}' does not exist",
+            suggested_action="Please check the workspace ID and try again"
+        )
+
+    logger.info(f"Unarchived workspace '{workspace_id}'")
+    return _expand_workspace_path(updated)
+
 
 @router.post("/{workspace_id}/init-folders", status_code=200)
 async def init_workspace_folders(workspace_id: str):

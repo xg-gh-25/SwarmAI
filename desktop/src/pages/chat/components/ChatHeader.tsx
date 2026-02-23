@@ -2,6 +2,7 @@ import { useTranslation } from 'react-i18next';
 import clsx from 'clsx';
 import type { OpenTab } from '../types';
 import { SessionTabBar } from './SessionTabBar';
+import type { RightSidebarId } from '../constants';
 
 interface ChatHeaderProps {
   // Tab management
@@ -11,11 +12,9 @@ interface ChatHeaderProps {
   onTabClose: (tabId: string) => void;
   onNewSession: () => void;
 
-  // Sidebar toggles
-  chatSidebarCollapsed: boolean;
-  todoRadarCollapsed: boolean;
-  onToggleChatSidebar: () => void;
-  onToggleTodoRadar: () => void;
+  // Sidebar controls (mutual exclusion - only one sidebar visible at a time)
+  activeSidebar: RightSidebarId;
+  onOpenSidebar: (id: RightSidebarId) => void;
 }
 
 /**
@@ -35,10 +34,8 @@ export function ChatHeader({
   onTabSelect,
   onTabClose,
   onNewSession,
-  chatSidebarCollapsed,
-  todoRadarCollapsed,
-  onToggleChatSidebar,
-  onToggleTodoRadar,
+  activeSidebar,
+  onOpenSidebar,
 }: ChatHeaderProps) {
   const { t } = useTranslation();
 
@@ -64,36 +61,52 @@ export function ChatHeader({
           <span className="material-symbols-outlined">add</span>
         </button>
 
-        {/* ToDo Radar Toggle (checklist) - Validates: Requirements 4.2, 4.4 */}
+        {/* ToDo Radar Toggle (checklist) - Validates: Requirements 5.1, 5.4 */}
         <button
-          onClick={onToggleTodoRadar}
+          onClick={() => onOpenSidebar('todoRadar')}
           className={clsx(
             'p-2 rounded-lg transition-colors',
-            !todoRadarCollapsed
+            activeSidebar === 'todoRadar'
               ? 'text-primary bg-primary/10 hover:bg-primary/20'
               : 'text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)]'
           )}
           title={t('chat.todoRadar', 'ToDo Radar')}
           aria-label={t('chat.todoRadar', 'ToDo Radar')}
-          aria-pressed={!todoRadarCollapsed}
+          aria-pressed={activeSidebar === 'todoRadar'}
         >
           <span className="material-symbols-outlined">checklist</span>
         </button>
 
-        {/* Chat History Toggle (history) - Validates: Requirements 4.3, 4.4 */}
+        {/* Chat History Toggle (history) - Validates: Requirements 5.2, 5.4 */}
         <button
-          onClick={onToggleChatSidebar}
+          onClick={() => onOpenSidebar('chatHistory')}
           className={clsx(
             'p-2 rounded-lg transition-colors',
-            !chatSidebarCollapsed
+            activeSidebar === 'chatHistory'
               ? 'text-primary bg-primary/10 hover:bg-primary/20'
               : 'text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)]'
           )}
           title={t('chat.history', 'Chat History')}
           aria-label={t('chat.history', 'Chat History')}
-          aria-pressed={!chatSidebarCollapsed}
+          aria-pressed={activeSidebar === 'chatHistory'}
         >
           <span className="material-symbols-outlined">history</span>
+        </button>
+
+        {/* FileBrowser Toggle (folder) - Validates: Requirements 1.3, 2.1, 5.3 */}
+        <button
+          onClick={() => onOpenSidebar('fileBrowser')}
+          className={clsx(
+            'p-2 rounded-lg transition-colors',
+            activeSidebar === 'fileBrowser'
+              ? 'text-primary bg-primary/10 hover:bg-primary/20'
+              : 'text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)]'
+          )}
+          title={t('chat.fileBrowser', 'File Browser')}
+          aria-label={t('chat.fileBrowser', 'File Browser')}
+          aria-pressed={activeSidebar === 'fileBrowser'}
+        >
+          <span className="material-symbols-outlined">folder</span>
         </button>
       </div>
     </div>
