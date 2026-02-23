@@ -1,6 +1,6 @@
 export { ChatHeader } from './ChatHeader';
 export { ChatInput } from './ChatInput';
-export { ChatSidebar } from './ChatSidebar';
+export { ChatHistorySidebar } from './ChatHistorySidebar';
 export { ContentBlockRenderer } from './ContentBlockRenderer';
 export { FileBrowserSidebar } from './FileBrowserSidebar';
 export { MessageBubble } from './MessageBubble';

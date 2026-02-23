@@ -219,7 +219,7 @@ describe('FileEditorModal - Property-Based Tests', () => {
     it('should allow saving unchanged content (no-op save)', () => {
       fc.assert(
         fc.property(fileContentArb, (content) => {
-          let state = createInitialState(content);
+          const state = createInitialState(content);
           
           // Save without editing
           const { state: savedState, savedContent } = saveContent(state);
@@ -272,7 +272,7 @@ describe('FileEditorModal - Property-Based Tests', () => {
     it('should allow cancelling without changes', () => {
       fc.assert(
         fc.property(fileContentArb, (content) => {
-          let state = createInitialState(content);
+          const state = createInitialState(content);
           
           // Cancel without editing
           const cancelledState = cancelEdit(state);

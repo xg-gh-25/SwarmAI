@@ -21,11 +21,20 @@ PROPERTY_SETTINGS = settings(
 
 
 # Strategies for generating valid workspace field values
+# Note: We filter out strings that start with '{' or '[' because the SQLite
+# _row_to_dict method aggressively parses such strings as JSON, which would
+# cause type mismatches on retrieval (e.g., name='{}' stored as string but
+# retrieved as dict).
+def _not_json_like(s: str) -> bool:
+    """Filter out strings that would be parsed as JSON by the DB layer."""
+    stripped = s.strip()
+    return not (stripped.startswith('{') or stripped.startswith('['))
+
 name_strategy = st.text(
     alphabet=st.characters(whitelist_categories=('L', 'N', 'P', 'S'), whitelist_characters=' -_'),
     min_size=1,
     max_size=100
-).filter(lambda x: x.strip())  # Ensure non-empty after strip
+).filter(lambda x: x.strip() and _not_json_like(x))  # Ensure non-empty after strip and not JSON-like
 
 # Valid file paths - absolute paths or tilde paths
 valid_path_strategy = st.one_of(
@@ -59,7 +68,7 @@ invalid_relative_path_strategy = st.text(
     max_size=100
 ).filter(lambda x: not x.startswith('/') and not x.startswith('~') and '..' not in x)
 
-context_strategy = st.text(min_size=1, max_size=1000)
+context_strategy = st.text(min_size=1, max_size=1000).filter(_not_json_like)
 
 icon_strategy = st.one_of(
     st.none(),

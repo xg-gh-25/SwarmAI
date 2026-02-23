@@ -7,6 +7,7 @@ interface SidebarConfig {
   defaultWidth: number;
   minWidth: number;
   maxWidth: number;
+  position?: 'left' | 'right'; // Defaults to 'left' for backward compatibility
 }
 
 interface SidebarState {
@@ -52,7 +53,7 @@ export function useSidebarState(config: SidebarConfig): SidebarState {
     if (!isResizing) return;
 
     const handleMouseMove = (e: MouseEvent) => {
-      const newWidth = storageKey.includes('right')
+      const newWidth = config.position === 'right'
         ? window.innerWidth - e.clientX
         : e.clientX;
 
@@ -76,7 +77,7 @@ export function useSidebarState(config: SidebarConfig): SidebarState {
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
     };
-  }, [isResizing, minWidth, maxWidth, storageKey]);
+  }, [isResizing, minWidth, maxWidth, config.position]);
 
   const setCollapsed = useCallback((value: boolean) => {
     setCollapsedState(value);

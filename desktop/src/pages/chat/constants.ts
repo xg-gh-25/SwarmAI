@@ -16,6 +16,45 @@ export const MAX_SIDEBAR_WIDTH = 600;
 export const MIN_RIGHT_SIDEBAR_WIDTH = 240;
 export const MAX_RIGHT_SIDEBAR_WIDTH = 600;
 
+// ToDo Radar sidebar constants
+export const DEFAULT_TODO_RADAR_WIDTH = 300;
+export const MIN_TODO_RADAR_WIDTH = 200;
+export const MAX_TODO_RADAR_WIDTH = 500;
+
+// Right sidebar group types and constants
+export const RIGHT_SIDEBAR_IDS = ['todoRadar', 'chatHistory', 'fileBrowser'] as const;
+export type RightSidebarId = typeof RIGHT_SIDEBAR_IDS[number];
+
+export const DEFAULT_ACTIVE_SIDEBAR: RightSidebarId = 'todoRadar';
+
+export interface SidebarWidthConfig {
+  defaultWidth: number;
+  minWidth: number;
+  maxWidth: number;
+  storageKey: string;
+}
+
+export const RIGHT_SIDEBAR_WIDTH_CONFIGS: Record<RightSidebarId, SidebarWidthConfig> = {
+  todoRadar: {
+    defaultWidth: DEFAULT_TODO_RADAR_WIDTH,
+    minWidth: MIN_TODO_RADAR_WIDTH,
+    maxWidth: MAX_TODO_RADAR_WIDTH,
+    storageKey: 'todoRadarSidebarWidth',
+  },
+  chatHistory: {
+    defaultWidth: DEFAULT_SIDEBAR_WIDTH,
+    minWidth: MIN_SIDEBAR_WIDTH,
+    maxWidth: MAX_SIDEBAR_WIDTH,
+    storageKey: 'chatSidebarWidth',
+  },
+  fileBrowser: {
+    defaultWidth: DEFAULT_RIGHT_SIDEBAR_WIDTH,
+    minWidth: MIN_RIGHT_SIDEBAR_WIDTH,
+    maxWidth: MAX_RIGHT_SIDEBAR_WIDTH,
+    storageKey: 'rightSidebarWidth',
+  },
+};
+
 // Slash commands configuration
 export const SLASH_COMMANDS = [
   { name: '/clear', description: 'Clear conversation context' },

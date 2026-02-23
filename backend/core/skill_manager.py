@@ -6,8 +6,6 @@ import logging
 from pathlib import Path
 from dataclasses import dataclass, field
 
-from config import settings
-
 logger = logging.getLogger(__name__)
 
 
@@ -41,7 +39,15 @@ class SkillManager:
     """
 
     def __init__(self):
-        self.local_dir = Path(settings.agent_workspace_dir) / ".claude" / "skills"
+        self._local_dir = None
+
+    @property
+    def local_dir(self) -> Path:
+        """Return the skills directory from the cached workspace path."""
+        if self._local_dir is None:
+            from core.initialization_manager import initialization_manager
+            self._local_dir = Path(initialization_manager.get_cached_workspace_path()) / ".claude" / "skills"
+        return self._local_dir
 
     def _ensure_local_dir(self):
         """Ensure local skills directory exists."""
@@ -130,8 +136,10 @@ class SkillManager:
         self._ensure_local_dir()
         dest_dir = self.local_dir / skill_name
 
-        # Remove existing directory if exists
-        if dest_dir.exists():
+        # Remove existing symlink (from setup_workspace_skills) or directory
+        if dest_dir.is_symlink():
+            dest_dir.unlink()
+        elif dest_dir.exists():
             shutil.rmtree(dest_dir)
 
         # Extract ZIP

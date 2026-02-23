@@ -48,7 +48,6 @@ const toSessionCamelCase = (data: Record<string, unknown>): ChatSession => {
     createdAt: data.created_at as string,
     lastAccessedAt: data.last_accessed_at as string,
     workDir: data.work_dir as string | undefined,
-    workspaceId: data.workspace_id as string | undefined,
   };
 };
 
@@ -91,15 +90,7 @@ export const chatService = {
       requestBody.message = request.message;
     }
 
-    // Add optional add_dirs if provided
-    if (request.addDirs && request.addDirs.length > 0) {
-      requestBody.add_dirs = request.addDirs;
-    }
-
-    // Add workspace context if provided (Requirement 5.3)
-    if (request.workspaceId) {
-      requestBody.workspace_id = request.workspaceId;
-    }
+    // Add workspace context if provided
     if (request.workspaceContext) {
       requestBody.workspace_context = request.workspaceContext;
     }

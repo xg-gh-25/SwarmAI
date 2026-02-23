@@ -81,17 +81,19 @@ The design prioritizes:
 App
 ├── ThemeProvider
 ├── QueryClientProvider
-├── LayoutProvider (NEW)
-│   └── ThreeColumnLayout (NEW - replaces Layout)
+├── LayoutProvider
+│   └── ThreeColumnLayout
 │       ├── TopBar
-│       ├── LeftSidebar (MODIFIED)
-│       │   ├── BrandLogo
+│       ├── LeftSidebar
+│       │   ├── SwarmAILogo
+│       │   ├── NavIconButton (Workspaces)
+│       │   ├── NavIconButton (SwarmCore)
+│       │   ├── NavIconButton (Agents)
 │       │   ├── NavIconButton (Skills)
 │       │   ├── NavIconButton (MCP Servers)
-│       │   ├── NavIconButton (Agents)
 │       │   ├── NavIconButton (Settings)
 │       │   └── GitHubLink
-│       ├── WorkspaceExplorer (NEW)
+│       ├── WorkspaceExplorer
 │       │   ├── ScopeDropdown
 │       │   ├── ExplorerToolbar
 │       │   │   ├── NewFileButton
@@ -100,20 +102,26 @@ App
 │       │   ├── FileTree
 │       │   │   └── FileTreeNode (recursive)
 │       │   └── ResizeHandle
-│       └── MainChatPanel (MODIFIED from ChatPage)
-│           ├── ChatContextBar (NEW)
-│           │   ├── WorkspaceScopeBadge
-│           │   └── AttachedFilesList
+│       └── MainChatPanel (ChatPage)
+│           ├── ChatHeader
+│           │   ├── SessionTabBar
+│           │   └── Header Actions (New Session, ToDo Radar, Chat History)
 │           ├── ChatMessages
-│           └── ChatInput
+│           ├── ChatInput
+│           └── Right Sidebars (order: TodoRadar → ChatHistory → FileBrowser)
+│               ├── TodoRadarSidebar (conditional)
+│               ├── ChatHistorySidebar (conditional)
+│               └── FileBrowserSidebar (conditional)
 ├── ModalOverlays
+│   ├── WorkspacesModal
+│   ├── SwarmCoreModal
 │   ├── SkillsModal
 │   ├── MCPServersModal
 │   ├── AgentsModal
 │   ├── SettingsModal
-│   └── FileEditorModal (NEW)
+│   └── FileEditorModal
 └── ConfirmDialogs
-    └── SwarmWorkspaceWarningDialog (NEW)
+    └── SwarmWorkspaceWarningDialog
 ```
 
 ### Key Component Interfaces
@@ -216,17 +224,17 @@ interface SwarmWorkspaceWarningProps {
 │ ○ ○ ○                        SwarmAI                                         │
 ├────┬─────────────────────────┬───────────────────────────────────────────────┤
 │    │ ▼ All Workspaces        │ 📁 All Workspaces │ 📎 main.py, utils.ts      │
-│ 🧠 │ ─────────────────────── │───────────────────────────────────────────────│
+│ 📁 │ ─────────────────────── │───────────────────────────────────────────────│
 │    │ [+📄] [+📁] [⬆️ Upload]  │                                               │
-│ 🔌 │ ─────────────────────── │  🤖 SwarmAI                                   │
+│ 🔲 │ ─────────────────────── │  🤖 SwarmAI                                   │
 │    │ 📁 Swarm Workspace 🔒   │  Hello! I'm SwarmAI — Your AI Team, 24/7!!!   │
 │ 🤖 │   └── 📄 config.json    │                                               │
 │    │ 📁 my-project           │  ─────────────────────────────────────────    │
-│ ⚙️ │   ├── 📁 src            │                                               │
+│ ✨ │   ├── 📁 src            │                                               │
 │    │   │   ├── 📄 main.py    │  👤 You                                       │
-│    │   │   └── 📄 utils.ts   │  Can you help me refactor the main.py file?  │
+│ 🔌 │   │   └── 📄 utils.ts   │  Can you help me refactor the main.py file?  │
 │    │   └── 📄 README.md      │                                               │
-│    │ 📁 another-project      │  ─────────────────────────────────────────    │
+│ ⚙️ │ 📁 another-project      │  ─────────────────────────────────────────    │
 │    │   └── 📄 index.js       │                                               │
 │ 🔗 │                         │  🤖 SwarmAI                                   │
 │    │                         │  I'll analyze main.py and suggest...          │
@@ -237,6 +245,8 @@ interface SwarmWorkspaceWarningProps {
 │    │                         │ └───────────────────────────────────────────┘ │
 └────┴─────────────────────────┴───────────────────────────────────────────────┘
  56px        280px (resizable)              Remaining space (flex-1)
+
+Legend: 📁=Workspaces, 🔲=SwarmCore, 🤖=Agents, ✨=Skills, 🔌=MCP, ⚙️=Settings, 🔗=GitHub
 ```
 
 #### Workspace Explorer Collapsed
@@ -246,17 +256,17 @@ interface SwarmWorkspaceWarningProps {
 │ ○ ○ ○                        SwarmAI                                         │
 ├────┬──┬──────────────────────────────────────────────────────────────────────┤
 │    │  │ 📁 All Workspaces │ 📎 main.py, utils.ts                             │
-│ 🧠 │◀ │──────────────────────────────────────────────────────────────────────│
+│ 📁 │◀ │──────────────────────────────────────────────────────────────────────│
 │    │  │                                                                      │
-│ 🔌 │  │  🤖 SwarmAI                                                          │
+│ 🔲 │  │  🤖 SwarmAI                                                          │
 │    │  │  Hello! I'm SwarmAI — Your AI Team, 24/7!!!                          │
 │ 🤖 │  │                                                                      │
 │    │  │  ─────────────────────────────────────────────────────────────────   │
-│ ⚙️ │  │                                                                      │
+│ ✨ │  │                                                                      │
 │    │  │  👤 You                                                              │
-│    │  │  Can you help me refactor the main.py file?                          │
+│ 🔌 │  │  Can you help me refactor the main.py file?                          │
 │    │  │                                                                      │
-│    │  │  ─────────────────────────────────────────────────────────────────   │
+│ ⚙️ │  │  ─────────────────────────────────────────────────────────────────   │
 │ 🔗 │  │                                                                      │
 │    │  │  🤖 SwarmAI                                                          │
 │    │  │  I'll analyze main.py and suggest improvements...                    │
@@ -327,18 +337,18 @@ interface SwarmWorkspaceWarningProps {
 │ ○ ○ ○        SwarmAI               │
 ├────┬───────────────────────────────┤
 │    │ 📁 All Workspaces │ 📎 2 files│
-│ 🧠 │───────────────────────────────│
+│ 📁 │───────────────────────────────│
 │    │                               │
-│ 🔌 │  🤖 SwarmAI                   │
+│ 🔲 │  🤖 SwarmAI                   │
 │    │  Hello! I'm SwarmAI...        │
 │ 🤖 │                               │
 │    │  ───────────────────────────  │
-│ ⚙️ │                               │
+│ ✨ │                               │
 │    │  👤 You                       │
-│    │  Help me with main.py         │
+│ 🔌 │  Help me with main.py         │
 │    │                               │
-│ 🔗 │  ───────────────────────────  │
-│    │                               │
+│ ⚙️ │  ───────────────────────────  │
+│ 🔗 │                               │
 │    │ ┌───────────────────────────┐ │
 │    │ │ Type a message...    [📎] │ │
 │    │ └───────────────────────────┘ │

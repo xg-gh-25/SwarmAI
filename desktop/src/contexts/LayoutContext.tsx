@@ -2,7 +2,7 @@ import { createContext, useContext, useEffect, useState, useCallback, ReactNode 
 import type { FileTreeItem } from '../components/workspace-explorer/FileTreeNode';
 
 // Modal types that can be opened from the left sidebar
-export type ModalType = 'workspaces' | 'swarmcore' | 'skills' | 'mcp' | 'agents' | 'settings' | 'file-editor';
+export type ModalType = 'workspaces' | 'swarmcore' | 'skills' | 'mcp' | 'agents' | 'settings' | 'file-editor' | 'workspace-settings';
 
 // Workspace scope - 'all' for all workspaces or a specific workspace ID
 export type WorkspaceScope = 'all' | string;
@@ -33,6 +33,10 @@ export interface LayoutContextValue {
   activeModal: ModalType | null;
   openModal: (modal: ModalType) => void;
   closeModal: () => void;
+  
+  // Workspace settings modal - workspace ID for WorkspaceSettingsModal
+  workspaceSettingsId: string;
+  setWorkspaceSettingsId: (id: string) => void;
   
   // Responsive state
   isNarrowViewport: boolean;
@@ -108,6 +112,9 @@ export function LayoutProvider({ children }: LayoutProviderProps) {
 
   // Active modal state (not persisted)
   const [activeModal, setActiveModal] = useState<ModalType | null>(null);
+
+  // Workspace settings modal target ID
+  const [workspaceSettingsId, setWorkspaceSettingsId] = useState<string>('');
 
   // Attached files for chat context - Requirements 3.12, 6.2
   const [attachedFiles, setAttachedFiles] = useState<FileTreeItem[]>([]);
@@ -232,6 +239,8 @@ export function LayoutProvider({ children }: LayoutProviderProps) {
     activeModal,
     openModal,
     closeModal,
+    workspaceSettingsId,
+    setWorkspaceSettingsId,
     isNarrowViewport,
   };
 

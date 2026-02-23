@@ -30,7 +30,7 @@ export function WorkspaceSelector({
   // Fetch all workspaces
   const { data: workspaces = [], isLoading } = useQuery({
     queryKey: ['swarmWorkspaces'],
-    queryFn: swarmWorkspacesService.list,
+    queryFn: () => swarmWorkspacesService.list(),
   });
 
   // Close dropdown when clicking outside

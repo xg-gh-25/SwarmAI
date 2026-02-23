@@ -68,6 +68,7 @@ export default defineConfig(function () { return __awaiter(void 0, void 0, void 
                     globals: true,
                     environment: 'jsdom',
                     include: ['src/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts,jsx,tsx}'],
+                    setupFiles: ['./src/test-setup.ts'],
                 },
             })];
     });

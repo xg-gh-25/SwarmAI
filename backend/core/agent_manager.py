@@ -1,4 +1,26 @@
-"""Agent lifecycle management using Claude Agent SDK."""
+"""Agent execution engine: session management, response streaming, and SDK orchestration.
+
+This module contains the ``AgentManager`` class — the core execution engine that
+drives agent conversations via the Claude Agent SDK. After refactoring, it delegates
+to five focused modules for specific concerns:
+
+- ``security_hooks.py``      — 4-layer defense hook factories and dangerous command detection
+- ``permission_manager.py``  — PermissionManager singleton for command approval / HITL decisions
+- ``agent_defaults.py``      — Default agent bootstrap, skill/MCP registration
+- ``claude_environment.py``  — Claude SDK environment configuration and client wrapper
+- ``content_accumulator.py`` — O(1) content block deduplication (pure utility)
+
+All public symbols from those modules are re-exported here for backward compatibility,
+so existing callers require zero import changes.
+
+Key responsibilities retained in this module:
+- ``_build_options``          — Orchestrates 6 helpers to assemble ``ClaudeAgentOptions``
+- ``_execute_on_session``     — Shared session setup / query / streaming (used by
+                                ``run_conversation`` and ``continue_with_answer``)
+- ``_run_query_on_client``    — Message processing loop with SSE event dispatch
+- ``_format_message``         — Converts SDK messages to frontend-friendly dicts
+- Session caching with 12-hour TTL and background cleanup
+"""
 from typing import AsyncIterator, Optional, Any
 from uuid import uuid4
 from datetime import datetime
@@ -12,6 +34,7 @@ import asyncio
 import platform
 import sys
 import time
+import traceback
 
 from claude_agent_sdk import (
     ClaudeSDKClient,
@@ -27,899 +50,85 @@ from claude_agent_sdk import (
 
 from database import db
 from config import settings, get_bedrock_model_id, get_app_data_dir
-from utils.bundle_paths import get_resources_dir
 from .session_manager import session_manager
 from .system_prompt import SystemPromptBuilder
-from .workspace_manager import workspace_manager
+from .agent_sandbox_manager import agent_sandbox_manager
+from .context_manager import ContextManager
+from .initialization_manager import initialization_manager
 
 logger = logging.getLogger(__name__)
 
-# Default agent ID constant
-DEFAULT_AGENT_ID = "default"
+# Agent defaults extracted to agent_defaults.py — re-exported for backward compatibility
+from .agent_defaults import (  # noqa: F401
+    DEFAULT_AGENT_ID,
+    SWARM_AGENT_NAME,
+    ensure_default_agent,
+    get_default_agent,
+    expand_skill_ids_with_plugins,
+)
 
-# SwarmAgent name constant - hardcoded, cannot be changed by users
-SWARM_AGENT_NAME = "SwarmAgent"
 
+# Claude environment extracted to claude_environment.py — re-exported for backward compatibility
+from .claude_environment import _ClaudeClientWrapper, _configure_claude_environment, AuthenticationNotConfiguredError  # noqa: F401
 
-def _get_resources_dir() -> Path:
-    """Get the resources directory path.
-    
-    See utils.bundle_paths for Tauri bundle structure documentation.
-    """
-    backend_dir = Path(__file__).resolve().parent.parent
-    project_root = backend_dir.parent
-    dev_resources = project_root / "desktop" / "resources"
-    return get_resources_dir(dev_resources)
 
+# PermissionManager extracted to permission_manager.py — re-exported for backward compatibility
+from .permission_manager import permission_manager as _pm
 
-def _get_templates_dir() -> Path:
-    """Get the templates directory path."""
-    return Path(__file__).resolve().parent.parent / "templates"
+approve_command = _pm.approve_command
+is_command_approved = _pm.is_command_approved
+set_permission_decision = _pm.set_permission_decision
+wait_for_permission_decision = _pm.wait_for_permission_decision
+_permission_request_queue = _pm.get_permission_queue()
 
+# Keep clear_session_approvals and hash_command accessible
+clear_session_approvals = _pm.clear_session_approvals
+_hash_command = _pm.hash_command
 
-async def get_default_agent() -> dict | None:
-    """Get the default agent from the database.
-    
-    Returns:
-        The default agent dict or None if not found
-    """
-    agent = await db.agents.get(DEFAULT_AGENT_ID)
-    return agent
 
+# ContentBlockAccumulator extracted to content_accumulator.py — re-exported for backward compatibility
+from .content_accumulator import ContentBlockAccumulator  # noqa: F401
 
-async def ensure_default_agent(skip_registration: bool = False) -> dict:
-    """Ensure the default agent exists, creating it if necessary.
-    
-    Called during application startup. Loads configuration from
-    desktop/resources/default-agent.json and creates the agent
-    with associated skills and MCP servers.
-    
-    Args:
-        skip_registration: If True, skip skill/MCP registration (used during
-            quick validation when we know resources already exist).
-    
-    Returns:
-        The default agent configuration dict
-    """
-    resources_dir = _get_resources_dir()
-    
-    if not skip_registration:
-        # Register default skills (only during full initialization)
-        skills_dir = resources_dir / "default-skills"
-        if skills_dir.exists():
-            skill_ids = await _register_default_skills(skills_dir)
-            if skill_ids:
-                logger.info(f"Ensured {len(skill_ids)} default skills are registered")
-        else:
-            logger.warning(f"Default skills directory not found: {skills_dir}")
-        
-        # Register default MCP servers (only during full initialization)
-        mcp_config_path = resources_dir / "default-mcp-servers.json"
-        if mcp_config_path.exists():
-            mcp_ids = await _register_default_mcp_servers(mcp_config_path)
-            if mcp_ids:
-                logger.info(f"Ensured {len(mcp_ids)} default MCP servers are registered")
-        else:
-            logger.warning(f"Default MCP servers config not found: {mcp_config_path}")
-    
-    # Query ALL system resources from database (not just the ones we registered above)
-    # This ensures that if a new system skill/MCP is added to the resources folder,
-    # it gets bound on restart without requiring code changes
-    all_system_skills = await db.skills.list_by_system()
-    all_system_mcps = await db.mcp_servers.list_by_system()
-    
-    # Extract IDs from system resources
-    skill_ids = [skill["id"] for skill in all_system_skills]
-    mcp_ids = [mcp["id"] for mcp in all_system_mcps]
-    
-    logger.info(f"Found {len(skill_ids)} system skills and {len(mcp_ids)} system MCPs to bind to SwarmAgent")
-    
-    # Check if default agent already exists
-    existing = await db.agents.get(DEFAULT_AGENT_ID)
-    if existing:
-        # Update existing agent with any new default skills/MCPs
-        existing_skill_ids = set(existing.get("skill_ids", []))
-        existing_mcp_ids = set(existing.get("mcp_ids", []))
-        new_skill_ids = set(skill_ids)
-        new_mcp_ids = set(mcp_ids)
-        
-        # Merge new defaults into existing (preserve user additions)
-        updated_skill_ids = list(existing_skill_ids | new_skill_ids)
-        updated_mcp_ids = list(existing_mcp_ids | new_mcp_ids)
-        
-        # Check if we need to update skills/MCPs or system agent properties
-        needs_update = (
-            set(updated_skill_ids) != existing_skill_ids or
-            set(updated_mcp_ids) != existing_mcp_ids or
-            existing.get("name") != SWARM_AGENT_NAME or
-            not existing.get("is_system_agent")
-        )
-        
-        if needs_update:
-            await db.agents.update(DEFAULT_AGENT_ID, {
-                "skill_ids": updated_skill_ids,
-                "mcp_ids": updated_mcp_ids,
-                "name": SWARM_AGENT_NAME,  # Ensure hardcoded name
-                "is_system_agent": True,  # Ensure system agent flag
-            })
-            logger.info(f"Updated default agent with new skills/MCPs: skills={len(updated_skill_ids)}, mcps={len(updated_mcp_ids)}")
-            # Refresh the existing agent data
-            existing = await db.agents.get(DEFAULT_AGENT_ID)
-        else:
-            logger.info(f"Default agent already exists: {existing.get('name')}")
-        
-        return existing
-    
-    logger.info("Creating default agent...")
-    templates_dir = _get_templates_dir()
-    
-    # Load default agent configuration
-    config_path = resources_dir / "default-agent.json"
-    if not config_path.exists():
-        logger.error(f"Default agent config not found: {config_path}")
-        raise FileNotFoundError(f"Default agent configuration missing: {config_path}")
-    
-    with open(config_path, "r", encoding="utf-8") as f:
-        agent_config = json.load(f)
-    
-    # Load system prompt from SWARMAI.md template
-    template_path = templates_dir / "SWARMAI.md"
-    system_prompt = ""
-    if template_path.exists():
-        content = template_path.read_text(encoding="utf-8")
-        # Skip YAML frontmatter if present
-        if content.startswith("---"):
-            parts = content.split("---", 2)
-            if len(parts) >= 3:
-                system_prompt = parts[2].strip()
-            else:
-                system_prompt = content
-        else:
-            system_prompt = content
-        logger.info("Loaded SWARMAI.md system prompt template")
-    else:
-        logger.warning(f"SWARMAI.md template not found: {template_path}")
-    
-    # Create the default agent (skill_ids and mcp_ids already collected above)
-    now = datetime.now().isoformat()
-    agent_data = {
-        "id": DEFAULT_AGENT_ID,
-        "name": SWARM_AGENT_NAME,  # Hardcoded system agent name
-        "description": agent_config.get("description", "Your AI assistant"),
-        "model": agent_config.get("model", settings.default_model),
-        "permission_mode": agent_config.get("permission_mode", "default"),
-        "max_turns": agent_config.get("max_turns", 100),
-        "system_prompt": system_prompt,
-        "is_default": True,
-        "is_system_agent": True,  # Mark as protected system agent
-        "skill_ids": skill_ids,
-        "allow_all_skills": agent_config.get("allow_all_skills", True),
-        "mcp_ids": mcp_ids,
-        "enable_bash_tool": agent_config.get("enable_bash_tool", True),
-        "enable_file_tools": agent_config.get("enable_file_tools", True),
-        "enable_web_tools": agent_config.get("enable_web_tools", True),
-        "global_user_mode": agent_config.get("global_user_mode", True),
-        "enable_human_approval": agent_config.get("enable_human_approval", True),
-        "sandbox_enabled": agent_config.get("sandbox_enabled", True),
-        "status": "active",
-        "created_at": now,
-        "updated_at": now,
-    }
-    
-    # Save to database
-    await db.agents.put(agent_data)
-    logger.info(f"Default agent created: {agent_data['name']}")
-    
-    return agent_data
 
 
-async def _register_default_skills(skills_dir: Path) -> list[str]:
-    """Register default skills from the skills directory.
-    
-    Args:
-        skills_dir: Path to directory containing SKILL.md files
-        
-    Returns:
-        List of registered skill IDs
-    """
-    skill_ids = []
-    
-    for skill_file in skills_dir.glob("*.md"):
-        try:
-            content = skill_file.read_text(encoding="utf-8")
-            
-            # Parse YAML frontmatter
-            metadata = {}
-            if content.startswith("---"):
-                parts = content.split("---", 2)
-                if len(parts) >= 3:
-                    import yaml
-                    metadata = yaml.safe_load(parts[1]) or {}
-            
-            skill_name = metadata.get("name", skill_file.stem)
-            skill_id = f"default-{skill_name.lower().replace(' ', '-')}"
-            
-            # Check if skill already exists
-            existing = await db.skills.get(skill_id)
-            if existing:
-                # Update existing record to ensure is_system=True (Requirement 7.4)
-                if not existing.get("is_system"):
-                    await db.skills.update(skill_id, {"is_system": True})
-                    logger.debug(f"Updated existing skill with is_system=True: {skill_id}")
-                skill_ids.append(skill_id)
-                continue
-            
-            # Create skill record
-            now = datetime.now().isoformat()
-            skill_data = {
-                "id": skill_id,
-                "name": skill_name,
-                "description": metadata.get("description", ""),
-                "folder_name": skill_file.stem.lower(),
-                "local_path": str(skill_file),
-                "source_type": "system",
-                "version": metadata.get("version", "1.0.0"),
-                "is_system": True,
-                "created_at": now,
-                "updated_at": now,
-            }
-            
-            await db.skills.put(skill_data)
-            skill_ids.append(skill_id)
-            logger.debug(f"Registered default skill: {skill_name}")
-            
-        except Exception as e:
-            logger.error(f"Failed to register skill {skill_file}: {e}")
-    
-    return skill_ids
 
+# Security hooks extracted to security_hooks.py — re-exported for backward compatibility
+from .security_hooks import (  # noqa: F401
+    DANGEROUS_PATTERNS,
+    check_dangerous_command,
+    pre_tool_logger,
+    dangerous_command_blocker,
+    create_human_approval_hook,
+    create_file_access_permission_handler,
+    create_skill_access_checker,
+)
 
-async def _register_default_mcp_servers(config_path: Path) -> list[str]:
-    """Register default MCP servers from configuration file.
-    
-    Args:
-        config_path: Path to default-mcp-servers.json
-        
-    Returns:
-        List of registered MCP server IDs
-    """
-    mcp_ids = []
-    
-    try:
-        with open(config_path, "r", encoding="utf-8") as f:
-            mcp_configs = json.load(f)
-        
-        for mcp_config in mcp_configs:
-            mcp_id = mcp_config.get("id", f"default-{mcp_config.get('name', 'mcp').lower()}")
-            
-            # Check if MCP server already exists
-            existing = await db.mcp_servers.get(mcp_id)
-            if existing:
-                # Update existing record to ensure is_system=True (Requirement 7.4)
-                if not existing.get("is_system"):
-                    await db.mcp_servers.update(mcp_id, {"is_system": True})
-                    logger.debug(f"Updated existing MCP server with is_system=True: {mcp_id}")
-                mcp_ids.append(mcp_id)
-                continue
-            
-            # Create MCP server record
-            now = datetime.now().isoformat()
-            mcp_data = {
-                "id": mcp_id,
-                "name": mcp_config.get("name", "MCP Server"),
-                "description": mcp_config.get("description", ""),
-                "connection_type": mcp_config.get("connection_type", "stdio"),
-                "config": mcp_config.get("config", {}),
-                "source_type": "system",
-                "is_system": True,
-                "is_active": True,
-                "created_at": now,
-                "updated_at": now,
-            }
-            
-            await db.mcp_servers.put(mcp_data)
-            mcp_ids.append(mcp_id)
-            logger.debug(f"Registered default MCP server: {mcp_data['name']}")
-            
-    except Exception as e:
-        logger.error(f"Failed to register MCP servers: {e}")
-    
-    return mcp_ids
+# Auth error patterns used by _run_query_on_client to classify SDK error messages.
+_AUTH_PATTERNS = ["not logged in", "please run /login", "invalid api key", "authentication"]
 
 
-async def expand_skill_ids_with_plugins(
-    skill_ids: list[str],
-    plugin_ids: list[str],
-    allow_all_skills: bool = False,
-) -> list[str]:
-    """Combine explicit skill_ids with skills from selected plugins.
+# System prompt template for the Skill Creator Agent.
+# Used by run_skill_creator_conversation; extracted from inline f-string for clarity.
+SKILL_CREATOR_SYSTEM_PROMPT_TEMPLATE = """\
+You are a Skill Creator Agent specialized in creating Claude Code skills.
 
-    Returns a deduplicated list preserving order: explicit skills first,
-    then plugin skills. Skips expansion when allow_all_skills is True.
-    """
-    if allow_all_skills or not plugin_ids:
-        return list(skill_ids)
+Your task is to help users create high-quality skills that extend Claude's capabilities.
 
-    seen = set(skill_ids)
-    effective = list(skill_ids)
-    for plugin_id in plugin_ids:
-        plugin_skills = await db.skills.list_by_source_plugin(plugin_id)
-        for skill in plugin_skills:
-            sid = skill.get("id")
-            if sid and sid not in seen:
-                seen.add(sid)
-                effective.append(sid)
-    return effective
+IMPORTANT GUIDELINES:
+1. Always use the skill-creator skill (invoke /skill-creator) to get guidance on skill creation best practices
+2. Follow the skill creation workflow from the skill-creator skill
+3. Create skills in the `.claude/skills/` directory
+4. Ensure SKILL.md has proper YAML frontmatter with name and description
+5. Keep skills concise and focused - only include what Claude needs
+6. Test any scripts you create before completing
 
+The skill-creator skill provides comprehensive guidance on:
+- Skill anatomy and structure
+- Progressive disclosure design
+- When to use scripts, references, and assets
+- Best practices for SKILL.md content
 
-class _ClaudeClientWrapper:
-    """Wrapper to handle anyio cleanup errors when ClaudeSDKClient is used with asyncio tasks.
-
-    When receive_response() is called from a different asyncio task than the one that
-    created the client, anyio's cancel scope can get confused during cleanup.
-    This wrapper suppresses that specific error.
-    """
-
-    def __init__(self, options):
-        self.options = options
-        self.client: ClaudeSDKClient | None = None
-
-    async def __aenter__(self) -> ClaudeSDKClient:
-        self.client = ClaudeSDKClient(options=self.options)
-        return await self.client.__aenter__()  # type: ignore[union-attr]
-
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        if self.client is None:
-            return False
-        try:
-            return await self.client.__aexit__(exc_type, exc_val, exc_tb)
-        except RuntimeError as e:
-            if "cancel scope" in str(e).lower():
-                logger.warning(f"Suppressed anyio cleanup error (expected when using asyncio tasks): {e}")
-                return False  # Don't suppress the original exception if any
-            raise
-
-
-# Module-level storage for approved commands per session
-# Key: session_id, Value: set of command hashes that have been approved
-_approved_commands: dict[str, set[str]] = {}
-
-# Storage for pending permission decisions
-_permission_events: dict[str, asyncio.Event] = {}
-_permission_results: dict[str, str] = {}
-
-# Module-level queue for permission requests (to be picked up by SSE stream)
-_permission_request_queue: asyncio.Queue = asyncio.Queue()
-
-
-def _hash_command(command: str) -> str:
-    """Create a hash of the command for approval tracking."""
-    return hashlib.sha256(command.encode()).hexdigest()[:16]
-
-
-def approve_command(session_id: str, command: str):
-    """Mark a command as approved for a session."""
-    if session_id not in _approved_commands:
-        _approved_commands[session_id] = set()
-    command_hash = _hash_command(command)
-    _approved_commands[session_id].add(command_hash)
-    logger.info(f"Command approved for session {session_id}: {command[:50]}... (hash: {command_hash})")
-
-
-def is_command_approved(session_id: str, command: str) -> bool:
-    """Check if a command was previously approved for a session."""
-    if session_id not in _approved_commands:
-        return False
-    command_hash = _hash_command(command)
-    return command_hash in _approved_commands[session_id]
-
-
-def clear_session_approvals(session_id: str):
-    """Clear all approved commands for a session."""
-    _approved_commands.pop(session_id, None)
-
-
-class ContentBlockAccumulator:
-    """Accumulates content blocks with O(1) deduplication.
-
-    Used to prevent duplicate content when SDK sends cumulative messages.
-    Uses a set for O(1) duplicate detection instead of O(n) list scanning.
-    """
-
-    def __init__(self):
-        self._blocks: list[dict] = []
-        self._seen_keys: set[str] = set()
-
-    @staticmethod
-    def _get_key(block: dict) -> str | None:
-        """Generate unique key for a content block.
-
-        Returns None for unknown types or blocks with missing IDs,
-        which causes them to always be added (no deduplication).
-        """
-        block_type = block.get('type')
-        if block_type == 'text':
-            # Use hash for text content to handle large strings efficiently
-            # Note: hash() collisions are theoretically possible but extremely rare
-            # for the SDK cumulative message deduplication use case
-            text = block.get('text', '')
-            return f"text:{hash(text)}"
-        elif block_type == 'tool_use':
-            block_id = block.get('id')
-            return f"tool_use:{block_id}" if block_id else None
-        elif block_type == 'tool_result':
-            tool_use_id = block.get('tool_use_id')
-            return f"tool_result:{tool_use_id}" if tool_use_id else None
-        return None
-
-    def add(self, block: dict) -> bool:
-        """Add block if not duplicate. Returns True if added."""
-        key = self._get_key(block)
-        if key is None:
-            # Unknown type - always add
-            self._blocks.append(block)
-            return True
-        if key in self._seen_keys:
-            return False
-        self._seen_keys.add(key)
-        self._blocks.append(block)
-        return True
-
-    def extend(self, blocks: list[dict]) -> None:
-        """Add multiple blocks with deduplication."""
-        for block in blocks:
-            self.add(block)
-
-    @property
-    def blocks(self) -> list[dict]:
-        """Get the accumulated blocks as a list."""
-        return self._blocks
-
-    def __bool__(self) -> bool:
-        return bool(self._blocks)
-
-
-async def wait_for_permission_decision(request_id: str, timeout: int = 300) -> str:
-    """Wait for user permission decision.
-
-    Args:
-        request_id: The permission request ID
-        timeout: Timeout in seconds (default 5 minutes)
-
-    Returns:
-        'approve' or 'deny'
-    """
-    event = asyncio.Event()
-    _permission_events[request_id] = event
-
-    try:
-        await asyncio.wait_for(event.wait(), timeout=timeout)
-        return _permission_results.get(request_id, "deny")
-    except asyncio.TimeoutError:
-        # Update database with expired status
-        await db.permission_requests.update(request_id, {"status": "expired"})
-        return "deny"
-    finally:
-        _permission_events.pop(request_id, None)
-        _permission_results.pop(request_id, None)
-
-
-def set_permission_decision(request_id: str, decision: str):
-    """Set the user's permission decision and signal waiting tasks."""
-    _permission_results[request_id] = decision
-    if request_id in _permission_events:
-        _permission_events[request_id].set()
-
-
-async def _configure_claude_environment():
-    """Configure environment variables for Claude Code CLI.
-
-    Reads API configuration from database settings (Settings page in UI).
-    Falls back to environment variables from config.py if no database settings exist.
-    """
-    # Import here to avoid circular imports
-    from routers.settings import get_api_settings
-
-    # Get API settings from database
-    api_settings = await get_api_settings()
-
-    # Set ANTHROPIC_API_KEY - prefer database setting, fall back to env var
-    api_key = api_settings.get("anthropic_api_key") or settings.anthropic_api_key
-    if api_key:
-        os.environ["ANTHROPIC_API_KEY"] = api_key
-
-    # Set ANTHROPIC_BASE_URL if configured (for custom endpoints)
-    base_url = api_settings.get("anthropic_base_url") or settings.anthropic_base_url
-    if base_url:
-        os.environ["ANTHROPIC_BASE_URL"] = base_url
-    elif "ANTHROPIC_BASE_URL" in os.environ:
-        # Clear it if not configured but exists in environment
-        del os.environ["ANTHROPIC_BASE_URL"]
-
-    # Set CLAUDE_CODE_USE_BEDROCK if enabled - prefer database setting
-    use_bedrock = api_settings.get("use_bedrock", False) or settings.claude_code_use_bedrock
-    bedrock_auth_type = api_settings.get("bedrock_auth_type", "credentials")
-
-    if use_bedrock:
-        os.environ["CLAUDE_CODE_USE_BEDROCK"] = "true"
-
-        # Get region (common for both auth types)
-        aws_region = api_settings.get("aws_region", "us-east-1")
-        if aws_region:
-            os.environ["AWS_REGION"] = aws_region
-            os.environ["AWS_DEFAULT_REGION"] = aws_region
-
-        if bedrock_auth_type == "bearer_token":
-            # Use Bearer Token authentication
-            aws_bearer_token = api_settings.get("aws_bearer_token")
-            if aws_bearer_token:
-                os.environ["AWS_BEARER_TOKEN_BEDROCK"] = aws_bearer_token
-            # Clear AK/SK credentials when using bearer token
-            os.environ.pop("AWS_ACCESS_KEY_ID", None)
-            os.environ.pop("AWS_SECRET_ACCESS_KEY", None)
-            os.environ.pop("AWS_SESSION_TOKEN", None)
-        else:
-            # Use AK/SK credentials authentication
-            aws_access_key = api_settings.get("aws_access_key_id")
-            aws_secret_key = api_settings.get("aws_secret_access_key")
-            aws_session_token = api_settings.get("aws_session_token")
-
-            if aws_access_key:
-                os.environ["AWS_ACCESS_KEY_ID"] = aws_access_key
-            if aws_secret_key:
-                os.environ["AWS_SECRET_ACCESS_KEY"] = aws_secret_key
-            if aws_session_token:
-                os.environ["AWS_SESSION_TOKEN"] = aws_session_token
-            else:
-                # Clear session token if not provided
-                os.environ.pop("AWS_SESSION_TOKEN", None)
-            # Clear bearer token when using AK/SK
-            os.environ.pop("AWS_BEARER_TOKEN_BEDROCK", None)
-    else:
-        # Clear Bedrock-related env vars when not using Bedrock
-        os.environ.pop("CLAUDE_CODE_USE_BEDROCK", None)
-        os.environ.pop("AWS_BEARER_TOKEN_BEDROCK", None)
-
-    # Set CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS if enabled (from env only)
-    if settings.claude_code_disable_experimental_betas:
-        os.environ["CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS"] = "true"
-    elif "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS" in os.environ:
-        del os.environ["CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS"]
-
-    logger.info(f"Claude environment configured - Bedrock: {use_bedrock}, Auth: {bedrock_auth_type if use_bedrock else 'N/A'}, Base URL: {base_url or 'default'}")
-
-
-async def pre_tool_logger(
-    input_data: dict,
-    tool_use_id: str | None,
-    context: Any
-) -> dict:
-    """Log tool usage before execution."""
-    tool_name = input_data.get('tool_name', 'unknown')
-    tool_input = input_data.get('tool_input', {})
-    logger.info(f"[PRE-TOOL] Tool: {tool_name}, Input keys: {list(tool_input.keys())}")
-    return {}
-
-
-async def dangerous_command_blocker(
-    input_data: dict,
-    tool_use_id: str | None,
-    context: Any
-) -> dict:
-    """Block dangerous bash commands."""
-    if input_data.get('tool_name') == 'Bash':
-        command = input_data.get('tool_input', {}).get('command', '')
-
-        dangerous_patterns = [
-            'rm -rf /',
-            'rm -rf ~',
-            'dd if=/dev/zero',
-            ':(){:|:&};:',
-            '> /dev/sda',
-        ]
-
-        for pattern in dangerous_patterns:
-            if pattern in command:
-                logger.warning(f"[BLOCKED] Dangerous command: {command}")
-                return {
-                    'hookSpecificOutput': {
-                        'hookEventName': 'PreToolUse',
-                        'permissionDecision': 'deny',
-                        'permissionDecisionReason': f'Dangerous command blocked: {pattern}'
-                    }
-                }
-    return {}
-
-
-# Dangerous command patterns for human approval (more comprehensive than auto-block)
-DANGEROUS_PATTERNS = [
-    (r'rm\s+(-[rfRf]+\s+)?/', "Recursive deletion from root"),
-    (r'rm\s+(-[rfRf]+\s+)?~', "Recursive deletion from home"),
-    (r'rm\s+-[rfRf]+', "Recursive file deletion"),
-    (r'dd\s+if=/dev/(zero|random|urandom)', "Disk overwrite command"),
-    (r'mkfs', "Filesystem format command"),
-    (r'>\s*/dev/(sda|hda|nvme|vda)', "Direct disk write"),
-    (r':()\{:\|:&\};:', "Fork bomb"),
-    (r'chmod\s+(-R\s+)?777\s+/', "Dangerous permission change"),
-    (r'chown\s+-R\s+.*\s+/', "Recursive ownership change from root"),
-    (r'curl\s+.*\|\s*(bash|sh)', "Piping remote script to shell"),
-    (r'wget\s+.*\|\s*(bash|sh)', "Piping remote script to shell"),
-    (r'sudo\s+rm', "Sudo removal command"),
-    (r'>\s*/etc/', "Writing to /etc directory"),
-]
-
-
-def check_dangerous_command(command: str) -> Optional[str]:
-    """Check if command matches dangerous patterns.
-
-    Args:
-        command: The bash command to check
-
-    Returns:
-        Reason string if dangerous, None otherwise
-    """
-    for pattern, reason in DANGEROUS_PATTERNS:
-        if re.search(pattern, command, re.IGNORECASE):
-            return reason
-    return None
-
-
-def create_human_approval_hook(session_context: dict, session_key: str, enable_human_approval: bool):
-    """Create a human approval hook for dangerous commands.
-
-    Args:
-        session_context: Dict with {"sdk_session_id": ...} that gets updated with actual SDK session
-        session_key: The session key for tracking approved commands (agent_id or resume_session_id)
-        enable_human_approval: Whether human approval is enabled for this agent
-
-    Returns:
-        Async hook function that checks for dangerous commands and requests approval
-    """
-    async def human_approval_hook(
-        input_data: dict,
-        tool_use_id: str | None,
-        context: Any
-    ) -> dict:
-        """Check for dangerous commands and request human approval if needed."""
-        if input_data.get('tool_name') != 'Bash':
-            return {}
-
-        command = input_data.get('tool_input', {}).get('command', '')
-        if not command:
-            return {}
-
-        # Check if command is dangerous
-        danger_reason = check_dangerous_command(command)
-        if not danger_reason:
-            return {}
-
-        # If human approval is disabled, just block it
-        if not enable_human_approval:
-            logger.warning(f"[BLOCKED] Dangerous command (no human approval): {command}")
-            return {
-                'hookSpecificOutput': {
-                    'hookEventName': 'PreToolUse',
-                    'permissionDecision': 'deny',
-                    'permissionDecisionReason': f'Dangerous command blocked: {danger_reason}'
-                }
-            }
-
-        # Check if this command was previously approved (use session_key for tracking)
-        if is_command_approved(session_key, command):
-            logger.info(f"[APPROVED] Previously approved command: {command[:50]}...")
-            return {}  # Allow execution
-
-        # Get the actual SDK session_id (may have been updated after init message)
-        actual_session_id = session_context.get("sdk_session_id")
-        logger.info(f"Hook firing with session_key={session_key}, actual_session_id={actual_session_id}")
-
-        # Create permission request
-        request_id = f"perm_{uuid4().hex[:12]}"
-        tool_input_data = input_data.get('tool_input', {})
-        permission_request = {
-            "id": request_id,
-            "session_id": actual_session_id,  # Use actual SDK session_id (not session_key/agent_id)
-            "tool_name": "Bash",
-            "tool_input": json.dumps(tool_input_data),
-            "reason": danger_reason,
-            "status": "pending",
-            "created_at": datetime.now().isoformat()
-        }
-
-        # Store in database
-        await db.permission_requests.put(permission_request)
-
-        # Put permission request in queue for SSE streaming (use actual SDK session_id!)
-        await _permission_request_queue.put({
-            "sessionId": actual_session_id,  # Use actual SDK session_id for matching
-            "requestId": request_id,
-            "toolName": "Bash",
-            "toolInput": tool_input_data,
-            "reason": danger_reason,
-            "options": ["approve", "deny"],
-        })
-
-        logger.warning(f"[PERMISSION_REQUEST] Dangerous command requires approval: {command[:50]}... (request_id: {request_id})")
-        logger.info(f"Waiting for user decision on request {request_id}...")
-
-        # Suspend execution and wait for user decision
-        decision = await wait_for_permission_decision(request_id)
-
-        logger.info(f"User decision received for request {request_id}: {decision}")
-
-        # Return the decision to the SDK
-        if decision == "approve":
-            # Allow the command to execute
-            return {}
-        else:
-            # Deny the command
-            return {
-                'hookSpecificOutput': {
-                    'hookEventName': 'PreToolUse',
-                    'permissionDecision': 'deny',
-                    'permissionDecisionReason': f'User denied: {danger_reason}'
-                }
-            }
-
-    return human_approval_hook
-
-
-def create_file_access_permission_handler(allowed_directories: list[str]):
-    """Create a file access permission handler with allowed directories bound.
-
-    Args:
-        allowed_directories: List of directory paths that are allowed for file access
-
-    Returns:
-        Async permission handler function for can_use_tool
-    """
-    # Normalize paths (remove trailing slashes for consistent comparison)
-    normalized_dirs = [d.rstrip('/') for d in allowed_directories]
-
-    async def file_access_permission_handler(
-        tool_name: str,
-        input_data: dict,
-        context: dict
-    ) -> dict:
-        """Check if file access is allowed based on path restrictions."""
-        import os
-        import re
-
-        # File tools that need path checking
-        file_tools = {
-            'Read': 'file_path',
-            'Write': 'file_path',
-            'Edit': 'file_path',
-            'Glob': 'path',
-            'Grep': 'path',
-        }
-
-        # Check file tools
-        if tool_name in file_tools:
-            # Get the path parameter name for this tool
-            path_param = file_tools[tool_name]
-            file_path = input_data.get(path_param, '')
-
-            # If no path specified, allow (tool will handle the error)
-            if not file_path:
-                return {"behavior": "allow"}
-
-            # Normalize the file path (resolve .. and symlinks conceptually)
-            normalized_path = os.path.normpath(file_path)
-
-            # Check if the path is within any allowed directory
-            is_allowed = any(
-                normalized_path.startswith(allowed_dir + '/') or normalized_path == allowed_dir
-                for allowed_dir in normalized_dirs
-            )
-
-            if not is_allowed:
-                logger.warning(f"[FILE ACCESS DENIED] Tool: {tool_name}, Path: {file_path}, Allowed: {normalized_dirs}")
-                return {
-                    "behavior": "deny",
-                    "message": f"File access denied: {file_path} is outside allowed directories",
-                    "interrupt": False  # Don't interrupt, let agent try alternative approach
-                }
-
-            logger.debug(f"[FILE ACCESS ALLOWED] Tool: {tool_name}, Path: {file_path}")
-            return {"behavior": "allow"}
-
-        # Check Bash tool for file access commands
-        if tool_name == 'Bash':
-            command = input_data.get('command', '')
-
-            if not command:
-                return {"behavior": "allow"}
-
-            # Extract potential file paths from bash commands
-            # Match common file access patterns
-            suspicious_patterns = [
-                r'\s+(/[^\s]+)',  # Absolute paths like /etc/passwd
-                r'(?:cat|head|tail|less|more|nano|vi|vim|emacs)\s+([^\s|>&]+)',  # Read commands
-                r'(?:echo|printf|tee)\s+.*?>\s*([^\s|>&]+)',  # Write redirects
-                r'(?:cp|mv|rm|mkdir|rmdir|touch)\s+.*?([^\s|>&]+)',  # File manipulation
-            ]
-
-            potential_paths = []
-            for pattern in suspicious_patterns:
-                matches = re.findall(pattern, command)
-                potential_paths.extend(matches)
-
-            # Check each potential path
-            for file_path in potential_paths:
-                # Skip if relative path (will be relative to cwd which is safe)
-                if not file_path.startswith('/'):
-                    continue
-
-                # Normalize and check
-                normalized_path = os.path.normpath(file_path)
-                is_allowed = any(
-                    normalized_path.startswith(allowed_dir + '/') or normalized_path == allowed_dir
-                    for allowed_dir in normalized_dirs
-                )
-
-                if not is_allowed:
-                    logger.warning(f"[BASH FILE ACCESS DENIED] Command: {command[:100]}, Path: {file_path}, Allowed: {normalized_dirs}")
-                    return {
-                        "behavior": "deny",
-                        "message": f"Bash file access denied: Command attempts to access {file_path} which is outside allowed directories ({', '.join(normalized_dirs)})",
-                        "interrupt": False
-                    }
-
-            logger.debug(f"[BASH ALLOWED] Command: {command[:100]}")
-            return {"behavior": "allow"}
-
-        # Allow all other tools
-        return {"behavior": "allow"}
-
-    return file_access_permission_handler
-
-
-def create_skill_access_checker(allowed_skill_names: list[str]):
-    """Create a skill access checker hook with the allowed skill names bound.
-
-    Args:
-        allowed_skill_names: List of skill folder names that are allowed
-
-    Returns:
-        Async hook function that checks skill access
-    """
-    async def skill_access_checker(
-        input_data: dict,
-        tool_use_id: str | None,
-        context: Any
-    ) -> dict:
-        """Check if the requested skill is allowed for this agent."""
-        if input_data.get('tool_name') == 'Skill':
-            tool_input = input_data.get('tool_input', {})
-            requested_skill = tool_input.get('skill', '')
-
-            # Empty allowed list means no skills are allowed
-            if not allowed_skill_names:
-                logger.warning(f"[BLOCKED] Skill access denied (no skills allowed): {requested_skill}")
-                return {
-                    'hookSpecificOutput': {
-                        'hookEventName': 'PreToolUse',
-                        'permissionDecision': 'deny',
-                        'permissionDecisionReason': 'No skills are authorized for this agent'
-                    }
-                }
-
-            # Check if requested skill is in allowed list
-            if requested_skill not in allowed_skill_names:
-                logger.warning(f"[BLOCKED] Skill access denied: {requested_skill} not in {allowed_skill_names}")
-                return {
-                    'hookSpecificOutput': {
-                        'hookEventName': 'PreToolUse',
-                        'permissionDecision': 'deny',
-                        'permissionDecisionReason': f'Skill "{requested_skill}" is not authorized for this agent. Allowed skills: {", ".join(allowed_skill_names)}'
-                    }
-                }
-
-            logger.debug(f"[ALLOWED] Skill access granted: {requested_skill}")
-        return {}
-
-    return skill_access_checker
+Current task: Create a skill named "{skill_name}" that {skill_description}"""
 
 
 class AgentManager:
@@ -983,28 +192,22 @@ class AgentManager:
             return info["client"]
         return None
 
-    async def _build_options(
-        self,
-        agent_config: dict,
-        enable_skills: bool,
-        enable_mcp: bool,
-        resume_session_id: Optional[str] = None,
-        session_context: Optional[dict] = None,
-        channel_context: Optional[dict] = None,
-    ) -> ClaudeAgentOptions:
-        """Build ClaudeAgentOptions from agent configuration.
+    def _resolve_allowed_tools(self, agent_config: dict) -> list[str]:
+        """Resolve the list of allowed tool names from agent configuration.
+
+        Uses ``allowed_tools`` from config directly when present. Otherwise
+        falls back to the individual enable flags (``enable_bash_tool``,
+        ``enable_file_tools``, ``enable_web_tools``) for backwards compatibility.
 
         Args:
-            agent_config: Agent configuration dictionary
-            enable_skills: Whether to enable skills
-            enable_mcp: Whether to enable MCP servers
-            resume_session_id: Optional session ID to resume (for multi-turn conversations)
+            agent_config: Agent configuration dictionary.
+
+        Returns:
+            List of allowed tool name strings.
         """
-        logger.info(f"agent_config:{agent_config}")
-        logger.info(f"settings:{settings}")
         # Build allowed tools list - use directly from config if provided
         allowed_tools = list(agent_config.get("allowed_tools", []))
-    
+
         # If no allowed_tools specified, fall back to enable flags for backwards compatibility
         if not allowed_tools:
             if agent_config.get("enable_bash_tool", True):
@@ -1027,52 +230,96 @@ class AgentManager:
         # contains both document-skills and example-skills). The workspace approach gives
         # precise per-plugin skill control.
 
-        # MCP servers configuration
-        mcp_servers = {}
+        return allowed_tools
 
-        # Add external MCP servers if enabled
-        # Use the server name as the key (instead of UUID) to keep tool names short
-        # This is important for Bedrock which has a 64-character tool name limit
-        if enable_mcp and agent_config.get("mcp_ids"):
-            used_names = set()  # Track used names to handle collisions
-            for mcp_id in agent_config["mcp_ids"]:
-                mcp_config = await db.mcp_servers.get(mcp_id)
-                if mcp_config:
-                    connection_type = mcp_config.get("connection_type", "stdio")
-                    config = mcp_config.get("config", {})
+    async def _build_mcp_config(
+        self,
+        agent_config: dict,
+        enable_mcp: bool,
+    ) -> dict:
+        """Build MCP server configuration dict from agent's mcp_ids.
 
-                    # Use server name as the key for shorter tool names
-                    # Handle name collisions by appending suffix
-                    server_name = mcp_config.get("name", mcp_id)
-                    base_name = server_name
-                    suffix = 1
-                    while server_name in used_names:
-                        server_name = f"{base_name}_{suffix}"
-                        suffix += 1
-                    used_names.add(server_name)
+        Iterates over the agent's ``mcp_ids``, looks up each MCP server record
+        from the database, and assembles the ``mcp_servers`` dict keyed by
+        server name (to keep tool names short for Bedrock's 64-char limit).
 
-                    if connection_type == "stdio":
-                        mcp_servers[server_name] = {
-                            "type": "stdio",
-                            "command": config.get("command"),
-                            "args": config.get("args", []),
-                        }
-                        env = config.get("env")
-                        if env and isinstance(env, dict):
-                            mcp_servers[server_name]["env"] = env
-                    elif connection_type == "sse":
-                        mcp_servers[server_name] = {
-                            "type": "sse",
-                            "url": config.get("url"),
-                        }
-                    elif connection_type == "http":
-                        mcp_servers[server_name] = {
-                            "type": "http",
-                            "url": config.get("url"),
-                        }
+        No workspace filtering — all agent MCPs are included.
 
-        # Build hooks
-        hooks = {}
+        Args:
+            agent_config: Agent configuration dictionary.
+            enable_mcp: Whether MCP servers are enabled.
+
+        Returns:
+            Dict mapping server names to their connection configuration.
+        """
+        mcp_servers: dict = {}
+
+        if not (enable_mcp and agent_config.get("mcp_ids")):
+            return mcp_servers
+
+        used_names: set = set()  # Track used names to handle collisions
+        for mcp_id in agent_config["mcp_ids"]:
+            mcp_config = await db.mcp_servers.get(mcp_id)
+            if mcp_config:
+                connection_type = mcp_config.get("connection_type", "stdio")
+                config = mcp_config.get("config", {})
+
+                # Use server name as the key for shorter tool names
+                # Handle name collisions by appending suffix
+                server_name = mcp_config.get("name", mcp_id)
+                base_name = server_name
+                suffix = 1
+                while server_name in used_names:
+                    server_name = f"{base_name}_{suffix}"
+                    suffix += 1
+                used_names.add(server_name)
+
+                if connection_type == "stdio":
+                    mcp_servers[server_name] = {
+                        "type": "stdio",
+                        "command": config.get("command"),
+                        "args": config.get("args", []),
+                    }
+                    env = config.get("env")
+                    if env and isinstance(env, dict):
+                        mcp_servers[server_name]["env"] = env
+                elif connection_type == "sse":
+                    mcp_servers[server_name] = {
+                        "type": "sse",
+                        "url": config.get("url"),
+                    }
+                elif connection_type == "http":
+                    mcp_servers[server_name] = {
+                        "type": "http",
+                        "url": config.get("url"),
+                    }
+
+        return mcp_servers
+
+    async def _build_hooks(
+        self,
+        agent_config: dict,
+        enable_skills: bool,
+        enable_mcp: bool,
+        resume_session_id: Optional[str],
+        session_context: Optional[dict],
+    ) -> tuple[dict, list[str], bool]:
+        """Build hook matchers and file access permission handler.
+
+        Composes security_hooks functions with the PermissionManager singleton
+        to produce the hooks configuration for ClaudeAgentOptions.
+
+        Args:
+            agent_config: Agent configuration dictionary.
+            enable_skills: Whether skills are enabled.
+            enable_mcp: Whether MCP servers are enabled.
+            resume_session_id: Optional session ID for resumed sessions.
+            session_context: Optional session context dict for hook tracking.
+
+        Returns:
+            A tuple of (hooks_config_dict, effective_skill_ids, allow_all_skills).
+        """
+        hooks: dict = {}
 
         if agent_config.get("enable_tool_logging", True):
             hooks["PreToolUse"] = [
@@ -1090,7 +337,7 @@ class AgentManager:
         # Use resume_session_id for resumed sessions, or agent_id for new sessions
         # The session_key is used for tracking approved commands - must match what's
         # stored in the permission_request and used in continue_with_permission
-        agent_id = agent_config.get("id",'default')
+        agent_id = agent_config.get("id", 'default')
         session_key = resume_session_id or agent_id or "unknown"
 
         # Enable human approval hook if configured
@@ -1100,7 +347,7 @@ class AgentManager:
                 hooks["PreToolUse"] = []
             # Use provided session_context or create a temporary one
             hook_session_context = session_context if session_context is not None else {"sdk_session_id": resume_session_id or agent_id}
-            human_approval = create_human_approval_hook(hook_session_context, session_key, enable_human_approval)
+            human_approval = create_human_approval_hook(hook_session_context, session_key, enable_human_approval, _pm)
             hooks["PreToolUse"].append(
                 HookMatcher(matcher="Bash", hooks=[human_approval])
             )
@@ -1125,7 +372,7 @@ class AgentManager:
         )
 
         # Get allowed skill names for hook-based access control
-        allowed_skill_names = await workspace_manager.get_allowed_skill_names(
+        allowed_skill_names = await agent_sandbox_manager.get_allowed_skill_names(
             skill_ids=effective_skill_ids,
             allow_all_skills=allow_all_skills
         )
@@ -1143,87 +390,22 @@ class AgentManager:
             )
             logger.info(f"Skill access checker hook added for skills: {allowed_skill_names}")
 
-        # Determine workspace mode and working directory
-        # agent_id already retrieved above for human approval hook
-        global_user_mode = agent_config.get("global_user_mode", True)
-        if global_user_mode:
-            # Global User Mode: use home directory, full access, user settings
-            working_directory = str(Path.home())
-            setting_sources = ['project', 'user']
-            workspace_manager.ensure_templates_in_directory(Path(working_directory))
-            logger.info(f"Agent {agent_id} running in GLOBAL USER MODE (cwd: {working_directory})")
-        else:
-            # Isolated Mode: per-agent workspace with symlinked skills
-            working_directory = str(workspace_manager.get_agent_workspace(agent_id))
-            setting_sources = ['project']
-            workspace_manager.ensure_templates_in_directory(Path(working_directory))
-            logger.info(f"Using per-agent workspace: {working_directory} (allow_all_skills={allow_all_skills})")
+        return hooks, effective_skill_ids, allow_all_skills
 
-            # Auto-rebuild workspace if it was deleted (e.g., /tmp cleared on reboot)
-            if not Path(working_directory).exists():
-                logger.warning(f"Agent workspace missing, rebuilding: {working_directory}")
-                await workspace_manager.rebuild_agent_workspace(
-                    agent_id,
-                    effective_skill_ids,
-                    allow_all_skills=allow_all_skills
-                )
-                logger.info(f"Agent workspace rebuilt: {working_directory}")
 
-        # Validate add_dirs - ensure directories exist before using them
-        # This must run regardless of file_access_enabled since add_dirs affects cwd
-        add_dirs = agent_config.get("add_dirs", [])
-        if add_dirs:
-            valid_add_dirs = []
-            for dir_path in add_dirs:
-                if Path(dir_path).exists():
-                    valid_add_dirs.append(dir_path)
-                elif settings.agent_workspaces_dir in dir_path and agent_id:
-                    # This is an agent workspace path - check if it's the current agent's workspace
-                    workspace_path = Path(dir_path)
-                    # Agent workspace paths are like: <app_data_dir>/workspaces/{agent_id}
-                    # Check if this matches the current agent's workspace
-                    current_agent_workspace = workspace_manager.get_agent_workspace(agent_id)
-                    if workspace_path == current_agent_workspace or str(workspace_path).startswith(str(current_agent_workspace)):
-                        # This is current agent's workspace - rebuild it with skills
-                        logger.warning(f"Current agent workspace missing, rebuilding with skills: {dir_path}")
-                        await workspace_manager.rebuild_agent_workspace(
-                            agent_id,
-                            effective_skill_ids,
-                            allow_all_skills=allow_all_skills
-                        )
-                        valid_add_dirs.append(dir_path)
-                    else:
-                        # Different agent's workspace or subdirectory - just create the directory
-                        logger.warning(f"Agent workspace directory missing, creating: {dir_path}")
-                        Path(dir_path).mkdir(parents=True, exist_ok=True)
-                        valid_add_dirs.append(dir_path)
-                else:
-                    logger.warning(f"Skipping non-existent add_dir: {dir_path}")
-            agent_config['add_dirs'] = valid_add_dirs  # Update config with valid dirs
+    def _build_sandbox_config(self, agent_config: dict) -> Optional[dict]:
+        """Build the sandbox configuration dict from agent settings.
 
-        # Build file access permission handler
-        # Restrict file access to the working directory (and any additional allowed dirs)
-        # In global_user_mode, file access control is disabled
-        if global_user_mode:
-            file_access_enabled = False
-        else:
-            file_access_enabled = agent_config.get("enable_file_access_control", True)
-        file_access_handler = None
-        if file_access_enabled:
-            allowed_directories = [working_directory]
-            # Add any additional allowed directories from config
-            extra_dirs = agent_config.get("allowed_directories", [])
-            if extra_dirs:
-                allowed_directories.extend(extra_dirs)
-            # Add validated add_dirs
-            valid_add_dirs = agent_config.get("add_dirs", [])
-            if valid_add_dirs:
-                allowed_directories.extend(valid_add_dirs)
-            file_access_handler = create_file_access_permission_handler(allowed_directories)
-            logger.info(f"File access control enabled, allowed directories: {allowed_directories}")
-        
-        # Build sandbox configuration (SDK built-in bash sandboxing)
-        sandbox_settings = None
+        Reads ``sandbox_enabled`` from the agent config (falling back to the
+        global default) and constructs the SDK sandbox settings dict.  Returns
+        ``None`` when sandboxing is disabled or unsupported (Windows).
+
+        Args:
+            agent_config: Agent configuration dictionary.
+
+        Returns:
+            Sandbox settings dict or ``None`` if sandboxing is disabled.
+        """
         sandbox_enabled = agent_config.get("sandbox_enabled", settings.sandbox_enabled_default)
 
         # Sandbox only works on macOS/Linux, not Windows
@@ -1231,99 +413,231 @@ class AgentManager:
             logger.warning("Sandbox is not supported on Windows, disabling")
             sandbox_enabled = False
 
-        if sandbox_enabled:
-            excluded_commands = []
-            if settings.sandbox_excluded_commands:
-                excluded_commands = [cmd.strip() for cmd in settings.sandbox_excluded_commands.split(",") if cmd.strip()]
+        if not sandbox_enabled:
+            return None
 
-            sandbox_settings = {
-                "enabled": True,
-                "autoAllowBashIfSandboxed": settings.sandbox_auto_allow_bash,
-                "excludedCommands": excluded_commands,
-                "allowUnsandboxedCommands": settings.sandbox_allow_unsandboxed,
-                "network": {"allowLocalBinding": True}
+        excluded_commands = []
+        if settings.sandbox_excluded_commands:
+            excluded_commands = [cmd.strip() for cmd in settings.sandbox_excluded_commands.split(",") if cmd.strip()]
+
+        sandbox_settings = {
+            "enabled": True,
+            "autoAllowBashIfSandboxed": settings.sandbox_auto_allow_bash,
+            "excludedCommands": excluded_commands,
+            "allowUnsandboxedCommands": settings.sandbox_allow_unsandboxed,
+            "network": {"allowLocalBinding": True}
+        }
+        logger.info(f"Sandbox enabled: {sandbox_settings}")
+        return sandbox_settings
+
+    def _inject_channel_mcp(
+        self,
+        mcp_servers: dict,
+        channel_context: Optional[dict],
+        working_directory: str,
+    ) -> dict:
+        """Inject channel-specific MCP servers when running in a channel context.
+
+        When ``channel_context`` is provided, a ``channel-tools`` MCP server
+        entry is added to ``mcp_servers`` so the agent can interact with the
+        originating channel (e.g. Feishu).
+
+        Args:
+            mcp_servers: Current MCP server configuration dict (mutated in place).
+            channel_context: Optional channel context for channel-based execution.
+            working_directory: The resolved working directory for the agent.
+
+        Returns:
+            The (possibly updated) mcp_servers dict.
+        """
+        if not channel_context:
+            return mcp_servers
+
+        channel_type = channel_context.get("channel_type", "")
+        env_vars = {
+            "CHANNEL_TYPE": channel_type,
+            "WORKSPACE_DIR": working_directory,
+        }
+
+        if channel_type == "feishu":
+            env_vars.update({
+                "FEISHU_APP_ID": channel_context.get("app_id", ""),
+                "FEISHU_APP_SECRET": channel_context.get("app_secret", ""),
+                "CHAT_ID": channel_context.get("chat_id", ""),
+            })
+            reply_to = channel_context.get("reply_to_message_id")
+            if reply_to:
+                env_vars["REPLY_TO_MESSAGE_ID"] = reply_to
+
+        mcp_script = Path(__file__).resolve().parent.parent / "mcp_servers" / "channel_file_sender.py"
+        if mcp_script.exists():
+            mcp_servers["channel-tools"] = {
+                "type": "stdio",
+                "command": sys.executable,
+                "args": [str(mcp_script)],
+                "env": env_vars,
             }
-            logger.info(f"Sandbox enabled: {sandbox_settings}")
+        else:
+            logger.warning(f"Channel-tools MCP script not found: {mcp_script}")
 
-        # Determine permission mode
-        permission_mode = agent_config.get("permission_mode", "bypassPermissions")
+        return mcp_servers
 
-        # Get model from config and convert to Bedrock model ID if using Bedrock
-        # Check runtime env var (set by _configure_claude_environment) rather than static settings
+
+    def _resolve_model(self, agent_config: dict) -> Optional[str]:
+        """Resolve the model identifier, converting to Bedrock format if needed.
+
+        Reads the ``model`` key from agent config and checks the runtime
+        ``CLAUDE_CODE_USE_BEDROCK`` environment variable (set by
+        ``_configure_claude_environment``) to decide whether to convert the
+        model name to a Bedrock model ID.
+
+        Args:
+            agent_config: Agent configuration dictionary.
+
+        Returns:
+            The resolved model string, or ``None`` if not configured.
+        """
         model = agent_config.get("model")
         use_bedrock = os.environ.get("CLAUDE_CODE_USE_BEDROCK", "").lower() == "true"
         if model and use_bedrock:
             model = get_bedrock_model_id(model)
             logger.info(f"Using Bedrock model: {model}")
-        
-        def stderr_callback(input):
-            logger.error(input)
+        return model
 
-        # Get add_dirs for ClaudeAgentOptions
+    async def _build_system_prompt(
+        self,
+        agent_config: dict,
+        working_directory: str,
+        channel_context: Optional[dict],
+    ) -> Any:
+        """Build the system prompt, injecting workspace context when available.
+
+        Workspace context from the ``ContextManager`` is injected using the
+        cached workspace path from ``initialization_manager``.
+
+        Args:
+            agent_config: Agent configuration dictionary (may be mutated to
+                append workspace context to ``system_prompt``).
+            working_directory: Resolved working directory for the agent.
+            channel_context: Optional channel context for channel-based execution.
+
+        Returns:
+            The assembled system prompt configuration object.
+        """
+        # Inject workspace context into agent config for SystemPromptBuilder
+        # Use the cached workspace path to find the default workspace for context injection
+        try:
+            context_mgr = ContextManager()
+            # Look up the default workspace to get its ID for context injection
+            default_ws = await db.swarm_workspaces.get_default()
+            if default_ws:
+                injected_context = await context_mgr.inject_context(default_ws["id"])
+                if injected_context:
+                    existing_prompt = agent_config.get("system_prompt", "") or ""
+                    agent_config["system_prompt"] = (
+                        existing_prompt + "\n\n## Workspace Context\n" + injected_context
+                        if existing_prompt
+                        else "## Workspace Context\n" + injected_context
+                    )
+                    logger.info(f"Injected workspace context ({len(injected_context)} chars)")
+        except Exception as e:
+            logger.warning(f"Failed to inject workspace context: {e}")
+
         sdk_add_dirs = agent_config.get("add_dirs", [])
-        # if sdk_add_dirs:
-        #     working_directory = sdk_add_dirs[0]
-        # Max buffer size for JSON messages (default 10MB to handle large tool outputs)
-        max_buffer_size = int(os.environ.get("MAX_BUFFER_SIZE", 10 * 1024 * 1024))
-
-        # Inject channel-tools MCP server when running in channel context
-        if channel_context:
-            channel_type = channel_context.get("channel_type", "")
-            env_vars = {
-                "CHANNEL_TYPE": channel_type,
-                "WORKSPACE_DIR": working_directory,
-            }
-
-            if channel_type == "feishu":
-                env_vars.update({
-                    "FEISHU_APP_ID": channel_context.get("app_id", ""),
-                    "FEISHU_APP_SECRET": channel_context.get("app_secret", ""),
-                    "CHAT_ID": channel_context.get("chat_id", ""),
-                })
-                reply_to = channel_context.get("reply_to_message_id")
-                if reply_to:
-                    env_vars["REPLY_TO_MESSAGE_ID"] = reply_to
-
-            mcp_script = Path(__file__).resolve().parent.parent / "mcp_servers" / "channel_file_sender.py"
-            if mcp_script.exists():
-                mcp_servers["channel-tools"] = {
-                    "type": "stdio",
-                    "command": sys.executable,
-                    "args": [str(mcp_script)],
-                    "env": env_vars,
-                }
-            else:
-                logger.warning(f"Channel-tools MCP script not found: {mcp_script}")
-
-        # Build system prompt via SystemPromptBuilder
         prompt_builder = SystemPromptBuilder(
             working_directory=working_directory,
             agent_config=agent_config,
             channel_context=channel_context,
             add_dirs=sdk_add_dirs,
         )
-        system_prompt_config = prompt_builder.build()
+        return prompt_builder.build()
+
+    async def _build_options(
+        self,
+        agent_config: dict,
+        enable_skills: bool,
+        enable_mcp: bool,
+        resume_session_id: Optional[str] = None,
+        session_context: Optional[dict] = None,
+        channel_context: Optional[dict] = None,
+    ) -> ClaudeAgentOptions:
+        """Orchestrate helper methods to assemble ClaudeAgentOptions.
+
+        Delegates each concern to a focused helper and assembles the final
+        options object from their results.  Contains no inline business logic
+        — only orchestration and final assembly.
+
+        Args:
+            agent_config: Agent configuration dictionary.
+            enable_skills: Whether to enable skills.
+            enable_mcp: Whether to enable MCP servers.
+            resume_session_id: Optional session ID to resume (for multi-turn conversations).
+            session_context: Optional session context dict for hook tracking.
+            channel_context: Optional channel context for channel-based execution.
+        """
+        logger.debug(f"agent_config:{agent_config}")
+        logger.debug(f"settings:{settings}")
+
+        # 1. Resolve allowed tools
+        allowed_tools = self._resolve_allowed_tools(agent_config)
+
+        # 2. Build MCP server configuration (no workspace_id)
+        mcp_servers = await self._build_mcp_config(agent_config, enable_mcp)
+
+        # 3. Build hooks
+        hooks, effective_skill_ids, allow_all_skills = await self._build_hooks(
+            agent_config, enable_skills, enable_mcp,
+            resume_session_id, session_context,
+        )
+
+        # 4. Resolve working directory and file access (inlined, no _resolve_workspace_mode)
+        working_directory = initialization_manager.get_cached_workspace_path()
+        setting_sources = ["project"]
+        global_user_mode = agent_config.get("global_user_mode", True)
+
+        if global_user_mode:
+            file_access_handler = None
+        else:
+            allowed_directories = [working_directory]
+            extra_dirs = agent_config.get("allowed_directories", [])
+            if extra_dirs:
+                allowed_directories.extend(extra_dirs)
+            file_access_handler = create_file_access_permission_handler(allowed_directories)
+
+        # 5. Build sandbox configuration
+        sandbox_settings = self._build_sandbox_config(agent_config)
+
+        # 6. Inject channel-specific MCP servers
+        mcp_servers = self._inject_channel_mcp(mcp_servers, channel_context, working_directory)
+
+        # 7. Resolve model (with Bedrock conversion if needed)
+        model = self._resolve_model(agent_config)
+
+        # 8. Build system prompt (reads context files — stays per-session)
+        system_prompt_config = await self._build_system_prompt(
+            agent_config, working_directory, channel_context,
+        )
+
+        # Assemble final options
+        permission_mode = agent_config.get("permission_mode", "bypassPermissions")
+        max_buffer_size = int(os.environ.get("MAX_BUFFER_SIZE", 10 * 1024 * 1024))
 
         return ClaudeAgentOptions(
             system_prompt=system_prompt_config,
             allowed_tools=allowed_tools if allowed_tools else None,
             mcp_servers=mcp_servers if mcp_servers else None,
-            plugins=None,  # Skills provided via workspace symlinks, not SDK plugins
+            plugins=None,
             permission_mode=permission_mode,
             model=model,
-            stderr=stderr_callback,
-            # if user select a folder as working directory.
-            cwd=working_directory ,
-            # setting_sources controls where Claude Code loads settings from:
-            # - 'project' = only from cwd (isolated mode)
-            # - 'user' = also from ~/.claude/ (global mode, enables user-level skills)
+            stderr=lambda msg: logger.error(msg),
+            cwd=working_directory,
             setting_sources=setting_sources,
             hooks=hooks if hooks else None,
-            resume=resume_session_id,  # Resume from previous session for multi-turn
-            sandbox=sandbox_settings,  # Built-in SDK sandbox for bash isolation
-            can_use_tool=file_access_handler,  # File access control
-            max_buffer_size=max_buffer_size,  # Increase buffer for large JSON messages
-            add_dirs=sdk_add_dirs if sdk_add_dirs else None,  # Additional directories for Claude to access
+            resume=resume_session_id,
+            sandbox=sandbox_settings,
+            can_use_tool=file_access_handler,
+            max_buffer_size=max_buffer_size,
+            add_dirs=None,
         )
 
     async def _save_message(
@@ -1374,9 +688,7 @@ class AgentManager:
         session_id: Optional[str] = None,
         enable_skills: bool = False,
         enable_mcp: bool = False,
-        add_dirs: Optional[list[str]] = None,
         channel_context: Optional[dict] = None,
-        workspace_id: Optional[str] = None,
         workspace_context: Optional[str] = None,
     ) -> AsyncIterator[dict]:
         """Run conversation with agent and stream responses.
@@ -1397,8 +709,6 @@ class AgentManager:
             session_id: Optional session ID for resuming conversations
             enable_skills: Whether to enable skills
             enable_mcp: Whether to enable MCP servers
-            add_dirs: Additional directories for Claude to access
-            workspace_id: Optional Swarm Workspace ID for session tracking
             workspace_context: Optional workspace context to inject into system prompt
         """
         # Check if this is a new session or resuming an existing one
@@ -1437,16 +747,8 @@ class AgentManager:
             return
         agent_config['allowed_tools'] = []
 
-        # Add runtime add_dirs to agent config for _build_options
-        # Also extract work_dir for session persistence
-        work_dir = None
-        if add_dirs:
-            agent_config['add_dirs'] = add_dirs
-            work_dir = add_dirs[0]  # First directory is the working directory
-            logger.info(f"Adding extra directories: {add_dirs}")
-
         logger.info(f"Running conversation with agent {agent_id}, session {session_id}, is_resuming={is_resuming}")
-        logger.info(f"Agent config: {agent_config}")
+        logger.debug(f"Agent config: {agent_config}")
         logger.info(f"Content type: {'multimodal' if content else 'text'}")
 
         # For resumed sessions, we can send session_start immediately
@@ -1458,7 +760,7 @@ class AgentManager:
             }
             # Store/update session for resumed conversations
             title = display_text[:50] + "..." if len(display_text) > 50 else display_text
-            await session_manager.store_session(session_id, agent_id, title, work_dir=work_dir, workspace_id=workspace_id)
+            await session_manager.store_session(session_id, agent_id, title)
 
             # Save user message to database for resumed sessions
             # Store original content if multimodal, otherwise wrap text
@@ -1469,20 +771,69 @@ class AgentManager:
                 content=user_content
             )
 
+        # Delegate to shared session execution pattern
+        async for event in self._execute_on_session(
+            agent_config=agent_config,
+            query_content=query_content,
+            display_text=display_text,
+            session_id=session_id,
+            enable_skills=enable_skills,
+            enable_mcp=enable_mcp,
+            is_resuming=is_resuming,
+            content=content,
+            user_message=user_message,
+            agent_id=agent_id,
+            channel_context=channel_context,
+        ):
+            yield event
+
+    async def _execute_on_session(
+        self,
+        agent_config: dict,
+        query_content: Any,
+        display_text: str,
+        session_id: Optional[str],
+        enable_skills: bool,
+        enable_mcp: bool,
+        is_resuming: bool,
+        content: Optional[list[dict]],
+        user_message: Optional[str],
+        agent_id: str,
+        channel_context: Optional[dict] = None,
+    ) -> AsyncIterator[dict]:
+        """Shared session setup, query execution, and response streaming.
+
+        Handles:
+        - Reusing existing long-lived clients for resumed sessions
+        - Creating new clients when no active session exists
+        - Falling back to fresh sessions when --resume can't work
+        - Storing clients for future reuse
+        - Error handling and session cleanup
+        """
         # Configure Claude environment variables
-        await _configure_claude_environment()
+        try:
+            await _configure_claude_environment()
+        except AuthenticationNotConfiguredError:
+            yield {
+                "type": "error",
+                "error": "No API key configured. Please add your Anthropic API key in Settings or enable Bedrock authentication.",
+            }
+            return
 
         # Track the actual SDK session_id (captured from init message)
         # Use a dict so forwarder task can see updates (mutable container)
         # Must be created BEFORE _build_options so hook can capture same object
-        session_context = {"sdk_session_id": session_id}  # Will be updated for new sessions
+        session_context = {"sdk_session_id": session_id}
 
         # Build options - use resume parameter if continuing an existing session
-        options = await self._build_options(agent_config, enable_skills, enable_mcp, session_id if is_resuming else None, session_context, channel_context)
+        options = await self._build_options(
+            agent_config, enable_skills, enable_mcp,
+            session_id if is_resuming else None,
+            session_context, channel_context,
+        )
         logger.info(f"Built options - allowed_tools: {options.allowed_tools}, permission_mode: {options.permission_mode}, resume: {session_id if is_resuming else None}")
         logger.info(f"MCP servers: {list(options.mcp_servers.keys()) if options.mcp_servers else None}")
         logger.info(f"Working directory: {options.cwd}")
-        logger.info(f"Add dirs: {options.add_dirs}")
 
         # Collect assistant response content for saving (with O(1) deduplication)
         assistant_content = ContentBlockAccumulator()
@@ -1510,9 +861,7 @@ class AgentManager:
                     is_resuming=is_resuming,
                     content=content,
                     user_message=user_message,
-                    work_dir=work_dir,
                     agent_id=agent_id,
-                    workspace_id=workspace_id,
                 ):
                     yield event
 
@@ -1524,7 +873,10 @@ class AgentManager:
                 # Start a fresh session instead.
                 if is_resuming:
                     logger.info(f"No active client for session {session_id}, starting fresh session instead of --resume")
-                    options = await self._build_options(agent_config, enable_skills, enable_mcp, None, session_context, channel_context)
+                    options = await self._build_options(
+                        agent_config, enable_skills, enable_mcp,
+                        None, session_context, channel_context,
+                    )
                     # Reset to behave as a new session
                     is_resuming = False
                     session_context["sdk_session_id"] = None
@@ -1545,9 +897,7 @@ class AgentManager:
                         is_resuming=is_resuming,
                         content=content,
                         user_message=user_message,
-                        work_dir=work_dir,
                         agent_id=agent_id,
-                        workspace_id=workspace_id,
                     ):
                         yield event
                 except Exception:
@@ -1559,8 +909,15 @@ class AgentManager:
                     raise
 
                 # Store client for reuse (keep alive for future resume calls)
+                # Skip storage if the session ended with an error (e.g. auth failure)
                 final_session_id = session_context["sdk_session_id"]
-                if final_session_id:
+                if session_context.get("had_error"):
+                    logger.info(f"Session had error, disconnecting instead of storing")
+                    try:
+                        await wrapper.__aexit__(None, None, None)
+                    except Exception:
+                        pass
+                elif final_session_id:
                     self._active_sessions[final_session_id] = {
                         "client": client,
                         "wrapper": wrapper,
@@ -1570,7 +927,6 @@ class AgentManager:
                     logger.info(f"Stored long-lived client for session {final_session_id}")
 
         except Exception as e:
-            import traceback
             error_traceback = traceback.format_exc()
             logger.error(f"Error in conversation: {e}")
             logger.error(f"Full traceback:\n{error_traceback}")
@@ -1595,22 +951,24 @@ class AgentManager:
         is_resuming: bool,
         content: Optional[list[dict]],
         user_message: Optional[str],
-        work_dir: Optional[str],
         agent_id: str,
-        workspace_id: Optional[str] = None,
     ) -> AsyncIterator[dict]:
         """Send a query on an existing client and yield SSE events.
 
         This is the shared message-processing loop used by both new and resumed sessions.
         The client is NOT disconnected after the response completes (caller manages lifecycle).
         """
+        # Two concurrent tasks feed a single combined_queue: one reads SDK messages,
+        # the other forwards permission requests for this session. This fan-in pattern
+        # lets the main loop process both streams without polling or nested awaits.
         sdk_reader_task = None
         forwarder_task = None
 
         try:
             logger.info(f"Sending query: {display_text[:100] if display_text else 'multimodal'}...")
 
-            # Send query - use content for multimodal, message for simple text
+            # The SDK expects an async generator for multimodal (image/file) content,
+            # but a plain string for simple text queries.
             if isinstance(query_content, list):
                 async def multimodal_message_generator():
                     """Async generator for multimodal content."""
@@ -1626,17 +984,22 @@ class AgentManager:
                 await client.query(query_content)
             logger.info(f"Query sent, waiting for response...")
 
-            # Create combined queue for merging SDK messages and permission requests
+            # Fan-in queue: merges two async streams (SDK responses + permission requests)
+            # into one consumer loop, avoiding race conditions between the two sources.
             combined_queue: asyncio.Queue = asyncio.Queue()
             message_count = 0
 
             async def sdk_message_reader():
-                """Read SDK messages and put them in the combined queue."""
+                """Read SDK messages and put them in the combined queue.
+
+                Drains the SDK response stream into combined_queue. On error, pushes
+                an error sentinel so the main loop can break cleanly. Always pushes
+                sdk_done as a termination signal regardless of success or failure.
+                """
                 try:
                     async for message in client.receive_response():
                         await combined_queue.put({"source": "sdk", "message": message})
                 except Exception as e:
-                    import traceback
                     error_traceback = traceback.format_exc()
                     logger.error(f"SDK message reader error: {e}")
                     logger.error(f"SDK error traceback:\n{error_traceback}")
@@ -1650,7 +1013,13 @@ class AgentManager:
                     logger.debug("SDK message reader finished")
 
             async def permission_request_forwarder():
-                """Monitor global queue and forward requests for this session."""
+                """Monitor the global permission queue and forward requests for this session.
+
+                Permission requests arrive on a shared global queue from security hooks.
+                Only requests matching this session's ID are forwarded; mismatched requests
+                are put back so other sessions can claim them. The sleep(0.01) prevents
+                busy-looping when repeatedly re-queuing mismatched requests.
+                """
                 try:
                     while True:
                         request = await _permission_request_queue.get()
@@ -1669,6 +1038,13 @@ class AgentManager:
             sdk_reader_task = asyncio.create_task(sdk_message_reader())
             forwarder_task = asyncio.create_task(permission_request_forwarder())
 
+            # --- Main message loop ---
+            # Consumes items from the fan-in queue until sdk_done or an error sentinel.
+            # Each item is tagged with a "source" key so we can dispatch accordingly:
+            #   "sdk"        → a Claude SDK message (AssistantMessage, ResultMessage, SystemMessage, etc.)
+            #   "permission" → a human-approval request forwarded from the permission queue
+            #   "sdk_done"   → the SDK stream has ended (normal termination)
+            #   "error"      → the SDK reader encountered an exception
             formatted = None
             assistant_model = None
 
@@ -1694,6 +1070,14 @@ class AgentManager:
                     message_count += 1
                     logger.info(f"Received message {message_count}: {type(message).__name__}")
 
+                    # --- SDK message dispatch ---
+                    # Messages are checked in a specific order:
+                    #   1. ResultMessage first — may carry final text AND error subtypes
+                    #   2. SystemMessage — session init metadata, never forwarded to the client
+                    #   3. All other types — formatted via _format_message and yielded as SSE events
+                    # ResultMessage is checked TWICE: once here for errors/final text, and again
+                    # after _format_message to handle conversation-complete bookkeeping.
+
                     if isinstance(message, ResultMessage):
                         logger.info(f"ResultMessage: {message}")
 
@@ -1710,25 +1094,55 @@ class AgentManager:
                                 "error": error_text,
                             }
 
-                        result_text = message.result
-                        if result_text:
-                            logger.debug(f"ResultMessage result_text: {result_text[:50]}...")
+                        elif message.is_error:
+                            # is_error=True but subtype is NOT 'error_during_execution':
+                            # This covers auth failures (e.g. "Not logged in · Please run /login")
+                            # and other SDK-level errors. Yield as an error event, NOT assistant.
+                            raw_error = message.result or "An unknown error occurred."
+                            error_lower = raw_error.lower()
+                            is_auth_error = any(p in error_lower for p in _AUTH_PATTERNS)
+
+                            if is_auth_error:
+                                error_msg = "Authentication failed. Please configure your API key in Settings or run /login."
+                                logger.warning(f"Auth error detected from SDK: {raw_error}")
+                            else:
+                                error_msg = raw_error
+                                logger.warning(f"SDK is_error ResultMessage: {raw_error}")
+
+                            session_context["had_error"] = True
                             yield {
-                                "type": "assistant",
-                                "content": [{"type": "text", "text": result_text}],
-                                "model": agent_config.get("model", "claude-sonnet-4-20250514")
+                                "type": "error",
+                                "error": error_msg,
                             }
-                            result_block = {"type": "text", "text": result_text}
-                            assistant_content.add(result_block)
+                            # Do NOT persist error text as assistant content or yield as assistant
+
+                        else:
+                            result_text = message.result
+                            if result_text:
+                                logger.debug(f"ResultMessage result_text: {result_text[:50]}...")
+                                # Emit the final text as an SSE assistant event so the frontend
+                                # can render it immediately, then accumulate it for DB persistence.
+                                yield {
+                                    "type": "assistant",
+                                    "content": [{"type": "text", "text": result_text}],
+                                    "model": agent_config.get("model", "claude-sonnet-4-20250514")
+                                }
+                                result_block = {"type": "text", "text": result_text}
+                                assistant_content.add(result_block)
 
                     if isinstance(message, SystemMessage):
                         logger.info(f"SystemMessage subtype: {message.subtype}, data: {message.data}")
 
+                        # The 'init' SystemMessage carries the SDK-assigned session ID.
+                        # For new sessions we bootstrap persistence (store session + save
+                        # the user message). For resumed sessions the session already exists
+                        # in the DB, so we only capture the ID for later reference.
                         if message.subtype == 'init':
                             session_context["sdk_session_id"] = message.data.get('session_id')
                             logger.info(f"Captured SDK session_id from init: {session_context['sdk_session_id']}")
 
                             if not is_resuming:
+                                # Register the client for potential reuse by continue_with_answer
                                 self._clients[session_context["sdk_session_id"]] = client
 
                                 yield {
@@ -1737,7 +1151,7 @@ class AgentManager:
                                 }
 
                                 title = display_text[:50] + "..." if len(display_text) > 50 else display_text
-                                await session_manager.store_session(session_context["sdk_session_id"], agent_id, title, work_dir=work_dir, workspace_id=workspace_id)
+                                await session_manager.store_session(session_context["sdk_session_id"], agent_id, title)
 
                                 user_content = content if content else [{"type": "text", "text": user_message}]
                                 await self._save_message(
@@ -1746,18 +1160,31 @@ class AgentManager:
                                     content=user_content
                                 )
 
-                        continue  # Don't format SystemMessage for output
+                        # SystemMessages are internal metadata — never forwarded as SSE events
+                        continue
 
+                    # --- Format and dispatch non-system messages ---
+                    # _format_message converts SDK message types (AssistantMessage, ToolUseMessage,
+                    # etc.) into SSE-friendly dicts. Returns None for messages that shouldn't
+                    # be forwarded to the frontend.
                     formatted = await self._format_message(message, agent_config, session_context["sdk_session_id"])
                     if formatted:
                         logger.debug(f"Formatted message type: {formatted.get('type')}")
 
+                        # Accumulate assistant content blocks for later DB persistence.
+                        # The accumulator deduplicates by block key (text content, tool_use id,
+                        # tool_result tool_use_id) so repeated blocks from streaming don't
+                        # produce duplicate entries in the saved message.
                         if formatted.get('type') == 'assistant' and formatted.get('content'):
                             assistant_content.extend(formatted['content'])
                             assistant_model = formatted.get('model')
 
                         yield formatted
 
+                        # Early-return events: ask_user_question and permission_request both
+                        # pause the conversation to wait for external input. We persist any
+                        # accumulated assistant content before returning so the partial
+                        # response isn't lost if the user takes a long time to respond.
                         if formatted.get('type') == 'ask_user_question':
                             logger.info(f"AskUserQuestion detected, stopping to wait for user input")
                             sdk_session = session_context.get("sdk_session_id")
@@ -1783,9 +1210,16 @@ class AgentManager:
                                 )
                             return
 
+                    # --- Conversation-complete bookkeeping (second ResultMessage check) ---
+                    # ResultMessage is checked again here (after formatting) because the first
+                    # check above handles error subtypes and final text extraction, while this
+                    # block handles end-of-conversation persistence and the result SSE event.
                     if isinstance(message, ResultMessage):
                         logger.info(f"Conversation complete. Total messages: {message_count}")
 
+                        # Slash commands (e.g. /help) may produce no assistant content if the
+                        # SDK handles them silently. Synthesize a default response so the
+                        # frontend always has something to display.
                         is_slash_command = display_text.strip().startswith('/') if display_text else False
                         if is_slash_command and not assistant_content:
                             command_name = display_text.strip().split()[0] if display_text else '/unknown'
@@ -1798,6 +1232,10 @@ class AgentManager:
                             }
                             assistant_content.add({"type": "text", "text": default_response})
 
+                        # Persist the full deduplicated assistant response to the DB.
+                        # This is the single write point for normal conversation completion;
+                        # early-return paths (ask_user_question, permission_request) have
+                        # their own persistence above.
                         if assistant_content and session_context["sdk_session_id"]:
                             await self._save_message(
                                 session_id=session_context["sdk_session_id"],
@@ -1806,6 +1244,8 @@ class AgentManager:
                                 model=assistant_model
                             )
 
+                        # Terminal SSE event — signals the frontend that the turn is complete
+                        # and carries usage metrics for display.
                         yield {
                             "type": "result",
                             "session_id": session_context["sdk_session_id"],
@@ -1814,6 +1254,9 @@ class AgentManager:
                             "num_turns": getattr(message, 'num_turns', 1),
                         }
         finally:
+            # Cleanup: cancel both background tasks regardless of how we exited the loop
+            # (normal completion, error, or early return). The await-after-cancel pattern
+            # ensures the tasks have fully stopped before we proceed.
             if sdk_reader_task and not sdk_reader_task.done():
                 sdk_reader_task.cancel()
                 try:
@@ -1830,7 +1273,9 @@ class AgentManager:
                     pass
                 logger.debug("Forwarder task cancelled")
 
-            # Only remove from _clients tracking (NOT from _active_sessions - that's for reuse)
+            # Remove from _clients tracking so stale references aren't reused,
+            # but keep _active_sessions intact — the session may still be valid for
+            # future continue_with_answer calls via the SDK's resume mechanism.
             if session_context.get("sdk_session_id"):
                 self._clients.pop(session_context["sdk_session_id"], None)
 
@@ -1936,15 +1381,6 @@ class AgentManager:
         logger.info(f"Continuing conversation with answer for agent {agent_id}, session {session_id}")
         logger.info(f"Tool use ID: {tool_use_id}, Answers: {answers}")
 
-        # Restore work_dir from session for continuity
-        session_info = await session_manager.get_session(session_id)
-        if session_info and session_info.work_dir:
-            agent_config['add_dirs'] = [session_info.work_dir]
-            logger.info(f"Restored work_dir from session: {session_info.work_dir}")
-
-        # Configure Claude environment variables
-        await _configure_claude_environment()
-
         # Format answers as a user message
         answer_message = json.dumps({"answers": answers}, indent=2)
 
@@ -1955,88 +1391,20 @@ class AgentManager:
             content=[{"type": "text", "text": f"User answers:\n{answer_message}"}]
         )
 
-        # Collect assistant response content for saving (with O(1) deduplication)
-        assistant_content = ContentBlockAccumulator()
-        session_context = {"sdk_session_id": session_id}
-
-        # Try to reuse existing long-lived client
-        reused_client = self._get_active_client(session_id)
-
-        try:
-            if reused_client:
-                # Reuse existing client
-                client = reused_client
-                logger.info(f"Reusing long-lived client for answer continuation, session {session_id}")
-                self._clients[session_id] = client
-
-                async for event in self._run_query_on_client(
-                    client=client,
-                    query_content=answer_message,
-                    display_text=answer_message[:100],
-                    agent_config=agent_config,
-                    session_context=session_context,
-                    assistant_content=assistant_content,
-                    is_resuming=True,
-                    content=None,
-                    user_message=answer_message,
-                    work_dir=session_info.work_dir if session_info else None,
-                    agent_id=agent_id,
-                ):
-                    yield event
-            else:
-                # No active client — --resume won't work (SDK 0.1.34+ doesn't
-                # persist transcripts). Start a fresh session.
-                logger.info(f"No active client for session {session_id}, starting fresh session for answer")
-                options = await self._build_options(agent_config, enable_skills, enable_mcp)
-                session_context["sdk_session_id"] = None
-                wrapper = _ClaudeClientWrapper(options=options)
-                client = await wrapper.__aenter__()
-                logger.info(f"ClaudeSDKClient created for fresh answer session")
-
-                try:
-                    async for event in self._run_query_on_client(
-                        client=client,
-                        query_content=answer_message,
-                        display_text=answer_message[:100],
-                        agent_config=agent_config,
-                        session_context=session_context,
-                        assistant_content=assistant_content,
-                        is_resuming=False,
-                        content=None,
-                        user_message=answer_message,
-                        work_dir=session_info.work_dir if session_info else None,
-                        agent_id=agent_id,
-                    ):
-                        yield event
-                except Exception:
-                    try:
-                        await wrapper.__aexit__(None, None, None)
-                    except Exception:
-                        pass
-                    raise
-
-                # Store for reuse
-                self._active_sessions[session_id] = {
-                    "client": client,
-                    "wrapper": wrapper,
-                    "created_at": time.time(),
-                    "last_used": time.time(),
-                }
-                logger.info(f"Stored long-lived client for session {session_id} (from answer continuation)")
-
-        except Exception as e:
-            import traceback
-            error_traceback = traceback.format_exc()
-            logger.error(f"Error continuing conversation with answer: {e}")
-            logger.error(f"Full traceback:\n{error_traceback}")
-            # Clean up broken session from reuse pool
-            if session_id in self._active_sessions:
-                await self._cleanup_session(session_id)
-            yield {
-                "type": "error",
-                "error": str(e),
-                "detail": error_traceback,
-            }
+        # Delegate to shared session execution pattern
+        async for event in self._execute_on_session(
+            agent_config=agent_config,
+            query_content=answer_message,
+            display_text=answer_message[:100],
+            session_id=session_id,
+            enable_skills=enable_skills,
+            enable_mcp=enable_mcp,
+            is_resuming=True,
+            content=None,
+            user_message=answer_message,
+            agent_id=agent_id,
+        ):
+            yield event
 
     async def continue_with_permission(
         self,
@@ -2105,7 +1473,7 @@ class AgentManager:
         if decision == "approve":
             decision_message = f"User APPROVED the command. Please proceed with executing: {command}"
             # Store this approval for the hook to check - use the session_id from permission_request
-            _approved_commands.setdefault(perm_session_id, set()).add(_hash_command(command))
+            _pm.approve_command(perm_session_id, command)
         else:
             reason = feedback if feedback else "User denied the command"
             decision_message = f"User DENIED the command '{command}'. Reason: {reason}. Please acknowledge this and continue without executing that command."
@@ -2228,25 +1596,10 @@ Use the skill-creator skill (invoke /skill-creator) to guide your skill creation
 Create the skill in the `.claude/skills/` directory within the current workspace."""
 
         # Build system prompt for skill creator agent
-        system_prompt = f"""You are a Skill Creator Agent specialized in creating Claude Code skills.
-
-Your task is to help users create high-quality skills that extend Claude's capabilities.
-
-IMPORTANT GUIDELINES:
-1. Always use the skill-creator skill (invoke /skill-creator) to get guidance on skill creation best practices
-2. Follow the skill creation workflow from the skill-creator skill
-3. Create skills in the `.claude/skills/` directory
-4. Ensure SKILL.md has proper YAML frontmatter with name and description
-5. Keep skills concise and focused - only include what Claude needs
-6. Test any scripts you create before completing
-
-The skill-creator skill provides comprehensive guidance on:
-- Skill anatomy and structure
-- Progressive disclosure design
-- When to use scripts, references, and assets
-- Best practices for SKILL.md content
-
-Current task: Create a skill named "{skill_name}" that {skill_description}"""
+        system_prompt = SKILL_CREATOR_SYSTEM_PROMPT_TEMPLATE.format(
+            skill_name=skill_name,
+            skill_description=skill_description,
+        )
 
         # Create temporary agent config for skill creation
         agent_config = {
@@ -2255,7 +1608,7 @@ Current task: Create a skill named "{skill_name}" that {skill_description}"""
             "system_prompt": system_prompt,
             "allowed_tools": ["Bash", "Read", "Write", "Edit", "Glob", "Grep", "Skill","TodoWrite","Task"],
             "permission_mode": "bypassPermissions",
-            "working_directory": settings.agent_workspace_dir,
+            "working_directory": None,  # Uses cached SwarmWorkspace path via initialization_manager
             "global_user_mode": False,  # Use workspace dir, not home dir
             "enable_tool_logging": True,
             "enable_safety_checks": True,
@@ -2302,7 +1655,6 @@ Current task: Create a skill named "{skill_name}" that {skill_description}"""
                     is_resuming=is_resuming,
                     content=None,
                     user_message=prompt,
-                    work_dir=None,
                     agent_id="skill-creator",
                 ):
                     if event.get("type") == "result":
@@ -2333,7 +1685,6 @@ Current task: Create a skill named "{skill_name}" that {skill_description}"""
                         is_resuming=is_resuming,
                         content=None,
                         user_message=prompt,
-                        work_dir=None,
                         agent_id="skill-creator",
                     ):
                         if event.get("type") == "result":
@@ -2358,7 +1709,6 @@ Current task: Create a skill named "{skill_name}" that {skill_description}"""
                     logger.info(f"Stored long-lived client for skill creator session {final_session_id}")
 
         except Exception as e:
-            import traceback
             error_traceback = traceback.format_exc()
             logger.error(f"Error in skill creation conversation: {e}")
             logger.error(f"Full traceback:\n{error_traceback}")

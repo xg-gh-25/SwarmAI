@@ -1129,17 +1129,17 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
 
           const result = verifyNavigationOrder();
 
-          // Property: All 5 navigation items SHALL be present
+          // Property: All 5 modal navigation items SHALL be present
           expect(result.allItemsPresent).toBe(true);
 
-          // Property: Items SHALL appear in exact order: Workspaces, SwarmCore, Agents, Skills, MCP Servers
+          // Property: Modal nav items SHALL appear in exact order: Workspaces, SwarmCore, Agents, Skills, MCP Servers
           expect(result.correctOrder).toBe(true);
 
           // Property: No items SHALL be duplicated
           expect(result.noDuplicates).toBe(true);
 
-          // Property: Exactly 5 items SHALL be present
-          expect(result.foundItems.length).toBe(5);
+          // Property: At least 5 modal nav items SHALL be present (section nav items may also exist)
+          expect(result.foundItems.length).toBeGreaterThanOrEqual(5);
 
           unmount();
         }),

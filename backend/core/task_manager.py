@@ -11,6 +11,17 @@ from .agent_manager import agent_manager
 
 logger = logging.getLogger(__name__)
 
+# Legacy status → new status mapping for backward compatibility
+# Requirements: 5.4
+_LEGACY_STATUS_MAP = {
+    "pending": "draft",
+    "running": "wip",
+    "failed": "blocked",
+}
+
+# All valid new statuses
+_VALID_STATUSES = {"draft", "wip", "blocked", "completed", "cancelled"}
+
 
 class TaskManager:
     """Manages background agent tasks that persist across frontend connections.
@@ -20,6 +31,8 @@ class TaskManager:
     - Subscribe to task events via SSE
     - Disconnect and reconnect without losing progress
     - Send messages to running tasks
+
+    Requirements: 5.1-5.8
     """
 
     def __init__(self):
@@ -36,6 +49,43 @@ class TaskManager:
         # Buffer retention time after task completion (seconds)
         self._buffer_retention_seconds = 300  # 5 minutes
 
+    @staticmethod
+    def _map_legacy_status(status: str) -> str:
+        """Map legacy task status to new status values.
+
+        Provides backward compatibility by transparently converting:
+        - pending → draft
+        - running → wip
+        - failed → blocked
+
+        If the status is already a valid new status, it is returned as-is.
+
+        Args:
+            status: The status string (legacy or new).
+
+        Returns:
+            The mapped new status string.
+
+        Validates: Requirements 5.4
+        """
+        return _LEGACY_STATUS_MAP.get(status, status)
+
+    async def _get_default_workspace_id(self) -> str:
+        """Get the default workspace (SwarmWS) ID.
+
+        Returns:
+            str: The ID of the default workspace (SwarmWS).
+
+        Raises:
+            ValueError: If no default workspace exists.
+
+        Validates: Requirements 1.3, 1.4
+        """
+        default_workspace = await db.swarm_workspaces.get_default()
+        if not default_workspace:
+            raise ValueError("Default workspace (SwarmWS) not found. Please initialize the application first.")
+        return default_workspace["id"]
+
     async def create_task(
         self,
         agent_id: str,
@@ -43,7 +93,10 @@ class TaskManager:
         content: Optional[list[dict]] = None,
         enable_skills: bool = False,
         enable_mcp: bool = False,
-        add_dirs: Optional[list[str]] = None,
+        workspace_id: Optional[str] = None,
+        source_todo_id: Optional[str] = None,
+        priority: str = "none",
+        description: Optional[str] = None,
     ) -> dict:
         """Create and start a new background task.
 
@@ -53,15 +106,33 @@ class TaskManager:
             content: Multimodal content array
             enable_skills: Whether to enable skills
             enable_mcp: Whether to enable MCP servers
-            add_dirs: Additional directories for Claude to access
+            workspace_id: Workspace to assign the task to (defaults to SwarmWS)
+            source_todo_id: ID of the ToDo this task was created from
+            priority: Task priority (high, medium, low, none)
+            description: Task description
 
         Returns:
             Task record dict
+
+        Validates: Requirements 1.4, 5.1, 5.6, 5.7
         """
         # Get agent config for model and title
         agent_config = await db.agents.get(agent_id)
         if not agent_config:
             raise ValueError(f"Agent {agent_id} not found")
+
+        # Default workspace_id to SwarmWS if not provided
+        if not workspace_id:
+            workspace_id = await self._get_default_workspace_id()
+            logger.debug(f"Defaulting task workspace_id to SwarmWS: {workspace_id}")
+
+        # Enforce archived workspace read-only (Requirement 36.6, 36.8)
+        ws = await db.swarm_workspaces.get(workspace_id)
+        if ws and ws.get("is_archived"):
+            raise PermissionError(
+                f"Cannot create tasks in archived workspace '{workspace_id}'. "
+                "Archived workspaces are read-only."
+            )
 
         # Generate title from message
         if content:
@@ -79,20 +150,24 @@ class TaskManager:
         if message and len(message) > 50:
             title += "..."
 
-        # Create task record
+        # Create task record with new fields
         task_id = f"task_{uuid4().hex[:12]}"
         task = {
             "id": task_id,
             "agent_id": agent_id,
             "session_id": None,  # Will be set when agent starts
-            "status": "pending",
+            "status": "draft",
             "title": title,
+            "description": description,
+            "priority": priority,
+            "workspace_id": workspace_id,
+            "source_todo_id": source_todo_id,
+            "blocked_reason": None,
             "model": agent_config.get("model"),
             "created_at": datetime.now(timezone.utc).isoformat(),
             "started_at": None,
             "completed_at": None,
             "error": None,
-            "work_dir": add_dirs[0] if add_dirs else None,
         }
         await db.tasks.put(task)
 
@@ -110,7 +185,6 @@ class TaskManager:
                 content=content,
                 enable_skills=enable_skills,
                 enable_mcp=enable_mcp,
-                add_dirs=add_dirs,
             )
         )
         self._running_tasks[task_id] = asyncio_task
@@ -126,16 +200,15 @@ class TaskManager:
         content: Optional[list[dict]],
         enable_skills: bool,
         enable_mcp: bool,
-        add_dirs: Optional[list[str]],
     ) -> None:
         """Background task execution."""
         try:
-            # Update status to running
+            # Update status to wip (was "running")
             await db.tasks.update(task_id, {
-                "status": "running",
+                "status": "wip",
                 "started_at": datetime.now(timezone.utc).isoformat(),
             })
-            await self._emit_event(task_id, {"type": "status", "status": "running"})
+            await self._emit_event(task_id, {"type": "status", "status": "wip"})
 
             # Run agent conversation
             # Use aclosing() to ensure generator cleanup happens in this task
@@ -147,7 +220,6 @@ class TaskManager:
                 session_id=None,  # New conversation
                 enable_skills=enable_skills,
                 enable_mcp=enable_mcp,
-                add_dirs=add_dirs,
             )) as conversation:
                 async for event in conversation:
                     # Capture session_id from session_start event
@@ -158,12 +230,14 @@ class TaskManager:
                     # Emit event to subscribers
                     await self._emit_event(task_id, event)
 
-                    # Check for errors
+                    # Check for errors - transition to blocked with reason
                     if event.get("type") == "error":
+                        error_msg = event.get("error", "Unknown error")
                         await db.tasks.update(task_id, {
-                            "status": "failed",
+                            "status": "blocked",
+                            "blocked_reason": error_msg,
                             "completed_at": datetime.now(timezone.utc).isoformat(),
-                            "error": event.get("error"),
+                            "error": error_msg,
                         })
                         return
 
@@ -190,12 +264,14 @@ class TaskManager:
             await self._emit_event(task_id, {"type": "status", "status": "cancelled"})
         except Exception as e:
             logger.error(f"Task {task_id} failed: {e}")
+            error_msg = str(e)
             await db.tasks.update(task_id, {
-                "status": "failed",
+                "status": "blocked",
+                "blocked_reason": error_msg,
                 "completed_at": datetime.now(timezone.utc).isoformat(),
-                "error": str(e),
+                "error": error_msg,
             })
-            await self._emit_event(task_id, {"type": "error", "error": str(e)})
+            await self._emit_event(task_id, {"type": "error", "error": error_msg})
         finally:
             # Cleanup running task reference
             self._running_tasks.pop(task_id, None)
@@ -237,16 +313,17 @@ class TaskManager:
                     session_id=session_id,
                     enable_skills=enable_skills,
                     enable_mcp=enable_mcp,
-                    add_dirs=[task["work_dir"]] if task.get("work_dir") else None,
                 )) as conversation:
                     async for event in conversation:
                         await self._emit_event(task_id, event)
 
                         if event.get("type") == "error":
+                            error_msg = event.get("error", "Unknown error")
                             await db.tasks.update(task_id, {
-                                "status": "failed",
+                                "status": "blocked",
+                                "blocked_reason": error_msg,
                                 "completed_at": datetime.now(timezone.utc).isoformat(),
-                                "error": event.get("error"),
+                                "error": error_msg,
                             })
                             return
 
@@ -322,8 +399,8 @@ class TaskManager:
                 event = await queue.get()
                 yield event
 
-                # Stop if task completed/failed/cancelled
-                if event.get("type") == "status" and event.get("status") in ["completed", "failed", "cancelled"]:
+                # Stop if task completed/blocked/cancelled
+                if event.get("type") == "status" and event.get("status") in ["completed", "blocked", "failed", "cancelled"]:
                     break
                 if event.get("type") in ["result", "error"]:
                     break
@@ -347,7 +424,7 @@ class TaskManager:
             return False
 
         task = await db.tasks.get(task_id)
-        if not task or task.get("status") != "running":
+        if not task or task.get("status") not in ("running", "wip"):
             return False
 
         await self._message_queues[task_id].put({
@@ -371,16 +448,44 @@ class TaskManager:
         return True
 
     async def get_task(self, task_id: str) -> Optional[dict]:
-        """Get task by ID."""
-        return await db.tasks.get(task_id)
+        """Get task by ID, with legacy status mapping.
+
+        Validates: Requirements 5.4
+        """
+        task = await db.tasks.get(task_id)
+        if task and task.get("status"):
+            task["status"] = self._map_legacy_status(task["status"])
+        return task
 
     async def list_tasks(
         self,
         status: Optional[str] = None,
         agent_id: Optional[str] = None,
+        workspace_id: Optional[str] = None,
     ) -> list[dict]:
-        """List all tasks."""
-        return await db.tasks.list_all(status=status, agent_id=agent_id)
+        """List all tasks, with optional filtering.
+
+        Args:
+            status: Filter by status. Legacy statuses are mapped automatically.
+            agent_id: Filter by agent ID.
+            workspace_id: Filter by workspace ID.
+
+        Returns:
+            List of task dicts with statuses mapped to new values.
+
+        Validates: Requirements 5.1, 5.4, 5.7
+        """
+        # Map legacy status if provided
+        mapped_status = self._map_legacy_status(status) if status else None
+
+        tasks = await db.tasks.list_all(status=mapped_status, agent_id=agent_id, workspace_id=workspace_id)
+
+        # Map legacy statuses in returned results for backward compatibility
+        for task in tasks:
+            if task.get("status"):
+                task["status"] = self._map_legacy_status(task["status"])
+
+        return tasks
 
     async def delete_task(self, task_id: str) -> bool:
         """Delete a task (cancels if running)."""
@@ -396,8 +501,11 @@ class TaskManager:
         return await db.tasks.delete(task_id)
 
     async def get_running_count(self) -> int:
-        """Get count of running tasks."""
-        return await db.tasks.count_by_status("running")
+        """Get count of running (wip) tasks."""
+        # Check both old and new status names for backward compatibility
+        wip_count = await db.tasks.count_by_status("wip")
+        running_count = await db.tasks.count_by_status("running")
+        return wip_count + running_count
 
 
 # Global instance
