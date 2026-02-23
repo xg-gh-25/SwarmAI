@@ -38,6 +38,7 @@ npm run tauri:build    # Only Tauri app (requires backend built first)
 # Testing
 npm run test           # Watch mode
 npm run test:run       # Single run
+npm run test -- src/components/Button.test.tsx  # Run specific test file
 npm run lint
 ```
 
@@ -47,16 +48,17 @@ npm run lint
 cd backend
 
 # Setup (using uv - recommended)
-uv venv && source .venv/bin/activate
-uv pip install -r requirements.txt
+uv sync                          # Creates venv and installs deps from pyproject.toml
+source .venv/bin/activate
 
 # Run development server
 python main.py
 # or: uvicorn main:app --reload --port 8000
 
 # Testing
-pytest
-pytest tests/test_agent_manager.py -v
+pytest                                    # Run all tests
+pytest tests/test_agent_manager.py -v     # Run specific test file
+pytest tests/test_agent_manager.py::test_function_name -v  # Run single test
 ```
 
 ### Development Ports
@@ -253,6 +255,18 @@ tail -f logs/backend.log | grep "FILE ACCESS DENIED\|BASH FILE ACCESS\|BLOCKED.*
 # SSE stream
 # Browser DevTools → Network → Filter: stream
 ```
+
+## Internationalization (i18n)
+
+The desktop app supports multiple languages using `i18next`:
+
+- **Locales**: `desktop/src/i18n/locales/{en,zh}.json`
+- **Config**: `desktop/src/i18n/index.ts`
+
+**When adding new UI text:**
+1. Add the key to both `en.json` and `zh.json`
+2. Use `useTranslation()` hook: `const { t } = useTranslation(); t('key.path')`
+3. Use nested keys: `"agents": { "create": "Create Agent" }` → `t('agents.create')`
 
 ## Design System
 
