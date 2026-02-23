@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
 import clsx from 'clsx';
@@ -22,6 +23,7 @@ interface PendingQuestion {
 }
 
 export default function ChatPage() {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
   const [messages, setMessages] = useState<Message[]>([]);
@@ -1505,7 +1507,7 @@ export default function ChatPage() {
             <div className="h-12 px-4 flex items-center justify-between border-b border-dark-border flex-shrink-0">
               <div className="flex items-center gap-2">
                 <span className="material-symbols-outlined text-primary text-lg">chat</span>
-                <span className="font-medium text-white text-sm">History</span>
+                <span className="font-medium text-white text-sm">{t('chat.history')}</span>
               </div>
               <button
                 onClick={toggleChatSidebar}
@@ -1553,15 +1555,15 @@ export default function ChatPage() {
                 className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-primary hover:bg-primary-hover disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg transition-colors"
               >
                 <span className="material-symbols-outlined text-xl">add</span>
-                New Chat
+                {t('chat.newChat')}
               </button>
             </div>
 
             {/* Chat History List */}
             <div className="flex-1 overflow-y-auto p-2 space-y-1">
-              <p className="px-3 py-2 text-xs font-medium text-muted uppercase tracking-wider">Recent Chats</p>
+              <p className="px-3 py-2 text-xs font-medium text-muted uppercase tracking-wider">{t('chat.history')}</p>
               {sessions.length === 0 ? (
-                <p className="px-3 py-2 text-xs text-muted">No chat history yet</p>
+                <p className="px-3 py-2 text-xs text-muted">{t('chat.noHistory')}</p>
               ) : (
                 sessions.map((session) => {
                   const agentForSession = agents.find((a) => a.id === session.agentId);
@@ -1619,10 +1621,10 @@ export default function ChatPage() {
         {/* Delete Confirmation Dialog */}
         <ConfirmDialog
           isOpen={!!deleteConfirmSession}
-          title="Delete Chat"
-          message={`Are you sure you want to delete "${deleteConfirmSession?.title}"? This action cannot be undone.`}
-          confirmText="Delete"
-          cancelText="Cancel"
+          title={t('chat.deleteSession')}
+          message={t('chat.deleteSessionConfirm')}
+          confirmText={t('common.button.delete')}
+          cancelText={t('common.button.cancel')}
           variant="danger"
           onConfirm={() => deleteConfirmSession && handleDeleteSession(deleteConfirmSession)}
           onClose={() => setDeleteConfirmSession(null)}
@@ -1635,10 +1637,9 @@ export default function ChatPage() {
           <div className="flex-1 flex items-center justify-center">
             <div className="text-center">
               <span className="material-symbols-outlined text-6xl text-muted mb-4">smart_toy</span>
-              <h2 className="text-xl font-semibold text-white mb-2">Select an Agent to Start</h2>
+              <h2 className="text-xl font-semibold text-white mb-2">{t('chat.selectAgent')}</h2>
               <p className="text-muted max-w-md">
-                Choose an agent from the dropdown on the left to begin chatting.
-                Each agent has unique capabilities and configurations.
+                {t('chat.noAgent')}
               </p>
               {agents.length === 0 && !isLoadingAgents && (
                 <a
@@ -1646,7 +1647,7 @@ export default function ChatPage() {
                   className="inline-flex items-center gap-2 mt-4 px-4 py-2 bg-primary hover:bg-primary-hover text-white rounded-lg transition-colors"
                 >
                   <span className="material-symbols-outlined">add</span>
-                  Create Your First Agent
+                  {t('agents.createAgent')}
                 </a>
               )}
             </div>
@@ -1655,7 +1656,7 @@ export default function ChatPage() {
           <div className="flex-1 flex items-center justify-center">
             <div className="text-center">
               <Spinner size="lg" />
-              <p className="text-muted mt-4">Loading conversation history...</p>
+              <p className="text-muted mt-4">{t('common.status.loading')}</p>
             </div>
           </div>
         ) : (
@@ -1674,7 +1675,7 @@ export default function ChatPage() {
               {isStreaming && (
                 <div className="flex items-center gap-2 text-muted">
                   <Spinner size="sm" />
-                  <span className="text-sm">AI is thinking...</span>
+                  <span className="text-sm">{t('chat.thinking')}</span>
                 </div>
               )}
               <div ref={messagesEndRef} />
@@ -1806,7 +1807,7 @@ export default function ChatPage() {
                       onChange={handleInputChange}
                       onKeyDown={handleKeyDown}
                       onPaste={handlePaste}
-                      placeholder="Ask anything..."
+                      placeholder={t('chat.placeholder')}
                       rows={1}
                       className="flex-1 bg-transparent text-white placeholder:text-muted resize-none focus:outline-none py-2"
                     />
@@ -1934,7 +1935,7 @@ export default function ChatPage() {
               ) : (
                 <div className="flex flex-col items-center justify-center h-full text-muted p-4 text-center">
                   <span className="material-symbols-outlined text-3xl mb-2">folder_off</span>
-                  <p className="text-sm">Select an agent to browse files</p>
+                  <p className="text-sm">{t('chat.noAgent')}</p>
                 </div>
               )}
             </div>

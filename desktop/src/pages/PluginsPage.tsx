@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   SearchBar,
@@ -12,18 +13,19 @@ import {
 import type { Plugin } from '../types';
 import { pluginsService } from '../services/plugins';
 
-// Table columns for installed plugins
-const PLUGIN_COLUMNS = [
+// Table columns for installed plugins - will be translated via hook
+const getPluginColumns = (t: (key: string) => string) => [
   { key: 'checkbox', header: '', initialWidth: 40, minWidth: 40 },
-  { key: 'name', header: 'Plugin Name', initialWidth: 200, minWidth: 150 },
-  { key: 'version', header: 'Version', initialWidth: 100, minWidth: 80 },
-  { key: 'marketplace', header: 'Marketplace', initialWidth: 180, minWidth: 120 },
-  { key: 'components', header: 'Components', initialWidth: 200, minWidth: 150 },
-  { key: 'status', header: 'Status', initialWidth: 100, minWidth: 80 },
+  { key: 'name', header: t('plugins.table.name'), initialWidth: 200, minWidth: 150 },
+  { key: 'version', header: t('plugins.table.version'), initialWidth: 100, minWidth: 80 },
+  { key: 'marketplace', header: t('plugins.table.marketplace'), initialWidth: 180, minWidth: 120 },
+  { key: 'components', header: t('common.label.components') || 'Components', initialWidth: 200, minWidth: 150 },
+  { key: 'status', header: t('plugins.table.status'), initialWidth: 100, minWidth: 80 },
   { key: 'actions', header: '', initialWidth: 80, minWidth: 60, align: 'right' as const },
 ];
 
 export default function PluginsPage() {
+  const { t } = useTranslation();
   const [searchQuery, setSearchQuery] = useState('');
   const [isInstallModalOpen, setIsInstallModalOpen] = useState(false);
   const [deletePluginTarget, setDeletePluginTarget] = useState<Plugin | null>(null);
@@ -31,6 +33,9 @@ export default function PluginsPage() {
   const [isBatchDeleteOpen, setIsBatchDeleteOpen] = useState(false);
 
   const queryClient = useQueryClient();
+
+  // Get translated columns
+  const PLUGIN_COLUMNS = getPluginColumns(t);
 
   // Fetch installed plugins
   const { data: plugins = [], isLoading: isLoadingPlugins } = useQuery({
@@ -103,8 +108,8 @@ export default function PluginsPage() {
       {/* Header */}
       <div className="flex items-start justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-bold text-white">Plugin Management</h1>
-          <p className="text-muted mt-1">Install and manage plugins from Git repositories.</p>
+          <h1 className="text-2xl font-bold text-white">{t('plugins.title')}</h1>
+          <p className="text-muted mt-1">{t('plugins.subtitle')}</p>
         </div>
         <div className="flex items-center gap-3">
           {selectedIds.size > 0 && (
@@ -114,11 +119,11 @@ export default function PluginsPage() {
               onClick={() => setIsBatchDeleteOpen(true)}
               className="!text-status-error !border-status-error/30 hover:!bg-status-error/10"
             >
-              Delete ({selectedIds.size})
+              {t('common.button.delete')} ({selectedIds.size})
             </Button>
           )}
           <Button icon="add" onClick={() => setIsInstallModalOpen(true)}>
-            Install Plugin
+            {t('common.button.install')} Plugin
           </Button>
         </div>
       </div>
@@ -128,7 +133,7 @@ export default function PluginsPage() {
         <SearchBar
           value={searchQuery}
           onChange={setSearchQuery}
-          placeholder="Search plugins..."
+          placeholder={t('plugins.searchPlaceholder')}
           className="max-w-md"
         />
       </div>
@@ -143,16 +148,14 @@ export default function PluginsPage() {
               extension
             </span>
             <p className="text-white font-medium mb-1">
-              {searchQuery ? 'No plugins match your search' : 'No plugins installed'}
+              {t('plugins.noPlugins')}
             </p>
             <p className="text-muted text-sm mb-6">
-              {searchQuery
-                ? 'Try a different search term'
-                : 'Install plugins from Git repositories to extend functionality.'}
+              {t('plugins.subtitle')}
             </p>
             {!searchQuery && (
               <Button icon="add" onClick={() => setIsInstallModalOpen(true)}>
-                Install Plugin
+                {t('common.button.install')} Plugin
               </Button>
             )}
           </div>
@@ -236,18 +239,19 @@ export default function PluginsPage() {
         isOpen={deletePluginTarget !== null}
         onClose={() => setDeletePluginTarget(null)}
         onConfirm={() => deletePluginTarget && uninstallMutation.mutate(deletePluginTarget.id)}
-        title="Uninstall Plugin"
+        title={t('common.button.uninstall') + ' Plugin'}
         message={
           <>
-            Are you sure you want to uninstall{' '}
+            {t('common.message.confirmDelete')}{' '}
             <strong className="text-white">{deletePluginTarget?.name}</strong>?
             <br />
             <span className="text-sm text-muted">
-              This will remove all skills, commands, and hooks installed by this plugin.
+              {t('common.message.cannotUndo')}
             </span>
           </>
         }
-        confirmText="Uninstall"
+        confirmText={t('common.button.uninstall')}
+        cancelText={t('common.button.cancel')}
         isLoading={uninstallMutation.isPending}
       />
 
@@ -256,18 +260,19 @@ export default function PluginsPage() {
         isOpen={isBatchDeleteOpen}
         onClose={() => setIsBatchDeleteOpen(false)}
         onConfirm={() => batchUninstallMutation.mutate(Array.from(selectedIds))}
-        title="Uninstall Selected Plugins"
+        title={t('common.button.uninstall') + ' ' + selectedIds.size + ' Plugins'}
         message={
           <>
-            Are you sure you want to uninstall{' '}
+            {t('common.message.confirmDelete')}{' '}
             <strong className="text-white">{selectedIds.size} plugins</strong>?
             <br />
             <span className="text-sm text-muted">
-              This will remove all skills, commands, and hooks installed by these plugins.
+              {t('common.message.cannotUndo')}
             </span>
           </>
         }
-        confirmText={`Uninstall ${selectedIds.size} Plugins`}
+        confirmText={`${t('common.button.uninstall')} ${selectedIds.size} Plugins`}
+        cancelText={t('common.button.cancel')}
         isLoading={batchUninstallMutation.isPending}
       />
 
@@ -275,7 +280,7 @@ export default function PluginsPage() {
       <Modal
         isOpen={isInstallModalOpen}
         onClose={() => setIsInstallModalOpen(false)}
-        title="Install Plugin from Git"
+        title={t('common.button.install') + ' Plugin'}
         size="md"
       >
         <InstallPluginModal

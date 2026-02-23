@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import { SearchBar, Button, Modal, SkeletonTable, ResizableTable, ResizableTableCell, ConfirmDialog, AskUserQuestion, Dropdown, MarkdownRenderer } from '../components/common';
 import type { Skill, SyncResult, StreamEvent, ContentBlock, AskUserQuestion as AskUserQuestionType } from '../types';
 import { skillsService } from '../services/skills';
@@ -19,14 +20,14 @@ function formatDateTime(dateString: string): string {
   return date.toLocaleString();
 }
 
-// Table column configuration
-const SKILL_COLUMNS = [
-  { key: 'name', header: 'Skill Name', initialWidth: 180, minWidth: 120 },
-  { key: 'description', header: 'Description', initialWidth: 220, minWidth: 150 },
-  { key: 'source', header: 'Source', initialWidth: 180, minWidth: 120 },
-  { key: 'version', header: 'Version', initialWidth: 120, minWidth: 80 },
-  { key: 'updatedAt', header: 'Updated', initialWidth: 160, minWidth: 120 },
-  { key: 'actions', header: 'Actions', initialWidth: 120, minWidth: 100, align: 'right' as const },
+// Table column configuration - will be translated via hook
+const getSkillColumns = (t: (key: string) => string) => [
+  { key: 'name', header: t('skills.table.name'), initialWidth: 180, minWidth: 120 },
+  { key: 'description', header: t('skills.table.description'), initialWidth: 220, minWidth: 150 },
+  { key: 'source', header: t('skills.table.source'), initialWidth: 180, minWidth: 120 },
+  { key: 'version', header: t('skills.table.version'), initialWidth: 120, minWidth: 80 },
+  { key: 'updatedAt', header: t('common.label.updated') || 'Updated', initialWidth: 160, minWidth: 120 },
+  { key: 'actions', header: t('skills.table.actions'), initialWidth: 120, minWidth: 100, align: 'right' as const },
 ];
 
 // Get source display for a skill
@@ -61,6 +62,7 @@ function getSourceDisplay(skill: Skill): { label: string; icon: string; color: s
 }
 
 export default function SkillsPage() {
+  const { t } = useTranslation();
   const [skills, setSkills] = useState<Skill[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
@@ -71,6 +73,9 @@ export default function SkillsPage() {
   const [syncResult, setSyncResult] = useState<SyncResult | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Skill | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+
+  // Get translated columns
+  const SKILL_COLUMNS = getSkillColumns(t);
 
   // Fetch skills on mount
   useEffect(() => {
@@ -168,7 +173,7 @@ export default function SkillsPage() {
     <div className="p-8">
       {/* Header */}
       <div className="mb-6">
-        <h1 className="text-2xl font-bold text-white">Skill Management</h1>
+        <h1 className="text-2xl font-bold text-white">{t('skills.title')}</h1>
       </div>
 
       {/* Toolbar */}
@@ -176,7 +181,7 @@ export default function SkillsPage() {
         <SearchBar
           value={searchQuery}
           onChange={setSearchQuery}
-          placeholder="Filter by name..."
+          placeholder={t('skills.searchPlaceholder')}
           className="w-96"
         />
 
@@ -188,13 +193,13 @@ export default function SkillsPage() {
             isLoading={isRefreshing}
             disabled={isRefreshing}
           >
-            {isRefreshing ? 'Syncing...' : 'Refresh'}
+            {isRefreshing ? t('common.status.loading') : t('skills.refreshSkills')}
           </Button>
           <Button variant="secondary" icon="upload" onClick={() => setIsUploadModalOpen(true)}>
-            Upload ZIP
+            {t('skills.uploadSkill')}
           </Button>
           <Button icon="auto_awesome" onClick={() => setIsGenerateModalOpen(true)}>
-            Create with Agent
+            {t('skills.createSkill')}
           </Button>
         </div>
       </div>
@@ -270,7 +275,7 @@ export default function SkillsPage() {
                   <span className="material-symbols-outlined text-4xl text-muted mb-2">
                     construction
                   </span>
-                  <p className="text-muted">No skills found</p>
+                  <p className="text-muted">{t('skills.noSkills')}</p>
                 </td>
               </tr>
             )}
@@ -282,7 +287,7 @@ export default function SkillsPage() {
       <Modal
         isOpen={isUploadModalOpen}
         onClose={() => setIsUploadModalOpen(false)}
-        title="Upload Skill Package"
+        title={t('skills.upload.title')}
         size="md"
       >
         <UploadSkillForm
@@ -295,7 +300,7 @@ export default function SkillsPage() {
       <Modal
         isOpen={isGenerateModalOpen}
         onClose={() => setIsGenerateModalOpen(false)}
-        title="Create Skill with Agent"
+        title={t('skills.create.title')}
         size="3xl"
       >
         <GenerateSkillForm
@@ -308,7 +313,7 @@ export default function SkillsPage() {
       <Modal
         isOpen={isSyncResultModalOpen}
         onClose={() => setIsSyncResultModalOpen(false)}
-        title="Skill Sync Complete"
+        title={t('skills.refreshSkills')}
         size="md"
       >
         <SyncResultDisplay
@@ -322,19 +327,18 @@ export default function SkillsPage() {
         isOpen={deleteTarget !== null}
         onClose={() => setDeleteTarget(null)}
         onConfirm={handleDeleteConfirm}
-        title="Delete Skill"
+        title={t('skills.deleteSkill')}
         message={
           <>
-            Are you sure you want to delete <strong className="text-white">{deleteTarget?.name}</strong>?
+            {t('skills.deleteConfirm', { name: '' })}<strong className="text-white">{deleteTarget?.name}</strong>?
             <br />
             <span className="text-sm text-status-error font-medium">
-              ⚠️ This will permanently delete ALL versions (v1-v{deleteTarget?.currentVersion || 1}), drafts, and data.
+              {t('common.message.cannotUndo')}
             </span>
-            <br />
-            <span className="text-sm">The skill will be removed from local storage, S3, and database.</span>
           </>
         }
-        confirmText="Delete All Versions"
+        confirmText={t('common.button.delete')}
+        cancelText={t('common.button.cancel')}
         isLoading={isDeleting}
       />
 
