@@ -345,7 +345,7 @@
       "step1": "下载并安装 Git for Windows：",
       "step2": "设置环境变量：",
       "example": "示例（默认安装路径）：",
-      "afterSetting": "设置环境变量后，重启应用并点击上方的"刷新"验证。"
+      "afterSetting": "设置环境变量后，重启应用并点击上方的「刷新」验证。"
     },
     "backendService": {
       "title": "后端服务",

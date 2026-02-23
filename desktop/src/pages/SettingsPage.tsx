@@ -141,7 +141,7 @@ export default function SettingsPage() {
       } else {
         // In production, get port from Tauri and verify backend is actually responding
         const backend = await tauriService.getBackendStatus();
-        let port = backend.port;
+        const port = backend.port;
         let running = false;
 
         // Actually ping the backend to verify it's running
