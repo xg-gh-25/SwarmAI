@@ -66,7 +66,7 @@ Owork 是一个功能强大的 AI Agent 管理平台，让您可以：
 4. 注意如果运行提示“文件损坏”，需要在终端执行以下命令
 ```shell
 # 移除隔离属性
-sudo xattr -cr /Applications/Owork.app
+xattr -cr /Applications/Owork.app
 ```
 5. 启动 Owork
 #### 2. 配置 API
