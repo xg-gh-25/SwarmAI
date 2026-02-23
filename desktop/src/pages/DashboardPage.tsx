@@ -1,49 +1,12 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { agentsService } from '../services/agents';
 import { skillsService } from '../services/skills';
 import { mcpService } from '../services/mcp';
 import { pluginsService } from '../services/plugins';
 import type { Agent, Skill } from '../types';
 import { Skeleton } from '../components/common';
-
-const quickActions = [
-  {
-    title: 'Start a Chat',
-    description: 'Begin a conversation with an AI agent',
-    icon: 'chat',
-    path: '/chat',
-    color: 'bg-blue-500/20 text-blue-400',
-  },
-  {
-    title: 'Manage Agents',
-    description: 'Create and configure your AI agents',
-    icon: 'smart_toy',
-    path: '/agents',
-    color: 'bg-purple-500/20 text-purple-400',
-  },
-  {
-    title: 'View Skills',
-    description: 'Browse and manage available skills',
-    icon: 'construction',
-    path: '/skills',
-    color: 'bg-green-500/20 text-green-400',
-  },
-  {
-    title: 'MCP Servers',
-    description: 'Monitor and configure MCP connections',
-    icon: 'dns',
-    path: '/mcp',
-    color: 'bg-orange-500/20 text-orange-400',
-  },
-  {
-    title: 'Plugins',
-    description: 'Install and manage plugins from Git',
-    icon: 'extension',
-    path: '/plugins',
-    color: 'bg-teal-500/20 text-teal-400',
-  },
-];
 
 interface DashboardStats {
   agents: {
@@ -66,8 +29,47 @@ interface DashboardStats {
 }
 
 export default function DashboardPage() {
+  const { t } = useTranslation();
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+
+  const quickActions = [
+    {
+      titleKey: 'dashboard.action.startChat',
+      descriptionKey: 'dashboard.action.startChatDesc',
+      icon: 'chat',
+      path: '/chat',
+      color: 'bg-blue-500/20 text-blue-400',
+    },
+    {
+      titleKey: 'dashboard.action.manageAgents',
+      descriptionKey: 'dashboard.action.manageAgentsDesc',
+      icon: 'smart_toy',
+      path: '/agents',
+      color: 'bg-purple-500/20 text-purple-400',
+    },
+    {
+      titleKey: 'dashboard.action.viewSkills',
+      descriptionKey: 'dashboard.action.viewSkillsDesc',
+      icon: 'construction',
+      path: '/skills',
+      color: 'bg-green-500/20 text-green-400',
+    },
+    {
+      titleKey: 'dashboard.action.mcpServers',
+      descriptionKey: 'dashboard.action.mcpServersDesc',
+      icon: 'dns',
+      path: '/mcp',
+      color: 'bg-orange-500/20 text-orange-400',
+    },
+    {
+      titleKey: 'dashboard.action.plugins',
+      descriptionKey: 'dashboard.action.pluginsDesc',
+      icon: 'extension',
+      path: '/plugins',
+      color: 'bg-teal-500/20 text-teal-400',
+    },
+  ];
 
   useEffect(() => {
     const fetchStats = async () => {
@@ -122,15 +124,15 @@ export default function DashboardPage() {
     <div className="p-8">
       {/* Header */}
       <div className="mb-8">
-        <h1 className="text-3xl font-bold text-white mb-2">Welcome to Owork</h1>
+        <h1 className="text-3xl font-bold text-white mb-2">{t('dashboard.title')}</h1>
         <p className="text-muted">
-          Manage your AI agents, skills, and MCP server connections
+          {t('dashboard.subtitle')}
         </p>
       </div>
 
       {/* Quick Actions */}
       <div className="mb-8">
-        <h2 className="text-xl font-semibold text-white mb-4">Quick Actions</h2>
+        <h2 className="text-xl font-semibold text-white mb-4">{t('dashboard.quickActions')}</h2>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
           {quickActions.map((action) => (
             <Link
@@ -144,9 +146,9 @@ export default function DashboardPage() {
                 <span className="material-symbols-outlined text-2xl">{action.icon}</span>
               </div>
               <h3 className="text-lg font-semibold text-white mb-1 group-hover:text-primary transition-colors">
-                {action.title}
+                {t(action.titleKey)}
               </h3>
-              <p className="text-sm text-muted">{action.description}</p>
+              <p className="text-sm text-muted">{t(action.descriptionKey)}</p>
             </Link>
           ))}
         </div>
@@ -154,12 +156,12 @@ export default function DashboardPage() {
 
       {/* Stats Overview */}
       <div className="mb-8">
-        <h2 className="text-xl font-semibold text-white mb-4">Overview</h2>
+        <h2 className="text-xl font-semibold text-white mb-4">{t('dashboard.overview')}</h2>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
           {/* Total Agents */}
           <div className="p-6 bg-dark-card border border-dark-border rounded-xl">
             <div className="flex items-center justify-between mb-4">
-              <span className="text-muted">Total Agents</span>
+              <span className="text-muted">{t('dashboard.stats.totalAgents')}</span>
               <span className="material-symbols-outlined text-primary">smart_toy</span>
             </div>
             {isLoading ? (
@@ -171,7 +173,7 @@ export default function DashboardPage() {
               <>
                 <p className="text-3xl font-bold text-white">{stats?.agents.total || 0}</p>
                 <p className="text-sm text-status-online mt-1">
-                  {stats?.agents.active || 0} active
+                  {t('dashboard.stats.active', { count: stats?.agents.active || 0 })}
                 </p>
               </>
             )}
@@ -180,7 +182,7 @@ export default function DashboardPage() {
           {/* Available Skills */}
           <div className="p-6 bg-dark-card border border-dark-border rounded-xl">
             <div className="flex items-center justify-between mb-4">
-              <span className="text-muted">Available Skills</span>
+              <span className="text-muted">{t('dashboard.stats.availableSkills')}</span>
               <span className="material-symbols-outlined text-green-400">construction</span>
             </div>
             {isLoading ? (
@@ -192,7 +194,7 @@ export default function DashboardPage() {
               <>
                 <p className="text-3xl font-bold text-white">{stats?.skills.total || 0}</p>
                 <p className="text-sm text-muted mt-1">
-                  {stats?.skills.system || 0} system, {stats?.skills.custom || 0} custom
+                  {t('dashboard.stats.skillsBreakdown', { system: stats?.skills.system || 0, custom: stats?.skills.custom || 0 })}
                 </p>
               </>
             )}
@@ -201,7 +203,7 @@ export default function DashboardPage() {
           {/* MCP Servers */}
           <div className="p-6 bg-dark-card border border-dark-border rounded-xl">
             <div className="flex items-center justify-between mb-4">
-              <span className="text-muted">MCP Servers</span>
+              <span className="text-muted">{t('dashboard.stats.mcpServers')}</span>
               <span className="material-symbols-outlined text-orange-400">dns</span>
             </div>
             {isLoading ? (
@@ -212,7 +214,7 @@ export default function DashboardPage() {
             ) : (
               <>
                 <p className="text-3xl font-bold text-white">{stats?.mcpServers.total || 0}</p>
-                <p className="text-sm text-muted mt-1">configured</p>
+                <p className="text-sm text-muted mt-1">{t('dashboard.stats.configured')}</p>
               </>
             )}
           </div>
@@ -220,7 +222,7 @@ export default function DashboardPage() {
           {/* Plugins */}
           <div className="p-6 bg-dark-card border border-dark-border rounded-xl">
             <div className="flex items-center justify-between mb-4">
-              <span className="text-muted">Plugins</span>
+              <span className="text-muted">{t('dashboard.stats.plugins')}</span>
               <span className="material-symbols-outlined text-teal-400">extension</span>
             </div>
             {isLoading ? (
@@ -232,7 +234,7 @@ export default function DashboardPage() {
               <>
                 <p className="text-3xl font-bold text-white">{stats?.plugins.total || 0}</p>
                 <p className="text-sm text-status-online mt-1">
-                  {stats?.plugins.installed || 0} installed
+                  {t('dashboard.stats.installed', { count: stats?.plugins.installed || 0 })}
                 </p>
               </>
             )}
@@ -242,7 +244,7 @@ export default function DashboardPage() {
 
       {/* Recent Agents */}
       <div>
-        <h2 className="text-xl font-semibold text-white mb-4">Recent Agents</h2>
+        <h2 className="text-xl font-semibold text-white mb-4">{t('dashboard.recentAgents')}</h2>
         <div className="bg-dark-card border border-dark-border rounded-xl">
           {isLoading ? (
             <div className="p-6 space-y-4">
@@ -286,13 +288,13 @@ export default function DashboardPage() {
           ) : (
             <div className="text-center py-8">
               <span className="material-symbols-outlined text-4xl text-muted mb-2">smart_toy</span>
-              <p className="text-muted">No agents yet</p>
+              <p className="text-muted">{t('dashboard.noAgents')}</p>
               <Link
                 to="/agents"
                 className="inline-flex items-center gap-2 mt-4 px-4 py-2 bg-primary hover:bg-primary-hover text-white rounded-lg transition-colors"
               >
                 <span className="material-symbols-outlined text-xl">add</span>
-                Create Agent
+                {t('dashboard.createAgent')}
               </Link>
             </div>
           )}
