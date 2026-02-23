@@ -50,7 +50,8 @@
       "no": "否",
       "custom": "自定义",
       "system": "系统",
-      "user": "用户"
+      "user": "用户",
+      "updated": "更新时间"
     },
     "message": {
       "confirmDelete": "确定要删除吗？",
@@ -218,16 +219,43 @@
     },
     "upload": {
       "title": "上传 Skill",
-      "dropzone": "拖放 ZIP 文件到此处，或点击选择",
+      "skillName": "Skill 名称",
+      "skillNamePlaceholder": "输入 Skill 名称（可选）",
+      "zipFile": "ZIP 文件",
+      "dropzone": "点击选择或拖放文件",
+      "zipOnly": "仅支持 ZIP 文件",
       "selectFile": "选择文件",
-      "uploading": "上传中..."
+      "uploading": "上传中...",
+      "uploadProcess": "上传流程",
+      "uploadProcessDesc": "ZIP 文件将被解压到本地 Skill 目录。必须包含有效的 SKILL.md 文件。"
     },
     "create": {
       "title": "创建 Skill",
       "nameLabel": "Skill 名称",
-      "namePlaceholder": "输入 Skill 名称",
-      "descriptionLabel": "描述",
-      "descriptionPlaceholder": "描述这个 Skill 的功能..."
+      "namePlaceholder": "my-skill-name（仅限小写字母、数字、连字符）",
+      "nameHelp": "仅限小写字母、数字、连字符 (-) 和下划线 (_)",
+      "descriptionLabel": "Skill 描述",
+      "descriptionPlaceholder": "描述这个 Skill 的功能。AI 将根据你的描述创建 Skill。",
+      "model": "模型",
+      "selectModel": "选择模型...",
+      "howItWorks": "工作原理",
+      "howItWorksDesc": "AI Agent 将使用 skill-creator 工作流创建你的 Skill。你可以与 Agent 对话来迭代优化 Skill，直到满意为止。最后点击「保存 Skill」同步到数据库。",
+      "startCreating": "开始创建",
+      "skillCreator": "Skill 创建助手",
+      "creating": "正在创建：{{name}}",
+      "saveSkill": "保存 Skill",
+      "saving": "保存中..."
+    },
+    "sync": {
+      "local": "本地",
+      "fromPlugins": "来自 Plugin",
+      "database": "数据库",
+      "added": "新增",
+      "updated": "更新",
+      "orphanedRecords": "孤立记录",
+      "orphanedDesc": "这些数据库记录没有对应的文件：",
+      "allInSync": "所有 Skill 已同步！",
+      "errors": "错误"
     }
   },
   "mcp": {
