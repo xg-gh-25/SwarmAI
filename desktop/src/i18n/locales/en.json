@@ -50,7 +50,8 @@
       "no": "No",
       "custom": "Custom",
       "system": "System",
-      "user": "User"
+      "user": "User",
+      "updated": "Updated"
     },
     "message": {
       "confirmDelete": "Are you sure you want to delete?",
@@ -218,16 +219,43 @@
     },
     "upload": {
       "title": "Upload Skill",
-      "dropzone": "Drop ZIP file here, or click to select",
+      "skillName": "Skill Name",
+      "skillNamePlaceholder": "Enter skill name (optional)",
+      "zipFile": "ZIP File",
+      "dropzone": "Click to select or drag and drop file",
+      "zipOnly": "Only ZIP files supported",
       "selectFile": "Select File",
-      "uploading": "Uploading..."
+      "uploading": "Uploading...",
+      "uploadProcess": "Upload Process",
+      "uploadProcessDesc": "ZIP file will be extracted to local skills directory. Must contain a valid SKILL.md file."
     },
     "create": {
       "title": "Create Skill",
       "nameLabel": "Skill Name",
-      "namePlaceholder": "Enter skill name",
-      "descriptionLabel": "Description",
-      "descriptionPlaceholder": "Describe what this skill does..."
+      "namePlaceholder": "my-skill-name (lowercase letters, numbers, hyphens only)",
+      "nameHelp": "Lowercase letters, numbers, hyphens (-) and underscores (_) only",
+      "descriptionLabel": "Skill Description",
+      "descriptionPlaceholder": "Describe what this skill does. AI will create the skill based on your description.",
+      "model": "Model",
+      "selectModel": "Select model...",
+      "howItWorks": "How It Works",
+      "howItWorksDesc": "AI Agent will use the skill-creator workflow to create your skill. You can iterate with the agent until satisfied. Finally click \"Save Skill\" to sync to database.",
+      "startCreating": "Start Creating",
+      "skillCreator": "Skill Creator Assistant",
+      "creating": "Creating: {{name}}",
+      "saveSkill": "Save Skill",
+      "saving": "Saving..."
+    },
+    "sync": {
+      "local": "Local",
+      "fromPlugins": "From Plugins",
+      "database": "Database",
+      "added": "Added",
+      "updated": "Updated",
+      "orphanedRecords": "Orphaned Records",
+      "orphanedDesc": "These database entries have no matching files:",
+      "allInSync": "All skills are in sync!",
+      "errors": "Errors"
     }
   },
   "mcp": {
