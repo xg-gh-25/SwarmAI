@@ -259,7 +259,9 @@
       "args": "Arguments",
       "argsPlaceholder": "e.g., -y @modelcontextprotocol/server-filesystem",
       "endpoint": "Endpoint URL",
-      "endpointPlaceholder": "https://example.com/mcp"
+      "endpointPlaceholder": "https://example.com/mcp",
+      "url": "URL",
+      "urlPlaceholder": "http://server:port"
     }
   },
   "plugins": {
