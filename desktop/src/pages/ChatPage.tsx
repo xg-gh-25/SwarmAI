@@ -1488,7 +1488,7 @@ export default function ChatPage() {
             onClick={handleOpenEditAgent}
             disabled={!selectedAgent}
             className="p-2 rounded-lg text-muted hover:bg-dark-hover hover:text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            title="Edit agent settings"
+            title={t('chat.editAgentSettings')}
           >
             <span className="material-symbols-outlined">settings</span>
           </button>
@@ -1526,16 +1526,16 @@ export default function ChatPage() {
                 </div>
               ) : agents.length === 0 ? (
                 <div className="text-sm text-muted text-center py-3">
-                  No agents available.
+                  {t('chat.noAgentsAvailable')}
                   <br />
                   <a href="/agents" className="text-primary hover:underline">
-                    Create one first
+                    {t('chat.createAgentFirst')}
                   </a>
                 </div>
               ) : (
                 <Dropdown
-                  label="Select Agent"
-                  placeholder="Choose an agent..."
+                  label={t('chat.selectAgent')}
+                  placeholder={t('chat.chooseAgent')}
                   options={agents.map((agent) => ({
                     id: agent.id,
                     name: agent.name,
@@ -1724,13 +1724,13 @@ export default function ChatPage() {
                     <div className="mb-3 px-3 py-2 bg-primary/10 border border-primary/30 rounded-lg flex items-center justify-between">
                       <div className="flex items-center gap-2 text-sm">
                         <span className="material-symbols-outlined text-primary text-lg">folder</span>
-                        <span className="text-primary font-medium">Working in:</span>
+                        <span className="text-primary font-medium">{t('chat.workingIn')}</span>
                         <span className="text-muted truncate max-w-[300px]">{workDir}</span>
                       </div>
                       <button
                         onClick={handleClearWorkDir}
                         className="p-1 rounded hover:bg-primary/20 text-primary transition-colors"
-                        title="Clear work directory"
+                        title={t('chat.clearWorkDir')}
                       >
                         <span className="material-symbols-outlined text-sm">close</span>
                       </button>
