@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import { getVersion } from '@tauri-apps/api/app';
 import { tauriService, BackendStatus, getBackendPort, setBackendPort } from '../services/tauri';
 import { settingsService, APIConfigurationResponse, BedrockAuthType } from '../services/settings';
@@ -58,6 +59,13 @@ const AWS_REGION_OPTIONS = [
 ];
 
 export default function SettingsPage() {
+  const { t, i18n } = useTranslation();
+
+  const handleLanguageChange = (lang: 'zh' | 'en') => {
+    i18n.changeLanguage(lang);
+    localStorage.setItem('language', lang);
+  };
+
   const [backendStatus, setBackendStatus] = useState<BackendStatus | null>(null);
   const [apiConfig, setApiConfig] = useState<APIConfigurationResponse | null>(null);
 
@@ -312,7 +320,37 @@ export default function SettingsPage() {
 
   return (
     <div className="p-6 max-w-4xl mx-auto">
-      <h1 className="text-2xl font-bold text-white mb-6">Settings</h1>
+      <h1 className="text-2xl font-bold text-white mb-6">{t('settings.title')}</h1>
+
+      {/* Language Settings */}
+      <section className="mb-8 bg-[#1a1f2e] rounded-lg p-6">
+        <h2 className="text-lg font-semibold text-white mb-2">{t('settings.language.title')}</h2>
+        <p className="text-sm text-gray-400 mb-4">{t('settings.language.description')}</p>
+        <div className="flex gap-3">
+          <button
+            onClick={() => handleLanguageChange('zh')}
+            className={`flex-1 px-4 py-3 rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2 ${
+              i18n.language === 'zh'
+                ? 'bg-[#2b6cee] text-white'
+                : 'bg-[#101622] text-gray-400 border border-gray-700 hover:border-gray-500'
+            }`}
+          >
+            {i18n.language === 'zh' && <span className="material-symbols-outlined text-sm">check</span>}
+            {t('settings.language.zh')}
+          </button>
+          <button
+            onClick={() => handleLanguageChange('en')}
+            className={`flex-1 px-4 py-3 rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2 ${
+              i18n.language === 'en'
+                ? 'bg-[#2b6cee] text-white'
+                : 'bg-[#101622] text-gray-400 border border-gray-700 hover:border-gray-500'
+            }`}
+          >
+            {i18n.language === 'en' && <span className="material-symbols-outlined text-sm">check</span>}
+            {t('settings.language.en')}
+          </button>
+        </div>
+      </section>
 
       {message && (
         <div
