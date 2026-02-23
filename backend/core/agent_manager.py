@@ -929,8 +929,11 @@ class AgentManager:
         agent_config['allowed_tools'] = []
 
         # Add runtime add_dirs to agent config for _build_options
+        # Also extract work_dir for session persistence
+        work_dir = None
         if add_dirs:
             agent_config['add_dirs'] = add_dirs
+            work_dir = add_dirs[0]  # First directory is the working directory
             logger.info(f"Adding extra directories: {add_dirs}")
 
         logger.info(f"Running conversation with agent {agent_id}, session {session_id}, is_resuming={is_resuming}")
@@ -946,7 +949,7 @@ class AgentManager:
             }
             # Store/update session for resumed conversations
             title = display_text[:50] + "..." if len(display_text) > 50 else display_text
-            await session_manager.store_session(session_id, agent_id, title)
+            await session_manager.store_session(session_id, agent_id, title, work_dir=work_dir)
 
             # Save user message to database for resumed sessions
             # Store original content if multimodal, otherwise wrap text
@@ -1124,9 +1127,9 @@ class AgentManager:
                                             "sessionId": session_context["sdk_session_id"],
                                         }
 
-                                        # Store session with SDK session_id
+                                        # Store session with SDK session_id and work_dir for continuity
                                         title = display_text[:50] + "..." if len(display_text) > 50 else display_text
-                                        await session_manager.store_session(session_context["sdk_session_id"], agent_id, title)
+                                        await session_manager.store_session(session_context["sdk_session_id"], agent_id, title, work_dir=work_dir)
 
                                         # Save user message to database with SDK session_id
                                         # Store original content if multimodal, otherwise wrap text
@@ -1350,6 +1353,12 @@ class AgentManager:
         logger.info(f"Continuing conversation with answer for agent {agent_id}, session {session_id}")
         logger.info(f"Tool use ID: {tool_use_id}, Answers: {answers}")
 
+        # Restore work_dir from session for continuity
+        session_info = await session_manager.get_session(session_id)
+        if session_info and session_info.work_dir:
+            agent_config['add_dirs'] = [session_info.work_dir]
+            logger.info(f"Restored work_dir from session: {session_info.work_dir}")
+
         # Configure Claude environment variables
         await _configure_claude_environment()
 
@@ -1541,6 +1550,12 @@ class AgentManager:
 
         logger.info(f"Permission decision for request {request_id}: {decision}")
         logger.info(f"Continuing conversation for agent {agent_id}, session {session_id}")
+
+        # Restore work_dir from session for continuity
+        session_info = await session_manager.get_session(session_id)
+        if session_info and session_info.work_dir:
+            agent_config['add_dirs'] = [session_info.work_dir]
+            logger.info(f"Restored work_dir from session: {session_info.work_dir}")
 
         # Configure Claude environment variables
         await _configure_claude_environment()

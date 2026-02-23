@@ -16,6 +16,7 @@ class SessionInfo:
     agent_id: str
     title: str = "New Chat"
     user_id: Optional[str] = None
+    work_dir: Optional[str] = None  # Working directory for session continuity
     created_at: str = field(default_factory=lambda: datetime.now().isoformat())
     last_accessed: str = field(default_factory=lambda: datetime.now().isoformat())
 
@@ -26,6 +27,7 @@ class SessionInfo:
             "agent_id": self.agent_id,
             "title": self.title,
             "user_id": self.user_id,
+            "work_dir": self.work_dir,
             "created_at": self.created_at,
             "last_accessed": self.last_accessed,
         }
@@ -38,6 +40,7 @@ class SessionInfo:
             agent_id=data.get("agent_id", ""),
             title=data.get("title", "New Chat"),
             user_id=data.get("user_id"),
+            work_dir=data.get("work_dir"),
             created_at=data.get("created_at", datetime.now().isoformat()),
             last_accessed=data.get("last_accessed", datetime.now().isoformat()),
         )
@@ -56,6 +59,7 @@ class SessionManager:
         agent_id: str,
         title: str = "New Chat",
         user_id: Optional[str] = None,
+        work_dir: Optional[str] = None,
     ) -> SessionInfo:
         """Store session information in database."""
         now = datetime.now().isoformat()
@@ -67,6 +71,9 @@ class SessionManager:
             updates = {"last_accessed": now}
             if title and title != "New Chat":
                 updates["title"] = title
+            # Update work_dir if provided (don't overwrite with None)
+            if work_dir is not None:
+                updates["work_dir"] = work_dir
             await db.sessions.update(session_id, updates)
             existing.update(updates)
             session_info = SessionInfo.from_dict(existing)
@@ -77,6 +84,7 @@ class SessionManager:
                 "agent_id": agent_id,
                 "title": title,
                 "user_id": user_id,
+                "work_dir": work_dir,
                 "created_at": now,
                 "last_accessed": now,
             }
