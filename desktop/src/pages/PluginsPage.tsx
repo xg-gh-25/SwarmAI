@@ -223,7 +223,7 @@ export default function PluginsPage() {
                   <button
                     onClick={() => setDeletePluginTarget(plugin)}
                     className="p-1.5 rounded-lg text-muted hover:text-status-error hover:bg-status-error/10 transition-colors"
-                    title="Uninstall plugin"
+                    title={t('plugins.uninstallPlugin')}
                   >
                     <span className="material-symbols-outlined text-lg">delete</span>
                   </button>
@@ -239,7 +239,7 @@ export default function PluginsPage() {
         isOpen={deletePluginTarget !== null}
         onClose={() => setDeletePluginTarget(null)}
         onConfirm={() => deletePluginTarget && uninstallMutation.mutate(deletePluginTarget.id)}
-        title={t('common.button.uninstall') + ' Plugin'}
+        title={t('plugins.uninstallPlugin')}
         message={
           <>
             {t('common.message.confirmDelete')}{' '}
@@ -260,7 +260,7 @@ export default function PluginsPage() {
         isOpen={isBatchDeleteOpen}
         onClose={() => setIsBatchDeleteOpen(false)}
         onConfirm={() => batchUninstallMutation.mutate(Array.from(selectedIds))}
-        title={t('common.button.uninstall') + ' ' + selectedIds.size + ' Plugins'}
+        title={t('plugins.uninstallPlugins', { count: selectedIds.size })}
         message={
           <>
             {t('common.message.confirmDelete')}{' '}

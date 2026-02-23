@@ -253,15 +253,15 @@ export default function SkillsPage() {
                       <button
                         onClick={() => handleDeleteClick(skill)}
                         className="p-1.5 rounded-lg text-muted hover:text-status-error hover:bg-status-error/10 transition-colors"
-                        title="Delete skill"
+                        title={t('skills.deleteSkill')}
                       >
                         <span className="material-symbols-outlined text-lg">delete</span>
                       </button>
                     )}
                     {/* For plugin skills, show info that they are managed by plugin */}
                     {skill.sourceType === 'plugin' && (
-                      <span className="text-xs text-muted" title="Managed by plugin - uninstall plugin to remove">
-                        Plugin managed
+                      <span className="text-xs text-muted" title={t('skills.source.pluginManaged')}>
+                        {t('skills.source.plugin')}
                       </span>
                     )}
                   </div>

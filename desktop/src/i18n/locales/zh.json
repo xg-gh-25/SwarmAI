@@ -123,7 +123,14 @@
     "thinking": "思考中...",
     "editAgent": "编辑 Agent",
     "deleteSession": "删除会话",
-    "deleteSessionConfirm": "确定要删除这个会话吗？"
+    "deleteSessionConfirm": "确定要删除这个会话吗？",
+    "editAgentSettings": "编辑 Agent 设置",
+    "clearWorkDir": "清除工作目录",
+    "workingIn": "工作在：",
+    "noAgentsAvailable": "暂无可用 Agent。",
+    "createAgentFirst": "请先创建一个",
+    "selectAgent": "选择 Agent",
+    "chooseAgent": "选择一个 Agent..."
   },
   "agents": {
     "title": "Agent 管理",
@@ -215,7 +222,8 @@
     "source": {
       "system": "系统",
       "user": "用户",
-      "plugin": "Plugin"
+      "plugin": "Plugin",
+      "pluginManaged": "由 Plugin 管理 - 卸载 Plugin 以移除"
     },
     "upload": {
       "title": "上传 Skill",
@@ -319,7 +327,10 @@
       "urlPlaceholder": "https://github.com/user/repo.git",
       "branch": "分支",
       "branchPlaceholder": "main"
-    }
+    },
+    "uninstallPlugin": "卸载 Plugin",
+    "uninstallPlugins": "卸载 {{count}} 个 Plugin",
+    "confirmUninstallPlugins": "确定要卸载 {{count}} 个 Plugin 吗？"
   },
   "settings": {
     "title": "设置",

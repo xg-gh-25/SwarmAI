@@ -123,7 +123,14 @@
     "thinking": "Thinking...",
     "editAgent": "Edit Agent",
     "deleteSession": "Delete Session",
-    "deleteSessionConfirm": "Are you sure you want to delete this session?"
+    "deleteSessionConfirm": "Are you sure you want to delete this session?",
+    "editAgentSettings": "Edit agent settings",
+    "clearWorkDir": "Clear work directory",
+    "workingIn": "Working in:",
+    "noAgentsAvailable": "No agents available.",
+    "createAgentFirst": "Create one first",
+    "selectAgent": "Select Agent",
+    "chooseAgent": "Choose an agent..."
   },
   "agents": {
     "title": "Agent Management",
@@ -215,7 +222,8 @@
     "source": {
       "system": "System",
       "user": "User",
-      "plugin": "Plugin"
+      "plugin": "Plugin",
+      "pluginManaged": "Managed by plugin - uninstall plugin to remove"
     },
     "upload": {
       "title": "Upload Skill",
@@ -319,7 +327,10 @@
       "urlPlaceholder": "https://github.com/user/repo.git",
       "branch": "Branch",
       "branchPlaceholder": "main"
-    }
+    },
+    "uninstallPlugin": "Uninstall Plugin",
+    "uninstallPlugins": "Uninstall {{count}} Plugins",
+    "confirmUninstallPlugins": "Are you sure you want to uninstall {{count}} plugins?"
   },
   "settings": {
     "title": "Settings",
