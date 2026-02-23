@@ -1,23 +1,12 @@
 import { NavLink, useLocation } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import clsx from 'clsx';
 
 interface NavItem {
   path: string;
-  label: string;
+  labelKey: string;
   icon: string;
 }
-
-const navItems: NavItem[] = [
-  { path: '/chat', label: 'Chat', icon: 'chat' },
-  { path: '/agents', label: 'Agent Management', icon: 'smart_toy' },
-  { path: '/skills', label: 'Skill Management', icon: 'construction' },
-  { path: '/plugins', label: 'Plugin Management', icon: 'extension' },
-  { path: '/mcp', label: 'MCP Management', icon: 'dns' },
-];
-
-const bottomNavItems: NavItem[] = [
-  { path: '/settings', label: 'Settings', icon: 'settings' },
-];
 
 const GITHUB_URL = 'https://github.com/xiehust/owork.git';
 
@@ -40,7 +29,20 @@ interface SidebarProps {
 }
 
 export default function Sidebar({ collapsed, onClose, isOverlay }: SidebarProps) {
+  const { t } = useTranslation();
   const location = useLocation();
+
+  const navItems: NavItem[] = [
+    { path: '/chat', labelKey: 'nav.chat', icon: 'chat' },
+    { path: '/agents', labelKey: 'nav.agents', icon: 'smart_toy' },
+    { path: '/skills', labelKey: 'nav.skills', icon: 'construction' },
+    { path: '/plugins', labelKey: 'nav.plugins', icon: 'extension' },
+    { path: '/mcp', labelKey: 'nav.mcp', icon: 'dns' },
+  ];
+
+  const bottomNavItems: NavItem[] = [
+    { path: '/settings', labelKey: 'nav.settings', icon: 'settings' },
+  ];
 
   const isActive = (path: string) => {
     if (path === '/') {
@@ -50,7 +52,6 @@ export default function Sidebar({ collapsed, onClose, isOverlay }: SidebarProps)
   };
 
   const handleNavClick = () => {
-    // Close sidebar when navigating in overlay mode
     if (isOverlay && onClose) {
       onClose();
     }
@@ -64,7 +65,7 @@ export default function Sidebar({ collapsed, onClose, isOverlay }: SidebarProps)
         <div className="h-16 flex items-center justify-center border-b border-dark-border">
           <NavLink
             to="/"
-            title="Dashboard"
+            title={t('nav.dashboard')}
             className={clsx(
               'w-10 h-10 rounded-xl flex items-center justify-center transition-colors',
               isActive('/')
@@ -82,7 +83,7 @@ export default function Sidebar({ collapsed, onClose, isOverlay }: SidebarProps)
             <NavLink
               key={item.path}
               to={item.path}
-              title={item.label}
+              title={t(item.labelKey)}
               className={clsx(
                 'flex items-center justify-center w-12 h-12 rounded-xl transition-colors',
                 isActive(item.path)
@@ -101,7 +102,7 @@ export default function Sidebar({ collapsed, onClose, isOverlay }: SidebarProps)
             <NavLink
               key={item.path}
               to={item.path}
-              title={item.label}
+              title={t(item.labelKey)}
               className={clsx(
                 'flex items-center justify-center w-12 h-12 rounded-xl transition-colors',
                 isActive(item.path)
@@ -158,14 +159,14 @@ export default function Sidebar({ collapsed, onClose, isOverlay }: SidebarProps)
           </div>
           <div>
             <h1 className="font-semibold text-white">Agent Platform</h1>
-            <p className="text-xs text-muted">Dashboard</p>
+            <p className="text-xs text-muted">{t('nav.dashboard')}</p>
           </div>
         </NavLink>
         {isOverlay && onClose && (
           <button
             onClick={onClose}
             className="p-2 rounded-lg text-muted hover:bg-dark-hover hover:text-white transition-colors"
-            aria-label="Close sidebar"
+            aria-label={t('common.button.close')}
           >
             <span className="material-symbols-outlined">close</span>
           </button>
@@ -187,7 +188,7 @@ export default function Sidebar({ collapsed, onClose, isOverlay }: SidebarProps)
             )}
           >
             <span className="material-symbols-outlined text-xl">{item.icon}</span>
-            <span className="text-sm font-medium">{item.label}</span>
+            <span className="text-sm font-medium">{t(item.labelKey)}</span>
           </NavLink>
         ))}
       </nav>
@@ -207,7 +208,7 @@ export default function Sidebar({ collapsed, onClose, isOverlay }: SidebarProps)
             )}
           >
             <span className="material-symbols-outlined text-xl">{item.icon}</span>
-            <span className="text-sm font-medium">{item.label}</span>
+            <span className="text-sm font-medium">{t(item.labelKey)}</span>
           </NavLink>
         ))}
 
@@ -228,8 +229,8 @@ export default function Sidebar({ collapsed, onClose, isOverlay }: SidebarProps)
             <span className="material-symbols-outlined text-white text-sm">person</span>
           </div>
           <div className="flex-1 min-w-0">
-            <p className="text-sm font-medium text-white truncate">User</p>
-            <p className="text-xs text-muted truncate">Settings</p>
+            <p className="text-sm font-medium text-white truncate">{t('common.label.user')}</p>
+            <p className="text-xs text-muted truncate">{t('nav.settings')}</p>
           </div>
         </div>
       </div>

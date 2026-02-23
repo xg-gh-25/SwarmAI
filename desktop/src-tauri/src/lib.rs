@@ -41,6 +41,25 @@ fn get_enhanced_path() -> String {
             "/sbin".to_string(),
             format!("{}/Library/pnpm", home),          // macOS-specific pnpm location
         ]);
+
+        // Scan Homebrew's versioned package paths for node (e.g., node@20, node@22, node@24)
+        // These packages are installed to /opt/homebrew/opt/node@XX/bin/ on Apple Silicon
+        // or /usr/local/opt/node@XX/bin/ on Intel Mac
+        for homebrew_opt in &["/opt/homebrew/opt", "/usr/local/opt"] {
+            if let Ok(entries) = std::fs::read_dir(homebrew_opt) {
+                for entry in entries.flatten() {
+                    let name = entry.file_name();
+                    let name_str = name.to_string_lossy();
+                    // Match node, node@XX, python, python@XX patterns
+                    if name_str.starts_with("node") || name_str.starts_with("python") {
+                        let bin_path = entry.path().join("bin");
+                        if bin_path.exists() {
+                            paths.push(bin_path.to_string_lossy().to_string());
+                        }
+                    }
+                }
+            }
+        }
     }
 
     #[cfg(target_os = "linux")]

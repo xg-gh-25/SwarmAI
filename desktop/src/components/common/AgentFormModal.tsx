@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
 import clsx from 'clsx';
 import type { Agent, AgentCreateRequest } from '../../types';
 import { skillsService } from '../../services/skills';
@@ -53,8 +54,9 @@ export default function AgentFormModal({
   agent,
   title,
 }: AgentFormModalProps) {
+  const { t } = useTranslation();
   const isEditMode = !!agent;
-  const modalTitle = title || (isEditMode ? 'Edit Agent' : 'Create New Agent');
+  const modalTitle = title || (isEditMode ? t('agents.editAgent') : t('agents.createAgent'));
 
   // Form state
   const [name, setName] = useState('');
@@ -213,12 +215,12 @@ export default function AgentFormModal({
       <form onSubmit={handleSubmit} className="space-y-4">
         {/* Agent Name */}
         <div>
-          <label className="block text-sm font-medium text-muted mb-2">Agent Name</label>
+          <label className="block text-sm font-medium text-muted mb-2">{t('agents.form.name')}</label>
           <input
             type="text"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="Enter agent name"
+            placeholder={t('agents.form.namePlaceholder')}
             required
             className="w-full px-4 py-2 bg-dark-bg border border-dark-border rounded-lg text-white placeholder:text-muted focus:outline-none focus:border-primary"
           />
@@ -226,23 +228,23 @@ export default function AgentFormModal({
 
         {/* Description */}
         <div>
-          <label className="block text-sm font-medium text-muted mb-2">Description</label>
+          <label className="block text-sm font-medium text-muted mb-2">{t('agents.form.description')}</label>
           <input
             type="text"
             value={description}
             onChange={(e) => setDescription(e.target.value)}
-            placeholder="Describe what this agent does"
+            placeholder={t('agents.form.descriptionPlaceholder')}
             className="w-full px-4 py-2 bg-dark-bg border border-dark-border rounded-lg text-white placeholder:text-muted focus:outline-none focus:border-primary"
           />
         </div>
 
         {/* System Prompt */}
         <div>
-          <label className="block text-sm font-medium text-muted mb-2">System Prompt</label>
+          <label className="block text-sm font-medium text-muted mb-2">{t('agents.form.systemPrompt')}</label>
           <textarea
             value={systemPrompt}
             onChange={(e) => setSystemPrompt(e.target.value)}
-            placeholder="Enter system prompt instructions (optional)"
+            placeholder={t('agents.form.systemPromptPlaceholder')}
             rows={4}
             className="w-full px-4 py-2 bg-dark-bg border border-dark-border rounded-lg text-white placeholder:text-muted focus:outline-none focus:border-primary resize-none"
           />
@@ -251,8 +253,8 @@ export default function AgentFormModal({
         {/* Global User Mode Toggle */}
         <div className="flex items-center justify-between">
           <div>
-            <label className="block text-sm font-medium text-muted">Global User Mode</label>
-            <p className="text-xs text-muted mt-0.5">Use home directory with full file access</p>
+            <label className="block text-sm font-medium text-muted">{t('agents.form.globalUserMode')}</label>
+            <p className="text-xs text-muted mt-0.5">{t('agents.form.globalUserModeDescription')}</p>
           </div>
           <button
             type="button"
@@ -274,8 +276,8 @@ export default function AgentFormModal({
         {/* Enable Human Approval Toggle */}
         <div className="flex items-center justify-between">
           <div>
-            <label className="block text-sm font-medium text-muted">Enable Human Approval</label>
-            <p className="text-xs text-muted mt-0.5">Dangerous commands require user confirmation</p>
+            <label className="block text-sm font-medium text-muted">{t('agents.form.enableHumanApproval')}</label>
+            <p className="text-xs text-muted mt-0.5">{t('agents.form.enableHumanApprovalDescription')}</p>
           </div>
           <button
             type="button"
@@ -297,16 +299,16 @@ export default function AgentFormModal({
         {/* Base Model */}
         <div>
           <Dropdown
-            label="Base Model"
+            label={t('agents.form.model')}
             options={getModelOptions(useBedrock)}
             selectedId={model || null}
             onChange={setModel}
-            placeholder="Select a model..."
+            placeholder={t('agents.form.modelPlaceholder')}
           />
           {useBedrock && (
             <p className="mt-1 text-xs text-amber-400">
               <span className="material-symbols-outlined text-xs align-middle mr-1">info</span>
-              Third-party models (MiniMax, Qwen) are only available when using API Proxy mode.
+              {t('agents.form.thirdPartyModelsNote')}
             </p>
           )}
         </div>
@@ -316,8 +318,8 @@ export default function AgentFormModal({
 
         {/* Plugins Selection */}
         <MultiSelect
-          label={isEditMode ? 'Enabled Plugins' : 'Plugins (Optional)'}
-          placeholder="Select plugins..."
+          label={isEditMode ? t('agents.form.enabledPlugins') : t('agents.form.pluginsOptional')}
+          placeholder={t('agents.form.selectPlugins')}
           options={installedPlugins.map((plugin) => ({
             id: plugin.id,
             name: plugin.name,
@@ -331,11 +333,11 @@ export default function AgentFormModal({
         {/* Allow All Skills Toggle */}
         <div className="flex items-center justify-between">
           <div>
-            <label className="block text-sm font-medium text-muted">Allow All Skills</label>
+            <label className="block text-sm font-medium text-muted">{t('agents.form.allowAllSkills')}</label>
             <p className="text-xs text-muted mt-0.5">
               {globalUserMode
-                ? 'Required in Global User Mode (skill restrictions not supported)'
-                : 'Grant access to all available skills'}
+                ? t('agents.form.allowAllSkillsRequiredDescription')
+                : t('agents.form.allowAllSkillsDescription')}
             </p>
           </div>
           <button
@@ -359,13 +361,13 @@ export default function AgentFormModal({
 
         {/* Skills Selection */}
         <MultiSelect
-          label={isEditMode ? 'Enabled Skills' : 'Skills (Optional)'}
+          label={isEditMode ? t('agents.form.enabledSkills') : t('agents.form.skillsOptional')}
           placeholder={
             globalUserMode
-              ? 'All skills enabled (Global User Mode)'
+              ? t('agents.form.allSkillsEnabledGlobal')
               : allowAllSkills
-                ? 'All skills enabled'
-                : 'Select skills...'
+                ? t('agents.form.allSkillsEnabled')
+                : t('agents.form.selectSkills')
           }
           options={skills.map((skill) => ({
             id: skill.id,
@@ -380,8 +382,8 @@ export default function AgentFormModal({
 
         {/* MCP Servers Selection */}
         <MultiSelect
-          label={isEditMode ? 'Enabled MCPs' : 'MCP Servers (Optional)'}
-          placeholder="Select MCP servers..."
+          label={isEditMode ? t('agents.form.enabledMCPs') : t('agents.form.mcpServersOptional')}
+          placeholder={t('agents.form.selectMCPServers')}
           options={mcpServers.map((mcp) => ({
             id: mcp.id,
             name: mcp.name,
@@ -401,18 +403,18 @@ export default function AgentFormModal({
             onClick={handleClose}
             disabled={isSaving}
           >
-            Cancel
+            {t('common.button.cancel')}
           </Button>
           <Button type="submit" className="flex-1" disabled={isSaving || !name.trim()}>
             {isSaving ? (
               <span className="flex items-center gap-2">
                 <Spinner size="sm" color="#ffffff" />
-                {isEditMode ? 'Saving...' : 'Creating...'}
+                {isEditMode ? t('common.button.saving') : t('common.button.creating')}
               </span>
             ) : isEditMode ? (
-              'Save Changes'
+              t('common.button.saveChanges')
             ) : (
-              'Create Agent'
+              t('agents.createAgent')
             )}
           </Button>
         </div>
