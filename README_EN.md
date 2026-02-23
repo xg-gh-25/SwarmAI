@@ -68,7 +68,7 @@ Owork is a powerful AI Agent management platform that enables you to:
 4. If you encounter “File Damaged”, please execute command in the terminal
 ```shell
 # remove isolation
-sudo xattr -cr /Applications/Owork.app
+xattr -cr /Applications/Owork.app
 ```
 
 #### 2. Configure API
