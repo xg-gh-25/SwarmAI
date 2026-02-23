@@ -330,7 +330,19 @@
     },
     "uninstallPlugin": "卸载 Plugin",
     "uninstallPlugins": "卸载 {{count}} 个 Plugin",
-    "confirmUninstallPlugins": "确定要卸载 {{count}} 个 Plugin 吗？"
+    "confirmUninstallPlugins": "确定要卸载 {{count}} 个 Plugin 吗？",
+    "install": {
+      "title": "安装 Plugin",
+      "gitUrl": "Git 仓库 URL",
+      "gitUrlPlaceholder": "https://github.com/org/plugin-repo",
+      "gitUrlHelp": "仓库必须包含 plugin.yaml 文件，并在 skills/ 目录中包含 Skill。",
+      "branch": "分支 / 标签 / 提交",
+      "branchPlaceholder": "main",
+      "installing": "安装中...",
+      "installButton": "安装 Plugin",
+      "noPluginsFound": "仓库中未找到 Plugin。仓库必须包含 plugin.yaml 文件，并在 skills/ 目录中包含 Skill。",
+      "installFailed": "安装 Plugin 失败"
+    }
   },
   "settings": {
     "title": "设置",
