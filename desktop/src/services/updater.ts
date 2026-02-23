@@ -1,5 +1,6 @@
 import { check, Update } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
+import { invoke } from '@tauri-apps/api/core';
 
 export interface UpdateProgress {
   downloaded: number;
@@ -80,8 +81,18 @@ export async function downloadAndInstallUpdate(
 
 /**
  * Restart the application to apply the update
+ * On Windows, this first stops the backend process to release file handles
  */
 export async function restartApp(): Promise<void> {
+  // Stop the backend first to release file handles (important for Windows updates)
+  try {
+    console.log('[Updater] Stopping backend before restart...');
+    await invoke('stop_backend');
+    console.log('[Updater] Backend stopped, proceeding with relaunch');
+  } catch (err) {
+    console.warn('[Updater] Failed to stop backend, proceeding anyway:', err);
+  }
+
   await relaunch();
 }
 

@@ -249,6 +249,9 @@ async fn stop_backend(state: tauri::State<'_, SharedBackendState>) -> Result<(),
 
     // On Windows, use taskkill to kill the entire process tree
     #[cfg(target_os = "windows")]
+    let pid_to_wait = backend.pid;
+
+    #[cfg(target_os = "windows")]
     if let Some(pid) = backend.pid {
         kill_process_tree(pid);
     }
@@ -259,7 +262,57 @@ async fn stop_backend(state: tauri::State<'_, SharedBackendState>) -> Result<(),
 
     backend.running = false;
     backend.pid = None;
+
+    // Drop the lock before waiting
+    drop(backend);
+
+    // On Windows, wait for the process to fully exit to release file handles
+    // This is important for updates where the installer needs to overwrite the exe
+    #[cfg(target_os = "windows")]
+    if let Some(pid) = pid_to_wait {
+        wait_for_process_exit(pid).await;
+    }
+
     Ok(())
+}
+
+// Wait for a process to exit on Windows
+#[cfg(target_os = "windows")]
+async fn wait_for_process_exit(pid: u32) {
+    use std::time::Duration;
+
+    // Try up to 10 times with 500ms delay (5 seconds total)
+    for i in 0..10 {
+        // Check if process still exists using tasklist
+        let output = std::process::Command::new("tasklist")
+            .args(["/FI", &format!("PID eq {}", pid), "/NH"])
+            .creation_flags(0x08000000) // CREATE_NO_WINDOW
+            .output();
+
+        match output {
+            Ok(out) => {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                // tasklist with /FI "PID eq X" returns either:
+                // - A line with the process info if running
+                // - "INFO: No tasks are running..." if not running
+                // Check if output contains the executable name as a more reliable indicator
+                let process_running = stdout.contains("python-backend") ||
+                    (stdout.contains(&pid.to_string()) && !stdout.contains("INFO:"));
+                if !process_running {
+                    println!("Process {} has exited after {} checks", pid, i + 1);
+                    return;
+                }
+            }
+            Err(_) => {
+                // If tasklist fails, assume process is gone
+                return;
+            }
+        }
+
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+
+    println!("Warning: Process {} may still be running after timeout", pid);
 }
 
 // Get backend status
