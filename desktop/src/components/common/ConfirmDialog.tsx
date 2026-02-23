@@ -1,4 +1,5 @@
 import { type ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 import Modal from './Modal';
 import Button from './Button';
 
@@ -20,11 +21,14 @@ export default function ConfirmDialog({
   onConfirm,
   title,
   message,
-  confirmText = 'Confirm',
-  cancelText = 'Cancel',
+  confirmText,
+  cancelText,
   variant = 'danger',
   isLoading = false,
 }: ConfirmDialogProps) {
+  const { t } = useTranslation();
+  const resolvedConfirmText = confirmText ?? t('common.button.confirm');
+  const resolvedCancelText = cancelText ?? t('common.button.cancel');
   const iconMap = {
     danger: { icon: 'delete', color: 'text-status-error', bg: 'bg-status-error/10' },
     warning: { icon: 'warning', color: 'text-status-warning', bg: 'bg-status-warning/10' },
@@ -47,7 +51,7 @@ export default function ConfirmDialog({
             onClick={onClose}
             disabled={isLoading}
           >
-            {cancelText}
+            {resolvedCancelText}
           </Button>
           <Button
             variant={variant === 'danger' ? 'danger' : 'primary'}
@@ -55,7 +59,7 @@ export default function ConfirmDialog({
             onClick={onConfirm}
             isLoading={isLoading}
           >
-            {confirmText}
+            {resolvedConfirmText}
           </Button>
         </div>
       </div>
