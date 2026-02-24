@@ -174,6 +174,7 @@ export interface ChatSession {
   title: string;
   createdAt: string;
   lastAccessedAt: string;
+  workDir?: string;
 }
 
 export interface ChatMessage {

@@ -47,6 +47,7 @@ const toSessionCamelCase = (data: Record<string, unknown>): ChatSession => {
     title: data.title as string,
     createdAt: data.created_at as string,
     lastAccessedAt: data.last_accessed_at as string,
+    workDir: data.work_dir as string | undefined,
   };
 };
 
