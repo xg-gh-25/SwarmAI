@@ -1,7 +1,6 @@
 import { useEffect } from 'react';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { ThemeProvider } from './contexts';
 import { Layout, BackendStartupOverlay, UpdateNotification } from './components/common';
 import ChatPage from './pages/ChatPage';
 import AgentsPage from './pages/AgentsPage';
@@ -33,26 +32,24 @@ export default function App() {
   }, []);
 
   return (
-    <ThemeProvider>
-      <QueryClientProvider client={queryClient}>
-        {/* Backend startup overlay - only shown in production mode */}
-        {!isDev && <BackendStartupOverlay />}
-        {/* Update notification - only shown in production mode */}
-        {!isDev && <UpdateNotification />}
-        <BrowserRouter>
-          <Routes>
-            <Route path="/" element={<Layout />}>
-              <Route index element={<DashboardPage />} />
-              <Route path="chat" element={<ChatPage />} />
-              <Route path="agents" element={<AgentsPage />} />
-              <Route path="skills" element={<SkillsPage />} />
-              <Route path="mcp" element={<MCPPage />} />
-              <Route path="plugins" element={<PluginsPage />} />
-              <Route path="settings" element={<SettingsPage />} />
-            </Route>
-          </Routes>
-        </BrowserRouter>
-      </QueryClientProvider>
-    </ThemeProvider>
+    <QueryClientProvider client={queryClient}>
+      {/* Backend startup overlay - only shown in production mode */}
+      {!isDev && <BackendStartupOverlay />}
+      {/* Update notification - only shown in production mode */}
+      {!isDev && <UpdateNotification />}
+      <BrowserRouter>
+        <Routes>
+          <Route path="/" element={<Layout />}>
+            <Route index element={<DashboardPage />} />
+            <Route path="chat" element={<ChatPage />} />
+            <Route path="agents" element={<AgentsPage />} />
+            <Route path="skills" element={<SkillsPage />} />
+            <Route path="mcp" element={<MCPPage />} />
+            <Route path="plugins" element={<PluginsPage />} />
+            <Route path="settings" element={<SettingsPage />} />
+          </Route>
+        </Routes>
+      </BrowserRouter>
+    </QueryClientProvider>
   );
 }

@@ -3,7 +3,6 @@ import { useTranslation } from 'react-i18next';
 import { getVersion } from '@tauri-apps/api/app';
 import { tauriService, BackendStatus, getBackendPort, setBackendPort } from '../services/tauri';
 import { settingsService, APIConfigurationResponse, BedrockAuthType } from '../services/settings';
-import { useTheme, ThemeMode } from '../contexts';
 import {
   checkForUpdates,
   downloadAndInstallUpdate,
@@ -65,12 +64,6 @@ export default function SettingsPage() {
   const handleLanguageChange = (lang: 'zh' | 'en') => {
     i18n.changeLanguage(lang);
     localStorage.setItem('language', lang);
-  };
-
-  const { mode: themeMode, setMode: setThemeMode } = useTheme();
-
-  const handleThemeChange = (theme: ThemeMode) => {
-    setThemeMode(theme);
   };
 
   const [backendStatus, setBackendStatus] = useState<BackendStatus | null>(null);
@@ -330,16 +323,16 @@ export default function SettingsPage() {
       <h1 className="text-2xl font-bold text-white mb-6">{t('settings.title')}</h1>
 
       {/* Language Settings */}
-      <section className="mb-8 bg-dark-card rounded-lg p-6">
+      <section className="mb-8 bg-[#1a1f2e] rounded-lg p-6">
         <h2 className="text-lg font-semibold text-white mb-2">{t('settings.language.title')}</h2>
-        <p className="text-sm text-muted mb-4">{t('settings.language.description')}</p>
+        <p className="text-sm text-gray-400 mb-4">{t('settings.language.description')}</p>
         <div className="flex gap-3">
           <button
             onClick={() => handleLanguageChange('zh')}
             className={`flex-1 px-4 py-3 rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2 ${
               i18n.language === 'zh'
-                ? 'bg-primary text-white'
-                : 'bg-dark-bg text-muted border border-dark-border hover:border-muted'
+                ? 'bg-[#2b6cee] text-white'
+                : 'bg-[#101622] text-gray-400 border border-gray-700 hover:border-gray-500'
             }`}
           >
             {i18n.language === 'zh' && <span className="material-symbols-outlined text-sm">check</span>}
@@ -349,53 +342,12 @@ export default function SettingsPage() {
             onClick={() => handleLanguageChange('en')}
             className={`flex-1 px-4 py-3 rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2 ${
               i18n.language === 'en'
-                ? 'bg-primary text-white'
-                : 'bg-dark-bg text-muted border border-dark-border hover:border-muted'
+                ? 'bg-[#2b6cee] text-white'
+                : 'bg-[#101622] text-gray-400 border border-gray-700 hover:border-gray-500'
             }`}
           >
             {i18n.language === 'en' && <span className="material-symbols-outlined text-sm">check</span>}
             {t('settings.language.en')}
-          </button>
-        </div>
-      </section>
-
-      {/* Theme Settings */}
-      <section className="mb-8 bg-dark-card rounded-lg p-6">
-        <h2 className="text-lg font-semibold mb-2">{t('settings.theme.title')}</h2>
-        <p className="text-sm text-muted mb-4">{t('settings.language.description')}</p>
-        <div className="flex gap-3">
-          <button
-            onClick={() => handleThemeChange('light')}
-            className={`flex-1 px-4 py-3 rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2 ${
-              themeMode === 'light'
-                ? 'bg-primary text-white'
-                : 'bg-dark-bg border border-dark-border text-muted hover:border-muted'
-            }`}
-          >
-            <span className="material-symbols-outlined text-lg">light_mode</span>
-            {t('settings.theme.light')}
-          </button>
-          <button
-            onClick={() => handleThemeChange('dark')}
-            className={`flex-1 px-4 py-3 rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2 ${
-              themeMode === 'dark'
-                ? 'bg-primary text-white'
-                : 'bg-dark-bg border border-dark-border text-muted hover:border-muted'
-            }`}
-          >
-            <span className="material-symbols-outlined text-lg">dark_mode</span>
-            {t('settings.theme.dark')}
-          </button>
-          <button
-            onClick={() => handleThemeChange('system')}
-            className={`flex-1 px-4 py-3 rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2 ${
-              themeMode === 'system'
-                ? 'bg-primary text-white'
-                : 'bg-dark-bg border border-dark-border text-muted hover:border-muted'
-            }`}
-          >
-            <span className="material-symbols-outlined text-lg">contrast</span>
-            {t('settings.theme.system')}
           </button>
         </div>
       </section>
@@ -411,19 +363,19 @@ export default function SettingsPage() {
       )}
 
       {/* API Configuration */}
-      <section className="mb-8 bg-dark-card rounded-lg p-6">
+      <section className="mb-8 bg-[#1a1f2e] rounded-lg p-6">
         <h2 className="text-lg font-semibold text-white mb-4">API Configuration</h2>
         <div className="space-y-4">
           {/* Use Bedrock Toggle */}
-          <div className="flex items-center justify-between p-3 bg-dark-bg rounded-lg">
+          <div className="flex items-center justify-between p-3 bg-[#101622] rounded-lg">
             <div>
               <label className="text-sm font-medium text-white">Use AWS Bedrock</label>
-              <p className="text-xs text-muted">Use AWS Bedrock instead of Anthropic API</p>
+              <p className="text-xs text-gray-500">Use AWS Bedrock instead of Anthropic API</p>
             </div>
             <button
               onClick={() => setUseBedrock(!useBedrock)}
               className={`relative w-12 h-6 rounded-full transition-colors ${
-                useBedrock ? 'bg-primary' : 'bg-gray-600'
+                useBedrock ? 'bg-[#2b6cee]' : 'bg-gray-600'
               }`}
             >
               <span
@@ -438,7 +390,7 @@ export default function SettingsPage() {
             <>
               {/* Custom Base URL */}
               <div>
-                <label className="block text-sm text-muted mb-2">
+                <label className="block text-sm text-gray-400 mb-2">
                   Custom Base URL (Optional)
                 </label>
                 <input
@@ -446,16 +398,16 @@ export default function SettingsPage() {
                   value={baseUrl}
                   onChange={(e) => setBaseUrl(e.target.value)}
                   placeholder="https://api.anthropic.com (default)"
-                  className="w-full px-4 py-2 bg-dark-bg border border-dark-border rounded-lg text-white placeholder-muted focus:outline-none focus:border-primary"
+                  className="w-full px-4 py-2 bg-[#101622] border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-[#2b6cee]"
                 />
-                <p className="text-xs text-muted mt-1">
+                <p className="text-xs text-gray-500 mt-1">
                   For proxies or custom endpoints. Leave empty for default.
                 </p>
               </div>
 
               {/* API Key */}
               <div>
-                <label className="block text-sm text-muted mb-2">
+                <label className="block text-sm text-gray-400 mb-2">
                   API Key
                   {apiConfig?.anthropic_api_key_set && (
                     <span className="ml-2 text-green-400 text-xs">✓ Configured</span>
@@ -466,9 +418,9 @@ export default function SettingsPage() {
                   value={apiKey}
                   onChange={(e) => setApiKey(e.target.value)}
                   placeholder={apiConfig?.anthropic_api_key_set ? '••••••••••••••••' : 'sk-ant-...'}
-                  className="w-full px-4 py-2 bg-dark-bg border border-dark-border rounded-lg text-white placeholder-muted focus:outline-none focus:border-primary"
+                  className="w-full px-4 py-2 bg-[#101622] border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-[#2b6cee]"
                 />
-                <p className="text-xs text-muted mt-1">
+                <p className="text-xs text-gray-500 mt-1">
                   Leave blank to keep existing key. Your API key is stored securely.
                 </p>
               </div>
@@ -479,15 +431,15 @@ export default function SettingsPage() {
             <>
               {/* Authentication Type Selector */}
               <div>
-                <label className="block text-sm text-muted mb-2">Authentication Method</label>
+                <label className="block text-sm text-gray-400 mb-2">Authentication Method</label>
                 <div className="flex gap-2">
                   <button
                     type="button"
                     onClick={() => setBedrockAuthType('credentials')}
                     className={`flex-1 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
                       bedrockAuthType === 'credentials'
-                        ? 'bg-primary text-white'
-                        : 'bg-dark-bg text-muted border border-dark-border hover:border-muted'
+                        ? 'bg-[#2b6cee] text-white'
+                        : 'bg-[#101622] text-gray-400 border border-gray-700 hover:border-gray-500'
                     }`}
                   >
                     AK/SK Credentials
@@ -497,8 +449,8 @@ export default function SettingsPage() {
                     onClick={() => setBedrockAuthType('bearer_token')}
                     className={`flex-1 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
                       bedrockAuthType === 'bearer_token'
-                        ? 'bg-primary text-white'
-                        : 'bg-dark-bg text-muted border border-dark-border hover:border-muted'
+                        ? 'bg-[#2b6cee] text-white'
+                        : 'bg-[#101622] text-gray-400 border border-gray-700 hover:border-gray-500'
                     }`}
                   >
                     Bearer Token
@@ -510,7 +462,7 @@ export default function SettingsPage() {
                 <>
                   {/* AWS Access Key ID */}
                   <div>
-                    <label className="block text-sm text-muted mb-2">
+                    <label className="block text-sm text-gray-400 mb-2">
                       AWS Access Key ID
                       {apiConfig?.aws_access_key_id_set && (
                         <span className="ml-2 text-green-400 text-xs">✓ Configured</span>
@@ -521,25 +473,25 @@ export default function SettingsPage() {
                       value={awsAccessKey}
                       onChange={(e) => setAwsAccessKey(e.target.value)}
                       placeholder={apiConfig?.aws_access_key_id_set ? '••••••••••••' : 'AKIA...'}
-                      className="w-full px-4 py-2 bg-dark-bg border border-dark-border rounded-lg text-white placeholder-muted focus:outline-none focus:border-primary"
+                      className="w-full px-4 py-2 bg-[#101622] border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-[#2b6cee]"
                     />
                   </div>
 
                   {/* AWS Secret Access Key */}
                   <div>
-                    <label className="block text-sm text-muted mb-2">AWS Secret Access Key</label>
+                    <label className="block text-sm text-gray-400 mb-2">AWS Secret Access Key</label>
                     <input
                       type="password"
                       value={awsSecretKey}
                       onChange={(e) => setAwsSecretKey(e.target.value)}
                       placeholder="••••••••••••••••"
-                      className="w-full px-4 py-2 bg-dark-bg border border-dark-border rounded-lg text-white placeholder-muted focus:outline-none focus:border-primary"
+                      className="w-full px-4 py-2 bg-[#101622] border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-[#2b6cee]"
                     />
                   </div>
 
                   {/* AWS Session Token */}
                   <div>
-                    <label className="block text-sm text-muted mb-2">
+                    <label className="block text-sm text-gray-400 mb-2">
                       AWS Session Token (Optional)
                     </label>
                     <input
@@ -547,9 +499,9 @@ export default function SettingsPage() {
                       value={awsSessionToken}
                       onChange={(e) => setAwsSessionToken(e.target.value)}
                       placeholder="For temporary credentials"
-                      className="w-full px-4 py-2 bg-dark-bg border border-dark-border rounded-lg text-white placeholder-muted focus:outline-none focus:border-primary"
+                      className="w-full px-4 py-2 bg-[#101622] border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-[#2b6cee]"
                     />
-                    <p className="text-xs text-muted mt-1">
+                    <p className="text-xs text-gray-500 mt-1">
                       Only needed for temporary security credentials (STS).
                     </p>
                   </div>
@@ -560,7 +512,7 @@ export default function SettingsPage() {
                 <>
                   {/* AWS Bearer Token */}
                   <div>
-                    <label className="block text-sm text-muted mb-2">
+                    <label className="block text-sm text-gray-400 mb-2">
                       AWS Bearer Token
                       {apiConfig?.aws_bearer_token_set && (
                         <span className="ml-2 text-green-400 text-xs">✓ Configured</span>
@@ -571,9 +523,9 @@ export default function SettingsPage() {
                       value={awsBearerToken}
                       onChange={(e) => setAwsBearerToken(e.target.value)}
                       placeholder={apiConfig?.aws_bearer_token_set ? '••••••••••••••••' : 'Enter bearer token...'}
-                      className="w-full px-4 py-2 bg-dark-bg border border-dark-border rounded-lg text-white placeholder-muted focus:outline-none focus:border-primary"
+                      className="w-full px-4 py-2 bg-[#101622] border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-[#2b6cee]"
                     />
-                    <p className="text-xs text-muted mt-1">
+                    <p className="text-xs text-gray-500 mt-1">
                       Bearer token for AWS Bedrock authentication.
                     </p>
                   </div>
@@ -595,7 +547,7 @@ export default function SettingsPage() {
           <button
             onClick={handleSaveAPIConfig}
             disabled={saving}
-            className="w-full px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary/80 disabled:opacity-50"
+            className="w-full px-4 py-2 bg-[#2b6cee] text-white rounded-lg hover:bg-[#2b6cee]/80 disabled:opacity-50"
           >
             {saving ? 'Saving...' : 'Save API Configuration'}
           </button>
@@ -603,18 +555,18 @@ export default function SettingsPage() {
       </section>
 
       {/* Claude Agent SDK */}
-      <section className="mb-8 bg-dark-card rounded-lg p-6">
+      <section className="mb-8 bg-[#1a1f2e] rounded-lg p-6">
         <h2 className="text-lg font-semibold text-white mb-4">Claude Agent SDK</h2>
         <div className="space-y-3">
           <div className="flex items-center justify-between">
-            <span className="text-muted">Status</span>
+            <span className="text-gray-400">Status</span>
             <span className="text-green-400">✓ Bundled</span>
           </div>
           <div className="flex items-center justify-between">
-            <span className="text-muted">Version</span>
+            <span className="text-gray-400">Version</span>
             <span className="text-white">0.1.20</span>
           </div>
-          <p className="text-xs text-muted mt-2">
+          <p className="text-xs text-gray-500 mt-2">
             The Claude Agent SDK includes a bundled Claude Code CLI. No external installation required.
           </p>
         </div>
@@ -622,22 +574,22 @@ export default function SettingsPage() {
 
       {/* System Dependencies */}
       {!isDev && (
-        <section className="mb-8 bg-dark-card rounded-lg p-6">
+        <section className="mb-8 bg-[#1a1f2e] rounded-lg p-6">
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-lg font-semibold text-white">System Dependencies</h2>
             <button
               onClick={checkSystemDependencies}
               disabled={checkingDependencies}
-              className="px-3 py-1 text-xs bg-dark-bg text-muted rounded hover:bg-primary hover:text-white transition-colors disabled:opacity-50"
+              className="px-3 py-1 text-xs bg-[#101622] text-gray-400 rounded hover:bg-[#2b6cee] hover:text-white transition-colors disabled:opacity-50"
             >
               {checkingDependencies ? 'Checking...' : 'Refresh'}
             </button>
           </div>
           <div className="space-y-3">
             <div className="flex items-center justify-between">
-              <span className="text-muted">Node.js</span>
+              <span className="text-gray-400">Node.js</span>
               {nodejsVersion === null ? (
-                <span className="text-muted">Checking...</span>
+                <span className="text-gray-500">Checking...</span>
               ) : nodejsVersion === 'Not installed' ? (
                 <span className="text-red-400">✗ Not found</span>
               ) : (
@@ -645,9 +597,9 @@ export default function SettingsPage() {
               )}
             </div>
             <div className="flex items-center justify-between">
-              <span className="text-muted">Python</span>
+              <span className="text-gray-400">Python</span>
               {pythonVersion === null ? (
-                <span className="text-muted">Checking...</span>
+                <span className="text-gray-500">Checking...</span>
               ) : pythonVersion === 'Not installed' ? (
                 <span className="text-red-400">✗ Not found</span>
               ) : (
@@ -656,9 +608,9 @@ export default function SettingsPage() {
             </div>
             {platformInfo.platform === 'Windows' && (
               <div className="flex items-center justify-between">
-                <span className="text-muted">Git Bash</span>
+                <span className="text-gray-400">Git Bash</span>
                 {gitBashPath === null ? (
-                  <span className="text-muted">Checking...</span>
+                  <span className="text-gray-500">Checking...</span>
                 ) : gitBashPath === 'Not found' ? (
                   <span className="text-red-400">✗ Not found</span>
                 ) : (
@@ -668,7 +620,7 @@ export default function SettingsPage() {
                 )}
               </div>
             )}
-            <p className="text-xs text-muted mt-2">
+            <p className="text-xs text-gray-500 mt-2">
               System-level dependencies detected in PATH. These are not required for the app to run.
             </p>
           </div>
@@ -688,29 +640,29 @@ export default function SettingsPage() {
               </p>
               <div className="space-y-2 text-sm">
                 <div>
-                  <span className="text-muted">1. Download and install Git for Windows:</span>
+                  <span className="text-gray-400">1. Download and install Git for Windows:</span>
                   <a
                     href="https://git-scm.com/downloads/win"
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="ml-2 text-primary hover:underline"
+                    className="ml-2 text-[#2b6cee] hover:underline"
                   >
                     https://git-scm.com/downloads/win
                   </a>
                 </div>
                 <div>
-                  <span className="text-muted">2. Set the environment variable:</span>
-                  <code className="ml-2 px-2 py-1 bg-dark-bg rounded text-xs text-white">
+                  <span className="text-gray-400">2. Set the environment variable:</span>
+                  <code className="ml-2 px-2 py-1 bg-[#101622] rounded text-xs text-white">
                     CLAUDE_CODE_GIT_BASH_PATH
                   </code>
                 </div>
-                <div className="mt-2 p-3 bg-dark-bg rounded-lg">
-                  <p className="text-muted text-xs mb-1">Example (default installation path):</p>
+                <div className="mt-2 p-3 bg-[#101622] rounded-lg">
+                  <p className="text-gray-400 text-xs mb-1">Example (default installation path):</p>
                   <code className="text-white text-xs font-mono">
                     CLAUDE_CODE_GIT_BASH_PATH=C:\Program Files\Git\bin\bash.exe
                   </code>
                 </div>
-                <p className="text-muted text-xs mt-2">
+                <p className="text-gray-500 text-xs mt-2">
                   After setting the environment variable, restart the application and click "Refresh" above to verify.
                 </p>
               </div>
@@ -720,48 +672,48 @@ export default function SettingsPage() {
       )}
 
       {/* Backend Status */}
-      <section className="mb-8 bg-dark-card rounded-lg p-6">
+      <section className="mb-8 bg-[#1a1f2e] rounded-lg p-6">
         <h2 className="text-lg font-semibold text-white mb-4">Backend Service</h2>
         {backendStatus ? (
           <div className="space-y-3">
             <div className="flex items-center justify-between">
-              <span className="text-muted">Status</span>
+              <span className="text-gray-400">Status</span>
               <span className={backendStatus.running ? 'text-green-400' : 'text-red-400'}>
                 {backendStatus.running ? '● Running' : '○ Stopped'}
               </span>
             </div>
             <div className="flex items-center justify-between">
-              <span className="text-muted">Port</span>
+              <span className="text-gray-400">Port</span>
               <span className="text-white">{backendStatus.port}</span>
             </div>
           </div>
         ) : (
-          <p className="text-muted">Loading...</p>
+          <p className="text-gray-500">Loading...</p>
         )}
       </section>
 
       {/* Storage Info */}
-      <section className="mb-8 bg-dark-card rounded-lg p-6">
+      <section className="mb-8 bg-[#1a1f2e] rounded-lg p-6">
         <h2 className="text-lg font-semibold text-white mb-4">Storage</h2>
         <div className="space-y-3 text-sm">
           <div className="flex items-center justify-between">
-            <span className="text-muted">Data Directory</span>
+            <span className="text-gray-400">Data Directory</span>
             <span className="text-white font-mono text-xs">
               {platformInfo.dataDir}
             </span>
           </div>
           <div className="flex items-center justify-between">
-            <span className="text-muted">Skills Directory</span>
+            <span className="text-gray-400">Skills Directory</span>
             <span className="text-white font-mono text-xs">
               {platformInfo.skillsDir}
             </span>
           </div>
           <div className="flex items-center justify-between">
-            <span className="text-muted">Database</span>
+            <span className="text-gray-400">Database</span>
             <span className="text-white font-mono text-xs">data.db (SQLite)</span>
           </div>
           <div className="flex items-center justify-between">
-            <span className="text-muted">Logs Directory</span>
+            <span className="text-gray-400">Logs Directory</span>
             <span className="text-white font-mono text-xs">
               {platformInfo.logsDir}
             </span>
@@ -770,26 +722,26 @@ export default function SettingsPage() {
       </section>
 
       {/* About */}
-      <section className="bg-dark-card rounded-lg p-6">
+      <section className="bg-[#1a1f2e] rounded-lg p-6">
         <h2 className="text-lg font-semibold text-white mb-4">About</h2>
         <div className="space-y-3 text-sm">
           <div className="flex items-center justify-between">
-            <span className="text-muted">Version</span>
+            <span className="text-gray-400">Version</span>
             <span className="text-white">{appVersion || 'Loading...'}</span>
           </div>
           <div className="flex items-center justify-between">
-            <span className="text-muted">Platform</span>
+            <span className="text-gray-400">Platform</span>
             <span className="text-white">{platformInfo.platform}</span>
           </div>
 
           {/* Update Section - only in production */}
           {!isDev && (
-            <div className="pt-3 border-t border-dark-border">
+            <div className="pt-3 border-t border-gray-700">
               {/* Idle state - show check button */}
               {updateState === 'idle' && (
                 <button
                   onClick={handleCheckForUpdates}
-                  className="w-full px-4 py-2 bg-dark-bg text-white rounded-lg hover:bg-primary transition-colors flex items-center justify-center gap-2"
+                  className="w-full px-4 py-2 bg-[#101622] text-white rounded-lg hover:bg-[#2b6cee] transition-colors flex items-center justify-center gap-2"
                 >
                   <span className="material-symbols-outlined text-lg">update</span>
                   Check for Updates
@@ -798,7 +750,7 @@ export default function SettingsPage() {
 
               {/* Checking state */}
               {updateState === 'checking' && (
-                <div className="flex items-center justify-center gap-2 py-2 text-muted">
+                <div className="flex items-center justify-center gap-2 py-2 text-gray-400">
                   <span className="material-symbols-outlined animate-spin text-lg">progress_activity</span>
                   Checking for updates...
                 </div>
@@ -812,13 +764,13 @@ export default function SettingsPage() {
                     <span>Version {availableUpdate.version} available!</span>
                   </div>
                   {availableUpdate.body && (
-                    <div className="bg-dark-bg rounded p-3 text-xs text-muted max-h-24 overflow-y-auto">
+                    <div className="bg-[#101622] rounded p-3 text-xs text-gray-400 max-h-24 overflow-y-auto">
                       {availableUpdate.body}
                     </div>
                   )}
                   <button
                     onClick={handleDownloadUpdate}
-                    className="w-full px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary/80 transition-colors flex items-center justify-center gap-2"
+                    className="w-full px-4 py-2 bg-[#2b6cee] text-white rounded-lg hover:bg-[#2b6cee]/80 transition-colors flex items-center justify-center gap-2"
                   >
                     <span className="material-symbols-outlined text-lg">download</span>
                     Download & Install
@@ -829,7 +781,7 @@ export default function SettingsPage() {
               {/* Downloading state */}
               {updateState === 'downloading' && updateProgress && (
                 <div className="space-y-2">
-                  <div className="flex justify-between text-xs text-muted">
+                  <div className="flex justify-between text-xs text-gray-400">
                     <span>Downloading...</span>
                     <span>
                       {updateProgress.total
@@ -837,9 +789,9 @@ export default function SettingsPage() {
                         : formatBytes(updateProgress.downloaded)}
                     </span>
                   </div>
-                  <div className="h-2 bg-dark-bg rounded-full overflow-hidden">
+                  <div className="h-2 bg-[#101622] rounded-full overflow-hidden">
                     <div
-                      className="h-full bg-primary transition-all duration-300"
+                      className="h-full bg-[#2b6cee] transition-all duration-300"
                       style={{ width: `${updateProgress.percentage}%` }}
                     />
                   </div>
@@ -855,7 +807,7 @@ export default function SettingsPage() {
                   </div>
                   <button
                     onClick={handleRestartApp}
-                    className="w-full px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary/80 transition-colors flex items-center justify-center gap-2"
+                    className="w-full px-4 py-2 bg-[#2b6cee] text-white rounded-lg hover:bg-[#2b6cee]/80 transition-colors flex items-center justify-center gap-2"
                   >
                     <span className="material-symbols-outlined text-lg">restart_alt</span>
                     Restart Now
@@ -872,7 +824,7 @@ export default function SettingsPage() {
                   </div>
                   <button
                     onClick={handleCheckForUpdates}
-                    className="w-full px-4 py-2 bg-dark-bg text-white rounded-lg hover:bg-primary transition-colors flex items-center justify-center gap-2"
+                    className="w-full px-4 py-2 bg-[#101622] text-white rounded-lg hover:bg-[#2b6cee] transition-colors flex items-center justify-center gap-2"
                   >
                     <span className="material-symbols-outlined text-lg">refresh</span>
                     Try Again
