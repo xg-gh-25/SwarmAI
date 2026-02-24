@@ -2064,26 +2064,24 @@ export default function ChatPage() {
 }
 
 // Collapsible Tool Use Input Component
-const TOOL_INPUT_COLLAPSE_LINES = 5;
+const TOOL_INPUT_COLLAPSE_LENGTH = 200; // Collapse if content exceeds this character length
 
 function ToolUseBlock({ name, input }: { name: string; input: Record<string, unknown> }) {
   const [isExpanded, setIsExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
 
   // Memoize expensive JSON serialization
-  const { content, lines, shouldCollapse, hiddenLines } = useMemo(() => {
+  const { content, shouldCollapse, hiddenChars } = useMemo(() => {
     const content = JSON.stringify(input, null, 2);
-    const lines = content.split('\n');
     return {
       content,
-      lines,
-      shouldCollapse: lines.length > TOOL_INPUT_COLLAPSE_LINES,
-      hiddenLines: lines.length - TOOL_INPUT_COLLAPSE_LINES,
+      shouldCollapse: content.length > TOOL_INPUT_COLLAPSE_LENGTH,
+      hiddenChars: content.length - TOOL_INPUT_COLLAPSE_LENGTH,
     };
   }, [input]);
 
   const displayContent = shouldCollapse && !isExpanded
-    ? lines.slice(0, TOOL_INPUT_COLLAPSE_LINES).join('\n')
+    ? content.slice(0, TOOL_INPUT_COLLAPSE_LENGTH) + '...'
     : content;
 
   const handleCopy = () => {
@@ -2122,7 +2120,7 @@ function ToolUseBlock({ name, input }: { name: string; input: Record<string, unk
             <span className="material-symbols-outlined text-sm">
               {isExpanded ? 'expand_less' : 'expand_more'}
             </span>
-            {isExpanded ? 'Show less' : `Show more (${hiddenLines} more lines)`}
+            {isExpanded ? 'Show less' : `Show more (${hiddenChars} more chars)`}
           </button>
         )}
       </div>
