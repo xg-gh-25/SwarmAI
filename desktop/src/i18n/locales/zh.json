@@ -360,6 +360,12 @@
       "zh": "中文",
       "en": "English"
     },
+    "theme": {
+      "title": "外观",
+      "light": "浅色",
+      "dark": "深色",
+      "system": "跟随系统"
+    },
     "apiConfig": {
       "title": "API 配置",
       "useBedrock": "使用 AWS Bedrock",
