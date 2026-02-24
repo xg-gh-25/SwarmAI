@@ -173,7 +173,7 @@ export default function SkillsPage() {
     <div className="p-8">
       {/* Header */}
       <div className="mb-6">
-        <h1 className="text-2xl font-bold text-white">{t('skills.title')}</h1>
+        <h1 className="text-2xl font-bold text-[var(--color-text)]">{t('skills.title')}</h1>
       </div>
 
       {/* Toolbar */}
@@ -205,7 +205,7 @@ export default function SkillsPage() {
       </div>
 
       {/* Skills Table */}
-      <div className="bg-dark-card border border-dark-border rounded-xl overflow-hidden">
+      <div className="bg-[var(--color-card)] border border-[var(--color-border)] rounded-xl overflow-hidden">
         {isInitialLoading ? (
           <SkeletonTable rows={5} columns={5} />
         ) : (
@@ -213,13 +213,13 @@ export default function SkillsPage() {
             {filteredSkills.map((skill) => (
               <tr
                 key={skill.id}
-                className="border-b border-dark-border hover:bg-dark-hover transition-colors"
+                className="border-b border-[var(--color-border)] hover:bg-[var(--color-hover)] transition-colors"
               >
                 <ResizableTableCell>
-                  <span className="text-white font-medium">{skill.name}</span>
+                  <span className="text-[var(--color-text)] font-medium">{skill.name}</span>
                 </ResizableTableCell>
                 <ResizableTableCell>
-                  <span className="text-muted" title={skill.description}>
+                  <span className="text-[var(--color-text-muted)]" title={skill.description}>
                     {skill.description}
                   </span>
                 </ResizableTableCell>
@@ -242,7 +242,7 @@ export default function SkillsPage() {
                   </span>
                 </ResizableTableCell>
                 <ResizableTableCell>
-                  <span className="text-muted text-sm">
+                  <span className="text-[var(--color-text-muted)] text-sm">
                     {formatDateTime(skill.updatedAt)}
                   </span>
                 </ResizableTableCell>
@@ -252,7 +252,7 @@ export default function SkillsPage() {
                     {(skill.sourceType === 'user' || skill.sourceType === 'local') && (
                       <button
                         onClick={() => handleDeleteClick(skill)}
-                        className="p-1.5 rounded-lg text-muted hover:text-status-error hover:bg-status-error/10 transition-colors"
+                        className="p-1.5 rounded-lg text-[var(--color-text-muted)] hover:text-status-error hover:bg-status-error/10 transition-colors"
                         title={t('skills.deleteSkill')}
                       >
                         <span className="material-symbols-outlined text-lg">delete</span>
@@ -260,7 +260,7 @@ export default function SkillsPage() {
                     )}
                     {/* For plugin skills, show info that they are managed by plugin */}
                     {skill.sourceType === 'plugin' && (
-                      <span className="text-xs text-muted" title={t('skills.source.pluginManaged')}>
+                      <span className="text-xs text-[var(--color-text-muted)]" title={t('skills.source.pluginManaged')}>
                         {t('skills.source.plugin')}
                       </span>
                     )}
@@ -272,10 +272,10 @@ export default function SkillsPage() {
             {filteredSkills.length === 0 && (
               <tr>
                 <td colSpan={5} className="px-6 py-12 text-center">
-                  <span className="material-symbols-outlined text-4xl text-muted mb-2">
+                  <span className="material-symbols-outlined text-4xl text-[var(--color-text-muted)] mb-2">
                     construction
                   </span>
-                  <p className="text-muted">{t('skills.noSkills')}</p>
+                  <p className="text-[var(--color-text-muted)]">{t('skills.noSkills')}</p>
                 </td>
               </tr>
             )}
@@ -330,7 +330,7 @@ export default function SkillsPage() {
         title={t('skills.deleteSkill')}
         message={
           <>
-            {t('skills.deleteConfirm', { name: '' })}<strong className="text-white">{deleteTarget?.name}</strong>?
+            {t('skills.deleteConfirm', { name: '' })}<strong className="text-[var(--color-text)]">{deleteTarget?.name}</strong>?
             <br />
             <span className="text-sm text-status-error font-medium">
               {t('common.message.cannotUndo')}
@@ -364,17 +364,17 @@ function SyncResultDisplay({
     <div className="space-y-4">
       {/* Summary Stats */}
       <div className="grid grid-cols-3 gap-4">
-        <div className="bg-dark-bg border border-dark-border rounded-lg p-4 text-center">
-          <p className="text-2xl font-bold text-white">{result.totalLocal}</p>
-          <p className="text-sm text-muted">{t('skills.sync.local')}</p>
+        <div className="bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg p-4 text-center">
+          <p className="text-2xl font-bold text-[var(--color-text)]">{result.totalLocal}</p>
+          <p className="text-sm text-[var(--color-text-muted)]">{t('skills.sync.local')}</p>
         </div>
-        <div className="bg-dark-bg border border-dark-border rounded-lg p-4 text-center">
-          <p className="text-2xl font-bold text-white">{result.totalPlugins}</p>
-          <p className="text-sm text-muted">{t('skills.sync.fromPlugins')}</p>
+        <div className="bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg p-4 text-center">
+          <p className="text-2xl font-bold text-[var(--color-text)]">{result.totalPlugins}</p>
+          <p className="text-sm text-[var(--color-text-muted)]">{t('skills.sync.fromPlugins')}</p>
         </div>
-        <div className="bg-dark-bg border border-dark-border rounded-lg p-4 text-center">
-          <p className="text-2xl font-bold text-white">{result.totalDb}</p>
-          <p className="text-sm text-muted">{t('skills.sync.database')}</p>
+        <div className="bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg p-4 text-center">
+          <p className="text-2xl font-bold text-[var(--color-text)]">{result.totalDb}</p>
+          <p className="text-sm text-[var(--color-text-muted)]">{t('skills.sync.database')}</p>
         </div>
       </div>
 
@@ -419,7 +419,7 @@ function SyncResultDisplay({
                 <span className="material-symbols-outlined text-status-warning">warning</span>
                 <span className="text-status-warning font-medium">{t('skills.sync.orphanedRecords')} ({result.removed.length})</span>
               </div>
-              <p className="text-sm text-muted mb-2">{t('skills.sync.orphanedDesc')}</p>
+              <p className="text-sm text-[var(--color-text-muted)] mb-2">{t('skills.sync.orphanedDesc')}</p>
               <div className="flex flex-wrap gap-2">
                 {result.removed.map((name) => (
                   <span key={name} className="px-2 py-1 bg-status-warning/20 text-status-warning text-sm rounded">
@@ -431,9 +431,9 @@ function SyncResultDisplay({
           )}
         </div>
       ) : (
-        <div className="bg-dark-bg border border-dark-border rounded-lg p-4 text-center">
+        <div className="bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg p-4 text-center">
           <span className="material-symbols-outlined text-3xl text-status-success mb-2">check_circle</span>
-          <p className="text-white">{t('skills.sync.allInSync')}</p>
+          <p className="text-[var(--color-text)]">{t('skills.sync.allInSync')}</p>
         </div>
       )}
 
@@ -447,7 +447,7 @@ function SyncResultDisplay({
           <div className="space-y-2">
             {result.errors.map((err, idx) => (
               <div key={idx} className="text-sm">
-                <span className="text-white">{err.skill}:</span>{' '}
+                <span className="text-[var(--color-text)]">{err.skill}:</span>{' '}
                 <span className="text-status-error">{err.error}</span>
               </div>
             ))}
@@ -490,18 +490,18 @@ function UploadSkillForm({
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
       <div>
-        <label className="block text-sm font-medium text-muted mb-2">{t('skills.upload.skillName')}</label>
+        <label className="block text-sm font-medium text-[var(--color-text-muted)] mb-2">{t('skills.upload.skillName')}</label>
         <input
           type="text"
           value={name}
           onChange={(e) => setName(e.target.value)}
           placeholder={t('skills.upload.skillNamePlaceholder')}
-          className="w-full px-4 py-2 bg-dark-bg border border-dark-border rounded-lg text-white placeholder:text-muted focus:outline-none focus:border-primary"
+          className="w-full px-4 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-primary"
         />
       </div>
 
       <div>
-        <label className="block text-sm font-medium text-muted mb-2">{t('skills.upload.zipFile')}</label>
+        <label className="block text-sm font-medium text-[var(--color-text-muted)] mb-2">{t('skills.upload.zipFile')}</label>
         <div className="relative">
           <input
             type="file"
@@ -510,22 +510,22 @@ function UploadSkillForm({
             required
             className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
           />
-          <div className="px-4 py-8 bg-dark-bg border border-dashed border-dark-border rounded-lg text-center">
-            <span className="material-symbols-outlined text-3xl text-muted mb-2">upload_file</span>
-            <p className="text-white">
+          <div className="px-4 py-8 bg-[var(--color-bg)] border border-dashed border-[var(--color-border)] rounded-lg text-center">
+            <span className="material-symbols-outlined text-3xl text-[var(--color-text-muted)] mb-2">upload_file</span>
+            <p className="text-[var(--color-text)]">
               {file ? file.name : t('skills.upload.dropzone')}
             </p>
-            <p className="text-sm text-muted mt-1">{t('skills.upload.zipOnly')}</p>
+            <p className="text-sm text-[var(--color-text-muted)] mt-1">{t('skills.upload.zipOnly')}</p>
           </div>
         </div>
       </div>
 
-      <div className="bg-dark-bg border border-dark-border rounded-lg p-4">
+      <div className="bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg p-4">
         <div className="flex items-start gap-3">
           <span className="material-symbols-outlined text-primary">info</span>
           <div>
-            <p className="text-sm text-white font-medium">{t('skills.upload.uploadProcess')}</p>
-            <p className="text-sm text-muted mt-1">
+            <p className="text-sm text-[var(--color-text)] font-medium">{t('skills.upload.uploadProcess')}</p>
+            <p className="text-sm text-[var(--color-text-muted)] mt-1">
               {t('skills.upload.uploadProcessDesc')}
             </p>
           </div>
@@ -985,34 +985,34 @@ function GenerateSkillForm({
     return (
       <div className="space-y-4">
         <div>
-          <label className="block text-sm font-medium text-muted mb-2">{t('skills.create.nameLabel')}</label>
+          <label className="block text-sm font-medium text-[var(--color-text-muted)] mb-2">{t('skills.create.nameLabel')}</label>
           <input
             type="text"
             value={name}
             onChange={(e) => handleNameChange(e.target.value)}
             placeholder={t('skills.create.namePlaceholder')}
             required
-            className={`w-full px-4 py-2 bg-dark-bg border rounded-lg text-white placeholder:text-muted focus:outline-none focus:border-primary ${
-              nameError ? 'border-status-error' : 'border-dark-border'
+            className={`w-full px-4 py-2 bg-[var(--color-bg)] border rounded-lg text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-primary ${
+              nameError ? 'border-status-error' : 'border-[var(--color-border)]'
             }`}
           />
           {nameError && (
             <p className="mt-1 text-sm text-status-error">{nameError}</p>
           )}
-          <p className="mt-1 text-xs text-muted">
+          <p className="mt-1 text-xs text-[var(--color-text-muted)]">
             {t('skills.create.nameHelp')}
           </p>
         </div>
 
         <div>
-          <label className="block text-sm font-medium text-muted mb-2">{t('skills.create.descriptionLabel')}</label>
+          <label className="block text-sm font-medium text-[var(--color-text-muted)] mb-2">{t('skills.create.descriptionLabel')}</label>
           <textarea
             value={description}
             onChange={(e) => setDescription(e.target.value)}
             placeholder={t('skills.create.descriptionPlaceholder')}
             rows={5}
             required
-            className="w-full px-4 py-2 bg-dark-bg border border-dark-border rounded-lg text-white placeholder:text-muted focus:outline-none focus:border-primary resize-none"
+            className="w-full px-4 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-primary resize-none"
           />
         </div>
 
@@ -1024,12 +1024,12 @@ function GenerateSkillForm({
           placeholder={t('skills.create.selectModel')}
         />
 
-        <div className="bg-dark-bg border border-dark-border rounded-lg p-4">
+        <div className="bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg p-4">
           <div className="flex items-start gap-3">
             <span className="material-symbols-outlined text-primary">info</span>
             <div>
-              <p className="text-sm text-white font-medium">{t('skills.create.howItWorks')}</p>
-              <p className="text-sm text-muted mt-1">
+              <p className="text-sm text-[var(--color-text)] font-medium">{t('skills.create.howItWorks')}</p>
+              <p className="text-sm text-[var(--color-text-muted)] mt-1">
                 {t('skills.create.howItWorksDesc')}
               </p>
             </div>
@@ -1057,16 +1057,16 @@ function GenerateSkillForm({
   return (
     <div className="flex flex-col h-[700px]">
       {/* Chat Header */}
-      <div className="flex items-center justify-between pb-4 border-b border-dark-border">
+      <div className="flex items-center justify-between pb-4 border-b border-[var(--color-border)]">
         <div className="flex items-center gap-2">
           <span className="material-symbols-outlined text-primary">smart_toy</span>
           <div>
-            <h3 className="font-medium text-white">{t('skills.create.skillCreator')}</h3>
-            <p className="text-xs text-muted">{t('skills.create.creating', { name })}</p>
+            <h3 className="font-medium text-[var(--color-text)]">{t('skills.create.skillCreator')}</h3>
+            <p className="text-xs text-[var(--color-text-muted)]">{t('skills.create.creating', { name })}</p>
           </div>
         </div>
         {isStreaming && (
-          <span className="flex items-center gap-2 text-sm text-muted">
+          <span className="flex items-center gap-2 text-sm text-[var(--color-text-muted)]">
             <Spinner size="sm" />
             {t('chat.thinking')}
           </span>
@@ -1082,7 +1082,7 @@ function GenerateSkillForm({
           >
             <div
               className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${
-                message.role === 'user' ? 'bg-orange-500/20' : 'bg-dark-card'
+                message.role === 'user' ? 'bg-orange-500/20' : 'bg-[var(--color-card)]'
               }`}
             >
               <span
@@ -1109,7 +1109,7 @@ function GenerateSkillForm({
           </div>
         ))}
         {isStreaming && messages[messages.length - 1]?.content.length === 0 && (
-          <div className="flex items-center gap-2 text-muted">
+          <div className="flex items-center gap-2 text-[var(--color-text-muted)]">
             <Spinner size="sm" />
             <span className="text-sm">Agent is working...</span>
           </div>
@@ -1128,7 +1128,7 @@ function GenerateSkillForm({
       )}
 
       {/* Input Area */}
-      <div className="pt-4 border-t border-dark-border">
+      <div className="pt-4 border-t border-[var(--color-border)]">
         {isComplete && !isStreaming ? (
           <div className="space-y-3">
             <div className="flex items-center gap-2 p-3 bg-status-success/10 border border-status-success/30 rounded-lg">
@@ -1144,7 +1144,7 @@ function GenerateSkillForm({
                   onKeyDown={handleKeyDown}
                   placeholder={isStreaming ? 'Generating...' : 'Request changes or improvements...'}
                   disabled={isStreaming}
-                  className="w-full px-4 py-2 pr-10 bg-dark-bg border border-dark-border rounded-lg text-white placeholder:text-muted focus:outline-none focus:border-primary disabled:opacity-50"
+                  className="w-full px-4 py-2 pr-10 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-primary disabled:opacity-50"
                 />
                 <button
                   onClick={isStreaming ? handleStop : handleSendMessage}
@@ -1173,7 +1173,7 @@ function GenerateSkillForm({
               onKeyDown={handleKeyDown}
               placeholder={isStreaming ? 'Generating...' : 'Send a message...'}
               disabled={isStreaming}
-              className="w-full px-4 py-2 pr-10 bg-dark-bg border border-dark-border rounded-lg text-white placeholder:text-muted focus:outline-none focus:border-primary disabled:opacity-50"
+              className="w-full px-4 py-2 pr-10 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-primary disabled:opacity-50"
             />
             <button
               onClick={isStreaming ? handleStop : handleSendMessage}
@@ -1216,15 +1216,15 @@ function ContentBlockRenderer({ block, onAnswerQuestion, pendingToolUseId, isStr
 
   if (block.type === 'tool_use') {
     return (
-      <div className="bg-dark-card border border-dark-border rounded-lg overflow-hidden text-sm">
-        <div className="flex items-center justify-between px-3 py-1.5 bg-dark-hover">
+      <div className="bg-[var(--color-card)] border border-[var(--color-border)] rounded-lg overflow-hidden text-sm">
+        <div className="flex items-center justify-between px-3 py-1.5 bg-[var(--color-hover)]">
           <div className="flex items-center gap-2">
             <span className="material-symbols-outlined text-primary text-sm">terminal</span>
-            <span className="font-medium text-white">{block.name}</span>
+            <span className="font-medium text-[var(--color-text)]">{block.name}</span>
           </div>
         </div>
         <div className="p-3 max-h-32 overflow-y-auto">
-          <pre className="text-xs text-muted overflow-x-auto whitespace-pre-wrap break-words">
+          <pre className="text-xs text-[var(--color-text-muted)] overflow-x-auto whitespace-pre-wrap break-words">
             <code>{JSON.stringify(block.input, null, 2)}</code>
           </pre>
         </div>
@@ -1234,12 +1234,12 @@ function ContentBlockRenderer({ block, onAnswerQuestion, pendingToolUseId, isStr
 
   if (block.type === 'tool_result') {
     return (
-      <div className="bg-dark-card border border-dark-border rounded-lg p-3 text-sm">
+      <div className="bg-[var(--color-card)] border border-[var(--color-border)] rounded-lg p-3 text-sm">
         <div className="flex items-center gap-2 mb-1">
           <span className="material-symbols-outlined text-status-success text-sm">check_circle</span>
-          <span className="font-medium text-white">Result</span>
+          <span className="font-medium text-[var(--color-text)]">Result</span>
         </div>
-        <pre className="text-xs text-muted overflow-x-auto whitespace-pre-wrap break-words max-h-24 overflow-y-auto">
+        <pre className="text-xs text-[var(--color-text-muted)] overflow-x-auto whitespace-pre-wrap break-words max-h-24 overflow-y-auto">
           <code>{block.content}</code>
         </pre>
       </div>
