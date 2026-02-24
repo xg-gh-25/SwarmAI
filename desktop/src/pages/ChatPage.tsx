@@ -1052,7 +1052,10 @@ export default function ChatPage() {
   const handleSelectFolder = useCallback(async () => {
     // Check if running in Tauri environment
     if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) {
-      // Web browser mode: open folder picker modal
+      // Web browser mode: open folder picker modal (requires agent to be selected)
+      if (!selectedAgentId) {
+        return;
+      }
       setIsFolderPickerOpen(true);
       return;
     }
@@ -1070,7 +1073,7 @@ export default function ChatPage() {
     } catch (error) {
       console.error('Failed to select folder:', error);
     }
-  }, []);
+  }, [selectedAgentId]);
 
   // Handle folder selection from web modal
   const handleFolderPickerSelect = useCallback((path: string) => {
