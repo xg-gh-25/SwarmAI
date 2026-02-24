@@ -82,19 +82,19 @@ export default function MultiSelect({
 
   return (
     <div className={clsx('relative', className)} ref={dropdownRef}>
-      <label className="block text-sm font-medium text-muted mb-2">{label}</label>
+      <label className="block text-sm font-medium text-[var(--color-text-muted)] mb-2">{label}</label>
 
       {/* Selected Items Display / Trigger */}
       <div
         onClick={handleToggle}
         className={clsx(
-          'w-full min-h-[42px] px-4 py-2 bg-dark-bg border border-dark-border rounded-lg transition-colors',
+          'w-full min-h-[42px] px-4 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg transition-colors',
           disabled ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer focus-within:border-primary',
           isOpen && !disabled && 'border-primary'
         )}
       >
         {selectedOptions.length === 0 ? (
-          <span className="text-muted">{placeholder}</span>
+          <span className="text-[var(--color-text-muted)]">{placeholder}</span>
         ) : (
           <div className="flex flex-wrap gap-2">
             {selectedOptions.map((option) => (
@@ -117,7 +117,7 @@ export default function MultiSelect({
         {/* Dropdown Icon */}
         <span
           className={clsx(
-            'material-symbols-outlined absolute right-3 top-10 text-muted transition-transform',
+            'material-symbols-outlined absolute right-3 top-10 text-[var(--color-text-muted)] transition-transform',
             isOpen && 'rotate-180'
           )}
         >
@@ -127,11 +127,11 @@ export default function MultiSelect({
 
       {/* Dropdown Menu */}
       {isOpen && (
-        <div className="absolute z-50 w-full mt-2 bg-dark-card border border-dark-border rounded-lg shadow-lg max-h-80 overflow-hidden">
+        <div className="absolute z-50 w-full mt-2 bg-[var(--color-card)] border border-[var(--color-border)] rounded-lg shadow-lg max-h-80 overflow-hidden">
           {/* Search Input */}
-          <div className="p-3 border-b border-dark-border">
+          <div className="p-3 border-b border-[var(--color-border)]">
             <div className="relative">
-              <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-muted text-lg">
+              <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-[var(--color-text-muted)] text-lg">
                 search
               </span>
               <input
@@ -139,7 +139,7 @@ export default function MultiSelect({
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="Search..."
-                className="w-full pl-10 pr-4 py-2 bg-dark-bg border border-dark-border rounded-lg text-white placeholder:text-muted focus:outline-none focus:border-primary"
+                className="w-full pl-10 pr-4 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-primary"
                 onClick={(e) => e.stopPropagation()}
               />
             </div>
@@ -148,14 +148,14 @@ export default function MultiSelect({
           {/* Options List */}
           <div className="max-h-60 overflow-y-auto">
             {loading ? (
-              <div className="p-4 text-center text-muted">
+              <div className="p-4 text-center text-[var(--color-text-muted)]">
                 <div className="inline-block w-5 h-5 border-2 border-muted border-t-primary rounded-full animate-spin" />
                 <span className="ml-2">Loading...</span>
               </div>
             ) : error ? (
               <div className="p-4 text-center text-status-error">{error}</div>
             ) : filteredOptions.length === 0 ? (
-              <div className="p-4 text-center text-muted">No items found</div>
+              <div className="p-4 text-center text-[var(--color-text-muted)]">No items found</div>
             ) : (
               filteredOptions.map((option) => {
                 const isSelected = selectedIds.includes(option.id);
@@ -164,7 +164,7 @@ export default function MultiSelect({
                     key={option.id}
                     onClick={() => handleSelect(option.id)}
                     className={clsx(
-                      'px-4 py-3 cursor-pointer transition-colors hover:bg-dark-hover',
+                      'px-4 py-3 cursor-pointer transition-colors hover:bg-[var(--color-hover)]',
                       isSelected && 'bg-dark-hover'
                     )}
                   >
@@ -175,11 +175,11 @@ export default function MultiSelect({
                           'flex-shrink-0 w-5 h-5 rounded border-2 flex items-center justify-center mt-0.5',
                           isSelected
                             ? 'bg-primary border-primary'
-                            : 'border-dark-border bg-dark-bg'
+                            : 'border-[var(--color-border)] bg-[var(--color-bg)]'
                         )}
                       >
                         {isSelected && (
-                          <span className="material-symbols-outlined text-white text-sm">
+                          <span className="material-symbols-outlined text-[var(--color-text)] text-sm">
                             check
                           </span>
                         )}
@@ -187,9 +187,9 @@ export default function MultiSelect({
 
                       {/* Option Content */}
                       <div className="flex-1 min-w-0">
-                        <div className="text-white font-medium">{option.name}</div>
+                        <div className="text-[var(--color-text)] font-medium">{option.name}</div>
                         {option.description && (
-                          <div className="text-sm text-muted mt-0.5 line-clamp-1">
+                          <div className="text-sm text-[var(--color-text-muted)] mt-0.5 line-clamp-1">
                             {option.description}
                           </div>
                         )}
@@ -203,8 +203,8 @@ export default function MultiSelect({
 
           {/* Footer */}
           {!loading && !error && filteredOptions.length > 0 && (
-            <div className="p-3 border-t border-dark-border bg-dark-bg/50">
-              <div className="flex items-center justify-between text-sm text-muted">
+            <div className="p-3 border-t border-[var(--color-border)] bg-[var(--color-bg)]/50">
+              <div className="flex items-center justify-between text-sm text-[var(--color-text-muted)]">
                 <span>
                   {selectedIds.length} of {options.length} selected
                 </span>
