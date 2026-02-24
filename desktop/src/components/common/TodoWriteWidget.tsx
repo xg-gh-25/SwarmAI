@@ -14,8 +14,8 @@ interface TodoWriteWidgetProps {
 const statusConfig = {
   pending: {
     icon: 'radio_button_unchecked',
-    color: 'text-muted',
-    bgColor: 'bg-dark-hover',
+    color: 'text-[var(--color-text-muted)]',
+    bgColor: 'bg-[var(--color-hover)]',
   },
   in_progress: {
     icon: 'pending',
@@ -48,9 +48,9 @@ function TodoItemCard({ todo }: { todo: TodoItem }) {
         {config.icon}
       </span>
       <div className="flex-1 min-w-0">
-        <p className="text-white text-sm font-medium">{todo.content}</p>
+        <p className="text-[var(--color-text)] text-sm font-medium">{todo.content}</p>
         {todo.status === 'in_progress' && todo.activeForm && (
-          <p className="text-muted text-xs mt-0.5">{todo.activeForm}</p>
+          <p className="text-[var(--color-text-muted)] text-xs mt-0.5">{todo.activeForm}</p>
         )}
       </div>
     </div>
@@ -62,16 +62,16 @@ export default function TodoWriteWidget({ todos }: TodoWriteWidgetProps) {
 
   if (!todos || todos.length === 0) {
     return (
-      <div className="bg-dark-card border border-dark-border rounded-lg p-4">
+      <div className="bg-[var(--color-card)] border border-[var(--color-border)] rounded-lg p-4">
         <div className="flex items-center gap-2">
           <span className="material-symbols-outlined text-primary text-sm">
             checklist
           </span>
-          <span className="text-sm font-medium text-white">
+          <span className="text-sm font-medium text-[var(--color-text)]">
             Tool Call: TodoWrite
           </span>
         </div>
-        <p className="text-muted text-sm mt-2">No tasks to display</p>
+        <p className="text-[var(--color-text-muted)] text-sm mt-2">No tasks to display</p>
       </div>
     );
   }
@@ -86,18 +86,18 @@ export default function TodoWriteWidget({ todos }: TodoWriteWidgetProps) {
   };
 
   return (
-    <div className="bg-dark-card border border-dark-border rounded-lg overflow-hidden">
+    <div className="bg-[var(--color-card)] border border-[var(--color-border)] rounded-lg overflow-hidden">
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-2 bg-dark-hover">
+      <div className="flex items-center justify-between px-4 py-2 bg-[var(--color-hover)]">
         <div className="flex items-center gap-2">
           <span className="material-symbols-outlined text-primary text-sm">
             checklist
           </span>
-          <span className="text-sm font-medium text-white">
+          <span className="text-sm font-medium text-[var(--color-text)]">
             Tool Call: TodoWrite
           </span>
         </div>
-        <span className="text-xs text-muted">
+        <span className="text-xs text-[var(--color-text-muted)]">
           {completedCount}/{todos.length} completed
         </span>
       </div>
@@ -110,16 +110,16 @@ export default function TodoWriteWidget({ todos }: TodoWriteWidgetProps) {
       </div>
 
       {/* Footer with actions */}
-      <div className="px-4 py-2 border-t border-dark-border flex items-center justify-between">
+      <div className="px-4 py-2 border-t border-[var(--color-border)] flex items-center justify-between">
         <button
           onClick={() => setShowRawJson(!showRawJson)}
-          className="text-xs text-muted hover:text-white transition-colors"
+          className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
         >
           {showRawJson ? 'Hide' : 'View'} Raw JSON
         </button>
         <button
           onClick={handleCopy}
-          className="flex items-center gap-1 px-2 py-1 text-xs text-muted hover:text-white bg-dark-hover rounded transition-colors"
+          className="flex items-center gap-1 px-2 py-1 text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] bg-[var(--color-hover)] rounded transition-colors"
         >
           <span className="material-symbols-outlined text-sm">content_copy</span>
           Copy
@@ -129,7 +129,7 @@ export default function TodoWriteWidget({ todos }: TodoWriteWidgetProps) {
       {/* Collapsible Raw JSON */}
       {showRawJson && (
         <div className="px-4 pb-4">
-          <pre className="text-sm text-muted overflow-x-auto bg-dark-hover p-3 rounded">
+          <pre className="text-sm text-[var(--color-text-muted)] overflow-x-auto bg-[var(--color-hover)] p-3 rounded">
             <code>{JSON.stringify({ todos }, null, 2)}</code>
           </pre>
         </div>

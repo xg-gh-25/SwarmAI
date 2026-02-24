@@ -36,10 +36,10 @@ export function FileAttachmentPreview({ attachments, onRemove }: FileAttachmentP
 
       {/* Total size indicator */}
       <div className="flex items-center justify-between mt-1 px-1">
-        <span className="text-xs text-muted">
+        <span className="text-xs text-[var(--color-text-muted)]">
           {attachments.length} attachment{attachments.length !== 1 ? 's' : ''}
         </span>
-        <span className="text-xs text-muted">
+        <span className="text-xs text-[var(--color-text-muted)]">
           Total: {formatTotalSize(attachments)}
         </span>
       </div>

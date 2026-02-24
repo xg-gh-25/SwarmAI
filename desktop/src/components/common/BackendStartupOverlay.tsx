@@ -116,7 +116,7 @@ export default function BackendStartupOverlay({ onReady }: BackendStartupOverlay
 
   return (
     <div
-      className={`fixed inset-0 z-50 flex items-center justify-center bg-dark-bg transition-opacity duration-500 ${
+      className={`fixed inset-0 z-50 flex items-center justify-center bg-[var(--color-bg)] transition-opacity duration-500 ${
         isFadingOut ? 'opacity-0' : 'opacity-100'
       }`}
     >
@@ -129,7 +129,7 @@ export default function BackendStartupOverlay({ onReady }: BackendStartupOverlay
         </div>
 
         {/* App Name */}
-        <h1 className="text-3xl font-bold text-white">Owork</h1>
+        <h1 className="text-3xl font-bold text-[var(--color-text)]">Owork</h1>
 
         {status === 'starting' && (
           <>
@@ -155,11 +155,11 @@ export default function BackendStartupOverlay({ onReady }: BackendStartupOverlay
                   d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
                 />
               </svg>
-              <span className="text-muted">Starting...</span>
+              <span className="text-[var(--color-text-muted)]">Starting...</span>
             </div>
 
             {/* Progress bar */}
-            <div className="w-64 h-1 bg-dark-border rounded-full overflow-hidden">
+            <div className="w-64 h-1 bg-[var(--color-border)] rounded-full overflow-hidden">
               <div className="h-full bg-primary rounded-full animate-pulse" style={{ width: '60%' }} />
             </div>
           </>
@@ -177,13 +177,13 @@ export default function BackendStartupOverlay({ onReady }: BackendStartupOverlay
             {/* Error Message */}
             <div className="text-center">
               <p className="text-red-400 font-medium mb-2">Failed to start</p>
-              <p className="text-muted text-sm">{errorMessage}</p>
+              <p className="text-[var(--color-text-muted)] text-sm">{errorMessage}</p>
             </div>
 
             {/* Log Path Info */}
-            <div className="bg-dark-card border border-dark-border rounded-lg p-4 mt-2">
-              <p className="text-sm text-muted mb-2">Please check the logs at:</p>
-              <code className="text-xs text-primary bg-dark-hover px-2 py-1 rounded block">
+            <div className="bg-[var(--color-card)] border border-[var(--color-border)] rounded-lg p-4 mt-2">
+              <p className="text-sm text-[var(--color-text-muted)] mb-2">Please check the logs at:</p>
+              <code className="text-xs text-primary bg-[var(--color-hover)] px-2 py-1 rounded block">
                 {logPath}
               </code>
             </div>
@@ -191,7 +191,7 @@ export default function BackendStartupOverlay({ onReady }: BackendStartupOverlay
             {/* Retry Button */}
             <button
               onClick={() => window.location.reload()}
-              className="mt-4 px-6 py-2 bg-primary hover:bg-primary-hover text-white rounded-lg transition-colors flex items-center gap-2"
+              className="mt-4 px-6 py-2 bg-primary hover:bg-primary-hover text-[var(--color-text)] rounded-lg transition-colors flex items-center gap-2"
             >
               <span className="material-symbols-outlined text-xl">refresh</span>
               Retry

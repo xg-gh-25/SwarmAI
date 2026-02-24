@@ -94,11 +94,11 @@ export default function UpdateNotification() {
           <div className="flex items-center gap-3">
             <span className="material-symbols-outlined text-3xl text-primary">system_update</span>
             <div>
-              <p className="text-white font-medium">
+              <p className="text-[var(--color-text)] font-medium">
                 Version {updateInfo.version} is available
               </p>
               {updateInfo.date && (
-                <p className="text-sm text-muted">
+                <p className="text-sm text-[var(--color-text-muted)]">
                   Released: {new Date(updateInfo.date).toLocaleDateString()}
                 </p>
               )}
@@ -108,8 +108,8 @@ export default function UpdateNotification() {
 
         {/* Release notes */}
         {updateInfo?.body && (
-          <div className="bg-dark-bg rounded-lg p-4 max-h-48 overflow-y-auto">
-            <p className="text-sm text-muted whitespace-pre-wrap">{updateInfo.body}</p>
+          <div className="bg-[var(--color-bg)] rounded-lg p-4 max-h-48 overflow-y-auto">
+            <p className="text-sm text-[var(--color-text-muted)] whitespace-pre-wrap">{updateInfo.body}</p>
           </div>
         )}
 
@@ -117,14 +117,14 @@ export default function UpdateNotification() {
         {state === 'downloading' && progress && (
           <div className="space-y-2">
             <div className="flex justify-between text-sm">
-              <span className="text-muted">Downloading...</span>
-              <span className="text-white">
+              <span className="text-[var(--color-text-muted)]">Downloading...</span>
+              <span className="text-[var(--color-text)]">
                 {progress.total
                   ? `${formatBytes(progress.downloaded)} / ${formatBytes(progress.total)}`
                   : formatBytes(progress.downloaded)}
               </span>
             </div>
-            <div className="h-2 bg-dark-bg rounded-full overflow-hidden">
+            <div className="h-2 bg-[var(--color-bg)] rounded-full overflow-hidden">
               <div
                 className="h-full bg-primary transition-all duration-300"
                 style={{ width: `${progress.percentage}%` }}
