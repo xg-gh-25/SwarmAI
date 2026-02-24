@@ -60,9 +60,9 @@ export default function Sidebar({ collapsed, onClose, isOverlay }: SidebarProps)
   // Icon-only collapsed mode
   if (collapsed) {
     return (
-      <aside className="w-16 bg-dark-bg border-r border-dark-border flex flex-col flex-shrink-0">
+      <aside className="w-16 bg-[var(--color-bg)] border-r border-[var(--color-border)] flex flex-col flex-shrink-0">
         {/* Dashboard - Top Icon */}
-        <div className="h-16 flex items-center justify-center border-b border-dark-border">
+        <div className="h-16 flex items-center justify-center border-b border-[var(--color-border)]">
           <NavLink
             to="/"
             title={t('nav.dashboard')}
@@ -70,7 +70,7 @@ export default function Sidebar({ collapsed, onClose, isOverlay }: SidebarProps)
               'w-10 h-10 rounded-xl flex items-center justify-center transition-colors',
               isActive('/')
                 ? 'bg-primary text-white'
-                : 'bg-dark-hover text-muted hover:bg-primary/20 hover:text-primary'
+                : 'bg-[var(--color-hover)] text-[var(--color-text-muted)] hover:bg-primary/20 hover:text-primary'
             )}
           >
             <span className="material-symbols-outlined text-xl">dashboard</span>
@@ -88,7 +88,7 @@ export default function Sidebar({ collapsed, onClose, isOverlay }: SidebarProps)
                 'flex items-center justify-center w-12 h-12 rounded-xl transition-colors',
                 isActive(item.path)
                   ? 'bg-primary/20 text-primary'
-                  : 'text-muted hover:bg-dark-hover hover:text-white'
+                  : 'text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)]'
               )}
             >
               <span className="material-symbols-outlined text-2xl">{item.icon}</span>
@@ -97,7 +97,7 @@ export default function Sidebar({ collapsed, onClose, isOverlay }: SidebarProps)
         </nav>
 
         {/* Bottom navigation */}
-        <div className="py-4 px-2 border-t border-dark-border space-y-1">
+        <div className="py-4 px-2 border-t border-[var(--color-border)] space-y-1">
           {bottomNavItems.map((item) => (
             <NavLink
               key={item.path}
@@ -107,7 +107,7 @@ export default function Sidebar({ collapsed, onClose, isOverlay }: SidebarProps)
                 'flex items-center justify-center w-12 h-12 rounded-xl transition-colors',
                 isActive(item.path)
                   ? 'bg-primary/20 text-primary'
-                  : 'text-muted hover:bg-dark-hover hover:text-white'
+                  : 'text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)]'
               )}
             >
               <span className="material-symbols-outlined text-2xl">{item.icon}</span>
@@ -120,7 +120,7 @@ export default function Sidebar({ collapsed, onClose, isOverlay }: SidebarProps)
             target="_blank"
             rel="noopener noreferrer"
             title="GitHub"
-            className="flex items-center justify-center w-12 h-12 rounded-xl transition-colors text-muted hover:bg-dark-hover hover:text-white"
+            className="flex items-center justify-center w-12 h-12 rounded-xl transition-colors text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)]"
           >
             <GitHubIcon className="w-6 h-6" />
           </a>
@@ -140,12 +140,12 @@ export default function Sidebar({ collapsed, onClose, isOverlay }: SidebarProps)
   return (
     <aside
       className={clsx(
-        'w-64 bg-dark-bg border-r border-dark-border flex flex-col',
+        'w-64 bg-[var(--color-bg)] border-r border-[var(--color-border)] flex flex-col',
         isOverlay && 'fixed left-0 top-0 h-full z-50 animate-slide-in-left shadow-2xl'
       )}
     >
       {/* Header with Dashboard */}
-      <div className="h-16 flex items-center px-4 border-b border-dark-border">
+      <div className="h-16 flex items-center px-4 border-b border-[var(--color-border)]">
         <NavLink
           to="/"
           onClick={handleNavClick}
@@ -153,19 +153,19 @@ export default function Sidebar({ collapsed, onClose, isOverlay }: SidebarProps)
         >
           <div className={clsx(
             'w-10 h-10 rounded-xl flex items-center justify-center transition-colors',
-            isActive('/') ? 'bg-primary text-white' : 'bg-dark-hover text-muted'
+            isActive('/') ? 'bg-primary text-white' : 'bg-[var(--color-hover)] text-[var(--color-text-muted)]'
           )}>
             <span className="material-symbols-outlined">dashboard</span>
           </div>
           <div>
-            <h1 className="font-semibold text-white">Agent Platform</h1>
-            <p className="text-xs text-muted">{t('nav.dashboard')}</p>
+            <h1 className="font-semibold text-[var(--color-text)]">Agent Platform</h1>
+            <p className="text-xs text-[var(--color-text-muted)]">{t('nav.dashboard')}</p>
           </div>
         </NavLink>
         {isOverlay && onClose && (
           <button
             onClick={onClose}
-            className="p-2 rounded-lg text-muted hover:bg-dark-hover hover:text-white transition-colors"
+            className="p-2 rounded-lg text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)] transition-colors"
             aria-label={t('common.button.close')}
           >
             <span className="material-symbols-outlined">close</span>
@@ -184,7 +184,7 @@ export default function Sidebar({ collapsed, onClose, isOverlay }: SidebarProps)
               'flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors',
               isActive(item.path)
                 ? 'bg-primary text-white'
-                : 'text-muted hover:bg-dark-hover hover:text-white'
+                : 'text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)]'
             )}
           >
             <span className="material-symbols-outlined text-xl">{item.icon}</span>
@@ -194,7 +194,7 @@ export default function Sidebar({ collapsed, onClose, isOverlay }: SidebarProps)
       </nav>
 
       {/* Bottom navigation */}
-      <div className="py-4 px-3 border-t border-dark-border space-y-1">
+      <div className="py-4 px-3 border-t border-[var(--color-border)] space-y-1">
         {bottomNavItems.map((item) => (
           <NavLink
             key={item.path}
@@ -204,7 +204,7 @@ export default function Sidebar({ collapsed, onClose, isOverlay }: SidebarProps)
               'flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors',
               isActive(item.path)
                 ? 'bg-primary text-white'
-                : 'text-muted hover:bg-dark-hover hover:text-white'
+                : 'text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)]'
             )}
           >
             <span className="material-symbols-outlined text-xl">{item.icon}</span>
@@ -217,7 +217,7 @@ export default function Sidebar({ collapsed, onClose, isOverlay }: SidebarProps)
           href={GITHUB_URL}
           target="_blank"
           rel="noopener noreferrer"
-          className="flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors text-muted hover:bg-dark-hover hover:text-white"
+          className="flex items-center gap-3 px-3 py-2.5 rounded-lg transition-colors text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)]"
         >
           <GitHubIcon className="w-5 h-5" />
           <span className="text-sm font-medium">GitHub</span>
@@ -229,8 +229,8 @@ export default function Sidebar({ collapsed, onClose, isOverlay }: SidebarProps)
             <span className="material-symbols-outlined text-white text-sm">person</span>
           </div>
           <div className="flex-1 min-w-0">
-            <p className="text-sm font-medium text-white truncate">{t('common.label.user')}</p>
-            <p className="text-xs text-muted truncate">{t('nav.settings')}</p>
+            <p className="text-sm font-medium text-[var(--color-text)] truncate">{t('common.label.user')}</p>
+            <p className="text-xs text-[var(--color-text-muted)] truncate">{t('nav.settings')}</p>
           </div>
         </div>
       </div>

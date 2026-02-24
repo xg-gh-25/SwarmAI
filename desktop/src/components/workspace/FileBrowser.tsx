@@ -92,7 +92,7 @@ const getFileIconColor = (file: WorkspaceFile): string => {
     case 'svg':
       return 'text-pink-400';
     default:
-      return 'text-muted';
+      return 'text-[var(--color-text-muted)]';
   }
 };
 

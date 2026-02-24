@@ -165,7 +165,7 @@ export default function MultiSelect({
                     onClick={() => handleSelect(option.id)}
                     className={clsx(
                       'px-4 py-3 cursor-pointer transition-colors hover:bg-[var(--color-hover)]',
-                      isSelected && 'bg-dark-hover'
+                      isSelected && 'bg-[var(--color-hover)]'
                     )}
                   >
                     <div className="flex items-start gap-3">

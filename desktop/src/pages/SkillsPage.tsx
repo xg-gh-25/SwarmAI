@@ -56,7 +56,7 @@ function getSourceDisplay(skill: Skill): { label: string; icon: string; color: s
       return {
         label: skill.createdBy === 'ai-agent' ? 'AI Generated' : 'User Created',
         icon: skill.createdBy === 'ai-agent' ? 'auto_awesome' : 'person',
-        color: skill.createdBy === 'ai-agent' ? 'text-orange-400' : 'text-muted',
+        color: skill.createdBy === 'ai-agent' ? 'text-orange-400' : 'text-[var(--color-text-muted)]',
       };
   }
 }

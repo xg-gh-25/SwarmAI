@@ -144,15 +144,15 @@ export const CodePreview = memo(function CodePreview({
   const lines = content.split('\n');
 
   return (
-    <div className={clsx('flex flex-col bg-dark-card border border-dark-border rounded-lg overflow-hidden', className)}>
+    <div className={clsx('flex flex-col bg-[var(--color-card)] border border-[var(--color-border)] rounded-lg overflow-hidden', className)}>
       {/* Header with language label and copy button */}
-      <div className="flex items-center justify-between px-4 py-2 bg-dark-hover border-b border-dark-border">
-        <span className="text-xs text-muted font-medium uppercase tracking-wider">
+      <div className="flex items-center justify-between px-4 py-2 bg-[var(--color-hover)] border-b border-[var(--color-border)]">
+        <span className="text-xs text-[var(--color-text-muted)] font-medium uppercase tracking-wider">
           {language}
         </span>
         <button
           onClick={handleCopy}
-          className="flex items-center gap-1 px-2 py-1 text-xs text-muted hover:text-white bg-dark-card hover:bg-dark-border rounded transition-colors"
+          className="flex items-center gap-1 px-2 py-1 text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] bg-[var(--color-card)] hover:bg-[var(--color-border)] rounded transition-colors"
         >
           <span className="material-symbols-outlined text-sm">
             {copied ? 'check' : 'content_copy'}
@@ -164,11 +164,11 @@ export const CodePreview = memo(function CodePreview({
       {/* Code content with optional line numbers */}
       <div className="flex overflow-x-auto">
         {showLineNumbers && (
-          <div className="flex-shrink-0 py-4 pr-2 pl-4 text-right select-none bg-dark-card/50 border-r border-dark-border">
+          <div className="flex-shrink-0 py-4 pr-2 pl-4 text-right select-none bg-[var(--color-card)]/50 border-r border-[var(--color-border)]">
             {lines.map((_, index) => (
               <div
                 key={index}
-                className="text-xs text-muted font-mono leading-relaxed"
+                className="text-xs text-[var(--color-text-muted)] font-mono leading-relaxed"
               >
                 {index + 1}
               </div>

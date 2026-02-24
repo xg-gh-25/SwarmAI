@@ -117,31 +117,31 @@ const MermaidModal = memo(function MermaidModal({
       onClick={(e) => e.target === e.currentTarget && onClose()}
     >
       {/* Top toolbar */}
-      <div className="flex items-center justify-between px-4 py-3 bg-dark-card border-b border-dark-border">
-        <span className="text-sm text-white font-medium flex items-center gap-2">
+      <div className="flex items-center justify-between px-4 py-3 bg-[var(--color-card)] border-b border-[var(--color-border)]">
+        <span className="text-sm text-[var(--color-text)] font-medium flex items-center gap-2">
           <span className="material-symbols-outlined text-primary">schema</span>
           Mermaid Diagram
         </span>
         <div className="flex items-center gap-2">
           {/* Zoom controls */}
-          <div className="flex items-center gap-1 bg-dark-hover rounded-lg px-1">
+          <div className="flex items-center gap-1 bg-[var(--color-hover)] rounded-lg px-1">
             <button
               onClick={handleZoomOut}
-              className="p-1.5 text-muted hover:text-white transition-colors"
+              className="p-1.5 text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
               title="Zoom out"
             >
               <span className="material-symbols-outlined text-lg">remove</span>
             </button>
             <button
               onClick={handleResetZoom}
-              className="px-2 py-1 text-xs text-muted hover:text-white min-w-[50px] text-center"
+              className="px-2 py-1 text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] min-w-[50px] text-center"
               title="Reset zoom (100% = fit to screen)"
             >
               {Math.round(scale * 100)}%
             </button>
             <button
               onClick={handleZoomIn}
-              className="p-1.5 text-muted hover:text-white transition-colors"
+              className="p-1.5 text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
               title="Zoom in"
             >
               <span className="material-symbols-outlined text-lg">add</span>
@@ -150,7 +150,7 @@ const MermaidModal = memo(function MermaidModal({
           {/* Close button */}
           <button
             onClick={onClose}
-            className="p-1.5 text-muted hover:text-white bg-dark-hover hover:bg-dark-border rounded-lg transition-colors"
+            className="p-1.5 text-[var(--color-text-muted)] hover:text-[var(--color-text)] bg-[var(--color-hover)] hover:bg-[var(--color-border)] rounded-lg transition-colors"
             title="Close (Esc)"
           >
             <span className="material-symbols-outlined">close</span>
@@ -165,15 +165,15 @@ const MermaidModal = memo(function MermaidModal({
         onClick={(e) => e.target === e.currentTarget && onClose()}
       >
         <div
-          className="bg-dark-card border border-dark-border rounded-xl p-4 shadow-2xl transition-transform duration-150"
+          className="bg-[var(--color-card)] border border-[var(--color-border)] rounded-xl p-4 shadow-2xl transition-transform duration-150"
           style={{ transform: `scale(${scale})`, transformOrigin: 'center center' }}
           dangerouslySetInnerHTML={{ __html: scaledSvg }}
         />
       </div>
 
       {/* Bottom hint */}
-      <div className="px-4 py-2 bg-dark-card border-t border-dark-border text-center">
-        <span className="text-xs text-muted">
+      <div className="px-4 py-2 bg-[var(--color-card)] border-t border-[var(--color-border)] text-center">
+        <span className="text-xs text-[var(--color-text-muted)]">
           Ctrl + Scroll to zoom | Click outside to close | Esc to close
         </span>
       </div>
@@ -368,10 +368,10 @@ const MermaidDiagram = memo(function MermaidDiagram({ chart }: { chart: string }
           <span className="material-symbols-outlined text-sm">error</span>
           <span className="text-sm font-medium">Mermaid Diagram Error</span>
         </div>
-        <pre className="text-xs text-muted overflow-x-auto">{error}</pre>
+        <pre className="text-xs text-[var(--color-text-muted)] overflow-x-auto">{error}</pre>
         <details className="mt-2">
-          <summary className="text-xs text-muted cursor-pointer hover:text-white">Show source</summary>
-          <pre className="text-xs text-muted mt-2 overflow-x-auto">{chart}</pre>
+          <summary className="text-xs text-[var(--color-text-muted)] cursor-pointer hover:text-[var(--color-text)]">Show source</summary>
+          <pre className="text-xs text-[var(--color-text-muted)] mt-2 overflow-x-auto">{chart}</pre>
         </details>
       </div>
     );
@@ -379,18 +379,18 @@ const MermaidDiagram = memo(function MermaidDiagram({ chart }: { chart: string }
 
   if (!svg) {
     return (
-      <div className="flex items-center justify-center p-4 my-4 bg-dark-card border border-dark-border rounded-lg">
-        <span className="text-muted text-sm">Loading diagram...</span>
+      <div className="flex items-center justify-center p-4 my-4 bg-[var(--color-card)] border border-[var(--color-border)] rounded-lg">
+        <span className="text-[var(--color-text-muted)] text-sm">Loading diagram...</span>
       </div>
     );
   }
 
   return (
     <>
-      <div className="my-4 bg-dark-card border border-dark-border rounded-lg overflow-hidden group">
+      <div className="my-4 bg-[var(--color-card)] border border-[var(--color-border)] rounded-lg overflow-hidden group">
         {/* Toolbar */}
-        <div className="flex items-center justify-between px-4 py-2 bg-dark-hover border-b border-dark-border">
-          <span className="text-xs text-muted font-medium uppercase tracking-wider flex items-center gap-1.5">
+        <div className="flex items-center justify-between px-4 py-2 bg-[var(--color-hover)] border-b border-[var(--color-border)]">
+          <span className="text-xs text-[var(--color-text-muted)] font-medium uppercase tracking-wider flex items-center gap-1.5">
             <span className="material-symbols-outlined text-sm">schema</span>
             Mermaid Diagram
           </span>
@@ -398,7 +398,7 @@ const MermaidDiagram = memo(function MermaidDiagram({ chart }: { chart: string }
             {/* Zoom button */}
             <button
               onClick={() => setIsModalOpen(true)}
-              className="flex items-center gap-1 px-2 py-1 text-xs text-muted hover:text-white bg-dark-card hover:bg-dark-border rounded transition-colors"
+              className="flex items-center gap-1 px-2 py-1 text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] bg-[var(--color-card)] hover:bg-[var(--color-border)] rounded transition-colors"
               title="View fullscreen"
             >
               <span className="material-symbols-outlined text-sm">fullscreen</span>
@@ -407,7 +407,7 @@ const MermaidDiagram = memo(function MermaidDiagram({ chart }: { chart: string }
             {/* Download SVG button */}
             <button
               onClick={handleDownloadSvg}
-              className="flex items-center gap-1 px-2 py-1 text-xs text-muted hover:text-white bg-dark-card hover:bg-dark-border rounded transition-colors"
+              className="flex items-center gap-1 px-2 py-1 text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] bg-[var(--color-card)] hover:bg-[var(--color-border)] rounded transition-colors"
               title="Download as SVG"
             >
               <span className="material-symbols-outlined text-sm">download</span>
@@ -417,7 +417,7 @@ const MermaidDiagram = memo(function MermaidDiagram({ chart }: { chart: string }
             <button
               onClick={handleDownloadPng}
               disabled={isDownloading}
-              className="flex items-center gap-1 px-2 py-1 text-xs text-muted hover:text-white bg-dark-card hover:bg-dark-border rounded transition-colors disabled:opacity-50"
+              className="flex items-center gap-1 px-2 py-1 text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] bg-[var(--color-card)] hover:bg-[var(--color-border)] rounded transition-colors disabled:opacity-50"
               title="Download as PNG"
             >
               <span className="material-symbols-outlined text-sm">
@@ -485,15 +485,15 @@ const CodeBlock = memo(function CodeBlock({
   };
 
   return (
-    <div className="relative my-4 bg-dark-card border border-dark-border rounded-lg overflow-hidden group">
+    <div className="relative my-4 bg-[var(--color-card)] border border-[var(--color-border)] rounded-lg overflow-hidden group">
       {/* Header with language label and copy button */}
-      <div className="flex items-center justify-between px-4 py-2 bg-dark-hover border-b border-dark-border">
-        <span className="text-xs text-muted font-medium uppercase tracking-wider">
+      <div className="flex items-center justify-between px-4 py-2 bg-[var(--color-hover)] border-b border-[var(--color-border)]">
+        <span className="text-xs text-[var(--color-text-muted)] font-medium uppercase tracking-wider">
           {language || 'code'}
         </span>
         <button
           onClick={handleCopy}
-          className="flex items-center gap-1 px-2 py-1 text-xs text-muted hover:text-white bg-dark-card hover:bg-dark-border rounded transition-colors"
+          className="flex items-center gap-1 px-2 py-1 text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] bg-[var(--color-card)] hover:bg-[var(--color-border)] rounded transition-colors"
         >
           <span className="material-symbols-outlined text-sm">
             {copied ? 'check' : 'content_copy'}
@@ -520,7 +520,7 @@ const InlineCode = memo(function InlineCode({ children }: { children: React.Reac
   const hasNewlines = content.includes('\n');
 
   return (
-    <code className={`px-1.5 py-0.5 bg-dark-card border border-dark-border rounded text-sm text-primary font-mono ${hasNewlines ? 'whitespace-pre-wrap block my-2' : ''}`}>
+    <code className={`px-1.5 py-0.5 bg-[var(--color-card)] border border-[var(--color-border)] rounded text-sm text-primary font-mono ${hasNewlines ? 'whitespace-pre-wrap block my-2' : ''}`}>
       {children}
     </code>
   );
@@ -532,28 +532,28 @@ const InlineCode = memo(function InlineCode({ children }: { children: React.Reac
 const markdownComponents: Record<string, React.ComponentType<any>> = {
   // Headers
   h1: ({ children }) => (
-    <h1 className="text-2xl font-bold text-white mt-6 mb-4 pb-2 border-b border-dark-border">
+    <h1 className="text-2xl font-bold text-[var(--color-text)] mt-6 mb-4 pb-2 border-b border-[var(--color-border)]">
       {children}
     </h1>
   ),
   h2: ({ children }) => (
-    <h2 className="text-xl font-bold text-white mt-5 mb-3">{children}</h2>
+    <h2 className="text-xl font-bold text-[var(--color-text)] mt-5 mb-3">{children}</h2>
   ),
   h3: ({ children }) => (
-    <h3 className="text-lg font-semibold text-white mt-4 mb-2">{children}</h3>
+    <h3 className="text-lg font-semibold text-[var(--color-text)] mt-4 mb-2">{children}</h3>
   ),
   h4: ({ children }) => (
-    <h4 className="text-base font-semibold text-white mt-3 mb-2">{children}</h4>
+    <h4 className="text-base font-semibold text-[var(--color-text)] mt-3 mb-2">{children}</h4>
   ),
   h5: ({ children }) => (
-    <h5 className="text-sm font-semibold text-white mt-2 mb-1">{children}</h5>
+    <h5 className="text-sm font-semibold text-[var(--color-text)] mt-2 mb-1">{children}</h5>
   ),
   h6: ({ children }) => (
-    <h6 className="text-sm font-medium text-muted mt-2 mb-1">{children}</h6>
+    <h6 className="text-sm font-medium text-[var(--color-text-muted)] mt-2 mb-1">{children}</h6>
   ),
 
   // Paragraphs
-  p: ({ children }) => <p className="text-white mb-4 leading-relaxed">{children}</p>,
+  p: ({ children }) => <p className="text-[var(--color-text)] mb-4 leading-relaxed">{children}</p>,
 
   // Links
   a: ({ href, children }) => (
@@ -569,16 +569,16 @@ const markdownComponents: Record<string, React.ComponentType<any>> = {
 
   // Lists
   ul: ({ children }) => (
-    <ul className="list-disc list-inside mb-4 space-y-1 text-white">{children}</ul>
+    <ul className="list-disc list-inside mb-4 space-y-1 text-[var(--color-text)]">{children}</ul>
   ),
   ol: ({ children }) => (
-    <ol className="list-decimal list-inside mb-4 space-y-1 text-white">{children}</ol>
+    <ol className="list-decimal list-inside mb-4 space-y-1 text-[var(--color-text)]">{children}</ol>
   ),
-  li: ({ children }) => <li className="text-white leading-relaxed">{children}</li>,
+  li: ({ children }) => <li className="text-[var(--color-text)] leading-relaxed">{children}</li>,
 
   // Blockquote
   blockquote: ({ children }) => (
-    <blockquote className="border-l-4 border-primary pl-4 my-4 text-muted italic">
+    <blockquote className="border-l-4 border-primary pl-4 my-4 text-[var(--color-text-muted)] italic">
       {children}
     </blockquote>
   ),
@@ -602,41 +602,41 @@ const markdownComponents: Record<string, React.ComponentType<any>> = {
   // Tables
   table: ({ children }) => (
     <div className="overflow-x-auto my-4">
-      <table className="min-w-full border border-dark-border rounded-lg overflow-hidden">
+      <table className="min-w-full border border-[var(--color-border)] rounded-lg overflow-hidden">
         {children}
       </table>
     </div>
   ),
-  thead: ({ children }) => <thead className="bg-dark-hover">{children}</thead>,
+  thead: ({ children }) => <thead className="bg-[var(--color-hover)]">{children}</thead>,
   tbody: ({ children }) => <tbody className="divide-y divide-dark-border">{children}</tbody>,
-  tr: ({ children }) => <tr className="hover:bg-dark-hover transition-colors">{children}</tr>,
+  tr: ({ children }) => <tr className="hover:bg-[var(--color-hover)] transition-colors">{children}</tr>,
   th: ({ children }) => (
-    <th className="px-4 py-3 text-left text-sm font-semibold text-white border-b border-dark-border">
+    <th className="px-4 py-3 text-left text-sm font-semibold text-[var(--color-text)] border-b border-[var(--color-border)]">
       {children}
     </th>
   ),
-  td: ({ children }) => <td className="px-4 py-3 text-sm text-muted">{children}</td>,
+  td: ({ children }) => <td className="px-4 py-3 text-sm text-[var(--color-text-muted)]">{children}</td>,
 
   // Horizontal rule
-  hr: () => <hr className="my-6 border-dark-border" />,
+  hr: () => <hr className="my-6 border-[var(--color-border)]" />,
 
   // Images
   img: ({ src, alt }) => (
     <img
       src={src}
       alt={alt || ''}
-      className="max-w-full h-auto my-4 rounded-lg border border-dark-border"
+      className="max-w-full h-auto my-4 rounded-lg border border-[var(--color-border)]"
     />
   ),
 
   // Strong/Bold
-  strong: ({ children }) => <strong className="font-semibold text-white">{children}</strong>,
+  strong: ({ children }) => <strong className="font-semibold text-[var(--color-text)]">{children}</strong>,
 
   // Emphasis/Italic
   em: ({ children }) => <em className="italic">{children}</em>,
 
   // Strikethrough
-  del: ({ children }) => <del className="line-through text-muted">{children}</del>,
+  del: ({ children }) => <del className="line-through text-[var(--color-text-muted)]">{children}</del>,
 
   // Task list items (GFM)
   input: ({ checked }) => (
@@ -644,7 +644,7 @@ const markdownComponents: Record<string, React.ComponentType<any>> = {
       type="checkbox"
       checked={checked}
       readOnly
-      className="mr-2 rounded border-dark-border bg-dark-card text-primary focus:ring-primary"
+      className="mr-2 rounded border-[var(--color-border)] bg-[var(--color-card)] text-primary focus:ring-primary"
     />
   ),
 };
