@@ -271,11 +271,48 @@ The desktop app supports multiple languages using `i18next`:
 ## Design System
 
 - **Font**: Space Grotesk
-- **Colors**: Primary `#2b6cee`, Background `#101622`, Card `#1a1f2e`
 - **Icons**: Material Symbols Outlined
-- **Styling**: Tailwind CSS 4.x with dark mode
+- **Styling**: Tailwind CSS 4.x with CSS custom properties for theming
+
+### Theme System
+
+The app supports **light**, **dark**, and **system** (follows OS preference) themes.
+
+**Key Files:**
+- `desktop/src/index.css` - CSS custom properties (`:root` for light, `:root.dark` for dark)
+- `desktop/src/contexts/ThemeContext.tsx` - React context for theme state management
+- `desktop/src/index.html` - FOUC prevention script (applies theme before React loads)
+- `desktop/src/pages/SettingsPage.tsx` - Theme selector UI
+
+**Color Variables (defined in index.css):**
+```css
+--color-bg          /* Page background */
+--color-card        /* Card/panel backgrounds */
+--color-hover       /* Hover states */
+--color-border      /* Borders */
+--color-text        /* Primary text */
+--color-text-muted  /* Secondary/muted text */
+--color-input-bg    /* Form input backgrounds */
+```
+
+**Usage Pattern:**
+```tsx
+// ✅ Correct - use CSS variables
+className="bg-[var(--color-card)] text-[var(--color-text)] border-[var(--color-border)]"
+
+// ❌ Wrong - hardcoded dark theme colors
+className="bg-dark-card text-white border-dark-border"
+```
+
+**Default Theme:** `system` (stored in localStorage as `theme`)
+
+**When adding new components:**
+1. Never use hardcoded colors like `bg-dark-*`, `text-white`, `text-muted`, `border-dark-*`
+2. Always use CSS variables: `bg-[var(--color-*)]`, `text-[var(--color-*)]`, `border-[var(--color-*)]`
+3. Exception: `text-white` on `bg-primary` buttons is intentional (white on blue)
 
 ## Build Outputs
+
 
 **Desktop (macOS):**
 ```
