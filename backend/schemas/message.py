@@ -124,6 +124,7 @@ class ChatSessionResponse(BaseModel):
     title: str
     created_at: str
     last_accessed_at: str
+    work_dir: str | None = None
 
 
 class ChatMessageResponse(BaseModel):
