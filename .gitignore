@@ -67,9 +67,6 @@ logs/
 .DS_Store
 Thumbs.db
 
-# Git worktrees
-.worktrees/
-
 # Test coverage
 .coverage
 htmlcov/

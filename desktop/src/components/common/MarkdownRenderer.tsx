@@ -4,13 +4,12 @@ import remarkGfm from 'remark-gfm';
 import remarkBreaks from 'remark-breaks';
 import mermaid from 'mermaid';
 import hljs from 'highlight.js';
-import { useTheme } from '../../contexts';
 
-// Mermaid theme configurations
-const getMermaidConfig = (isDark: boolean) => ({
+// Initialize mermaid with dark theme
+mermaid.initialize({
   startOnLoad: false,
-  theme: (isDark ? 'dark' : 'default') as 'dark' | 'default',
-  themeVariables: isDark ? {
+  theme: 'dark',
+  themeVariables: {
     primaryColor: '#2b6cee',
     primaryTextColor: '#ffffff',
     primaryBorderColor: '#3d4f6f',
@@ -23,25 +22,9 @@ const getMermaidConfig = (isDark: boolean) => ({
     clusterBkg: '#101622',
     titleColor: '#ffffff',
     edgeLabelBackground: '#1a1f2e',
-  } : {
-    primaryColor: '#2b6cee',
-    primaryTextColor: '#1d1d1f',
-    primaryBorderColor: '#d1d1d6',
-    lineColor: '#6e6e73',
-    secondaryColor: '#f5f5f7',
-    tertiaryColor: '#ffffff',
-    background: '#ffffff',
-    mainBkg: '#ffffff',
-    nodeBorder: '#d1d1d6',
-    clusterBkg: '#f5f5f7',
-    titleColor: '#1d1d1f',
-    edgeLabelBackground: '#ffffff',
   },
   fontFamily: 'Space Grotesk, sans-serif',
 });
-
-// Initialize mermaid with default dark theme
-mermaid.initialize(getMermaidConfig(true));
 
 interface MarkdownRendererProps {
   content: string;
@@ -220,17 +203,11 @@ const MermaidModal = memo(function MermaidModal({
 
 // Mermaid diagram component
 const MermaidDiagram = memo(function MermaidDiagram({ chart }: { chart: string }) {
-  const { resolvedTheme } = useTheme();
   const containerRef = useRef<HTMLDivElement>(null);
   const [svg, setSvg] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
-
-  // Reinitialize mermaid when theme changes
-  useEffect(() => {
-    mermaid.initialize(getMermaidConfig(resolvedTheme === 'dark'));
-  }, [resolvedTheme]);
 
   useEffect(() => {
     const renderDiagram = async () => {
@@ -248,7 +225,7 @@ const MermaidDiagram = memo(function MermaidDiagram({ chart }: { chart: string }
     };
 
     renderDiagram();
-  }, [chart, resolvedTheme]); // Add resolvedTheme as dependency
+  }, [chart]);
 
   // Download as SVG
   const handleDownloadSvg = () => {

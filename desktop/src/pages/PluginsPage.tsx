@@ -371,7 +371,7 @@ function InstallPluginModal({
           value={gitUrl}
           onChange={(e) => setGitUrl(e.target.value)}
           placeholder={t('plugins.install.gitUrlPlaceholder')}
-          className="w-full px-4 py-2.5 bg-dark-bg border border-dark-border rounded-lg text-white placeholder-muted focus:outline-none focus:border-primary"
+          className="w-full px-4 py-2.5 bg-dark-bg border border-dark-border rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-primary"
           disabled={installMutation.isPending}
         />
         <p className="mt-1.5 text-xs text-muted">
@@ -389,7 +389,7 @@ function InstallPluginModal({
           value={branch}
           onChange={(e) => setBranch(e.target.value)}
           placeholder={t('plugins.install.branchPlaceholder')}
-          className="w-full px-4 py-2.5 bg-dark-bg border border-dark-border rounded-lg text-white placeholder-muted focus:outline-none focus:border-primary"
+          className="w-full px-4 py-2.5 bg-dark-bg border border-dark-border rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-primary"
           disabled={installMutation.isPending}
         />
       </div>

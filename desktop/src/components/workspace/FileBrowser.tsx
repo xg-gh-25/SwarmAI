@@ -83,7 +83,7 @@ const getFileIconColor = (file: WorkspaceFile): string => {
     case 'yml':
       return 'text-purple-400';
     case 'md':
-      return 'text-muted';
+      return 'text-gray-400';
     case 'png':
     case 'jpg':
     case 'jpeg':
