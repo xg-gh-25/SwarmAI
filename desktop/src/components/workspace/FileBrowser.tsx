@@ -154,24 +154,24 @@ export function FileBrowser({ agentId, onFileSelect, className, basePath }: File
   return (
     <div className={clsx('flex flex-col h-full', className)}>
       {/* Header with breadcrumb and refresh */}
-      <div className="flex items-center justify-between px-3 py-2 border-b border-dark-border bg-dark-card/50">
+      <div className="flex items-center justify-between px-3 py-2 border-b border-[var(--color-border)] bg-[var(--color-card)]/50">
         {/* Breadcrumb navigation */}
         <div className="flex items-center gap-1 text-sm overflow-x-auto">
           <button
             onClick={() => handleBreadcrumbClick(-1)}
-            className="text-muted hover:text-white transition-colors flex-shrink-0"
+            className="text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors flex-shrink-0"
             title="Root"
           >
             <span className="material-symbols-outlined text-lg">home</span>
           </button>
           {breadcrumbParts.map((part, index) => (
             <div key={index} className="flex items-center flex-shrink-0">
-              <span className="text-muted mx-1">/</span>
+              <span className="text-[var(--color-text-muted)] mx-1">/</span>
               <button
                 onClick={() => handleBreadcrumbClick(index)}
                 className={clsx(
-                  'hover:text-white transition-colors truncate max-w-[100px]',
-                  index === breadcrumbParts.length - 1 ? 'text-white' : 'text-muted'
+                  'hover:text-[var(--color-text)] transition-colors truncate max-w-[100px]',
+                  index === breadcrumbParts.length - 1 ? 'text-[var(--color-text)]' : 'text-[var(--color-text-muted)]'
                 )}
                 title={part}
               >
@@ -185,7 +185,7 @@ export function FileBrowser({ agentId, onFileSelect, className, basePath }: File
         <button
           onClick={() => refetch()}
           disabled={isFetching}
-          className="p-1 text-muted hover:text-white transition-colors disabled:opacity-50"
+          className="p-1 text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors disabled:opacity-50"
           title="Refresh"
         >
           <span
@@ -202,7 +202,7 @@ export function FileBrowser({ agentId, onFileSelect, className, basePath }: File
       {/* File list */}
       <div className="flex-1 overflow-y-auto">
         {isLoading ? (
-          <div className="flex items-center justify-center h-32 text-muted">
+          <div className="flex items-center justify-center h-32 text-[var(--color-text-muted)]">
             <span className="material-symbols-outlined animate-spin mr-2">progress_activity</span>
             Loading...
           </div>
@@ -220,22 +220,22 @@ export function FileBrowser({ agentId, onFileSelect, className, basePath }: File
             </button>
           </div>
         ) : !fileList || fileList.files.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-32 text-muted">
+          <div className="flex flex-col items-center justify-center h-32 text-[var(--color-text-muted)]">
             <span className="material-symbols-outlined text-2xl mb-2">folder_off</span>
             <span className="text-sm">Empty directory</span>
           </div>
         ) : (
-          <div className="divide-y divide-dark-border/50">
+          <div className="divide-y divide-[var(--color-border)]/50">
             {/* Parent directory link */}
             {fileList.parentPath !== null && (
               <button
                 onClick={handleNavigateUp}
-                className="w-full flex items-center gap-3 px-3 py-2 hover:bg-dark-hover transition-colors text-left"
+                className="w-full flex items-center gap-3 px-3 py-2 hover:bg-[var(--color-hover)] transition-colors text-left"
               >
-                <span className="material-symbols-outlined text-lg text-muted">
+                <span className="material-symbols-outlined text-lg text-[var(--color-text-muted)]">
                   folder_open
                 </span>
-                <span className="text-muted text-sm">..</span>
+                <span className="text-[var(--color-text-muted)] text-sm">..</span>
               </button>
             )}
 
@@ -244,7 +244,7 @@ export function FileBrowser({ agentId, onFileSelect, className, basePath }: File
               <button
                 key={file.name}
                 onClick={() => handleItemClick(file)}
-                className="w-full flex items-center gap-3 px-3 py-2 hover:bg-dark-hover transition-colors text-left group"
+                className="w-full flex items-center gap-3 px-3 py-2 hover:bg-[var(--color-hover)] transition-colors text-left group"
               >
                 <span
                   className={clsx(
@@ -254,10 +254,10 @@ export function FileBrowser({ agentId, onFileSelect, className, basePath }: File
                 >
                   {getFileIcon(file)}
                 </span>
-                <span className="flex-1 text-sm text-white truncate group-hover:text-primary transition-colors">
+                <span className="flex-1 text-sm text-[var(--color-text)] truncate group-hover:text-primary transition-colors">
                   {file.name}
                 </span>
-                <span className="text-xs text-muted flex-shrink-0">
+                <span className="text-xs text-[var(--color-text-muted)] flex-shrink-0">
                   {formatFileSize(file.size)}
                 </span>
               </button>
