@@ -215,53 +215,53 @@ export default function AgentFormModal({
       <form onSubmit={handleSubmit} className="space-y-4">
         {/* Agent Name */}
         <div>
-          <label className="block text-sm font-medium text-muted mb-2">{t('agents.form.name')}</label>
+          <label className="block text-sm font-medium text-[var(--color-text-muted)] mb-2">{t('agents.form.name')}</label>
           <input
             type="text"
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder={t('agents.form.namePlaceholder')}
             required
-            className="w-full px-4 py-2 bg-dark-bg border border-dark-border rounded-lg text-white placeholder:text-muted focus:outline-none focus:border-primary"
+            className="w-full px-4 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-primary"
           />
         </div>
 
         {/* Description */}
         <div>
-          <label className="block text-sm font-medium text-muted mb-2">{t('agents.form.description')}</label>
+          <label className="block text-sm font-medium text-[var(--color-text-muted)] mb-2">{t('agents.form.description')}</label>
           <input
             type="text"
             value={description}
             onChange={(e) => setDescription(e.target.value)}
             placeholder={t('agents.form.descriptionPlaceholder')}
-            className="w-full px-4 py-2 bg-dark-bg border border-dark-border rounded-lg text-white placeholder:text-muted focus:outline-none focus:border-primary"
+            className="w-full px-4 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-primary"
           />
         </div>
 
         {/* System Prompt */}
         <div>
-          <label className="block text-sm font-medium text-muted mb-2">{t('agents.form.systemPrompt')}</label>
+          <label className="block text-sm font-medium text-[var(--color-text-muted)] mb-2">{t('agents.form.systemPrompt')}</label>
           <textarea
             value={systemPrompt}
             onChange={(e) => setSystemPrompt(e.target.value)}
             placeholder={t('agents.form.systemPromptPlaceholder')}
             rows={4}
-            className="w-full px-4 py-2 bg-dark-bg border border-dark-border rounded-lg text-white placeholder:text-muted focus:outline-none focus:border-primary resize-none"
+            className="w-full px-4 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-primary resize-none"
           />
         </div>
 
         {/* Global User Mode Toggle */}
         <div className="flex items-center justify-between">
           <div>
-            <label className="block text-sm font-medium text-muted">{t('agents.form.globalUserMode')}</label>
-            <p className="text-xs text-muted mt-0.5">{t('agents.form.globalUserModeDescription')}</p>
+            <label className="block text-sm font-medium text-[var(--color-text-muted)]">{t('agents.form.globalUserMode')}</label>
+            <p className="text-xs text-[var(--color-text-muted)] mt-0.5">{t('agents.form.globalUserModeDescription')}</p>
           </div>
           <button
             type="button"
             onClick={() => setGlobalUserMode(!globalUserMode)}
             className={clsx(
               'relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none',
-              globalUserMode ? 'bg-primary' : 'bg-dark-border'
+              globalUserMode ? 'bg-primary' : 'bg-[var(--color-border)]'
             )}
           >
             <span
@@ -276,15 +276,15 @@ export default function AgentFormModal({
         {/* Enable Human Approval Toggle */}
         <div className="flex items-center justify-between">
           <div>
-            <label className="block text-sm font-medium text-muted">{t('agents.form.enableHumanApproval')}</label>
-            <p className="text-xs text-muted mt-0.5">{t('agents.form.enableHumanApprovalDescription')}</p>
+            <label className="block text-sm font-medium text-[var(--color-text-muted)]">{t('agents.form.enableHumanApproval')}</label>
+            <p className="text-xs text-[var(--color-text-muted)] mt-0.5">{t('agents.form.enableHumanApprovalDescription')}</p>
           </div>
           <button
             type="button"
             onClick={() => setEnableHumanApproval(!enableHumanApproval)}
             className={clsx(
               'relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none',
-              enableHumanApproval ? 'bg-primary' : 'bg-dark-border'
+              enableHumanApproval ? 'bg-primary' : 'bg-[var(--color-border)]'
             )}
           >
             <span
@@ -333,8 +333,8 @@ export default function AgentFormModal({
         {/* Allow All Skills Toggle */}
         <div className="flex items-center justify-between">
           <div>
-            <label className="block text-sm font-medium text-muted">{t('agents.form.allowAllSkills')}</label>
-            <p className="text-xs text-muted mt-0.5">
+            <label className="block text-sm font-medium text-[var(--color-text-muted)]">{t('agents.form.allowAllSkills')}</label>
+            <p className="text-xs text-[var(--color-text-muted)] mt-0.5">
               {globalUserMode
                 ? t('agents.form.allowAllSkillsRequiredDescription')
                 : t('agents.form.allowAllSkillsDescription')}
@@ -347,7 +347,7 @@ export default function AgentFormModal({
             className={clsx(
               'relative inline-flex h-6 w-11 flex-shrink-0 rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none',
               globalUserMode ? 'cursor-not-allowed opacity-60' : 'cursor-pointer',
-              allowAllSkills ? 'bg-primary' : 'bg-dark-border'
+              allowAllSkills ? 'bg-primary' : 'bg-[var(--color-border)]'
             )}
           >
             <span

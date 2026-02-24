@@ -43,7 +43,7 @@ export default function ConfirmDialog({
         <div className={`w-16 h-16 rounded-full ${bg} flex items-center justify-center mx-auto mb-4`}>
           <span className={`material-symbols-outlined text-3xl ${color}`}>{icon}</span>
         </div>
-        <div className="text-muted mb-6">{message}</div>
+        <div className="text-[var(--color-text-muted)] mb-6">{message}</div>
         <div className="flex gap-3">
           <Button
             variant="secondary"

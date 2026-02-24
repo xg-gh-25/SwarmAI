@@ -15,7 +15,7 @@ export default function SearchBar({
 }: SearchBarProps) {
   return (
     <div className={clsx('relative', className)}>
-      <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-muted text-xl">
+      <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-[var(--color-text-muted)] text-xl">
         search
       </span>
       <input
@@ -23,7 +23,7 @@ export default function SearchBar({
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
-        className="w-full pl-10 pr-4 py-2.5 bg-dark-card border border-dark-border rounded-lg text-white placeholder:text-muted focus:outline-none focus:border-primary transition-colors"
+        className="w-full pl-10 pr-4 py-2.5 bg-[var(--color-card)] border border-[var(--color-border)] rounded-lg text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-primary transition-colors"
       />
     </div>
   );

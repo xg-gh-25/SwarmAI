@@ -149,8 +149,8 @@ export default function AgentsPage() {
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-bold text-white">{t('agents.title')}</h1>
-          <p className="text-muted mt-1">{t('agents.subtitle')}</p>
+          <h1 className="text-2xl font-bold text-[var(--color-text)]">{t('agents.title')}</h1>
+          <p className="text-[var(--color-text-muted)] mt-1">{t('agents.subtitle')}</p>
         </div>
         <Button icon="add" onClick={() => setIsCreateModalOpen(true)}>
           {t('agents.addAgent')}
@@ -167,7 +167,7 @@ export default function AgentsPage() {
             className="mb-4"
           />
 
-          <div className="bg-dark-card border border-dark-border rounded-xl overflow-hidden">
+          <div className="bg-[var(--color-card)] border border-[var(--color-border)] rounded-xl overflow-hidden">
             {isInitialLoading ? (
               <SkeletonTable rows={5} columns={6} />
             ) : (
@@ -175,24 +175,24 @@ export default function AgentsPage() {
                 {filteredAgents.map((agent) => (
                   <tr
                     key={agent.id}
-                    className="border-b border-dark-border hover:bg-dark-hover transition-colors"
+                    className="border-b border-[var(--color-border)] hover:bg-[var(--color-hover)] transition-colors"
                   >
                     <ResizableTableCell>
-                      <span className="text-white font-medium">{agent.name}</span>
+                      <span className="text-[var(--color-text)] font-medium">{agent.name}</span>
                     </ResizableTableCell>
                     <ResizableTableCell>
                       <StatusBadge status={agent.status} />
                     </ResizableTableCell>
                     <ResizableTableCell>
-                      <span className="text-muted">{agent.model}</span>
+                      <span className="text-[var(--color-text-muted)]">{agent.model}</span>
                     </ResizableTableCell>
                     <ResizableTableCell>
-                      <span className="text-muted" title={getSkillNames(agent)}>
+                      <span className="text-[var(--color-text-muted)]" title={getSkillNames(agent)}>
                         {getSkillNames(agent)}
                       </span>
                     </ResizableTableCell>
                     <ResizableTableCell>
-                      <span className="text-muted" title={getMcpNames(agent.mcpIds)}>
+                      <span className="text-[var(--color-text-muted)]" title={getMcpNames(agent.mcpIds)}>
                         {getMcpNames(agent.mcpIds)}
                       </span>
                     </ResizableTableCell>
@@ -203,7 +203,7 @@ export default function AgentsPage() {
                             e.stopPropagation();
                             handleStartChat(agent.id);
                           }}
-                          className="p-2 rounded-lg text-muted hover:text-primary hover:bg-primary/10 transition-colors"
+                          className="p-2 rounded-lg text-[var(--color-text-muted)] hover:text-primary hover:bg-primary/10 transition-colors"
                           title={t('agents.startChat')}
                         >
                           <span className="material-symbols-outlined text-xl">chat</span>
@@ -213,7 +213,7 @@ export default function AgentsPage() {
                             e.stopPropagation();
                             handleOpenEditModal(agent);
                           }}
-                          className="p-2 rounded-lg text-muted hover:text-white hover:bg-dark-hover transition-colors"
+                          className="p-2 rounded-lg text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)] transition-colors"
                           title={t('chat.editAgent')}
                         >
                           <span className="material-symbols-outlined text-xl">edit</span>
@@ -223,7 +223,7 @@ export default function AgentsPage() {
                             e.stopPropagation();
                             handleDeleteClick(agent);
                           }}
-                          className="p-2 rounded-lg text-muted hover:text-status-error hover:bg-status-error/10 transition-colors"
+                          className="p-2 rounded-lg text-[var(--color-text-muted)] hover:text-status-error hover:bg-status-error/10 transition-colors"
                           title={t('agents.deleteAgent')}
                         >
                           <span className="material-symbols-outlined text-xl">delete</span>
@@ -235,8 +235,8 @@ export default function AgentsPage() {
                 {filteredAgents.length === 0 && (
                   <tr>
                     <td colSpan={6} className="px-6 py-12 text-center">
-                      <span className="material-symbols-outlined text-4xl text-muted mb-2">smart_toy</span>
-                      <p className="text-muted">{t('agents.noAgents')}</p>
+                      <span className="material-symbols-outlined text-4xl text-[var(--color-text-muted)] mb-2">smart_toy</span>
+                      <p className="text-[var(--color-text-muted)]">{t('agents.noAgents')}</p>
                     </td>
                   </tr>
                 )}
