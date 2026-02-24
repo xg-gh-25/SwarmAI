@@ -156,6 +156,64 @@ impl Default for BackendState {
     }
 }
 
+// Send graceful shutdown request to backend via HTTP
+// This allows the backend to properly terminate Claude CLI child processes before being killed
+#[cfg(target_os = "windows")]
+fn send_shutdown_request(port: u16) {
+    // Use PowerShell to send HTTP POST request (Windows built-in, no dependencies needed)
+    let result = std::process::Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-Command",
+            &format!(
+                "try {{ Invoke-WebRequest -Uri 'http://127.0.0.1:{}/shutdown' -Method POST -TimeoutSec 3 }} catch {{}}",
+                port
+            ),
+        ])
+        .creation_flags(0x08000000) // CREATE_NO_WINDOW
+        .output();
+
+    match result {
+        Ok(output) => {
+            if output.status.success() {
+                println!("Sent shutdown request to backend on port {}", port);
+            } else {
+                eprintln!("Shutdown request returned non-zero exit code on port {}", port);
+            }
+        }
+        Err(e) => {
+            eprintln!("Failed to send shutdown request to backend on port {}: {}", port, e);
+        }
+    }
+}
+
+// Send graceful shutdown request to backend via HTTP (macOS/Linux)
+// Uses curl which is available on most Unix systems
+#[cfg(not(target_os = "windows"))]
+fn send_shutdown_request(port: u16) {
+    let result = std::process::Command::new("curl")
+        .args([
+            "-s",                                          // Silent mode
+            "-X", "POST",                                  // POST request
+            "-m", "3",                                     // 3 second timeout
+            &format!("http://127.0.0.1:{}/shutdown", port),
+        ])
+        .output();
+
+    match result {
+        Ok(output) => {
+            if output.status.success() {
+                println!("Sent shutdown request to backend on port {}", port);
+            } else {
+                eprintln!("Shutdown request failed on port {}", port);
+            }
+        }
+        Err(e) => {
+            eprintln!("Failed to send shutdown request to backend on port {}: {}", port, e);
+        }
+    }
+}
+
 // Kill process tree on Windows using taskkill
 #[cfg(target_os = "windows")]
 fn kill_process_tree(pid: u32) {
@@ -166,6 +224,41 @@ fn kill_process_tree(pid: u32) {
         .creation_flags(0x08000000) // CREATE_NO_WINDOW - hide the console window
         .output();
     println!("Killed process tree for PID: {}", pid);
+}
+
+// Kill claude.exe processes that were children of a specific parent PID on Windows
+// Uses PowerShell Get-CimInstance (WMIC is deprecated on Windows 11)
+#[cfg(target_os = "windows")]
+fn kill_claude_child_processes(parent_pid: u32) {
+    // Use PowerShell Get-CimInstance to find claude.exe processes that were children of our backend
+    // This avoids killing claude.exe processes from other Owork instances or direct CLI usage
+    let ps_script = format!(
+        "Get-CimInstance Win32_Process | Where-Object {{ $_.Name -eq 'claude.exe' -and $_.ParentProcessId -eq {} }} | ForEach-Object {{ $_.ProcessId }}",
+        parent_pid
+    );
+
+    let output = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-Command", &ps_script])
+        .creation_flags(0x08000000) // CREATE_NO_WINDOW
+        .output();
+
+    if let Ok(out) = output {
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        // Each line is a PID
+        for line in stdout.lines() {
+            let trimmed = line.trim();
+            if !trimmed.is_empty() {
+                if let Ok(pid) = trimmed.parse::<u32>() {
+                    let _ = std::process::Command::new("taskkill")
+                        .args(["/F", "/PID", &pid.to_string()])
+                        .creation_flags(0x08000000)
+                        .output();
+                    println!("Killed claude.exe child process PID: {}", pid);
+                }
+            }
+        }
+    }
+    println!("Finished checking for claude.exe child processes of PID {}", parent_pid);
 }
 
 // On Unix systems (macOS/Linux), kill the process tree using pkill
@@ -282,74 +375,98 @@ async fn start_backend(
 // Stop the Python backend
 #[tauri::command]
 async fn stop_backend(state: tauri::State<'_, SharedBackendState>) -> Result<(), String> {
-    let mut backend = state.lock().await;
+    // Step 1: Capture all needed state under lock, then release
+    // This avoids race conditions from dropping and re-acquiring the lock
+    let (was_running, port, pid, child) = {
+        let mut backend = state.lock().await;
+        let was_running = backend.running;
+        let port = backend.port;
+        let pid = backend.pid;
+        let child = backend.child.take();
 
-    // Store PID for waiting (Windows only)
-    #[cfg(target_os = "windows")]
-    let pid_to_wait = backend.pid;
+        // Mark as not running immediately to prevent concurrent operations
+        backend.running = false;
+        backend.pid = None;
 
-    // Kill the entire process tree (works on all platforms)
-    if let Some(pid) = backend.pid {
+        (was_running, port, pid, child)
+    };
+    // Lock is now released
+
+    // Step 2: Try graceful shutdown via HTTP request (all platforms)
+    // This allows the backend to properly terminate Claude CLI child processes
+    if was_running {
+        send_shutdown_request(port);
+        // Wait for backend to process shutdown and terminate child processes
+        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+    }
+
+    // Step 3: Kill the entire process tree (works on all platforms)
+    if let Some(pid) = pid {
         kill_process_tree(pid);
     }
 
-    if let Some(child) = backend.child.take() {
+    if let Some(child) = child {
         let _ = child.kill(); // Also try normal kill as fallback
     }
 
-    backend.running = false;
-    backend.pid = None;
-
-    // Drop the lock before waiting
-    drop(backend);
-
-    // On Windows, wait for the process to fully exit to release file handles
+    // Step 4: On Windows, wait for processes to fully exit to release file handles
     // This is important for updates where the installer needs to overwrite the exe
     #[cfg(target_os = "windows")]
-    if let Some(pid) = pid_to_wait {
-        wait_for_process_exit(pid).await;
+    if let Some(pid) = pid {
+        wait_for_processes_exit(pid).await;
     }
 
     Ok(())
 }
 
-// Wait for a process to exit on Windows
+// Wait for processes to exit on Windows (checks both python-backend and claude.exe)
 #[cfg(target_os = "windows")]
-async fn wait_for_process_exit(pid: u32) {
+async fn wait_for_processes_exit(backend_pid: u32) {
     use std::time::Duration;
 
-    // Try up to 10 times with 500ms delay (5 seconds total)
-    for i in 0..10 {
-        // Check if process still exists using tasklist
-        let output = std::process::Command::new("tasklist")
-            .args(["/FI", &format!("PID eq {}", pid), "/NH"])
-            .creation_flags(0x08000000) // CREATE_NO_WINDOW
-            .output();
+    // Process names to check - Claude CLI processes may outlive the Python backend
+    // Note: On Windows, tasklist requires the full executable name with .exe extension
+    let process_names = ["python-backend.exe", "claude.exe"];
 
-        match output {
-            Ok(out) => {
+    // Try up to 20 times with 500ms delay (10 seconds total)
+    for i in 0..20 {
+        let mut any_running = false;
+
+        // Check each process name
+        for process_name in &process_names {
+            let output = std::process::Command::new("tasklist")
+                .args(["/FI", &format!("IMAGENAME eq {}", process_name), "/NH"])
+                .creation_flags(0x08000000) // CREATE_NO_WINDOW
+                .output();
+
+            if let Ok(out) = output {
                 let stdout = String::from_utf8_lossy(&out.stdout);
-                // tasklist with /FI "PID eq X" returns either:
-                // - A line with the process info if running
-                // - "INFO: No tasks are running..." if not running
-                // Check if output contains the executable name as a more reliable indicator
-                let process_running = stdout.contains("python-backend") ||
-                    (stdout.contains(&pid.to_string()) && !stdout.contains("INFO:"));
-                if !process_running {
-                    println!("Process {} has exited after {} checks", pid, i + 1);
-                    return;
+                // tasklist returns "INFO: No tasks are running..." if no matches
+                if stdout.contains(process_name) && !stdout.contains("INFO:") {
+                    any_running = true;
+                    println!("Process {} still running at check {}", process_name, i + 1);
+                    break;
                 }
             }
-            Err(_) => {
-                // If tasklist fails, assume process is gone
-                return;
-            }
+        }
+
+        if !any_running {
+            println!("All processes exited after {} checks", i + 1);
+            return;
+        }
+
+        // Every 4 checks (2 seconds), try to kill any remaining claude.exe child processes
+        // This handles orphaned processes that may have been missed by the initial kill
+        if i > 0 && i % 4 == 0 {
+            kill_claude_child_processes(backend_pid);
         }
 
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
 
-    println!("Warning: Process {} may still be running after timeout", pid);
+    // Final attempt to kill any remaining claude.exe child processes
+    kill_claude_child_processes(backend_pid);
+    println!("Warning: Some processes may still be running after timeout (backend PID: {})", backend_pid);
 }
 
 // Get backend status
