@@ -1,17 +1,22 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useQuery } from '@tanstack/react-query';
 import { SearchBar, Button, Modal, SkeletonTable, ResizableTable, ResizableTableCell, ConfirmDialog, AskUserQuestion, Dropdown, MarkdownRenderer } from '../components/common';
 import type { Skill, SyncResult, StreamEvent, ContentBlock, AskUserQuestion as AskUserQuestionType } from '../types';
 import { skillsService } from '../services/skills';
 import { chatService } from '../services/chat';
+import { settingsService } from '../services/settings';
 import { Spinner } from '../components/common';
 
-// Available models for skill creation
-const MODEL_OPTIONS = [
-  { id: 'claude-sonnet-4-5-20250929', name: 'Claude Sonnet 4.5', description: 'Best balance of speed and intelligence' },
-  { id: 'claude-haiku-4-5-20251001', name: 'Claude Haiku 4.5', description: 'Fastest and most cost-effective' },
-  { id: 'claude-opus-4-5-20251101', name: 'Claude Opus 4.5', description: 'Most intelligent, best for complex tasks' },
-];
+// Helper to convert model ID to dropdown option
+const modelIdToOption = (id: string) => ({
+  id,
+  name: id
+    .split(/[-.]/)
+    .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' '),
+  description: id,
+});
 
 // Format timestamp to readable date time
 function formatDateTime(dateString: string): string {
@@ -553,11 +558,30 @@ function GenerateSkillForm({
   onGenerate: (skill: Skill) => void;
 }) {
   const { t } = useTranslation();
+
+  // Fetch API config to get model list
+  const { data: apiConfig } = useQuery({
+    queryKey: ['apiConfig'],
+    queryFn: settingsService.getAPIConfiguration,
+  });
+  const availableModels = useMemo(() => apiConfig?.available_models ?? [], [apiConfig?.available_models]);
+  const defaultModelFromSettings = apiConfig?.default_model ?? '';
+  const modelOptions = useMemo(() => availableModels.map(modelIdToOption), [availableModels]);
+
   // Phase 1: Input form
   const [name, setName] = useState('');
   const [nameError, setNameError] = useState<string | null>(null);
   const [description, setDescription] = useState('');
-  const [selectedModel, setSelectedModel] = useState('claude-sonnet-4-5-20250929'); // Default to Sonnet 4.5
+  const [selectedModel, setSelectedModel] = useState('');
+
+  // Set default model from settings when loaded
+  useEffect(() => {
+    if (!selectedModel && defaultModelFromSettings) {
+      setSelectedModel(defaultModelFromSettings);
+    } else if (!selectedModel && availableModels.length > 0) {
+      setSelectedModel(availableModels[0]);
+    }
+  }, [defaultModelFromSettings, availableModels, selectedModel]);
 
   // Validate skill name: only allow lowercase letters, numbers, hyphens, underscores
   const validateSkillName = (value: string): string | null => {
@@ -1018,7 +1042,7 @@ function GenerateSkillForm({
 
         <Dropdown
           label={t('skills.create.model')}
-          options={MODEL_OPTIONS}
+          options={modelOptions}
           selectedId={selectedModel}
           onChange={setSelectedModel}
           placeholder={t('skills.create.selectModel')}
