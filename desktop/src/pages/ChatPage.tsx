@@ -2063,43 +2063,6 @@ export default function ChatPage() {
   );
 }
 
-// Collapsible Tool Result Component
-const TOOL_RESULT_COLLAPSE_LINES = 5;
-
-function ToolResultBlock({ content }: { content: string }) {
-  const [isExpanded, setIsExpanded] = useState(false);
-  const lines = content.split('\n');
-  const shouldCollapse = lines.length > TOOL_RESULT_COLLAPSE_LINES;
-  const hiddenLines = lines.length - TOOL_RESULT_COLLAPSE_LINES;
-
-  const displayContent = shouldCollapse && !isExpanded
-    ? lines.slice(0, TOOL_RESULT_COLLAPSE_LINES).join('\n')
-    : content;
-
-  return (
-    <div className="bg-dark-card border border-dark-border rounded-lg p-4">
-      <div className="flex items-center gap-2 mb-2">
-        <span className="material-symbols-outlined text-status-online text-sm">check_circle</span>
-        <span className="text-sm font-medium text-white">Tool Result</span>
-      </div>
-      <pre className="text-sm text-muted overflow-x-auto whitespace-pre-wrap break-words">
-        <code>{displayContent}</code>
-      </pre>
-      {shouldCollapse && (
-        <button
-          onClick={() => setIsExpanded(!isExpanded)}
-          className="mt-2 text-xs text-primary hover:text-primary-hover transition-colors flex items-center gap-1"
-        >
-          <span className="material-symbols-outlined text-sm">
-            {isExpanded ? 'expand_less' : 'expand_more'}
-          </span>
-          {isExpanded ? 'Show less' : `Show more (${hiddenLines} more lines)`}
-        </button>
-      )}
-    </div>
-  );
-}
-
 // Message Bubble Component
 interface MessageBubbleProps {
   message: Message;
@@ -2197,7 +2160,17 @@ function ContentBlockRenderer({ block, onAnswerQuestion, pendingToolUseId, isStr
   }
 
   if (block.type === 'tool_result') {
-    return <ToolResultBlock content={block.content || ''} />;
+    return (
+      <div className="bg-dark-card border border-dark-border rounded-lg p-4">
+        <div className="flex items-center gap-2 mb-2">
+          <span className="material-symbols-outlined text-status-online text-sm">check_circle</span>
+          <span className="text-sm font-medium text-white">Tool Result</span>
+        </div>
+        <pre className="text-sm text-muted overflow-x-auto whitespace-pre-wrap break-words">
+          <code>{block.content}</code>
+        </pre>
+      </div>
+    );
   }
 
   if (block.type === 'ask_user_question') {
