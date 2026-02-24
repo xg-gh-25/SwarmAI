@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
@@ -234,6 +234,9 @@ export default function ChatPage() {
     queryFn: () => chatService.listSessions(selectedAgentId || undefined),
     enabled: !!selectedAgentId,
   });
+
+  // Memoize grouped sessions to avoid recalculating on every render
+  const groupedSessions = useMemo(() => groupSessionsByTime(sessions), [sessions]);
 
   // Fetch agent's effective working directory
   const { data: agentWorkDir } = useQuery({
@@ -1625,10 +1628,10 @@ export default function ChatPage() {
 
             {/* Chat History List */}
             <div className="flex-1 overflow-y-auto p-2 space-y-1">
-              {sessions.length === 0 ? (
+              {groupedSessions.length === 0 ? (
                 <p className="px-3 py-2 text-xs text-muted">{t('chat.noHistory')}</p>
               ) : (
-                groupSessionsByTime(sessions).map((group, groupIndex) => (
+                groupedSessions.map((group, groupIndex) => (
                   <div key={group.group}>
                     <p className={clsx(
                       'px-3 py-2 text-xs font-medium text-muted uppercase tracking-wider',

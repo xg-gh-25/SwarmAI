@@ -295,6 +295,7 @@ async def list_sessions(agent_id: str | None = None):
             title=s.title,
             created_at=s.created_at,
             last_accessed_at=s.last_accessed,
+            work_dir=s.work_dir,
         )
         for s in sessions
     ]
@@ -315,6 +316,7 @@ async def get_session(session_id: str):
         title=session.title,
         created_at=session.created_at,
         last_accessed_at=session.last_accessed,
+        work_dir=session.work_dir,
     )
 
 
