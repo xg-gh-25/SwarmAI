@@ -54,8 +54,8 @@ export function FileAttachmentButton({
         className={clsx(
           'w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 transition-colors',
           disabled || !canAddMore
-            ? 'bg-dark-hover/50 text-muted/50 cursor-not-allowed'
-            : 'bg-dark-hover text-muted hover:text-white hover:bg-dark-border',
+            ? 'bg-[var(--color-hover)]/50 text-[var(--color-text-muted)]/50 cursor-not-allowed'
+            : 'bg-[var(--color-hover)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-border)]',
           className
         )}
         title={

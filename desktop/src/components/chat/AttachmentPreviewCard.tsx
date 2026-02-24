@@ -42,13 +42,13 @@ export function AttachmentPreviewCard({ attachment, onRemove }: AttachmentPrevie
         'relative group flex-shrink-0 w-32 h-24 rounded-lg overflow-hidden border transition-colors',
         error
           ? 'border-red-500/50 bg-red-500/10'
-          : 'border-dark-border bg-dark-hover hover:border-primary/50'
+          : 'border-[var(--color-border)] bg-[var(--color-hover)] hover:border-primary/50'
       )}
     >
       {/* Remove button */}
       <button
         onClick={() => onRemove(id)}
-        className="absolute top-1 right-1 z-10 w-5 h-5 rounded-full bg-black/60 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-500"
+        className="absolute top-1 right-1 z-10 w-5 h-5 rounded-full bg-black/60 text-[var(--color-text)] flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-500"
         title="Remove attachment"
       >
         <span className="material-symbols-outlined text-sm">close</span>
@@ -60,7 +60,7 @@ export function AttachmentPreviewCard({ attachment, onRemove }: AttachmentPrevie
         <div className="flex-1 flex items-center justify-center p-2 overflow-hidden">
           {isLoading ? (
             <div className="animate-spin">
-              <span className="material-symbols-outlined text-muted">progress_activity</span>
+              <span className="material-symbols-outlined text-[var(--color-text-muted)]">progress_activity</span>
             </div>
           ) : error ? (
             <div className="flex flex-col items-center text-red-400">
@@ -79,21 +79,21 @@ export function AttachmentPreviewCard({ attachment, onRemove }: AttachmentPrevie
             </div>
           ) : (type === 'text' || type === 'csv') && preview ? (
             <div className="w-full h-full overflow-hidden p-1">
-              <pre className="text-[8px] text-muted leading-tight whitespace-pre-wrap break-all">
+              <pre className="text-[8px] text-[var(--color-text-muted)] leading-tight whitespace-pre-wrap break-all">
                 {preview}
               </pre>
             </div>
           ) : (
-            <span className="material-symbols-outlined text-2xl text-muted">{getFileIcon(type)}</span>
+            <span className="material-symbols-outlined text-2xl text-[var(--color-text-muted)]">{getFileIcon(type)}</span>
           )}
         </div>
 
         {/* File info */}
-        <div className="px-2 pb-1.5 bg-dark-card/80">
-          <p className="text-xs text-white truncate" title={name}>
+        <div className="px-2 pb-1.5 bg-[var(--color-card)]/80">
+          <p className="text-xs text-[var(--color-text)] truncate" title={name}>
             {name}
           </p>
-          <p className="text-[10px] text-muted">{formatFileSize(size)}</p>
+          <p className="text-[10px] text-[var(--color-text-muted)]">{formatFileSize(size)}</p>
         </div>
       </div>
     </div>

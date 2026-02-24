@@ -60,18 +60,18 @@ export default function Modal({
     >
       <div
         className={clsx(
-          'w-full bg-dark-card border border-dark-border rounded-xl shadow-2xl flex flex-col max-h-[90vh]',
+          'w-full bg-[var(--color-card)] border border-[var(--color-border)] rounded-xl shadow-2xl flex flex-col max-h-[90vh]',
           sizeClasses[size]
         )}
         // Stop event propagation to prevent overlay close when clicking inside modal
         onMouseDown={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-dark-border shrink-0">
-          <h2 className="text-lg font-semibold text-white">{title}</h2>
+        <div className="flex items-center justify-between px-6 py-4 border-b border-[var(--color-border)] shrink-0">
+          <h2 className="text-lg font-semibold text-[var(--color-text)]">{title}</h2>
           <button
             onClick={onClose}
-            className="p-1 rounded-lg text-muted hover:text-white hover:bg-dark-hover transition-colors"
+            className="p-1 rounded-lg text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)] transition-colors"
           >
             <span className="material-symbols-outlined">close</span>
           </button>

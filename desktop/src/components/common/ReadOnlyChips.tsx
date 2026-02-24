@@ -48,21 +48,21 @@ export default function ReadOnlyChips({
         className={clsx(
           'flex items-center gap-1.5 px-2 py-1 rounded-lg cursor-default transition-colors',
           showBadge
-            ? 'bg-dark-hover/50 hover:bg-dark-hover'
-            : 'text-muted/50'
+            ? 'bg-[var(--color-hover)]/50 hover:bg-[var(--color-hover)]'
+            : 'text-[var(--color-text-muted)]/50'
         )}
       >
         {icon && (
           <span className={clsx(
             'material-symbols-outlined text-sm',
-            showBadge ? 'text-muted' : 'text-muted/50'
+            showBadge ? 'text-[var(--color-text-muted)]' : 'text-[var(--color-text-muted)]/50'
           )}>
             {icon}
           </span>
         )}
         <span className={clsx(
           'text-xs font-medium',
-          showBadge ? 'text-muted' : 'text-muted/50'
+          showBadge ? 'text-[var(--color-text-muted)]' : 'text-[var(--color-text-muted)]/50'
         )}>
           {label}
         </span>
@@ -78,17 +78,17 @@ export default function ReadOnlyChips({
       {/* Hover Tooltip */}
       {isHovering && !loading && (
         <div className="absolute bottom-full left-0 mb-2 z-50 animate-fade-in">
-          <div className="bg-dark-card border border-dark-border rounded-lg shadow-xl p-3 min-w-[180px] max-w-[300px]">
+          <div className="bg-[var(--color-card)] border border-[var(--color-border)] rounded-lg shadow-xl p-3 min-w-[180px] max-w-[300px]">
             {/* Header */}
-            <div className="flex items-center gap-2 mb-2 pb-2 border-b border-dark-border">
+            <div className="flex items-center gap-2 mb-2 pb-2 border-b border-[var(--color-border)]">
               {icon && (
                 <span className="material-symbols-outlined text-primary text-sm">{icon}</span>
               )}
-              <span className="text-xs font-semibold text-white uppercase tracking-wider">
+              <span className="text-xs font-semibold text-[var(--color-text)] uppercase tracking-wider">
                 {label}
               </span>
               {count > 0 && (
-                <span className="text-xs text-muted ml-auto">
+                <span className="text-xs text-[var(--color-text-muted)] ml-auto">
                   {count} item{count !== 1 ? 's' : ''}
                 </span>
               )}
@@ -96,7 +96,7 @@ export default function ReadOnlyChips({
 
             {/* Items List */}
             {count === 0 ? (
-              <span className="text-xs text-muted italic">{emptyText}</span>
+              <span className="text-xs text-[var(--color-text-muted)] italic">{emptyText}</span>
             ) : (
               <div className="space-y-1 max-h-[200px] overflow-y-auto">
                 {items.map((item) => (
@@ -107,9 +107,9 @@ export default function ReadOnlyChips({
                   >
                     <span className="text-primary mt-0.5">•</span>
                     <div className="flex-1 min-w-0">
-                      <span className="text-white">{item.name}</span>
+                      <span className="text-[var(--color-text)]">{item.name}</span>
                       {item.description && (
-                        <p className="text-muted/70 text-[10px] truncate mt-0.5">
+                        <p className="text-[var(--color-text-muted)]/70 text-[10px] truncate mt-0.5">
                           {item.description}
                         </p>
                       )}
@@ -120,7 +120,7 @@ export default function ReadOnlyChips({
             )}
           </div>
           {/* Arrow */}
-          <div className="absolute left-4 -bottom-1 w-2 h-2 bg-dark-card border-b border-r border-dark-border transform rotate-45" />
+          <div className="absolute left-4 -bottom-1 w-2 h-2 bg-[var(--color-card)] border-b border-r border-[var(--color-border)] transform rotate-45" />
         </div>
       )}
     </div>

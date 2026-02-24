@@ -116,17 +116,17 @@ export function FilePreviewModal({ isOpen, onClose, agentId, file, basePath }: F
     if (!canPreview) {
       const ext = getFileExtension(file.name);
       return (
-        <div className="flex flex-col items-center justify-center h-64 text-muted">
-          <div className="w-20 h-20 rounded-2xl bg-dark-hover flex items-center justify-center mb-4">
+        <div className="flex flex-col items-center justify-center h-64 text-[var(--color-text-muted)]">
+          <div className="w-20 h-20 rounded-2xl bg-[var(--color-hover)] flex items-center justify-center mb-4">
             <span className="text-2xl font-bold text-primary">{ext}</span>
           </div>
-          <span className="text-lg font-medium text-white mb-1">{file.name}</span>
-          <span className="text-sm text-muted mb-4">
+          <span className="text-lg font-medium text-[var(--color-text)] mb-1">{file.name}</span>
+          <span className="text-sm text-[var(--color-text-muted)] mb-4">
             This file type cannot be previewed
           </span>
           <button
             onClick={handleRevealInFinder}
-            className="flex items-center gap-2 px-4 py-2 bg-primary hover:bg-primary-hover text-white rounded-lg transition-colors"
+            className="flex items-center gap-2 px-4 py-2 bg-primary hover:bg-primary-hover text-[var(--color-text)] rounded-lg transition-colors"
           >
             <span className="material-symbols-outlined text-lg">folder_open</span>
             Reveal in Finder
@@ -137,7 +137,7 @@ export function FilePreviewModal({ isOpen, onClose, agentId, file, basePath }: F
 
     if (isLoading) {
       return (
-        <div className="flex items-center justify-center h-64 text-muted">
+        <div className="flex items-center justify-center h-64 text-[var(--color-text-muted)]">
           <span className="material-symbols-outlined animate-spin mr-2">
             progress_activity
           </span>
@@ -151,7 +151,7 @@ export function FilePreviewModal({ isOpen, onClose, agentId, file, basePath }: F
       const errorMessage = error instanceof Error ? error.message : 'Failed to load file';
 
       return (
-        <div className="flex flex-col items-center justify-center h-64 text-muted">
+        <div className="flex flex-col items-center justify-center h-64 text-[var(--color-text-muted)]">
           <span className="material-symbols-outlined text-5xl mb-4">error</span>
           <span className="text-lg font-medium mb-2">Cannot Load File</span>
           <span className="text-sm text-center mb-4 text-status-error">
@@ -159,7 +159,7 @@ export function FilePreviewModal({ isOpen, onClose, agentId, file, basePath }: F
           </span>
           <button
             onClick={handleRevealInFinder}
-            className="flex items-center gap-2 px-4 py-2 bg-primary hover:bg-primary-hover text-white rounded-lg transition-colors"
+            className="flex items-center gap-2 px-4 py-2 bg-primary hover:bg-primary-hover text-[var(--color-text)] rounded-lg transition-colors"
           >
             <span className="material-symbols-outlined text-lg">folder_open</span>
             Reveal in Finder
@@ -176,7 +176,7 @@ export function FilePreviewModal({ isOpen, onClose, agentId, file, basePath }: F
     const RevealButton = () => (
       <button
         onClick={handleRevealInFinder}
-        className="flex items-center gap-2 px-4 py-2 bg-primary hover:bg-primary-hover text-white rounded-lg transition-colors"
+        className="flex items-center gap-2 px-4 py-2 bg-primary hover:bg-primary-hover text-[var(--color-text)] rounded-lg transition-colors"
       >
         <span className="material-symbols-outlined text-lg">folder_open</span>
         Reveal in Finder
@@ -190,10 +190,10 @@ export function FilePreviewModal({ isOpen, onClose, agentId, file, basePath }: F
           <img
             src={`data:${fileContent.mimeType};base64,${fileContent.content}`}
             alt={file.name}
-            className="max-w-full max-h-[55vh] object-contain rounded-lg border border-dark-border"
+            className="max-w-full max-h-[55vh] object-contain rounded-lg border border-[var(--color-border)]"
           />
           <div className="flex items-center justify-between w-full mt-4">
-            <span className="text-sm text-muted">
+            <span className="text-sm text-[var(--color-text-muted)]">
               {fileContent.mimeType} - {formatFileSize(fileContent.size)}
             </span>
             <RevealButton />
@@ -206,7 +206,7 @@ export function FilePreviewModal({ isOpen, onClose, agentId, file, basePath }: F
     return (
       <div className="flex flex-col">
         <div className="flex items-center justify-between mb-2">
-          <span className="text-xs text-muted">
+          <span className="text-xs text-[var(--color-text-muted)]">
             {fileContent.mimeType} - {formatFileSize(fileContent.size)}
           </span>
           <RevealButton />

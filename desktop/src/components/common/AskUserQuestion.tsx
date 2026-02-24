@@ -81,10 +81,10 @@ export default function AskUserQuestion({
   });
 
   return (
-    <div className="bg-dark-card border border-primary/30 rounded-lg p-4 my-3">
+    <div className="bg-[var(--color-card)] border border-primary/30 rounded-lg p-4 my-3">
       <div className="flex items-center gap-2 mb-4">
         <span className="material-symbols-outlined text-primary">help_outline</span>
-        <span className="font-medium text-white">Claude needs your input</span>
+        <span className="font-medium text-[var(--color-text)]">Claude needs your input</span>
       </div>
 
       {questions.map((q, qIndex) => (
@@ -94,10 +94,10 @@ export default function AskUserQuestion({
               {q.header}
             </span>
             {q.multiSelect && (
-              <span className="text-xs text-muted">(Select multiple)</span>
+              <span className="text-xs text-[var(--color-text-muted)]">(Select multiple)</span>
             )}
           </div>
-          <p className="text-white text-sm mb-3">{q.question}</p>
+          <p className="text-[var(--color-text)] text-sm mb-3">{q.question}</p>
 
           <div className="space-y-2">
             {q.options.map((option, optIndex) => {
@@ -113,25 +113,25 @@ export default function AskUserQuestion({
                     isSelected
                       ? 'border-primary bg-primary/10'
                       : isDisabledByCustom
-                      ? 'border-dark-border bg-dark-bg opacity-50 cursor-not-allowed'
-                      : 'border-dark-border bg-dark-bg hover:border-primary/50'
+                      ? 'border-[var(--color-border)] bg-[var(--color-bg)] opacity-50 cursor-not-allowed'
+                      : 'border-[var(--color-border)] bg-[var(--color-bg)] hover:border-primary/50'
                   } ${disabled ? 'cursor-not-allowed opacity-50' : ''}`}
                 >
                   <div className="flex items-start gap-3">
                     <div
                       className={`w-5 h-5 rounded-${q.multiSelect ? 'sm' : 'full'} border-2 flex items-center justify-center flex-shrink-0 mt-0.5 ${
-                        isSelected ? 'border-primary bg-primary' : 'border-muted'
+                        isSelected ? 'border-primary bg-primary' : 'border-[var(--color-text-muted)]'
                       }`}
                     >
                       {isSelected && (
-                        <span className="material-symbols-outlined text-white text-sm">
+                        <span className="material-symbols-outlined text-[var(--color-text)] text-sm">
                           {q.multiSelect ? 'check' : 'circle'}
                         </span>
                       )}
                     </div>
                     <div>
-                      <p className="text-white text-sm font-medium">{option.label}</p>
-                      <p className="text-muted text-xs mt-0.5">{option.description}</p>
+                      <p className="text-[var(--color-text)] text-sm font-medium">{option.label}</p>
+                      <p className="text-[var(--color-text-muted)] text-xs mt-0.5">{option.description}</p>
                     </div>
                   </div>
                 </button>
@@ -139,27 +139,27 @@ export default function AskUserQuestion({
             })}
 
             {/* Custom "Other" option */}
-            <div className="pt-2 border-t border-dark-border">
+            <div className="pt-2 border-t border-[var(--color-border)]">
               <button
                 onClick={() => handleCustomToggle(q.question)}
                 disabled={disabled}
                 className={`w-full text-left p-3 rounded-lg border transition-all ${
                   showCustom[q.question]
                     ? 'border-primary bg-primary/10'
-                    : 'border-dark-border bg-dark-bg hover:border-primary/50'
+                    : 'border-[var(--color-border)] bg-[var(--color-bg)] hover:border-primary/50'
                 } ${disabled ? 'cursor-not-allowed opacity-50' : ''}`}
               >
                 <div className="flex items-center gap-3">
                   <div
                     className={`w-5 h-5 rounded-full border-2 flex items-center justify-center flex-shrink-0 ${
-                      showCustom[q.question] ? 'border-primary bg-primary' : 'border-muted'
+                      showCustom[q.question] ? 'border-primary bg-primary' : 'border-[var(--color-text-muted)]'
                     }`}
                   >
                     {showCustom[q.question] && (
-                      <span className="material-symbols-outlined text-white text-sm">circle</span>
+                      <span className="material-symbols-outlined text-[var(--color-text)] text-sm">circle</span>
                     )}
                   </div>
-                  <span className="text-white text-sm">Other (custom answer)</span>
+                  <span className="text-[var(--color-text)] text-sm">Other (custom answer)</span>
                 </div>
               </button>
 
@@ -171,7 +171,7 @@ export default function AskUserQuestion({
                     onChange={(e) => handleCustomInputChange(q.question, e.target.value)}
                     placeholder="Enter your custom answer..."
                     disabled={disabled}
-                    className="w-full px-3 py-2 bg-dark-bg border border-dark-border rounded-lg text-white text-sm placeholder:text-muted focus:outline-none focus:border-primary"
+                    className="w-full px-3 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-[var(--color-text)] text-sm placeholder-[var(--color-text-muted)] focus:outline-none focus:border-primary"
                   />
                 </div>
               )}
@@ -180,7 +180,7 @@ export default function AskUserQuestion({
         </div>
       ))}
 
-      <div className="mt-4 pt-4 border-t border-dark-border">
+      <div className="mt-4 pt-4 border-t border-[var(--color-border)]">
         <Button
           onClick={handleSubmit}
           disabled={disabled || !isComplete}
