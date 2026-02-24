@@ -35,7 +35,7 @@ Owork 是一个基于 Claude Agent SDK 的 AI Agent 桌面应用，支持创建�
 
 **方式一：使用 DMG 安装包（推荐）**
 
-1. 下载 `Owork_x.x.x_aarch64.dmg`（Apple Silicon）或 `Owork_x.x.x_x86_64.dmg`（Intel）
+1. 下载 [`Owork_x.x.x_aarch64.dmg`](https://d1a1de1i2hajk1.cloudfront.net/owork/release/v0.0.81/Owork_0.0.81_aarch64.dmg)
 2. 双击打开 DMG 文件
 3. 将 `Owork.app` 拖拽到 `Applications` 文件夹
 4. 从启动台或 Applications 文件夹启动 Owork
@@ -64,7 +64,7 @@ xattr -cr /Applications/Owork.app
 
 **方式二：使用 NSIS 安装包**
 
-1. 下载 `Owork_x.x.x_x64-setup.exe`
+1. 下载 [`Owork_x.x.x._x64-setup.zip`](https://d1a1de1i2hajk1.cloudfront.net/owork/release/v0.0.81/Owork_0.0.81_x64-setup.zip)
 2. 运行安装程序并按照提示完成安装
 3. 从开始菜单或桌面快捷方式启动 Owork
 

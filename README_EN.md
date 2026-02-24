@@ -60,9 +60,9 @@ Owork is a powerful AI Agent management platform that enables you to:
 
 ### Quick Installation
 
-#### 1. Install Owork
+#### 1. Install Owork (MAC)
 
-1. Download `Owork_x.x.x_aarch64.dmg`
+1. Download [`Owork_x.x.x_aarch64.dmg`](https://d1a1de1i2hajk1.cloudfront.net/owork/release/v0.0.81/Owork_0.0.81_aarch64.dmg)
 2. Double-click to open the DMG file
 3. Drag Owork.app to the Applications folder
 4. If you encounter “File Damaged”, please execute command in the terminal
@@ -70,6 +70,12 @@ Owork is a powerful AI Agent management platform that enables you to:
 # remove isolation
 xattr -cr /Applications/Owork.app
 ```
+
+#### 1. Install Owork （Windows 版）
+1. Download [`Owork_x.x.x._x64-setup.zip`](https://d1a1de1i2hajk1.cloudfront.net/owork/release/v0.0.81/Owork_0.0.81_x64-setup.zip)
+2. Windows might display SmartScreen warning, click "more information" -"run"
+3. Windows requires Git bash dependency：https://git-scm.com/downloads/win
+
 
 #### 2. Configure API
 
