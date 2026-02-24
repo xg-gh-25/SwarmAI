@@ -10,6 +10,7 @@ import platform
 from pathlib import Path
 
 from config import settings
+from core.agent_manager import agent_manager
 from routers import agents_router, skills_router, mcp_router, chat_router, auth_router, workspace_router, settings_router, plugins_router
 from middleware.error_handler import setup_error_handlers
 from middleware.rate_limit import limiter
@@ -77,6 +78,8 @@ async def lifespan(app: FastAPI):
     yield
     # Shutdown
     logger.info("Shutting down...")
+    await agent_manager.disconnect_all()
+    logger.info("All clients disconnected")
 
 
 # Create FastAPI application
@@ -149,6 +152,19 @@ async def health_check():
         "version": settings.app_version,
         "sdk": "claude-agent-sdk",
     }
+
+
+@app.post("/shutdown")
+async def shutdown():
+    """Graceful shutdown endpoint - disconnects all Claude SDK clients.
+
+    This endpoint is called by the Tauri app before killing the backend process
+    to ensure all Claude CLI child processes are properly terminated.
+    """
+    logger.info("Shutdown endpoint called - disconnecting all clients")
+    await agent_manager.disconnect_all()
+    logger.info("All clients disconnected via shutdown endpoint")
+    return {"status": "shutting_down"}
 
 
 @app.get("/")
