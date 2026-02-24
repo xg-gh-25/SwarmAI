@@ -22,6 +22,68 @@ interface PendingQuestion {
   questions: AskUserQuestionType[];
 }
 
+// Time group types for session grouping
+type TimeGroup = 'today' | 'yesterday' | 'thisWeek' | 'thisMonth' | 'older';
+
+interface GroupedSessions {
+  group: TimeGroup;
+  sessions: ChatSession[];
+}
+
+// Group sessions by time periods
+const groupSessionsByTime = (sessions: ChatSession[]): GroupedSessions[] => {
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const yesterday = new Date(today.getTime() - 86400000);
+
+  // Week starts on Monday
+  const dayOfWeek = now.getDay();
+  const mondayOffset = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+  const weekStart = new Date(today.getTime() - mondayOffset * 86400000);
+
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+
+  const groups: Record<TimeGroup, ChatSession[]> = {
+    today: [],
+    yesterday: [],
+    thisWeek: [],
+    thisMonth: [],
+    older: [],
+  };
+
+  for (const session of sessions) {
+    const date = new Date(session.lastAccessedAt);
+    const sessionDay = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+
+    if (sessionDay.getTime() === today.getTime()) {
+      groups.today.push(session);
+    } else if (sessionDay.getTime() === yesterday.getTime()) {
+      groups.yesterday.push(session);
+    } else if (sessionDay >= weekStart) {
+      groups.thisWeek.push(session);
+    } else if (sessionDay >= monthStart) {
+      groups.thisMonth.push(session);
+    } else {
+      groups.older.push(session);
+    }
+  }
+
+  // Return only non-empty groups in order
+  const order: TimeGroup[] = ['today', 'yesterday', 'thisWeek', 'thisMonth', 'older'];
+  return order
+    .filter(group => groups[group].length > 0)
+    .map(group => ({ group, sessions: groups[group] }));
+};
+
+// i18n keys for time group labels
+const timeGroupLabelKey: Record<TimeGroup, string> = {
+  today: 'chat.today',
+  yesterday: 'chat.yesterday',
+  thisWeek: 'chat.thisWeek',
+  thisMonth: 'chat.thisMonth',
+  older: 'chat.older',
+};
+
 export default function ChatPage() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
@@ -1561,47 +1623,56 @@ export default function ChatPage() {
 
             {/* Chat History List */}
             <div className="flex-1 overflow-y-auto p-2 space-y-1">
-              <p className="px-3 py-2 text-xs font-medium text-muted uppercase tracking-wider">{t('chat.history')}</p>
               {sessions.length === 0 ? (
                 <p className="px-3 py-2 text-xs text-muted">{t('chat.noHistory')}</p>
               ) : (
-                sessions.map((session) => {
-                  const agentForSession = agents.find((a) => a.id === session.agentId);
-                  return (
-                    <div
-                      key={session.id}
-                      className={clsx(
-                        'group w-full flex items-center gap-2 px-3 py-2.5 rounded-lg text-left transition-colors cursor-pointer',
-                        sessionId === session.id
-                          ? 'bg-primary text-white'
-                          : 'text-muted hover:bg-dark-hover hover:text-white'
-                      )}
-                      onClick={() => handleSelectSession(session)}
-                    >
-                      <span className="material-symbols-outlined text-lg flex-shrink-0">chat_bubble_outline</span>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium truncate">{session.title}</p>
-                        <p className="text-xs opacity-70">
-                          {agentForSession?.name || 'Unknown'} • {formatTimestamp(session.lastAccessedAt)}
-                        </p>
-                      </div>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setDeleteConfirmSession(session);
-                        }}
-                        className={clsx(
-                          'p-1 rounded opacity-0 group-hover:opacity-100 transition-opacity',
-                          sessionId === session.id
-                            ? 'hover:bg-white/20 text-white'
-                            : 'hover:bg-dark-border text-muted hover:text-white'
-                        )}
-                      >
-                        <span className="material-symbols-outlined text-sm">delete</span>
-                      </button>
-                    </div>
-                  );
-                })
+                groupSessionsByTime(sessions).map((group, groupIndex) => (
+                  <div key={group.group}>
+                    <p className={clsx(
+                      'px-3 py-2 text-xs font-medium text-muted uppercase tracking-wider',
+                      groupIndex > 0 && 'mt-3'
+                    )}>
+                      {t(timeGroupLabelKey[group.group])}
+                    </p>
+                    {group.sessions.map((session) => {
+                      const agentForSession = agents.find((a) => a.id === session.agentId);
+                      return (
+                        <div
+                          key={session.id}
+                          className={clsx(
+                            'group w-full flex items-center gap-2 px-3 py-2.5 rounded-lg text-left transition-colors cursor-pointer',
+                            sessionId === session.id
+                              ? 'bg-primary text-white'
+                              : 'text-muted hover:bg-dark-hover hover:text-white'
+                          )}
+                          onClick={() => handleSelectSession(session)}
+                        >
+                          <span className="material-symbols-outlined text-lg flex-shrink-0">chat_bubble_outline</span>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium truncate">{session.title}</p>
+                            <p className="text-xs opacity-70">
+                              {agentForSession?.name || 'Unknown'} • {formatTimestamp(session.lastAccessedAt)}
+                            </p>
+                          </div>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setDeleteConfirmSession(session);
+                            }}
+                            className={clsx(
+                              'p-1 rounded opacity-0 group-hover:opacity-100 transition-opacity',
+                              sessionId === session.id
+                                ? 'hover:bg-white/20 text-white'
+                                : 'hover:bg-dark-border text-muted hover:text-white'
+                            )}
+                          >
+                            <span className="material-symbols-outlined text-sm">delete</span>
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ))
               )}
             </div>
 
