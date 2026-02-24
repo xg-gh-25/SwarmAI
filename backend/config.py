@@ -64,6 +64,9 @@ class Settings(BaseSettings):
     dynamodb_messages_table: str = "awesome_skills_platform_messages"
     dynamodb_skill_versions_table: str = "awesome_skills_platform_skill_versions"
 
+    # S3 bucket for skill storage (cloud mode only)
+    s3_bucket: str = "awesome-skills-platform-skills"
+
     # JWT Authentication
     jwt_secret_key: str = "your-secret-key-change-in-production"
     jwt_algorithm: str = "HS256"
@@ -72,9 +75,6 @@ class Settings(BaseSettings):
 
     # Rate Limiting
     rate_limit_per_minute: int = 100
-
-    # S3 (bucket name will auto-append AWS account ID on first startup via start.sh)
-    s3_bucket: str = "awesome-skills-platform"
 
     # Claude Agent SDK / Anthropic API Configuration
     anthropic_api_key: str = ""

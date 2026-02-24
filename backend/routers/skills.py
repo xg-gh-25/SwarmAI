@@ -119,37 +119,74 @@ async def upload_skill(
             original_filename=file.filename
         )
 
-        # Check if skill already exists (by looking for matching s3_location pattern)
+        # Determine if we're in local mode (SQLite) or cloud mode (DynamoDB)
+        is_local_mode = settings.database_type == "sqlite"
+
+        # Check if skill already exists (by folder_name, local_path, or s3_location)
         existing_skills = await db.skills.list()
         existing_skill = None
         for s in existing_skills:
-            s3_loc = s.get("s3_location") or s.get("draft_s3_location") or ""
-            if f"/skills/{skill_name}/" in s3_loc:
+            # Match by folder_name first (most reliable)
+            if s.get("folder_name") == skill_name:
                 existing_skill = s
                 break
+            # Also match by local_path (exact match on directory name)
+            local_path = s.get("local_path") or ""
+            if local_path and Path(local_path).name == skill_name:
+                existing_skill = s
+                break
+            # In cloud mode, also check s3_location
+            if not is_local_mode:
+                s3_loc = s.get("s3_location") or s.get("draft_s3_location") or ""
+                if f"/skills/{skill_name}/" in s3_loc:
+                    existing_skill = s
+                    break
 
         if existing_skill:
-            # Update existing skill with draft info
-            skill = await db.skills.update(existing_skill["id"], {
-                "has_draft": True,
-                "draft_s3_location": result["draft_s3_location"],
-            })
-            logger.info(f"Updated skill '{skill_name}' with new draft: {result['draft_s3_location']}")
+            # Update existing skill - immediately active in local mode, draft in cloud mode
+            update_data = {
+                "name": result["name"],
+                "description": result["description"],
+                "version": result["version"],
+                "local_path": result["local_path"],
+                "folder_name": skill_name,
+            }
+            if is_local_mode:
+                # Local mode: immediately active, no draft workflow
+                update_data["has_draft"] = False
+                update_data["current_version"] = existing_skill.get("current_version", 0) + 1
+            else:
+                # Cloud mode: create draft for review
+                update_data["has_draft"] = True
+                update_data["draft_s3_location"] = result["draft_s3_location"]
+
+            skill = await db.skills.update(existing_skill["id"], update_data)
+            logger.info(f"Updated skill '{skill_name}' at: {result['local_path']}")
         else:
-            # Create new skill record (with draft, never published)
+            # Create new skill record
             skill_data = {
                 "name": result["name"],
                 "description": result["description"],
                 "version": result["version"],
-                "s3_location": None,  # No published version yet
-                "draft_s3_location": result["draft_s3_location"],
-                "has_draft": True,
-                "current_version": 0,  # Never published
+                "local_path": result["local_path"],
+                "folder_name": skill_name,
                 "created_by": "user",
                 "is_system": False,
+                "source_type": "user",
             }
+            if is_local_mode:
+                # Local mode: immediately active
+                skill_data["has_draft"] = False
+                skill_data["current_version"] = 1
+            else:
+                # Cloud mode: create draft for review
+                skill_data["s3_location"] = None  # No published version yet
+                skill_data["draft_s3_location"] = result["draft_s3_location"]
+                skill_data["has_draft"] = True
+                skill_data["current_version"] = 0  # Never published
+
             skill = await db.skills.put(skill_data)
-            logger.info(f"Created new skill '{skill_name}' with draft: {result['draft_s3_location']}")
+            logger.info(f"Created new skill '{skill_name}' at: {result['local_path']}")
 
         return skill
 
