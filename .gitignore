@@ -77,3 +77,6 @@ coverage/
 *.tmp
 *.bak
 *.swp
+
+# Git worktrees
+.worktrees/
