@@ -2063,6 +2063,56 @@ export default function ChatPage() {
   );
 }
 
+// Collapsible Tool Use Input Component
+const TOOL_INPUT_COLLAPSE_LINES = 5;
+
+function ToolUseBlock({ name, input }: { name: string; input: Record<string, unknown> }) {
+  const [isExpanded, setIsExpanded] = useState(false);
+  const content = JSON.stringify(input, null, 2);
+  const lines = content.split('\n');
+  const shouldCollapse = lines.length > TOOL_INPUT_COLLAPSE_LINES;
+  const hiddenLines = lines.length - TOOL_INPUT_COLLAPSE_LINES;
+
+  const displayContent = shouldCollapse && !isExpanded
+    ? lines.slice(0, TOOL_INPUT_COLLAPSE_LINES).join('\n')
+    : content;
+
+  return (
+    <div className="bg-dark-card border border-dark-border rounded-lg overflow-hidden">
+      <div className="flex items-center justify-between px-4 py-2 bg-dark-hover">
+        <div className="flex items-center gap-2">
+          <span className="material-symbols-outlined text-primary text-sm">terminal</span>
+          <span className="text-sm font-medium text-white">Tool Call: {name}</span>
+        </div>
+        <span className="text-xs text-status-online">Success</span>
+      </div>
+      <div className="p-4 relative">
+        <button
+          onClick={() => navigator.clipboard.writeText(content)}
+          className="absolute top-2 right-2 flex items-center gap-1 px-2 py-1 text-xs text-muted hover:text-white bg-dark-hover rounded transition-colors"
+        >
+          <span className="material-symbols-outlined text-sm">content_copy</span>
+          Copy
+        </button>
+        <pre className="text-sm text-muted overflow-x-auto whitespace-pre-wrap break-words">
+          <code>{displayContent}</code>
+        </pre>
+        {shouldCollapse && (
+          <button
+            onClick={() => setIsExpanded(!isExpanded)}
+            className="mt-2 text-xs text-primary hover:text-primary-hover transition-colors flex items-center gap-1"
+          >
+            <span className="material-symbols-outlined text-sm">
+              {isExpanded ? 'expand_less' : 'expand_more'}
+            </span>
+            {isExpanded ? 'Show less' : `Show more (${hiddenLines} more lines)`}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // Message Bubble Component
 interface MessageBubbleProps {
   message: Message;
@@ -2136,27 +2186,8 @@ function ContentBlockRenderer({ block, onAnswerQuestion, pendingToolUseId, isStr
       }
     }
 
-    // Generic tool use rendering
-    return (
-      <div className="bg-dark-card border border-dark-border rounded-lg overflow-hidden">
-        <div className="flex items-center justify-between px-4 py-2 bg-dark-hover">
-          <div className="flex items-center gap-2">
-            <span className="material-symbols-outlined text-primary text-sm">terminal</span>
-            <span className="text-sm font-medium text-white">Tool Call: {block.name}</span>
-          </div>
-          <span className="text-xs text-status-online">Success</span>
-        </div>
-        <div className="p-4 relative">
-          <button className="absolute top-2 right-2 flex items-center gap-1 px-2 py-1 text-xs text-muted hover:text-white bg-dark-hover rounded transition-colors">
-            <span className="material-symbols-outlined text-sm">content_copy</span>
-            Copy
-          </button>
-          <pre className="text-sm text-muted overflow-x-auto whitespace-pre-wrap break-words">
-            <code>{JSON.stringify(block.input, null, 2)}</code>
-          </pre>
-        </div>
-      </div>
-    );
+    // Generic tool use rendering with collapsible input
+    return <ToolUseBlock name={block.name || 'Unknown'} input={block.input || {}} />;
   }
 
   if (block.type === 'tool_result') {
