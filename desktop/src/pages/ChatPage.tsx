@@ -348,6 +348,8 @@ export default function ChatPage() {
     if (session.agentId && session.agentId !== selectedAgentId) {
       setSelectedAgentId(session.agentId);
     }
+    // Restore workDir from session (use true to mark as restoring, avoid session reset)
+    setWorkDir(session.workDir || null, true);
     await loadSessionMessages(session.id);
     // Collapse sidebar after selection for immersive experience
     setChatSidebarCollapsed(true);
