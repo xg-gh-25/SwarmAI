@@ -168,11 +168,29 @@ fn kill_process_tree(pid: u32) {
     println!("Killed process tree for PID: {}", pid);
 }
 
-// On non-Windows, just use the standard kill
+// On Unix systems (macOS/Linux), kill the process tree using pkill
 #[cfg(not(target_os = "windows"))]
-fn kill_process_tree(_pid: u32) {
-    // On Unix systems, the child.kill() should be sufficient
-    // as we handle it in the main cleanup code
+fn kill_process_tree(pid: u32) {
+    // First, kill all child processes recursively using pkill -P
+    // This sends SIGTERM to all processes whose parent PID matches
+    let _ = std::process::Command::new("pkill")
+        .args(["-TERM", "-P", &pid.to_string()])
+        .output();
+
+    // Give child processes a moment to terminate gracefully
+    std::thread::sleep(std::time::Duration::from_millis(100));
+
+    // Force kill any remaining child processes
+    let _ = std::process::Command::new("pkill")
+        .args(["-KILL", "-P", &pid.to_string()])
+        .output();
+
+    // Finally, kill the parent process itself
+    let _ = std::process::Command::new("kill")
+        .args(["-9", &pid.to_string()])
+        .output();
+
+    println!("Killed process tree for PID: {}", pid);
 }
 
 type SharedBackendState = Arc<Mutex<BackendState>>;
@@ -266,11 +284,11 @@ async fn start_backend(
 async fn stop_backend(state: tauri::State<'_, SharedBackendState>) -> Result<(), String> {
     let mut backend = state.lock().await;
 
-    // On Windows, use taskkill to kill the entire process tree
+    // Store PID for waiting (Windows only)
     #[cfg(target_os = "windows")]
     let pid_to_wait = backend.pid;
 
-    #[cfg(target_os = "windows")]
+    // Kill the entire process tree (works on all platforms)
     if let Some(pid) = backend.pid {
         kill_process_tree(pid);
     }
@@ -633,8 +651,7 @@ pub fn run() {
                         tauri::async_runtime::block_on(async {
                             let mut backend = state_clone.lock().await;
 
-                            // On Windows, use taskkill to kill the entire process tree
-                            #[cfg(target_os = "windows")]
+                            // Kill the entire process tree (works on all platforms)
                             if let Some(pid) = backend.pid {
                                 kill_process_tree(pid);
                                 println!("Killed backend process tree (PID: {}) on window destroy", pid);
@@ -665,8 +682,7 @@ pub fn run() {
                     tauri::async_runtime::block_on(async {
                         let mut backend = state_clone.lock().await;
 
-                        // On Windows, use taskkill to kill the entire process tree
-                        #[cfg(target_os = "windows")]
+                        // Kill the entire process tree (works on all platforms)
                         if let Some(pid) = backend.pid {
                             kill_process_tree(pid);
                             println!("Killed backend process tree (PID: {}) on exit", pid);
@@ -691,8 +707,7 @@ pub fn run() {
                     tauri::async_runtime::block_on(async {
                         let mut backend = state_clone.lock().await;
 
-                        // On Windows, use taskkill to kill the entire process tree
-                        #[cfg(target_os = "windows")]
+                        // Kill the entire process tree (works on all platforms)
                         if let Some(pid) = backend.pid {
                             kill_process_tree(pid);
                             println!("Killed backend process tree (PID: {}) on exit request", pid);
