@@ -608,11 +608,7 @@ class SkillManager:
         return deleted_count
 
     def extract_zip_to_directory(self, zip_path: Path, skill_name: str) -> Path:
-        """Extract ZIP file to skills directory.
-
-        Handles nested directory structures by searching for SKILL.md
-        to find the actual skill root directory.
-        """
+        """Extract ZIP file to skills directory."""
         self._ensure_local_dir()
         dest_dir = self.local_dir / skill_name
 
@@ -620,42 +616,39 @@ class SkillManager:
         if dest_dir.exists():
             shutil.rmtree(dest_dir)
 
-        # Extract ZIP to temp directory first
-        temp_dir = self.local_dir / f"_temp_{skill_name}"
-        if temp_dir.exists():
-            shutil.rmtree(temp_dir)
-
+        # Extract ZIP
         with zipfile.ZipFile(zip_path, 'r') as zf:
-            zf.extractall(temp_dir)
+            # Check if ZIP contains a root folder or files directly
+            namelist = zf.namelist()
 
-        # Find the directory containing SKILL.md (the actual skill root)
-        skill_root = self._find_skill_root(temp_dir)
+            # Detect if there's a single root folder
+            root_folders = set()
+            for name in namelist:
+                parts = name.split('/')
+                if len(parts) > 1 and parts[0]:
+                    root_folders.add(parts[0])
 
-        if skill_root:
-            # Move skill root to destination
-            shutil.move(str(skill_root), str(dest_dir))
-            # Clean up temp dir if it still exists
-            if temp_dir.exists():
-                shutil.rmtree(temp_dir, ignore_errors=True)
-        else:
-            # No SKILL.md found, just rename temp dir
-            shutil.move(str(temp_dir), str(dest_dir))
+            if len(root_folders) == 1:
+                # ZIP has a single root folder, extract and rename
+                root_folder = list(root_folders)[0]
+                temp_dir = self.local_dir / f"_temp_{skill_name}"
+                zf.extractall(temp_dir)
+
+                # Move the root folder to the correct name
+                extracted_dir = temp_dir / root_folder
+                if extracted_dir.exists():
+                    shutil.move(str(extracted_dir), str(dest_dir))
+                    shutil.rmtree(temp_dir)
+                else:
+                    # Fallback: rename temp dir
+                    shutil.move(str(temp_dir), str(dest_dir))
+            else:
+                # ZIP contains files directly, extract to dest_dir
+                dest_dir.mkdir(parents=True, exist_ok=True)
+                zf.extractall(dest_dir)
 
         logger.info(f"Extracted ZIP to: {dest_dir}")
         return dest_dir
-
-    def _find_skill_root(self, search_dir: Path) -> Path | None:
-        """Find the directory containing SKILL.md by searching recursively."""
-        # Check if SKILL.md is directly in search_dir
-        if (search_dir / "SKILL.md").exists():
-            return search_dir
-
-        # Search subdirectories (up to 3 levels deep to avoid infinite loops)
-        for depth in range(3):
-            for skill_md in search_dir.glob("*/" * (depth + 1) + "SKILL.md"):
-                return skill_md.parent
-
-        return None
 
     async def upload_skill_package(
         self,
