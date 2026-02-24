@@ -14,6 +14,7 @@ import { Spinner, ReadOnlyChips, AskUserQuestion, Dropdown, MarkdownRenderer, Co
 import { PermissionRequestModal, FileAttachmentButton, FileAttachmentPreview } from '../components/chat';
 import { FileBrowser } from '../components/workspace/FileBrowser';
 import { FilePreviewModal } from '../components/workspace/FilePreviewModal';
+import { FolderPickerModal } from '../components/workspace/FolderPickerModal';
 import { useFileAttachment } from '../hooks/useFileAttachment';
 
 // Pending question state
@@ -137,6 +138,9 @@ export default function ChatPage() {
 
   // File preview state
   const [previewFile, setPreviewFile] = useState<{ path: string; name: string } | null>(null);
+
+  // Folder picker modal state (for web browser mode)
+  const [isFolderPickerOpen, setIsFolderPickerOpen] = useState(false);
 
   // Right sidebar state (for File Browser)
   const [rightSidebarCollapsed, setRightSidebarCollapsed] = useState(() => {
@@ -1048,11 +1052,8 @@ export default function ChatPage() {
   const handleSelectFolder = useCallback(async () => {
     // Check if running in Tauri environment
     if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) {
-      // Fallback for browser dev mode
-      const path = prompt('Enter folder path (Tauri dialog not available in browser):');
-      if (path) {
-        setWorkDir(path);
-      }
+      // Web browser mode: open folder picker modal
+      setIsFolderPickerOpen(true);
       return;
     }
 
@@ -1069,6 +1070,12 @@ export default function ChatPage() {
     } catch (error) {
       console.error('Failed to select folder:', error);
     }
+  }, []);
+
+  // Handle folder selection from web modal
+  const handleFolderPickerSelect = useCallback((path: string) => {
+    setWorkDir(path);
+    setIsFolderPickerOpen(false);
   }, []);
 
   // Clear work directory
@@ -2027,6 +2034,14 @@ export default function ChatPage() {
         agentId={selectedAgentId || ''}
         file={previewFile}
         basePath={effectiveBasePath}
+      />
+
+      {/* Folder Picker Modal (Web browser mode) */}
+      <FolderPickerModal
+        isOpen={isFolderPickerOpen}
+        onClose={() => setIsFolderPickerOpen(false)}
+        onSelect={handleFolderPickerSelect}
+        agentId={selectedAgentId || ''}
       />
 
       {/* Permission Request Modal */}
