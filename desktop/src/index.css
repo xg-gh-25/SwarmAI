@@ -3,23 +3,42 @@
 @theme {
   --font-family-sans: 'Space Grotesk', system-ui, sans-serif;
 
-  /* Colors */
+  /* Static colors (not theme-aware) */
   --color-primary: #2b6cee;
   --color-primary-hover: #1d5cd6;
   --color-primary-light: #3d7ef0;
-
-  --color-dark-bg: #101622;
-  --color-dark-card: #1a1f2e;
-  --color-dark-hover: #252b3d;
-  --color-dark-border: #2d3548;
-
-  --color-muted: #9da6b9;
 
   --color-status-online: #22c55e;
   --color-status-offline: #6b7280;
   --color-status-error: #ef4444;
   --color-status-warning: #f59e0b;
   --color-status-success: #22c55e;
+}
+
+/* Light theme (default) */
+:root {
+  --color-bg: #f5f5f7;
+  --color-card: #ffffff;
+  --color-hover: #e5e5e7;
+  --color-border: #d1d1d6;
+  --color-text: #1d1d1f;
+  --color-muted: #6e6e73;
+  --scrollbar-track: #f0f0f0;
+  --scrollbar-thumb: #c1c1c1;
+  --scrollbar-thumb-hover: #a1a1a1;
+}
+
+/* Dark theme */
+.dark {
+  --color-bg: #101622;
+  --color-card: #1a1f2e;
+  --color-hover: #252b3d;
+  --color-border: #2d3548;
+  --color-text: #ffffff;
+  --color-muted: #9da6b9;
+  --scrollbar-track: #1a1f2e;
+  --scrollbar-thumb: #2d3548;
+  --scrollbar-thumb-hover: #9da6b9;
 }
 
 /* Base styles */
@@ -29,8 +48,8 @@ html {
 }
 
 body {
-  background-color: var(--color-dark-bg);
-  color: white;
+  background-color: var(--color-bg);
+  color: var(--color-text);
 }
 
 /* Scrollbar styling */
@@ -40,16 +59,16 @@ body {
 }
 
 ::-webkit-scrollbar-track {
-  background: var(--color-dark-card);
+  background: var(--scrollbar-track);
 }
 
 ::-webkit-scrollbar-thumb {
-  background: var(--color-dark-border);
+  background: var(--scrollbar-thumb);
   border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--color-muted);
+  background: var(--scrollbar-thumb-hover);
 }
 
 /* Material Icons */
@@ -63,105 +82,193 @@ body {
 
 /* Custom utilities */
 .glass-effect {
-  background: rgba(26, 31, 46, 0.8);
+  background: color-mix(in srgb, var(--color-card) 80%, transparent);
   backdrop-filter: blur(10px);
 }
 
-/* Highlight.js Dark Theme - Custom for our dark UI */
-.hljs {
+/* Highlight.js Light Theme (GitHub-light inspired) */
+:root .hljs {
+  background: transparent !important;
+  color: #24292f;
+}
+
+:root .hljs-comment,
+:root .hljs-quote {
+  color: #6e7781;
+  font-style: italic;
+}
+
+:root .hljs-keyword,
+:root .hljs-selector-tag,
+:root .hljs-addition {
+  color: #cf222e;
+}
+
+:root .hljs-number,
+:root .hljs-string,
+:root .hljs-meta .hljs-meta-string,
+:root .hljs-literal,
+:root .hljs-doctag,
+:root .hljs-regexp {
+  color: #0a3069;
+}
+
+:root .hljs-title,
+:root .hljs-section,
+:root .hljs-name,
+:root .hljs-selector-id,
+:root .hljs-selector-class {
+  color: #8250df;
+}
+
+:root .hljs-attribute,
+:root .hljs-attr,
+:root .hljs-variable,
+:root .hljs-template-variable,
+:root .hljs-class .hljs-title,
+:root .hljs-type {
+  color: #0550ae;
+}
+
+:root .hljs-symbol,
+:root .hljs-bullet,
+:root .hljs-subst,
+:root .hljs-meta,
+:root .hljs-meta .hljs-keyword,
+:root .hljs-selector-attr,
+:root .hljs-selector-pseudo,
+:root .hljs-link {
+  color: #953800;
+}
+
+:root .hljs-built_in,
+:root .hljs-deletion {
+  color: #82071e;
+}
+
+:root .hljs-formula {
+  background: #f6f8fa;
+}
+
+:root .hljs-emphasis {
+  font-style: italic;
+}
+
+:root .hljs-strong {
+  font-weight: bold;
+}
+
+:root .hljs-title.function_,
+:root .hljs-title.class_ {
+  color: #8250df;
+}
+
+:root .hljs-params {
+  color: #24292f;
+}
+
+:root .hljs-operator {
+  color: #cf222e;
+}
+
+:root .hljs-property {
+  color: #0550ae;
+}
+
+:root .hljs-punctuation {
+  color: #24292f;
+}
+
+/* Highlight.js Dark Theme */
+.dark .hljs {
   background: transparent !important;
   color: #e6edf3;
 }
 
-.hljs-comment,
-.hljs-quote {
+.dark .hljs-comment,
+.dark .hljs-quote {
   color: #8b949e;
   font-style: italic;
 }
 
-.hljs-keyword,
-.hljs-selector-tag,
-.hljs-addition {
+.dark .hljs-keyword,
+.dark .hljs-selector-tag,
+.dark .hljs-addition {
   color: #ff7b72;
 }
 
-.hljs-number,
-.hljs-string,
-.hljs-meta .hljs-meta-string,
-.hljs-literal,
-.hljs-doctag,
-.hljs-regexp {
+.dark .hljs-number,
+.dark .hljs-string,
+.dark .hljs-meta .hljs-meta-string,
+.dark .hljs-literal,
+.dark .hljs-doctag,
+.dark .hljs-regexp {
   color: #a5d6ff;
 }
 
-.hljs-title,
-.hljs-section,
-.hljs-name,
-.hljs-selector-id,
-.hljs-selector-class {
+.dark .hljs-title,
+.dark .hljs-section,
+.dark .hljs-name,
+.dark .hljs-selector-id,
+.dark .hljs-selector-class {
   color: #d2a8ff;
 }
 
-.hljs-attribute,
-.hljs-attr,
-.hljs-variable,
-.hljs-template-variable,
-.hljs-class .hljs-title,
-.hljs-type {
+.dark .hljs-attribute,
+.dark .hljs-attr,
+.dark .hljs-variable,
+.dark .hljs-template-variable,
+.dark .hljs-class .hljs-title,
+.dark .hljs-type {
   color: #79c0ff;
 }
 
-.hljs-symbol,
-.hljs-bullet,
-.hljs-subst,
-.hljs-meta,
-.hljs-meta .hljs-keyword,
-.hljs-selector-attr,
-.hljs-selector-pseudo,
-.hljs-link {
+.dark .hljs-symbol,
+.dark .hljs-bullet,
+.dark .hljs-subst,
+.dark .hljs-meta,
+.dark .hljs-meta .hljs-keyword,
+.dark .hljs-selector-attr,
+.dark .hljs-selector-pseudo,
+.dark .hljs-link {
   color: #ffa657;
 }
 
-.hljs-built_in,
-.hljs-deletion {
+.dark .hljs-built_in,
+.dark .hljs-deletion {
   color: #ffa198;
 }
 
-.hljs-formula {
+.dark .hljs-formula {
   background: #161b22;
 }
 
-.hljs-emphasis {
+.dark .hljs-emphasis {
   font-style: italic;
 }
 
-.hljs-strong {
+.dark .hljs-strong {
   font-weight: bold;
 }
 
-/* Function names */
-.hljs-title.function_,
-.hljs-title.class_ {
+.dark .hljs-title.function_,
+.dark .hljs-title.class_ {
   color: #d2a8ff;
 }
 
-/* Parameters */
-.hljs-params {
+.dark .hljs-params {
   color: #e6edf3;
 }
 
-/* Operators */
-.hljs-operator {
+.dark .hljs-operator {
   color: #ff7b72;
 }
 
-/* Properties */
-.hljs-property {
+.dark .hljs-property {
   color: #79c0ff;
 }
 
-/* Punctuation */
-.hljs-punctuation {
+.dark .hljs-punctuation {
   color: #e6edf3;
 }
 

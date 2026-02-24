@@ -360,6 +360,12 @@
       "zh": "中文",
       "en": "English"
     },
+    "theme": {
+      "title": "Appearance",
+      "light": "Light",
+      "dark": "Dark",
+      "system": "System"
+    },
     "apiConfig": {
       "title": "API Configuration",
       "useBedrock": "Use AWS Bedrock",
