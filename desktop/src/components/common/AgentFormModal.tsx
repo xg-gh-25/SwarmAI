@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import clsx from 'clsx';
@@ -14,30 +14,16 @@ import ToolSelector, { getDefaultEnabledTools } from './ToolSelector';
 import Button from './Button';
 import { Spinner } from './SkeletonLoader';
 
-// Claude models (available in both Bedrock and API Proxy modes)
-const CLAUDE_MODELS = [
-  { id: 'claude-sonnet-4-5-20250929', name: 'Claude Sonnet 4.5', description: 'Best balance of speed and intelligence' },
-  { id: 'claude-haiku-4-5-20251001', name: 'Claude Haiku 4.5', description: 'Fastest and most cost-effective' },
-  { id: 'claude-opus-4-5-20251101', name: 'Claude Opus 4.5', description: 'Most intelligent, best for complex tasks' },
-];
-
-// Third-party models (only available via API Proxy, not Bedrock mode)
-const THIRD_PARTY_MODELS = [
-  { id: 'minimax.minimax-m2', name: 'MiniMax-m2', description: 'MiniMax M2 model (API Proxy only)' },
-  { id: 'qwen.qwen3-next-80b-a3b', name: 'Qwen3-Next-80B-A3B', description: 'Qwen3 Next 80B (API Proxy only)' },
-  { id: 'qwen.qwen3-coder-480b-a35b-v1:0', name: 'Qwen3-Coder-480B-A35B', description: 'Qwen3 Coder 480B (API Proxy only)' },
-  { id: 'qwen.qwen3-235b-a22b-2507-v1:0', name: 'Qwen3-235B-A22B-2507', description: 'Qwen3 235B (API Proxy only)' },
-];
-
-// Helper to get model options based on API mode
-// When useBedrock is true: only show Claude models
-// When useBedrock is false (API Proxy): show Claude + third-party models
-const getModelOptions = (useBedrock: boolean) => {
-  if (useBedrock) {
-    return CLAUDE_MODELS;
-  }
-  return [...CLAUDE_MODELS, ...THIRD_PARTY_MODELS];
-};
+// Helper to convert model ID to a display option
+const modelIdToOption = (id: string) => ({
+  id,
+  // Convert model ID to human-readable name (e.g., claude-sonnet-4-5 -> Claude Sonnet 4 5)
+  name: id
+    .split(/[-.]/)
+    .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' '),
+  description: id,
+});
 
 export interface AgentFormModalProps {
   isOpen: boolean;
@@ -73,13 +59,18 @@ export default function AgentFormModal({
 
   const [isSaving, setIsSaving] = useState(false);
 
-  // Fetch API config to check if Bedrock is enabled
+  // Fetch API config to get model list and check if Bedrock is enabled
   const { data: apiConfig } = useQuery({
     queryKey: ['apiConfig'],
     queryFn: settingsService.getAPIConfiguration,
     enabled: isOpen,
   });
   const useBedrock = apiConfig?.use_bedrock ?? false;
+  const availableModels = useMemo(() => apiConfig?.available_models ?? [], [apiConfig?.available_models]);
+  const defaultModelFromSettings = apiConfig?.default_model ?? '';
+
+  // Convert model IDs to dropdown options
+  const modelOptions = useMemo(() => availableModels.map(modelIdToOption), [availableModels]);
 
   // Fetch skills
   const { data: skills = [], isLoading: loadingSkills } = useQuery({
@@ -138,15 +129,15 @@ export default function AgentFormModal({
     }
   }, [isOpen, agent]);
 
-  // Set default model for create mode (use first available model)
+  // Set default model for create mode (use default from settings)
   useEffect(() => {
-    if (!isEditMode && !model) {
-      const availableModels = getModelOptions(useBedrock);
-      if (availableModels.length > 0) {
-        setModel(availableModels[0].id);
-      }
+    if (!isEditMode && !model && defaultModelFromSettings) {
+      setModel(defaultModelFromSettings);
+    } else if (!isEditMode && !model && availableModels.length > 0) {
+      // Fallback to first available model if no default is set
+      setModel(availableModels[0]);
     }
-  }, [useBedrock, model, isEditMode]);
+  }, [defaultModelFromSettings, availableModels, model, isEditMode]);
 
   // Global User Mode requires Allow All Skills - skill restrictions not supported
   useEffect(() => {
@@ -300,7 +291,7 @@ export default function AgentFormModal({
         <div>
           <Dropdown
             label={t('agents.form.model')}
-            options={getModelOptions(useBedrock)}
+            options={modelOptions}
             selectedId={model || null}
             onChange={setModel}
             placeholder={t('agents.form.modelPlaceholder')}

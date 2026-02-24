@@ -391,6 +391,18 @@
       "selectRegion": "Select AWS Region...",
       "saveConfig": "Save API Configuration"
     },
+    "modelConfig": {
+      "title": "Model Configuration",
+      "defaultModel": "Default Model",
+      "defaultModelDesc": "The model used when creating new agents.",
+      "availableModels": "Available Models",
+      "addModel": "Add",
+      "addModelPlaceholder": "Enter model ID...",
+      "cannotDeleteDefault": "Cannot delete the default model",
+      "cannotDeleteLast": "Cannot delete the last model",
+      "duplicateModel": "Model already exists",
+      "defaultLabel": "Default"
+    },
     "claudeAgentSdk": {
       "title": "Claude Agent SDK",
       "status": "Status",

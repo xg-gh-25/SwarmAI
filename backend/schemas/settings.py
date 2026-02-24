@@ -48,6 +48,9 @@ class APIConfigurationRequest(BaseModel):
     aws_region: Optional[str] = None
     # Bearer token auth
     aws_bearer_token: Optional[str] = None
+    # Model configuration
+    available_models: Optional[list[str]] = None
+    default_model: Optional[str] = None
 
 
 class APIConfigurationResponse(BaseModel):
@@ -62,3 +65,12 @@ class APIConfigurationResponse(BaseModel):
     aws_access_key_id_set: bool = Field(description="Whether AWS Access Key ID is configured")
     aws_bearer_token_set: bool = Field(default=False, description="Whether AWS Bearer Token is configured")
     aws_region: str = "us-east-1"
+    # Model configuration
+    available_models: list[str] = Field(
+        default_factory=list,
+        description="Available model IDs for agent configuration"
+    )
+    default_model: str = Field(
+        default="claude-sonnet-4-5-20250929",
+        description="Default model for new agents"
+    )

@@ -1,9 +1,10 @@
 """Settings API endpoints."""
 import logging
 from datetime import datetime
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 
 from schemas.settings import APIConfigurationRequest, APIConfigurationResponse
+from config import settings as app_config, ANTHROPIC_TO_BEDROCK_MODEL_MAP
 from database import db
 
 logger = logging.getLogger(__name__)
@@ -21,6 +22,9 @@ async def get_api_configuration():
     """
     settings = await db.app_settings.get(DEFAULT_SETTINGS_ID)
 
+    # Default models from config
+    default_models = list(ANTHROPIC_TO_BEDROCK_MODEL_MAP.keys())
+
     if not settings:
         # Return default settings if none exist
         return APIConfigurationResponse(
@@ -31,7 +35,14 @@ async def get_api_configuration():
             aws_access_key_id_set=False,
             aws_bearer_token_set=False,
             aws_region="us-east-1",
+            available_models=default_models,
+            default_model=app_config.default_model,
         )
+
+    # Get available_models from database, or use config defaults if empty
+    available_models = settings.get("available_models")
+    if not available_models:
+        available_models = default_models
 
     return APIConfigurationResponse(
         anthropic_api_key_set=bool(settings.get("anthropic_api_key")),
@@ -41,6 +52,8 @@ async def get_api_configuration():
         aws_access_key_id_set=bool(settings.get("aws_access_key_id")),
         aws_bearer_token_set=bool(settings.get("aws_bearer_token")),
         aws_region=settings.get("aws_region", "us-east-1"),
+        available_models=available_models,
+        default_model=settings.get("default_model", app_config.default_model),
     )
 
 
@@ -54,6 +67,9 @@ async def update_api_configuration(request: APIConfigurationRequest):
     settings = await db.app_settings.get(DEFAULT_SETTINGS_ID)
     now = datetime.now().isoformat()
 
+    # Default models from config
+    default_models = list(ANTHROPIC_TO_BEDROCK_MODEL_MAP.keys())
+
     if not settings:
         settings = {
             "id": DEFAULT_SETTINGS_ID,
@@ -66,6 +82,8 @@ async def update_api_configuration(request: APIConfigurationRequest):
             "aws_session_token": None,
             "aws_bearer_token": "",
             "aws_region": "us-east-1",
+            "available_models": [],
+            "default_model": app_config.default_model,
             "created_at": now,
             "updated_at": now,
         }
@@ -100,12 +118,31 @@ async def update_api_configuration(request: APIConfigurationRequest):
     if request.aws_region is not None:
         settings["aws_region"] = request.aws_region
 
+    # Handle available_models update
+    if request.available_models is not None:
+        settings["available_models"] = request.available_models
+
+    # Handle default_model update with validation
+    if request.default_model is not None:
+        available = settings.get("available_models", [])
+        if available and request.default_model not in available:
+            raise HTTPException(
+                status_code=400,
+                detail="default_model must be in available_models"
+            )
+        settings["default_model"] = request.default_model
+
     settings["updated_at"] = now
 
     # Save settings
     await db.app_settings.put(settings)
 
     logger.info(f"API configuration updated: use_bedrock={settings.get('use_bedrock')}, auth_type={settings.get('bedrock_auth_type')}")
+
+    # Get available_models for response, or use config defaults if empty
+    available_models = settings.get("available_models")
+    if not available_models:
+        available_models = default_models
 
     return APIConfigurationResponse(
         anthropic_api_key_set=bool(settings.get("anthropic_api_key")),
@@ -115,6 +152,8 @@ async def update_api_configuration(request: APIConfigurationRequest):
         aws_access_key_id_set=bool(settings.get("aws_access_key_id")),
         aws_bearer_token_set=bool(settings.get("aws_bearer_token")),
         aws_region=settings.get("aws_region", "us-east-1"),
+        available_models=available_models,
+        default_model=settings.get("default_model", app_config.default_model),
     )
 
 
