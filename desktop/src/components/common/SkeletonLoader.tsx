@@ -28,7 +28,7 @@ export function Skeleton({
   return (
     <div
       className={clsx(
-        'bg-[#2a3142]',
+        'bg-dark-hover',
         roundedClasses[rounded],
         animate && 'animate-pulse',
         className
@@ -87,7 +87,7 @@ export function SkeletonTable({
   return (
     <div className={clsx('w-full', className)}>
       {showHeader && (
-        <div className="flex gap-4 p-4 border-b border-[#2a3142]">
+        <div className="flex gap-4 p-4 border-b border-dark-border">
           {Array.from({ length: columns }).map((_, index) => (
             <Skeleton key={index} height={16} className="flex-1" />
           ))}
@@ -96,7 +96,7 @@ export function SkeletonTable({
       {Array.from({ length: rows }).map((_, rowIndex) => (
         <div
           key={rowIndex}
-          className="flex gap-4 p-4 border-b border-[#2a3142] last:border-b-0"
+          className="flex gap-4 p-4 border-b border-dark-border last:border-b-0"
         >
           {Array.from({ length: columns }).map((_, colIndex) => (
             <Skeleton key={colIndex} height={16} className="flex-1" />
@@ -130,7 +130,7 @@ export function SkeletonCard({
   return (
     <div
       className={clsx(
-        'p-4 rounded-xl bg-[#1a1f2e] border border-[#2a3142]',
+        'p-4 rounded-xl bg-dark-card border border-dark-border',
         className
       )}
     >
@@ -257,10 +257,10 @@ export function LoadingOverlay({
     <div className={clsx('relative', className)}>
       {children}
       {isLoading && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center bg-[#101622]/80 rounded-xl z-10">
+        <div className="absolute inset-0 flex flex-col items-center justify-center bg-dark-bg/80 rounded-xl z-10">
           <Spinner size="lg" />
           {text && (
-            <p className="mt-3 text-sm text-[#9da6b9]">{text}</p>
+            <p className="mt-3 text-sm text-muted">{text}</p>
           )}
         </div>
       )}
@@ -277,7 +277,7 @@ export function PageLoading({ text = 'Loading...' }: PageLoadingProps): React.Re
   return (
     <div className="flex flex-col items-center justify-center min-h-[400px]">
       <Spinner size="lg" />
-      <p className="mt-4 text-[#9da6b9]">{text}</p>
+      <p className="mt-4 text-muted">{text}</p>
     </div>
   );
 }

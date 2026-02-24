@@ -77,11 +77,11 @@ export function ErrorFallback({ error, onRetry }: ErrorFallbackProps): React.Rea
         <span className="material-symbols-outlined text-red-500 text-3xl">error</span>
       </div>
       <h2 className="text-xl font-semibold text-white mb-2">Something went wrong</h2>
-      <p className="text-[#9da6b9] mb-6 max-w-md">{errorMessage}</p>
+      <p className="text-muted mb-6 max-w-md">{errorMessage}</p>
       {onRetry && (
         <button
           onClick={onRetry}
-          className="flex items-center gap-2 px-4 py-2 bg-[#2b6cee] text-white rounded-lg hover:bg-[#2b6cee]/80 transition-colors"
+          className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary/80 transition-colors"
         >
           <span className="material-symbols-outlined text-sm">refresh</span>
           Try again
@@ -123,9 +123,9 @@ export function ApiError({ error, onRetry, onDismiss, compact = false }: ApiErro
         <span className={`material-symbols-outlined text-sm ${getErrorColor(error.code)}`}>
           {getErrorIcon(error.code)}
         </span>
-        <span className="text-sm text-[#9da6b9] flex-1">{error.message}</span>
+        <span className="text-sm text-muted flex-1">{error.message}</span>
         {onDismiss && (
-          <button onClick={onDismiss} className="text-[#9da6b9] hover:text-white">
+          <button onClick={onDismiss} className="text-muted hover:text-white">
             <span className="material-symbols-outlined text-sm">close</span>
           </button>
         )}
@@ -134,7 +134,7 @@ export function ApiError({ error, onRetry, onDismiss, compact = false }: ApiErro
   }
 
   return (
-    <div className="p-6 rounded-xl bg-[#1a1f2e] border border-[#2a3142]">
+    <div className="p-6 rounded-xl bg-dark-card border border-dark-border">
       <div className="flex items-start gap-4">
         <div className={`w-10 h-10 rounded-full bg-red-500/10 flex items-center justify-center flex-shrink-0`}>
           <span className={`material-symbols-outlined ${getErrorColor(error.code)}`}>
@@ -144,10 +144,10 @@ export function ApiError({ error, onRetry, onDismiss, compact = false }: ApiErro
         <div className="flex-1">
           <h3 className="text-lg font-medium text-white mb-1">{error.message}</h3>
           {error.detail && (
-            <p className="text-sm text-[#9da6b9] mb-3">{error.detail}</p>
+            <p className="text-sm text-muted mb-3">{error.detail}</p>
           )}
           {error.suggestedAction && (
-            <p className="text-sm text-[#6b7280] mb-4 flex items-center gap-1">
+            <p className="text-sm text-muted mb-4 flex items-center gap-1">
               <span className="material-symbols-outlined text-sm">lightbulb</span>
               {error.suggestedAction}
             </p>
@@ -156,7 +156,7 @@ export function ApiError({ error, onRetry, onDismiss, compact = false }: ApiErro
             {onRetry && (
               <button
                 onClick={onRetry}
-                className="flex items-center gap-2 px-4 py-2 bg-[#2b6cee] text-white rounded-lg hover:bg-[#2b6cee]/80 transition-colors text-sm"
+                className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary/80 transition-colors text-sm"
               >
                 <span className="material-symbols-outlined text-sm">refresh</span>
                 Try again
@@ -165,7 +165,7 @@ export function ApiError({ error, onRetry, onDismiss, compact = false }: ApiErro
             {onDismiss && (
               <button
                 onClick={onDismiss}
-                className="px-4 py-2 text-[#9da6b9] hover:text-white transition-colors text-sm"
+                className="px-4 py-2 text-muted hover:text-white transition-colors text-sm"
               >
                 Dismiss
               </button>
@@ -174,9 +174,9 @@ export function ApiError({ error, onRetry, onDismiss, compact = false }: ApiErro
         </div>
       </div>
       {error.requestId && (
-        <div className="mt-4 pt-4 border-t border-[#2a3142]">
-          <p className="text-xs text-[#6b7280]">
-            Request ID: <code className="bg-[#101622] px-2 py-1 rounded">{error.requestId}</code>
+        <div className="mt-4 pt-4 border-t border-dark-border">
+          <p className="text-xs text-muted">
+            Request ID: <code className="bg-dark-bg px-2 py-1 rounded">{error.requestId}</code>
           </p>
         </div>
       )}
