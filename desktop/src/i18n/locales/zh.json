@@ -391,6 +391,18 @@
       "selectRegion": "选择 AWS 区域...",
       "saveConfig": "保存 API 配置"
     },
+    "modelConfig": {
+      "title": "模型配置",
+      "defaultModel": "默认模型",
+      "defaultModelDesc": "创建新 Agent 时使用的模型。",
+      "availableModels": "可用模型",
+      "addModel": "添加",
+      "addModelPlaceholder": "输入模型 ID...",
+      "cannotDeleteDefault": "无法删除默认模型",
+      "cannotDeleteLast": "无法删除最后一个模型",
+      "duplicateModel": "模型已存在",
+      "defaultLabel": "默认"
+    },
     "claudeAgentSdk": {
       "title": "Claude Agent SDK",
       "status": "状态",

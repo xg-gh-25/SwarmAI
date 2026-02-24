@@ -485,6 +485,8 @@ class SQLiteDatabase(BaseDatabase):
         aws_session_token TEXT,
         aws_bearer_token TEXT DEFAULT '',
         aws_region TEXT DEFAULT 'us-east-1',
+        available_models TEXT DEFAULT '[]',
+        default_model TEXT DEFAULT 'claude-sonnet-4-5-20250929',
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
     );
@@ -616,6 +618,24 @@ class SQLiteDatabase(BaseDatabase):
             await conn.execute("ALTER TABLE sessions ADD COLUMN work_dir TEXT")
             await conn.commit()
             logger.info("Migration complete: work_dir column added")
+
+        # Migration: Add available_models and default_model columns to app_settings table (added 2026-02-02)
+        # Stores model configuration for agent creation
+        cursor = await conn.execute("PRAGMA table_info(app_settings)")
+        app_settings_columns = await cursor.fetchall()
+        app_settings_column_names = [col[1] for col in app_settings_columns]
+
+        if "available_models" not in app_settings_column_names:
+            logger.info("Running migration: Adding available_models column to app_settings table")
+            await conn.execute("ALTER TABLE app_settings ADD COLUMN available_models TEXT DEFAULT '[]'")
+            await conn.commit()
+            logger.info("Migration complete: available_models column added")
+
+        if "default_model" not in app_settings_column_names:
+            logger.info("Running migration: Adding default_model column to app_settings table")
+            await conn.execute("ALTER TABLE app_settings ADD COLUMN default_model TEXT DEFAULT 'claude-sonnet-4-5-20250929'")
+            await conn.commit()
+            logger.info("Migration complete: default_model column added")
 
     @property
     def agents(self) -> SQLiteTable:

@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useQueryClient } from '@tanstack/react-query';
 import { useTheme } from '../contexts/ThemeContext';
 import { getVersion } from '@tauri-apps/api/app';
 import { tauriService, BackendStatus, getBackendPort, setBackendPort } from '../services/tauri';
@@ -62,6 +63,7 @@ const AWS_REGION_OPTIONS = [
 export default function SettingsPage() {
   const { t, i18n } = useTranslation();
   const { theme, setTheme } = useTheme();
+  const queryClient = useQueryClient();
 
   const handleLanguageChange = (lang: 'zh' | 'en') => {
     i18n.changeLanguage(lang);
@@ -84,6 +86,11 @@ export default function SettingsPage() {
 
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  // Model configuration
+  const [availableModels, setAvailableModels] = useState<string[]>([]);
+  const [defaultModel, setDefaultModel] = useState<string>('');
+  const [newModelId, setNewModelId] = useState('');
 
   // System dependencies
   const [nodejsVersion, setNodejsVersion] = useState<string | null>(null);
@@ -184,6 +191,9 @@ export default function SettingsPage() {
       setUseBedrock(config.use_bedrock);
       setBedrockAuthType(config.bedrock_auth_type || 'credentials');
       setAwsRegion(config.aws_region);
+      // Model configuration
+      setAvailableModels(config.available_models || []);
+      setDefaultModel(config.default_model || '');
     } catch (error) {
       console.error('Failed to load API config:', error);
     }
@@ -277,6 +287,53 @@ export default function SettingsPage() {
       console.error('Restart failed:', error);
       setUpdateError(error instanceof Error ? error.message : 'Restart failed');
     }
+  };
+
+  // Model configuration helpers
+  const saveModelConfig = async (models: string[], defaultMdl: string) => {
+    try {
+      const config = await settingsService.updateAPIConfiguration({
+        available_models: models,
+        default_model: defaultMdl,
+      });
+      setAvailableModels(config.available_models || []);
+      setDefaultModel(config.default_model || '');
+      // Invalidate cache so AgentFormModal gets updated models
+      queryClient.invalidateQueries({ queryKey: ['apiConfig'] });
+      setMessage({ type: 'success', text: t('common.message.saveSuccess') });
+    } catch (error) {
+      setMessage({ type: 'error', text: `${t('common.message.saveFailed')}: ${error}` });
+      await loadAPIConfig(); // Reload on failure
+    }
+  };
+
+  const handleAddModel = async () => {
+    const trimmed = newModelId.trim();
+    if (!trimmed) return;
+    if (availableModels.includes(trimmed)) {
+      setMessage({ type: 'error', text: t('settings.modelConfig.duplicateModel') });
+      return;
+    }
+    const newModels = [...availableModels, trimmed];
+    setNewModelId('');
+    await saveModelConfig(newModels, defaultModel);
+  };
+
+  const handleDeleteModel = async (modelId: string) => {
+    if (modelId === defaultModel) {
+      setMessage({ type: 'error', text: t('settings.modelConfig.cannotDeleteDefault') });
+      return;
+    }
+    if (availableModels.length <= 1) {
+      setMessage({ type: 'error', text: t('settings.modelConfig.cannotDeleteLast') });
+      return;
+    }
+    const newModels = availableModels.filter(m => m !== modelId);
+    await saveModelConfig(newModels, defaultModel);
+  };
+
+  const handleSetDefaultModel = async (modelId: string) => {
+    await saveModelConfig(availableModels, modelId);
   };
 
   const checkSystemDependencies = async () => {
@@ -597,6 +654,80 @@ export default function SettingsPage() {
           >
             {saving ? 'Saving...' : 'Save API Configuration'}
           </button>
+        </div>
+      </section>
+
+      {/* Model Configuration */}
+      <section className="mb-8 bg-[var(--color-card)] rounded-lg p-6">
+        <h2 className="text-lg font-semibold text-[var(--color-text)] mb-4">{t('settings.modelConfig.title')}</h2>
+        <div className="space-y-4">
+          {/* Default Model Dropdown */}
+          <div>
+            <label className="block text-sm text-[var(--color-text-muted)] mb-2">
+              {t('settings.modelConfig.defaultModel')}
+            </label>
+            <select
+              value={defaultModel}
+              onChange={(e) => handleSetDefaultModel(e.target.value)}
+              className="w-full px-4 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-[var(--color-text)] focus:outline-none focus:border-[var(--color-primary)]"
+            >
+              {availableModels.map((model) => (
+                <option key={model} value={model}>{model}</option>
+              ))}
+            </select>
+            <p className="text-xs text-[var(--color-text-muted)] mt-1">
+              {t('settings.modelConfig.defaultModelDesc')}
+            </p>
+          </div>
+
+          {/* Add Model Input */}
+          <div>
+            <label className="block text-sm text-[var(--color-text-muted)] mb-2">
+              {t('settings.modelConfig.availableModels')}
+            </label>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={newModelId}
+                onChange={(e) => setNewModelId(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleAddModel()}
+                placeholder={t('settings.modelConfig.addModelPlaceholder')}
+                className="flex-1 px-4 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-[var(--color-text)] placeholder-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-primary)]"
+              />
+              <button
+                onClick={handleAddModel}
+                className="px-4 py-2 bg-[var(--color-primary)] text-white rounded-lg hover:bg-[var(--color-primary)]/80"
+              >
+                {t('settings.modelConfig.addModel')}
+              </button>
+            </div>
+          </div>
+
+          {/* Model List */}
+          <div className="space-y-2">
+            {availableModels.map((model) => (
+              <div
+                key={model}
+                className="flex items-center justify-between p-3 bg-[var(--color-bg)] rounded-lg"
+              >
+                <span className="text-[var(--color-text)] font-mono text-sm">{model}</span>
+                {model === defaultModel ? (
+                  <span className="flex items-center gap-1 text-amber-400 text-sm">
+                    <span className="material-symbols-outlined text-sm">star</span>
+                    {t('settings.modelConfig.defaultLabel')}
+                  </span>
+                ) : (
+                  <button
+                    onClick={() => handleDeleteModel(model)}
+                    className="text-[var(--color-text-muted)] hover:text-red-400 transition-colors"
+                    title={t('common.button.delete')}
+                  >
+                    <span className="material-symbols-outlined text-sm">delete</span>
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
         </div>
       </section>
 

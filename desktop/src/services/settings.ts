@@ -10,6 +10,8 @@ export interface APIConfigurationResponse {
   aws_access_key_id_set: boolean;
   aws_bearer_token_set: boolean;
   aws_region: string;
+  available_models: string[];
+  default_model: string;
 }
 
 export interface APIConfigurationRequest {
@@ -22,6 +24,8 @@ export interface APIConfigurationRequest {
   aws_session_token?: string;
   aws_bearer_token?: string;
   aws_region?: string;
+  available_models?: string[];
+  default_model?: string;
 }
 
 export const settingsService = {
