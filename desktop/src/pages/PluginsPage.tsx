@@ -108,8 +108,8 @@ export default function PluginsPage() {
       {/* Header */}
       <div className="flex items-start justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-bold text-white">{t('plugins.title')}</h1>
-          <p className="text-muted mt-1">{t('plugins.subtitle')}</p>
+          <h1 className="text-2xl font-bold text-[var(--color-text)]">{t('plugins.title')}</h1>
+          <p className="text-[var(--color-text-muted)] mt-1">{t('plugins.subtitle')}</p>
         </div>
         <div className="flex items-center gap-3">
           {selectedIds.size > 0 && (
@@ -139,18 +139,18 @@ export default function PluginsPage() {
       </div>
 
       {/* Plugins Table / Empty State */}
-      <div className="bg-dark-card border border-dark-border rounded-xl overflow-hidden">
+      <div className="bg-[var(--color-card)] border border-[var(--color-border)] rounded-xl overflow-hidden">
         {isLoadingPlugins ? (
           <SkeletonTable rows={5} columns={6} />
         ) : filteredPlugins.length === 0 ? (
           <div className="py-16 flex flex-col items-center justify-center">
-            <span className="material-symbols-outlined text-5xl text-muted mb-4">
+            <span className="material-symbols-outlined text-5xl text-[var(--color-text-muted)] mb-4">
               extension
             </span>
-            <p className="text-white font-medium mb-1">
+            <p className="text-[var(--color-text)] font-medium mb-1">
               {t('plugins.noPlugins')}
             </p>
-            <p className="text-muted text-sm mb-6">
+            <p className="text-[var(--color-text-muted)] text-sm mb-6">
               {t('plugins.subtitle')}
             </p>
             {!searchQuery && (
@@ -168,7 +168,7 @@ export default function PluginsPage() {
                   type="checkbox"
                   checked={filteredPlugins.length > 0 && selectedIds.size === filteredPlugins.length}
                   onChange={toggleSelectAll}
-                  className="w-4 h-4 rounded border-dark-border bg-dark-bg text-primary focus:ring-primary cursor-pointer"
+                  className="w-4 h-4 rounded border-[var(--color-border)] bg-[var(--color-bg)] text-primary focus:ring-primary cursor-pointer"
                 />
               ),
             }}
@@ -176,7 +176,7 @@ export default function PluginsPage() {
             {filteredPlugins.map((plugin) => (
               <tr
                 key={plugin.id}
-                className="border-b border-dark-border hover:bg-dark-hover"
+                className="border-b border-[var(--color-border)] hover:bg-[var(--color-hover)]"
               >
                 <ResizableTableCell>
                   <input
@@ -184,27 +184,27 @@ export default function PluginsPage() {
                     checked={selectedIds.has(plugin.id)}
                     onChange={() => toggleSelect(plugin.id)}
                     onClick={(e) => e.stopPropagation()}
-                    className="w-4 h-4 rounded border-dark-border bg-dark-bg text-primary focus:ring-primary cursor-pointer"
+                    className="w-4 h-4 rounded border-[var(--color-border)] bg-[var(--color-bg)] text-primary focus:ring-primary cursor-pointer"
                   />
                 </ResizableTableCell>
                 <ResizableTableCell>
                   <div>
-                    <span className="text-white font-medium">{plugin.name}</span>
+                    <span className="text-[var(--color-text)] font-medium">{plugin.name}</span>
                     {plugin.description && (
-                      <p className="text-xs text-muted line-clamp-1 mt-0.5">
+                      <p className="text-xs text-[var(--color-text-muted)] line-clamp-1 mt-0.5">
                         {plugin.description}
                       </p>
                     )}
                   </div>
                 </ResizableTableCell>
                 <ResizableTableCell>
-                  <span className="text-muted">{plugin.version}</span>
+                  <span className="text-[var(--color-text-muted)]">{plugin.version}</span>
                 </ResizableTableCell>
                 <ResizableTableCell>
-                  <span className="text-muted">{plugin.marketplaceName || 'Unknown'}</span>
+                  <span className="text-[var(--color-text-muted)]">{plugin.marketplaceName || 'Unknown'}</span>
                 </ResizableTableCell>
                 <ResizableTableCell>
-                  <span className="text-muted text-sm">{getComponentSummary(plugin)}</span>
+                  <span className="text-[var(--color-text-muted)] text-sm">{getComponentSummary(plugin)}</span>
                 </ResizableTableCell>
                 <ResizableTableCell>
                   <span
@@ -222,7 +222,7 @@ export default function PluginsPage() {
                 <ResizableTableCell align="right">
                   <button
                     onClick={() => setDeletePluginTarget(plugin)}
-                    className="p-1.5 rounded-lg text-muted hover:text-status-error hover:bg-status-error/10 transition-colors"
+                    className="p-1.5 rounded-lg text-[var(--color-text-muted)] hover:text-status-error hover:bg-status-error/10 transition-colors"
                     title={t('plugins.uninstallPlugin')}
                   >
                     <span className="material-symbols-outlined text-lg">delete</span>
@@ -243,9 +243,9 @@ export default function PluginsPage() {
         message={
           <>
             {t('common.message.confirmDelete')}{' '}
-            <strong className="text-white">{deletePluginTarget?.name}</strong>?
+            <strong className="text-[var(--color-text)]">{deletePluginTarget?.name}</strong>?
             <br />
-            <span className="text-sm text-muted">
+            <span className="text-sm text-[var(--color-text-muted)]">
               {t('common.message.cannotUndo')}
             </span>
           </>
@@ -264,9 +264,9 @@ export default function PluginsPage() {
         message={
           <>
             {t('common.message.confirmDelete')}{' '}
-            <strong className="text-white">{selectedIds.size} plugins</strong>?
+            <strong className="text-[var(--color-text)]">{selectedIds.size} plugins</strong>?
             <br />
-            <span className="text-sm text-muted">
+            <span className="text-sm text-[var(--color-text-muted)]">
               {t('common.message.cannotUndo')}
             </span>
           </>
@@ -363,7 +363,7 @@ function InstallPluginModal({
     <form onSubmit={handleSubmit} className="space-y-5">
       {/* Git Repository URL */}
       <div>
-        <label className="block text-sm font-medium text-white mb-2">
+        <label className="block text-sm font-medium text-[var(--color-text)] mb-2">
           {t('plugins.install.gitUrl')} <span className="text-status-error">*</span>
         </label>
         <input
@@ -371,17 +371,17 @@ function InstallPluginModal({
           value={gitUrl}
           onChange={(e) => setGitUrl(e.target.value)}
           placeholder={t('plugins.install.gitUrlPlaceholder')}
-          className="w-full px-4 py-2.5 bg-dark-bg border border-dark-border rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-primary"
+          className="w-full px-4 py-2.5 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-[var(--color-text)] placeholder-[var(--color-text-muted)] focus:outline-none focus:border-primary"
           disabled={installMutation.isPending}
         />
-        <p className="mt-1.5 text-xs text-muted">
+        <p className="mt-1.5 text-xs text-[var(--color-text-muted)]">
           {t('plugins.install.gitUrlHelp')}
         </p>
       </div>
 
       {/* Branch / Tag / Commit */}
       <div>
-        <label className="block text-sm font-medium text-white mb-2">
+        <label className="block text-sm font-medium text-[var(--color-text)] mb-2">
           {t('plugins.install.branch')}
         </label>
         <input
@@ -389,7 +389,7 @@ function InstallPluginModal({
           value={branch}
           onChange={(e) => setBranch(e.target.value)}
           placeholder={t('plugins.install.branchPlaceholder')}
-          className="w-full px-4 py-2.5 bg-dark-bg border border-dark-border rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-primary"
+          className="w-full px-4 py-2.5 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-[var(--color-text)] placeholder-[var(--color-text-muted)] focus:outline-none focus:border-primary"
           disabled={installMutation.isPending}
         />
       </div>
