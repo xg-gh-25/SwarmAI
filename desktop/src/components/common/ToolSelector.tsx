@@ -157,7 +157,7 @@ export function ToolSelector({ selectedTools, onChange, className }: ToolSelecto
 
   return (
     <div className={clsx('space-y-2', className)}>
-      <label className="block text-sm font-medium text-muted mb-2">Built-in Tools</label>
+      <label className="block text-sm font-medium text-[var(--color-text-muted)] mb-2">Built-in Tools</label>
       <div className="space-y-2">
         {TOOL_CATEGORIES.map((category) => {
           const isExpanded = expandedCategories.includes(category.id);
@@ -168,23 +168,23 @@ export function ToolSelector({ selectedTools, onChange, className }: ToolSelecto
           return (
             <div
               key={category.id}
-              className="bg-dark-bg border border-dark-border rounded-lg overflow-hidden"
+              className="bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg overflow-hidden"
             >
               {/* Category Header */}
               <div
-                className="flex items-center justify-between px-4 py-3 cursor-pointer hover:bg-dark-hover transition-colors"
+                className="flex items-center justify-between px-4 py-3 cursor-pointer hover:bg-[var(--color-hover)] transition-colors"
                 onClick={() => toggleCategory(category.id)}
               >
                 <div className="flex items-center gap-3">
                   <span className="material-symbols-outlined text-primary">{category.icon}</span>
                   <div>
                     <div className="flex items-center gap-2">
-                      <span className="text-white font-medium">{category.name}</span>
-                      <span className="text-xs text-muted">
+                      <span className="text-[var(--color-text)] font-medium">{category.name}</span>
+                      <span className="text-xs text-[var(--color-text-muted)]">
                         ({enabledCount}/{category.tools.length})
                       </span>
                     </div>
-                    <p className="text-xs text-muted">{category.description}</p>
+                    <p className="text-xs text-[var(--color-text-muted)]">{category.description}</p>
                   </div>
                 </div>
                 <div className="flex items-center gap-3">
@@ -201,7 +201,7 @@ export function ToolSelector({ selectedTools, onChange, className }: ToolSelecto
                         ? 'bg-primary'
                         : isPartiallyEnabled
                         ? 'bg-primary/50'
-                        : 'bg-dark-border'
+                        : 'bg-[var(--color-border)]'
                     )}
                   >
                     <span
@@ -214,7 +214,7 @@ export function ToolSelector({ selectedTools, onChange, className }: ToolSelecto
                   {/* Expand/Collapse Icon */}
                   <span
                     className={clsx(
-                      'material-symbols-outlined text-muted transition-transform',
+                      'material-symbols-outlined text-[var(--color-text-muted)] transition-transform',
                       isExpanded && 'rotate-180'
                     )}
                   >
@@ -225,24 +225,24 @@ export function ToolSelector({ selectedTools, onChange, className }: ToolSelecto
 
               {/* Expanded Tools List */}
               {isExpanded && (
-                <div className="border-t border-dark-border bg-dark-card/50">
+                <div className="border-t border-[var(--color-border)] bg-[var(--color-card)]/50">
                   {category.tools.map((tool) => {
                     const isEnabled = selectedTools.includes(tool.id);
                     return (
                       <div
                         key={tool.id}
-                        className="flex items-center justify-between px-4 py-2 pl-12 hover:bg-dark-hover/50 transition-colors"
+                        className="flex items-center justify-between px-4 py-2 pl-12 hover:bg-[var(--color-hover)]/50 transition-colors"
                       >
                         <div>
-                          <span className="text-sm text-white">{tool.name}</span>
-                          <p className="text-xs text-muted">{tool.description}</p>
+                          <span className="text-sm text-[var(--color-text)]">{tool.name}</span>
+                          <p className="text-xs text-[var(--color-text-muted)]">{tool.description}</p>
                         </div>
                         <button
                           type="button"
                           onClick={() => toggleTool(tool.id)}
                           className={clsx(
                             'w-8 h-4 rounded-full transition-colors relative',
-                            isEnabled ? 'bg-primary' : 'bg-dark-border'
+                            isEnabled ? 'bg-primary' : 'bg-[var(--color-border)]'
                           )}
                         >
                           <span
