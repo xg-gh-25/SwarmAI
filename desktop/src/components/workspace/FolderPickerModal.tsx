@@ -9,7 +9,6 @@ interface FolderPickerModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSelect: (path: string) => void;
-  agentId: string;
   /** Initial path to start browsing from */
   initialPath?: string;
 }
@@ -23,18 +22,19 @@ export function FolderPickerModal({
   isOpen,
   onClose,
   onSelect,
-  agentId,
   initialPath,
 }: FolderPickerModalProps) {
   const { t } = useTranslation();
+  // Current browsing path (absolute path from server)
   const [currentPath, setCurrentPath] = useState<string>('.');
-  const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  // Selected subfolder within current path (null = select current path)
+  const [selectedSubfolder, setSelectedSubfolder] = useState<string | null>(null);
 
   // Reset state when modal opens
   useEffect(() => {
     if (isOpen) {
       setCurrentPath(initialPath || '.');
-      setSelectedPath(null);
+      setSelectedSubfolder(null);
     }
   }, [isOpen, initialPath]);
 
@@ -52,7 +52,7 @@ export function FolderPickerModal({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isOpen, onClose]);
 
-  // Fetch files for current path - browse from root (no basePath restriction)
+  // Fetch directories using the browse API
   const {
     data: fileList,
     isLoading,
@@ -61,9 +61,9 @@ export function FolderPickerModal({
     refetch,
     isFetching,
   } = useQuery({
-    queryKey: ['folderPicker', agentId, currentPath],
-    queryFn: () => workspaceService.listFiles(agentId, currentPath),
-    enabled: isOpen && !!agentId,
+    queryKey: ['folderPicker', currentPath],
+    queryFn: () => workspaceService.browseFilesystem(currentPath),
+    enabled: isOpen,
     staleTime: 30000,
   });
 
@@ -72,53 +72,63 @@ export function FolderPickerModal({
 
   // Handle directory double-click (navigate into)
   const handleNavigateInto = (dir: WorkspaceFile) => {
-    const newPath = currentPath === '.' ? dir.name : `${currentPath}/${dir.name}`;
+    // fileList.currentPath is the absolute path, append dir.name
+    const newPath = fileList?.currentPath
+      ? `${fileList.currentPath}/${dir.name}`
+      : dir.name;
     setCurrentPath(newPath);
-    setSelectedPath(null);
+    setSelectedSubfolder(null);
   };
 
   // Handle directory single-click (select)
   const handleSelectDir = (dir: WorkspaceFile) => {
-    const dirPath = currentPath === '.' ? dir.name : `${currentPath}/${dir.name}`;
-    setSelectedPath(dirPath);
+    setSelectedSubfolder(dir.name);
   };
 
   // Handle navigation to parent directory
   const handleNavigateUp = () => {
-    if (fileList?.parentPath !== null && fileList?.parentPath !== undefined) {
+    if (fileList?.parentPath) {
       setCurrentPath(fileList.parentPath);
-      setSelectedPath(null);
+      setSelectedSubfolder(null);
     }
   };
 
-  // Build breadcrumb parts
-  const breadcrumbParts = currentPath === '.' ? [] : currentPath.split('/');
+  // Build breadcrumb parts from absolute path
+  const getBreadcrumbParts = () => {
+    const absPath = fileList?.currentPath || '';
+    if (!absPath || absPath === '/') return [];
+    // Split by / and filter empty parts
+    return absPath.split('/').filter(Boolean);
+  };
 
-  // Handle breadcrumb click
+  const breadcrumbParts = getBreadcrumbParts();
+
+  // Handle breadcrumb click - navigate to that path level
   const handleBreadcrumbClick = (index: number) => {
     if (index === -1) {
+      // Home - go to root/home
       setCurrentPath('.');
     } else {
-      setCurrentPath(breadcrumbParts.slice(0, index + 1).join('/'));
+      // Build path up to this index
+      const newPath = '/' + breadcrumbParts.slice(0, index + 1).join('/');
+      setCurrentPath(newPath);
     }
-    setSelectedPath(null);
+    setSelectedSubfolder(null);
   };
 
-  // Get the full path to display
-  const getDisplayPath = () => {
-    if (selectedPath) {
-      return selectedPath === '.' ? '/' : `/${selectedPath}`;
+  // Get the path that will be selected
+  const getSelectedPath = () => {
+    const basePath = fileList?.currentPath || '/';
+    if (selectedSubfolder) {
+      return `${basePath}/${selectedSubfolder}`;
     }
-    return currentPath === '.' ? '/' : `/${currentPath}`;
+    return basePath;
   };
 
   // Handle confirm selection
   const handleConfirm = () => {
-    // Use selected subfolder if one is selected, otherwise use current path
-    const pathToSelect = selectedPath || currentPath;
-    // Convert relative path to absolute by prepending the base workspace path
-    // The backend will resolve this relative to the agent's workspace or system root
-    onSelect(pathToSelect === '.' ? '/' : `/${pathToSelect}`);
+    const path = getSelectedPath();
+    onSelect(path);
     onClose();
   };
 
@@ -143,6 +153,7 @@ export function FolderPickerModal({
           <button
             onClick={onClose}
             className="p-1 text-muted hover:text-white transition-colors rounded"
+            aria-label="Close"
           >
             <span className="material-symbols-outlined">close</span>
           </button>
@@ -154,7 +165,7 @@ export function FolderPickerModal({
             <button
               onClick={() => handleBreadcrumbClick(-1)}
               className="text-muted hover:text-white transition-colors flex-shrink-0"
-              title="Root"
+              title="Home"
             >
               <span className="material-symbols-outlined text-lg">home</span>
             </button>
@@ -195,12 +206,7 @@ export function FolderPickerModal({
 
         {/* Directory list */}
         <div className="flex-1 overflow-y-auto min-h-[200px] max-h-[400px]">
-          {!agentId ? (
-            <div className="flex flex-col items-center justify-center h-32 text-muted px-4 text-center">
-              <span className="material-symbols-outlined text-2xl mb-2">person_off</span>
-              <span className="text-sm">{t('chat.noAgent')}</span>
-            </div>
-          ) : isLoading ? (
+          {isLoading ? (
             <div className="flex items-center justify-center h-32 text-muted">
               <span className="material-symbols-outlined animate-spin mr-2">progress_activity</span>
               Loading...
@@ -241,8 +247,7 @@ export function FolderPickerModal({
                 </div>
               ) : (
                 directories.map((dir) => {
-                  const dirPath = currentPath === '.' ? dir.name : `${currentPath}/${dir.name}`;
-                  const isSelected = selectedPath === dirPath;
+                  const isSelected = selectedSubfolder === dir.name;
                   return (
                     <button
                       key={dir.name}
@@ -289,7 +294,7 @@ export function FolderPickerModal({
             <span className="material-symbols-outlined text-primary text-sm">folder</span>
             <span className="text-sm text-muted">{t('chat.selectedFolder') || 'Selected'}:</span>
             <span className="text-sm text-white font-medium truncate flex-1">
-              {getDisplayPath()}
+              {getSelectedPath()}
             </span>
           </div>
 

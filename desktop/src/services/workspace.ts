@@ -33,6 +33,15 @@ const fileContentToCamelCase = (data: Record<string, unknown>): WorkspaceFileCon
 
 export const workspaceService = {
   /**
+   * Browse server filesystem for folder selection (web browser mode)
+   * @param path Absolute path to browse (default: home directory)
+   */
+  async browseFilesystem(path: string = '.'): Promise<WorkspaceListResponse> {
+    const response = await api.post<Record<string, unknown>>('/workspace/browse', { path });
+    return listResponseToCamelCase(response.data);
+  },
+
+  /**
    * List files and directories in the specified path
    * @param agentId The agent ID
    * @param path Relative path to list (default: ".")

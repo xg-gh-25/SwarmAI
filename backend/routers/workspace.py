@@ -162,6 +162,86 @@ def is_image_file(path: Path) -> bool:
     return path.suffix.lower() in IMAGE_EXTENSIONS
 
 
+@router.post("/browse", response_model=WorkspaceListResponse)
+async def browse_filesystem(request: WorkspaceListRequest):
+    """Browse the server filesystem for folder selection.
+
+    This endpoint allows browsing absolute paths on the server,
+    used by FolderPickerModal in web browser mode.
+
+    Args:
+        request: The list request containing the absolute path to browse
+
+    Returns:
+        WorkspaceListResponse with directories and navigation info
+    """
+    import os
+
+    # Use home directory as default starting point
+    home_dir = Path.home()
+
+    # Parse the requested path
+    requested_path = request.path
+    if requested_path == "." or requested_path == "/" or not requested_path:
+        target_path = home_dir
+    else:
+        # Handle paths - could be absolute or relative to home
+        if requested_path.startswith("/"):
+            target_path = Path(requested_path)
+        else:
+            target_path = home_dir / requested_path
+
+    # Normalize the path
+    target_path = Path(os.path.normpath(target_path))
+
+    # Check if path exists and is a directory
+    if not target_path.exists():
+        raise HTTPException(status_code=404, detail=f"Path not found: {requested_path}")
+
+    if not target_path.is_dir():
+        raise HTTPException(
+            status_code=400, detail=f"Path is not a directory: {requested_path}"
+        )
+
+    # List directory contents (directories only for folder picker)
+    files: list[WorkspaceFileInfo] = []
+
+    try:
+        for item in sorted(target_path.iterdir(), key=lambda x: x.name.lower()):
+            # Skip hidden files/directories (starting with .)
+            if item.name.startswith('.'):
+                continue
+            try:
+                stat = item.stat()
+                files.append(
+                    WorkspaceFileInfo(
+                        name=item.name,
+                        type="directory" if item.is_dir() else "file",
+                        size=0 if item.is_dir() else stat.st_size,
+                        modified=datetime.fromtimestamp(stat.st_mtime),
+                    )
+                )
+            except (PermissionError, OSError):
+                # Skip files we can't access
+                continue
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="Permission denied")
+
+    # Calculate current path (absolute)
+    current_path = str(target_path)
+
+    # Calculate parent path (None if at filesystem root)
+    parent_path = None
+    if target_path.parent != target_path:  # Not at root
+        parent_path = str(target_path.parent)
+
+    return WorkspaceListResponse(
+        files=files,
+        current_path=current_path,
+        parent_path=parent_path,
+    )
+
+
 @router.post("/{agent_id}/list", response_model=WorkspaceListResponse)
 async def list_files(
     agent_id: str,
