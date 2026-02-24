@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTheme } from '../contexts/ThemeContext';
@@ -91,6 +91,13 @@ export default function SettingsPage() {
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [defaultModel, setDefaultModel] = useState<string>('');
   const [newModelId, setNewModelId] = useState('');
+
+  // Convert model IDs to dropdown options
+  const modelOptions = useMemo(() => availableModels.map(id => ({
+    id,
+    name: id.split(/[-.]/).map(part => part.charAt(0).toUpperCase() + part.slice(1)).join(' '),
+    description: id,
+  })), [availableModels]);
 
   // System dependencies
   const [nodejsVersion, setNodejsVersion] = useState<string | null>(null);
@@ -663,18 +670,13 @@ export default function SettingsPage() {
         <div className="space-y-4">
           {/* Default Model Dropdown */}
           <div>
-            <label className="block text-sm text-[var(--color-text-muted)] mb-2">
-              {t('settings.modelConfig.defaultModel')}
-            </label>
-            <select
-              value={defaultModel}
-              onChange={(e) => handleSetDefaultModel(e.target.value)}
-              className="w-full px-4 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-[var(--color-text)] focus:outline-none focus:border-[var(--color-primary)]"
-            >
-              {availableModels.map((model) => (
-                <option key={model} value={model}>{model}</option>
-              ))}
-            </select>
+            <Dropdown
+              label={t('settings.modelConfig.defaultModel')}
+              options={modelOptions}
+              selectedId={defaultModel}
+              onChange={handleSetDefaultModel}
+              placeholder={t('common.placeholder.select')}
+            />
             <p className="text-xs text-[var(--color-text-muted)] mt-1">
               {t('settings.modelConfig.defaultModelDesc')}
             </p>
