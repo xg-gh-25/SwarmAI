@@ -4,27 +4,7 @@ import remarkGfm from 'remark-gfm';
 import remarkBreaks from 'remark-breaks';
 import mermaid from 'mermaid';
 import hljs from 'highlight.js';
-
-// Initialize mermaid with dark theme
-mermaid.initialize({
-  startOnLoad: false,
-  theme: 'dark',
-  themeVariables: {
-    primaryColor: '#2b6cee',
-    primaryTextColor: '#ffffff',
-    primaryBorderColor: '#3d4f6f',
-    lineColor: '#9da6b9',
-    secondaryColor: '#1a1f2e',
-    tertiaryColor: '#101622',
-    background: '#1a1f2e',
-    mainBkg: '#1a1f2e',
-    nodeBorder: '#3d4f6f',
-    clusterBkg: '#101622',
-    titleColor: '#ffffff',
-    edgeLabelBackground: '#1a1f2e',
-  },
-  fontFamily: 'Space Grotesk, sans-serif',
-});
+import { useTheme } from '../../contexts/ThemeContext';
 
 interface MarkdownRendererProps {
   content: string;
@@ -208,6 +188,43 @@ const MermaidDiagram = memo(function MermaidDiagram({ chart }: { chart: string }
   const [error, setError] = useState<string | null>(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
+  const { resolvedTheme } = useTheme();
+
+  // Reinitialize mermaid when theme changes
+  useEffect(() => {
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: resolvedTheme === 'dark' ? 'dark' : 'default',
+      themeVariables: resolvedTheme === 'dark' ? {
+        primaryColor: '#2b6cee',
+        primaryTextColor: '#ffffff',
+        primaryBorderColor: '#3d4f6f',
+        lineColor: '#9da6b9',
+        secondaryColor: '#1a1f2e',
+        tertiaryColor: '#101622',
+        background: '#1a1f2e',
+        mainBkg: '#1a1f2e',
+        nodeBorder: '#3d4f6f',
+        clusterBkg: '#101622',
+        titleColor: '#ffffff',
+        edgeLabelBackground: '#1a1f2e',
+      } : {
+        primaryColor: '#2b6cee',
+        primaryTextColor: '#1e293b',
+        primaryBorderColor: '#cbd5e1',
+        lineColor: '#64748b',
+        secondaryColor: '#f1f5f9',
+        tertiaryColor: '#f8fafc',
+        background: '#ffffff',
+        mainBkg: '#ffffff',
+        nodeBorder: '#cbd5e1',
+        clusterBkg: '#f8fafc',
+        titleColor: '#1e293b',
+        edgeLabelBackground: '#ffffff',
+      },
+      fontFamily: 'Space Grotesk, sans-serif',
+    });
+  }, [resolvedTheme]);
 
   useEffect(() => {
     const renderDiagram = async () => {
@@ -295,8 +312,8 @@ const MermaidDiagram = memo(function MermaidDiagram({ chart }: { chart: string }
         throw new Error('Canvas context not available');
       }
 
-      // Fill background with dark theme color
-      ctx.fillStyle = '#1a1f2e';
+      // Fill background with theme-appropriate color
+      ctx.fillStyle = resolvedTheme === 'dark' ? '#1a1f2e' : '#ffffff';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
       ctx.scale(scale, scale);
 
