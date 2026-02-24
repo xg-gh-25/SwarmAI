@@ -2068,14 +2068,29 @@ const TOOL_INPUT_COLLAPSE_LINES = 5;
 
 function ToolUseBlock({ name, input }: { name: string; input: Record<string, unknown> }) {
   const [isExpanded, setIsExpanded] = useState(false);
-  const content = JSON.stringify(input, null, 2);
-  const lines = content.split('\n');
-  const shouldCollapse = lines.length > TOOL_INPUT_COLLAPSE_LINES;
-  const hiddenLines = lines.length - TOOL_INPUT_COLLAPSE_LINES;
+  const [copied, setCopied] = useState(false);
+
+  // Memoize expensive JSON serialization
+  const { content, lines, shouldCollapse, hiddenLines } = useMemo(() => {
+    const content = JSON.stringify(input, null, 2);
+    const lines = content.split('\n');
+    return {
+      content,
+      lines,
+      shouldCollapse: lines.length > TOOL_INPUT_COLLAPSE_LINES,
+      hiddenLines: lines.length - TOOL_INPUT_COLLAPSE_LINES,
+    };
+  }, [input]);
 
   const displayContent = shouldCollapse && !isExpanded
     ? lines.slice(0, TOOL_INPUT_COLLAPSE_LINES).join('\n')
     : content;
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(content);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
 
   return (
     <div className="bg-dark-card border border-dark-border rounded-lg overflow-hidden">
@@ -2084,15 +2099,16 @@ function ToolUseBlock({ name, input }: { name: string; input: Record<string, unk
           <span className="material-symbols-outlined text-primary text-sm">terminal</span>
           <span className="text-sm font-medium text-white">Tool Call: {name}</span>
         </div>
-        <span className="text-xs text-status-online">Success</span>
       </div>
       <div className="p-4 relative">
         <button
-          onClick={() => navigator.clipboard.writeText(content)}
+          onClick={handleCopy}
           className="absolute top-2 right-2 flex items-center gap-1 px-2 py-1 text-xs text-muted hover:text-white bg-dark-hover rounded transition-colors"
         >
-          <span className="material-symbols-outlined text-sm">content_copy</span>
-          Copy
+          <span className="material-symbols-outlined text-sm">
+            {copied ? 'check' : 'content_copy'}
+          </span>
+          {copied ? 'Copied!' : 'Copy'}
         </button>
         <pre className="text-sm text-muted overflow-x-auto whitespace-pre-wrap break-words">
           <code>{displayContent}</code>
@@ -2100,6 +2116,7 @@ function ToolUseBlock({ name, input }: { name: string; input: Record<string, unk
         {shouldCollapse && (
           <button
             onClick={() => setIsExpanded(!isExpanded)}
+            aria-expanded={isExpanded}
             className="mt-2 text-xs text-primary hover:text-primary-hover transition-colors flex items-center gap-1"
           >
             <span className="material-symbols-outlined text-sm">
