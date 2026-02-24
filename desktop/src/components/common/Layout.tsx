@@ -15,11 +15,11 @@ export default function Layout() {
   };
 
   return (
-    <div className="flex flex-col h-screen bg-dark-bg">
+    <div className="flex flex-col h-screen bg-[var(--color-bg)]">
       {/* Top bar with traffic lights area - draggable */}
       <div
         onMouseDown={handleMouseDown}
-        className="h-10 bg-dark-bg border-b border-dark-border flex-shrink-0 select-none cursor-default"
+        className="h-10 bg-[var(--color-bg)] border-b border-[var(--color-border)] flex-shrink-0 select-none cursor-default"
       />
 
       {/* Main layout below top bar */}
