@@ -58,9 +58,9 @@ Owork 是一个功能强大的 AI Agent 管理平台，让您可以：
 
 ### 快速安装
 
-#### 1. 安装 Owork
+#### 1. 安装 Owork （MAC 版）
 
-1. 下载 `Owork_x.x.x_aarch64.dmg`
+1. 下载 [`Owork_x.x.x_aarch64.dmg`](https://d1a1de1i2hajk1.cloudfront.net/owork/release/v0.0.81/Owork_0.0.81_aarch64.dmg)
 2. 双击打开 DMG 文件
 3. 将 Owork.app 拖拽到 Applications 文件夹
 4. 注意如果运行提示“文件损坏”，需要在终端执行以下命令
@@ -68,10 +68,15 @@ Owork 是一个功能强大的 AI Agent 管理平台，让您可以：
 # 移除隔离属性
 xattr -cr /Applications/Owork.app
 ```
-5. 启动 Owork
+
+#### 1. 安装 Owork （Windows 版）
+1. 下载 [`Owork_x.x.x._x64-setup.zip`](https://d1a1de1i2hajk1.cloudfront.net/owork/release/v0.0.81/Owork_0.0.81_x64-setup.zip)
+2. Windows版可能显示 SmartScreen 警告。点击「更多信息」→「仍要运行」即可。
+3. 需要安装Git bash 系统依赖：https://git-scm.com/downloads/win
+
 #### 2. 配置 API
 
-启动后进入 Settings 页面配置：
+启动Owork,后进入 Settings 页面配置：
 
 - **Anthropic API**：输入 API Key
 - **AWS Bedrock**：开启 Bedrock 开关，配置认证信息
