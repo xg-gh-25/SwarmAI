@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useTheme } from '../contexts/ThemeContext';
 import { getVersion } from '@tauri-apps/api/app';
 import { tauriService, BackendStatus, getBackendPort, setBackendPort } from '../services/tauri';
 import { settingsService, APIConfigurationResponse, BedrockAuthType } from '../services/settings';
@@ -60,6 +61,7 @@ const AWS_REGION_OPTIONS = [
 
 export default function SettingsPage() {
   const { t, i18n } = useTranslation();
+  const { theme, setTheme } = useTheme();
 
   const handleLanguageChange = (lang: 'zh' | 'en') => {
     i18n.changeLanguage(lang);
@@ -320,19 +322,19 @@ export default function SettingsPage() {
 
   return (
     <div className="p-6 max-w-4xl mx-auto">
-      <h1 className="text-2xl font-bold text-white mb-6">{t('settings.title')}</h1>
+      <h1 className="text-2xl font-bold text-[var(--color-text)] mb-6">{t('settings.title')}</h1>
 
       {/* Language Settings */}
-      <section className="mb-8 bg-[#1a1f2e] rounded-lg p-6">
-        <h2 className="text-lg font-semibold text-white mb-2">{t('settings.language.title')}</h2>
-        <p className="text-sm text-gray-400 mb-4">{t('settings.language.description')}</p>
+      <section className="mb-8 bg-[var(--color-card)] rounded-lg p-6">
+        <h2 className="text-lg font-semibold text-[var(--color-text)] mb-2">{t('settings.language.title')}</h2>
+        <p className="text-sm text-[var(--color-text-muted)] mb-4">{t('settings.language.description')}</p>
         <div className="flex gap-3">
           <button
             onClick={() => handleLanguageChange('zh')}
             className={`flex-1 px-4 py-3 rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2 ${
               i18n.language === 'zh'
-                ? 'bg-[#2b6cee] text-white'
-                : 'bg-[#101622] text-gray-400 border border-gray-700 hover:border-gray-500'
+                ? 'bg-[var(--color-primary)] text-white'
+                : 'bg-[var(--color-bg)] text-[var(--color-text-muted)] border border-[var(--color-border)] hover:border-[var(--color-text-muted)]'
             }`}
           >
             {i18n.language === 'zh' && <span className="material-symbols-outlined text-sm">check</span>}
@@ -342,12 +344,56 @@ export default function SettingsPage() {
             onClick={() => handleLanguageChange('en')}
             className={`flex-1 px-4 py-3 rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2 ${
               i18n.language === 'en'
-                ? 'bg-[#2b6cee] text-white'
-                : 'bg-[#101622] text-gray-400 border border-gray-700 hover:border-gray-500'
+                ? 'bg-[var(--color-primary)] text-white'
+                : 'bg-[var(--color-bg)] text-[var(--color-text-muted)] border border-[var(--color-border)] hover:border-[var(--color-text-muted)]'
             }`}
           >
             {i18n.language === 'en' && <span className="material-symbols-outlined text-sm">check</span>}
             {t('settings.language.en')}
+          </button>
+        </div>
+      </section>
+
+      {/* Theme Settings */}
+      <section className="mb-8 bg-[var(--color-card)] rounded-lg p-6">
+        <h2 className="text-lg font-semibold text-[var(--color-text)] mb-2">{t('settings.theme.title')}</h2>
+        <p className="text-sm text-[var(--color-text-muted)] mb-4">{t('settings.theme.description')}</p>
+        <div className="flex gap-3">
+          <button
+            onClick={() => setTheme('light')}
+            className={`flex-1 px-4 py-3 rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2 ${
+              theme === 'light'
+                ? 'bg-[var(--color-primary)] text-white'
+                : 'bg-[var(--color-bg)] text-[var(--color-text-muted)] border border-[var(--color-border)] hover:border-[var(--color-text-muted)]'
+            }`}
+          >
+            {theme === 'light' && <span className="material-symbols-outlined text-sm">check</span>}
+            <span className="material-symbols-outlined text-sm">light_mode</span>
+            {t('settings.theme.light')}
+          </button>
+          <button
+            onClick={() => setTheme('dark')}
+            className={`flex-1 px-4 py-3 rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2 ${
+              theme === 'dark'
+                ? 'bg-[var(--color-primary)] text-white'
+                : 'bg-[var(--color-bg)] text-[var(--color-text-muted)] border border-[var(--color-border)] hover:border-[var(--color-text-muted)]'
+            }`}
+          >
+            {theme === 'dark' && <span className="material-symbols-outlined text-sm">check</span>}
+            <span className="material-symbols-outlined text-sm">dark_mode</span>
+            {t('settings.theme.dark')}
+          </button>
+          <button
+            onClick={() => setTheme('system')}
+            className={`flex-1 px-4 py-3 rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2 ${
+              theme === 'system'
+                ? 'bg-[var(--color-primary)] text-white'
+                : 'bg-[var(--color-bg)] text-[var(--color-text-muted)] border border-[var(--color-border)] hover:border-[var(--color-text-muted)]'
+            }`}
+          >
+            {theme === 'system' && <span className="material-symbols-outlined text-sm">check</span>}
+            <span className="material-symbols-outlined text-sm">contrast</span>
+            {t('settings.theme.system')}
           </button>
         </div>
       </section>
@@ -363,19 +409,19 @@ export default function SettingsPage() {
       )}
 
       {/* API Configuration */}
-      <section className="mb-8 bg-[#1a1f2e] rounded-lg p-6">
-        <h2 className="text-lg font-semibold text-white mb-4">API Configuration</h2>
+      <section className="mb-8 bg-[var(--color-card)] rounded-lg p-6">
+        <h2 className="text-lg font-semibold text-[var(--color-text)] mb-4">API Configuration</h2>
         <div className="space-y-4">
           {/* Use Bedrock Toggle */}
-          <div className="flex items-center justify-between p-3 bg-[#101622] rounded-lg">
+          <div className="flex items-center justify-between p-3 bg-[var(--color-bg)] rounded-lg">
             <div>
-              <label className="text-sm font-medium text-white">Use AWS Bedrock</label>
-              <p className="text-xs text-gray-500">Use AWS Bedrock instead of Anthropic API</p>
+              <label className="text-sm font-medium text-[var(--color-text)]">Use AWS Bedrock</label>
+              <p className="text-xs text-[var(--color-text-muted)]">Use AWS Bedrock instead of Anthropic API</p>
             </div>
             <button
               onClick={() => setUseBedrock(!useBedrock)}
               className={`relative w-12 h-6 rounded-full transition-colors ${
-                useBedrock ? 'bg-[#2b6cee]' : 'bg-gray-600'
+                useBedrock ? 'bg-[var(--color-primary)]' : 'bg-gray-600'
               }`}
             >
               <span
@@ -390,7 +436,7 @@ export default function SettingsPage() {
             <>
               {/* Custom Base URL */}
               <div>
-                <label className="block text-sm text-gray-400 mb-2">
+                <label className="block text-sm text-[var(--color-text-muted)] mb-2">
                   Custom Base URL (Optional)
                 </label>
                 <input
@@ -398,16 +444,16 @@ export default function SettingsPage() {
                   value={baseUrl}
                   onChange={(e) => setBaseUrl(e.target.value)}
                   placeholder="https://api.anthropic.com (default)"
-                  className="w-full px-4 py-2 bg-[#101622] border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-[#2b6cee]"
+                  className="w-full px-4 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-[var(--color-text)] placeholder-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-primary)]"
                 />
-                <p className="text-xs text-gray-500 mt-1">
+                <p className="text-xs text-[var(--color-text-muted)] mt-1">
                   For proxies or custom endpoints. Leave empty for default.
                 </p>
               </div>
 
               {/* API Key */}
               <div>
-                <label className="block text-sm text-gray-400 mb-2">
+                <label className="block text-sm text-[var(--color-text-muted)] mb-2">
                   API Key
                   {apiConfig?.anthropic_api_key_set && (
                     <span className="ml-2 text-green-400 text-xs">✓ Configured</span>
@@ -418,9 +464,9 @@ export default function SettingsPage() {
                   value={apiKey}
                   onChange={(e) => setApiKey(e.target.value)}
                   placeholder={apiConfig?.anthropic_api_key_set ? '••••••••••••••••' : 'sk-ant-...'}
-                  className="w-full px-4 py-2 bg-[#101622] border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-[#2b6cee]"
+                  className="w-full px-4 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-[var(--color-text)] placeholder-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-primary)]"
                 />
-                <p className="text-xs text-gray-500 mt-1">
+                <p className="text-xs text-[var(--color-text-muted)] mt-1">
                   Leave blank to keep existing key. Your API key is stored securely.
                 </p>
               </div>
@@ -431,15 +477,15 @@ export default function SettingsPage() {
             <>
               {/* Authentication Type Selector */}
               <div>
-                <label className="block text-sm text-gray-400 mb-2">Authentication Method</label>
+                <label className="block text-sm text-[var(--color-text-muted)] mb-2">Authentication Method</label>
                 <div className="flex gap-2">
                   <button
                     type="button"
                     onClick={() => setBedrockAuthType('credentials')}
                     className={`flex-1 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
                       bedrockAuthType === 'credentials'
-                        ? 'bg-[#2b6cee] text-white'
-                        : 'bg-[#101622] text-gray-400 border border-gray-700 hover:border-gray-500'
+                        ? 'bg-[var(--color-primary)] text-white'
+                        : 'bg-[var(--color-bg)] text-[var(--color-text-muted)] border border-[var(--color-border)] hover:border-[var(--color-text-muted)]'
                     }`}
                   >
                     AK/SK Credentials
@@ -449,8 +495,8 @@ export default function SettingsPage() {
                     onClick={() => setBedrockAuthType('bearer_token')}
                     className={`flex-1 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
                       bedrockAuthType === 'bearer_token'
-                        ? 'bg-[#2b6cee] text-white'
-                        : 'bg-[#101622] text-gray-400 border border-gray-700 hover:border-gray-500'
+                        ? 'bg-[var(--color-primary)] text-white'
+                        : 'bg-[var(--color-bg)] text-[var(--color-text-muted)] border border-[var(--color-border)] hover:border-[var(--color-text-muted)]'
                     }`}
                   >
                     Bearer Token
@@ -462,7 +508,7 @@ export default function SettingsPage() {
                 <>
                   {/* AWS Access Key ID */}
                   <div>
-                    <label className="block text-sm text-gray-400 mb-2">
+                    <label className="block text-sm text-[var(--color-text-muted)] mb-2">
                       AWS Access Key ID
                       {apiConfig?.aws_access_key_id_set && (
                         <span className="ml-2 text-green-400 text-xs">✓ Configured</span>
@@ -473,25 +519,25 @@ export default function SettingsPage() {
                       value={awsAccessKey}
                       onChange={(e) => setAwsAccessKey(e.target.value)}
                       placeholder={apiConfig?.aws_access_key_id_set ? '••••••••••••' : 'AKIA...'}
-                      className="w-full px-4 py-2 bg-[#101622] border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-[#2b6cee]"
+                      className="w-full px-4 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-[var(--color-text)] placeholder-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-primary)]"
                     />
                   </div>
 
                   {/* AWS Secret Access Key */}
                   <div>
-                    <label className="block text-sm text-gray-400 mb-2">AWS Secret Access Key</label>
+                    <label className="block text-sm text-[var(--color-text-muted)] mb-2">AWS Secret Access Key</label>
                     <input
                       type="password"
                       value={awsSecretKey}
                       onChange={(e) => setAwsSecretKey(e.target.value)}
                       placeholder="••••••••••••••••"
-                      className="w-full px-4 py-2 bg-[#101622] border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-[#2b6cee]"
+                      className="w-full px-4 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-[var(--color-text)] placeholder-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-primary)]"
                     />
                   </div>
 
                   {/* AWS Session Token */}
                   <div>
-                    <label className="block text-sm text-gray-400 mb-2">
+                    <label className="block text-sm text-[var(--color-text-muted)] mb-2">
                       AWS Session Token (Optional)
                     </label>
                     <input
@@ -499,9 +545,9 @@ export default function SettingsPage() {
                       value={awsSessionToken}
                       onChange={(e) => setAwsSessionToken(e.target.value)}
                       placeholder="For temporary credentials"
-                      className="w-full px-4 py-2 bg-[#101622] border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-[#2b6cee]"
+                      className="w-full px-4 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-[var(--color-text)] placeholder-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-primary)]"
                     />
-                    <p className="text-xs text-gray-500 mt-1">
+                    <p className="text-xs text-[var(--color-text-muted)] mt-1">
                       Only needed for temporary security credentials (STS).
                     </p>
                   </div>
@@ -512,7 +558,7 @@ export default function SettingsPage() {
                 <>
                   {/* AWS Bearer Token */}
                   <div>
-                    <label className="block text-sm text-gray-400 mb-2">
+                    <label className="block text-sm text-[var(--color-text-muted)] mb-2">
                       AWS Bearer Token
                       {apiConfig?.aws_bearer_token_set && (
                         <span className="ml-2 text-green-400 text-xs">✓ Configured</span>
@@ -523,9 +569,9 @@ export default function SettingsPage() {
                       value={awsBearerToken}
                       onChange={(e) => setAwsBearerToken(e.target.value)}
                       placeholder={apiConfig?.aws_bearer_token_set ? '••••••••••••••••' : 'Enter bearer token...'}
-                      className="w-full px-4 py-2 bg-[#101622] border border-gray-700 rounded-lg text-white placeholder-gray-500 focus:outline-none focus:border-[#2b6cee]"
+                      className="w-full px-4 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-[var(--color-text)] placeholder-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-primary)]"
                     />
-                    <p className="text-xs text-gray-500 mt-1">
+                    <p className="text-xs text-[var(--color-text-muted)] mt-1">
                       Bearer token for AWS Bedrock authentication.
                     </p>
                   </div>
@@ -547,7 +593,7 @@ export default function SettingsPage() {
           <button
             onClick={handleSaveAPIConfig}
             disabled={saving}
-            className="w-full px-4 py-2 bg-[#2b6cee] text-white rounded-lg hover:bg-[#2b6cee]/80 disabled:opacity-50"
+            className="w-full px-4 py-2 bg-[var(--color-primary)] text-white rounded-lg hover:bg-[var(--color-primary)]/80 disabled:opacity-50"
           >
             {saving ? 'Saving...' : 'Save API Configuration'}
           </button>
@@ -555,18 +601,18 @@ export default function SettingsPage() {
       </section>
 
       {/* Claude Agent SDK */}
-      <section className="mb-8 bg-[#1a1f2e] rounded-lg p-6">
-        <h2 className="text-lg font-semibold text-white mb-4">Claude Agent SDK</h2>
+      <section className="mb-8 bg-[var(--color-card)] rounded-lg p-6">
+        <h2 className="text-lg font-semibold text-[var(--color-text)] mb-4">Claude Agent SDK</h2>
         <div className="space-y-3">
           <div className="flex items-center justify-between">
-            <span className="text-gray-400">Status</span>
+            <span className="text-[var(--color-text-muted)]">Status</span>
             <span className="text-green-400">✓ Bundled</span>
           </div>
           <div className="flex items-center justify-between">
-            <span className="text-gray-400">Version</span>
-            <span className="text-white">0.1.20</span>
+            <span className="text-[var(--color-text-muted)]">Version</span>
+            <span className="text-[var(--color-text)]">0.1.20</span>
           </div>
-          <p className="text-xs text-gray-500 mt-2">
+          <p className="text-xs text-[var(--color-text-muted)] mt-2">
             The Claude Agent SDK includes a bundled Claude Code CLI. No external installation required.
           </p>
         </div>
@@ -574,22 +620,22 @@ export default function SettingsPage() {
 
       {/* System Dependencies */}
       {!isDev && (
-        <section className="mb-8 bg-[#1a1f2e] rounded-lg p-6">
+        <section className="mb-8 bg-[var(--color-card)] rounded-lg p-6">
           <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg font-semibold text-white">System Dependencies</h2>
+            <h2 className="text-lg font-semibold text-[var(--color-text)]">System Dependencies</h2>
             <button
               onClick={checkSystemDependencies}
               disabled={checkingDependencies}
-              className="px-3 py-1 text-xs bg-[#101622] text-gray-400 rounded hover:bg-[#2b6cee] hover:text-white transition-colors disabled:opacity-50"
+              className="px-3 py-1 text-xs bg-[var(--color-bg)] text-[var(--color-text-muted)] rounded hover:bg-[var(--color-primary)] hover:text-white transition-colors disabled:opacity-50"
             >
               {checkingDependencies ? 'Checking...' : 'Refresh'}
             </button>
           </div>
           <div className="space-y-3">
             <div className="flex items-center justify-between">
-              <span className="text-gray-400">Node.js</span>
+              <span className="text-[var(--color-text-muted)]">Node.js</span>
               {nodejsVersion === null ? (
-                <span className="text-gray-500">Checking...</span>
+                <span className="text-[var(--color-text-muted)]">Checking...</span>
               ) : nodejsVersion === 'Not installed' ? (
                 <span className="text-red-400">✗ Not found</span>
               ) : (
@@ -597,9 +643,9 @@ export default function SettingsPage() {
               )}
             </div>
             <div className="flex items-center justify-between">
-              <span className="text-gray-400">Python</span>
+              <span className="text-[var(--color-text-muted)]">Python</span>
               {pythonVersion === null ? (
-                <span className="text-gray-500">Checking...</span>
+                <span className="text-[var(--color-text-muted)]">Checking...</span>
               ) : pythonVersion === 'Not installed' ? (
                 <span className="text-red-400">✗ Not found</span>
               ) : (
@@ -608,9 +654,9 @@ export default function SettingsPage() {
             </div>
             {platformInfo.platform === 'Windows' && (
               <div className="flex items-center justify-between">
-                <span className="text-gray-400">Git Bash</span>
+                <span className="text-[var(--color-text-muted)]">Git Bash</span>
                 {gitBashPath === null ? (
-                  <span className="text-gray-500">Checking...</span>
+                  <span className="text-[var(--color-text-muted)]">Checking...</span>
                 ) : gitBashPath === 'Not found' ? (
                   <span className="text-red-400">✗ Not found</span>
                 ) : (
@@ -620,7 +666,7 @@ export default function SettingsPage() {
                 )}
               </div>
             )}
-            <p className="text-xs text-gray-500 mt-2">
+            <p className="text-xs text-[var(--color-text-muted)] mt-2">
               System-level dependencies detected in PATH. These are not required for the app to run.
             </p>
           </div>
@@ -634,35 +680,35 @@ export default function SettingsPage() {
             <span className="text-yellow-500 text-xl">⚠</span>
             <div className="flex-1">
               <h3 className="text-yellow-500 font-semibold mb-2">Git Bash Required</h3>
-              <p className="text-gray-300 text-sm mb-3">
+              <p className="text-[var(--color-text)] text-sm mb-3">
                 Git Bash is required for Claude Agent SDK to execute shell commands on Windows.
                 Please install Git for Windows and configure the environment variable.
               </p>
               <div className="space-y-2 text-sm">
                 <div>
-                  <span className="text-gray-400">1. Download and install Git for Windows:</span>
+                  <span className="text-[var(--color-text-muted)]">1. Download and install Git for Windows:</span>
                   <a
                     href="https://git-scm.com/downloads/win"
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="ml-2 text-[#2b6cee] hover:underline"
+                    className="ml-2 text-[var(--color-primary)] hover:underline"
                   >
                     https://git-scm.com/downloads/win
                   </a>
                 </div>
                 <div>
-                  <span className="text-gray-400">2. Set the environment variable:</span>
-                  <code className="ml-2 px-2 py-1 bg-[#101622] rounded text-xs text-white">
+                  <span className="text-[var(--color-text-muted)]">2. Set the environment variable:</span>
+                  <code className="ml-2 px-2 py-1 bg-[var(--color-bg)] rounded text-xs text-[var(--color-text)]">
                     CLAUDE_CODE_GIT_BASH_PATH
                   </code>
                 </div>
-                <div className="mt-2 p-3 bg-[#101622] rounded-lg">
-                  <p className="text-gray-400 text-xs mb-1">Example (default installation path):</p>
-                  <code className="text-white text-xs font-mono">
+                <div className="mt-2 p-3 bg-[var(--color-bg)] rounded-lg">
+                  <p className="text-[var(--color-text-muted)] text-xs mb-1">Example (default installation path):</p>
+                  <code className="text-[var(--color-text)] text-xs font-mono">
                     CLAUDE_CODE_GIT_BASH_PATH=C:\Program Files\Git\bin\bash.exe
                   </code>
                 </div>
-                <p className="text-gray-500 text-xs mt-2">
+                <p className="text-[var(--color-text-muted)] text-xs mt-2">
                   After setting the environment variable, restart the application and click "Refresh" above to verify.
                 </p>
               </div>
@@ -672,49 +718,49 @@ export default function SettingsPage() {
       )}
 
       {/* Backend Status */}
-      <section className="mb-8 bg-[#1a1f2e] rounded-lg p-6">
-        <h2 className="text-lg font-semibold text-white mb-4">Backend Service</h2>
+      <section className="mb-8 bg-[var(--color-card)] rounded-lg p-6">
+        <h2 className="text-lg font-semibold text-[var(--color-text)] mb-4">Backend Service</h2>
         {backendStatus ? (
           <div className="space-y-3">
             <div className="flex items-center justify-between">
-              <span className="text-gray-400">Status</span>
+              <span className="text-[var(--color-text-muted)]">Status</span>
               <span className={backendStatus.running ? 'text-green-400' : 'text-red-400'}>
                 {backendStatus.running ? '● Running' : '○ Stopped'}
               </span>
             </div>
             <div className="flex items-center justify-between">
-              <span className="text-gray-400">Port</span>
-              <span className="text-white">{backendStatus.port}</span>
+              <span className="text-[var(--color-text-muted)]">Port</span>
+              <span className="text-[var(--color-text)]">{backendStatus.port}</span>
             </div>
           </div>
         ) : (
-          <p className="text-gray-500">Loading...</p>
+          <p className="text-[var(--color-text-muted)]">Loading...</p>
         )}
       </section>
 
       {/* Storage Info */}
-      <section className="mb-8 bg-[#1a1f2e] rounded-lg p-6">
-        <h2 className="text-lg font-semibold text-white mb-4">Storage</h2>
+      <section className="mb-8 bg-[var(--color-card)] rounded-lg p-6">
+        <h2 className="text-lg font-semibold text-[var(--color-text)] mb-4">Storage</h2>
         <div className="space-y-3 text-sm">
           <div className="flex items-center justify-between">
-            <span className="text-gray-400">Data Directory</span>
-            <span className="text-white font-mono text-xs">
+            <span className="text-[var(--color-text-muted)]">Data Directory</span>
+            <span className="text-[var(--color-text)] font-mono text-xs">
               {platformInfo.dataDir}
             </span>
           </div>
           <div className="flex items-center justify-between">
-            <span className="text-gray-400">Skills Directory</span>
-            <span className="text-white font-mono text-xs">
+            <span className="text-[var(--color-text-muted)]">Skills Directory</span>
+            <span className="text-[var(--color-text)] font-mono text-xs">
               {platformInfo.skillsDir}
             </span>
           </div>
           <div className="flex items-center justify-between">
-            <span className="text-gray-400">Database</span>
-            <span className="text-white font-mono text-xs">data.db (SQLite)</span>
+            <span className="text-[var(--color-text-muted)]">Database</span>
+            <span className="text-[var(--color-text)] font-mono text-xs">data.db (SQLite)</span>
           </div>
           <div className="flex items-center justify-between">
-            <span className="text-gray-400">Logs Directory</span>
-            <span className="text-white font-mono text-xs">
+            <span className="text-[var(--color-text-muted)]">Logs Directory</span>
+            <span className="text-[var(--color-text)] font-mono text-xs">
               {platformInfo.logsDir}
             </span>
           </div>
@@ -722,26 +768,26 @@ export default function SettingsPage() {
       </section>
 
       {/* About */}
-      <section className="bg-[#1a1f2e] rounded-lg p-6">
-        <h2 className="text-lg font-semibold text-white mb-4">About</h2>
+      <section className="bg-[var(--color-card)] rounded-lg p-6">
+        <h2 className="text-lg font-semibold text-[var(--color-text)] mb-4">About</h2>
         <div className="space-y-3 text-sm">
           <div className="flex items-center justify-between">
-            <span className="text-gray-400">Version</span>
-            <span className="text-white">{appVersion || 'Loading...'}</span>
+            <span className="text-[var(--color-text-muted)]">Version</span>
+            <span className="text-[var(--color-text)]">{appVersion || 'Loading...'}</span>
           </div>
           <div className="flex items-center justify-between">
-            <span className="text-gray-400">Platform</span>
-            <span className="text-white">{platformInfo.platform}</span>
+            <span className="text-[var(--color-text-muted)]">Platform</span>
+            <span className="text-[var(--color-text)]">{platformInfo.platform}</span>
           </div>
 
           {/* Update Section - only in production */}
           {!isDev && (
-            <div className="pt-3 border-t border-gray-700">
+            <div className="pt-3 border-t border-[var(--color-border)]">
               {/* Idle state - show check button */}
               {updateState === 'idle' && (
                 <button
                   onClick={handleCheckForUpdates}
-                  className="w-full px-4 py-2 bg-[#101622] text-white rounded-lg hover:bg-[#2b6cee] transition-colors flex items-center justify-center gap-2"
+                  className="w-full px-4 py-2 bg-[var(--color-bg)] text-[var(--color-text)] rounded-lg hover:bg-[var(--color-primary)] hover:text-white transition-colors flex items-center justify-center gap-2"
                 >
                   <span className="material-symbols-outlined text-lg">update</span>
                   Check for Updates
@@ -750,7 +796,7 @@ export default function SettingsPage() {
 
               {/* Checking state */}
               {updateState === 'checking' && (
-                <div className="flex items-center justify-center gap-2 py-2 text-gray-400">
+                <div className="flex items-center justify-center gap-2 py-2 text-[var(--color-text-muted)]">
                   <span className="material-symbols-outlined animate-spin text-lg">progress_activity</span>
                   Checking for updates...
                 </div>
@@ -764,13 +810,13 @@ export default function SettingsPage() {
                     <span>Version {availableUpdate.version} available!</span>
                   </div>
                   {availableUpdate.body && (
-                    <div className="bg-[#101622] rounded p-3 text-xs text-gray-400 max-h-24 overflow-y-auto">
+                    <div className="bg-[var(--color-bg)] rounded p-3 text-xs text-[var(--color-text-muted)] max-h-24 overflow-y-auto">
                       {availableUpdate.body}
                     </div>
                   )}
                   <button
                     onClick={handleDownloadUpdate}
-                    className="w-full px-4 py-2 bg-[#2b6cee] text-white rounded-lg hover:bg-[#2b6cee]/80 transition-colors flex items-center justify-center gap-2"
+                    className="w-full px-4 py-2 bg-[var(--color-primary)] text-white rounded-lg hover:bg-[var(--color-primary)]/80 transition-colors flex items-center justify-center gap-2"
                   >
                     <span className="material-symbols-outlined text-lg">download</span>
                     Download & Install
@@ -781,7 +827,7 @@ export default function SettingsPage() {
               {/* Downloading state */}
               {updateState === 'downloading' && updateProgress && (
                 <div className="space-y-2">
-                  <div className="flex justify-between text-xs text-gray-400">
+                  <div className="flex justify-between text-xs text-[var(--color-text-muted)]">
                     <span>Downloading...</span>
                     <span>
                       {updateProgress.total
@@ -789,9 +835,9 @@ export default function SettingsPage() {
                         : formatBytes(updateProgress.downloaded)}
                     </span>
                   </div>
-                  <div className="h-2 bg-[#101622] rounded-full overflow-hidden">
+                  <div className="h-2 bg-[var(--color-bg)] rounded-full overflow-hidden">
                     <div
-                      className="h-full bg-[#2b6cee] transition-all duration-300"
+                      className="h-full bg-[var(--color-primary)] transition-all duration-300"
                       style={{ width: `${updateProgress.percentage}%` }}
                     />
                   </div>
@@ -807,7 +853,7 @@ export default function SettingsPage() {
                   </div>
                   <button
                     onClick={handleRestartApp}
-                    className="w-full px-4 py-2 bg-[#2b6cee] text-white rounded-lg hover:bg-[#2b6cee]/80 transition-colors flex items-center justify-center gap-2"
+                    className="w-full px-4 py-2 bg-[var(--color-primary)] text-white rounded-lg hover:bg-[var(--color-primary)]/80 transition-colors flex items-center justify-center gap-2"
                   >
                     <span className="material-symbols-outlined text-lg">restart_alt</span>
                     Restart Now
@@ -824,7 +870,7 @@ export default function SettingsPage() {
                   </div>
                   <button
                     onClick={handleCheckForUpdates}
-                    className="w-full px-4 py-2 bg-[#101622] text-white rounded-lg hover:bg-[#2b6cee] transition-colors flex items-center justify-center gap-2"
+                    className="w-full px-4 py-2 bg-[var(--color-bg)] text-[var(--color-text)] rounded-lg hover:bg-[var(--color-primary)] hover:text-white transition-colors flex items-center justify-center gap-2"
                   >
                     <span className="material-symbols-outlined text-lg">refresh</span>
                     Try Again

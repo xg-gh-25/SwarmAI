@@ -1509,24 +1509,24 @@ export default function ChatPage() {
   return (
     <div className="flex flex-col h-full">
       {/* Enhanced Chat Header - spans full width */}
-      <div className="h-16 px-4 flex items-center justify-between border-b border-dark-border flex-shrink-0">
+      <div className="h-16 px-4 flex items-center justify-between border-b border-[var(--color-border)] flex-shrink-0">
         <div className="flex items-center gap-3">
           {/* Agent info - clickable to expand sidebar */}
           {selectedAgent ? (
             <button
               onClick={toggleChatSidebar}
-              className="flex items-center gap-3 hover:bg-dark-hover rounded-lg px-3 py-2 transition-colors"
+              className="flex items-center gap-3 hover:bg-[var(--color-hover)] rounded-lg px-3 py-2 transition-colors"
             >
               <div className="w-10 h-10 rounded-full bg-primary/20 flex items-center justify-center flex-shrink-0">
                 <span className="material-symbols-outlined text-primary">history</span>
               </div>
               <div className="text-left">
-                <h1 className="font-semibold text-white">{selectedAgent.name}</h1>
-                <p className="text-xs text-muted truncate max-w-[200px]">
+                <h1 className="font-semibold text-[var(--color-text)]">{selectedAgent.name}</h1>
+                <p className="text-xs text-[var(--color-text-muted)] truncate max-w-[200px]">
                   {selectedAgent.description || 'AI Assistant'}
                 </p>
               </div>
-              <span className="material-symbols-outlined text-muted text-sm">expand_more</span>
+              <span className="material-symbols-outlined text-[var(--color-text-muted)] text-sm">expand_more</span>
             </button>
           ) : (
             <button
@@ -1541,7 +1541,7 @@ export default function ChatPage() {
 
         <div className="flex items-center gap-2">
           {selectedAgent && (
-            <span className="px-2 py-1 text-xs bg-dark-hover text-muted rounded">
+            <span className="px-2 py-1 text-xs bg-[var(--color-hover)] text-[var(--color-text-muted)] rounded">
               {selectedAgent.model || 'Default Model'}
             </span>
           )}
@@ -1552,7 +1552,7 @@ export default function ChatPage() {
               'p-2 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed',
               !rightSidebarCollapsed
                 ? 'text-primary bg-primary/10 hover:bg-primary/20'
-                : 'text-muted hover:bg-dark-hover hover:text-white'
+                : 'text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)]'
             )}
             title={rightSidebarCollapsed ? 'Open file browser' : 'Close file browser'}
           >
@@ -1561,7 +1561,7 @@ export default function ChatPage() {
           <button
             onClick={handleOpenEditAgent}
             disabled={!selectedAgent}
-            className="p-2 rounded-lg text-muted hover:bg-dark-hover hover:text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            className="p-2 rounded-lg text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             title={t('chat.editAgentSettings')}
           >
             <span className="material-symbols-outlined">settings</span>
@@ -1574,18 +1574,18 @@ export default function ChatPage() {
         {/* Chat History Sidebar - part of flex layout, slides from left */}
         {!chatSidebarCollapsed && (
           <div
-            className="flex flex-col bg-dark-card border-r border-dark-border relative flex-shrink-0"
+            className="flex flex-col bg-[var(--color-card)] border-r border-[var(--color-border)] relative flex-shrink-0"
             style={{ width: sidebarWidth }}
           >
             {/* Sidebar Header with Close Button */}
-            <div className="h-12 px-4 flex items-center justify-between border-b border-dark-border flex-shrink-0">
+            <div className="h-12 px-4 flex items-center justify-between border-b border-[var(--color-border)] flex-shrink-0">
               <div className="flex items-center gap-2">
                 <span className="material-symbols-outlined text-primary text-lg">chat</span>
-                <span className="font-medium text-white text-sm">{t('chat.history')}</span>
+                <span className="font-medium text-[var(--color-text)] text-sm">{t('chat.history')}</span>
               </div>
               <button
                 onClick={toggleChatSidebar}
-                className="p-1.5 rounded-lg text-muted hover:bg-dark-hover hover:text-white transition-colors"
+                className="p-1.5 rounded-lg text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)] transition-colors"
                 aria-label="Close chat sidebar"
               >
                 <span className="material-symbols-outlined text-lg">close</span>
@@ -1593,13 +1593,13 @@ export default function ChatPage() {
             </div>
 
             {/* Agent Selector */}
-            <div className="p-3 border-b border-dark-border">
+            <div className="p-3 border-b border-[var(--color-border)]">
               {isLoadingAgents ? (
                 <div className="flex items-center justify-center py-3">
                   <Spinner size="sm" />
                 </div>
               ) : agents.length === 0 ? (
-                <div className="text-sm text-muted text-center py-3">
+                <div className="text-sm text-[var(--color-text-muted)] text-center py-3">
                   {t('chat.noAgentsAvailable')}
                   <br />
                   <a href="/agents" className="text-primary hover:underline">
@@ -1622,7 +1622,7 @@ export default function ChatPage() {
             </div>
 
             {/* Header with New Chat button */}
-            <div className="p-3 border-b border-dark-border">
+            <div className="p-3 border-b border-[var(--color-border)]">
               <button
                 onClick={handleNewChat}
                 disabled={!selectedAgentId}
@@ -1636,12 +1636,12 @@ export default function ChatPage() {
             {/* Chat History List */}
             <div className="flex-1 overflow-y-auto p-2 space-y-1">
               {groupedSessions.length === 0 ? (
-                <p className="px-3 py-2 text-xs text-muted">{t('chat.noHistory')}</p>
+                <p className="px-3 py-2 text-xs text-[var(--color-text-muted)]">{t('chat.noHistory')}</p>
               ) : (
                 groupedSessions.map((group, groupIndex) => (
                   <div key={group.group}>
                     <p className={clsx(
-                      'px-3 py-2 text-xs font-medium text-muted uppercase tracking-wider',
+                      'px-3 py-2 text-xs font-medium text-[var(--color-text-muted)] uppercase tracking-wider',
                       groupIndex > 0 && 'mt-3'
                     )}>
                       {t(timeGroupLabelKey[group.group])}
@@ -1655,7 +1655,7 @@ export default function ChatPage() {
                             'group w-full flex items-center gap-2 px-3 py-2.5 rounded-lg text-left transition-colors cursor-pointer',
                             sessionId === session.id
                               ? 'bg-primary text-white'
-                              : 'text-muted hover:bg-dark-hover hover:text-white'
+                              : 'text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)]'
                           )}
                           onClick={() => handleSelectSession(session)}
                         >
@@ -1675,7 +1675,7 @@ export default function ChatPage() {
                               'p-1 rounded opacity-0 group-hover:opacity-100 transition-opacity',
                               sessionId === session.id
                                 ? 'hover:bg-white/20 text-white'
-                                : 'hover:bg-dark-border text-muted hover:text-white'
+                                : 'hover:bg-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
                             )}
                           >
                             <span className="material-symbols-outlined text-sm">delete</span>
@@ -1719,9 +1719,9 @@ export default function ChatPage() {
         {!selectedAgentId ? (
           <div className="flex-1 flex items-center justify-center">
             <div className="text-center">
-              <span className="material-symbols-outlined text-6xl text-muted mb-4">smart_toy</span>
-              <h2 className="text-xl font-semibold text-white mb-2">{t('chat.selectAgent')}</h2>
-              <p className="text-muted max-w-md">
+              <span className="material-symbols-outlined text-6xl text-[var(--color-text-muted)] mb-4">smart_toy</span>
+              <h2 className="text-xl font-semibold text-[var(--color-text)] mb-2">{t('chat.selectAgent')}</h2>
+              <p className="text-[var(--color-text-muted)] max-w-md">
                 {t('chat.noAgent')}
               </p>
               {agents.length === 0 && !isLoadingAgents && (
@@ -1739,7 +1739,7 @@ export default function ChatPage() {
           <div className="flex-1 flex items-center justify-center">
             <div className="text-center">
               <Spinner size="lg" />
-              <p className="text-muted mt-4">{t('common.status.loading')}</p>
+              <p className="text-[var(--color-text-muted)] mt-4">{t('common.status.loading')}</p>
             </div>
           </div>
         ) : (
@@ -1756,7 +1756,7 @@ export default function ChatPage() {
                 />
               ))}
               {isStreaming && (
-                <div className="flex items-center gap-2 text-muted">
+                <div className="flex items-center gap-2 text-[var(--color-text-muted)]">
                   <Spinner size="sm" />
                   <span className="text-sm">{t('chat.thinking')}</span>
                 </div>
@@ -1770,8 +1770,8 @@ export default function ChatPage() {
                 {/* Input Container with drag-and-drop */}
                 <div
                   className={clsx(
-                    'bg-dark-card border rounded-2xl p-3 relative transition-colors',
-                    isDragging ? 'border-primary bg-primary/5' : 'border-dark-border'
+                    'bg-[var(--color-card)] border rounded-2xl p-3 relative transition-colors',
+                    isDragging ? 'border-primary bg-primary/5' : 'border-[var(--color-border)]'
                   )}
                   onDragOver={handleDragOver}
                   onDragLeave={handleDragLeave}
@@ -1808,7 +1808,7 @@ export default function ChatPage() {
                       <div className="flex items-center gap-2 text-sm">
                         <span className="material-symbols-outlined text-primary text-lg">folder</span>
                         <span className="text-primary font-medium">{t('chat.workingIn')}</span>
-                        <span className="text-muted truncate max-w-[300px]">{workDir}</span>
+                        <span className="text-[var(--color-text-muted)] truncate max-w-[300px]">{workDir}</span>
                       </div>
                       <button
                         onClick={handleClearWorkDir}
@@ -1836,7 +1836,7 @@ export default function ChatPage() {
                         'p-2 rounded-lg transition-colors',
                         workDir
                           ? 'text-primary bg-primary/10 hover:bg-primary/20'
-                          : 'text-muted hover:bg-dark-hover hover:text-white'
+                          : 'text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)]'
                       )}
                       title={workDir ? `Working in: ${workDir}` : 'Select a folder to work in'}
                     >
@@ -1845,9 +1845,9 @@ export default function ChatPage() {
 
                     {/* Slash Command Suggestions */}
                     {showCommandSuggestions && filteredCommands.length > 0 && (
-                      <div className="absolute bottom-full left-0 mb-2 w-64 bg-dark-card border border-dark-border rounded-lg shadow-xl overflow-hidden z-10">
-                        <div className="px-3 py-2 border-b border-dark-border">
-                          <span className="text-xs text-muted font-medium uppercase tracking-wider">Commands</span>
+                      <div className="absolute bottom-full left-0 mb-2 w-64 bg-[var(--color-card)] border border-[var(--color-border)] rounded-lg shadow-xl overflow-hidden z-10">
+                        <div className="px-3 py-2 border-b border-[var(--color-border)]">
+                          <span className="text-xs text-[var(--color-text-muted)] font-medium uppercase tracking-wider">Commands</span>
                         </div>
                         {filteredCommands.map((cmd, index) => (
                           <button
@@ -1857,7 +1857,7 @@ export default function ChatPage() {
                               'w-full px-3 py-2.5 flex items-start gap-3 text-left transition-colors',
                               index === selectedCommandIndex
                                 ? 'bg-primary text-white'
-                                : 'text-white hover:bg-dark-hover'
+                                : 'text-[var(--color-text)] hover:bg-[var(--color-hover)]'
                             )}
                           >
                             <span className="material-symbols-outlined text-lg mt-0.5">terminal</span>
@@ -1865,20 +1865,20 @@ export default function ChatPage() {
                               <p className="font-medium">{cmd.name}</p>
                               <p className={clsx(
                                 'text-xs',
-                                index === selectedCommandIndex ? 'text-white/70' : 'text-muted'
+                                index === selectedCommandIndex ? 'text-white/70' : 'text-[var(--color-text-muted)]'
                               )}>
                                 {cmd.description}
                               </p>
                             </div>
                           </button>
                         ))}
-                        <div className="px-3 py-1.5 border-t border-dark-border bg-dark-hover/50">
-                          <span className="text-xs text-muted">
-                            <kbd className="px-1 py-0.5 bg-dark-border rounded text-xs">↑↓</kbd> navigate
+                        <div className="px-3 py-1.5 border-t border-[var(--color-border)] bg-[var(--color-hover)]/50">
+                          <span className="text-xs text-[var(--color-text-muted)]">
+                            <kbd className="px-1 py-0.5 bg-[var(--color-border)] rounded text-xs">↑↓</kbd> navigate
                             <span className="mx-2">·</span>
-                            <kbd className="px-1 py-0.5 bg-dark-border rounded text-xs">Tab</kbd> select
+                            <kbd className="px-1 py-0.5 bg-[var(--color-border)] rounded text-xs">Tab</kbd> select
                             <span className="mx-2">·</span>
-                            <kbd className="px-1 py-0.5 bg-dark-border rounded text-xs">Esc</kbd> close
+                            <kbd className="px-1 py-0.5 bg-[var(--color-border)] rounded text-xs">Esc</kbd> close
                           </span>
                         </div>
                       </div>
@@ -1892,7 +1892,7 @@ export default function ChatPage() {
                       onPaste={handlePaste}
                       placeholder={t('chat.placeholder')}
                       rows={1}
-                      className="flex-1 bg-transparent text-white placeholder:text-muted resize-none focus:outline-none py-2"
+                      className="flex-1 bg-transparent text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] resize-none focus:outline-none py-2"
                     />
 
                     {/* Send Button */}
@@ -1917,7 +1917,7 @@ export default function ChatPage() {
                   </div>
 
                   {/* Bottom Row - Skills & Commands hint */}
-                  <div className="flex items-center justify-between mt-3 pt-3 border-t border-dark-border/50">
+                  <div className="flex items-center justify-between mt-3 pt-3 border-t border-[var(--color-border)]/50">
                     <div className="flex items-center gap-4">
                       <ReadOnlyChips
                         label="Plugins"
@@ -1957,14 +1957,14 @@ export default function ChatPage() {
                       />
                     </div>
 
-                    <span className="text-xs text-muted">
-                      Type <kbd className="px-1.5 py-0.5 bg-dark-hover rounded text-xs mx-1">/</kbd> for commands
+                    <span className="text-xs text-[var(--color-text-muted)]">
+                      Type <kbd className="px-1.5 py-0.5 bg-[var(--color-hover)] rounded text-xs mx-1">/</kbd> for commands
                     </span>
                   </div>
                 </div>
 
                 {/* Footer */}
-                <p className="text-center text-xs text-muted/60 mt-4 uppercase tracking-wider">
+                <p className="text-center text-xs text-[var(--color-text-muted)]/60 mt-4 uppercase tracking-wider">
                   {"Immersive Workspace • Powered by Claude Code"}
                 </p>
               </div>
@@ -1977,7 +1977,7 @@ export default function ChatPage() {
         {/* Right Sidebar - File Browser (part of flex layout) */}
         {!rightSidebarCollapsed && (
           <div
-            className="flex flex-col bg-dark-card border-l border-dark-border relative"
+            className="flex flex-col bg-[var(--color-card)] border-l border-[var(--color-border)] relative"
             style={{ width: rightSidebarWidth }}
           >
             {/* Resize Handle (on the left side) */}
@@ -1992,14 +1992,14 @@ export default function ChatPage() {
             </div>
 
             {/* Header */}
-            <div className="h-12 px-4 flex items-center justify-between border-b border-dark-border flex-shrink-0">
+            <div className="h-12 px-4 flex items-center justify-between border-b border-[var(--color-border)] flex-shrink-0">
               <div className="flex items-center gap-2">
                 <span className="material-symbols-outlined text-primary text-lg">folder</span>
-                <span className="font-medium text-white text-sm">Files</span>
+                <span className="font-medium text-[var(--color-text)] text-sm">Files</span>
               </div>
               <button
                 onClick={toggleRightSidebar}
-                className="p-1.5 rounded-lg text-muted hover:bg-dark-hover hover:text-white transition-colors"
+                className="p-1.5 rounded-lg text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)] transition-colors"
                 aria-label="Close file browser"
               >
                 <span className="material-symbols-outlined text-lg">close</span>
@@ -2016,7 +2016,7 @@ export default function ChatPage() {
                   basePath={effectiveBasePath}
                 />
               ) : (
-                <div className="flex flex-col items-center justify-center h-full text-muted p-4 text-center">
+                <div className="flex flex-col items-center justify-center h-full text-[var(--color-text-muted)] p-4 text-center">
                   <span className="material-symbols-outlined text-3xl mb-2">folder_off</span>
                   <p className="text-sm">{t('chat.noAgent')}</p>
                 </div>
@@ -2091,24 +2091,24 @@ function ToolUseBlock({ name, input }: { name: string; input: Record<string, unk
   };
 
   return (
-    <div className="bg-dark-card border border-dark-border rounded-lg overflow-hidden">
-      <div className="flex items-center justify-between px-4 py-2 bg-dark-hover">
+    <div className="bg-[var(--color-card)] border border-[var(--color-border)] rounded-lg overflow-hidden">
+      <div className="flex items-center justify-between px-4 py-2 bg-[var(--color-hover)]">
         <div className="flex items-center gap-2">
           <span className="material-symbols-outlined text-primary text-sm">terminal</span>
-          <span className="text-sm font-medium text-white">Tool Call: {name}</span>
+          <span className="text-sm font-medium text-[var(--color-text)]">Tool Call: {name}</span>
         </div>
       </div>
       <div className="p-4 relative">
         <button
           onClick={handleCopy}
-          className="absolute top-2 right-2 flex items-center gap-1 px-2 py-1 text-xs text-muted hover:text-white bg-dark-hover rounded transition-colors"
+          className="absolute top-2 right-2 flex items-center gap-1 px-2 py-1 text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] bg-[var(--color-hover)] rounded transition-colors"
         >
           <span className="material-symbols-outlined text-sm">
             {copied ? 'check' : 'content_copy'}
           </span>
           {copied ? 'Copied!' : 'Copy'}
         </button>
-        <pre className="text-sm text-muted overflow-x-auto whitespace-pre-wrap break-words">
+        <pre className="text-sm text-[var(--color-text-muted)] overflow-x-auto whitespace-pre-wrap break-words">
           <code>{displayContent}</code>
         </pre>
         {shouldCollapse && (
@@ -2144,7 +2144,7 @@ function MessageBubble({ message, onAnswerQuestion, pendingToolUseId, isStreamin
       <div
         className={clsx(
           'w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0',
-          isUser ? 'bg-orange-500/20' : 'bg-dark-card'
+          isUser ? 'bg-orange-500/20' : 'bg-[var(--color-card)]'
         )}
       >
         <span className={clsx('material-symbols-outlined', isUser ? 'text-orange-400' : 'text-primary')}>
@@ -2154,8 +2154,8 @@ function MessageBubble({ message, onAnswerQuestion, pendingToolUseId, isStreamin
 
       <div className={clsx('flex-1 max-w-3xl', isUser && 'text-right')}>
         <div className={clsx('flex items-center gap-2 mb-1', isUser && 'justify-end')}>
-          <span className="font-medium text-white">{isUser ? 'User' : 'AI Agent'}</span>
-          <span className="text-xs text-muted">
+          <span className="font-medium text-[var(--color-text)]">{isUser ? 'User' : 'AI Agent'}</span>
+          <span className="text-xs text-[var(--color-text-muted)]">
             {new Date(message.timestamp).toLocaleTimeString([], {
               hour: '2-digit',
               minute: '2-digit',
@@ -2207,12 +2207,12 @@ function ContentBlockRenderer({ block, onAnswerQuestion, pendingToolUseId, isStr
 
   if (block.type === 'tool_result') {
     return (
-      <div className="bg-dark-card border border-dark-border rounded-lg p-4">
+      <div className="bg-[var(--color-card)] border border-[var(--color-border)] rounded-lg p-4">
         <div className="flex items-center gap-2 mb-2">
           <span className="material-symbols-outlined text-status-online text-sm">check_circle</span>
-          <span className="text-sm font-medium text-white">Tool Result</span>
+          <span className="text-sm font-medium text-[var(--color-text)]">Tool Result</span>
         </div>
-        <pre className="text-sm text-muted overflow-x-auto whitespace-pre-wrap break-words">
+        <pre className="text-sm text-[var(--color-text-muted)] overflow-x-auto whitespace-pre-wrap break-words">
           <code>{block.content}</code>
         </pre>
       </div>

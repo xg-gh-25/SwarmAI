@@ -88,8 +88,8 @@ export default function MCPPage() {
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-bold text-white">{t('mcp.title')}</h1>
-          <p className="text-muted mt-1">{t('mcp.subtitle')}</p>
+          <h1 className="text-2xl font-bold text-[var(--color-text)]">{t('mcp.title')}</h1>
+          <p className="text-[var(--color-text-muted)] mt-1">{t('mcp.subtitle')}</p>
         </div>
         <Button icon="add" onClick={() => setIsAddModalOpen(true)}>
           {t('mcp.addMcp')}
@@ -107,7 +107,7 @@ export default function MCPPage() {
       </div>
 
       {/* MCP Servers Table */}
-      <div className="bg-dark-card border border-dark-border rounded-xl overflow-hidden">
+      <div className="bg-[var(--color-card)] border border-[var(--color-border)] rounded-xl overflow-hidden">
         {isInitialLoading ? (
           <SkeletonTable rows={5} columns={5} />
         ) : (
@@ -115,10 +115,10 @@ export default function MCPPage() {
             {filteredServers.map((server) => (
               <tr
                 key={server.id}
-                className="border-b border-dark-border hover:bg-dark-hover transition-colors"
+                className="border-b border-[var(--color-border)] hover:bg-[var(--color-hover)] transition-colors"
               >
                 <ResizableTableCell>
-                  <span className="text-white font-medium">{server.name}</span>
+                  <span className="text-[var(--color-text)] font-medium">{server.name}</span>
                 </ResizableTableCell>
                 <ResizableTableCell>
                   <span className="px-2 py-1 text-xs font-medium bg-primary/10 text-primary rounded uppercase">
@@ -126,12 +126,12 @@ export default function MCPPage() {
                   </span>
                 </ResizableTableCell>
                 <ResizableTableCell>
-                  <span className="text-muted" title={server.endpoint}>
+                  <span className="text-[var(--color-text-muted)]" title={server.endpoint}>
                     {server.endpoint || '-'}
                   </span>
                 </ResizableTableCell>
                 <ResizableTableCell>
-                  <span className="text-muted" title={server.description || ''}>
+                  <span className="text-[var(--color-text-muted)]" title={server.description || ''}>
                     {server.description || '-'}
                   </span>
                 </ResizableTableCell>
@@ -139,14 +139,14 @@ export default function MCPPage() {
                   <div className="flex items-center justify-end gap-2">
                     <button
                       onClick={() => setSelectedServer(server)}
-                      className="p-2 rounded-lg text-muted hover:text-white hover:bg-dark-hover transition-colors"
+                      className="p-2 rounded-lg text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)] transition-colors"
                       title={t('mcp.editMcp')}
                     >
                       <span className="material-symbols-outlined text-xl">edit</span>
                     </button>
                     <button
                       onClick={() => handleDeleteClick(server)}
-                      className="p-2 rounded-lg text-muted hover:text-status-error hover:bg-status-error/10 transition-colors"
+                      className="p-2 rounded-lg text-[var(--color-text-muted)] hover:text-status-error hover:bg-status-error/10 transition-colors"
                       title={t('mcp.deleteMcp')}
                     >
                       <span className="material-symbols-outlined text-xl">delete</span>
@@ -159,8 +159,8 @@ export default function MCPPage() {
             {filteredServers.length === 0 && (
               <tr>
                 <td colSpan={5} className="px-6 py-12 text-center">
-                  <span className="material-symbols-outlined text-4xl text-muted mb-2">dns</span>
-                  <p className="text-muted">{t('mcp.noMcps')}</p>
+                  <span className="material-symbols-outlined text-4xl text-[var(--color-text-muted)] mb-2">dns</span>
+                  <p className="text-[var(--color-text-muted)]">{t('mcp.noMcps')}</p>
                 </td>
               </tr>
             )}
@@ -260,30 +260,30 @@ function MCPServerForm({
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
       <div>
-        <label className="block text-sm font-medium text-muted mb-2">{t('mcp.form.name')}</label>
+        <label className="block text-sm font-medium text-[var(--color-text-muted)] mb-2">{t('mcp.form.name')}</label>
         <input
           type="text"
           value={name}
           onChange={(e) => setName(e.target.value)}
           placeholder={t('mcp.form.namePlaceholder')}
           required
-          className="w-full px-4 py-2 bg-dark-bg border border-dark-border rounded-lg text-white placeholder:text-muted focus:outline-none focus:border-primary"
+          className="w-full px-4 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-primary"
         />
       </div>
 
       <div>
-        <label className="block text-sm font-medium text-muted mb-2">{t('mcp.form.description')}</label>
+        <label className="block text-sm font-medium text-[var(--color-text-muted)] mb-2">{t('mcp.form.description')}</label>
         <input
           type="text"
           value={description}
           onChange={(e) => setDescription(e.target.value)}
           placeholder={t('mcp.form.descriptionPlaceholder')}
-          className="w-full px-4 py-2 bg-dark-bg border border-dark-border rounded-lg text-white placeholder:text-muted focus:outline-none focus:border-primary"
+          className="w-full px-4 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-primary"
         />
       </div>
 
       <div>
-        <label className="block text-sm font-medium text-muted mb-2">{t('mcp.form.connectionType')}</label>
+        <label className="block text-sm font-medium text-[var(--color-text-muted)] mb-2">{t('mcp.form.connectionType')}</label>
         <div className="flex gap-4">
           {(['stdio', 'sse', 'http'] as const).map((type) => (
             <label key={type} className="flex items-center gap-2 cursor-pointer">
@@ -293,9 +293,9 @@ function MCPServerForm({
                 value={type}
                 checked={connectionType === type}
                 onChange={(e) => setConnectionType(e.target.value as typeof connectionType)}
-                className="w-4 h-4 border-dark-border bg-dark-bg text-primary focus:ring-primary"
+                className="w-4 h-4 border-[var(--color-border)] bg-[var(--color-bg)] text-primary focus:ring-primary"
               />
-              <span className="text-white uppercase">{type}</span>
+              <span className="text-[var(--color-text)] uppercase">{type}</span>
             </label>
           ))}
         </div>
@@ -304,37 +304,37 @@ function MCPServerForm({
       {connectionType === 'stdio' ? (
         <>
           <div>
-            <label className="block text-sm font-medium text-muted mb-2">{t('mcp.form.command')}</label>
+            <label className="block text-sm font-medium text-[var(--color-text-muted)] mb-2">{t('mcp.form.command')}</label>
             <input
               type="text"
               value={command}
               onChange={(e) => setCommand(e.target.value)}
               placeholder={t('mcp.form.commandPlaceholder')}
               required
-              className="w-full px-4 py-2 bg-dark-bg border border-dark-border rounded-lg text-white placeholder:text-muted focus:outline-none focus:border-primary"
+              className="w-full px-4 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-primary"
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-muted mb-2">{t('mcp.form.args')}</label>
+            <label className="block text-sm font-medium text-[var(--color-text-muted)] mb-2">{t('mcp.form.args')}</label>
             <input
               type="text"
               value={args}
               onChange={(e) => setArgs(e.target.value)}
               placeholder={t('mcp.form.argsPlaceholder')}
-              className="w-full px-4 py-2 bg-dark-bg border border-dark-border rounded-lg text-white placeholder:text-muted focus:outline-none focus:border-primary"
+              className="w-full px-4 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-primary"
             />
           </div>
         </>
       ) : (
         <div>
-          <label className="block text-sm font-medium text-muted mb-2">{t('mcp.form.url')}</label>
+          <label className="block text-sm font-medium text-[var(--color-text-muted)] mb-2">{t('mcp.form.url')}</label>
           <input
             type="url"
             value={url}
             onChange={(e) => setUrl(e.target.value)}
             placeholder={t('mcp.form.urlPlaceholder')}
             required
-            className="w-full px-4 py-2 bg-dark-bg border border-dark-border rounded-lg text-white placeholder:text-muted focus:outline-none focus:border-primary"
+            className="w-full px-4 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-primary"
           />
         </div>
       )}
