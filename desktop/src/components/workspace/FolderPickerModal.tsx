@@ -38,6 +38,20 @@ export function FolderPickerModal({
     }
   }, [isOpen, initialPath]);
 
+  // Handle Escape key to close modal
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onClose();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
+
   // Fetch files for current path - browse from root (no basePath restriction)
   const {
     data: fileList,
@@ -181,7 +195,12 @@ export function FolderPickerModal({
 
         {/* Directory list */}
         <div className="flex-1 overflow-y-auto min-h-[200px] max-h-[400px]">
-          {isLoading ? (
+          {!agentId ? (
+            <div className="flex flex-col items-center justify-center h-32 text-muted px-4 text-center">
+              <span className="material-symbols-outlined text-2xl mb-2">person_off</span>
+              <span className="text-sm">{t('chat.noAgent')}</span>
+            </div>
+          ) : isLoading ? (
             <div className="flex items-center justify-center h-32 text-muted">
               <span className="material-symbols-outlined animate-spin mr-2">progress_activity</span>
               Loading...
@@ -202,7 +221,7 @@ export function FolderPickerModal({
           ) : (
             <div className="divide-y divide-dark-border/50">
               {/* Parent directory link */}
-              {fileList?.parentPath !== null && (
+              {fileList?.parentPath != null && (
                 <button
                   onClick={handleNavigateUp}
                   className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-dark-hover transition-colors text-left"
@@ -215,7 +234,7 @@ export function FolderPickerModal({
               )}
 
               {/* Directories only */}
-              {directories.length === 0 && fileList?.parentPath === null ? (
+              {directories.length === 0 ? (
                 <div className="flex flex-col items-center justify-center h-32 text-muted">
                   <span className="material-symbols-outlined text-2xl mb-2">folder_off</span>
                   <span className="text-sm">No subdirectories</span>
