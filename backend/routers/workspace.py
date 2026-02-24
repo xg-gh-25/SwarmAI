@@ -166,18 +166,21 @@ def is_image_file(path: Path) -> bool:
 async def browse_filesystem(request: WorkspaceListRequest):
     """Browse the server filesystem for folder selection.
 
-    This endpoint allows browsing absolute paths on the server,
+    This endpoint allows browsing directories on the server,
     used by FolderPickerModal in web browser mode.
 
+    Security: Browsing is restricted to user's home directory and below
+    to prevent unauthorized access to system directories.
+
     Args:
-        request: The list request containing the absolute path to browse
+        request: The list request containing the path to browse
 
     Returns:
         WorkspaceListResponse with directories and navigation info
     """
     import os
 
-    # Use home directory as default starting point
+    # Use home directory as default starting point and security boundary
     home_dir = Path.home()
 
     # Parse the requested path
@@ -193,6 +196,24 @@ async def browse_filesystem(request: WorkspaceListRequest):
 
     # Normalize the path
     target_path = Path(os.path.normpath(target_path))
+
+    # SECURITY: Resolve symlinks and verify path stays within home directory
+    try:
+        resolved_path = target_path.resolve()
+        home_resolved = home_dir.resolve()
+
+        # Check if the resolved path is within home directory
+        if not (str(resolved_path).startswith(str(home_resolved) + os.sep) or
+                resolved_path == home_resolved):
+            raise HTTPException(
+                status_code=403,
+                detail="Access denied: cannot browse outside home directory"
+            )
+    except (OSError, ValueError):
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied: invalid path"
+        )
 
     # Check if path exists and is a directory
     if not target_path.exists():
@@ -230,10 +251,14 @@ async def browse_filesystem(request: WorkspaceListRequest):
     # Calculate current path (absolute)
     current_path = str(target_path)
 
-    # Calculate parent path (None if at filesystem root)
+    # Calculate parent path (None if at home directory - security boundary)
     parent_path = None
-    if target_path.parent != target_path:  # Not at root
-        parent_path = str(target_path.parent)
+    if target_path != home_dir and target_path.parent != target_path:
+        # Only allow navigation to parent if we're below home directory
+        parent_resolved = target_path.parent.resolve()
+        if (str(parent_resolved).startswith(str(home_resolved) + os.sep) or
+                parent_resolved == home_resolved):
+            parent_path = str(target_path.parent)
 
     return WorkspaceListResponse(
         files=files,
