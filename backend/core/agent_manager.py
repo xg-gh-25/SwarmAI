@@ -98,25 +98,56 @@ def clear_session_approvals(session_id: str):
     _approved_commands.pop(session_id, None)
 
 
-def _is_duplicate_content_block(block: dict, existing_blocks: list[dict]) -> bool:
-    """Check if a content block is a duplicate of any existing block.
+class ContentBlockAccumulator:
+    """Accumulates content blocks with O(1) deduplication.
 
     Used to prevent duplicate content when SDK sends cumulative messages.
+    Uses a set for O(1) duplicate detection instead of O(n) list scanning.
     """
-    block_type = block.get('type')
-    for existing in existing_blocks:
-        if existing.get('type') != block_type:
-            continue
+
+    def __init__(self):
+        self._blocks: list[dict] = []
+        self._seen_keys: set[str] = set()
+
+    @staticmethod
+    def _get_key(block: dict) -> str | None:
+        """Generate unique key for a content block."""
+        block_type = block.get('type')
         if block_type == 'text':
-            if block.get('text') == existing.get('text'):
-                return True
+            # Use hash for text content to handle large strings efficiently
+            text = block.get('text', '')
+            return f"text:{hash(text)}"
         elif block_type == 'tool_use':
-            if block.get('id') == existing.get('id'):
-                return True
+            return f"tool_use:{block.get('id', '')}"
         elif block_type == 'tool_result':
-            if block.get('tool_use_id') == existing.get('tool_use_id'):
-                return True
-    return False
+            return f"tool_result:{block.get('tool_use_id', '')}"
+        return None
+
+    def add(self, block: dict) -> bool:
+        """Add block if not duplicate. Returns True if added."""
+        key = self._get_key(block)
+        if key is None:
+            # Unknown type - always add
+            self._blocks.append(block)
+            return True
+        if key in self._seen_keys:
+            return False
+        self._seen_keys.add(key)
+        self._blocks.append(block)
+        return True
+
+    def extend(self, blocks: list[dict]) -> None:
+        """Add multiple blocks with deduplication."""
+        for block in blocks:
+            self.add(block)
+
+    @property
+    def blocks(self) -> list[dict]:
+        """Get the accumulated blocks as a list."""
+        return self._blocks
+
+    def __bool__(self) -> bool:
+        return bool(self._blocks)
 
 
 async def wait_for_permission_decision(request_id: str, timeout: int = 300) -> str:
@@ -1065,8 +1096,8 @@ class AgentManager:
         logger.info(f"Working directory: {options.cwd}")
         logger.info(f"Add dirs: {options.add_dirs}")
 
-        # Collect assistant response content for saving
-        assistant_content = []
+        # Collect assistant response content for saving (with O(1) deduplication)
+        assistant_content = ContentBlockAccumulator()
         assistant_model = None
 
         try:
@@ -1199,8 +1230,7 @@ class AgentManager:
                                     # Add to assistant_content for saving (with deduplication)
                                     # ResultMessage.result often duplicates AssistantMessage content
                                     result_block = {"type": "text", "text": result_text}
-                                    if not _is_duplicate_content_block(result_block, assistant_content):
-                                        assistant_content.append(result_block)
+                                    assistant_content.add(result_block)
                             # Handle SystemMessage
                             if isinstance(message, SystemMessage):
                                 logger.info(f"SystemMessage subtype: {message.subtype}, data: {message.data}")
@@ -1242,9 +1272,7 @@ class AgentManager:
 
                                 # Collect content for saving (with deduplication)
                                 if formatted.get('type') == 'assistant' and formatted.get('content'):
-                                    for block in formatted['content']:
-                                        if not _is_duplicate_content_block(block, assistant_content):
-                                            assistant_content.append(block)
+                                    assistant_content.extend(formatted['content'])
                                     assistant_model = formatted.get('model')
 
                                 yield formatted
@@ -1258,7 +1286,7 @@ class AgentManager:
                                         await self._save_message(
                                             session_id=sdk_session,
                                             role="assistant",
-                                            content=assistant_content,
+                                            content=assistant_content.blocks,
                                             model=assistant_model
                                         )
                                     return
@@ -1274,7 +1302,7 @@ class AgentManager:
                                         await self._save_message(
                                             session_id=sdk_session,
                                             role="assistant",
-                                            content=assistant_content,
+                                            content=assistant_content.blocks,
                                             model=assistant_model
                                         )
                                     return
@@ -1295,14 +1323,14 @@ class AgentManager:
                                         "content": [{"type": "text", "text": default_response}],
                                         "model": agent_config.get("model", "claude-sonnet-4-20250514")
                                     }
-                                    assistant_content.append({"type": "text", "text": default_response})
+                                    assistant_content.add({"type": "text", "text": default_response})
 
                                 # Save assistant message
                                 if assistant_content and session_context["sdk_session_id"]:
                                     await self._save_message(
                                         session_id=session_context["sdk_session_id"],
                                         role="assistant",
-                                        content=assistant_content,
+                                        content=assistant_content.blocks,
                                         model=assistant_model
                                     )
 
@@ -1470,8 +1498,8 @@ class AgentManager:
             content=[{"type": "text", "text": f"User answers:\n{answer_message}"}]
         )
 
-        # Collect assistant response content for saving
-        assistant_content = []
+        # Collect assistant response content for saving (with O(1) deduplication)
+        assistant_content = ContentBlockAccumulator()
         assistant_model = None
         forwarder_task = None  # Initialize before try block for finally clause
 
@@ -1532,9 +1560,7 @@ class AgentManager:
 
                         # Collect content for saving (with deduplication)
                         if formatted.get('type') == 'assistant' and formatted.get('content'):
-                            for block in formatted['content']:
-                                if not _is_duplicate_content_block(block, assistant_content):
-                                    assistant_content.append(block)
+                            assistant_content.extend(formatted['content'])
                             assistant_model = formatted.get('model')
 
                         yield formatted
@@ -1546,7 +1572,7 @@ class AgentManager:
                                 await self._save_message(
                                     session_id=session_id,
                                     role="assistant",
-                                    content=assistant_content,
+                                    content=assistant_content.blocks,
                                     model=assistant_model
                                 )
                             return
@@ -1562,7 +1588,7 @@ class AgentManager:
                             await self._save_message(
                                 session_id=session_id,
                                 role="assistant",
-                                content=assistant_content,
+                                content=assistant_content.blocks,
                                 model=assistant_model
                             )
 
