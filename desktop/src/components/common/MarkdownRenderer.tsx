@@ -608,7 +608,7 @@ const markdownComponents: Record<string, React.ComponentType<any>> = {
     </div>
   ),
   thead: ({ children }) => <thead className="bg-[var(--color-hover)]">{children}</thead>,
-  tbody: ({ children }) => <tbody className="divide-y divide-dark-border">{children}</tbody>,
+  tbody: ({ children }) => <tbody className="divide-y divide-[var(--color-border)]">{children}</tbody>,
   tr: ({ children }) => <tr className="hover:bg-[var(--color-hover)] transition-colors">{children}</tr>,
   th: ({ children }) => (
     <th className="px-4 py-3 text-left text-sm font-semibold text-[var(--color-text)] border-b border-[var(--color-border)]">

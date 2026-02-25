@@ -98,7 +98,7 @@ class Settings(BaseSettings):
     # Built-in Sandbox Configuration (Claude Agent SDK native bash sandboxing)
     sandbox_enabled_default: bool = True  # Default sandbox state for new agents (enabled for security)
     sandbox_auto_allow_bash: bool = True  # Auto-approve bash when sandboxed
-    sandbox_excluded_commands: str = ""  # Comma-separated commands to bypass sandbox (e.g., "git,docker")
+    sandbox_excluded_commands: str = "docker"  # Comma-separated commands to bypass sandbox (e.g., "git,docker")
     sandbox_allow_unsandboxed: bool = False  # Allow model to bypass sandbox
 
     class Config:

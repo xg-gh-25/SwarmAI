@@ -9,6 +9,7 @@ import json
 import re
 import hashlib
 import asyncio
+import platform
 
 from claude_agent_sdk import (
     ClaudeSDKClient,
@@ -28,6 +29,35 @@ from .session_manager import session_manager
 from .workspace_manager import workspace_manager
 
 logger = logging.getLogger(__name__)
+
+
+class _ClaudeClientWrapper:
+    """Wrapper to handle anyio cleanup errors when ClaudeSDKClient is used with asyncio tasks.
+
+    When receive_response() is called from a different asyncio task than the one that
+    created the client, anyio's cancel scope can get confused during cleanup.
+    This wrapper suppresses that specific error.
+    """
+
+    def __init__(self, options):
+        self.options = options
+        self.client: ClaudeSDKClient | None = None
+
+    async def __aenter__(self) -> ClaudeSDKClient:
+        self.client = ClaudeSDKClient(options=self.options)
+        return await self.client.__aenter__()  # type: ignore[union-attr]
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        if self.client is None:
+            return False
+        try:
+            return await self.client.__aexit__(exc_type, exc_val, exc_tb)
+        except RuntimeError as e:
+            if "cancel scope" in str(e).lower():
+                logger.warning(f"Suppressed anyio cleanup error (expected when using asyncio tasks): {e}")
+                return False  # Don't suppress the original exception if any
+            raise
+
 
 # Module-level storage for approved commands per session
 # Key: session_id, Value: set of command hashes that have been approved
@@ -66,6 +96,27 @@ def is_command_approved(session_id: str, command: str) -> bool:
 def clear_session_approvals(session_id: str):
     """Clear all approved commands for a session."""
     _approved_commands.pop(session_id, None)
+
+
+def _is_duplicate_content_block(block: dict, existing_blocks: list[dict]) -> bool:
+    """Check if a content block is a duplicate of any existing block.
+
+    Used to prevent duplicate content when SDK sends cumulative messages.
+    """
+    block_type = block.get('type')
+    for existing in existing_blocks:
+        if existing.get('type') != block_type:
+            continue
+        if block_type == 'text':
+            if block.get('text') == existing.get('text'):
+                return True
+        elif block_type == 'tool_use':
+            if block.get('id') == existing.get('id'):
+                return True
+        elif block_type == 'tool_result':
+            if block.get('tool_use_id') == existing.get('tool_use_id'):
+                return True
+    return False
 
 
 async def wait_for_permission_decision(request_id: str, timeout: int = 300) -> str:
@@ -537,7 +588,8 @@ class AgentManager:
             enable_mcp: Whether to enable MCP servers
             resume_session_id: Optional session ID to resume (for multi-turn conversations)
         """
-
+        logger.info(f"agent_config:{agent_config}")
+        logger.info(f"settings:{settings}")
         # Build allowed tools list - use directly from config if provided
         allowed_tools = list(agent_config.get("allowed_tools", []))
     
@@ -754,12 +806,28 @@ class AgentManager:
         
         # Build sandbox configuration (SDK built-in bash sandboxing)
         sandbox_settings = None
-        sandbox_config = agent_config.get("sandbox", {})
-        sandbox_enabled = sandbox_config.get("enabled", settings.sandbox_enabled_default)
+        sandbox_enabled = settings.sandbox_enabled_default
+
+        # Sandbox only works on macOS/Linux, not Windows
+        if sandbox_enabled and platform.system() == "Windows":
+            logger.warning("Sandbox is not supported on Windows, disabling")
+            sandbox_enabled = False
+
+        if sandbox_enabled:
+            excluded_commands = []
+            if settings.sandbox_excluded_commands:
+                excluded_commands = [cmd.strip() for cmd in settings.sandbox_excluded_commands.split(",") if cmd.strip()]
+
+            sandbox_settings = {
+                "enabled": True,
+                "autoAllowBashIfSandboxed": settings.sandbox_auto_allow_bash,
+                "excludedCommands": excluded_commands,
+                "allowUnsandboxedCommands": settings.sandbox_allow_unsandboxed,
+                "network": {"allowLocalBinding": True}
+            }
+            logger.info(f"Sandbox enabled: {sandbox_settings}")
 
         # Determine permission mode
-        # Note: Previously we downgraded bypassPermissions to acceptEdits when sandbox enabled,
-        # but this caused MCP tools to require permission. Keeping original permission mode.
         permission_mode = agent_config.get("permission_mode", "bypassPermissions")
 
         # Get model from config and convert to Bedrock model ID if using Bedrock
@@ -769,39 +837,6 @@ class AgentManager:
         if model and use_bedrock:
             model = get_bedrock_model_id(model)
             logger.info(f"Using Bedrock model: {model}")
-
-        if sandbox_enabled:
-            # Build network config if provided
-            network_config = {}
-            sandbox_network = sandbox_config.get("network", {})
-            if sandbox_network.get("allow_local_binding"):
-                network_config["allowLocalBinding"] = True
-            if sandbox_network.get("allow_unix_sockets"):
-                network_config["allowUnixSockets"] = sandbox_network["allow_unix_sockets"]
-            if sandbox_network.get("allow_all_unix_sockets"):
-                network_config["allowAllUnixSockets"] = True
-
-            # Get excluded commands from config or settings
-            excluded_commands = sandbox_config.get("excluded_commands", [])
-            if not excluded_commands and settings.sandbox_excluded_commands:
-                excluded_commands = [cmd.strip() for cmd in settings.sandbox_excluded_commands.split(",") if cmd.strip()]
-
-            sandbox_settings = {
-                "enabled": True,
-                "autoAllowBashIfSandboxed": sandbox_config.get(
-                    "auto_allow_bash_if_sandboxed",
-                    settings.sandbox_auto_allow_bash
-                ),
-                "excludedCommands": excluded_commands,
-                "allowUnsandboxedCommands": sandbox_config.get(
-                    "allow_unsandboxed_commands",
-                    settings.sandbox_allow_unsandboxed
-                ),
-            }
-            if network_config:
-                sandbox_settings["network"] = network_config
-
-            logger.info(f"Sandbox enabled: {sandbox_settings}")
         
         def stderr_callback(input):
             logger.error(input)
@@ -994,7 +1029,7 @@ class AgentManager:
 
         try:
             logger.info(f"Creating ClaudeSDKClient...")
-            async with ClaudeSDKClient(options=options) as client:
+            async with _ClaudeClientWrapper(options=options) as client:
                 # For resumed sessions, store client immediately
                 # For new sessions, we'll store after getting SDK session_id
                 if is_resuming:
@@ -1113,14 +1148,17 @@ class AgentManager:
                                 # Handle slash command results (e.g., /clear, /help, /compact)
                                 result_text = message.result
                                 if result_text:
-                                    logger.info(f"Slash command result: {result_text}")
+                                    logger.debug(f"ResultMessage result_text: {result_text[:50]}...")
                                     yield {
                                         "type": "assistant",
                                         "content": [{"type": "text", "text": result_text}],
                                         "model": agent_config.get("model", "claude-sonnet-4-20250514")
                                     }
-                                    # Add to assistant_content for saving
-                                    assistant_content.append({"type": "text", "text": result_text})
+                                    # Add to assistant_content for saving (with deduplication)
+                                    # ResultMessage.result often duplicates AssistantMessage content
+                                    result_block = {"type": "text", "text": result_text}
+                                    if not _is_duplicate_content_block(result_block, assistant_content):
+                                        assistant_content.append(result_block)
                             # Handle SystemMessage
                             if isinstance(message, SystemMessage):
                                 logger.info(f"SystemMessage subtype: {message.subtype}, data: {message.data}")
@@ -1160,9 +1198,11 @@ class AgentManager:
                             if formatted:
                                 logger.debug(f"Formatted message type: {formatted.get('type')}")
 
-                                # Collect content for saving
+                                # Collect content for saving (with deduplication)
                                 if formatted.get('type') == 'assistant' and formatted.get('content'):
-                                    assistant_content.extend(formatted['content'])
+                                    for block in formatted['content']:
+                                        if not _is_duplicate_content_block(block, assistant_content):
+                                            assistant_content.append(block)
                                     assistant_model = formatted.get('model')
 
                                 yield formatted
@@ -1448,9 +1488,11 @@ class AgentManager:
                     if formatted:
                         logger.debug(f"Formatted message type: {formatted.get('type')}")
 
-                        # Collect content for saving
+                        # Collect content for saving (with deduplication)
                         if formatted.get('type') == 'assistant' and formatted.get('content'):
-                            assistant_content.extend(formatted['content'])
+                            for block in formatted['content']:
+                                if not _is_duplicate_content_block(block, assistant_content):
+                                    assistant_content.append(block)
                             assistant_model = formatted.get('model')
 
                         yield formatted
