@@ -78,8 +78,8 @@ Windows 可能显示 SmartScreen 警告。点击「更多信息」→「仍要�
 
 ```bash
 # 克隆仓库
-git clone https://github.com/xiehust/awesome-skills-claude-agents.git
-cd awesome-skills-claude-agents/desktop
+git clone https://github.com/xiehust/owork.git
+cd owork/desktop
 
 # 安装依赖
 npm install
@@ -160,6 +160,7 @@ model_list:
 在**Plugin Management**页面中点击**Install Plugin**按钮，输入plugins github repo地址即可，推荐官方plugins包括：  
 | Name | 地址 |
 |------|------|
+| Cowork knowledge-work-plugins | https://github.com/anthropics/knowledge-work-plugins.git |
 | 官方SKILL | https://github.com/anthropics/skills.git |
 | 官方PLUGINS | https://github.com/anthropics/claude-plugins-official.git |
 
@@ -338,7 +339,7 @@ npm uninstall -g @anthropic-ai/claude-code
 
 ## 获取帮助
 
-- **GitHub Issues**: [报告问题或建议](https://github.com/xiehust/awesome-skills-claude-agents/issues)
+- **GitHub Issues**: [报告问题或建议](https://github.com/xiehust/owork/issues)
 - **文档**: 查看项目 README 和 CLAUDE.md 获取更多信息
 
 ---
