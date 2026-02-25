@@ -311,6 +311,36 @@ class SQLitePluginsTable(SQLiteTable[T], Generic[T]):
                 return [self._row_to_dict(row) for row in rows]
 
 
+class SQLiteTasksTable(SQLiteTable[T], Generic[T]):
+    """Specialized SQLite table for tasks with status filtering and counting."""
+
+    async def list_all(self, status: Optional[str] = None, agent_id: Optional[str] = None) -> list[T]:
+        """List all tasks, optionally filtered by status or agent_id."""
+        async with self._get_connection() as conn:
+            conn.row_factory = aiosqlite.Row
+            query = "SELECT * FROM tasks WHERE 1=1"
+            params = []
+            if status:
+                query += " AND status = ?"
+                params.append(status)
+            if agent_id:
+                query += " AND agent_id = ?"
+                params.append(agent_id)
+            query += " ORDER BY created_at DESC"
+            async with conn.execute(query, params) as cursor:
+                rows = await cursor.fetchall()
+                return [self._row_to_dict(row) for row in rows]
+
+    async def count_by_status(self, status: str) -> int:
+        """Count tasks by status."""
+        async with self._get_connection() as conn:
+            async with conn.execute(
+                "SELECT COUNT(*) FROM tasks WHERE status = ?", (status,)
+            ) as cursor:
+                row = await cursor.fetchone()
+                return row[0] if row else 0
+
+
 class SQLiteDatabase(BaseDatabase):
     """SQLite database client implementing BaseDatabase interface."""
 
@@ -535,6 +565,23 @@ class SQLiteDatabase(BaseDatabase):
     CREATE INDEX IF NOT EXISTS idx_plugins_marketplace_id ON plugins(marketplace_id);
     CREATE INDEX IF NOT EXISTS idx_plugins_user_id ON plugins(user_id);
     CREATE INDEX IF NOT EXISTS idx_plugins_name ON plugins(name);
+
+    -- Tasks table (background agent tasks)
+    CREATE TABLE IF NOT EXISTS tasks (
+        id TEXT PRIMARY KEY,
+        agent_id TEXT NOT NULL,
+        session_id TEXT,
+        status TEXT NOT NULL DEFAULT 'pending',
+        title TEXT NOT NULL,
+        model TEXT,
+        created_at TEXT NOT NULL,
+        started_at TEXT,
+        completed_at TEXT,
+        error TEXT,
+        work_dir TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
+    CREATE INDEX IF NOT EXISTS idx_tasks_agent_id ON tasks(agent_id);
     """
 
     def __init__(self, db_path: str | Path | None = None):
@@ -573,6 +620,7 @@ class SQLiteDatabase(BaseDatabase):
         self._marketplaces = SQLiteTable[dict]("marketplaces", self.db_path)
         self._plugins = SQLitePluginsTable[dict]("plugins", self.db_path)
         self._permission_requests = SQLiteTable[dict]("permission_requests", self.db_path)
+        self._tasks = SQLiteTasksTable[dict]("tasks", self.db_path)
 
     async def initialize(self) -> None:
         """Initialize database schema."""
@@ -691,6 +739,11 @@ class SQLiteDatabase(BaseDatabase):
     def permission_requests(self) -> SQLiteTable:
         """Get the permission requests table."""
         return self._permission_requests
+
+    @property
+    def tasks(self) -> SQLiteTasksTable:
+        """Get the tasks table."""
+        return self._tasks
 
     async def health_check(self) -> bool:
         """Check if the database is healthy."""
