@@ -340,6 +340,29 @@ class SQLiteTasksTable(SQLiteTable[T], Generic[T]):
                 row = await cursor.fetchone()
                 return row[0] if row else 0
 
+    async def delete_by_agent_id(self, agent_id: str) -> int:
+        """Delete all tasks for a given agent (cascade delete).
+
+        Returns the number of tasks deleted.
+        """
+        async with self._get_connection() as conn:
+            async with conn.execute(
+                "DELETE FROM tasks WHERE agent_id = ?", (agent_id,)
+            ) as cursor:
+                await conn.commit()
+                return cursor.rowcount
+
+    async def list_by_agent_id(self, agent_id: str) -> list[T]:
+        """List all tasks for a given agent."""
+        async with self._get_connection() as conn:
+            conn.row_factory = aiosqlite.Row
+            async with conn.execute(
+                "SELECT * FROM tasks WHERE agent_id = ? ORDER BY created_at DESC",
+                (agent_id,)
+            ) as cursor:
+                rows = await cursor.fetchall()
+                return [self._row_to_dict(row) for row in rows]
+
 
 class SQLiteDatabase(BaseDatabase):
     """SQLite database client implementing BaseDatabase interface."""
@@ -575,6 +598,7 @@ class SQLiteDatabase(BaseDatabase):
         title TEXT NOT NULL,
         model TEXT,
         created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
         started_at TEXT,
         completed_at TEXT,
         error TEXT,
@@ -684,6 +708,19 @@ class SQLiteDatabase(BaseDatabase):
             await conn.execute("ALTER TABLE app_settings ADD COLUMN default_model TEXT DEFAULT 'claude-sonnet-4-5-20250929'")
             await conn.commit()
             logger.info("Migration complete: default_model column added")
+
+        # Migration: Add updated_at column to tasks table (added 2026-02-03)
+        # Required by base SQLiteTable.put() method
+        cursor = await conn.execute("PRAGMA table_info(tasks)")
+        tasks_columns = await cursor.fetchall()
+        tasks_column_names = [col[1] for col in tasks_columns]
+
+        if "updated_at" not in tasks_column_names:
+            logger.info("Running migration: Adding updated_at column to tasks table")
+            # Set default to current timestamp for existing rows (datetime already imported at module level)
+            await conn.execute(f"ALTER TABLE tasks ADD COLUMN updated_at TEXT DEFAULT '{datetime.now().isoformat()}'")
+            await conn.commit()
+            logger.info("Migration complete: updated_at column added")
 
     @property
     def agents(self) -> SQLiteTable:

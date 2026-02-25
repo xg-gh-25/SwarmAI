@@ -139,7 +139,11 @@
     "noAgentsAvailable": "No agents available.",
     "createAgentFirst": "Create one first",
     "selectAgent": "Select Agent",
-    "chooseAgent": "Choose an agent..."
+    "chooseAgent": "Choose an agent...",
+    "runAsTask": "Background Task",
+    "runAsTaskDescription": "Run in background - task continues even if you navigate away",
+    "taskCreated": "Task created! View in Tasks page.",
+    "taskCreateFailed": "Failed to create task"
   },
   "tasks": {
     "title": "Task Management",
@@ -149,7 +153,8 @@
       "all": "All",
       "running": "Running",
       "completed": "Completed",
-      "failed": "Failed"
+      "failed": "Failed",
+      "cancelled": "Cancelled"
     },
     "columns": {
       "name": "Task Name",

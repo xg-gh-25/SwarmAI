@@ -139,7 +139,11 @@
     "noAgentsAvailable": "暂无可用 Agent。",
     "createAgentFirst": "请先创建一个",
     "selectAgent": "选择 Agent",
-    "chooseAgent": "选择一个 Agent..."
+    "chooseAgent": "选择一个 Agent...",
+    "runAsTask": "后台任务",
+    "runAsTaskDescription": "在后台运行 - 即使离开页面任务也会继续执行",
+    "taskCreated": "任务已创建！前往任务页面查看。",
+    "taskCreateFailed": "创建任务失败"
   },
   "tasks": {
     "title": "任务管理",
@@ -149,7 +153,8 @@
       "all": "全部",
       "running": "运行中",
       "completed": "已完成",
-      "failed": "失败"
+      "failed": "失败",
+      "cancelled": "已取消"
     },
     "columns": {
       "name": "任务名称",

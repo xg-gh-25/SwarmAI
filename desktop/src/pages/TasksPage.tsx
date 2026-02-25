@@ -102,13 +102,15 @@ export default function TasksPage() {
 
   // Handle actions
   const handleViewChat = (task: Task) => {
-    navigate(`/chat?taskId=${task.id}`);
+    navigate(`/chat?taskId=${task.id}&taskMode=true`);
   };
 
   const handleCancel = async () => {
     if (!taskToCancel) return;
     try {
       await tasksService.cancel(taskToCancel.id);
+      // Switch to "all" filter so user can see the cancelled task
+      setStatusFilter('all');
       queryClient.invalidateQueries({ queryKey: ['tasks'] });
       queryClient.invalidateQueries({ queryKey: ['runningTaskCount'] });
       setErrorMessage(null);
@@ -160,7 +162,7 @@ export default function TasksPage() {
           <p className="text-[var(--color-text-muted)] mt-1">{t('tasks.subtitle')}</p>
         </div>
         <button
-          onClick={() => navigate('/chat')}
+          onClick={() => navigate('/chat?taskMode=true')}
           className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary/90 transition-colors"
         >
           <span className="material-symbols-outlined text-xl">add</span>
@@ -191,6 +193,7 @@ export default function TasksPage() {
           <option value="running">{t('tasks.filter.running')}</option>
           <option value="completed">{t('tasks.filter.completed')}</option>
           <option value="failed">{t('tasks.filter.failed')}</option>
+          <option value="cancelled">{t('tasks.filter.cancelled')}</option>
         </select>
       </div>
 
