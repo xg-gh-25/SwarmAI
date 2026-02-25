@@ -1,3 +1,11 @@
+/**
+ * Root application component for SwarmAI desktop app.
+ *
+ * Sets up routing, React Query, theme provider, and backend startup overlay.
+ * Uses a three-column layout (Left Sidebar, Workspace Explorer, Main Chat Panel)
+ * with section-based navigation for the Daily Work Operating Loop.
+ */
+
 import { useEffect, useState } from 'react';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -9,7 +17,6 @@ import TasksPage from './pages/TasksPage';
 import PluginsPage from './pages/PluginsPage';
 import ChannelsPage from './pages/ChannelsPage';
 import SwarmCorePage from './pages/SwarmCorePage';
-import WorkspacesPage from './pages/WorkspacesPage';
 import SignalsPage from './pages/SignalsPage';
 import ExecutePage from './pages/ExecutePage';
 import PlanPage from './pages/PlanPage';
@@ -60,15 +67,9 @@ export default function App() {
                   <ChatPage />
                 </ThreeColumnLayout>
               } />
-              {/* Keep other routes that aren't converted to modals yet */}
               <Route path="/dashboard" element={
                 <ThreeColumnLayout>
                   <SwarmCorePage />
-                </ThreeColumnLayout>
-              } />
-              <Route path="/workspaces" element={
-                <ThreeColumnLayout>
-                  <WorkspacesPage />
                 </ThreeColumnLayout>
               } />
               <Route path="/tasks" element={
@@ -87,7 +88,6 @@ export default function App() {
                 </ThreeColumnLayout>
               } />
               {/* Section pages - Daily Work Operating Loop */}
-              {/* Requirements: 15.1, 15.2 */}
               <Route path="/signals" element={
                 <ThreeColumnLayout>
                   <SignalsPage />
@@ -114,37 +114,6 @@ export default function App() {
                 </ThreeColumnLayout>
               } />
               <Route path="/reflection" element={
-                <ThreeColumnLayout>
-                  <ReflectionPage />
-                </ThreeColumnLayout>
-              } />
-              {/* Workspace-scoped section routes - Requirements: 15.2, 15.3 */}
-              <Route path="/workspaces/:workspaceId/signals" element={
-                <ThreeColumnLayout>
-                  <SignalsPage />
-                </ThreeColumnLayout>
-              } />
-              <Route path="/workspaces/:workspaceId/execute" element={
-                <ThreeColumnLayout>
-                  <ExecutePage />
-                </ThreeColumnLayout>
-              } />
-              <Route path="/workspaces/:workspaceId/plan" element={
-                <ThreeColumnLayout>
-                  <PlanPage />
-                </ThreeColumnLayout>
-              } />
-              <Route path="/workspaces/:workspaceId/communicate" element={
-                <ThreeColumnLayout>
-                  <CommunicatePage />
-                </ThreeColumnLayout>
-              } />
-              <Route path="/workspaces/:workspaceId/artifacts" element={
-                <ThreeColumnLayout>
-                  <ArtifactsPage />
-                </ThreeColumnLayout>
-              } />
-              <Route path="/workspaces/:workspaceId/reflection" element={
                 <ThreeColumnLayout>
                   <ReflectionPage />
                 </ThreeColumnLayout>

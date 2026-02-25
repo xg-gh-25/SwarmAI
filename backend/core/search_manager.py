@@ -160,14 +160,15 @@ class SearchManager:
     # ------------------------------------------------------------------
 
     async def _get_workspace_map(self) -> dict:
-        """Return {workspace_id: {name, is_archived}} for all workspaces."""
-        workspaces = await db.swarm_workspaces.list()
+        """Return {workspace_id: {name, is_archived}} for the singleton workspace."""
+        ws = await db.workspace_config.get_config()
+        if not ws:
+            return {}
         return {
             ws["id"]: {
-                "name": ws.get("name", ""),
-                "is_archived": bool(ws.get("is_archived", 0)),
+                "name": ws.get("name", "SwarmWS"),
+                "is_archived": False,
             }
-            for ws in workspaces
         }
 
     async def _resolve_scope_ids(

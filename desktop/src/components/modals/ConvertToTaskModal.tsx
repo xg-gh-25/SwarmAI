@@ -1,11 +1,20 @@
+/**
+ * ConvertToTaskModal — Converts a ToDo into a Task.
+ *
+ * Simplified for the single-workspace model. The multi-workspace suggestion
+ * list has been replaced with a static SwarmWS indicator. The actual conversion
+ * logic (todosService.convertToTask) is unchanged.
+ *
+ * Exports:
+ * - ``ConvertToTaskModal`` — Modal component (default export)
+ */
+
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useQuery, useMutation } from '@tanstack/react-query';
-import clsx from 'clsx';
+import { useMutation } from '@tanstack/react-query';
 import Modal from '../common/Modal';
 import Button from '../common/Button';
 import { todosService } from '../../services/todos';
-import { swarmWorkspacesService } from '../../services/swarmWorkspaces';
 import type { ToDo } from '../../types/todo';
 
 interface ConvertToTaskModalProps {
@@ -23,13 +32,6 @@ export default function ConvertToTaskModal({
 }: ConvertToTaskModalProps) {
   const { t } = useTranslation();
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-
-  // Fetch workspaces for suggestion
-  const { data: workspaces = [] } = useQuery({
-    queryKey: ['swarmWorkspaces'],
-    queryFn: () => swarmWorkspacesService.list(false),
-    enabled: isOpen,
-  });
 
   const convertMutation = useMutation({
     mutationFn: () => todosService.convertToTask(todo.id),
@@ -64,44 +66,18 @@ export default function ConvertToTaskModal({
           />
         </div>
 
-        {/* Workspace Suggestion */}
+        {/* Singleton workspace indicator */}
         <div>
           <label className="block text-sm font-medium text-[var(--color-text-muted)] mb-1">
             {t('signals.convertToTask.workspace')}
           </label>
-          <div className="space-y-2">
-            {workspaces.map((ws) => {
-              const isSuggested = ws.id === todo.workspaceId;
-              const isArchived = ws.isArchived;
-              return (
-                <div
-                  key={ws.id}
-                  className={clsx(
-                    'flex items-center gap-3 p-3 rounded-lg border',
-                    isArchived
-                      ? 'border-[var(--color-border)] opacity-50 cursor-not-allowed'
-                      : isSuggested
-                        ? 'border-primary bg-primary/5'
-                        : 'border-[var(--color-border)]'
-                  )}
-                >
-                  <span className="text-lg">{ws.isDefault ? '🏠' : '📁'}</span>
-                  <div className="flex-1">
-                    <span className="text-[var(--color-text)] font-medium">{ws.name}</span>
-                    {isSuggested && (
-                      <span className="ml-2 px-2 py-0.5 text-xs bg-primary/20 text-primary rounded-full">
-                        {t('signals.convertToTask.suggested')}
-                      </span>
-                    )}
-                    {isArchived && (
-                      <p className="text-xs text-[var(--color-text-muted)] mt-1">
-                        {t('signals.convertToTask.archivedMessage')}
-                      </p>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
+          <div
+            className="flex items-center gap-3 p-3 rounded-lg border border-primary bg-primary/5"
+          >
+            <span className="text-lg">🏠</span>
+            <div className="flex-1">
+              <span className="text-[var(--color-text)] font-medium">SwarmWS</span>
+            </div>
           </div>
         </div>
 

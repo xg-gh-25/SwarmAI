@@ -377,7 +377,7 @@ class TestAllComponentsReady:
         # Create mock db with proper async methods
         mock_db = MagicMock()
         mock_db.health_check = mock_health_check
-        mock_db.swarm_workspaces.get_default = mock_get_default_workspace
+        mock_db.workspace_config.get_config = mock_get_default_workspace
 
         with patch("routers.system.db", mock_db), \
              patch("routers.system.get_default_agent", mock_get_default_agent), \

@@ -909,7 +909,7 @@ Each SwarmWorkspace maintains two context files:
 │                      │                  │
 │              ┌───────▼────────┐         │
 │              │ Within budget? │         │
-│              │ (4000 tokens)  │         │
+│              │ (10K tokens)   │         │
 │              └───┬────────┬───┘         │
 │                  │        │             │
 │              Yes ▼     No ▼             │

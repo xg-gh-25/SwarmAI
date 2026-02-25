@@ -81,9 +81,9 @@ class TaskManager:
 
         Validates: Requirements 1.3, 1.4
         """
-        default_workspace = await db.swarm_workspaces.get_default()
+        default_workspace = await db.workspace_config.get_config()
         if not default_workspace:
-            raise ValueError("Default workspace (SwarmWS) not found. Please initialize the application first.")
+            raise ValueError("SwarmWS workspace config not found. Please initialize the application first.")
         return default_workspace["id"]
 
     async def create_task(
@@ -126,13 +126,7 @@ class TaskManager:
             workspace_id = await self._get_default_workspace_id()
             logger.debug(f"Defaulting task workspace_id to SwarmWS: {workspace_id}")
 
-        # Enforce archived workspace read-only (Requirement 36.6, 36.8)
-        ws = await db.swarm_workspaces.get(workspace_id)
-        if ws and ws.get("is_archived"):
-            raise PermissionError(
-                f"Cannot create tasks in archived workspace '{workspace_id}'. "
-                "Archived workspaces are read-only."
-            )
+        # In single-workspace model, SwarmWS is never archived
 
         # Generate title from message
         if content:

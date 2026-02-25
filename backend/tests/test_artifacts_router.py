@@ -16,30 +16,18 @@ from fastapi.testclient import TestClient
 
 @pytest.fixture
 def workspace_id(client: TestClient) -> str:
-    """Create a workspace and return its ID for artifact tests."""
-    import tempfile
-    temp_path = tempfile.mkdtemp()
-    resp = client.post("/api/swarm-workspaces", json={
-        "name": "ArtifactTestWS",
-        "file_path": temp_path,
-        "context": "Workspace for artifact router tests",
-    })
-    assert resp.status_code == 201
-    return resp.json()["id"]
+    """Return the singleton workspace ID after seeding workspace_config."""
+    import asyncio, tempfile
+    from tests.helpers import ensure_default_workspace
+    return asyncio.get_event_loop().run_until_complete(ensure_default_workspace())
 
 
 @pytest.fixture
 def second_workspace_id(client: TestClient) -> str:
-    """Create a second workspace for filtering tests."""
-    import tempfile
-    temp_path = tempfile.mkdtemp()
-    resp = client.post("/api/swarm-workspaces", json={
-        "name": "ArtifactTestWS2",
-        "file_path": temp_path,
-        "context": "Second workspace for artifact filtering tests",
-    })
-    assert resp.status_code == 201
-    return resp.json()["id"]
+    """Return the singleton workspace ID (same as workspace_id in single-workspace model)."""
+    import asyncio
+    from tests.helpers import ensure_default_workspace
+    return asyncio.get_event_loop().run_until_complete(ensure_default_workspace())
 
 
 def _create_artifact(client: TestClient, workspace_id: str, **overrides) -> dict:
@@ -291,9 +279,11 @@ class TestListArtifacts:
         resp = client.get(f"/api/workspaces/{workspace_id}/artifacts")
         assert resp.status_code == 200
         data = resp.json()
+        # In singleton model, both workspace_id and second_workspace_id
+        # resolve to the same ID, so all artifacts are visible.
         assert all(item["workspace_id"] == workspace_id for item in data)
         assert any(item["title"] == "WS1 artifact" for item in data)
-        assert not any(item["title"] == "WS2 artifact" for item in data)
+        assert any(item["title"] == "WS2 artifact" for item in data)
 
     def test_list_filter_by_artifact_type(self, client: TestClient, workspace_id: str):
         _create_artifact(client, workspace_id, title="A plan", artifact_type="plan")

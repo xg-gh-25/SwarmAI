@@ -62,14 +62,7 @@ vi.mock('../modals/SettingsModal', () => ({
     isOpen ? <div data-testid="settings-modal"><button onClick={onClose}>Close</button></div> : null,
 }));
 
-// Mock the swarmWorkspacesService to avoid actual API calls
-vi.mock('../../services/swarmWorkspaces', () => ({
-  swarmWorkspacesService: {
-    list: vi.fn().mockResolvedValue([
-      { id: '1', name: 'Test Workspace', filePath: '/test', context: '', isDefault: false, createdAt: '', updatedAt: '' },
-    ]),
-  },
-}));
+// swarmWorkspacesService removed — singleton workspace model (task 12.9)
 
 // Mock services used by modal pages to avoid API calls
 vi.mock('../../services/skills', () => ({

@@ -213,27 +213,22 @@ class TestCommunicationList:
 
     @pytest.mark.asyncio
     async def test_list_isolates_workspaces(self):
-        ws1 = await create_workspace("WS1")
-        ws2 = await create_workspace("WS2")
+        """In single-workspace model, all communications belong to the same workspace."""
+        ws = await create_workspace("WS1")
 
         await communication_manager.create(CommunicationCreate(
-            workspace_id=ws1["id"],
+            workspace_id=ws["id"],
             title="WS1 comm",
             recipient="a@example.com",
         ))
         await communication_manager.create(CommunicationCreate(
-            workspace_id=ws2["id"],
+            workspace_id=ws["id"],
             title="WS2 comm",
             recipient="b@example.com",
         ))
 
-        ws1_results = await communication_manager.list(workspace_id=ws1["id"])
-        ws2_results = await communication_manager.list(workspace_id=ws2["id"])
-
-        assert len(ws1_results) == 1
-        assert ws1_results[0].title == "WS1 comm"
-        assert len(ws2_results) == 1
-        assert ws2_results[0].title == "WS2 comm"
+        results = await communication_manager.list(workspace_id=ws["id"])
+        assert len(results) == 2
 
 
 # ---------------------------------------------------------------------------

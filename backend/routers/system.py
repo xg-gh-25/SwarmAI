@@ -121,15 +121,15 @@ async def get_system_status() -> SystemStatusResponse:
     workspace_path: Optional[str] = None
     
     try:
-        default_workspace = await db.swarm_workspaces.get_default()
-        if default_workspace:
+        workspace_config = await db.workspace_config.get_config()
+        if workspace_config:
             workspace_ready = True
-            workspace_name = default_workspace.get("name")
+            workspace_name = workspace_config.get("name")
             # Expand {app_data_dir} placeholder to actual path
-            raw_path = default_workspace.get("file_path")
+            raw_path = workspace_config.get("file_path")
             workspace_path = swarm_workspace_manager.expand_path(raw_path) if raw_path else None
     except Exception as e:
-        logger.error(f"Failed to get default Swarm Workspace: {e}")
+        logger.error(f"Failed to get workspace config: {e}")
     
     swarm_workspace_status = SwarmWorkspaceStatus(
         ready=workspace_ready,

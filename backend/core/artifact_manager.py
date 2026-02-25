@@ -80,10 +80,10 @@ class ArtifactManager:
 
     async def _get_default_workspace_id(self) -> str:
         """Get the default workspace (SwarmWS) ID."""
-        default_workspace = await db.swarm_workspaces.get_default()
-        if not default_workspace:
-            raise ValueError("Default workspace (SwarmWS) not found.")
-        return default_workspace["id"]
+        workspace = await db.workspace_config.get_config()
+        if not workspace:
+            raise ValueError("SwarmWS workspace config not found.")
+        return workspace["id"]
 
     def _get_type_folder(self, artifact_type: ArtifactType) -> str:
         """Get the subfolder name for an artifact type."""
@@ -95,11 +95,11 @@ class ArtifactManager:
         Returns the expanded absolute path: {workspace_file_path}/Artifacts/{type_folder}/
 
         Raises:
-            ValueError: If workspace not found.
+            ValueError: If workspace config not found.
         """
-        workspace = await db.swarm_workspaces.get(workspace_id)
+        workspace = await db.workspace_config.get_config()
         if not workspace:
-            raise ValueError(f"Workspace {workspace_id} not found")
+            raise ValueError(f"Workspace config not found")
 
         expanded = self.workspace_manager.expand_path(workspace["file_path"])
         type_folder = self._get_type_folder(artifact_type)
@@ -270,7 +270,7 @@ class ArtifactManager:
         if not result:
             return None
 
-        workspace = await db.swarm_workspaces.get(result["workspace_id"])
+        workspace = await db.workspace_config.get_config()
         if not workspace:
             return None
 
@@ -415,7 +415,7 @@ class ArtifactManager:
 
         # Optionally delete the file
         if delete_file:
-            workspace = await db.swarm_workspaces.get(existing["workspace_id"])
+            workspace = await db.workspace_config.get_config()
             if workspace:
                 expanded = self.workspace_manager.expand_path(workspace["file_path"])
                 file_path = Path(expanded) / existing["file_path"]

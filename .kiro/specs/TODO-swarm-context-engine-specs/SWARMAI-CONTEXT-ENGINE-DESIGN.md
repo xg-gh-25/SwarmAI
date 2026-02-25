@@ -179,7 +179,7 @@ This enforces:
 > Project intent dominates, shared knowledge informs, global memory guides.
 
 ## 9.2 Budgets
-- Default injection budget: **4000 tokens**
+- Default injection budget: **10K tokens**
 - Prefer L0 summaries first
 - Expand to L1 only when needed
 

@@ -61,23 +61,19 @@ class SectionManager:
     async def _get_workspace_ids(self, workspace_id: str) -> list[str]:
         """Resolve workspace_id to a list of workspace IDs to query.
 
-        When workspace_id is "all", returns IDs of all non-archived workspaces.
-        Otherwise returns a single-element list with the given workspace_id.
-
-        Requirement 7.8: WHEN workspace_id is "all", aggregate across all
-        non-archived workspaces.
+        In the single-workspace model, always returns ['swarmws'].
+        The "all" parameter is kept for backward compatibility.
         """
         if workspace_id == "all":
-            all_ws = await db.swarm_workspaces.list()
-            return [
-                ws["id"]
-                for ws in all_ws
-                if not ws.get("is_archived", False)
-            ]
-        # Validate workspace exists for non-"all" queries
-        ws = await db.swarm_workspaces.get(workspace_id)
+            # Single workspace model — always return the singleton
+            ws = await db.workspace_config.get_config()
+            if ws:
+                return [ws["id"]]
+            return []
+        # Validate workspace config exists
+        ws = await db.workspace_config.get_config()
         if not ws:
-            logger.warning(f"Workspace {workspace_id} not found in section query")
+            logger.warning(f"Workspace config not found in section query")
             return []
         return [workspace_id]
 

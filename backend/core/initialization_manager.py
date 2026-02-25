@@ -58,14 +58,16 @@ async def retry_with_backoff(
             last_exception = e
             if attempt < max_retries:
                 logger.warning(
-                    f"{operation_name} failed (attempt {attempt + 1}/{max_retries + 1}), "
-                    f"retrying in {delay_ms}ms: {e}"
+                    "%s failed (attempt %d/%d), "
+                    "retrying in %dms: %s",
+                    operation_name, attempt + 1, max_retries + 1, delay_ms, e
                 )
                 await asyncio.sleep(delay_ms / 1000.0)
                 delay_ms *= 2  # Exponential backoff
             else:
                 logger.error(
-                    f"{operation_name} failed after {max_retries + 1} attempts: {e}"
+                    "%s failed after %d attempts: %s",
+                    operation_name, max_retries + 1, e
                 )
     
     raise last_exception
@@ -120,7 +122,7 @@ class InitializationManager:
                 "Check initialization status"
             )
         except Exception as e:
-            logger.error(f"Failed to check initialization status after retries: {e}")
+            logger.error("Failed to check initialization status after retries: %s", e)
             return False
     
     async def set_initialization_complete(self, complete: bool) -> None:
@@ -155,9 +157,9 @@ class InitializationManager:
                 _set,
                 "Set initialization status"
             )
-            logger.info(f"Set initialization_complete to {complete}")
+            logger.info("Set initialization_complete to %s", complete)
         except Exception as e:
-            logger.error(f"Failed to set initialization status after retries: {e}")
+            logger.error("Failed to set initialization status after retries: %s", e)
             raise
 
     async def run_quick_validation(self) -> bool:
@@ -182,10 +184,10 @@ class InitializationManager:
                 logger.warning("Quick validation failed: default agent not found")
                 return False
             
-            # Check if default workspace exists
-            workspace = await db.swarm_workspaces.get_default()
+            # Check if default workspace config exists
+            workspace = await db.workspace_config.get_config()
             if workspace is None:
-                logger.warning("Quick validation failed: default workspace not found")
+                logger.warning("Quick validation failed: workspace config not found")
                 return False
             
             return True
@@ -200,7 +202,7 @@ class InitializationManager:
             return result
             
         except Exception as e:
-            logger.error(f"Quick validation failed with error after retries: {e}")
+            logger.error("Quick validation failed with error after retries: %s", e)
             return False
 
     def get_cached_workspace_path(self) -> str:
@@ -261,7 +263,7 @@ class InitializationManager:
                 await ensure_default_agent()
                 logger.info("Default agent ensured during full initialization")
             except Exception as e:
-                logger.error(f"Failed to ensure default agent: {e}")
+                logger.error("Failed to ensure default agent: %s", e)
                 # Do NOT set initialization_complete - this is a critical failure
                 return False
             
@@ -271,7 +273,7 @@ class InitializationManager:
                 workspace = await swarm_workspace_manager.ensure_default_workspace(db)
                 logger.info("Default workspace ensured during full initialization")
             except Exception as e:
-                logger.error(f"Failed to ensure default workspace: {e}")
+                logger.error("Failed to ensure default workspace: %s", e)
                 # Do NOT set initialization_complete - this is a critical failure
                 return False
             
@@ -283,7 +285,7 @@ class InitializationManager:
                 await agent_sandbox_manager.setup_workspace_skills(Path(workspace_path))
                 logger.info("Workspace skills set up during full initialization")
             except Exception as e:
-                logger.error(f"Failed to setup workspace skills: {e}")
+                logger.error("Failed to setup workspace skills: %s", e)
                 # Non-critical - continue initialization
             
             # Ensure templates in workspace
@@ -291,7 +293,7 @@ class InitializationManager:
                 agent_sandbox_manager.ensure_templates_in_directory(Path(workspace_path))
                 logger.info("Templates ensured in workspace during full initialization")
             except Exception as e:
-                logger.error(f"Failed to ensure templates: {e}")
+                logger.error("Failed to ensure templates: %s", e)
                 # Non-critical - continue initialization
             
             # Cache the expanded path for per-session use
@@ -303,7 +305,7 @@ class InitializationManager:
             return True
             
         except Exception as e:
-            logger.error(f"Full initialization failed: {e}")
+            logger.error("Full initialization failed: %s", e)
             # Do NOT set initialization_complete
             return False
 

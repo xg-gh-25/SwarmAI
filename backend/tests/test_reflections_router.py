@@ -16,30 +16,18 @@ from fastapi.testclient import TestClient
 
 @pytest.fixture
 def workspace_id(client: TestClient) -> str:
-    """Create a workspace and return its ID for reflection tests."""
-    import tempfile
-    temp_path = tempfile.mkdtemp()
-    resp = client.post("/api/swarm-workspaces", json={
-        "name": "ReflectionTestWS",
-        "file_path": temp_path,
-        "context": "Workspace for reflection router tests",
-    })
-    assert resp.status_code == 201
-    return resp.json()["id"]
+    """Return the singleton workspace ID after seeding workspace_config."""
+    import asyncio
+    from tests.helpers import ensure_default_workspace
+    return asyncio.get_event_loop().run_until_complete(ensure_default_workspace())
 
 
 @pytest.fixture
 def second_workspace_id(client: TestClient) -> str:
-    """Create a second workspace for filtering tests."""
-    import tempfile
-    temp_path = tempfile.mkdtemp()
-    resp = client.post("/api/swarm-workspaces", json={
-        "name": "ReflectionTestWS2",
-        "file_path": temp_path,
-        "context": "Second workspace for reflection filtering tests",
-    })
-    assert resp.status_code == 201
-    return resp.json()["id"]
+    """Return the singleton workspace ID (same as workspace_id in single-workspace model)."""
+    import asyncio
+    from tests.helpers import ensure_default_workspace
+    return asyncio.get_event_loop().run_until_complete(ensure_default_workspace())
 
 
 def _create_reflection(client: TestClient, workspace_id: str, **overrides) -> dict:
@@ -281,9 +269,11 @@ class TestListReflections:
         resp = client.get(f"/api/workspaces/{workspace_id}/reflections")
         assert resp.status_code == 200
         data = resp.json()
+        # In singleton model, both IDs resolve to the same workspace,
+        # so all reflections are visible.
         assert all(item["workspace_id"] == workspace_id for item in data)
         assert any(item["title"] == "WS1 reflection" for item in data)
-        assert not any(item["title"] == "WS2 reflection" for item in data)
+        assert any(item["title"] == "WS2 reflection" for item in data)
 
     def test_list_filter_by_reflection_type(self, client: TestClient, workspace_id: str):
         _create_reflection(

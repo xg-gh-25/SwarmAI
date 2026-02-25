@@ -10,7 +10,6 @@ from .plugins import router as plugins_router
 from .tasks import router as tasks_router
 from .channels import router as channels_router
 from .system import router as system_router
-from .swarm_workspaces import router as swarm_workspaces_router
 from .todos import router as todos_router
 from .sections import router as sections_router
 from .plan_items import router as plan_items_router
@@ -19,6 +18,8 @@ from .artifacts import router as artifacts_router
 from .reflections import router as reflections_router
 from .search import router as search_router
 from .workspace_config import router as workspace_config_router
+from .workspace_api import router as workspace_api_router
+from .projects import router as projects_router
 
 __all__ = [
     "agents_router",
@@ -32,7 +33,6 @@ __all__ = [
     "tasks_router",
     "channels_router",
     "system_router",
-    "swarm_workspaces_router",
     "todos_router",
     "sections_router",
     "plan_items_router",
@@ -41,4 +41,6 @@ __all__ = [
     "reflections_router",
     "search_router",
     "workspace_config_router",
+    "workspace_api_router",
+    "projects_router",
 ]

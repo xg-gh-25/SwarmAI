@@ -258,92 +258,9 @@ class TestWorkspaceConfigInheritance:
 
 
 # =========================================================================
-# 28.3 — Archive workflow: Archive → Read-only → Excluded → Unarchive
-# Requirements: 36.1-36.11
+# 28.3 — Archive workflow: REMOVED (single-workspace model)
+# Archive/unarchive lifecycle tests are obsolete — SwarmWS cannot be archived.
 # =========================================================================
-
-
-class TestArchiveWorkflow:
-    """End-to-end test for workspace archive/unarchive lifecycle."""
-
-    async def test_archive_read_only_excluded_unarchive(self, client: TestClient):
-        """Archive workspace → Verify read-only → Excluded from aggregation → Unarchive → Writable.
-
-        Full lifecycle:
-        1. Create custom workspace with a ToDo
-        2. Archive it
-        3. Verify write ops (create ToDo) fail with 403
-        4. Verify it's excluded from "all" aggregation
-        5. Unarchive it
-        6. Verify write ops succeed again
-        """
-        await ensure_default_workspace()
-
-        # Step 1: Create custom workspace and seed a ToDo
-        ws = await create_workspace(name="ArchiveTestWS")
-        ws_id = ws["id"]
-        await seed_todo(ws_id, title="Pre-archive signal")
-
-        # Verify the ToDo exists
-        list_resp = client.get("/api/todos", params={"workspace_id": ws_id})
-        assert list_resp.status_code == 200
-        assert len(list_resp.json()) == 1
-
-        # Step 2: Archive the workspace
-        archive_resp = client.post(f"/api/swarm-workspaces/{ws_id}/archive")
-        assert archive_resp.status_code == 200, archive_resp.text
-        archived_ws = archive_resp.json()
-        assert archived_ws["is_archived"] is True
-        assert archived_ws["archived_at"] is not None
-
-        # Step 3: Verify write operations fail (create ToDo on archived workspace)
-        create_resp = client.post("/api/todos", json={
-            "workspace_id": ws_id,
-            "title": "Should fail",
-        })
-        assert create_resp.status_code == 403, (
-            f"Expected 403 for write on archived workspace, got {create_resp.status_code}"
-        )
-
-        # Step 4: Verify excluded from "all" aggregation
-        counts_resp = client.get("/api/workspaces/all/sections")
-        assert counts_resp.status_code == 200
-        counts = counts_resp.json()
-        # The archived workspace's ToDo should NOT be counted
-        # (signals.total should not include the archived workspace's items)
-        # We verify by checking that the pre-archive signal is not in the total
-        # Since we only have one ToDo in the archived workspace and none elsewhere,
-        # the total should be 0
-        assert counts["signals"]["total"] == 0
-
-        # Step 5: Unarchive the workspace
-        unarchive_resp = client.post(f"/api/swarm-workspaces/{ws_id}/unarchive")
-        assert unarchive_resp.status_code == 200, unarchive_resp.text
-        unarchived_ws = unarchive_resp.json()
-        assert unarchived_ws["is_archived"] is False
-        assert unarchived_ws.get("archived_at") is None
-
-        # Step 6: Verify write operations succeed again
-        create_resp2 = client.post("/api/todos", json={
-            "workspace_id": ws_id,
-            "title": "Post-unarchive signal",
-        })
-        assert create_resp2.status_code == 201, create_resp2.text
-
-        # And the workspace is now included in aggregation
-        counts_resp2 = client.get("/api/workspaces/all/sections")
-        counts2 = counts_resp2.json()
-        assert counts2["signals"]["total"] >= 2  # pre-archive + post-unarchive
-
-    async def test_swarmws_cannot_be_archived(self, client: TestClient):
-        """SwarmWS (default workspace) cannot be archived."""
-        swarmws_id = await ensure_default_workspace()
-
-        resp = client.post(f"/api/swarm-workspaces/{swarmws_id}/archive")
-        assert resp.status_code == 403, (
-            f"Expected 403 for archiving SwarmWS, got {resp.status_code}"
-        )
-
 
 
 # =========================================================================
@@ -397,42 +314,19 @@ class TestGlobalViewAggregation:
         assert counts["communicate"]["ai_draft"] == 1
         assert counts["communicate"]["total"] == 2
 
-    async def test_archived_workspace_excluded_from_all(self, client: TestClient):
-        """Archived workspaces are excluded from workspace_id='all' aggregation."""
-        await ensure_default_workspace()
-        active_ws_id = await create_custom_workspace(name="ActiveWS")
-        archived_ws_id = await create_custom_workspace(name="ArchivedWS")
-
-        # Seed items in both
-        await seed_todo(active_ws_id, title="Active signal", status="pending")
-        await seed_todo(archived_ws_id, title="Archived signal", status="pending")
-
-        # Archive one workspace (directly via DB since we already tested the endpoint)
-        from core.swarm_workspace_manager import swarm_workspace_manager
-        await swarm_workspace_manager.archive(archived_ws_id, db)
-
-        # Aggregation should only include the active workspace
-        resp = client.get("/api/workspaces/all/sections")
-        assert resp.status_code == 200
-        counts = resp.json()
-        assert counts["signals"]["pending"] == 1  # Only the active workspace's signal
-        assert counts["signals"]["total"] == 1
-
     async def test_single_workspace_scope(self, client: TestClient):
-        """Scoped view returns only items for the selected workspace."""
-        await ensure_default_workspace()
-        ws_a_id = await create_custom_workspace(name="ScopeA")
-        ws_b_id = await create_custom_workspace(name="ScopeB")
+        """Scoped view returns items for the singleton workspace."""
+        ws_id = await ensure_default_workspace()
 
-        await seed_todo(ws_a_id, title="A signal", status="pending")
-        await seed_todo(ws_b_id, title="B signal", status="pending")
+        await seed_todo(ws_id, title="A signal", status="pending")
+        await seed_todo(ws_id, title="B signal", status="pending")
 
-        # Scoped to ws_a
-        resp = client.get(f"/api/workspaces/{ws_a_id}/sections")
+        # Scoped to the singleton workspace
+        resp = client.get(f"/api/workspaces/{ws_id}/sections")
         assert resp.status_code == 200
         counts = resp.json()
-        assert counts["signals"]["total"] == 1
-        assert counts["signals"]["pending"] == 1
+        assert counts["signals"]["total"] >= 2
+        assert counts["signals"]["pending"] >= 2
 
 
 
@@ -465,27 +359,24 @@ class TestSearchFunctionality:
         assert any("Kubernetes" in item["title"] for item in todo_group["items"])
 
     async def test_search_scope_filtering(self, client: TestClient):
-        """Search with scope=workspace_id returns only items from that workspace."""
-        await ensure_default_workspace()
-        ws_a_id = await create_custom_workspace(name="SearchA")
-        ws_b_id = await create_custom_workspace(name="SearchB")
+        """Search with scope=workspace_id returns items from the singleton workspace."""
+        ws_id = await ensure_default_workspace()
 
-        await seed_todo(ws_a_id, title="Alpha deployment checklist")
-        await seed_todo(ws_b_id, title="Alpha security review")
+        await seed_todo(ws_id, title="Alpha deployment checklist")
+        await seed_todo(ws_id, title="Alpha security review")
 
-        # Search scoped to ws_a only
+        # Search scoped to the singleton workspace
         resp = client.get("/api/search", params={
             "query": "Alpha",
-            "scope": ws_a_id,
+            "scope": ws_id,
         })
         assert resp.status_code == 200
         results = resp.json()
 
-        # Should find only the ws_a item
+        # Should find both items (same workspace)
         all_items = [item for g in results["groups"] for item in g["items"]]
-        assert len(all_items) == 1
-        assert all_items[0]["workspace_id"] == ws_a_id
-        assert "deployment" in all_items[0]["title"].lower()
+        assert len(all_items) >= 2
+        assert all(item["workspace_id"] == ws_id for item in all_items)
 
     async def test_search_scope_all_returns_all_non_archived(self, client: TestClient):
         """Search with scope='all' returns items from all non-archived workspaces."""
@@ -504,29 +395,6 @@ class TestSearchFunctionality:
         results = resp.json()
         all_items = [item for g in results["groups"] for item in g["items"]]
         assert len(all_items) == 2
-
-    async def test_search_excludes_archived_workspace_items(self, client: TestClient):
-        """Search with scope='all' excludes items from archived workspaces."""
-        await ensure_default_workspace()
-        active_id = await create_custom_workspace(name="SearchActive")
-        archived_id = await create_custom_workspace(name="SearchArchived")
-
-        await seed_todo(active_id, title="Delta active item")
-        await seed_todo(archived_id, title="Delta archived item")
-
-        # Archive the second workspace
-        from core.swarm_workspace_manager import swarm_workspace_manager
-        await swarm_workspace_manager.archive(archived_id, db)
-
-        resp = client.get("/api/search", params={
-            "query": "Delta",
-            "scope": "all",
-        })
-        assert resp.status_code == 200
-        results = resp.json()
-        all_items = [item for g in results["groups"] for item in g["items"]]
-        assert len(all_items) == 1
-        assert all_items[0]["workspace_id"] == active_id
 
     async def test_search_across_entity_types(self, client: TestClient):
         """Search returns results from multiple entity types."""

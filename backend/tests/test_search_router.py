@@ -24,15 +24,10 @@ def _now_iso() -> str:
 
 
 def _create_workspace(client: TestClient, name: str = "SearchTestWS") -> str:
-    """Create a workspace via API and return its ID."""
-    tmp = tempfile.mkdtemp()
-    resp = client.post("/api/swarm-workspaces", json={
-        "name": name,
-        "file_path": tmp,
-        "context": f"Workspace for {name}",
-    })
-    assert resp.status_code == 201
-    return resp.json()["id"]
+    """Ensure the singleton workspace config exists and return its ID."""
+    import asyncio
+    from tests.helpers import ensure_default_workspace
+    return asyncio.get_event_loop().run_until_complete(ensure_default_workspace())
 
 
 async def _seed_todo(workspace_id: str, title: str, **kw) -> str:

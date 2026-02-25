@@ -242,25 +242,26 @@ class TestNeutralAllScopeNoRecommended:
 class TestArchivedExcludedFromGlobalView:
     """Property 27: Archived workspaces excluded from Global View aggregation.
 
+    In the single-workspace model, there is no archiving concept.
+    This test verifies that items from the singleton workspace appear
+    in Global View aggregation.
+
     **Validates: Requirements 37.1-37.12**
     """
 
     @given(title=title_strategy)
     @PROPERTY_SETTINGS
     @pytest.mark.asyncio
-    async def test_archived_workspaces_excluded_from_global_view(
+    async def test_singleton_workspace_items_appear_in_global_view(
         self,
         title: str,
     ):
-        """Items from archived workspaces do not appear in Global View.
+        """Items from the singleton workspace appear in Global View.
 
         **Validates: Requirements 37.1-37.12**
         """
-        active_ws = await create_custom_workspace(name="GV-Active")
-        archived_ws = await create_custom_workspace(name="GV-Archived", is_archived=True)
-
-        active_id = await seed_todo(active_ws, f"Active-{title}")
-        archived_id = await seed_todo(archived_ws, f"Archived-{title}")
+        ws_id = await create_custom_workspace(name="GV-Active")
+        todo_id = await seed_todo(ws_id, f"Active-{title}")
 
         manager = SectionManager()
         result = await manager.get_signals(
@@ -273,11 +274,8 @@ class TestArchivedExcludedFromGlobalView:
             for item in group.items
         }
 
-        assert active_id in all_ids, (
-            "ToDo from active workspace must appear in Global View"
-        )
-        assert archived_id not in all_ids, (
-            "ToDo from archived workspace must NOT appear in Global View"
+        assert todo_id in all_ids, (
+            "ToDo from singleton workspace must appear in Global View"
         )
 
 

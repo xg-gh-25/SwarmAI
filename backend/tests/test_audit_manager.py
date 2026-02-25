@@ -216,9 +216,7 @@ class TestGetAuditLog:
 
     @pytest.mark.asyncio
     async def test_returns_entries_for_workspace(self, manager, workspace):
-        """Returns only entries belonging to the requested workspace."""
-        other_ws = await create_workspace("OtherWS")
-
+        """Returns entries belonging to the singleton workspace."""
         await manager.log_change(
             workspace_id=workspace["id"],
             change_type=ChangeType.ENABLED,
@@ -226,15 +224,14 @@ class TestGetAuditLog:
             entity_id="skill-a",
         )
         await manager.log_change(
-            workspace_id=other_ws["id"],
+            workspace_id=workspace["id"],
             change_type=ChangeType.DISABLED,
             entity_type=EntityType.MCP,
             entity_id="mcp-b",
         )
 
         result = await manager.get_audit_log(workspace["id"])
-        assert result["total"] == 1
-        assert result["entries"][0].entity_id == "skill-a"
+        assert result["total"] == 2
 
     @pytest.mark.asyncio
     async def test_pagination_limit_and_offset(self, manager, workspace):

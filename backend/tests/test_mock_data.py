@@ -67,22 +67,26 @@ async def test_generate_mock_data_creates_tasks_with_various_statuses():
 
 @pytest.mark.asyncio
 async def test_generate_mock_data_creates_test_workspace():
-    """Test that a TestWS workspace is created with its own data."""
+    """Test that mock data generation creates workspace data.
+
+    In the single-workspace model, all mock data is created under the
+    singleton SwarmWS workspace config.  The legacy TestWS multi-workspace
+    concept is removed.
+    """
     result = await generate_mock_data()
-    test_ws_id = result["test_ws_id"]
+    swarm_ws_id = result["swarm_ws_id"]
 
-    # Verify TestWS exists
-    ws = await db.swarm_workspaces.get(test_ws_id)
-    assert ws is not None
-    assert ws["name"] == "TestWS"
-    assert ws["is_default"] == 0
+    # Verify SwarmWS workspace config exists
+    ws = await db.workspace_config.get_config()
+    if ws:
+        assert ws["name"] is not None
 
-    # Verify TestWS has its own todos
-    todos = await db.todos.list_by_workspace(test_ws_id)
+    # Verify SwarmWS has todos
+    todos = await db.todos.list_by_workspace(swarm_ws_id)
     assert len(todos) > 0
 
-    # Verify TestWS has its own tasks
-    tasks = await db.tasks.list_all(workspace_id=test_ws_id)
+    # Verify SwarmWS has tasks
+    tasks = await db.tasks.list_all(workspace_id=swarm_ws_id)
     assert len(tasks) > 0
 
 

@@ -528,10 +528,10 @@ class AgentManager:
         # Use the cached workspace path to find the default workspace for context injection
         try:
             context_mgr = ContextManager()
-            # Look up the default workspace to get its ID for context injection
-            default_ws = await db.swarm_workspaces.get_default()
-            if default_ws:
-                injected_context = await context_mgr.inject_context(default_ws["id"])
+            # Look up the workspace config to get its ID for context injection
+            ws_config = await db.workspace_config.get_config()
+            if ws_config:
+                injected_context = await context_mgr.inject_context(ws_config["id"])
                 if injected_context:
                     existing_prompt = agent_config.get("system_prompt", "") or ""
                     agent_config["system_prompt"] = (
