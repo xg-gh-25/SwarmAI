@@ -594,9 +594,10 @@ class PluginManager:
                                 skill_paths.append(rel_path)
                         logger.info(f"Auto-detected {len(skill_paths)} skills: {skill_paths}")
 
-                        # Update marketplace_base to point to the cloned source for skill installation
-                        if isinstance(source_info, dict):
-                            marketplace_base = plugin_source_dir
+                        # Update marketplace_base to point to the source directory for skill installation
+                        # This applies to both git URL sources (dict) and local path sources (string)
+                        marketplace_base = plugin_source_dir
+                        logger.info(f"Updated marketplace_base to: {marketplace_base}")
                     else:
                         logger.warning(f"Skills directory not found at {skills_dir}")
                 else:
