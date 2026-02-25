@@ -175,7 +175,17 @@
     "empty": "暂无任务。开始对话以创建您的第一个任务。",
     "newTask": "新建任务",
     "confirmCancel": "确定要取消此任务吗？",
-    "confirmDelete": "确定要删除此任务吗？"
+    "confirmDelete": "确定要删除此任务吗？",
+    "time": {
+      "justNow": "刚刚",
+      "minutesAgo": "{{count}}分钟前",
+      "hoursAgo": "{{count}}小时前",
+      "daysAgo": "{{count}}天前"
+    },
+    "error": {
+      "cancelFailed": "取消任务失败",
+      "deleteFailed": "删除任务失败"
+    }
   },
   "agents": {
     "title": "Agent 管理",

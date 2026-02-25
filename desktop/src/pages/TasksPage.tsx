@@ -1,5 +1,6 @@
 import { useState, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import clsx from 'clsx';
@@ -8,8 +9,8 @@ import { agentsService } from '../services/agents';
 import { ConfirmDialog } from '../components/common';
 import type { Task, TaskStatus, Agent } from '../types';
 
-// Format relative time
-function formatRelativeTime(dateString: string | null): string {
+// Format relative time with i18n
+function formatRelativeTime(dateString: string | null, t: TFunction): string {
   if (!dateString) return '-';
   const date = new Date(dateString);
   const now = new Date();
@@ -18,10 +19,10 @@ function formatRelativeTime(dateString: string | null): string {
   const diffHours = Math.floor(diffMs / 3600000);
   const diffDays = Math.floor(diffMs / 86400000);
 
-  if (diffMins < 1) return 'Just now';
-  if (diffMins < 60) return `${diffMins}m ago`;
-  if (diffHours < 24) return `${diffHours}h ago`;
-  return `${diffDays}d ago`;
+  if (diffMins < 1) return t('tasks.time.justNow');
+  if (diffMins < 60) return t('tasks.time.minutesAgo', { count: diffMins });
+  if (diffHours < 24) return t('tasks.time.hoursAgo', { count: diffHours });
+  return t('tasks.time.daysAgo', { count: diffDays });
 }
 
 // Format duration
@@ -67,6 +68,7 @@ export default function TasksPage() {
   const [statusFilter, setStatusFilter] = useState<TaskStatus | 'all'>('all');
   const [taskToCancel, setTaskToCancel] = useState<Task | null>(null);
   const [taskToDelete, setTaskToDelete] = useState<Task | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   // Fetch tasks
   const { data: tasks = [], isLoading: tasksLoading } = useQuery({
@@ -109,6 +111,10 @@ export default function TasksPage() {
       await tasksService.cancel(taskToCancel.id);
       queryClient.invalidateQueries({ queryKey: ['tasks'] });
       queryClient.invalidateQueries({ queryKey: ['runningTaskCount'] });
+      setErrorMessage(null);
+    } catch (error) {
+      console.error('Failed to cancel task:', error);
+      setErrorMessage(t('tasks.error.cancelFailed'));
     } finally {
       setTaskToCancel(null);
     }
@@ -120,6 +126,10 @@ export default function TasksPage() {
       await tasksService.delete(taskToDelete.id);
       queryClient.invalidateQueries({ queryKey: ['tasks'] });
       queryClient.invalidateQueries({ queryKey: ['runningTaskCount'] });
+      setErrorMessage(null);
+    } catch (error) {
+      console.error('Failed to delete task:', error);
+      setErrorMessage(t('tasks.error.deleteFailed'));
     } finally {
       setTaskToDelete(null);
     }
@@ -127,6 +137,22 @@ export default function TasksPage() {
 
   return (
     <div className="flex-1 p-6 overflow-auto">
+      {/* Error Toast */}
+      {errorMessage && (
+        <div className="mb-4 p-4 bg-red-500/10 border border-red-500/30 rounded-lg flex items-center justify-between">
+          <div className="flex items-center gap-2 text-red-400">
+            <span className="material-symbols-outlined">error</span>
+            <span>{errorMessage}</span>
+          </div>
+          <button
+            onClick={() => setErrorMessage(null)}
+            className="p-1 text-red-400 hover:text-red-300 transition-colors"
+          >
+            <span className="material-symbols-outlined">close</span>
+          </button>
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div>
@@ -232,7 +258,7 @@ export default function TasksPage() {
                     {task.model?.replace('claude-', '').replace(/-\d+$/, '') || '-'}
                   </td>
                   <td className="px-4 py-3 text-[var(--color-text-muted)] text-sm">
-                    {formatRelativeTime(task.startedAt || task.createdAt)}
+                    {formatRelativeTime(task.startedAt || task.createdAt, t)}
                   </td>
                   <td className="px-4 py-3 text-[var(--color-text-muted)] text-sm font-mono">
                     {formatDuration(task.startedAt, task.completedAt)}
