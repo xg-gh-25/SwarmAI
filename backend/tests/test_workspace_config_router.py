@@ -4,10 +4,21 @@ Tests CRUD operations for Skills, MCPs, Knowledgebases, Context management,
 audit log retrieval, and privileged capability confirmation for the
 /api/workspaces/{id}/... config endpoints.
 
+Updated for the single-workspace (singleton) model: there is only one
+workspace (``swarmws``), so the old multi-workspace intersection model
+helpers have been replaced with direct singleton helpers.
+
+Key helpers:
+
+- ``_ensure_default_workspace``  — Idempotent singleton workspace creation
+- ``_seed_skill`` / ``_seed_mcp`` — Insert global skill/MCP rows
+- ``_set_workspace_skill`` / ``_set_workspace_mcp`` — Upsert junction rows
+
 Requirements: 19.6-19.9
 """
 import json
 import tempfile
+from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -23,56 +34,38 @@ from tests.helpers import now_iso
 
 @pytest.fixture
 def workspace_id(client: TestClient) -> str:
-    """Create a workspace backed by a real temp directory."""
-    temp_path = tempfile.mkdtemp()
-    resp = client.post("/api/swarm-workspaces", json={
-        "name": "ConfigTestWS",
-        "file_path": temp_path,
-        "context": "Workspace for config router tests",
-    })
-    assert resp.status_code == 201
-    return resp.json()["id"]
+    """Return the singleton workspace ID after seeding workspace_config."""
+    import asyncio
+    return asyncio.get_event_loop().run_until_complete(_ensure_default_workspace())
 
 
 @pytest.fixture
 def second_workspace_id(client: TestClient) -> str:
-    """Create a second workspace for isolation tests."""
-    temp_path = tempfile.mkdtemp()
-    resp = client.post("/api/swarm-workspaces", json={
-        "name": "ConfigTestWS2",
-        "file_path": temp_path,
-        "context": "Second workspace for config tests",
-    })
-    assert resp.status_code == 201
-    return resp.json()["id"]
+    """Return the singleton workspace ID (same as workspace_id in single-workspace model)."""
+    import asyncio
+    return asyncio.get_event_loop().run_until_complete(_ensure_default_workspace())
 
 
 async def _ensure_default_workspace() -> str:
-    """Ensure a default SwarmWS workspace exists and return its ID."""
-    existing = await db.swarm_workspaces.get_default()
+    """Ensure a default SwarmWS workspace config exists and return its ID."""
+    existing = await db.workspace_config.get_config()
     if existing:
         return existing["id"]
-    from uuid import uuid4
     now = now_iso()
-    ws_id = str(uuid4())
-    await db.swarm_workspaces.put({
-        "id": ws_id,
+    await db.workspace_config.put({
+        "id": "swarmws",
         "name": "SwarmWS",
-        "file_path": f"/tmp/test-swarmws-{ws_id[:8]}",
-        "context": "Default workspace",
+        "file_path": f"/tmp/test-swarmws-{uuid4().hex[:8]}",
         "icon": "🏠",
-        "is_default": True,
-        "is_archived": 0,
-        "archived_at": None,
+        "context": "Default workspace",
         "created_at": now,
         "updated_at": now,
     })
-    return ws_id
+    return "swarmws"
 
 
 async def _seed_skill(name: str = "TestSkill", is_privileged: bool = False) -> str:
     """Insert a skill directly into the DB and return its ID."""
-    from uuid import uuid4
     now = now_iso()
     skill_id = str(uuid4())
     await db.skills.put({
@@ -94,7 +87,6 @@ async def _seed_skill(name: str = "TestSkill", is_privileged: bool = False) -> s
 
 async def _seed_mcp(name: str = "TestMCP", is_privileged: bool = False) -> str:
     """Insert an MCP server directly into the DB and return its ID."""
-    from uuid import uuid4
     now = now_iso()
     mcp_id = str(uuid4())
     await db.mcp_servers.put({
@@ -114,48 +106,48 @@ async def _seed_mcp(name: str = "TestMCP", is_privileged: bool = False) -> str:
     return mcp_id
 
 
-async def _seed_workspace_skill(workspace_id: str, skill_id: str, enabled: bool = True) -> None:
-    """Insert a workspace_skills junction row."""
-    from uuid import uuid4
+async def _set_workspace_skill(workspace_id: str, skill_id: str, enabled: bool = True) -> None:
+    """Create or update a workspace_skills junction row (upsert-safe)."""
     now = now_iso()
-    await db.workspace_skills.put({
-        "id": str(uuid4()),
-        "workspace_id": workspace_id,
-        "skill_id": skill_id,
-        "enabled": 1 if enabled else 0,
-        "created_at": now,
-        "updated_at": now,
-    })
+    existing = await db.workspace_skills.get_by_workspace_and_skill(workspace_id, skill_id)
+    if existing:
+        await db.workspace_skills.update(existing["id"], {
+            "enabled": 1 if enabled else 0,
+            "updated_at": now,
+        })
+    else:
+        await db.workspace_skills.put({
+            "id": str(uuid4()),
+            "workspace_id": workspace_id,
+            "skill_id": skill_id,
+            "enabled": 1 if enabled else 0,
+            "created_at": now,
+            "updated_at": now,
+        })
 
 
-async def _seed_workspace_mcp(workspace_id: str, mcp_id: str, enabled: bool = True) -> None:
-    """Insert a workspace_mcps junction row."""
-    from uuid import uuid4
+async def _set_workspace_mcp(workspace_id: str, mcp_id: str, enabled: bool = True) -> None:
+    """Create or update a workspace_mcps junction row (upsert-safe)."""
     now = now_iso()
-    await db.workspace_mcps.put({
-        "id": str(uuid4()),
-        "workspace_id": workspace_id,
-        "mcp_server_id": mcp_id,
-        "enabled": 1 if enabled else 0,
-        "created_at": now,
-        "updated_at": now,
-    })
-
-
-async def _enable_skill_in_both(swarmws_id: str, workspace_id: str, skill_id: str) -> None:
-    """Enable a skill in both SwarmWS and a custom workspace (intersection model)."""
-    await _seed_workspace_skill(swarmws_id, skill_id, enabled=True)
-    await _seed_workspace_skill(workspace_id, skill_id, enabled=True)
-
-
-async def _enable_mcp_in_both(swarmws_id: str, workspace_id: str, mcp_id: str) -> None:
-    """Enable an MCP in both SwarmWS and a custom workspace (intersection model)."""
-    await _seed_workspace_mcp(swarmws_id, mcp_id, enabled=True)
-    await _seed_workspace_mcp(workspace_id, mcp_id, enabled=True)
+    existing = await db.workspace_mcps.get_by_workspace_and_mcp(workspace_id, mcp_id)
+    if existing:
+        await db.workspace_mcps.update(existing["id"], {
+            "enabled": 1 if enabled else 0,
+            "updated_at": now,
+        })
+    else:
+        await db.workspace_mcps.put({
+            "id": str(uuid4()),
+            "workspace_id": workspace_id,
+            "mcp_server_id": mcp_id,
+            "enabled": 1 if enabled else 0,
+            "created_at": now,
+            "updated_at": now,
+        })
 
 
 # ============================================================================
-# Skills Endpoints (Intersection Model)
+# Skills Endpoints
 # Validates: Requirement 19.6
 # ============================================================================
 
@@ -171,10 +163,9 @@ class TestGetSkills:
 
     @pytest.mark.anyio
     async def test_get_skills_returns_configured(self, client: TestClient, workspace_id: str):
-        """Skills enabled in both SwarmWS and workspace are returned (intersection)."""
-        swarmws_id = await _ensure_default_workspace()
+        """Skills enabled in the singleton workspace are returned."""
         skill_id = await _seed_skill("MySkill")
-        await _enable_skill_in_both(swarmws_id, workspace_id, skill_id)
+        await _set_workspace_skill(workspace_id, skill_id, enabled=True)
 
         resp = client.get(f"/api/workspaces/{workspace_id}/skills")
         assert resp.status_code == 200
@@ -185,9 +176,8 @@ class TestGetSkills:
     @pytest.mark.anyio
     async def test_get_skills_includes_privileged_flag(self, client: TestClient, workspace_id: str):
         """Privileged skills have is_privileged=True in response."""
-        swarmws_id = await _ensure_default_workspace()
         skill_id = await _seed_skill("PrivSkill", is_privileged=True)
-        await _enable_skill_in_both(swarmws_id, workspace_id, skill_id)
+        await _set_workspace_skill(workspace_id, skill_id, enabled=True)
 
         resp = client.get(f"/api/workspaces/{workspace_id}/skills")
         assert resp.status_code == 200
@@ -196,12 +186,10 @@ class TestGetSkills:
         assert priv_skills[0]["is_privileged"] is True
 
     @pytest.mark.anyio
-    async def test_get_skills_intersection_excludes_swarmws_only(self, client: TestClient, workspace_id: str):
-        """Skill enabled only in SwarmWS (not workspace) is NOT in effective set."""
-        swarmws_id = await _ensure_default_workspace()
-        skill_id = await _seed_skill("SwarmOnlySkill")
-        await _seed_workspace_skill(swarmws_id, skill_id, enabled=True)
-        # NOT enabled in custom workspace
+    async def test_get_skills_disabled_not_in_effective_set(self, client: TestClient, workspace_id: str):
+        """Skill disabled in the workspace is NOT in the effective set."""
+        skill_id = await _seed_skill("DisabledSkill")
+        await _set_workspace_skill(workspace_id, skill_id, enabled=False)
 
         resp = client.get(f"/api/workspaces/{workspace_id}/skills")
         assert resp.status_code == 200
@@ -215,10 +203,8 @@ class TestUpdateSkills:
     @pytest.mark.anyio
     async def test_update_skill_enable(self, client: TestClient, workspace_id: str):
         """Enable a skill via PUT."""
-        swarmws_id = await _ensure_default_workspace()
         skill_id = await _seed_skill("EnableMe")
-        await _seed_workspace_skill(swarmws_id, skill_id, enabled=True)
-        await _seed_workspace_skill(workspace_id, skill_id, enabled=False)
+        await _set_workspace_skill(workspace_id, skill_id, enabled=False)
 
         resp = client.put(f"/api/workspaces/{workspace_id}/skills", json={
             "configs": [{
@@ -236,9 +222,8 @@ class TestUpdateSkills:
     @pytest.mark.anyio
     async def test_update_skill_disable(self, client: TestClient, workspace_id: str):
         """Disable a skill via PUT."""
-        swarmws_id = await _ensure_default_workspace()
         skill_id = await _seed_skill("DisableMe")
-        await _enable_skill_in_both(swarmws_id, workspace_id, skill_id)
+        await _set_workspace_skill(workspace_id, skill_id, enabled=True)
 
         resp = client.put(f"/api/workspaces/{workspace_id}/skills", json={
             "configs": [{
@@ -256,9 +241,8 @@ class TestUpdateSkills:
     @pytest.mark.anyio
     async def test_update_skill_creates_audit_entry(self, client: TestClient, workspace_id: str):
         """Updating a skill config creates an audit log entry."""
-        swarmws_id = await _ensure_default_workspace()
         skill_id = await _seed_skill("AuditSkill")
-        await _enable_skill_in_both(swarmws_id, workspace_id, skill_id)
+        await _set_workspace_skill(workspace_id, skill_id, enabled=True)
 
         client.put(f"/api/workspaces/{workspace_id}/skills", json={
             "configs": [{
@@ -279,7 +263,7 @@ class TestUpdateSkills:
 
 
 # ============================================================================
-# MCPs Endpoints (Intersection Model)
+# MCPs Endpoints
 # Validates: Requirement 19.7
 # ============================================================================
 
@@ -294,9 +278,9 @@ class TestGetMcps:
 
     @pytest.mark.anyio
     async def test_get_mcps_returns_configured(self, client: TestClient, workspace_id: str):
-        swarmws_id = await _ensure_default_workspace()
+        """MCPs enabled in the singleton workspace are returned."""
         mcp_id = await _seed_mcp("MyMCP")
-        await _enable_mcp_in_both(swarmws_id, workspace_id, mcp_id)
+        await _set_workspace_mcp(workspace_id, mcp_id, enabled=True)
 
         resp = client.get(f"/api/workspaces/{workspace_id}/mcps")
         assert resp.status_code == 200
@@ -305,9 +289,9 @@ class TestGetMcps:
 
     @pytest.mark.anyio
     async def test_get_mcps_includes_privileged_flag(self, client: TestClient, workspace_id: str):
-        swarmws_id = await _ensure_default_workspace()
+        """Privileged MCPs have is_privileged=True in response."""
         mcp_id = await _seed_mcp("PrivMCP", is_privileged=True)
-        await _enable_mcp_in_both(swarmws_id, workspace_id, mcp_id)
+        await _set_workspace_mcp(workspace_id, mcp_id, enabled=True)
 
         resp = client.get(f"/api/workspaces/{workspace_id}/mcps")
         assert resp.status_code == 200
@@ -316,11 +300,10 @@ class TestGetMcps:
         assert priv_mcps[0]["is_privileged"] is True
 
     @pytest.mark.anyio
-    async def test_get_mcps_intersection_excludes_swarmws_only(self, client: TestClient, workspace_id: str):
-        """MCP enabled only in SwarmWS is NOT in effective set for custom workspace."""
-        swarmws_id = await _ensure_default_workspace()
-        mcp_id = await _seed_mcp("SwarmOnlyMCP")
-        await _seed_workspace_mcp(swarmws_id, mcp_id, enabled=True)
+    async def test_get_mcps_disabled_not_in_effective_set(self, client: TestClient, workspace_id: str):
+        """MCP disabled in the workspace is NOT in the effective set."""
+        mcp_id = await _seed_mcp("DisabledMCP")
+        await _set_workspace_mcp(workspace_id, mcp_id, enabled=False)
 
         resp = client.get(f"/api/workspaces/{workspace_id}/mcps")
         assert resp.status_code == 200
@@ -333,10 +316,9 @@ class TestUpdateMcps:
 
     @pytest.mark.anyio
     async def test_update_mcp_enable(self, client: TestClient, workspace_id: str):
-        swarmws_id = await _ensure_default_workspace()
+        """Enable an MCP via PUT."""
         mcp_id = await _seed_mcp("EnableMCP")
-        await _seed_workspace_mcp(swarmws_id, mcp_id, enabled=True)
-        await _seed_workspace_mcp(workspace_id, mcp_id, enabled=False)
+        await _set_workspace_mcp(workspace_id, mcp_id, enabled=False)
 
         resp = client.put(f"/api/workspaces/{workspace_id}/mcps", json={
             "configs": [{
@@ -353,9 +335,9 @@ class TestUpdateMcps:
 
     @pytest.mark.anyio
     async def test_update_mcp_disable(self, client: TestClient, workspace_id: str):
-        swarmws_id = await _ensure_default_workspace()
+        """Disable an MCP via PUT."""
         mcp_id = await _seed_mcp("DisableMCP")
-        await _enable_mcp_in_both(swarmws_id, workspace_id, mcp_id)
+        await _set_workspace_mcp(workspace_id, mcp_id, enabled=True)
 
         resp = client.put(f"/api/workspaces/{workspace_id}/mcps", json={
             "configs": [{
@@ -371,9 +353,9 @@ class TestUpdateMcps:
 
     @pytest.mark.anyio
     async def test_update_mcp_creates_audit_entry(self, client: TestClient, workspace_id: str):
-        swarmws_id = await _ensure_default_workspace()
+        """Updating an MCP config creates an audit log entry."""
         mcp_id = await _seed_mcp("AuditMCP")
-        await _enable_mcp_in_both(swarmws_id, workspace_id, mcp_id)
+        await _set_workspace_mcp(workspace_id, mcp_id, enabled=True)
 
         client.put(f"/api/workspaces/{workspace_id}/mcps", json={
             "configs": [{
@@ -749,16 +731,16 @@ class TestGetAuditLog:
         assert offset_resp.status_code == 200
         assert len(offset_resp.json()["entries"]) == total - 2
 
-    def test_audit_log_scoped_to_workspace(
-        self, client: TestClient, workspace_id: str, second_workspace_id: str
+    def test_audit_log_all_entries_belong_to_workspace(
+        self, client: TestClient, workspace_id: str
     ):
-        """Audit log only returns entries for the requested workspace."""
+        """Audit log entries all belong to the singleton workspace."""
         client.post(f"/api/workspaces/{workspace_id}/knowledgebases", json={
             "source_type": "local_file",
             "source_path": "/data/ws1.md",
             "display_name": "WS1 KB",
         })
-        client.post(f"/api/workspaces/{second_workspace_id}/knowledgebases", json={
+        client.post(f"/api/workspaces/{workspace_id}/knowledgebases", json={
             "source_type": "local_file",
             "source_path": "/data/ws2.md",
             "display_name": "WS2 KB",
@@ -782,11 +764,10 @@ class TestPrivilegedCapabilities:
     @pytest.mark.anyio
     async def test_privileged_skill_flag_in_response(self, client: TestClient, workspace_id: str):
         """Privileged skills are flagged in GET response."""
-        swarmws_id = await _ensure_default_workspace()
         safe_id = await _seed_skill("SafeSkill", is_privileged=False)
         priv_id = await _seed_skill("PrivilegedSkill", is_privileged=True)
-        await _enable_skill_in_both(swarmws_id, workspace_id, safe_id)
-        await _enable_skill_in_both(swarmws_id, workspace_id, priv_id)
+        await _set_workspace_skill(workspace_id, safe_id, enabled=True)
+        await _set_workspace_skill(workspace_id, priv_id, enabled=True)
 
         resp = client.get(f"/api/workspaces/{workspace_id}/skills")
         assert resp.status_code == 200
@@ -802,11 +783,10 @@ class TestPrivilegedCapabilities:
     @pytest.mark.anyio
     async def test_privileged_mcp_flag_in_response(self, client: TestClient, workspace_id: str):
         """Privileged MCPs are flagged in GET response."""
-        swarmws_id = await _ensure_default_workspace()
         safe_id = await _seed_mcp("SafeMCP", is_privileged=False)
         priv_id = await _seed_mcp("PrivilegedMCP", is_privileged=True)
-        await _enable_mcp_in_both(swarmws_id, workspace_id, safe_id)
-        await _enable_mcp_in_both(swarmws_id, workspace_id, priv_id)
+        await _set_workspace_mcp(workspace_id, safe_id, enabled=True)
+        await _set_workspace_mcp(workspace_id, priv_id, enabled=True)
 
         resp = client.get(f"/api/workspaces/{workspace_id}/mcps")
         assert resp.status_code == 200
@@ -822,10 +802,8 @@ class TestPrivilegedCapabilities:
     @pytest.mark.anyio
     async def test_privileged_skill_can_be_toggled(self, client: TestClient, workspace_id: str):
         """Privileged skills can be enabled/disabled via PUT."""
-        swarmws_id = await _ensure_default_workspace()
         priv_id = await _seed_skill("TogglePriv", is_privileged=True)
-        await _seed_workspace_skill(swarmws_id, priv_id, enabled=True)
-        await _seed_workspace_skill(workspace_id, priv_id, enabled=False)
+        await _set_workspace_skill(workspace_id, priv_id, enabled=False)
 
         # Enable
         resp = client.put(f"/api/workspaces/{workspace_id}/skills", json={

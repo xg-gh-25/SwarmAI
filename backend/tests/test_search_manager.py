@@ -401,14 +401,13 @@ class TestSearchScope:
 
     @pytest.mark.asyncio
     async def test_scope_all_excludes_archived(self):
-        """scope='all' excludes archived workspaces.
+        """scope='all' includes items from the singleton workspace.
 
+        In the single-workspace model, there is no archiving concept.
         Validates: Requirement 38.3
         """
-        ws_active = await create_workspace("ActiveWS")
-        ws_archived = await create_workspace("ArchivedWS", is_archived=True)
-        await _create_todo(ws_active["id"], title="Searchable active item")
-        await _create_todo(ws_archived["id"], title="Searchable archived item")
+        ws = await create_workspace("ActiveWS")
+        await _create_todo(ws["id"], title="Searchable active item")
 
         result = await search_manager.search("Searchable", scope="all")
         all_ws_ids = set()
@@ -416,23 +415,22 @@ class TestSearchScope:
             for item in group.items:
                 all_ws_ids.add(item.workspace_id)
 
-        assert ws_active["id"] in all_ws_ids
-        assert ws_archived["id"] not in all_ws_ids
+        assert ws["id"] in all_ws_ids
 
     @pytest.mark.asyncio
     async def test_scope_specific_archived_workspace_still_searchable(self):
-        """Direct scope to archived workspace still returns results.
+        """Direct scope to the singleton workspace returns results.
 
+        In the single-workspace model, the singleton workspace is always searchable.
         Validates: Requirement 38.12
         """
-        ws_archived = await create_workspace("ArchivedWS", is_archived=True)
-        await _create_todo(ws_archived["id"], title="Archived but findable")
+        ws = await create_workspace("TestWS")
+        await _create_todo(ws["id"], title="Always findable")
 
-        result = await search_manager.search("findable", scope=ws_archived["id"])
+        result = await search_manager.search("findable", scope=ws["id"])
         assert result.total >= 1
         todo_group = next((g for g in result.groups if g.entity_type == "todo"), None)
         assert todo_group is not None
-        assert todo_group.items[0].is_archived is True
 
 
 # ---------------------------------------------------------------------------

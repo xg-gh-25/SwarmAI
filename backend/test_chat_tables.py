@@ -19,17 +19,21 @@ async def test_crud_operations():
         await db.initialize()
         
         # First create required parent records
-        workspace_id = str(uuid4())
+        workspace_id = 'swarmws'
         agent_id = str(uuid4())
         
-        # Create workspace
-        await db.swarm_workspaces.put({
-            'id': workspace_id,
-            'name': 'Test Workspace',
-            'file_path': '/tmp/test',
-            'context': 'Test context',
-            'is_default': 0
-        })
+        # Ensure workspace_config row exists (singleton model)
+        existing = await db.workspace_config.get_config()
+        if not existing:
+            await db.workspace_config.put({
+                'id': 'swarmws',
+                'name': 'Test Workspace',
+                'file_path': '/tmp/test',
+                'icon': '',
+                'context': 'Test context',
+                'created_at': '2025-01-01T00:00:00',
+                'updated_at': '2025-01-01T00:00:00',
+            })
         
         # Create agent
         await db.agents.put({

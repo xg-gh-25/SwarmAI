@@ -15,30 +15,18 @@ from fastapi.testclient import TestClient
 
 @pytest.fixture
 def workspace_id(client: TestClient) -> str:
-    """Create a workspace and return its ID for todo tests."""
-    import tempfile, os
-    temp_path = tempfile.mkdtemp()
-    resp = client.post("/api/swarm-workspaces", json={
-        "name": "TodoTestWS",
-        "file_path": temp_path,
-        "context": "Workspace for todo router tests",
-    })
-    assert resp.status_code == 201
-    return resp.json()["id"]
+    """Return the singleton workspace ID after seeding workspace_config."""
+    import asyncio
+    from tests.helpers import ensure_default_workspace
+    return asyncio.get_event_loop().run_until_complete(ensure_default_workspace())
 
 
 @pytest.fixture
 def second_workspace_id(client: TestClient) -> str:
-    """Create a second workspace for filtering tests."""
-    import tempfile
-    temp_path = tempfile.mkdtemp()
-    resp = client.post("/api/swarm-workspaces", json={
-        "name": "TodoTestWS2",
-        "file_path": temp_path,
-        "context": "Second workspace for filtering tests",
-    })
-    assert resp.status_code == 201
-    return resp.json()["id"]
+    """Return the singleton workspace ID (same as workspace_id in single-workspace model)."""
+    import asyncio
+    from tests.helpers import ensure_default_workspace
+    return asyncio.get_event_loop().run_until_complete(ensure_default_workspace())
 
 
 @pytest.fixture
@@ -285,9 +273,11 @@ class TestListTodos:
         resp = client.get(f"/api/todos?workspace_id={workspace_id}")
         assert resp.status_code == 200
         data = resp.json()
+        # In singleton model, both IDs resolve to the same workspace,
+        # so all todos are visible.
         assert all(t["workspace_id"] == workspace_id for t in data)
         assert any(t["title"] == "WS1 todo" for t in data)
-        assert not any(t["title"] == "WS2 todo" for t in data)
+        assert any(t["title"] == "WS2 todo" for t in data)
 
     def test_list_filter_by_status(self, client: TestClient, workspace_id: str):
         todo1 = _create_todo(client, workspace_id, title="Pending one")

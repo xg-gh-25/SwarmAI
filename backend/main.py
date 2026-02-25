@@ -5,7 +5,6 @@ from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
-import asyncio
 import logging
 import shutil
 import sys
@@ -13,9 +12,8 @@ from pathlib import Path
 
 from config import settings, get_app_data_dir
 from core.agent_manager import agent_manager
-from core.swarm_workspace_manager import swarm_workspace_manager
 from utils.bundle_paths import get_resource_file
-from routers import agents_router, skills_router, mcp_router, chat_router, auth_router, workspace_router, settings_router, plugins_router, tasks_router, channels_router, system_router, swarm_workspaces_router, todos_router, sections_router, plan_items_router, communications_router, artifacts_router, reflections_router, search_router, workspace_config_router
+from routers import agents_router, skills_router, mcp_router, chat_router, auth_router, workspace_router, settings_router, plugins_router, tasks_router, channels_router, system_router, todos_router, sections_router, plan_items_router, communications_router, artifacts_router, reflections_router, search_router, workspace_config_router, workspace_api_router, projects_router
 from channels.gateway import channel_gateway
 from middleware.error_handler import setup_error_handlers
 from middleware.rate_limit import limiter
@@ -106,24 +104,6 @@ def _ensure_database_initialized() -> None:
         logger.warning("Seed database not found, will use runtime initialization")
 
 
-async def _ensure_workspace_folders() -> None:
-    """Ensure workspace folders exist (fire and forget task).
-    
-    This is called as a non-blocking background task after database initialization
-    to create filesystem folders for pre-seeded workspace records.
-    
-    Validates: Requirements 4.1, 4.2, 4.5
-    """
-    try:
-        from database import get_database
-        db = get_database()
-        await swarm_workspace_manager.ensure_workspace_folders_exist(db)
-        logger.info("Workspace folder initialization complete")
-    except Exception as e:
-        # Log warning but don't fail - folder creation is non-critical
-        logger.warning(f"Failed to ensure workspace folders exist: {e}")
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan handler."""
@@ -143,10 +123,6 @@ async def lifespan(app: FastAPI):
     # Initialize database
     await initialize_database()
     logger.info("Database initialized")
-
-    # Ensure workspace folders exist (non-blocking)
-    # Validates: Requirements 4.1, 4.2, 4.5
-    asyncio.create_task(_ensure_workspace_folders())
 
     # Check initialization state and run appropriate flow
     # Validates: Requirements 2.1, 3.1, 3.6
@@ -245,7 +221,6 @@ app.include_router(plugins_router, prefix="/api/plugins", tags=["plugins"])
 app.include_router(tasks_router, prefix="/api/tasks", tags=["tasks"])
 app.include_router(channels_router, prefix="/api/channels", tags=["channels"])
 app.include_router(system_router, prefix="/api/system", tags=["system"])
-app.include_router(swarm_workspaces_router, prefix="/api", tags=["swarm-workspaces"])
 app.include_router(todos_router, prefix="/api/todos", tags=["todos"])
 app.include_router(sections_router, prefix="/api/workspaces", tags=["sections"])
 app.include_router(plan_items_router, prefix="/api/workspaces", tags=["plan-items"])
@@ -254,6 +229,8 @@ app.include_router(artifacts_router, prefix="/api/workspaces", tags=["artifacts"
 app.include_router(reflections_router, prefix="/api/workspaces", tags=["reflections"])
 app.include_router(search_router, prefix="/api/search", tags=["search"])
 app.include_router(workspace_config_router, prefix="/api/workspaces", tags=["workspace-config"])
+app.include_router(workspace_api_router, prefix="/api", tags=["workspace-api"])
+app.include_router(projects_router, prefix="/api", tags=["projects"])
 
 # Register development-only router when DEBUG=true
 if settings.debug:

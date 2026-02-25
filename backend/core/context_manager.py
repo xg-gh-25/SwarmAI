@@ -103,13 +103,19 @@ class ContextManager:
     async def _get_workspace(self, workspace_id: str) -> Optional[dict]:
         """Get workspace record from the database.
 
+        In the singleton model, validates that the requested workspace_id
+        matches the actual singleton config ID.
+
         Args:
             workspace_id: The workspace ID.
 
         Returns:
-            Workspace dict if found, None otherwise.
+            Workspace dict if found and ID matches, None otherwise.
         """
-        return await db.swarm_workspaces.get(workspace_id)
+        config = await db.workspace_config.get_config()
+        if config and config.get("id") == workspace_id:
+            return config
+        return None
 
     async def get_context(self, workspace_id: str) -> str:
         """Read the workspace context from ContextFiles/context.md.
@@ -140,7 +146,7 @@ class ContextManager:
             )
             return content
         except Exception as e:
-            logger.warning(f"Failed to read context.md for workspace {workspace_id}: {e}")
+            logger.warning("Failed to read context.md for workspace %s: %s", workspace_id, e)
             return ""
 
     async def update_context(self, workspace_id: str, content: str) -> None:
@@ -172,7 +178,7 @@ class ContextManager:
         await anyio.to_thread.run_sync(
             lambda: context_file.write_text(content, encoding="utf-8")
         )
-        logger.info(f"Updated context.md for workspace {workspace_id}")
+        logger.info("Updated context.md for workspace %s", workspace_id)
 
     async def compress_context(self, workspace_id: str) -> str:
         """Generate compressed-context.md from context.md.
@@ -214,7 +220,7 @@ class ContextManager:
             lambda: compressed_file.write_text(compressed, encoding="utf-8")
         )
 
-        logger.info(f"Generated compressed-context.md for workspace {workspace_id}")
+        logger.info("Generated compressed-context.md for workspace %s", workspace_id)
         return compressed
 
     async def _is_compressed_context_fresh(self, compressed_file: Path) -> bool:
@@ -243,7 +249,7 @@ class ContextManager:
         try:
             return await anyio.to_thread.run_sync(_check)
         except Exception as e:
-            logger.warning(f"Failed to check compressed context freshness: {e}")
+            logger.warning("Failed to check compressed context freshness: %s", e)
             return False
 
     async def _build_capabilities_summary(self, workspace_id: str) -> str:
@@ -258,8 +264,6 @@ class ContextManager:
 
         Validates: Requirement 14.8
         """
-        from database import db
-
         parts = []
 
         try:
@@ -270,7 +274,7 @@ class ContextManager:
             if skill_names:
                 parts.append(f"Enabled Skills: {', '.join(skill_names)}")
         except Exception as e:
-            logger.debug(f"Could not fetch effective skills for {workspace_id}: {e}")
+            logger.debug("Could not fetch effective skills for %s: %s", workspace_id, e)
 
         try:
             all_mcps = await db.mcp_servers.list()
@@ -280,7 +284,7 @@ class ContextManager:
             if mcp_names:
                 parts.append(f"Enabled MCPs: {', '.join(mcp_names)}")
         except Exception as e:
-            logger.debug(f"Could not fetch effective MCPs for {workspace_id}: {e}")
+            logger.debug("Could not fetch effective MCPs for %s: %s", workspace_id, e)
 
         try:
             kbs = await db.workspace_knowledgebases.list_by_workspace(workspace_id)
@@ -288,7 +292,7 @@ class ContextManager:
                 kb_names = [kb["display_name"] for kb in kbs]
                 parts.append(f"Knowledgebases: {', '.join(kb_names)}")
         except Exception as e:
-            logger.debug(f"Could not fetch effective knowledgebases for {workspace_id}: {e}")
+            logger.debug("Could not fetch effective knowledgebases for %s: %s", workspace_id, e)
 
         if not parts:
             return ""
@@ -319,7 +323,7 @@ class ContextManager:
         """
         workspace = await self._get_workspace(workspace_id)
         if not workspace:
-            logger.warning(f"Workspace {workspace_id} not found for context injection")
+            logger.warning("Workspace %s not found for context injection", workspace_id)
             return ""
 
         context_dir = self._get_context_dir(workspace["file_path"])
@@ -334,9 +338,9 @@ class ContextManager:
                 context_content = await anyio.to_thread.run_sync(
                     lambda: compressed_file.read_text(encoding="utf-8")
                 )
-                logger.debug(f"Using fresh compressed context for workspace {workspace_id}")
+                logger.debug("Using fresh compressed context for workspace %s", workspace_id)
             except Exception as e:
-                logger.warning(f"Failed to read compressed-context.md: {e}")
+                logger.warning("Failed to read compressed-context.md: %s", e)
                 context_content = ""
 
         # Requirement 14.4: Fallback to context.md
@@ -348,9 +352,9 @@ class ContextManager:
                     else ""
                 )
                 context_content = content
-                logger.debug(f"Using full context for workspace {workspace_id}")
+                logger.debug("Using full context for workspace %s", workspace_id)
             except Exception as e:
-                logger.warning(f"Failed to read context.md: {e}")
+                logger.warning("Failed to read context.md: %s", e)
                 context_content = ""
 
         # Requirement 14.8: Include effective capabilities summary

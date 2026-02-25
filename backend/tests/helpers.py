@@ -43,54 +43,46 @@ def now_iso() -> str:
 # ---------------------------------------------------------------------------
 
 async def ensure_default_workspace() -> str:
-    """Create the default SwarmWS workspace (idempotent) and return its ID.
+    """Create the default SwarmWS workspace config (idempotent) and return its ID.
 
-    Checks for an existing default workspace first to avoid duplicate
+    Checks for an existing workspace config first to avoid duplicate
     key errors across Hypothesis examples that share the same test-run
     database.
     """
-    existing = await db.swarm_workspaces.get_default()
+    existing = await db.workspace_config.get_config()
     if existing:
         return existing["id"]
 
     now = now_iso()
-    ws_id = str(uuid4())
-    await db.swarm_workspaces.put({
-        "id": ws_id,
+    await db.workspace_config.put({
+        "id": "swarmws",
         "name": "SwarmWS",
         "file_path": "/tmp/test-swarm-workspaces/SwarmWS",
-        "context": "Default SwarmAI workspace for general tasks and projects.",
         "icon": "🏠",
-        "is_default": True,
-        "is_archived": 0,
-        "archived_at": None,
+        "context": "Default SwarmAI workspace for general tasks and projects.",
         "created_at": now,
         "updated_at": now,
     })
-    return ws_id
+    return "swarmws"
 
 
 async def create_default_workspace() -> str:
-    """Create a new default SwarmWS workspace and return its ID.
+    """Create or replace the default SwarmWS workspace config and return its ID.
 
-    Unlike ``ensure_default_workspace``, this always inserts a new row.
+    Unlike ``ensure_default_workspace``, this always upserts the row.
     Use in tests where each example needs a fresh default workspace.
     """
     now = now_iso()
-    ws_id = str(uuid4())
-    await db.swarm_workspaces.put({
-        "id": ws_id,
+    await db.workspace_config.put({
+        "id": "swarmws",
         "name": "SwarmWS",
-        "file_path": f"/tmp/test-swarm-workspaces/SwarmWS-{ws_id[:8]}",
-        "context": "Default workspace",
+        "file_path": f"/tmp/test-swarm-workspaces/SwarmWS-{uuid4().hex[:8]}",
         "icon": "🏠",
-        "is_default": True,
-        "is_archived": 0,
-        "archived_at": None,
+        "context": "Default workspace",
         "created_at": now,
         "updated_at": now,
     })
-    return ws_id
+    return "swarmws"
 
 
 async def create_custom_workspace(
@@ -98,31 +90,22 @@ async def create_custom_workspace(
     index: int | None = None,
     is_archived: bool = False,
 ) -> str:
-    """Create a custom (non-default) workspace and return its ID.
+    """Create a workspace config entry and return its ID.
 
-    Parameters
-    ----------
-    name:
-        Workspace name. Defaults to ``TestWS-<uuid[:8]>``.
-    index:
-        Optional numeric index appended to the name (used by property tests
-        that create N workspaces in a loop).
-    is_archived:
-        Whether the workspace should be archived.
+    In the single-workspace model, this creates/updates the singleton
+    workspace_config row. The name parameter is accepted for backward
+    compatibility but the ID is always 'swarmws'.
     """
     now = now_iso()
-    ws_id = str(uuid4())
+    ws_id = "swarmws"
     if name is None:
-        name = f"TestWS-{ws_id[:8]}" if index is None else f"CustomWS-{index}-{ws_id[:8]}"
-    await db.swarm_workspaces.put({
+        name = f"TestWS-{uuid4().hex[:8]}" if index is None else f"CustomWS-{index}"
+    await db.workspace_config.put({
         "id": ws_id,
         "name": name,
-        "file_path": f"/tmp/test-swarm-workspaces/{name}-{ws_id[:8]}",
-        "context": f"Custom workspace: {name}",
+        "file_path": f"/tmp/test-swarm-workspaces/{name}-{uuid4().hex[:8]}",
         "icon": "📁",
-        "is_default": False,
-        "is_archived": 1 if is_archived else 0,
-        "archived_at": now if is_archived else None,
+        "context": f"Custom workspace: {name}",
         "created_at": now,
         "updated_at": now,
     })
@@ -134,25 +117,21 @@ async def create_workspace(
     is_default: bool = False,
     is_archived: bool = False,
 ) -> dict:
-    """Create a workspace and return the full dict (including ``id``).
+    """Create a workspace config entry and return the full dict.
 
-    This is the most flexible variant — used by tests that need the full
-    workspace record rather than just the ID.
+    In the single-workspace model, always uses 'swarmws' as the ID.
     """
     now = now_iso()
     ws = {
-        "id": str(uuid4()),
+        "id": "swarmws",
         "name": name,
         "file_path": f"/tmp/test/{name}-{uuid4().hex[:6]}",
-        "context": f"Context for {name}",
         "icon": "",
-        "is_default": 1 if is_default else 0,
-        "is_archived": 1 if is_archived else 0,
-        "archived_at": now if is_archived else None,
+        "context": f"Context for {name}",
         "created_at": now,
         "updated_at": now,
     }
-    await db.swarm_workspaces.put(ws)
+    await db.workspace_config.put(ws)
     return ws
 
 
@@ -161,12 +140,12 @@ async def create_workspace_with_path(
     name: str = "TestWS",
     is_default: bool = False,
 ) -> dict:
-    """Create a workspace backed by a real filesystem directory.
+    """Create a workspace config backed by a real filesystem directory.
 
     Used by artifact, reflection, and context tests that need to read/write
     actual files.
     """
-    ws_id = str(uuid4())
+    ws_id = "swarmws"
     ws_path = str(tmp_path / ws_id)
     os.makedirs(ws_path, exist_ok=True)
 
@@ -175,15 +154,12 @@ async def create_workspace_with_path(
         "id": ws_id,
         "name": name,
         "file_path": ws_path,
-        "context": f"Test workspace for {name}",
         "icon": "📁",
-        "is_default": 1 if is_default else 0,
-        "is_archived": 0,
-        "archived_at": None,
+        "context": f"Test workspace for {name}",
         "created_at": now,
         "updated_at": now,
     }
-    await db.swarm_workspaces.put(ws)
+    await db.workspace_config.put(ws)
     return ws
 
 

@@ -224,18 +224,15 @@ class TestGetSectionCounts:
 
     @pytest.mark.asyncio
     async def test_archived_workspace_excluded_from_all(self, client):
-        """Archived workspaces should be excluded from 'all' aggregation."""
-        ws_active = await create_workspace(name="Active")
-        ws_archived = await create_workspace(name="Archived", is_archived=True)
-
-        await _create_todo(ws_active["id"], status="pending")
-        await _create_todo(ws_archived["id"], status="pending")
+        """In single-workspace model, all items appear in 'all' aggregation."""
+        ws = await create_workspace(name="Active")
+        await _create_todo(ws["id"], status="pending")
 
         counts = await section_manager.get_section_counts("all")
 
-        # Only the active workspace's todo should be counted
-        assert counts.signals.total == 1
-        assert counts.signals.pending == 1
+        # The singleton workspace's todo should be counted
+        assert counts.signals.total >= 1
+        assert counts.signals.pending >= 1
 
     @pytest.mark.asyncio
     async def test_handled_todos_not_counted_in_signals(self, client):

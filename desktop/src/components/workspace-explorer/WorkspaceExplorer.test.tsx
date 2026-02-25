@@ -17,14 +17,7 @@ vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));
 
-// Mock services
-vi.mock('../../services/swarmWorkspaces', () => ({
-  swarmWorkspacesService: {
-    list: vi.fn().mockResolvedValue([]),
-    archive: vi.fn().mockResolvedValue({}),
-    delete: vi.fn().mockResolvedValue(undefined),
-  },
-}));
+// swarmWorkspacesService removed — singleton workspace model (task 12.9)
 
 vi.mock('../../services/sections', () => ({
   sectionsService: {
