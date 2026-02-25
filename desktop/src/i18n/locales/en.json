@@ -71,6 +71,7 @@
   "nav": {
     "dashboard": "Dashboard",
     "chat": "Chat",
+    "tasks": "Tasks",
     "agents": "Agent Management",
     "skills": "Skill Management",
     "plugins": "Plugin Management",
@@ -139,6 +140,42 @@
     "createAgentFirst": "Create one first",
     "selectAgent": "Select Agent",
     "chooseAgent": "Choose an agent..."
+  },
+  "tasks": {
+    "title": "Task Management",
+    "subtitle": "Monitor and manage your running agent tasks.",
+    "search": "Search tasks...",
+    "filter": {
+      "all": "All",
+      "running": "Running",
+      "completed": "Completed",
+      "failed": "Failed"
+    },
+    "columns": {
+      "name": "Task Name",
+      "agent": "Agent",
+      "status": "Status",
+      "model": "Model",
+      "started": "Started",
+      "duration": "Duration",
+      "actions": "Actions"
+    },
+    "status": {
+      "pending": "Pending",
+      "running": "Running",
+      "completed": "Completed",
+      "failed": "Failed",
+      "cancelled": "Cancelled"
+    },
+    "actions": {
+      "viewChat": "View Chat",
+      "cancel": "Cancel",
+      "delete": "Delete"
+    },
+    "empty": "No tasks yet. Start a chat to create your first task.",
+    "newTask": "New Task",
+    "confirmCancel": "Are you sure you want to cancel this task?",
+    "confirmDelete": "Are you sure you want to delete this task?"
   },
   "agents": {
     "title": "Agent Management",
