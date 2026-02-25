@@ -28,6 +28,10 @@ Owork is a powerful AI Agent management platform that enables you to:
 
 - **Chat with AI Agents**: Interactive chat interface with SSE streaming
 ![alt text](./assets/image-4.png)
+- **Background task**：Create and run background tasks in batch mode
+![alt text](./assets/image-5.png)
+![alt text](./assets/image-7.png)
+
 - **Manage Agents**: Create, configure, and monitor AI agents
 ![alt text](./assets/image-3.png)
 - **Manage Skills**: Upload, install, and manage custom skills (with Git version control)
