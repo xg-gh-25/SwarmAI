@@ -535,3 +535,39 @@ export interface PluginUninstallResponse {
   removedAgents: string[];
   removedHooks: string[];
 }
+
+// ============== Task Types ==============
+
+export type TaskStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+
+export interface Task {
+  id: string;
+  agentId: string;
+  sessionId: string | null;
+  status: TaskStatus;
+  title: string;
+  model: string | null;
+  createdAt: string;
+  startedAt: string | null;
+  completedAt: string | null;
+  error: string | null;
+  workDir: string | null;
+}
+
+export interface TaskCreateRequest {
+  agentId: string;
+  message?: string;
+  content?: ContentBlock[];
+  enableSkills?: boolean;
+  enableMcp?: boolean;
+  addDirs?: string[];
+}
+
+export interface TaskMessageRequest {
+  message?: string;
+  content?: ContentBlock[];
+}
+
+export interface RunningTaskCount {
+  count: number;
+}
