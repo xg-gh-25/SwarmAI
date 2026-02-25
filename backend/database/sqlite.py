@@ -244,6 +244,21 @@ class SQLiteSkillVersionsTable(SQLiteTable[T], Generic[T]):
             return cursor.rowcount
 
 
+class SQLiteSkillsTable(SQLiteTable[T], Generic[T]):
+    """Specialized SQLite table for skills with source_plugin_id querying support."""
+
+    async def list_by_source_plugin(self, plugin_id: str) -> list[T]:
+        """List all skills installed by a specific plugin."""
+        async with self._get_connection() as conn:
+            conn.row_factory = aiosqlite.Row
+            async with conn.execute(
+                f"SELECT * FROM {self.table_name} WHERE source_plugin_id = ?",
+                (plugin_id,)
+            ) as cursor:
+                rows = await cursor.fetchall()
+                return [self._row_to_dict(row) for row in rows]
+
+
 class SQLitePluginsTable(SQLiteTable[T], Generic[T]):
     """Specialized SQLite table for plugins with installed_at ordering.
 
@@ -634,7 +649,7 @@ class SQLiteDatabase(BaseDatabase):
 
         # Initialize tables
         self._agents = SQLiteTable[dict]("agents", self.db_path)
-        self._skills = SQLiteTable[dict]("skills", self.db_path)
+        self._skills = SQLiteSkillsTable[dict]("skills", self.db_path)
         self._mcp_servers = SQLiteTable[dict]("mcp_servers", self.db_path)
         self._sessions = SQLiteTable[dict]("sessions", self.db_path)
         self._messages = SQLiteMessagesTable[dict]("messages", self.db_path)
@@ -728,7 +743,7 @@ class SQLiteDatabase(BaseDatabase):
         return self._agents
 
     @property
-    def skills(self) -> SQLiteTable:
+    def skills(self) -> SQLiteSkillsTable:
         """Get the skills table."""
         return self._skills
 

@@ -45,7 +45,6 @@ Owork 是一个功能强大的 AI Agent 管理平台，让您可以：
 | 模式 | 前端 | 后端 | 数据库 | 技能存储 | 适用场景 |
 |------|------|------|--------|----------|----------|
 | **桌面版** | Tauri 2.0 + React | Python FastAPI (Sidecar) | SQLite | 本地文件系统 + Git | 个人使用 |
-| **云端版** | React (S3/CloudFront) | FastAPI (ECS Fargate/EC2) | DynamoDB | S3 | 团队/企业 |
 
 ---
 
@@ -196,7 +195,7 @@ npm run build:all
 - Node.js 18+ 和 npm
 - Python 3.12+
 - uv（Python 包管理器，推荐）或 pip
-- AWS 账号（用于 DynamoDB、S3 等）
+- AWS 账号（用于 Bedrock 等，可选）
 - ANTHROPIC_API_KEY
 
 ### 快速启动
@@ -251,12 +250,6 @@ API 文档：http://localhost:8000/docs
 - **后端**：FastAPI (PyInstaller 打包为 Sidecar)
 - **数据库**：SQLite
 - **构建工具**：Vite + Rust
-
-### 云端版
-- **前端**：React 19 + TypeScript + Vite
-- **后端**：FastAPI + Uvicorn
-- **数据库**：DynamoDB
-- **部署**：AWS ECS Fargate + S3 + CloudFront
 
 ### 通用
 - **AI 引擎**：Claude Agent SDK
@@ -328,8 +321,7 @@ owork/
 │   │   ├── session_manager.py
 │   │   └── local_skill_manager.py
 │   ├── database/
-│   │   ├── sqlite.py        # SQLite (桌面版)
-│   │   └── dynamodb.py      # DynamoDB (云端版)
+│   │   └── sqlite.py        # SQLite
 │   └── schemas/             # Pydantic 模型
 │
 ├── CLAUDE.md                # Claude Code 开发指南
@@ -379,7 +371,7 @@ owork/
 - `DEBUG` - 调试模式
 - `HOST` - 服务器主机
 - `PORT` - 服务器端口
-- `DATABASE_TYPE` - 数据库类型 (`sqlite` / `dynamodb`)
+- `DATABASE_TYPE` - 数据库类型 (`sqlite`)
 
 完整配置请参见 `backend/.env.example` 或 `desktop/backend.env.example`
 
