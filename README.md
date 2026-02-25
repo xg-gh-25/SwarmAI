@@ -25,9 +25,13 @@
 ## 概述
 
 Owork 是一个功能强大的 AI Agent 管理平台，让您可以：
-
+![alt text](image.png)
 - **与 AI 智能体对话**：通过 SSE 流式传输的交互式聊天界面
 ![alt text](./assets/image-4.png)
+- **创建后台任务运行**：创建后台任务批量运行
+![alt text](./assets/image-5.png)
+![alt text](./assets/image-7.png)
+
 - **管理智能体**：创建、配置和监控 AI 智能体
 ![alt text](./assets/image-3.png)
 - **管理技能**：上传、安装和管理自定义技能（支持 Git 版本控制）
@@ -75,7 +79,6 @@ xattr -cr /Applications/Owork.app
 3. 需要安装Git bash 系统依赖：https://git-scm.com/downloads/win
 
 #### 2. 配置 API
-
 启动Owork,后进入 Settings 页面配置：
 
 - **Anthropic API**：输入 API Key
