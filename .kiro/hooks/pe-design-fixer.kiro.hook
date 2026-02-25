@@ -1,0 +1,15 @@
+{
+  "enabled": true,
+  "name": "Apply PE Design Fixes",
+  "description": "Applies High and Medium PE design review fixes to design.md, then propagates changes to requirements.md and tasks.md.",
+  "version": "1",
+  "when": {
+    "type": "userTriggered"
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "You are a Principal Engineer applying design review fixes. Follow this process:\n\n**Phase 1 — Auto-fix design.md:**\n\nReview the PE design review findings from the most recent scan. Automatically apply fixes ONLY for 🔴 High and 🟡 Medium severity findings directly in design.md. For each fix:\n- Update the relevant section in design.md\n- Add or strengthen correctness properties if gaps were found\n- Update mermaid diagrams if architecture changes\n- Preserve the existing document structure and voice\n\nLeave 🟢 Low severity items as suggestions for the developer to decide on.\n\n**Phase 2 — Propagate changes to requirements.md and tasks.md:**\n\nAfter fixing design.md, read the requirements.md and tasks.md files in the SAME spec directory. Then propagate the 🔴 High and 🟡 Medium fixes:\n\n**For requirements.md:**\n- If a design fix introduces a new constraint, validation rule, or behavioral guarantee, add or update the corresponding requirement\n- If a design fix changes an API contract, data model, or error handling strategy, update any requirements that reference the old behavior\n- If a design fix adds a new correctness property, ensure there is a matching requirement that motivates it\n- Do NOT remove existing requirements — only add or amend\n\n**For tasks.md:**\n- If a design fix adds new components, endpoints, or data structures, add corresponding implementation sub-tasks\n- If a design fix changes how something should be built, update the affected task descriptions\n- If a design fix adds or strengthens a correctness property, ensure there is a task for writing the property-based test\n- Mark any new tasks as not started: `- [ ]`\n- Do NOT change the status of existing tasks\n\nAfter all fixes, provide a brief summary of what was changed in each file."
+  },
+  "workspaceFolderName": "swarmai",
+  "shortName": "pe-design-fixer"
+}

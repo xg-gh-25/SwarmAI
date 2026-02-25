@@ -1,0 +1,15 @@
+{
+  "enabled": true,
+  "name": "Docs Update Scan",
+  "description": "Checks if documentation updates are needed after code changes. Lists suggestions but does NOT auto-update — use the companion 'Apply Docs Updates' hook to apply changes.",
+  "version": "2",
+  "when": {
+    "type": "agentStop"
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "IMPORTANT: Skip this analysis entirely if the only edited files are under `.kiro/specs/`, `docs/`, or are documentation markdown files (README.md, AGENT.md, CLAUDE.md, QUICK_START.md, GITHUB_SUBMISSION.md). Only analyze actual source code changes.\n\nA source file was edited. Review the changes and determine if documentation updates are needed. Check if the change affects:\n- Public APIs, exports, or interfaces → Would need updates in docs/ or .kiro/specs/\n- Project setup, dependencies, or configuration → Would need README.md updates\n- New features or significant behavior changes → Would need README.md, .kiro/specs and docs/ updates\n\nList what documentation updates would be needed and why. Only flag meaningful changes — minor refactors or internal changes typically don't need doc updates.\n\n⚠️ DO NOT edit any files. Only report what needs updating. The developer can use the 'Apply Docs Updates' hook to make the changes."
+  },
+  "workspaceFolderName": "swarmai",
+  "shortName": "update-docs-on-code-change"
+}
