@@ -1,6 +1,7 @@
 import { NavLink, useLocation } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import clsx from 'clsx';
+import { useRunningTaskCount } from '../../hooks/useRunningTaskCount';
 
 interface NavItem {
   path: string;
@@ -32,8 +33,11 @@ export default function Sidebar({ collapsed, onClose, isOverlay }: SidebarProps)
   const { t } = useTranslation();
   const location = useLocation();
 
+  const { count: runningTaskCount } = useRunningTaskCount();
+
   const navItems: NavItem[] = [
     { path: '/chat', labelKey: 'nav.chat', icon: 'chat' },
+    { path: '/tasks', labelKey: 'nav.tasks', icon: 'task_alt' },
     { path: '/agents', labelKey: 'nav.agents', icon: 'smart_toy' },
     { path: '/skills', labelKey: 'nav.skills', icon: 'construction' },
     { path: '/plugins', labelKey: 'nav.plugins', icon: 'extension' },
@@ -80,19 +84,25 @@ export default function Sidebar({ collapsed, onClose, isOverlay }: SidebarProps)
         {/* Navigation */}
         <nav className="flex-1 py-4 px-2 space-y-1">
           {navItems.map((item) => (
-            <NavLink
-              key={item.path}
-              to={item.path}
-              title={t(item.labelKey)}
-              className={clsx(
-                'flex items-center justify-center w-12 h-12 rounded-xl transition-colors',
-                isActive(item.path)
-                  ? 'bg-primary/20 text-primary'
-                  : 'text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)]'
+            <div key={item.path} className="relative">
+              <NavLink
+                to={item.path}
+                title={t(item.labelKey)}
+                className={clsx(
+                  'flex items-center justify-center w-12 h-12 rounded-xl transition-colors',
+                  isActive(item.path)
+                    ? 'bg-primary/20 text-primary'
+                    : 'text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)]'
+                )}
+              >
+                <span className="material-symbols-outlined text-2xl">{item.icon}</span>
+              </NavLink>
+              {item.path === '/tasks' && runningTaskCount > 0 && (
+                <span className="absolute -top-1 -right-1 w-5 h-5 bg-primary text-white text-xs font-bold rounded-full flex items-center justify-center">
+                  {runningTaskCount > 9 ? '9+' : runningTaskCount}
+                </span>
               )}
-            >
-              <span className="material-symbols-outlined text-2xl">{item.icon}</span>
-            </NavLink>
+            </div>
           ))}
         </nav>
 
@@ -188,7 +198,17 @@ export default function Sidebar({ collapsed, onClose, isOverlay }: SidebarProps)
             )}
           >
             <span className="material-symbols-outlined text-xl">{item.icon}</span>
-            <span className="text-sm font-medium">{t(item.labelKey)}</span>
+            <span className="text-sm font-medium flex-1">{t(item.labelKey)}</span>
+            {item.path === '/tasks' && runningTaskCount > 0 && (
+              <span className={clsx(
+                'w-5 h-5 text-xs font-bold rounded-full flex items-center justify-center',
+                isActive(item.path)
+                  ? 'bg-white/20 text-white'
+                  : 'bg-primary/20 text-primary'
+              )}>
+                {runningTaskCount > 9 ? '9+' : runningTaskCount}
+              </span>
+            )}
           </NavLink>
         ))}
       </nav>

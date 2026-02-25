@@ -311,6 +311,59 @@ class SQLitePluginsTable(SQLiteTable[T], Generic[T]):
                 return [self._row_to_dict(row) for row in rows]
 
 
+class SQLiteTasksTable(SQLiteTable[T], Generic[T]):
+    """Specialized SQLite table for tasks with status filtering and counting."""
+
+    async def list_all(self, status: Optional[str] = None, agent_id: Optional[str] = None) -> list[T]:
+        """List all tasks, optionally filtered by status or agent_id."""
+        async with self._get_connection() as conn:
+            conn.row_factory = aiosqlite.Row
+            query = "SELECT * FROM tasks WHERE 1=1"
+            params = []
+            if status:
+                query += " AND status = ?"
+                params.append(status)
+            if agent_id:
+                query += " AND agent_id = ?"
+                params.append(agent_id)
+            query += " ORDER BY created_at DESC"
+            async with conn.execute(query, params) as cursor:
+                rows = await cursor.fetchall()
+                return [self._row_to_dict(row) for row in rows]
+
+    async def count_by_status(self, status: str) -> int:
+        """Count tasks by status."""
+        async with self._get_connection() as conn:
+            async with conn.execute(
+                "SELECT COUNT(*) FROM tasks WHERE status = ?", (status,)
+            ) as cursor:
+                row = await cursor.fetchone()
+                return row[0] if row else 0
+
+    async def delete_by_agent_id(self, agent_id: str) -> int:
+        """Delete all tasks for a given agent (cascade delete).
+
+        Returns the number of tasks deleted.
+        """
+        async with self._get_connection() as conn:
+            async with conn.execute(
+                "DELETE FROM tasks WHERE agent_id = ?", (agent_id,)
+            ) as cursor:
+                await conn.commit()
+                return cursor.rowcount
+
+    async def list_by_agent_id(self, agent_id: str) -> list[T]:
+        """List all tasks for a given agent."""
+        async with self._get_connection() as conn:
+            conn.row_factory = aiosqlite.Row
+            async with conn.execute(
+                "SELECT * FROM tasks WHERE agent_id = ? ORDER BY created_at DESC",
+                (agent_id,)
+            ) as cursor:
+                rows = await cursor.fetchall()
+                return [self._row_to_dict(row) for row in rows]
+
+
 class SQLiteDatabase(BaseDatabase):
     """SQLite database client implementing BaseDatabase interface."""
 
@@ -535,6 +588,24 @@ class SQLiteDatabase(BaseDatabase):
     CREATE INDEX IF NOT EXISTS idx_plugins_marketplace_id ON plugins(marketplace_id);
     CREATE INDEX IF NOT EXISTS idx_plugins_user_id ON plugins(user_id);
     CREATE INDEX IF NOT EXISTS idx_plugins_name ON plugins(name);
+
+    -- Tasks table (background agent tasks)
+    CREATE TABLE IF NOT EXISTS tasks (
+        id TEXT PRIMARY KEY,
+        agent_id TEXT NOT NULL,
+        session_id TEXT,
+        status TEXT NOT NULL DEFAULT 'pending',
+        title TEXT NOT NULL,
+        model TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        started_at TEXT,
+        completed_at TEXT,
+        error TEXT,
+        work_dir TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
+    CREATE INDEX IF NOT EXISTS idx_tasks_agent_id ON tasks(agent_id);
     """
 
     def __init__(self, db_path: str | Path | None = None):
@@ -573,6 +644,7 @@ class SQLiteDatabase(BaseDatabase):
         self._marketplaces = SQLiteTable[dict]("marketplaces", self.db_path)
         self._plugins = SQLitePluginsTable[dict]("plugins", self.db_path)
         self._permission_requests = SQLiteTable[dict]("permission_requests", self.db_path)
+        self._tasks = SQLiteTasksTable[dict]("tasks", self.db_path)
 
     async def initialize(self) -> None:
         """Initialize database schema."""
@@ -637,6 +709,19 @@ class SQLiteDatabase(BaseDatabase):
             await conn.commit()
             logger.info("Migration complete: default_model column added")
 
+        # Migration: Add updated_at column to tasks table (added 2026-02-03)
+        # Required by base SQLiteTable.put() method
+        cursor = await conn.execute("PRAGMA table_info(tasks)")
+        tasks_columns = await cursor.fetchall()
+        tasks_column_names = [col[1] for col in tasks_columns]
+
+        if "updated_at" not in tasks_column_names:
+            logger.info("Running migration: Adding updated_at column to tasks table")
+            # Set default to current timestamp for existing rows (datetime already imported at module level)
+            await conn.execute(f"ALTER TABLE tasks ADD COLUMN updated_at TEXT DEFAULT '{datetime.now().isoformat()}'")
+            await conn.commit()
+            logger.info("Migration complete: updated_at column added")
+
     @property
     def agents(self) -> SQLiteTable:
         """Get the agents table."""
@@ -691,6 +776,11 @@ class SQLiteDatabase(BaseDatabase):
     def permission_requests(self) -> SQLiteTable:
         """Get the permission requests table."""
         return self._permission_requests
+
+    @property
+    def tasks(self) -> SQLiteTasksTable:
+        """Get the tasks table."""
+        return self._tasks
 
     async def health_check(self) -> bool:
         """Check if the database is healthy."""

@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ThemeProvider } from './contexts/ThemeContext';
 import { Layout, BackendStartupOverlay, UpdateNotification } from './components/common';
 import ChatPage from './pages/ChatPage';
+import TasksPage from './pages/TasksPage';
 import AgentsPage from './pages/AgentsPage';
 import SkillsPage from './pages/SkillsPage';
 import MCPPage from './pages/MCPPage';
@@ -44,6 +45,7 @@ export default function App() {
             <Route path="/" element={<Layout />}>
               <Route index element={<DashboardPage />} />
               <Route path="chat" element={<ChatPage />} />
+              <Route path="tasks" element={<TasksPage />} />
               <Route path="agents" element={<AgentsPage />} />
               <Route path="skills" element={<SkillsPage />} />
               <Route path="mcp" element={<MCPPage />} />

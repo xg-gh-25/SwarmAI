@@ -71,6 +71,7 @@
   "nav": {
     "dashboard": "Dashboard",
     "chat": "Chat",
+    "tasks": "Tasks",
     "agents": "Agent Management",
     "skills": "Skill Management",
     "plugins": "Plugin Management",
@@ -138,7 +139,58 @@
     "noAgentsAvailable": "No agents available.",
     "createAgentFirst": "Create one first",
     "selectAgent": "Select Agent",
-    "chooseAgent": "Choose an agent..."
+    "chooseAgent": "Choose an agent...",
+    "runAsTask": "Background Task",
+    "runAsTaskDescription": "Run in background - task continues even if you navigate away",
+    "taskCreated": "Task created! View in Tasks page.",
+    "taskCreateFailed": "Failed to create task"
+  },
+  "tasks": {
+    "title": "Task Management",
+    "subtitle": "Monitor and manage your running agent tasks.",
+    "search": "Search tasks...",
+    "filter": {
+      "all": "All",
+      "running": "Running",
+      "completed": "Completed",
+      "failed": "Failed",
+      "cancelled": "Cancelled"
+    },
+    "columns": {
+      "name": "Task Name",
+      "agent": "Agent",
+      "status": "Status",
+      "model": "Model",
+      "started": "Started",
+      "duration": "Duration",
+      "actions": "Actions"
+    },
+    "status": {
+      "pending": "Pending",
+      "running": "Running",
+      "completed": "Completed",
+      "failed": "Failed",
+      "cancelled": "Cancelled"
+    },
+    "actions": {
+      "viewChat": "View Chat",
+      "cancel": "Cancel",
+      "delete": "Delete"
+    },
+    "empty": "No tasks yet. Start a chat to create your first task.",
+    "newTask": "New Task",
+    "confirmCancel": "Are you sure you want to cancel this task?",
+    "confirmDelete": "Are you sure you want to delete this task?",
+    "time": {
+      "justNow": "Just now",
+      "minutesAgo": "{{count}}m ago",
+      "hoursAgo": "{{count}}h ago",
+      "daysAgo": "{{count}}d ago"
+    },
+    "error": {
+      "cancelFailed": "Failed to cancel task",
+      "deleteFailed": "Failed to delete task"
+    }
   },
   "agents": {
     "title": "Agent Management",

@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import clsx from 'clsx';
 import type { Message, ContentBlock, StreamEvent, AskUserQuestion as AskUserQuestionType, ChatSession, TodoItem, PermissionRequest, Agent, AgentCreateRequest, FileAttachment } from '../types';
 import { chatService } from '../services/chat';
@@ -10,6 +10,7 @@ import { skillsService } from '../services/skills';
 import { mcpService } from '../services/mcp';
 import { pluginsService } from '../services/plugins';
 import { workspaceService } from '../services/workspace';
+import { tasksService } from '../services/tasks';
 import { Spinner, ReadOnlyChips, AskUserQuestion, Dropdown, MarkdownRenderer, ConfirmDialog, TodoWriteWidget, AgentFormModal } from '../components/common';
 import { PermissionRequestModal, FileAttachmentButton, FileAttachmentPreview } from '../components/chat';
 import { FileBrowser } from '../components/workspace/FileBrowser';
@@ -88,6 +89,7 @@ const timeGroupLabelKey: Record<TimeGroup, string> = {
 export default function ChatPage() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputValue, setInputValue] = useState('');
@@ -97,6 +99,12 @@ export default function ChatPage() {
   // Initialize selectedAgentId from localStorage
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(() => {
     return localStorage.getItem('lastSelectedAgentId');
+  });
+
+  // Background task mode - run chat as a background task
+  // Initialize from URL parameter (taskMode=true when coming from Tasks page)
+  const [runAsTask, setRunAsTask] = useState(() => {
+    return searchParams.get('taskMode') === 'true';
   });
 
   const [pendingQuestion, setPendingQuestion] = useState<PendingQuestion | null>(null);
@@ -239,6 +247,57 @@ export default function ChatPage() {
     enabled: !!selectedAgentId,
   });
 
+  // Task support: fetch task if taskId URL parameter is present
+  const taskId = searchParams.get('taskId');
+  const { data: task } = useQuery({
+    queryKey: ['task', taskId],
+    queryFn: () => taskId ? tasksService.get(taskId) : null,
+    enabled: !!taskId,
+  });
+
+  // Load session messages helper (defined here so it can be used by task effect below)
+  const loadSessionMessages = useCallback(async (sid: string) => {
+    setIsLoadingHistory(true);
+    try {
+      const sessionMessages = await chatService.getSessionMessages(sid);
+      // Convert to Message format
+      const formattedMessages: Message[] = sessionMessages.map((msg) => ({
+        id: msg.id,
+        role: msg.role as 'user' | 'assistant',
+        content: msg.content as ContentBlock[],
+        timestamp: msg.createdAt,
+        model: msg.model,
+      }));
+      setMessages(formattedMessages);
+      setSessionId(sid);
+      setPendingQuestion(null);
+    } catch (error) {
+      console.error('Failed to load session messages:', error);
+    } finally {
+      setIsLoadingHistory(false);
+    }
+  }, []);
+
+  // When task is loaded, set agent and load session messages
+  useEffect(() => {
+    if (task) {
+      if (task.agentId && task.agentId !== selectedAgentId) {
+        setSelectedAgentId(task.agentId);
+      }
+      // Load the session messages if task has a sessionId
+      if (task.sessionId && task.sessionId !== sessionId) {
+        loadSessionMessages(task.sessionId);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- Only run when task changes, not when selectedAgentId/sessionId change
+  }, [task]);
+
+  // Sync taskMode URL parameter with runAsTask state
+  useEffect(() => {
+    const taskMode = searchParams.get('taskMode') === 'true';
+    setRunAsTask(taskMode);
+  }, [searchParams]);
+
   // Memoize grouped sessions to avoid recalculating on every render
   const groupedSessions = useMemo(() => groupSessionsByTime(sessions), [sessions]);
 
@@ -325,29 +384,6 @@ export default function ChatPage() {
   const toggleChatSidebar = () => {
     setChatSidebarCollapsed((prev) => !prev);
   };
-
-  // Load session messages
-  const loadSessionMessages = useCallback(async (sid: string) => {
-    setIsLoadingHistory(true);
-    try {
-      const sessionMessages = await chatService.getSessionMessages(sid);
-      // Convert to Message format
-      const formattedMessages: Message[] = sessionMessages.map((msg) => ({
-        id: msg.id,
-        role: msg.role as 'user' | 'assistant',
-        content: msg.content as ContentBlock[],
-        timestamp: msg.createdAt,
-        model: msg.model,
-      }));
-      setMessages(formattedMessages);
-      setSessionId(sid);
-      setPendingQuestion(null);
-    } catch (error) {
-      console.error('Failed to load session messages:', error);
-    } finally {
-      setIsLoadingHistory(false);
-    }
-  }, []);
 
   // Handle session selection from history
   const handleSelectSession = useCallback(async (session: ChatSession) => {
@@ -559,6 +595,33 @@ export default function ChatPage() {
     // Build content array from text and attachments
     const content = await buildContentArray(messageText, attachments);
     if (content.length === 0) return;
+
+    // If runAsTask is enabled, create a background task instead of streaming
+    if (runAsTask) {
+      try {
+        await tasksService.create({
+          agentId: selectedAgentId,
+          message: hasAttachments ? undefined : messageText,
+          content: hasAttachments ? content : undefined,
+          enableSkills,
+          enableMcp: enableMCP,
+          addDirs: workDir ? [workDir] : undefined,
+        });
+        setInputValue('');
+        clearAttachments();
+        setRunAsTask(false); // Reset toggle after creating task
+        // Invalidate task queries to refresh the list
+        queryClient.invalidateQueries({ queryKey: ['tasks'] });
+        queryClient.invalidateQueries({ queryKey: ['runningTaskCount'] });
+        // Navigate to tasks page
+        navigate('/tasks');
+      } catch (error) {
+        console.error('Failed to create task:', error);
+        // Show error to user via a simple alert (could be improved with toast)
+        alert(t('chat.taskCreateFailed'));
+      }
+      return;
+    }
 
     // Display text for user message (show text + attachment indicators)
     const displayText = hasText ? messageText : '[Attachments]';
@@ -1767,11 +1830,61 @@ export default function ChatPage() {
             {/* Input Area */}
             <div className="p-6">
               <div className="max-w-3xl mx-auto">
+                {/* Background Task Mode Toggle - Prominent Banner */}
+                <div
+                  onClick={() => !isStreaming && setRunAsTask(!runAsTask)}
+                  className={clsx(
+                    'mb-3 flex items-center justify-between px-4 py-2.5 rounded-xl cursor-pointer transition-all',
+                    runAsTask
+                      ? 'bg-gradient-to-r from-green-500/20 to-emerald-500/20 border border-green-500/50 shadow-[0_0_15px_rgba(34,197,94,0.15)]'
+                      : 'bg-[var(--color-hover)]/50 border border-[var(--color-border)] hover:border-[var(--color-text-muted)]/50',
+                    isStreaming && 'opacity-50 cursor-not-allowed'
+                  )}
+                >
+                  <div className="flex items-center gap-3">
+                    <span className={clsx(
+                      'material-symbols-outlined text-xl',
+                      runAsTask ? 'text-green-500' : 'text-[var(--color-text-muted)]'
+                    )}>
+                      {runAsTask ? 'rocket_launch' : 'task_alt'}
+                    </span>
+                    <div>
+                      <p className={clsx(
+                        'text-sm font-medium',
+                        runAsTask ? 'text-green-500' : 'text-[var(--color-text)]'
+                      )}>
+                        {t('chat.runAsTask')}
+                      </p>
+                      <p className="text-xs text-[var(--color-text-muted)]">
+                        {t('chat.runAsTaskDescription')}
+                      </p>
+                    </div>
+                  </div>
+                  {/* Toggle Switch */}
+                  <div
+                    className={clsx(
+                      'relative w-11 h-6 rounded-full transition-colors flex-shrink-0',
+                      runAsTask ? 'bg-green-500' : 'bg-[var(--color-border)]'
+                    )}
+                  >
+                    <span
+                      className={clsx(
+                        'absolute top-1 left-1 w-4 h-4 rounded-full bg-white shadow-sm transition-transform duration-200',
+                        runAsTask && 'translate-x-5'
+                      )}
+                    />
+                  </div>
+                </div>
+
                 {/* Input Container with drag-and-drop */}
                 <div
                   className={clsx(
-                    'bg-[var(--color-card)] border rounded-2xl p-3 relative transition-colors',
-                    isDragging ? 'border-primary bg-primary/5' : 'border-[var(--color-border)]'
+                    'bg-[var(--color-card)] border rounded-2xl p-3 relative transition-all',
+                    isDragging
+                      ? 'border-primary bg-primary/5'
+                      : runAsTask
+                        ? 'border-green-500/50 shadow-[0_0_20px_rgba(34,197,94,0.1)]'
+                        : 'border-[var(--color-border)]'
                   )}
                   onDragOver={handleDragOver}
                   onDragLeave={handleDragLeave}
@@ -1903,13 +2016,17 @@ export default function ChatPage() {
                         'w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 transition-colors',
                         isStreaming
                           ? 'bg-red-500 hover:bg-red-600'
-                          : 'bg-primary hover:bg-primary-hover',
+                          : runAsTask
+                            ? 'bg-green-500 hover:bg-green-600'
+                            : 'bg-primary hover:bg-primary-hover',
                         !isStreaming && ((!inputValue.trim() && !attachments.some((a) => a.base64)) || !selectedAgentId) && 'opacity-50 cursor-not-allowed'
                       )}
-                      title={isStreaming ? 'Stop generation' : attachments.length > 0 ? 'Send with attachments' : 'Send message'}
+                      title={isStreaming ? 'Stop generation' : runAsTask ? t('chat.runAsTask') : (attachments.length > 0 ? 'Send with attachments' : 'Send message')}
                     >
                       {isStreaming ? (
                         <span className="material-symbols-outlined text-white text-xl">stop</span>
+                      ) : runAsTask ? (
+                        <span className="material-symbols-outlined text-white text-xl">rocket_launch</span>
                       ) : (
                         <span className="material-symbols-outlined text-white text-xl">arrow_upward</span>
                       )}
