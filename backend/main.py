@@ -11,7 +11,7 @@ from pathlib import Path
 
 from config import settings
 from core.agent_manager import agent_manager
-from routers import agents_router, skills_router, mcp_router, chat_router, auth_router, workspace_router, settings_router, plugins_router
+from routers import agents_router, skills_router, mcp_router, chat_router, auth_router, workspace_router, settings_router, plugins_router, tasks_router
 from middleware.error_handler import setup_error_handlers
 from middleware.rate_limit import limiter
 from database import initialize_database
@@ -142,6 +142,7 @@ app.include_router(chat_router, prefix="/api/chat", tags=["chat"])
 app.include_router(workspace_router, prefix="/api/workspace", tags=["workspace"])
 app.include_router(settings_router, prefix="/api/settings", tags=["settings"])
 app.include_router(plugins_router, prefix="/api/plugins", tags=["plugins"])
+app.include_router(tasks_router, prefix="/api/tasks", tags=["tasks"])
 
 
 @app.get("/health")
