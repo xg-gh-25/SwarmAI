@@ -459,12 +459,12 @@ graph TB
         E --> H[Task N]
     end
 
-    subgraph "AWS Database"
-        I[DynamoDB<br/>Agents/Skills/MCP]
+    subgraph "Database"
+        I[SQLite<br/>Agents/Skills/MCP]
     end
 
-    subgraph "AWS Storage"
-        J[S3 Bucket<br/>Skills Packages]
+    subgraph "Storage"
+        J[Local Filesystem<br/>Skills Packages]
     end
 
     subgraph "AWS Secrets"

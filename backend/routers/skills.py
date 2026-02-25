@@ -119,7 +119,7 @@ async def upload_skill(
             original_filename=file.filename
         )
 
-        # Determine if we're in local mode (SQLite) or cloud mode (DynamoDB)
+        # Determine storage mode
         is_local_mode = settings.database_type == "sqlite"
 
         # Check if skill already exists (by folder_name, local_path, or s3_location)
@@ -481,7 +481,7 @@ async def finalize_skill(request: SkillFinalizeRequest):
                 existing_skill = s
                 break
 
-        # Determine if we're in local mode (SQLite) or cloud mode (DynamoDB)
+        # Determine storage mode
         is_local_mode = settings.database_type == "sqlite"
 
         if existing_skill:

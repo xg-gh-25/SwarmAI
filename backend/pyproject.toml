@@ -14,10 +14,7 @@ dependencies = [
     "pydantic-settings>=2.6.0",
     # Claude Agent SDK
     "claude-agent-sdk>=0.1.20",
-    # AWS SDK (for production DynamoDB)
-    "boto3>=1.40.37",
-    "aioboto3>=13.0.0",
-    # SQLite (for desktop app)
+    # SQLite
     "aiosqlite>=0.20.0",
     # Authentication
     "python-jose[cryptography]>=3.3.0",

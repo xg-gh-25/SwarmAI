@@ -547,55 +547,49 @@ class PluginManager:
             skill_paths = plugin_data.get("skills", [])
             logger.info(f"Explicit skill paths from plugin_data: {skill_paths}")
 
-            # Track plugin source directory (for install_path in git URL plugins)
+            # Resolve plugin source directory (needed for install_path and auto-detection)
             plugin_source_dir = None
+            source_info = plugin_data.get("source", "")
 
-            # If no explicit skills but source is specified, auto-detect skills
+            # Handle dict source format: {'source': 'url', 'url': 'https://...'}
+            if isinstance(source_info, dict) and source_info.get("source") == "url":
+                git_url = source_info.get("url", "")
+                if git_url:
+                    logger.info(f"Source is a git URL: {git_url}")
+                    try:
+                        plugin_source_dir = await self._clone_plugin_source(
+                            git_url, plugin_name, market_cache
+                        )
+                        logger.info(f"Cloned plugin source to: {plugin_source_dir}")
+                    except Exception as e:
+                        logger.error(f"Failed to clone plugin source: {e}")
+                        plugin_source_dir = None
+
+            # Handle string source path (local path relative to marketplace)
+            elif source_info and isinstance(source_info, str):
+                clean_source = source_info.lstrip("./")
+                if clean_source:
+                    plugin_source_dir = marketplace_base / clean_source
+                else:
+                    plugin_source_dir = marketplace_base
+                logger.info(f"Source is local path: {plugin_source_dir} (exists: {plugin_source_dir.exists()})")
+
+            # If no explicit skills, auto-detect from source directory
             if not skill_paths:
-                source_info = plugin_data.get("source", "")
-                logger.info(f"No explicit skills, checking source: '{source_info}' (type: {type(source_info).__name__})")
+                logger.info(f"No explicit skills, auto-detecting from source")
 
-                # Handle dict source format: {'source': 'url', 'url': 'https://...'}
-                if isinstance(source_info, dict) and source_info.get("source") == "url":
-                    git_url = source_info.get("url", "")
-                    if git_url:
-                        logger.info(f"Source is a git URL: {git_url}")
-                        # Clone the repo to cache and use it as source
-                        try:
-                            plugin_source_dir = await self._clone_plugin_source(
-                                git_url, plugin_name, market_cache
-                            )
-                            logger.info(f"Cloned plugin source to: {plugin_source_dir}")
-                        except Exception as e:
-                            logger.error(f"Failed to clone plugin source: {e}")
-                            plugin_source_dir = None
-
-                # Handle string source path (local path relative to marketplace)
-                elif source_info and isinstance(source_info, str):
-                    # Resolve source path relative to marketplace base
-                    clean_source = source_info.lstrip("./")
-                    if clean_source:
-                        plugin_source_dir = marketplace_base / clean_source
-                    else:
-                        plugin_source_dir = marketplace_base
-                    logger.info(f"Source is local path: {plugin_source_dir} (exists: {plugin_source_dir.exists()})")
-
-                # Auto-detect skills from source directory
                 if plugin_source_dir and plugin_source_dir.exists():
-                    # Check for skills/ directory in the source
                     skills_dir = plugin_source_dir / "skills"
                     logger.info(f"Looking for skills dir at: {skills_dir} (exists: {skills_dir.exists()})")
                     if skills_dir.exists() and skills_dir.is_dir():
                         logger.info(f"Auto-detecting skills from {skills_dir}")
                         for skill_subdir in skills_dir.iterdir():
                             if skill_subdir.is_dir() and not skill_subdir.name.startswith('.'):
-                                # Add as relative path
                                 rel_path = f"./skills/{skill_subdir.name}"
                                 skill_paths.append(rel_path)
                         logger.info(f"Auto-detected {len(skill_paths)} skills: {skill_paths}")
 
                         # Update marketplace_base to point to the source directory for skill installation
-                        # This applies to both git URL sources (dict) and local path sources (string)
                         marketplace_base = plugin_source_dir
                         logger.info(f"Updated marketplace_base to: {marketplace_base}")
                     else:

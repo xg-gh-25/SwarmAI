@@ -31,6 +31,31 @@ from .workspace_manager import workspace_manager
 logger = logging.getLogger(__name__)
 
 
+async def expand_skill_ids_with_plugins(
+    skill_ids: list[str],
+    plugin_ids: list[str],
+    allow_all_skills: bool = False,
+) -> list[str]:
+    """Combine explicit skill_ids with skills from selected plugins.
+
+    Returns a deduplicated list preserving order: explicit skills first,
+    then plugin skills. Skips expansion when allow_all_skills is True.
+    """
+    if allow_all_skills or not plugin_ids:
+        return list(skill_ids)
+
+    seen = set(skill_ids)
+    effective = list(skill_ids)
+    for plugin_id in plugin_ids:
+        plugin_skills = await db.skills.list_by_source_plugin(plugin_id)
+        for skill in plugin_skills:
+            sid = skill.get("id")
+            if sid and sid not in seen:
+                seen.add(sid)
+                effective.append(sid)
+    return effective
+
+
 class _ClaudeClientWrapper:
     """Wrapper to handle anyio cleanup errors when ClaudeSDKClient is used with asyncio tasks.
 
@@ -648,46 +673,11 @@ class AgentManager:
         # Note: Skill tool is now user-controllable via the Advanced Tools section
         # If user wants to use skills, they need to enable the Skill tool explicitly
 
-        # Plugins configuration
-        plugins = []
-        plugin_ids = agent_config.get("plugin_ids", [])
-        if plugin_ids:
-            # Get skills directory for fallback path computation
-            from core.plugin_manager import plugin_manager
-            skills_dir = plugin_manager.skills_dir
-
-            for plugin_id in plugin_ids:
-                plugin = await db.plugins.get(plugin_id)
-                if plugin:
-                    install_path = plugin.get("install_path")
-
-                    # Fallback: compute install_path from installed_skills if missing
-                    if not install_path:
-                        installed_skills = plugin.get("installed_skills", [])
-                        if isinstance(installed_skills, str):
-                            try:
-                                installed_skills = json.loads(installed_skills)
-                            except Exception:
-                                installed_skills = []
-                        if installed_skills and len(installed_skills) > 0:
-                            install_path = str(skills_dir / installed_skills[0])
-                            logger.info(f"Computed install_path for plugin {plugin_id} from installed_skills: {install_path}")
-                            # Update the database with the computed path
-                            await db.plugins.update(plugin_id, {"install_path": install_path})
-
-                    if install_path:
-                        plugins.append({
-                            "type": "local",
-                            "path": install_path
-                        })
-                        logger.info(f"Added plugin: {plugin_id} ({plugin.get('name')}) from {install_path}")
-                    else:
-                        logger.warning(
-                            f"Plugin {plugin_id} ({plugin.get('name')}) has no install_path and no installed_skills. "
-                            f"Status: {plugin.get('status')}, installed_at: {plugin.get('installed_at')}"
-                        )
-                else:
-                    logger.warning(f"Plugin {plugin_id} not found in database")
+        # Note: Plugin skills are provided via workspace symlinks (expand_skill_ids_with_plugins),
+        # not via the SDK plugins config. Passing plugin paths to the SDK would cause
+        # over-inclusion when a repo contains multiple plugins (e.g., anthropics/skills
+        # contains both document-skills and example-skills). The workspace approach gives
+        # precise per-plugin skill control.
 
         # MCP servers configuration
         mcp_servers = {}
@@ -775,20 +765,28 @@ class AgentManager:
         # Skill access control - get allowed skill names for this agent
         skill_ids = agent_config.get("skill_ids", [])
         allow_all_skills = agent_config.get("allow_all_skills", False)
+        plugin_ids = agent_config.get("plugin_ids", [])
         global_user_mode = agent_config.get("global_user_mode", True)
 
         # Global User Mode requires allow_all_skills=True (skill restrictions not supported)
         if global_user_mode:
             allow_all_skills = True
             skill_ids = []  # Ignore skill_ids in global mode
+            plugin_ids = []  # Not needed when all skills allowed
             logger.info("Global User Mode: forcing allow_all_skills=True, ignoring skill_ids")
+
+        # Expand skill_ids with skills from selected plugins
+        effective_skill_ids = await expand_skill_ids_with_plugins(
+            skill_ids, plugin_ids, allow_all_skills
+        )
 
         # Get allowed skill names for hook-based access control
         allowed_skill_names = await workspace_manager.get_allowed_skill_names(
-            skill_ids=skill_ids,
+            skill_ids=effective_skill_ids,
             allow_all_skills=allow_all_skills
         )
-        logger.info(f"Agent skill access: allow_all={allow_all_skills}, skill_ids={skill_ids}, allowed_names={allowed_skill_names}")
+        logger.info(f"Agent skill access: allow_all={allow_all_skills}, {len(effective_skill_ids)} skills ({len(skill_ids)} explicit + {len(plugin_ids)} plugins)")
+        logger.debug(f"Skill details: skill_ids={skill_ids}, plugin_ids={plugin_ids}, effective_skill_ids={effective_skill_ids}, allowed_names={allowed_skill_names}")
 
         # Add skill access checker hook (double protection with per-agent workspace)
         # Skip adding the hook when allow_all_skills is True (no restrictions needed)
@@ -822,7 +820,7 @@ class AgentManager:
                 logger.warning(f"Agent workspace missing, rebuilding: {working_directory}")
                 await workspace_manager.rebuild_agent_workspace(
                     agent_id,
-                    skill_ids if skill_ids else [],
+                    effective_skill_ids,
                     allow_all_skills=allow_all_skills
                 )
                 logger.info(f"Agent workspace rebuilt: {working_directory}")
@@ -851,7 +849,7 @@ class AgentManager:
                         logger.warning(f"Current agent workspace missing, rebuilding with skills: {dir_path}")
                         await workspace_manager.rebuild_agent_workspace(
                             agent_id,
-                            skill_ids if skill_ids else [],
+                            effective_skill_ids,
                             allow_all_skills=allow_all_skills
                         )
                         valid_add_dirs.append(dir_path)
@@ -933,7 +931,7 @@ class AgentManager:
             system_prompt=system_prompt_config,
             allowed_tools=allowed_tools if allowed_tools else None,
             mcp_servers=mcp_servers if mcp_servers else None,
-            plugins=plugins if plugins else None,  # Local plugins for agent
+            plugins=None,  # Skills provided via workspace symlinks, not SDK plugins
             permission_mode=permission_mode,
             model=model,
             stderr=stderr_callback,
