@@ -258,6 +258,7 @@ export default function ChatPage() {
         setSessionId(task.sessionId);
       }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- Only run when task changes, not when selectedAgentId/sessionId change
   }, [task]);
 
   // Memoize grouped sessions to avoid recalculating on every render

@@ -40,7 +40,7 @@ function formatDuration(startedAt: string | null, completedAt: string | null): s
 function StatusBadge({ status }: { status: TaskStatus }) {
   const { t } = useTranslation();
 
-  const config = {
+  const config: Record<TaskStatus, { color: string; icon: string; spin?: boolean }> = {
     pending: { color: 'bg-gray-500/20 text-gray-400', icon: 'schedule' },
     running: { color: 'bg-blue-500/20 text-blue-400', icon: 'sync', spin: true },
     completed: { color: 'bg-green-500/20 text-green-400', icon: 'check_circle' },
@@ -48,7 +48,7 @@ function StatusBadge({ status }: { status: TaskStatus }) {
     cancelled: { color: 'bg-gray-500/20 text-gray-400', icon: 'cancel' },
   };
 
-  const { color, icon, spin } = config[status] || config.pending;
+  const { color, icon, spin = false } = config[status] || config.pending;
 
   return (
     <span className={clsx('inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium', color)}>
@@ -277,14 +277,14 @@ export default function TasksPage() {
         title={t('tasks.actions.cancel')}
         message={t('tasks.confirmCancel')}
         onConfirm={handleCancel}
-        onCancel={() => setTaskToCancel(null)}
+        onClose={() => setTaskToCancel(null)}
       />
       <ConfirmDialog
         isOpen={!!taskToDelete}
         title={t('tasks.actions.delete')}
         message={t('tasks.confirmDelete')}
         onConfirm={handleDelete}
-        onCancel={() => setTaskToDelete(null)}
+        onClose={() => setTaskToDelete(null)}
       />
     </div>
   );
