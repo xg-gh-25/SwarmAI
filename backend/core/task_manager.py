@@ -2,7 +2,7 @@
 import asyncio
 import logging
 from datetime import datetime
-from typing import Optional, AsyncIterator, Any
+from typing import Optional, AsyncIterator
 from uuid import uuid4
 
 from database import db
@@ -32,6 +32,8 @@ class TaskManager:
         self._message_queues: dict[str, asyncio.Queue] = {}
         # Max events to buffer per task
         self._max_buffer_size = 100
+        # Buffer retention time after task completion (seconds)
+        self._buffer_retention_seconds = 300  # 5 minutes
 
     async def create_task(
         self,
@@ -73,7 +75,7 @@ class TaskManager:
         else:
             title = f"Task with {agent_config.get('name', 'agent')}"
 
-        if len(title) < len(message or "") if message else False:
+        if message and len(message) > 50:
             title += "..."
 
         # Create task record
@@ -192,8 +194,10 @@ class TaskManager:
             })
             await self._emit_event(task_id, {"type": "error", "error": str(e)})
         finally:
-            # Cleanup
+            # Cleanup running task reference
             self._running_tasks.pop(task_id, None)
+            # Schedule cleanup of buffers after retention period
+            asyncio.create_task(self._schedule_buffer_cleanup(task_id))
 
     async def _handle_pending_interaction(
         self,
@@ -264,12 +268,28 @@ class TaskManager:
             for queue in self._subscribers[task_id]:
                 await queue.put(event)
 
+    async def _schedule_buffer_cleanup(self, task_id: str) -> None:
+        """Schedule cleanup of event buffers after retention period."""
+        await asyncio.sleep(self._buffer_retention_seconds)
+        # Only cleanup if no active subscribers
+        if task_id in self._subscribers and len(self._subscribers[task_id]) > 0:
+            # Reschedule if there are still subscribers
+            asyncio.create_task(self._schedule_buffer_cleanup(task_id))
+            return
+        # Cleanup buffers
+        self._event_buffers.pop(task_id, None)
+        self._subscribers.pop(task_id, None)
+        self._message_queues.pop(task_id, None)
+        logger.debug(f"Cleaned up buffers for completed task {task_id}")
+
     async def subscribe(self, task_id: str) -> AsyncIterator[dict]:
         """Subscribe to task events via SSE.
 
         Yields buffered events first, then live events.
+        Note: Queue is registered BEFORE reading buffer to avoid race condition
+        where events emitted between buffer read and queue registration are missed.
         """
-        # Create subscriber queue
+        # Create subscriber queue and register FIRST to avoid race condition
         queue: asyncio.Queue = asyncio.Queue()
 
         if task_id not in self._subscribers:
@@ -277,11 +297,14 @@ class TaskManager:
         self._subscribers[task_id].append(queue)
 
         try:
+            # Copy buffered events (snapshot) to avoid issues with concurrent modification
+            buffered_events = list(self._event_buffers.get(task_id, []))
+
             # Yield buffered events first
-            for event in self._event_buffers.get(task_id, []):
+            for event in buffered_events:
                 yield event
 
-            # Yield live events
+            # Yield live events (queue was registered before buffer read, so no events missed)
             while True:
                 event = await queue.get()
                 yield event
