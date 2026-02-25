@@ -39,7 +39,6 @@ class BaseTable(ABC, Generic[T]):
         """List items by session ID. Override in subclasses that support this."""
         raise NotImplementedError("list_by_session not implemented for this table")
 
-
 class BaseDatabase(ABC):
     """Abstract base class for database clients."""
 

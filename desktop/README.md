@@ -60,7 +60,7 @@ desktop/
 
 ## 与云端版本的区别
 
-- 使用 SQLite 替代 DynamoDB
+- 使用 SQLite 数据库
 - 使用本地文件系统 + Git 替代 S3 存储
 - 移除用户认证 (单用户本地应用)
 - 直接使用 Anthropic API (非 Bedrock)

@@ -44,28 +44,16 @@ class Settings(BaseSettings):
     # CORS - include Tauri origins for desktop app
     cors_origins: list[str] = ["http://localhost:5173", "http://localhost:3000", "http://localhost:1420", "tauri://localhost", "https://tauri.localhost", "http://tauri.localhost"]
 
-    # Database type: "dynamodb" for cloud deployment, "sqlite" for desktop app
-    database_type: str = "dynamodb"
+    # Database
+    database_type: str = "sqlite"
 
-    # SQLite configuration (for desktop app)
+    # SQLite configuration
     sqlite_db_path: str | None = None  # If None, uses default user data directory
 
-    # AWS
+    # AWS (for Bedrock model access)
     aws_region: str = "us-west-2"
     aws_access_key_id: str = ""
     aws_secret_access_key: str = ""
-
-    # DynamoDB (tables are auto-created on first startup via start.sh)
-    dynamodb_agents_table: str = "awesome_skills_platform_agents"
-    dynamodb_skills_table: str = "awesome_skills_platform_skills"
-    dynamodb_mcp_table: str = "awesome_skills_platform_mcp_servers"
-    dynamodb_users_table: str = "awesome_skills_platform_users"
-    dynamodb_sessions_table: str = "awesome_skills_platform_sessions"
-    dynamodb_messages_table: str = "awesome_skills_platform_messages"
-    dynamodb_skill_versions_table: str = "awesome_skills_platform_skill_versions"
-
-    # S3 bucket for skill storage (cloud mode only)
-    s3_bucket: str = "awesome-skills-platform-skills"
 
     # JWT Authentication
     jwt_secret_key: str = "your-secret-key-change-in-production"

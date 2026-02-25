@@ -32,19 +32,19 @@ Desktop 版本基于以下技术栈：
 | 桌面框架 | Tauri 2.0 (Rust) |
 | 前端 | React 19 + TypeScript + Vite |
 | 后端 | Python FastAPI (作为 sidecar 进程) |
-| 数据库 | SQLite (替代 DynamoDB) |
+| 数据库 | SQLite |
 | 技能管理 | 本地文件系统 + Git 版本控制 |
 | 打包 | PyInstaller (Python) + Tauri (Rust/前端) |
 
 ### 与云端版本的区别
 
-| 功能 | 云端版本 | 桌面版本 |
-|------|----------|----------|
-| 数据库 | DynamoDB | SQLite |
-| 技能存储 | S3 | 本地文件系统 |
-| 版本控制 | S3 版本 | Git |
-| 认证 | JWT + 用户系统 | 无 (单用户) |
-| Claude API | Bedrock / Anthropic API | Anthropic API |
+| 功能 | 桌面版本 |
+|------|----------|
+| 数据库 | SQLite |
+| 技能存储 | 本地文件系统 |
+| 版本控制 | Git |
+| 认证 | 无 (单用户) |
+| Claude API | Anthropic API / Bedrock |
 
 ---
 

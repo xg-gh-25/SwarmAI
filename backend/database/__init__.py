@@ -1,12 +1,6 @@
 """Database layer for Agent Platform.
 
-This module provides a database abstraction layer supporting:
-- DynamoDB for cloud deployment
-- SQLite for desktop application
-
-The database type is determined by the DATABASE_TYPE environment variable:
-- "dynamodb": Uses DynamoDB (default for cloud)
-- "sqlite": Uses SQLite (default for desktop)
+This module provides a database abstraction layer using SQLite for the desktop application.
 
 Usage:
     from database import db, get_database, initialize_database
@@ -19,26 +13,22 @@ Usage:
     agent = await db.agents.get("agent-id")
 """
 from database.base import BaseDatabase, BaseTable
+from database.sqlite import SQLiteDatabase
 from config import settings
 
-_db_instance: BaseDatabase | None = None
+_db_instance: SQLiteDatabase | None = None
 
 
-def _create_database() -> BaseDatabase:
-    """Create the appropriate database instance based on configuration."""
-    if settings.database_type == "sqlite":
-        from database.sqlite import SQLiteDatabase
-        return SQLiteDatabase(db_path=settings.sqlite_db_path)
-    else:
-        from database.dynamodb import DynamoDBDatabase
-        return DynamoDBDatabase()
+def _create_database() -> SQLiteDatabase:
+    """Create the SQLite database instance."""
+    return SQLiteDatabase(db_path=settings.sqlite_db_path)
 
 
-def get_database() -> BaseDatabase:
+def get_database() -> SQLiteDatabase:
     """Get the database instance.
 
     Returns:
-        BaseDatabase: Database instance (DynamoDB or SQLite based on config).
+        SQLiteDatabase: The SQLite database instance.
     """
     global _db_instance
     if _db_instance is None:
@@ -47,24 +37,15 @@ def get_database() -> BaseDatabase:
 
 
 async def initialize_database() -> None:
-    """Initialize the database.
-
-    This is required for SQLite to create the schema.
-    For DynamoDB, this is a no-op (tables are created via infrastructure).
-    """
+    """Initialize the database schema."""
     global _db_instance
     if _db_instance is None:
         _db_instance = _create_database()
-
-    # SQLite needs schema initialization
-    if settings.database_type == "sqlite":
-        from database.sqlite import SQLiteDatabase
-        if isinstance(_db_instance, SQLiteDatabase):
-            await _db_instance.initialize()
+    await _db_instance.initialize()
 
 
 # Convenience alias for direct access
-# Note: For SQLite, you must call initialize_database() first
+# Note: You must call initialize_database() first
 db = get_database()
 
 __all__ = [
