@@ -10,6 +10,7 @@ import { skillsService } from '../services/skills';
 import { mcpService } from '../services/mcp';
 import { pluginsService } from '../services/plugins';
 import { workspaceService } from '../services/workspace';
+import { tasksService } from '../services/tasks';
 import { Spinner, ReadOnlyChips, AskUserQuestion, Dropdown, MarkdownRenderer, ConfirmDialog, TodoWriteWidget, AgentFormModal } from '../components/common';
 import { PermissionRequestModal, FileAttachmentButton, FileAttachmentPreview } from '../components/chat';
 import { FileBrowser } from '../components/workspace/FileBrowser';
@@ -238,6 +239,26 @@ export default function ChatPage() {
     queryFn: () => chatService.listSessions(selectedAgentId || undefined),
     enabled: !!selectedAgentId,
   });
+
+  // Task support: fetch task if taskId URL parameter is present
+  const taskId = searchParams.get('taskId');
+  const { data: task } = useQuery({
+    queryKey: ['task', taskId],
+    queryFn: () => taskId ? tasksService.get(taskId) : null,
+    enabled: !!taskId,
+  });
+
+  // When task is loaded, set agent and session from task
+  useEffect(() => {
+    if (task) {
+      if (task.agentId && task.agentId !== selectedAgentId) {
+        setSelectedAgentId(task.agentId);
+      }
+      if (task.sessionId && task.sessionId !== sessionId) {
+        setSessionId(task.sessionId);
+      }
+    }
+  }, [task]);
 
   // Memoize grouped sessions to avoid recalculating on every render
   const groupedSessions = useMemo(() => groupSessionsByTime(sessions), [sessions]);
