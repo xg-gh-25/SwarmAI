@@ -11,6 +11,7 @@ from core.exceptions import (
     ValidationException,
 )
 from core.workspace_manager import workspace_manager
+from core.task_manager import task_manager
 
 
 class WorkingDirectoryResponse(BaseModel):
@@ -197,7 +198,7 @@ async def update_agent(agent_id: str, request: AgentUpdateRequest):
 
 @router.delete("/{agent_id}", status_code=204)
 async def delete_agent(agent_id: str):
-    """Delete an agent."""
+    """Delete an agent and all associated tasks (cascade delete)."""
     if agent_id == "default":
         raise ValidationException(
             message="Cannot delete the default agent",
@@ -211,6 +212,21 @@ async def delete_agent(agent_id: str):
             detail=f"Agent with ID '{agent_id}' does not exist",
             suggested_action="Please check the agent ID and try again"
         )
+
+    # Clean up associated tasks (cascade delete behavior)
+    try:
+        # First cancel any running tasks for this agent
+        tasks = await db.tasks.list_by_agent_id(agent_id)
+        for task in tasks:
+            if task.get("status") == "running":
+                await task_manager.cancel_task(task["id"])
+        # Then delete all task records
+        deleted_count = await db.tasks.delete_by_agent_id(agent_id)
+        if deleted_count > 0:
+            logger.info(f"Deleted {deleted_count} tasks for agent {agent_id}")
+    except Exception as e:
+        logger.error(f"Failed to delete tasks for agent {agent_id}: {e}")
+        # Don't fail agent deletion if task cleanup fails
 
     # Clean up agent workspace
     try:

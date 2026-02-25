@@ -1,7 +1,7 @@
 """Background task manager for persistent agent execution."""
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, AsyncIterator
 from uuid import uuid4
 
@@ -87,7 +87,7 @@ class TaskManager:
             "status": "pending",
             "title": title,
             "model": agent_config.get("model"),
-            "created_at": datetime.now().isoformat(),
+            "created_at": datetime.now(timezone.utc).isoformat(),
             "started_at": None,
             "completed_at": None,
             "error": None,
@@ -132,7 +132,7 @@ class TaskManager:
             # Update status to running
             await db.tasks.update(task_id, {
                 "status": "running",
-                "started_at": datetime.now().isoformat(),
+                "started_at": datetime.now(timezone.utc).isoformat(),
             })
             await self._emit_event(task_id, {"type": "status", "status": "running"})
 
@@ -159,7 +159,7 @@ class TaskManager:
                 if event.get("type") == "error":
                     await db.tasks.update(task_id, {
                         "status": "failed",
-                        "completed_at": datetime.now().isoformat(),
+                        "completed_at": datetime.now(timezone.utc).isoformat(),
                         "error": event.get("error"),
                     })
                     return
@@ -168,7 +168,7 @@ class TaskManager:
                 if event.get("type") == "result":
                     await db.tasks.update(task_id, {
                         "status": "completed",
-                        "completed_at": datetime.now().isoformat(),
+                        "completed_at": datetime.now(timezone.utc).isoformat(),
                     })
                     return
 
@@ -182,14 +182,14 @@ class TaskManager:
             logger.info(f"Task {task_id} was cancelled")
             await db.tasks.update(task_id, {
                 "status": "cancelled",
-                "completed_at": datetime.now().isoformat(),
+                "completed_at": datetime.now(timezone.utc).isoformat(),
             })
             await self._emit_event(task_id, {"type": "status", "status": "cancelled"})
         except Exception as e:
             logger.error(f"Task {task_id} failed: {e}")
             await db.tasks.update(task_id, {
                 "status": "failed",
-                "completed_at": datetime.now().isoformat(),
+                "completed_at": datetime.now(timezone.utc).isoformat(),
                 "error": str(e),
             })
             await self._emit_event(task_id, {"type": "error", "error": str(e)})
@@ -206,50 +206,59 @@ class TaskManager:
         enable_skills: bool,
         enable_mcp: bool,
     ) -> None:
-        """Handle task paused for user interaction (ask_user_question)."""
-        # Wait for message from user
+        """Handle task paused for user interaction (ask_user_question).
+
+        Uses a loop instead of recursion to handle multiple consecutive
+        ask_user_question events, avoiding potential stack overflow.
+        """
         message_queue = self._message_queues.get(task_id)
         if not message_queue:
             return
 
         try:
-            # Wait indefinitely for user message
-            msg_data = await message_queue.get()
+            while True:
+                # Wait indefinitely for user message
+                msg_data = await message_queue.get()
 
-            # Continue conversation with user's response
-            task = await db.tasks.get(task_id)
-            if not task:
-                return
-
-            async for event in agent_manager.run_conversation(
-                agent_id=task["agent_id"],
-                user_message=msg_data.get("message"),
-                content=msg_data.get("content"),
-                session_id=session_id,
-                enable_skills=enable_skills,
-                enable_mcp=enable_mcp,
-                add_dirs=[task["work_dir"]] if task.get("work_dir") else None,
-            ):
-                await self._emit_event(task_id, event)
-
-                if event.get("type") == "error":
-                    await db.tasks.update(task_id, {
-                        "status": "failed",
-                        "completed_at": datetime.now().isoformat(),
-                        "error": event.get("error"),
-                    })
+                # Continue conversation with user's response
+                task = await db.tasks.get(task_id)
+                if not task:
                     return
 
-                if event.get("type") == "result":
-                    await db.tasks.update(task_id, {
-                        "status": "completed",
-                        "completed_at": datetime.now().isoformat(),
-                    })
-                    return
+                needs_another_interaction = False
 
-                if event.get("type") == "ask_user_question":
-                    # Recursive wait for next interaction
-                    await self._handle_pending_interaction(task_id, session_id, enable_skills, enable_mcp)
+                async for event in agent_manager.run_conversation(
+                    agent_id=task["agent_id"],
+                    user_message=msg_data.get("message"),
+                    content=msg_data.get("content"),
+                    session_id=session_id,
+                    enable_skills=enable_skills,
+                    enable_mcp=enable_mcp,
+                    add_dirs=[task["work_dir"]] if task.get("work_dir") else None,
+                ):
+                    await self._emit_event(task_id, event)
+
+                    if event.get("type") == "error":
+                        await db.tasks.update(task_id, {
+                            "status": "failed",
+                            "completed_at": datetime.now(timezone.utc).isoformat(),
+                            "error": event.get("error"),
+                        })
+                        return
+
+                    if event.get("type") == "result":
+                        await db.tasks.update(task_id, {
+                            "status": "completed",
+                            "completed_at": datetime.now(timezone.utc).isoformat(),
+                        })
+                        return
+
+                    if event.get("type") == "ask_user_question":
+                        # Mark that we need to wait for another interaction
+                        needs_another_interaction = True
+
+                # If no more interactions needed, exit the loop
+                if not needs_another_interaction:
                     return
 
         except asyncio.CancelledError:
