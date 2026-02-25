@@ -602,26 +602,39 @@ class AgentManager:
         mcp_servers = {}
 
         # Add external MCP servers if enabled
+        # Use the server name as the key (instead of UUID) to keep tool names short
+        # This is important for Bedrock which has a 64-character tool name limit
         if enable_mcp and agent_config.get("mcp_ids"):
+            used_names = set()  # Track used names to handle collisions
             for mcp_id in agent_config["mcp_ids"]:
                 mcp_config = await db.mcp_servers.get(mcp_id)
                 if mcp_config:
                     connection_type = mcp_config.get("connection_type", "stdio")
                     config = mcp_config.get("config", {})
 
+                    # Use server name as the key for shorter tool names
+                    # Handle name collisions by appending suffix
+                    server_name = mcp_config.get("name", mcp_id)
+                    base_name = server_name
+                    suffix = 1
+                    while server_name in used_names:
+                        server_name = f"{base_name}_{suffix}"
+                        suffix += 1
+                    used_names.add(server_name)
+
                     if connection_type == "stdio":
-                        mcp_servers[mcp_id] = {
+                        mcp_servers[server_name] = {
                             "type": "stdio",
                             "command": config.get("command"),
                             "args": config.get("args", []),
                         }
                     elif connection_type == "sse":
-                        mcp_servers[mcp_id] = {
+                        mcp_servers[server_name] = {
                             "type": "sse",
                             "url": config.get("url"),
                         }
                     elif connection_type == "http":
-                        mcp_servers[mcp_id] = {
+                        mcp_servers[server_name] = {
                             "type": "http",
                             "url": config.get("url"),
                         }
