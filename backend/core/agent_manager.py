@@ -111,16 +111,24 @@ class ContentBlockAccumulator:
 
     @staticmethod
     def _get_key(block: dict) -> str | None:
-        """Generate unique key for a content block."""
+        """Generate unique key for a content block.
+
+        Returns None for unknown types or blocks with missing IDs,
+        which causes them to always be added (no deduplication).
+        """
         block_type = block.get('type')
         if block_type == 'text':
             # Use hash for text content to handle large strings efficiently
+            # Note: hash() collisions are theoretically possible but extremely rare
+            # for the SDK cumulative message deduplication use case
             text = block.get('text', '')
             return f"text:{hash(text)}"
         elif block_type == 'tool_use':
-            return f"tool_use:{block.get('id', '')}"
+            block_id = block.get('id')
+            return f"tool_use:{block_id}" if block_id else None
         elif block_type == 'tool_result':
-            return f"tool_result:{block.get('tool_use_id', '')}"
+            tool_use_id = block.get('tool_use_id')
+            return f"tool_result:{tool_use_id}" if tool_use_id else None
         return None
 
     def add(self, block: dict) -> bool:
