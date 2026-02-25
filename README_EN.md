@@ -41,7 +41,7 @@ Owork is a powerful AI Agent management platform that enables you to:
 - **Manage MCP Servers**: Configure Model Context Protocol servers
 ![alt text](./assets/image.png)
 
-
+![alt text](image-1.png)
 ## Deployment Modes
 
 | Mode | Frontend | Backend | Database | Skill Storage | Use Case |
@@ -66,7 +66,7 @@ Owork is a powerful AI Agent management platform that enables you to:
 
 #### 1. Install Owork (MAC)
 
-1. Download [`Owork_x.x.x_aarch64.dmg`](https://d1a1de1i2hajk1.cloudfront.net/owork/release/v0.0.81/Owork_0.0.81_aarch64.dmg)
+1. Download [`Owork_x.x.x_aarch64.dmg`](https://d1a1de1i2hajk1.cloudfront.net/owork/release/v0.0.85/Owork_0.0.85_aarch64.dmg)
 2. Double-click to open the DMG file
 3. Drag Owork.app to the Applications folder
 4. If you encounter “File Damaged”, please execute command in the terminal
@@ -76,7 +76,7 @@ xattr -cr /Applications/Owork.app
 ```
 
 #### 1. Install Owork （Windows 版）
-1. Download [`Owork_x.x.x._x64-setup.zip`](https://d1a1de1i2hajk1.cloudfront.net/owork/release/v0.0.81/Owork_0.0.81_x64-setup.zip)
+1. Download [`Owork_x.x.x._x64-setup.zip`](https://d1a1de1i2hajk1.cloudfront.net/owork/release/v0.0.85/Owork_0.0.85_x64-setup.zip)
 2. Windows might display SmartScreen warning, click "more information" -"run"
 3. Windows requires Git bash dependency：https://git-scm.com/downloads/win
 
@@ -87,6 +87,15 @@ After launching, go to the Settings page to configure:
 
 - **Anthropic API**: Enter your API Key
 - **AWS Bedrock**: Enable Bedrock toggle and configure authentication
+
+## Add Plugins
+In **Plugin Management** Page, Click **Install Plugin**，copy and past plugins github repo, recommended:  
+| Name | Repo |
+|------|------|
+| Cowork knowledge-work-plugins | https://github.com/anthropics/knowledge-work-plugins.git |
+| Official KILL | https://github.com/anthropics/skills.git |
+| Official PLUGINS | https://github.com/anthropics/claude-plugins-official.git |
+
 
 > 📖 For detailed installation instructions, see [QUICK_START.md](./QUICK_START.md)
 
@@ -233,7 +242,7 @@ API Documentation: http://localhost:8000/docs
 ## Project Structure
 
 ```
-awesome-skills-claude-agents/
+owork/
 ├── desktop/                 # Desktop app (Tauri 2.0)
 │   ├── src/                 # React frontend source
 │   │   ├── components/      # UI components
@@ -348,4 +357,4 @@ MIT License
 
 Issues and Pull Requests are welcome!
 
-- **GitHub**: https://github.com/xiehust/awesome-skills-claude-agents
+- **GitHub**: https://github.com/xiehust/owork

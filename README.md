@@ -64,7 +64,7 @@ Owork 是一个功能强大的 AI Agent 管理平台，让您可以：
 
 #### 1. 安装 Owork （MAC 版）
 
-1. 下载 [`Owork_x.x.x_aarch64.dmg`](https://d1a1de1i2hajk1.cloudfront.net/owork/release/v0.0.81/Owork_0.0.81_aarch64.dmg)
+1. 下载 [`Owork_x.x.x_aarch64.dmg`](https://d1a1de1i2hajk1.cloudfront.net/owork/release/v0.0.85/Owork_0.0.85_aarch64.dmg)
 2. 双击打开 DMG 文件
 3. 将 Owork.app 拖拽到 Applications 文件夹
 4. 注意如果运行提示“文件损坏”，需要在终端执行以下命令
@@ -74,7 +74,7 @@ xattr -cr /Applications/Owork.app
 ```
 
 #### 1. 安装 Owork （Windows 版）
-1. 下载 [`Owork_x.x.x._x64-setup.zip`](https://d1a1de1i2hajk1.cloudfront.net/owork/release/v0.0.81/Owork_0.0.81_x64-setup.zip)
+1. 下载 [`Owork_x.x.x._x64-setup.zip`](https://d1a1de1i2hajk1.cloudfront.net/owork/release/v0.0.85/Owork_0.0.85_x64-setup.zip)
 2. Windows版可能显示 SmartScreen 警告。点击「更多信息」→「仍要运行」即可。
 3. 需要安装Git bash 系统依赖：https://git-scm.com/downloads/win
 
@@ -85,6 +85,18 @@ xattr -cr /Applications/Owork.app
 - **AWS Bedrock**：开启 Bedrock 开关，配置认证信息
 
 > 📖 详细安装说明请参阅 [QUICK_START.md](./QUICK_START.md)
+
+## 添加Plugins
+在**Plugin Management**页面中点击**Install Plugin**按钮，输入plugins github repo地址即可，推荐官方plugins包括：  
+| Name | 地址 |
+|------|------|
+| Cowork knowledge-work-plugins | https://github.com/anthropics/knowledge-work-plugins.git |
+| 官方SKILL | https://github.com/anthropics/skills.git |
+| 官方PLUGINS | https://github.com/anthropics/claude-plugins-official.git |
+
+## 添加MCP
+在**MCP Management**页面中点击**Add MCP Server**按钮，选择Connection Type，例如添加AWS Knowledge
+选择http，输入地址 https://knowledge-mcp.global.api.aws 
 
 
 **首次启动注意事项：**
@@ -97,8 +109,8 @@ Windows 可能显示 SmartScreen 警告。点击「更多信息」→「仍要�
 
 ```bash
 # 克隆仓库
-git clone https://github.com/xiehust/awesome-skills-claude-agents.git
-cd awesome-skills-claude-agents/desktop
+git clone https://github.com/xiehust/owork.git
+cd owork/desktop
 
 # 安装依赖
 npm install
@@ -290,7 +302,7 @@ API 文档：http://localhost:8000/docs
 ## 项目结构
 
 ```
-awesome-skills-claude-agents/
+owork/
 ├── desktop/                 # 桌面应用 (Tauri 2.0)
 │   ├── src/                 # React 前端源码
 │   │   ├── components/      # UI 组件
@@ -405,4 +417,4 @@ MIT License
 
 欢迎提交 Issue 和 Pull Request！
 
-- **GitHub**: https://github.com/xiehust/awesome-skills-claude-agents
+- **GitHub**: https://github.com/xiehust/owork
