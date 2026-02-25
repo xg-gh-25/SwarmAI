@@ -143,6 +143,91 @@ body {
   background: rgba(255, 255, 255, 0.8);
 }
 
+/* Highlight.js Light Theme - For light UI */
+:root:not(.dark) .hljs {
+  background: transparent !important;
+  color: #24292f;
+}
+
+:root:not(.dark) .hljs-comment,
+:root:not(.dark) .hljs-quote {
+  color: #6e7781;
+  font-style: italic;
+}
+
+:root:not(.dark) .hljs-keyword,
+:root:not(.dark) .hljs-selector-tag,
+:root:not(.dark) .hljs-addition {
+  color: #cf222e;
+}
+
+:root:not(.dark) .hljs-number,
+:root:not(.dark) .hljs-string,
+:root:not(.dark) .hljs-meta .hljs-meta-string,
+:root:not(.dark) .hljs-literal,
+:root:not(.dark) .hljs-doctag,
+:root:not(.dark) .hljs-regexp {
+  color: #0a3069;
+}
+
+:root:not(.dark) .hljs-title,
+:root:not(.dark) .hljs-section,
+:root:not(.dark) .hljs-name,
+:root:not(.dark) .hljs-selector-id,
+:root:not(.dark) .hljs-selector-class {
+  color: #8250df;
+}
+
+:root:not(.dark) .hljs-attribute,
+:root:not(.dark) .hljs-attr,
+:root:not(.dark) .hljs-variable,
+:root:not(.dark) .hljs-template-variable,
+:root:not(.dark) .hljs-class .hljs-title,
+:root:not(.dark) .hljs-type {
+  color: #0550ae;
+}
+
+:root:not(.dark) .hljs-symbol,
+:root:not(.dark) .hljs-bullet,
+:root:not(.dark) .hljs-subst,
+:root:not(.dark) .hljs-meta,
+:root:not(.dark) .hljs-meta .hljs-keyword,
+:root:not(.dark) .hljs-selector-attr,
+:root:not(.dark) .hljs-selector-pseudo,
+:root:not(.dark) .hljs-link {
+  color: #953800;
+}
+
+:root:not(.dark) .hljs-built_in,
+:root:not(.dark) .hljs-deletion {
+  color: #82071e;
+}
+
+:root:not(.dark) .hljs-formula {
+  background: #f6f8fa;
+}
+
+:root:not(.dark) .hljs-title.function_,
+:root:not(.dark) .hljs-title.class_ {
+  color: #8250df;
+}
+
+:root:not(.dark) .hljs-params {
+  color: #24292f;
+}
+
+:root:not(.dark) .hljs-operator {
+  color: #cf222e;
+}
+
+:root:not(.dark) .hljs-property {
+  color: #0550ae;
+}
+
+:root:not(.dark) .hljs-punctuation {
+  color: #24292f;
+}
+
 /* Highlight.js Dark Theme - Custom for our dark UI */
 .hljs {
   background: transparent !important;

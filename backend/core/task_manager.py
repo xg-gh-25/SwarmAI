@@ -1,6 +1,7 @@
 """Background task manager for persistent agent execution."""
 import asyncio
 import logging
+from contextlib import aclosing
 from datetime import datetime, timezone
 from typing import Optional, AsyncIterator
 from uuid import uuid4
@@ -137,8 +138,9 @@ class TaskManager:
             await self._emit_event(task_id, {"type": "status", "status": "running"})
 
             # Run agent conversation
+            # Use aclosing() to ensure generator cleanup happens in this task
             session_id = None
-            async for event in agent_manager.run_conversation(
+            async with aclosing(agent_manager.run_conversation(
                 agent_id=agent_id,
                 user_message=message,
                 content=content,
@@ -146,37 +148,38 @@ class TaskManager:
                 enable_skills=enable_skills,
                 enable_mcp=enable_mcp,
                 add_dirs=add_dirs,
-            ):
-                # Capture session_id from session_start event
-                if event.get("type") == "session_start":
-                    session_id = event.get("sessionId")
-                    await db.tasks.update(task_id, {"session_id": session_id})
+            )) as conversation:
+                async for event in conversation:
+                    # Capture session_id from session_start event
+                    if event.get("type") == "session_start":
+                        session_id = event.get("sessionId")
+                        await db.tasks.update(task_id, {"session_id": session_id})
 
-                # Emit event to subscribers
-                await self._emit_event(task_id, event)
+                    # Emit event to subscribers
+                    await self._emit_event(task_id, event)
 
-                # Check for errors
-                if event.get("type") == "error":
-                    await db.tasks.update(task_id, {
-                        "status": "failed",
-                        "completed_at": datetime.now(timezone.utc).isoformat(),
-                        "error": event.get("error"),
-                    })
-                    return
+                    # Check for errors
+                    if event.get("type") == "error":
+                        await db.tasks.update(task_id, {
+                            "status": "failed",
+                            "completed_at": datetime.now(timezone.utc).isoformat(),
+                            "error": event.get("error"),
+                        })
+                        return
 
-                # Check for completion
-                if event.get("type") == "result":
-                    await db.tasks.update(task_id, {
-                        "status": "completed",
-                        "completed_at": datetime.now(timezone.utc).isoformat(),
-                    })
-                    return
+                    # Check for completion
+                    if event.get("type") == "result":
+                        await db.tasks.update(task_id, {
+                            "status": "completed",
+                            "completed_at": datetime.now(timezone.utc).isoformat(),
+                        })
+                        return
 
-                # Check for ask_user_question - task pauses, waiting for message
-                if event.get("type") == "ask_user_question":
-                    # Wait for user response via message queue
-                    await self._handle_pending_interaction(task_id, session_id, enable_skills, enable_mcp)
-                    return
+                    # Check for ask_user_question - task pauses, waiting for message
+                    if event.get("type") == "ask_user_question":
+                        # Wait for user response via message queue
+                        await self._handle_pending_interaction(task_id, session_id, enable_skills, enable_mcp)
+                        return
 
         except asyncio.CancelledError:
             logger.info(f"Task {task_id} was cancelled")
@@ -227,7 +230,7 @@ class TaskManager:
 
                 needs_another_interaction = False
 
-                async for event in agent_manager.run_conversation(
+                async with aclosing(agent_manager.run_conversation(
                     agent_id=task["agent_id"],
                     user_message=msg_data.get("message"),
                     content=msg_data.get("content"),
@@ -235,27 +238,28 @@ class TaskManager:
                     enable_skills=enable_skills,
                     enable_mcp=enable_mcp,
                     add_dirs=[task["work_dir"]] if task.get("work_dir") else None,
-                ):
-                    await self._emit_event(task_id, event)
+                )) as conversation:
+                    async for event in conversation:
+                        await self._emit_event(task_id, event)
 
-                    if event.get("type") == "error":
-                        await db.tasks.update(task_id, {
-                            "status": "failed",
-                            "completed_at": datetime.now(timezone.utc).isoformat(),
-                            "error": event.get("error"),
-                        })
-                        return
+                        if event.get("type") == "error":
+                            await db.tasks.update(task_id, {
+                                "status": "failed",
+                                "completed_at": datetime.now(timezone.utc).isoformat(),
+                                "error": event.get("error"),
+                            })
+                            return
 
-                    if event.get("type") == "result":
-                        await db.tasks.update(task_id, {
-                            "status": "completed",
-                            "completed_at": datetime.now(timezone.utc).isoformat(),
-                        })
-                        return
+                        if event.get("type") == "result":
+                            await db.tasks.update(task_id, {
+                                "status": "completed",
+                                "completed_at": datetime.now(timezone.utc).isoformat(),
+                            })
+                            return
 
-                    if event.get("type") == "ask_user_question":
-                        # Mark that we need to wait for another interaction
-                        needs_another_interaction = True
+                        if event.get("type") == "ask_user_question":
+                            # Mark that we need to wait for another interaction
+                            needs_another_interaction = True
 
                 # If no more interactions needed, exit the loop
                 if not needs_another_interaction:
