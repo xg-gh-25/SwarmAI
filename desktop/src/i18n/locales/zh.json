@@ -96,16 +96,23 @@
       "mcpServers": "MCP 服务器",
       "mcpServersDesc": "监控和配置 MCP 连接",
       "plugins": "Plugin",
-      "pluginsDesc": "从 Git 安装和管理 Plugin"
+      "pluginsDesc": "从 Git 安装和管理 Plugin",
+      "tasks": "任务",
+      "tasksDesc": "监控和管理后台任务"
     },
     "stats": {
       "totalAgents": "Agent 总数",
       "active": "{{count}} 个活跃",
       "availableSkills": "可用 Skill",
       "systemCustom": "{{system}} 个系统, {{custom}} 个自定义",
+      "skillsBreakdown": "{{system}} 个系统, {{custom}} 个自定义",
       "mcpServers": "MCP 服务器",
+      "configured": "已配置",
       "plugins": "Plugin",
-      "installed": "{{count}} 个已安装"
+      "installed": "{{count}} 个已安装",
+      "tasks": "任务",
+      "running": "{{running}} 个运行中",
+      "totalTasks": "共 {{total}} 个"
     }
   },
   "chat": {

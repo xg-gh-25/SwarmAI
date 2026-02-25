@@ -244,6 +244,15 @@ RATE_LIMIT_PER_MINUTE=1000
 ```
 
 ### Debugging
+- debug tauri app
+```shell
+open -n /Applications/Owork.app --env OWORK_DEBUG=1
+```
+
+```bat
+set OWORK_DEBUG=1                                                                                                   
+"C:\Users\Administrator\AppData\Local\Owork\owork.exe"
+```
 
 ```bash
 # Backend logs
