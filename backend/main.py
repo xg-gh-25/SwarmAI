@@ -53,13 +53,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 logger.info(f"Log file: {log_file}")
 
-# Suppress noisy debug logs from AWS/boto libraries
-logging.getLogger("aioboto3").setLevel(logging.WARNING)
-logging.getLogger("aiobotocore").setLevel(logging.WARNING)
-logging.getLogger("botocore").setLevel(logging.WARNING)
-logging.getLogger("boto3").setLevel(logging.WARNING)
+# Suppress noisy debug logs from third-party libraries
 logging.getLogger("urllib3").setLevel(logging.WARNING)
-logging.getLogger("s3transfer").setLevel(logging.WARNING)
 
 
 @asynccontextmanager
@@ -71,7 +66,7 @@ async def lifespan(app: FastAPI):
     logger.info(f"Database type: {settings.database_type}")
     logger.info(f"Rate limit: {settings.rate_limit_per_minute}/minute")
 
-    # Initialize database (required for SQLite, no-op for DynamoDB)
+    # Initialize database
     await initialize_database()
     logger.info("Database initialized")
 

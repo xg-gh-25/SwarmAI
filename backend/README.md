@@ -79,7 +79,7 @@ backend/
 │   └── session_manager.py
 ├── database/            # Data layer
 │   ├── base.py          # Base database interfaces
-│   └── dynamodb.py      # AWS DynamoDB implementation
+│   └── sqlite.py        # SQLite implementation
 ├── schemas/             # Pydantic models
 └── pyproject.toml       # Dependencies
 ```

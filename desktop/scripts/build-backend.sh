@@ -272,7 +272,6 @@ local_modules = [
     'database',
     'database.base',
     'database.sqlite',
-    'database.dynamodb',
     # Core
     'core',
     'core.agent_manager',

@@ -12,6 +12,7 @@ from core.exceptions import (
 )
 from core.workspace_manager import workspace_manager
 from core.task_manager import task_manager
+from core.agent_manager import expand_skill_ids_with_plugins
 
 
 class WorkingDirectoryResponse(BaseModel):
@@ -139,10 +140,13 @@ async def create_agent(request: AgentCreateRequest):
 
     # Build per-agent workspace with symlinks to allowed skills
     try:
+        effective_skill_ids = await expand_skill_ids_with_plugins(
+            skill_ids, request.plugin_ids, allow_all_skills
+        )
         await workspace_manager.rebuild_agent_workspace(
             agent_id=agent["id"],
-            skill_ids=request.skill_ids,
-            allow_all_skills=request.allow_all_skills
+            skill_ids=effective_skill_ids,
+            allow_all_skills=allow_all_skills
         )
         logger.info(f"Created workspace for agent {agent['id']}")
     except Exception as e:
@@ -175,17 +179,23 @@ async def update_agent(agent_id: str, request: AgentUpdateRequest):
 
     agent = await db.agents.update(agent_id, updates)
 
-    # Check if skill_ids or allow_all_skills changed - if so, rebuild workspace
+    # Check if skill_ids, allow_all_skills, or plugin_ids changed - if so, rebuild workspace
     skill_ids_changed = "skill_ids" in updates
     allow_all_changed = "allow_all_skills" in updates
+    plugin_ids_changed = "plugin_ids" in updates
 
-    if skill_ids_changed or allow_all_changed:
+    if skill_ids_changed or allow_all_changed or plugin_ids_changed:
         try:
             skill_ids = agent.get("skill_ids", [])
             allow_all_skills = agent.get("allow_all_skills", False)
+            plugin_ids = agent.get("plugin_ids", [])
+
+            effective_skill_ids = await expand_skill_ids_with_plugins(
+                skill_ids, plugin_ids, allow_all_skills
+            )
             await workspace_manager.rebuild_agent_workspace(
                 agent_id=agent_id,
-                skill_ids=skill_ids,
+                skill_ids=effective_skill_ids,
                 allow_all_skills=allow_all_skills
             )
             logger.info(f"Rebuilt workspace for agent {agent_id} after skill config change")

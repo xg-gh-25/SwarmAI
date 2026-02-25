@@ -100,14 +100,10 @@ The Agent Platform is a conversational AI system that enables users to interact 
 ┌─────────────────────────────────────────┐
 │  AWS Services                            │
 │  ┌─────────────┐   ┌──────────────────┐ │
-│  │  DynamoDB   │   │  Claude API      │ │
+│  │  SQLite     │   │  Claude API      │ │
 │  │  • agents   │   │  (via Claude     │ │
 │  │  • skills   │   │   Code CLI)      │ │
 │  │  • mcp_cfg  │   └──────────────────┘ │
-│  └─────────────┘                         │
-│  ┌─────────────┐                         │
-│  │  S3 Bucket  │  (optional)             │
-│  │  • Skills   │                         │
 │  └─────────────┘                         │
 └─────────────────────────────────────────┘
 ```
@@ -133,7 +129,7 @@ User Input (Text/Image)
         ▼
 ┌───────────────────┐
 │  FastAPI          │  3. Validates input payload
-│  Backend          │  4. Loads agent config from DynamoDB
+│  Backend          │  4. Loads agent config from database
 └───────────────────┘
         │
         ▼
@@ -378,7 +374,7 @@ src/api/
 │   └── error_handler.py     # Global exception handling
 ├── dependencies/
 │   ├── auth.py              # Auth dependency injection
-│   └── dynamodb.py          # DynamoDB session management
+│   └── sqlite.py            # SQLite database
 └── schemas/
     ├── agent.py             # Pydantic models for agents
     ├── skill.py             # Pydantic models for skills
@@ -420,7 +416,7 @@ from claude_agent_sdk import (
 from typing import Dict, Optional, Any, AsyncIterator
 import logging
 
-from src.database.dynamodb import db_client
+from src.database.sqlite import db_client
 from src.core.skill_manager import skill_manager
 from src.core.mcp_manager import mcp_manager
 from src.core.session_manager import session_manager
@@ -437,13 +433,13 @@ class AgentManager:
         agent_id: str,
         session_id: Optional[str] = None,
     ) -> ClaudeSDKClient:
-        """Get cached client or create new one from DynamoDB config"""
+        """Get cached client or create new one from database config"""
         cache_key = f"{agent_id}:{session_id}" if session_id else agent_id
 
         if cache_key in self._clients:
             return self._clients[cache_key]
 
-        # Load config from DynamoDB
+        # Load config from database
         agent_config = db_client.get_agent(agent_id)
         if not agent_config:
             raise ValueError(f"Agent {agent_id} not found")
@@ -646,7 +642,7 @@ from typing import Dict, List, Any, Optional
 import yaml
 from pathlib import Path
 
-from src.database.dynamodb import db_client
+from src.database.sqlite import db_client
 
 class SkillManager:
     """Manages skills as custom tools for Claude Agent SDK"""
@@ -656,7 +652,7 @@ class SkillManager:
         self._skill_tools = []
 
     def load_skills(self, skill_ids: List[str]) -> None:
-        """Load skill definitions from DynamoDB and filesystem"""
+        """Load skill definitions from database and filesystem"""
         for skill_id in skill_ids:
             skill_meta = db_client.get_skill(skill_id)
             if skill_meta:
@@ -743,7 +739,7 @@ skill_manager = SkillManager()
 ```python
 # src/core/mcp_manager.py
 from typing import Dict, List, Optional, Any
-from src.database.dynamodb import db_client
+from src.database.sqlite import db_client
 
 class MCPManager:
     """Manages MCP server configurations for Claude Agent SDK"""
@@ -753,7 +749,7 @@ class MCPManager:
         self.connection_status: Dict[str, str] = {}
 
     def get_mcp_config(self, mcp_id: str) -> Optional[dict]:
-        """Get MCP configuration from DynamoDB"""
+        """Get MCP configuration from database"""
         if mcp_id in self.configs:
             return self.configs[mcp_id]
 
@@ -942,9 +938,9 @@ async def dangerous_command_blocker(
 
 ### 3.4 Data Layer
 
-#### Database Schema (DynamoDB)
+#### Database Schema (SQLite)
 
-**DynamoDB Tables Design**
+**Database Tables Design**
 
 ```python
 # agents table
@@ -1014,7 +1010,7 @@ async def dangerous_command_blocker(
 
 **Responsibilities**:
 - Manage ClaudeSDKClient instances
-- Build ClaudeAgentOptions from DynamoDB configuration
+- Build ClaudeAgentOptions from database configuration
 - Coordinate tool loading (skills + MCP + built-in)
 - Handle session continuity via resume
 - Stream responses via async iterators
@@ -1029,7 +1025,7 @@ async def dangerous_command_blocker(
 ### 4.2 Skill Manager
 
 **Responsibilities**:
-- Load skill definitions from DynamoDB and filesystem
+- Load skill definitions from database and filesystem
 - Parse SKILL.md YAML frontmatter and markdown content
 - Create custom tools via `@tool` decorator
 - Generate MCP server with skill tools via `create_sdk_mcp_server`
@@ -1045,7 +1041,7 @@ async def dangerous_command_blocker(
 ### 4.3 MCP Manager
 
 **Responsibilities**:
-- Load MCP server configurations from DynamoDB
+- Load MCP server configurations from database
 - Build MCP server configs for Claude Agent SDK (stdio, SSE, HTTP)
 - Apply tool filtering (allowed/rejected lists)
 - Track connection status
@@ -1377,8 +1373,7 @@ async def chat_stream(request: Request):
 | ASGI Server | Uvicorn | High performance, SSE support |
 | Agent SDK | Claude Agent SDK | Official Anthropic SDK for Claude Code |
 | Runtime | Claude Code CLI | Managed by SDK, built-in tools |
-| Database | DynamoDB | Serverless, scalable, single-digit ms latency |
-| Storage | AWS S3 | Scalable object storage (optional) |
+| Database | SQLite | Lightweight, embedded, zero-config |
 | Validation | Pydantic v2 | FastAPI native, runtime validation |
 
 ### AI/ML Services
@@ -1424,7 +1419,7 @@ Internet
                • Claude Agent SDK (ClaudeSDKClient)
                • Claude Code CLI (spawned processes)
                │
-               ├─► [DynamoDB Tables]
+               ├─► [SQLite Database]
                │    • agents
                │    • skills
                │    • mcp_servers
@@ -1629,7 +1624,7 @@ async for message in client.receive_response():
    - Document analysis
 
 2. **Advanced Session Management**:
-   - Persistent session storage (DynamoDB)
+   - Persistent session storage (SQLite)
    - Session forking (`fork_session` option)
    - Cross-device session resume
 

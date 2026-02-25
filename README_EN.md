@@ -47,7 +47,6 @@ Owork is a powerful AI Agent management platform that enables you to:
 | Mode | Frontend | Backend | Database | Skill Storage | Use Case |
 |------|----------|---------|----------|---------------|----------|
 | **Desktop** | Tauri 2.0 + React | Python FastAPI (Sidecar) | SQLite | Local filesystem + Git | Personal use |
-| **Cloud** | React (S3/CloudFront) | FastAPI (ECS Fargate/EC2) | DynamoDB | S3 | Team/Enterprise |
 
 ---
 
@@ -136,7 +135,7 @@ npm run build:all
 - Node.js 18+ and npm
 - Python 3.12+
 - uv (Python package manager, recommended) or pip
-- AWS account (for DynamoDB, S3, etc.)
+- AWS account (for Bedrock, optional)
 - ANTHROPIC_API_KEY
 
 ### Quick Start
@@ -191,12 +190,6 @@ API Documentation: http://localhost:8000/docs
 - **Backend**: FastAPI (PyInstaller packaged as Sidecar)
 - **Database**: SQLite
 - **Build Tools**: Vite + Rust
-
-### Cloud Version
-- **Frontend**: React 19 + TypeScript + Vite
-- **Backend**: FastAPI + Uvicorn
-- **Database**: DynamoDB
-- **Deployment**: AWS ECS Fargate + S3 + CloudFront
 
 ### Common
 - **AI Engine**: Claude Agent SDK
@@ -268,8 +261,7 @@ owork/
 │   │   ├── session_manager.py
 │   │   └── local_skill_manager.py
 │   ├── database/
-│   │   ├── sqlite.py        # SQLite (desktop)
-│   │   └── dynamodb.py      # DynamoDB (cloud)
+│   │   └── sqlite.py        # SQLite
 │   └── schemas/             # Pydantic models
 │
 ├── CLAUDE.md                # Claude Code development guide
@@ -319,7 +311,7 @@ The platform implements a **defense-in-depth security model**:
 - `DEBUG` - Debug mode
 - `HOST` - Server host
 - `PORT` - Server port
-- `DATABASE_TYPE` - Database type (`sqlite` / `dynamodb`)
+- `DATABASE_TYPE` - Database type (`sqlite`)
 
 For complete configuration, see `backend/.env.example` or `desktop/backend.env.example`
 

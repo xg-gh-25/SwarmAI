@@ -4,12 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is an AI Agent Platform that enables users to create, manage, and chat with customizable AI agents powered by **Claude Agent SDK**. The platform has two deployment modes:
-
-| Mode | Frontend | Backend | Database | Skill Storage |
-|------|----------|---------|----------|---------------|
-| **Desktop** (primary) | Tauri 2.0 + React | Python FastAPI sidecar | SQLite | Local filesystem + Git |
-| **Cloud** | React (S3/CloudFront) | FastAPI (ECS Fargate) | DynamoDB | S3 |
+This is an AI Agent Platform that enables users to create, manage, and chat with customizable AI agents powered by **Claude Agent SDK**. It is a desktop application built with Tauri 2.0 + React + Python FastAPI, using SQLite for storage and local filesystem + Git for skill management.
 
 The **desktop version** (`desktop/` directory) is the primary development target and supports **Windows, macOS, and Linux**.
 
@@ -112,15 +107,14 @@ Tauri App
 ```
 backend/
 ├── main.py                   # FastAPI entry point
-├── config.py                 # Settings (database_type: sqlite|dynamodb)
+├── config.py                 # Settings
 ├── routers/                  # API endpoints (agents, skills, mcp, chat, plugins)
 ├── core/
 │   ├── agent_manager.py     # ClaudeSDKClient wrapper, hooks, security
 │   ├── session_manager.py   # Conversation session storage
 │   └── workspace_manager.py # Per-agent isolated workspaces
 ├── database/
-│   ├── sqlite.py            # Desktop: SQLite implementation
-│   └── dynamodb.py          # Cloud: DynamoDB implementation
+│   └── sqlite.py            # SQLite implementation
 └── schemas/                  # Pydantic models
 ```
 
@@ -208,7 +202,7 @@ Four-layer defense-in-depth model (see `SECURITY.md` for details):
 # Required
 ANTHROPIC_API_KEY=sk-ant-xxx
 
-# Database (desktop uses sqlite)
+# Database
 DATABASE_TYPE=sqlite
 
 # Optional
