@@ -96,16 +96,23 @@
       "mcpServers": "MCP Servers",
       "mcpServersDesc": "Monitor and configure MCP connections",
       "plugins": "Plugins",
-      "pluginsDesc": "Install and manage plugins from Git"
+      "pluginsDesc": "Install and manage plugins from Git",
+      "tasks": "Tasks",
+      "tasksDesc": "Monitor and manage background tasks"
     },
     "stats": {
       "totalAgents": "Total Agents",
       "active": "{{count}} active",
       "availableSkills": "Available Skills",
       "systemCustom": "{{system}} system, {{custom}} custom",
+      "skillsBreakdown": "{{system}} system, {{custom}} custom",
       "mcpServers": "MCP Servers",
+      "configured": "configured",
       "plugins": "Plugins",
-      "installed": "{{count}} installed"
+      "installed": "{{count}} installed",
+      "tasks": "Tasks",
+      "running": "{{running}} running",
+      "totalTasks": "{{total}} total"
     }
   },
   "chat": {

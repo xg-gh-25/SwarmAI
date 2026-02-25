@@ -5,6 +5,7 @@ import { agentsService } from '../services/agents';
 import { skillsService } from '../services/skills';
 import { mcpService } from '../services/mcp';
 import { pluginsService } from '../services/plugins';
+import { tasksService } from '../services/tasks';
 import type { Agent, Skill } from '../types';
 import { Skeleton } from '../components/common';
 
@@ -24,6 +25,10 @@ interface DashboardStats {
   plugins: {
     total: number;
     installed: number;
+  };
+  tasks: {
+    total: number;
+    running: number;
   };
   recentAgents: Agent[];
 }
@@ -69,16 +74,25 @@ export default function DashboardPage() {
       path: '/plugins',
       color: 'bg-teal-500/20 text-teal-400',
     },
+    {
+      titleKey: 'dashboard.action.tasks',
+      descriptionKey: 'dashboard.action.tasksDesc',
+      icon: 'task_alt',
+      path: '/tasks',
+      color: 'bg-amber-500/20 text-amber-400',
+    },
   ];
 
   useEffect(() => {
     const fetchStats = async () => {
       try {
-        const [agents, skills, mcpServers, plugins] = await Promise.all([
+        const [agents, skills, mcpServers, plugins, tasks, runningTaskCount] = await Promise.all([
           agentsService.list(),
           skillsService.list(),
           mcpService.list(),
           pluginsService.listPlugins(),
+          tasksService.list(),
+          tasksService.getRunningCount(),
         ]);
 
         const activeAgents = agents.filter((a: Agent) => a.status === 'active').length;
@@ -107,6 +121,10 @@ export default function DashboardPage() {
           plugins: {
             total: plugins.length,
             installed: installedPlugins,
+          },
+          tasks: {
+            total: tasks.length,
+            running: runningTaskCount,
           },
           recentAgents,
         });
@@ -235,6 +253,31 @@ export default function DashboardPage() {
                 <p className="text-3xl font-bold text-[var(--color-text)]">{stats?.plugins.total || 0}</p>
                 <p className="text-sm text-status-online mt-1">
                   {t('dashboard.stats.installed', { count: stats?.plugins.installed || 0 })}
+                </p>
+              </>
+            )}
+          </div>
+
+          {/* Tasks */}
+          <div className="p-6 bg-[var(--color-card)] border border-[var(--color-border)] rounded-xl">
+            <div className="flex items-center justify-between mb-4">
+              <span className="text-[var(--color-text-muted)]">{t('dashboard.stats.tasks')}</span>
+              <span className="material-symbols-outlined text-amber-400">task_alt</span>
+            </div>
+            {isLoading ? (
+              <>
+                <Skeleton className="h-9 w-16 mb-1" />
+                <Skeleton className="h-5 w-24" />
+              </>
+            ) : (
+              <>
+                <p className="text-3xl font-bold text-[var(--color-text)]">{stats?.tasks.total || 0}</p>
+                <p className="text-sm text-[var(--color-text-muted)] mt-1">
+                  {(stats?.tasks.running || 0) > 0 ? (
+                    <span className="text-status-online">{t('dashboard.stats.running', { running: stats?.tasks.running || 0 })}</span>
+                  ) : (
+                    t('dashboard.stats.totalTasks', { total: stats?.tasks.total || 0 })
+                  )}
                 </p>
               </>
             )}

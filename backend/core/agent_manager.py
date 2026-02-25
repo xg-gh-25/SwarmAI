@@ -777,11 +777,53 @@ class AgentManager:
             working_directory = str(workspace_manager.get_agent_workspace(agent_id))
             setting_sources = ['project']
             logger.info(f"Using per-agent workspace: {working_directory} (allow_all_skills={allow_all_skills})")
+
+            # Auto-rebuild workspace if it was deleted (e.g., /tmp cleared on reboot)
+            if not Path(working_directory).exists():
+                logger.warning(f"Agent workspace missing, rebuilding: {working_directory}")
+                await workspace_manager.rebuild_agent_workspace(
+                    agent_id,
+                    skill_ids if skill_ids else [],
+                    allow_all_skills=allow_all_skills
+                )
+                logger.info(f"Agent workspace rebuilt: {working_directory}")
         else:
             # Default workspace (no skills or no agent_id)
             working_directory = agent_config.get("working_directory") or settings.agent_workspace_dir
             setting_sources = None
             logger.info(f"Using default workspace: {working_directory}")
+
+        # Validate add_dirs - ensure directories exist before using them
+        # This must run regardless of file_access_enabled since add_dirs affects cwd
+        add_dirs = agent_config.get("add_dirs", [])
+        if add_dirs:
+            valid_add_dirs = []
+            for dir_path in add_dirs:
+                if Path(dir_path).exists():
+                    valid_add_dirs.append(dir_path)
+                elif settings.agent_workspaces_dir in dir_path and agent_id:
+                    # This is an agent workspace path - check if it's the current agent's workspace
+                    workspace_path = Path(dir_path)
+                    # Agent workspace paths are like: /tmp/agent-platform-workspaces/{agent_id}
+                    # Check if this matches the current agent's workspace
+                    current_agent_workspace = workspace_manager.get_agent_workspace(agent_id)
+                    if workspace_path == current_agent_workspace or str(workspace_path).startswith(str(current_agent_workspace)):
+                        # This is current agent's workspace - rebuild it with skills
+                        logger.warning(f"Current agent workspace missing, rebuilding with skills: {dir_path}")
+                        await workspace_manager.rebuild_agent_workspace(
+                            agent_id,
+                            skill_ids if skill_ids else [],
+                            allow_all_skills=allow_all_skills
+                        )
+                        valid_add_dirs.append(dir_path)
+                    else:
+                        # Different agent's workspace or subdirectory - just create the directory
+                        logger.warning(f"Agent workspace directory missing, creating: {dir_path}")
+                        Path(dir_path).mkdir(parents=True, exist_ok=True)
+                        valid_add_dirs.append(dir_path)
+                else:
+                    logger.warning(f"Skipping non-existent add_dir: {dir_path}")
+            agent_config['add_dirs'] = valid_add_dirs  # Update config with valid dirs
 
         # Build file access permission handler
         # Restrict file access to the working directory (and any additional allowed dirs)
@@ -797,10 +839,10 @@ class AgentManager:
             extra_dirs = agent_config.get("allowed_directories", [])
             if extra_dirs:
                 allowed_directories.extend(extra_dirs)
-            # Add runtime add_dirs (from "Work in a folder" feature)
-            add_dirs = agent_config.get("add_dirs", [])
-            if add_dirs:
-                allowed_directories.extend(add_dirs)
+            # Add validated add_dirs
+            valid_add_dirs = agent_config.get("add_dirs", [])
+            if valid_add_dirs:
+                allowed_directories.extend(valid_add_dirs)
             file_access_handler = create_file_access_permission_handler(allowed_directories)
             logger.info(f"File access control enabled, allowed directories: {allowed_directories}")
         
