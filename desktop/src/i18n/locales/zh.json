@@ -71,6 +71,7 @@
   "nav": {
     "dashboard": "仪表盘",
     "chat": "对话",
+    "tasks": "任务",
     "agents": "Agent 管理",
     "skills": "Skill 管理",
     "plugins": "Plugin 管理",
@@ -139,6 +140,42 @@
     "createAgentFirst": "请先创建一个",
     "selectAgent": "选择 Agent",
     "chooseAgent": "选择一个 Agent..."
+  },
+  "tasks": {
+    "title": "任务管理",
+    "subtitle": "监控和管理正在运行的代理任务。",
+    "search": "搜索任务...",
+    "filter": {
+      "all": "全部",
+      "running": "运行中",
+      "completed": "已完成",
+      "failed": "失败"
+    },
+    "columns": {
+      "name": "任务名称",
+      "agent": "代理",
+      "status": "状态",
+      "model": "模型",
+      "started": "开始时间",
+      "duration": "持续时间",
+      "actions": "操作"
+    },
+    "status": {
+      "pending": "等待中",
+      "running": "运行中",
+      "completed": "已完成",
+      "failed": "失败",
+      "cancelled": "已取消"
+    },
+    "actions": {
+      "viewChat": "查看对话",
+      "cancel": "取消",
+      "delete": "删除"
+    },
+    "empty": "暂无任务。开始对话以创建您的第一个任务。",
+    "newTask": "新建任务",
+    "confirmCancel": "确定要取消此任务吗？",
+    "confirmDelete": "确定要删除此任务吗？"
   },
   "agents": {
     "title": "Agent 管理",
