@@ -44,7 +44,7 @@ const backendProjectResponseArb = fc.record({
   created_at: isoDateArb,
   updated_at: isoDateArb,
   status: statusArb,
-  priority: fc.option(priorityArb, { nil: undefined }),
+  priority: fc.option(priorityArb, { nil: null }),
   tags: fc.array(fc.string({ minLength: 1, maxLength: 30 }), { maxLength: 10 }),
   schema_version: fc.constantFrom('1.0.0', '1.1.0', '2.0.0'),
   version: fc.integer({ min: 1, max: 10000 }),
