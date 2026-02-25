@@ -253,24 +253,42 @@ class SeedDatabaseGenerator:
         return mcp_ids
     
     async def _insert_default_workspace(self) -> None:
-        """Insert the SwarmWorkspace database record.
+        """Insert the SwarmWS workspace_config singleton record.
         
-        Uses {app_data_dir}/swarm-workspaces/SwarmWS placeholder path
-        which is expanded at runtime to the platform-specific location.
+        Uses {app_data_dir}/SwarmWS placeholder path which is expanded
+        at runtime to the platform-specific location.
+        
+        Also inserts a legacy swarm_workspaces row so the migration path
+        from seed DB works correctly (migration reads from swarm_workspaces
+        to seed workspace_config).
         """
-        workspace = {
-            "id": str(uuid.uuid4()),
-            "name": "SwarmWS",
-            "file_path": "{app_data_dir}/swarm-workspaces/SwarmWS",
-            "context": "Default SwarmAI workspace for general tasks and projects.",
-            "icon": "🏠",
-            "is_default": 1,
-            "created_at": self._now,
-            "updated_at": self._now,
-        }
+        now = self._now
         
-        await self.db.swarm_workspaces.put(workspace)
-        logger.info(f"Inserted default workspace: {workspace['name']} (path={workspace['file_path']})")
+        # Insert into workspace_config (new singleton model)
+        await self.db.workspace_config.put({
+            "id": "swarmws",
+            "name": "SwarmWS",
+            "file_path": "{app_data_dir}/SwarmWS",
+            "icon": "🏠",
+            "context": "Default SwarmAI workspace for general tasks and projects.",
+            "created_at": now,
+            "updated_at": now,
+        })
+        logger.info("Inserted workspace_config singleton (id=swarmws)")
+        
+        # Also insert a legacy swarm_workspaces row for migration compatibility
+        import aiosqlite
+        async with aiosqlite.connect(str(self.db.db_path)) as conn:
+            await conn.execute(
+                "INSERT OR IGNORE INTO swarm_workspaces "
+                "(id, name, file_path, context, icon, is_default, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (str(uuid.uuid4()), "SwarmWS", "{app_data_dir}/SwarmWS",
+                 "Default SwarmAI workspace for general tasks and projects.",
+                 "🏠", 1, now, now),
+            )
+            await conn.commit()
+        logger.info("Inserted legacy swarm_workspaces row for migration compatibility")
     
     async def _insert_app_settings(self) -> None:
         """Insert app_settings with initialization_complete=true."""
@@ -364,16 +382,16 @@ class SeedDatabaseGenerator:
         else:
             logger.info("✓ app_settings validated")
         
-        # Validate default workspace exists
-        workspace = await self.db.swarm_workspaces.get_default()
+        # Validate workspace_config singleton exists
+        workspace = await self.db.workspace_config.get_config()
         if not workspace:
-            logger.error("Validation failed: Default SwarmWorkspace not found")
+            logger.error("Validation failed: workspace_config singleton not found")
             valid = False
-        elif not workspace.get("is_default"):
-            logger.error("Validation failed: SwarmWorkspace is_default is not true")
+        elif workspace.get("id") != "swarmws":
+            logger.error("Validation failed: workspace_config id is not 'swarmws'")
             valid = False
         else:
-            logger.info("✓ Default SwarmWorkspace validated")
+            logger.info("✓ workspace_config singleton validated")
         
         return valid
 

@@ -152,16 +152,14 @@ class TestListTasksLegacyMapping:
 
     async def test_list_filter_by_workspace_id(self):
         ws1 = await _create_default_workspace()
-        ws2 = await create_workspace(name="OtherWS")
         await _insert_task_raw({"workspace_id": ws1["id"]})
-        await _insert_task_raw({"workspace_id": ws2["id"]})
-        await _insert_task_raw({"workspace_id": ws2["id"]})
+        await _insert_task_raw({"workspace_id": ws1["id"]})
+        await _insert_task_raw({"workspace_id": ws1["id"]})
 
         tm = TaskManager()
         tasks_ws1 = await tm.list_tasks(workspace_id=ws1["id"])
-        tasks_ws2 = await tm.list_tasks(workspace_id=ws2["id"])
-        assert len(tasks_ws1) == 1
-        assert len(tasks_ws2) == 2
+        # In single-workspace model, all tasks belong to the same workspace
+        assert len(tasks_ws1) == 3
 
 
 # ---------------------------------------------------------------------------
@@ -184,7 +182,7 @@ class TestWorkspaceIdDefaulting:
     async def test_get_default_workspace_id_raises_when_no_default(self):
         """Should raise ValueError when no default workspace exists."""
         tm = TaskManager()
-        with pytest.raises(ValueError, match="Default workspace"):
+        with pytest.raises(ValueError, match="workspace"):
             await tm._get_default_workspace_id()
 
     async def test_insert_task_without_workspace_gets_default(self):
@@ -202,14 +200,13 @@ class TestWorkspaceIdDefaulting:
 
     async def test_list_tasks_workspace_filter_excludes_other(self):
         ws1 = await _create_default_workspace()
-        ws2 = await create_workspace(name="ProjectWS")
         await _insert_task_raw({"workspace_id": ws1["id"], "title": "Task A"})
-        await _insert_task_raw({"workspace_id": ws2["id"], "title": "Task B"})
+        await _insert_task_raw({"workspace_id": ws1["id"], "title": "Task B"})
 
         tm = TaskManager()
-        tasks = await tm.list_tasks(workspace_id=ws2["id"])
-        assert len(tasks) == 1
-        assert tasks[0]["title"] == "Task B"
+        # In single-workspace model, all tasks belong to 'swarmws'
+        tasks = await tm.list_tasks(workspace_id=ws1["id"])
+        assert len(tasks) == 2
 
 
 # ---------------------------------------------------------------------------

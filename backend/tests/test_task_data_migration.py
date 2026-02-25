@@ -302,17 +302,20 @@ class TestTaskDataMigration:
 
     @pytest.mark.asyncio
     async def test_workspace_id_assigned_to_swarmws(self, db_with_legacy_tasks):
-        """Verify tasks with NULL workspace_id get SwarmWS.id assigned.
+        """Verify tasks with NULL workspace_id get workspace_id assigned.
         
-        Validates: Requirements 13.7, 13.8
+        After legacy cleanup drops swarm_workspaces, _migrate_existing_task_data
+        falls back to assigning 'swarmws' as the workspace_id constant.
+        
+        Validates: Requirements 13.7, 13.8, 24.1
         """
         db_path, swarm_ws_id, agent_id = db_with_legacy_tasks
         
-        # Initialize database (runs migrations)
+        # Initialize database (runs migrations including legacy cleanup)
         db = SQLiteDatabase(db_path=db_path)
         await db.initialize()
         
-        # Check that all tasks now have workspace_id set to SwarmWS.id
+        # Check that all tasks now have workspace_id set (not NULL)
         async with aiosqlite.connect(str(db_path)) as conn:
             conn.row_factory = aiosqlite.Row
             
@@ -324,20 +327,19 @@ class TestTaskDataMigration:
             assert row["count"] == 0, \
                 f"Expected 0 tasks with NULL workspace_id, got {row['count']}"
             
-            # Count tasks with SwarmWS workspace_id
+            # After legacy cleanup, tasks get 'swarmws' as workspace_id
             cursor = await conn.execute(
-                "SELECT COUNT(*) as count FROM tasks WHERE workspace_id = ?",
-                (swarm_ws_id,)
+                "SELECT COUNT(*) as count FROM tasks WHERE workspace_id = 'swarmws'"
             )
             row = await cursor.fetchone()
             assert row["count"] == 5, \
-                f"Expected 5 tasks with SwarmWS workspace_id, got {row['count']}"
+                f"Expected 5 tasks with 'swarmws' workspace_id, got {row['count']}"
 
     @pytest.mark.asyncio
     async def test_migration_is_idempotent(self, db_with_legacy_tasks):
         """Verify that running migration multiple times is safe.
         
-        Validates: Requirements 5.4, 13.7, 13.8
+        Validates: Requirements 5.4, 13.7, 13.8, 24.1
         """
         db_path, swarm_ws_id, agent_id = db_with_legacy_tasks
         
@@ -370,10 +372,9 @@ class TestTaskDataMigration:
             row = await cursor.fetchone()
             assert row["status"] == "blocked"
             
-            # Check workspace_id assignments
+            # After legacy cleanup, tasks get 'swarmws' as workspace_id
             cursor = await conn.execute(
-                "SELECT COUNT(*) as count FROM tasks WHERE workspace_id = ?",
-                (swarm_ws_id,)
+                "SELECT COUNT(*) as count FROM tasks WHERE workspace_id = 'swarmws'"
             )
             row = await cursor.fetchone()
             assert row["count"] == 5

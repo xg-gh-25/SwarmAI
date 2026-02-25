@@ -5,7 +5,7 @@ import logging
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from schemas.task import TaskCreate, TaskResponse, TaskMessageRequest, RunningTaskCount
 from core.task_manager import task_manager
@@ -51,6 +51,50 @@ async def create_task(request: TaskCreate):
 
     Requirements: 26.1-26.7, 34.1-34.7
     """
+    # --- Policy enforcement: check required_skills / required_mcps ---
+    if request.required_skills or request.required_mcps:
+        violations = []
+        ws_id = request.workspace_id
+
+        # Resolve default workspace if not provided
+        if not ws_id:
+            config = await db.workspace_config.get_config()
+            ws_id = config["id"] if config else None
+
+        if ws_id:
+            # Check required skills
+            for skill_id in (request.required_skills or []):
+                row = await db.workspace_skills.get_by_workspace_and_skill(ws_id, skill_id)
+                if not row or not row.get("enabled", 1):
+                    violations.append({
+                        "entity_type": "skill",
+                        "entity_id": skill_id,
+                        "message": f"Skill {skill_id} is not enabled in workspace {ws_id}",
+                        "suggestedAction": f"Enable skill {skill_id} in workspace settings",
+                    })
+
+            # Check required MCPs
+            for mcp_id in (request.required_mcps or []):
+                row = await db.workspace_mcps.get_by_workspace_and_mcp(ws_id, mcp_id)
+                if not row or not row.get("enabled", 1):
+                    violations.append({
+                        "entity_type": "mcp",
+                        "entity_id": mcp_id,
+                        "message": f"MCP {mcp_id} is not enabled in workspace {ws_id}",
+                        "suggestedAction": f"Enable MCP {mcp_id} in workspace settings",
+                    })
+
+        if violations:
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "code": "POLICY_VIOLATION",
+                    "message": "Required capabilities are not enabled in the workspace",
+                    "policy_violations": violations,
+                    "suggested_action": "Enable the required capabilities in workspace settings",
+                },
+            )
+
     try:
         task = await task_manager.create_task(
             agent_id=request.agent_id,
@@ -113,7 +157,7 @@ async def stream_task(task_id: str):
             async for event in task_manager.subscribe(task_id):
                 yield f"data: {json.dumps(event)}\n\n"
         except asyncio.CancelledError:
-            logger.info(f"SSE stream cancelled for task {task_id}")
+            logger.info("SSE stream cancelled for task %s", task_id)
 
     return StreamingResponse(
         event_generator(),

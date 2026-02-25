@@ -4,6 +4,7 @@ from __future__ import annotations
 import aiosqlite
 import json
 import logging
+import shutil
 import time
 from abc import abstractmethod
 from datetime import datetime
@@ -483,28 +484,27 @@ class SQLiteChannelMessagesTable(SQLiteTable[T], Generic[T]):
                 return [self._row_to_dict(row) for row in rows]
 
 
-class SQLiteSwarmWorkspacesTable(SQLiteTable[T], Generic[T]):
-    """Specialized SQLite table for swarm workspaces with default workspace querying support."""
+class SQLiteWorkspaceConfigTable(SQLiteTable[T], Generic[T]):
+    """Single-row workspace configuration table for the SwarmWS singleton.
 
-    async def get_default(self) -> Optional[T]:
-        """Get the default workspace (where is_default=1)."""
+    The workspace_config table always has exactly one row with id='swarmws'.
+    This replaces the multi-workspace table for the new
+    single-workspace model.
+    """
+
+    async def get_config(self) -> Optional[T]:
+        """Get the singleton workspace config row."""
         async with self._get_connection() as conn:
             conn.row_factory = aiosqlite.Row
             async with conn.execute(
-                f"SELECT * FROM {self.table_name} WHERE is_default = 1"
+                f"SELECT * FROM {self.table_name} WHERE id = 'swarmws'"
             ) as cursor:
                 row = await cursor.fetchone()
                 return self._row_to_dict(row) if row else None
 
-    async def list_non_default(self) -> list[T]:
-        """List all non-default workspaces (where is_default=0), ordered by created_at descending."""
-        async with self._get_connection() as conn:
-            conn.row_factory = aiosqlite.Row
-            async with conn.execute(
-                f"SELECT * FROM {self.table_name} WHERE is_default = 0 ORDER BY created_at DESC"
-            ) as cursor:
-                rows = await cursor.fetchall()
-                return [self._row_to_dict(row) for row in rows]
+    async def update_config(self, updates: dict) -> Optional[T]:
+        """Update the singleton workspace config."""
+        return await self.update('swarmws', updates)
 
 
 class WorkspaceScopedTable(SQLiteTable[T], Generic[T]):
@@ -1301,22 +1301,17 @@ class SQLiteDatabase(BaseDatabase):
     );
     CREATE INDEX IF NOT EXISTS idx_channel_messages_session ON channel_messages(channel_session_id);
 
-    -- Swarm Workspaces table
-    -- Validates: Requirements 36.1-36.11
-    CREATE TABLE IF NOT EXISTS swarm_workspaces (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
+    -- Workspace Config table (singleton SwarmWS configuration)
+    -- Validates: SwarmWS Foundation Requirements 19.1, 19.2, 19.5
+    CREATE TABLE IF NOT EXISTS workspace_config (
+        id TEXT PRIMARY KEY DEFAULT 'swarmws',
+        name TEXT NOT NULL DEFAULT 'SwarmWS',
         file_path TEXT NOT NULL,
-        context TEXT NOT NULL,
-        icon TEXT,
-        is_default INTEGER DEFAULT 0,
-        is_archived INTEGER DEFAULT 0,
-        archived_at TEXT,
+        icon TEXT DEFAULT '🏠',
+        context TEXT DEFAULT '',
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
     );
-    CREATE INDEX IF NOT EXISTS idx_swarm_workspaces_is_default ON swarm_workspaces(is_default);
-    CREATE INDEX IF NOT EXISTS idx_swarm_workspaces_is_archived ON swarm_workspaces(is_archived);
 
     -- ToDos table (Signals in Daily Work Operating Loop)
     CREATE TABLE IF NOT EXISTS todos (
@@ -1585,7 +1580,7 @@ class SQLiteDatabase(BaseDatabase):
         self._channels = SQLiteTable[dict]("channels", self.db_path)
         self._channel_sessions = SQLiteChannelSessionsTable[dict]("channel_sessions", self.db_path)
         self._channel_messages = SQLiteChannelMessagesTable[dict]("channel_messages", self.db_path)
-        self._swarm_workspaces = SQLiteSwarmWorkspacesTable[dict]("swarm_workspaces", self.db_path)
+        self._workspace_config = SQLiteWorkspaceConfigTable[dict]("workspace_config", self.db_path)
         # Daily Work Operating Loop tables
         self._todos = SQLiteToDosTable[dict]("todos", self.db_path)
         self._plan_items = SQLitePlanItemsTable[dict]("plan_items", self.db_path)
@@ -1819,31 +1814,6 @@ class SQLiteDatabase(BaseDatabase):
             await conn.commit()
             logger.info("Migration complete: is_privileged column added to mcp_servers")
 
-        # Migration: Add is_archived and archived_at columns to swarm_workspaces table
-        # Validates: Requirements 36.1-36.11
-        cursor = await conn.execute("PRAGMA table_info(swarm_workspaces)")
-        workspace_columns = await cursor.fetchall()
-        workspace_column_names = [col[1] for col in workspace_columns]
-
-        if "is_archived" not in workspace_column_names:
-            logger.info("Running migration: Adding is_archived column to swarm_workspaces table")
-            await conn.execute("ALTER TABLE swarm_workspaces ADD COLUMN is_archived INTEGER DEFAULT 0")
-            await conn.commit()
-            logger.info("Migration complete: is_archived column added to swarm_workspaces")
-
-        if "archived_at" not in workspace_column_names:
-            logger.info("Running migration: Adding archived_at column to swarm_workspaces table")
-            await conn.execute("ALTER TABLE swarm_workspaces ADD COLUMN archived_at TEXT")
-            await conn.commit()
-            logger.info("Migration complete: archived_at column added to swarm_workspaces")
-
-        # Create index on swarm_workspaces.is_archived if it doesn't exist
-        try:
-            await conn.execute("CREATE INDEX IF NOT EXISTS idx_swarm_workspaces_is_archived ON swarm_workspaces(is_archived)")
-            await conn.commit()
-        except Exception:
-            pass  # Index may already exist
-
         # Migration: Add source_type column to mcp_servers table (added 2026-02-22)
         # Consistent with skills table source tracking
         # Re-fetch mcp_servers columns in case they were updated earlier
@@ -1861,6 +1831,104 @@ class SQLiteDatabase(BaseDatabase):
         # Workspace Refactor Data Migration (Task 1.9)
         # Validates: Requirements 5.4, 13.7, 13.8
         # ============================================================================
+
+        # ============================================================================
+        # Legacy Data Cleanup: Clean-slate approach (Task 18.1)
+        # Detects the legacy swarm_workspaces table, reads workspace paths for
+        # filesystem cleanup, drops the table, removes legacy workspace dirs,
+        # and clears workspace_id in chat_threads so threads become global.
+        # Validates: SwarmWS Foundation Requirements 24.1, 24.2, 24.3
+        # ============================================================================
+
+        cursor = await conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='swarm_workspaces'"
+        )
+        legacy_table_exists = await cursor.fetchone()
+
+        if legacy_table_exists:
+            logger.info("Legacy cleanup: Detected swarm_workspaces table, starting clean-slate removal")
+
+            # Step 1: Read legacy workspace file_path values before dropping
+            # so we can remove their filesystem directories.
+            legacy_paths: list[str] = []
+            try:
+                cursor = await conn.execute("SELECT file_path FROM swarm_workspaces")
+                rows = await cursor.fetchall()
+                legacy_paths = [row[0] for row in rows if row[0]]
+                logger.info("Legacy cleanup: Found %d workspace path(s) to evaluate for removal", len(legacy_paths))
+            except Exception as e:
+                logger.warning("Legacy cleanup: Could not read legacy workspace paths: %s", e)
+
+            # Step 2: DROP the swarm_workspaces table entirely
+            try:
+                await conn.execute("DROP TABLE IF EXISTS swarm_workspaces")
+                await conn.commit()
+                logger.info("Legacy cleanup: Dropped swarm_workspaces table")
+            except Exception as e:
+                logger.warning("Legacy cleanup: Failed to drop swarm_workspaces table: %s", e)
+
+            # Step 3: Remove legacy workspace directories from filesystem.
+            # Only remove dirs that are NOT the current SwarmWS directory.
+            # Paths stored in DB use {app_data_dir} placeholder or ~ prefix.
+            app_data_dir = str(get_app_data_dir())
+            swarmws_dir = str(Path(app_data_dir) / "SwarmWS")
+
+            for raw_path in legacy_paths:
+                # Expand {app_data_dir} placeholder and ~ home dir
+                expanded = raw_path
+                if "{app_data_dir}" in expanded:
+                    expanded = expanded.replace("{app_data_dir}", app_data_dir)
+                expanded = str(Path(expanded).expanduser())
+
+                # Skip the current SwarmWS directory — it's the active workspace
+                if Path(expanded).resolve() == Path(swarmws_dir).resolve():
+                    logger.info("Legacy cleanup: Skipping active SwarmWS directory: %s", expanded)
+                    continue
+
+                # Safety: only remove directories under the app data directory
+                # to prevent a tampered DB from deleting arbitrary paths
+                try:
+                    resolved = Path(expanded).resolve()
+                    if not str(resolved).startswith(str(Path(app_data_dir).resolve())):
+                        logger.warning(
+                            "Legacy cleanup: Skipping directory outside app data dir: %s",
+                            expanded,
+                        )
+                        continue
+                except (OSError, ValueError):
+                    logger.warning(
+                        "Legacy cleanup: Could not resolve path, skipping: %s",
+                        expanded,
+                    )
+                    continue
+
+                if Path(expanded).exists() and Path(expanded).is_dir():
+                    try:
+                        shutil.rmtree(expanded)
+                        logger.info("Legacy cleanup: Removed legacy workspace directory: %s", expanded)
+                    except Exception as e:
+                        logger.warning("Legacy cleanup: Failed to remove directory %s: %s", expanded, e)
+                else:
+                    logger.debug("Legacy cleanup: Legacy directory does not exist, skipping: %s", expanded)
+
+            # Step 4: Clear workspace_id in chat_threads so threads become global SwarmWS chats
+            try:
+                cursor = await conn.execute(
+                    "SELECT COUNT(*) FROM chat_threads WHERE workspace_id IS NOT NULL"
+                )
+                row = await cursor.fetchone()
+                thread_count = row[0] if row else 0
+
+                if thread_count > 0:
+                    await conn.execute("UPDATE chat_threads SET workspace_id = NULL")
+                    await conn.commit()
+                    logger.info("Legacy cleanup: Cleared workspace_id on %d chat thread(s)", thread_count)
+                else:
+                    logger.debug("Legacy cleanup: No chat threads with workspace_id to clear")
+            except Exception as e:
+                logger.warning("Legacy cleanup: Failed to clear chat_threads workspace_id: %s", e)
+
+            logger.info("Legacy cleanup: Clean-slate removal complete")
 
         # Migration: Map existing task statuses and assign workspace_id to existing tasks
         # Status mapping: pending→draft, running→wip, failed→blocked
@@ -1937,14 +2005,10 @@ class SQLiteDatabase(BaseDatabase):
             logger.debug("Status migration skipped: No tasks with legacy status values found")
 
         # Migration: Set workspace_id to SwarmWS.id for existing tasks with NULL workspace_id
-        # First, get the SwarmWS workspace ID (the default workspace)
-        cursor = await conn.execute(
-            "SELECT id FROM swarm_workspaces WHERE is_default = 1"
-        )
-        row = await cursor.fetchone()
+        # Always use 'swarmws' as the workspace ID (legacy swarm_workspaces table is dropped)
+        swarm_ws_id = 'swarmws'
         
-        if row:
-            swarm_ws_id = row[0]
+        if swarm_ws_id:
             
             # Check how many tasks need workspace_id assignment
             cursor = await conn.execute(
@@ -2050,9 +2114,9 @@ class SQLiteDatabase(BaseDatabase):
         return self._channel_messages
 
     @property
-    def swarm_workspaces(self) -> SQLiteSwarmWorkspacesTable:
-        """Get the swarm workspaces table."""
-        return self._swarm_workspaces
+    def workspace_config(self) -> SQLiteWorkspaceConfigTable:
+        """Get the workspace_config table (singleton SwarmWS config)."""
+        return self._workspace_config
 
     @property
     def todos(self) -> SQLiteToDosTable:

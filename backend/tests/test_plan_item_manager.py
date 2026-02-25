@@ -194,14 +194,13 @@ class TestPlanItemList:
 
     @pytest.mark.asyncio
     async def test_list_isolates_workspaces(self):
-        ws1 = await create_workspace("WS1")
-        ws2 = await create_workspace("WS2")
-        await plan_item_manager.create(PlanItemCreate(workspace_id=ws1["id"], title="WS1 item"))
-        await plan_item_manager.create(PlanItemCreate(workspace_id=ws2["id"], title="WS2 item"))
+        """In single-workspace model, all plan items belong to the same workspace."""
+        ws = await create_workspace("WS1")
+        await plan_item_manager.create(PlanItemCreate(workspace_id=ws["id"], title="WS1 item"))
+        await plan_item_manager.create(PlanItemCreate(workspace_id=ws["id"], title="WS2 item"))
 
-        results = await plan_item_manager.list(workspace_id=ws1["id"])
-        assert len(results) == 1
-        assert results[0].title == "WS1 item"
+        results = await plan_item_manager.list(workspace_id=ws["id"])
+        assert len(results) == 2
 
 
 class TestPlanItemUpdate:

@@ -364,24 +364,19 @@ class TestChatThreadList:
 
     @pytest.mark.asyncio
     async def test_list_isolates_workspaces(self):
-        ws_a = await create_workspace("WS_A")
-        ws_b = await create_workspace("WS_B")
+        """In single-workspace model, all threads belong to the same workspace."""
+        ws = await create_workspace("WS_A")
         agent = await _create_agent()
 
         await chat_thread_manager.create_thread(
-            ChatThreadCreate(workspace_id=ws_a["id"], agent_id=agent["id"], title="A")
+            ChatThreadCreate(workspace_id=ws["id"], agent_id=agent["id"], title="A")
         )
         await chat_thread_manager.create_thread(
-            ChatThreadCreate(workspace_id=ws_b["id"], agent_id=agent["id"], title="B")
+            ChatThreadCreate(workspace_id=ws["id"], agent_id=agent["id"], title="B")
         )
 
-        threads_a = await chat_thread_manager.list_threads(workspace_id=ws_a["id"])
-        threads_b = await chat_thread_manager.list_threads(workspace_id=ws_b["id"])
-
-        assert len(threads_a) == 1
-        assert len(threads_b) == 1
-        assert threads_a[0].title == "A"
-        assert threads_b[0].title == "B"
+        threads = await chat_thread_manager.list_threads(workspace_id=ws["id"])
+        assert len(threads) == 2
 
 
 # ---------------------------------------------------------------------------

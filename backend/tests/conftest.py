@@ -57,7 +57,7 @@ _TABLES_TO_CLEAR = [
     "marketplaces",
     "users",
     "app_settings",
-    "swarm_workspaces",
+    "workspace_config",
 ]
 
 

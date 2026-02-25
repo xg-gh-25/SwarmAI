@@ -1,9 +1,10 @@
-"""Workspace configuration schemas for Skills, MCPs, and Knowledgebases.
+"""Workspace configuration schemas for Skills, MCPs, Knowledgebases, and singleton workspace config.
 
 This module defines the Pydantic models for workspace configuration entities,
-including Skills, MCPs, Knowledgebases, audit logging, and policy violations.
+including Skills, MCPs, Knowledgebases, audit logging, policy violations,
+and the singleton SwarmWS workspace configuration.
 
-Requirements: 19.6, 19.7, 19.8, 25.2
+Requirements: 19.2, 19.4, 19.5, 19.6, 19.7, 19.8, 25.2
 """
 from datetime import datetime
 from enum import Enum
@@ -378,3 +379,34 @@ class EffectiveKnowledgebasesResponse(BaseModel):
         ...,
         description="List of effective knowledgebase sources for the workspace"
     )
+
+
+# ============================================================================
+# Singleton Workspace Configuration (SwarmWS Foundation)
+# ============================================================================
+
+class WorkspaceConfigResponse(BaseModel):
+    """Response model for the singleton SwarmWS workspace configuration.
+
+    The workspace_config table always has exactly one row with id='swarmws'.
+    Requirements: 19.2, 19.4, 19.5
+    """
+
+    id: str = Field(..., description="Always 'swarmws'")
+    name: str = Field(..., description="Always 'SwarmWS'")
+    file_path: str = Field(..., description="Absolute path to workspace root")
+    icon: Optional[str] = Field(None, description="Workspace icon emoji")
+    context: Optional[str] = Field(None, description="Workspace-level context text")
+    created_at: str = Field(..., description="ISO timestamp of creation")
+    updated_at: str = Field(..., description="ISO timestamp of last update")
+
+
+class WorkspaceConfigUpdate(BaseModel):
+    """Request model for updating the singleton workspace configuration.
+
+    Only icon and context are user-mutable. Name and file_path are fixed.
+    Requirements: 19.4, 19.5
+    """
+
+    icon: Optional[str] = Field(None, description="Workspace icon emoji")
+    context: Optional[str] = Field(None, description="Workspace-level context text")

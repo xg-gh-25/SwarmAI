@@ -684,6 +684,7 @@ export interface RunningTaskCount {
 
 // ============== Swarm Workspace Types ==============
 
+/** @deprecated Use WorkspaceConfig instead. Kept for backward compat with useChatSession. */
 export interface SwarmWorkspace {
   id: string;
   name: string;
@@ -697,16 +698,63 @@ export interface SwarmWorkspace {
   updatedAt: string;
 }
 
-export interface SwarmWorkspaceCreateRequest {
+// ============== Workspace Config Types (Single-Workspace Model) ==============
+
+/** Workspace configuration for the singleton SwarmWS. */
+export interface WorkspaceConfig {
+  id: string;
   name: string;
   filePath: string;
-  context: string;
   icon?: string;
+  context?: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
-export interface SwarmWorkspaceUpdateRequest {
-  name?: string;
-  filePath?: string;
-  context?: string;
+/** Request to update the singleton workspace config. */
+export interface WorkspaceConfigUpdateRequest {
   icon?: string;
+  context?: string;
+}
+
+// ============== Project Types ==============
+
+/** Project metadata from .project.json (Cadence 2 enriched). */
+export interface Project {
+  id: string;
+  name: string;
+  description: string;
+  path: string;
+  createdAt: string;
+  updatedAt: string;
+  status: 'active' | 'archived' | 'completed';
+  priority?: 'low' | 'medium' | 'high' | 'critical';
+  tags: string[];
+  schemaVersion: string;
+  version: number;
+  contextL0?: string;
+  contextL1?: string;
+}
+
+/** A single entry in the project update history. */
+export interface ProjectHistoryEntry {
+  version: number;
+  timestamp: string;
+  action: string;
+  changes: Record<string, { from: unknown; to: unknown }>;
+  source: 'user' | 'agent' | 'system' | 'migration';
+}
+
+/** Request to create a new project. */
+export interface ProjectCreateRequest {
+  name: string;
+}
+
+/** Request to update a project. */
+export interface ProjectUpdateRequest {
+  name?: string;
+  description?: string;
+  status?: 'active' | 'archived' | 'completed';
+  tags?: string[];
+  priority?: 'low' | 'medium' | 'high' | 'critical' | null;
 }

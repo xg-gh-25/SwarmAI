@@ -37,13 +37,12 @@ async def workspace_with_tmp(tmp_path):
     ws_path = str(tmp_path / "TestWS")
     os.makedirs(ws_path, exist_ok=True)
 
-    workspace = await db.swarm_workspaces.put({
-        "id": "ws-test-reflections",
+    workspace = await db.workspace_config.put({
+        "id": "swarmws",
         "name": "TestWS",
         "file_path": ws_path,
         "context": "Test workspace for reflection tests",
         "icon": "📁",
-        "is_default": False,
         "created_at": now,
         "updated_at": now,
     })

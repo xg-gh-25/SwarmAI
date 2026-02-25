@@ -70,10 +70,10 @@ class ReflectionManager:
 
     async def _get_default_workspace_id(self) -> str:
         """Get the default workspace (SwarmWS) ID."""
-        default_workspace = await db.swarm_workspaces.get_default()
-        if not default_workspace:
-            raise ValueError("Default workspace (SwarmWS) not found.")
-        return default_workspace["id"]
+        workspace = await db.workspace_config.get_config()
+        if not workspace:
+            raise ValueError("SwarmWS workspace config not found.")
+        return workspace["id"]
 
     async def _resolve_reports_dir(self, workspace_id: str) -> Path:
         """Resolve the filesystem path for storing reflection content.
@@ -81,11 +81,11 @@ class ReflectionManager:
         Returns the expanded absolute path: {workspace_file_path}/Artifacts/Reports/
 
         Raises:
-            ValueError: If workspace not found.
+            ValueError: If workspace config not found.
         """
-        workspace = await db.swarm_workspaces.get(workspace_id)
+        workspace = await db.workspace_config.get_config()
         if not workspace:
-            raise ValueError(f"Workspace {workspace_id} not found")
+            raise ValueError(f"Workspace config not found")
 
         expanded = self.workspace_manager.expand_path(workspace["file_path"])
         return Path(expanded) / REFLECTIONS_SUBFOLDER
@@ -256,7 +256,7 @@ class ReflectionManager:
         if not result:
             return None
 
-        workspace = await db.swarm_workspaces.get(result["workspace_id"])
+        workspace = await db.workspace_config.get_config()
         if not workspace:
             return None
 
@@ -342,7 +342,7 @@ class ReflectionManager:
 
             if new_relative_path != existing["file_path"]:
                 # Rename the file on disk
-                workspace = await db.swarm_workspaces.get(existing["workspace_id"])
+                workspace = await db.workspace_config.get_config()
                 if workspace:
                     expanded = self.workspace_manager.expand_path(workspace["file_path"])
                     old_abs = Path(expanded) / existing["file_path"]
@@ -361,7 +361,7 @@ class ReflectionManager:
 
         # Write new content if provided
         if new_content is not None:
-            workspace = await db.swarm_workspaces.get(existing["workspace_id"])
+            workspace = await db.workspace_config.get_config()
             if workspace:
                 expanded = self.workspace_manager.expand_path(workspace["file_path"])
                 file_path = updates.get("file_path", existing["file_path"])
@@ -399,7 +399,7 @@ class ReflectionManager:
 
         # Optionally delete the file
         if delete_file:
-            workspace = await db.swarm_workspaces.get(existing["workspace_id"])
+            workspace = await db.workspace_config.get_config()
             if workspace:
                 expanded = self.workspace_manager.expand_path(workspace["file_path"])
                 file_path = Path(expanded) / existing["file_path"]

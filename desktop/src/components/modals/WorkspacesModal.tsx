@@ -1,15 +1,13 @@
 /**
- * WorkspacesModal Component
- * 
- * Wraps the WorkspacesPage content in a full-screen modal overlay.
- * Opens from the Left Sidebar navigation when Workspaces icon is clicked.
- * Displays workspace management with CRUD operations.
- * 
- * Requirements: 4.1, 4.2, 4.3, 4.4
+ * WorkspacesModal Component (Stub)
+ *
+ * Placeholder modal retained for layout compatibility during the
+ * SwarmWS single-workspace migration. The multi-workspace WorkspacesPage
+ * has been removed. This component will be fully replaced or removed
+ * in a future cadence once the Workspace Explorer UX redesign is complete.
  */
 
 import Modal from '../common/Modal';
-import WorkspacesPage from '../../pages/WorkspacesPage';
 
 interface WorkspacesModalProps {
   isOpen: boolean;
@@ -21,11 +19,13 @@ export default function WorkspacesModal({ isOpen, onClose }: WorkspacesModalProp
     <Modal
       isOpen={isOpen}
       onClose={onClose}
-      title="Workspaces"
+      title="SwarmWS"
       size="fullscreen"
     >
-      <div className="h-full overflow-y-auto -m-6">
-        <WorkspacesPage />
+      <div className="h-full overflow-y-auto -m-6 p-6">
+        <p className="text-[var(--color-text-muted)]">
+          SwarmWS is your single persistent workspace. Manage projects and settings from the Workspace Explorer.
+        </p>
       </div>
     </Modal>
   );

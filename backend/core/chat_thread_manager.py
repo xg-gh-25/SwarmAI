@@ -64,10 +64,10 @@ class ChatThreadManager:
         Raises:
             ValueError: If no default workspace exists.
         """
-        default_workspace = await db.swarm_workspaces.get_default()
+        default_workspace = await db.workspace_config.get_config()
         if not default_workspace:
             raise ValueError(
-                "Default workspace (SwarmWS) not found. "
+                "SwarmWS workspace config not found. "
                 "Please initialize the application first."
             )
         return default_workspace["id"]

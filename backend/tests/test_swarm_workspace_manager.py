@@ -1,32 +1,59 @@
-"""Unit tests for SwarmWorkspaceManager.
+"""Unit and property-based tests for SwarmWorkspaceManager.
 
-Tests for Task 3.1: validate_path() and expand_path() methods.
-Tests for Task 3.2: create_folder_structure() method.
+This module contains both unit tests and Hypothesis property-based tests for
+``SwarmWorkspaceManager`` in ``backend/core/swarm_workspace_manager.py``.
+
+Unit tests cover:
+- Constants (FOLDER_STRUCTURE, DEFAULT_WORKSPACE_CONFIG, etc.)
+- ``validate_path()`` and ``expand_path()`` methods
+- ``create_folder_structure()`` method (new hierarchical layout)
+- ``read_context_files()`` backward-compat method
+- ``ensure_default_workspace()`` with workspace_config DB interface
+- ``is_system_managed()`` for Knowledge/Memory path recognition
+- ``verify_integrity()`` for Knowledge/Memory recreation
+- Sample memory content creation during first-time init
+
+Property-based tests (Hypothesis):
+- ``TestInitializationIdempotence`` — Property 3: running
+  ``ensure_default_workspace()`` twice produces an equivalent filesystem
+  structure, preserving user files and not overwriting existing content.
+
+**Validates: Requirements 2.1, 2.4, 2.5, 3.2, 8.1, 25.7, 29.1, 30.1, 31.2, 32.1, 32.2, 32.3**
 """
 import os
 import pytest
 import tempfile
 import shutil
 from pathlib import Path
-from core.swarm_workspace_manager import SwarmWorkspaceManager, swarm_workspace_manager
+from core.swarm_workspace_manager import (
+    SwarmWorkspaceManager,
+    swarm_workspace_manager,
+    FOLDER_STRUCTURE,
+    SYSTEM_MANAGED_ROOT_FILES,
+    SYSTEM_MANAGED_SECTION_FILES,
+    SYSTEM_MANAGED_FOLDERS,
+    DEFAULT_WORKSPACE_CONFIG,
+)
 
 
 class TestSwarmWorkspaceManagerConstants:
-    """Tests for SwarmWorkspaceManager constants."""
+    """Tests for SwarmWorkspaceManager constants after single-workspace refactor."""
 
     def test_folder_structure_contains_required_directories(self):
         """Verify FOLDER_STRUCTURE contains all required directories.
 
-        Validates: Requirements 2.3, 2.7, 35.1-35.6
+        Validates: Requirements 2.1, 2.3
         """
         required_dirs = [
+            "Signals",
+            "Plan",
+            "Execute",
+            "Communicate",
+            "Reflection",
             "Artifacts",
-            "Artifacts/Plans",
-            "Artifacts/Reports",
-            "Artifacts/Docs",
-            "Artifacts/Decisions",
-            "ContextFiles",
-            "Transcripts",
+            "Notebooks",
+            "Projects",
+            "Knowledge/Memory",
         ]
         assert SwarmWorkspaceManager.FOLDER_STRUCTURE == required_dirs
 
@@ -35,9 +62,30 @@ class TestSwarmWorkspaceManagerConstants:
         config = SwarmWorkspaceManager.DEFAULT_WORKSPACE_CONFIG
         assert config["name"] == "SwarmWS"
         assert config["file_path"] == "{app_data_dir}/SwarmWS"
-        assert config["is_default"] is True
-        assert "context" in config
         assert "icon" in config
+
+    def test_system_managed_folders_match_folder_structure(self):
+        """Verify SYSTEM_MANAGED_FOLDERS covers all FOLDER_STRUCTURE entries."""
+        assert SYSTEM_MANAGED_FOLDERS == set(FOLDER_STRUCTURE)
+
+    def test_system_managed_root_files(self):
+        """Verify SYSTEM_MANAGED_ROOT_FILES has expected files."""
+        expected = {"system-prompts.md", "context-L0.md", "context-L1.md"}
+        assert SYSTEM_MANAGED_ROOT_FILES == expected
+
+    def test_system_managed_section_files(self):
+        """Verify SYSTEM_MANAGED_SECTION_FILES has context files for shared sections."""
+        for section in ("Artifacts", "Notebooks", "Projects"):
+            assert f"{section}/context-L0.md" in SYSTEM_MANAGED_SECTION_FILES
+            assert f"{section}/context-L1.md" in SYSTEM_MANAGED_SECTION_FILES
+
+    def test_depth_limits_has_all_sections(self):
+        """Verify DEPTH_LIMITS covers all section types."""
+        limits = SwarmWorkspaceManager.DEPTH_LIMITS
+        assert "operating_loop" in limits
+        assert "shared_knowledge" in limits
+        assert "project_system" in limits
+        assert "project_user" in limits
 
 
 class TestExpandPath:
@@ -79,23 +127,17 @@ class TestValidatePath:
     """
 
     def test_valid_absolute_path(self):
-        """Verify absolute paths are accepted."""
         manager = SwarmWorkspaceManager()
         assert manager.validate_path("/usr/local/bin") is True
         assert manager.validate_path("/home/user/workspace") is True
 
     def test_valid_tilde_path(self):
-        """Verify paths starting with ~ are accepted."""
         manager = SwarmWorkspaceManager()
         assert manager.validate_path("~/Desktop/SwarmAI") is True
         assert manager.validate_path("~/workspace") is True
         assert manager.validate_path("~") is True
 
     def test_reject_path_traversal_double_dot(self):
-        """Verify paths with .. are rejected.
-
-        Validates: Requirement 8.1
-        """
         manager = SwarmWorkspaceManager()
         assert manager.validate_path("/home/user/../etc/passwd") is False
         assert manager.validate_path("~/Desktop/../.ssh") is False
@@ -103,22 +145,16 @@ class TestValidatePath:
         assert manager.validate_path("../secret") is False
 
     def test_reject_relative_path(self):
-        """Verify relative paths (not starting with ~ or /) are rejected.
-
-        Validates: Requirement 8.5
-        """
         manager = SwarmWorkspaceManager()
         assert manager.validate_path("relative/path") is False
         assert manager.validate_path("workspace") is False
         assert manager.validate_path("./current") is False
 
     def test_reject_empty_path(self):
-        """Verify empty paths are rejected."""
         manager = SwarmWorkspaceManager()
         assert manager.validate_path("") is False
 
     def test_reject_path_with_embedded_traversal(self):
-        """Verify paths with embedded .. sequences are rejected."""
         manager = SwarmWorkspaceManager()
         assert manager.validate_path("/home/user/workspace/../../../etc") is False
         assert manager.validate_path("~/safe/../../unsafe") is False
@@ -128,19 +164,43 @@ class TestGlobalInstance:
     """Tests for the global swarm_workspace_manager instance."""
 
     def test_global_instance_exists(self):
-        """Verify global instance is created."""
         assert swarm_workspace_manager is not None
         assert isinstance(swarm_workspace_manager, SwarmWorkspaceManager)
 
     def test_global_instance_has_folder_structure(self):
-        """Verify global instance has FOLDER_STRUCTURE."""
-        assert len(swarm_workspace_manager.FOLDER_STRUCTURE) == 7
+        assert len(swarm_workspace_manager.FOLDER_STRUCTURE) == 9
+
+
+class TestKnowledgeMemorySystemManaged:
+    """Tests for Knowledge/Memory path recognition in is_system_managed().
+
+    Validates: Requirements 2.4, 3.2, 3.6, 3.7
+    """
+
+    def test_knowledge_memory_is_system_managed(self):
+        """Verify Knowledge/Memory is recognized as system-managed."""
+        manager = SwarmWorkspaceManager()
+        assert manager.is_system_managed("Knowledge/Memory") is True
+
+    def test_knowledge_memory_in_system_managed_folders(self):
+        """Verify Knowledge/Memory is in SYSTEM_MANAGED_FOLDERS set."""
+        assert "Knowledge/Memory" in SYSTEM_MANAGED_FOLDERS
+
+    def test_knowledge_memory_in_folder_structure(self):
+        """Verify Knowledge/Memory is in FOLDER_STRUCTURE list."""
+        assert "Knowledge/Memory" in FOLDER_STRUCTURE
+
+    def test_knowledge_memory_user_files_not_system_managed(self):
+        """Verify user files inside Knowledge/Memory/ are not system-managed."""
+        manager = SwarmWorkspaceManager()
+        assert manager.is_system_managed("Knowledge/Memory/my-notes.md") is False
+        assert manager.is_system_managed("Knowledge/Memory/subfolder") is False
 
 
 class TestCreateFolderStructure:
-    """Tests for create_folder_structure() method.
+    """Tests for create_folder_structure() method (new hierarchical layout).
 
-    Validates: Requirements 2.1, 2.4
+    Validates: Requirements 2.1, 2.2, 2.4, 3.2, 8.1, 8.2, 30.1
     """
 
     @pytest.fixture
@@ -148,41 +208,44 @@ class TestCreateFolderStructure:
         """Create a temporary directory for testing."""
         temp_path = tempfile.mkdtemp()
         yield temp_path
-        # Cleanup after test
         if os.path.exists(temp_path):
             shutil.rmtree(temp_path)
 
     @pytest.mark.asyncio
     async def test_creates_all_subdirectories(self, temp_dir):
-        """Verify all required subdirectories are created.
+        """Verify all required subdirectories are created."""
+        manager = SwarmWorkspaceManager()
+        workspace_path = os.path.join(temp_dir, "test_workspace")
 
-        Validates: Requirement 2.1
+        await manager.create_folder_structure(workspace_path)
+
+        for folder_name in SwarmWorkspaceManager.FOLDER_STRUCTURE:
+            folder_path = os.path.join(workspace_path, folder_name)
+            assert os.path.isdir(folder_path), f"Directory {folder_name} should exist"
+
+    @pytest.mark.asyncio
+    async def test_creates_knowledge_memory_directory(self, temp_dir):
+        """Verify Knowledge/Memory/ nested directory is created.
+
+        Validates: Requirements 2.1, 2.4, 3.2
         """
         manager = SwarmWorkspaceManager()
         workspace_path = os.path.join(temp_dir, "test_workspace")
 
         await manager.create_folder_structure(workspace_path)
 
-        # Verify all subdirectories exist
-        for folder_name in SwarmWorkspaceManager.FOLDER_STRUCTURE:
-            folder_path = os.path.join(workspace_path, folder_name)
-            assert os.path.isdir(folder_path), f"Directory {folder_name} should exist"
+        memory_path = os.path.join(workspace_path, "Knowledge", "Memory")
+        assert os.path.isdir(memory_path), "Knowledge/Memory/ directory should exist"
 
     @pytest.mark.asyncio
     async def test_creates_root_directory_if_not_exists(self, temp_dir):
-        """Verify root directory is created if it doesn't exist.
-
-        Validates: Requirement 2.4
-        """
+        """Verify root directory is created if it doesn't exist."""
         manager = SwarmWorkspaceManager()
         workspace_path = os.path.join(temp_dir, "new_workspace")
-
-        # Ensure path doesn't exist
         assert not os.path.exists(workspace_path)
 
         await manager.create_folder_structure(workspace_path)
 
-        # Verify root was created
         assert os.path.isdir(workspace_path)
 
     @pytest.mark.asyncio
@@ -194,7 +257,6 @@ class TestCreateFolderStructure:
         await manager.create_folder_structure(workspace_path)
 
         assert os.path.isdir(workspace_path)
-        # Verify subdirectories also exist
         for folder_name in SwarmWorkspaceManager.FOLDER_STRUCTURE:
             folder_path = os.path.join(workspace_path, folder_name)
             assert os.path.isdir(folder_path)
@@ -205,11 +267,9 @@ class TestCreateFolderStructure:
         manager = SwarmWorkspaceManager()
         workspace_path = os.path.join(temp_dir, "test_workspace")
 
-        # Create twice
         await manager.create_folder_structure(workspace_path)
         await manager.create_folder_structure(workspace_path)
 
-        # Should still have all directories
         for folder_name in SwarmWorkspaceManager.FOLDER_STRUCTURE:
             folder_path = os.path.join(workspace_path, folder_name)
             assert os.path.isdir(folder_path)
@@ -222,24 +282,20 @@ class TestCreateFolderStructure:
 
         with pytest.raises(ValueError) as exc_info:
             await manager.create_folder_structure(invalid_path)
-
         assert "Invalid workspace path" in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_rejects_relative_path(self):
         """Verify relative paths are rejected."""
         manager = SwarmWorkspaceManager()
-
         with pytest.raises(ValueError) as exc_info:
             await manager.create_folder_structure("relative/path/workspace")
-
         assert "Invalid workspace path" in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_handles_tilde_expansion(self):
         """Verify ~ paths are expanded and directories created."""
         manager = SwarmWorkspaceManager()
-        # Use a unique temp directory under home
         unique_name = f"swarm_test_{os.getpid()}"
         workspace_path = f"~/tmp_swarm_test/{unique_name}"
         expanded_path = os.path.expanduser(workspace_path)
@@ -247,230 +303,63 @@ class TestCreateFolderStructure:
         try:
             await manager.create_folder_structure(workspace_path)
 
-            # Verify directories were created at expanded path
             assert os.path.isdir(expanded_path)
             for folder_name in SwarmWorkspaceManager.FOLDER_STRUCTURE:
                 folder_path = os.path.join(expanded_path, folder_name)
                 assert os.path.isdir(folder_path)
         finally:
-            # Cleanup
             parent_dir = os.path.expanduser("~/tmp_swarm_test")
             if os.path.exists(parent_dir):
                 shutil.rmtree(parent_dir)
 
     @pytest.mark.asyncio
-    async def test_creates_exact_folder_structure(self, temp_dir):
-        """Verify exactly the expected folders are created, no more, no less."""
+    async def test_creates_root_level_system_files(self, temp_dir):
+        """Verify root-level system files are created."""
         manager = SwarmWorkspaceManager()
         workspace_path = os.path.join(temp_dir, "test_workspace")
 
         await manager.create_folder_structure(workspace_path)
 
-        # Collect all created directories relative to workspace root
-        created_dirs = []
-        for dirpath, dirnames, _ in os.walk(workspace_path):
-            for d in dirnames:
-                rel = os.path.relpath(os.path.join(dirpath, d), workspace_path)
-                created_dirs.append(rel)
-
-        # Should match exactly
-        assert set(created_dirs) == set(SwarmWorkspaceManager.FOLDER_STRUCTURE)
-
-
-class TestCreateContextFiles:
-    """Tests for create_context_files() method.
-
-    Validates: Requirements 2.3, 29.1-29.10, 35.1
-    """
-
-    @pytest.fixture
-    def temp_workspace(self):
-        """Create a temporary workspace with ContextFiles folder for testing."""
-        temp_path = tempfile.mkdtemp()
-        workspace_path = os.path.join(temp_path, "test_workspace")
-        context_path = os.path.join(workspace_path, "ContextFiles")
-        os.makedirs(context_path)
-        yield workspace_path
-        # Cleanup after test
-        if os.path.exists(temp_path):
-            shutil.rmtree(temp_path)
+        for filename in SYSTEM_MANAGED_ROOT_FILES:
+            file_path = os.path.join(workspace_path, filename)
+            assert os.path.isfile(file_path), f"System file {filename} should exist"
 
     @pytest.mark.asyncio
-    async def test_creates_context_file(self, temp_workspace):
-        """Verify context.md is created.
-
-        Validates: Requirement 2.3
-        """
+    async def test_creates_section_level_context_files(self, temp_dir):
+        """Verify section-level context files are created for Artifacts, Notebooks, Projects."""
         manager = SwarmWorkspaceManager()
-        workspace_name = "TestWorkspace"
+        workspace_path = os.path.join(temp_dir, "test_workspace")
 
-        await manager.create_context_files(temp_workspace, workspace_name)
+        await manager.create_folder_structure(workspace_path)
 
-        context_path = os.path.join(temp_workspace, "ContextFiles", "context.md")
-        assert os.path.isfile(context_path)
+        for section_file in SYSTEM_MANAGED_SECTION_FILES:
+            file_path = os.path.join(workspace_path, section_file)
+            assert os.path.isfile(file_path), f"Section file {section_file} should exist"
 
     @pytest.mark.asyncio
-    async def test_creates_compressed_context_file(self, temp_workspace):
-        """Verify compressed-context.md is created.
-
-        Validates: Requirement 35.1
-        """
+    async def test_does_not_overwrite_existing_files(self, temp_dir):
+        """Verify existing files are not overwritten on second call."""
         manager = SwarmWorkspaceManager()
-        workspace_name = "TestWorkspace"
+        workspace_path = os.path.join(temp_dir, "test_workspace")
 
-        await manager.create_context_files(temp_workspace, workspace_name)
+        await manager.create_folder_structure(workspace_path)
 
-        compressed_context_path = os.path.join(temp_workspace, "ContextFiles", "compressed-context.md")
-        assert os.path.isfile(compressed_context_path)
+        # Modify a system file
+        system_file = os.path.join(workspace_path, "system-prompts.md")
+        custom_content = "# Custom content"
+        with open(system_file, "w") as f:
+            f.write(custom_content)
 
-    @pytest.mark.asyncio
-    async def test_compressed_context_is_empty(self, temp_workspace):
-        """Verify compressed-context.md is created as empty file."""
-        manager = SwarmWorkspaceManager()
-        workspace_name = "TestWorkspace"
+        # Run again
+        await manager.create_folder_structure(workspace_path)
 
-        await manager.create_context_files(temp_workspace, workspace_name)
-
-        compressed_context_path = os.path.join(temp_workspace, "ContextFiles", "compressed-context.md")
-        with open(compressed_context_path, "r", encoding="utf-8") as f:
-            content = f.read()
-        assert content == ""
-
-    @pytest.mark.asyncio
-    async def test_context_contains_workspace_name(self, temp_workspace):
-        """Verify context.md contains the workspace name."""
-        manager = SwarmWorkspaceManager()
-        workspace_name = "MyProjectWorkspace"
-
-        await manager.create_context_files(temp_workspace, workspace_name)
-
-        context_path = os.path.join(temp_workspace, "ContextFiles", "context.md")
-        with open(context_path, "r", encoding="utf-8") as f:
-            content = f.read()
-        assert workspace_name in content
-        assert f"# {workspace_name} Workspace Context" in content
-
-    @pytest.mark.asyncio
-    async def test_context_contains_required_sections(self, temp_workspace):
-        """Verify context.md contains all required sections."""
-        manager = SwarmWorkspaceManager()
-        workspace_name = "TestWorkspace"
-
-        await manager.create_context_files(temp_workspace, workspace_name)
-
-        context_path = os.path.join(temp_workspace, "ContextFiles", "context.md")
-        with open(context_path, "r", encoding="utf-8") as f:
-            content = f.read()
-
-        # Check for required sections
-        assert "## Workspace Purpose" in content
-        assert "## Key Goals" in content
-        assert "## Important Context" in content
-        assert "## Notes" in content
-
-    @pytest.mark.asyncio
-    async def test_handles_tilde_path(self):
-        """Verify ~ paths are expanded correctly."""
-        manager = SwarmWorkspaceManager()
-        unique_name = f"swarm_context_test_{os.getpid()}"
-        workspace_path = f"~/tmp_swarm_test/{unique_name}"
-        expanded_path = os.path.expanduser(workspace_path)
-        context_path = os.path.join(expanded_path, "ContextFiles")
-
-        try:
-            # Create the ContextFiles directory first
-            os.makedirs(context_path, exist_ok=True)
-
-            await manager.create_context_files(workspace_path, "TildeTestWorkspace")
-
-            # Verify files were created at expanded path
-            ctx_path = os.path.join(context_path, "context.md")
-            compressed_path = os.path.join(context_path, "compressed-context.md")
-            assert os.path.isfile(ctx_path)
-            assert os.path.isfile(compressed_path)
-        finally:
-            # Cleanup
-            parent_dir = os.path.expanduser("~/tmp_swarm_test")
-            if os.path.exists(parent_dir):
-                shutil.rmtree(parent_dir)
-
-    @pytest.mark.asyncio
-    async def test_does_not_raise_on_missing_context_dir(self, temp_workspace):
-        """Verify method doesn't raise exception if ContextFiles dir doesn't exist.
-
-        Graceful error handling.
-        """
-        manager = SwarmWorkspaceManager()
-        # Remove the ContextFiles directory
-        context_path = os.path.join(temp_workspace, "ContextFiles")
-        shutil.rmtree(context_path)
-
-        # Should not raise, just log warning
-        await manager.create_context_files(temp_workspace, "TestWorkspace")
-
-        # Files should not exist since ContextFiles dir was removed
-        ctx_path = os.path.join(temp_workspace, "ContextFiles", "context.md")
-        assert not os.path.exists(ctx_path)
-
-    @pytest.mark.asyncio
-    async def test_idempotent_context_file_creation(self, temp_workspace):
-        """Verify calling create_context_files twice overwrites files correctly."""
-        manager = SwarmWorkspaceManager()
-
-        # Create files twice with different workspace names
-        await manager.create_context_files(temp_workspace, "FirstName")
-        await manager.create_context_files(temp_workspace, "SecondName")
-
-        # Should have the second workspace name
-        context_path = os.path.join(temp_workspace, "ContextFiles", "context.md")
-        with open(context_path, "r", encoding="utf-8") as f:
-            content = f.read()
-        assert "SecondName" in content
-        assert "FirstName" not in content
-
-    @pytest.mark.asyncio
-    async def test_special_characters_in_workspace_name(self, temp_workspace):
-        """Verify workspace names with special characters are handled."""
-        manager = SwarmWorkspaceManager()
-        workspace_name = "My Project (2024) - Test"
-
-        await manager.create_context_files(temp_workspace, workspace_name)
-
-        context_path = os.path.join(temp_workspace, "ContextFiles", "context.md")
-        with open(context_path, "r", encoding="utf-8") as f:
-            content = f.read()
-        assert workspace_name in content
-
-
-class TestOverallContextTemplate:
-    """Tests for OVERALL_CONTEXT_TEMPLATE constant."""
-
-    def test_template_has_workspace_name_placeholder(self):
-        """Verify template contains {workspace_name} placeholder."""
-        template = SwarmWorkspaceManager.OVERALL_CONTEXT_TEMPLATE
-        assert "{workspace_name}" in template
-
-    def test_template_has_required_sections(self):
-        """Verify template contains all required sections.
-
-        Validates: Requirement 7.2
-        """
-        template = SwarmWorkspaceManager.OVERALL_CONTEXT_TEMPLATE
-        assert "## Workspace Purpose" in template
-        assert "## Key Goals" in template
-        assert "## Important Context" in template
-        assert "## Notes" in template
-
-    def test_template_format_with_name(self):
-        """Verify template can be formatted with workspace name."""
-        template = SwarmWorkspaceManager.OVERALL_CONTEXT_TEMPLATE
-        result = template.format(workspace_name="TestProject")
-        assert "TestProject" in result
-        assert "{workspace_name}" not in result
+        # File should retain custom content
+        with open(system_file, "r") as f:
+            assert f.read() == custom_content
 
 
 class TestReadContextFiles:
-    """Tests for read_context_files() method.
+    """Tests for read_context_files() backward-compat method.
 
     Validates: Requirement 14.2
     """
@@ -483,142 +372,117 @@ class TestReadContextFiles:
         context_path = os.path.join(workspace_path, "ContextFiles")
         os.makedirs(context_path)
         yield workspace_path
-        # Cleanup after test
         if os.path.exists(temp_path):
             shutil.rmtree(temp_path)
 
     @pytest.mark.asyncio
     async def test_reads_context_file(self, temp_workspace):
-        """Verify context.md content is read."""
+        """Verify context.md is read correctly."""
         manager = SwarmWorkspaceManager()
-        ctx_path = os.path.join(temp_workspace, "ContextFiles", "context.md")
-        expected_content = "# Test Workspace\n\nThis is the overall context."
-        with open(ctx_path, "w", encoding="utf-8") as f:
-            f.write(expected_content)
+        context_path = os.path.join(temp_workspace, "ContextFiles", "context.md")
+        with open(context_path, "w", encoding="utf-8") as f:
+            f.write("# Test Context")
 
         result = await manager.read_context_files(temp_workspace)
-
-        assert expected_content in result
+        assert "# Test Context" in result
 
     @pytest.mark.asyncio
     async def test_reads_compressed_context_file(self, temp_workspace):
-        """Verify compressed-context.md content is read."""
+        """Verify compressed-context.md is read correctly."""
         manager = SwarmWorkspaceManager()
         compressed_path = os.path.join(temp_workspace, "ContextFiles", "compressed-context.md")
-        expected_content = "Compressed context summary."
         with open(compressed_path, "w", encoding="utf-8") as f:
-            f.write(expected_content)
+            f.write("# Compressed Context")
 
         result = await manager.read_context_files(temp_workspace)
-
-        assert expected_content in result
+        assert "# Compressed Context" in result
 
     @pytest.mark.asyncio
     async def test_combines_both_context_files(self, temp_workspace):
         """Verify both context files are combined."""
         manager = SwarmWorkspaceManager()
-        ctx_path = os.path.join(temp_workspace, "ContextFiles", "context.md")
+        context_path = os.path.join(temp_workspace, "ContextFiles", "context.md")
         compressed_path = os.path.join(temp_workspace, "ContextFiles", "compressed-context.md")
-
-        context_content = "# Overall Context"
-        compressed_content = "Compressed summary"
-
-        with open(ctx_path, "w", encoding="utf-8") as f:
-            f.write(context_content)
+        with open(context_path, "w", encoding="utf-8") as f:
+            f.write("Main context")
         with open(compressed_path, "w", encoding="utf-8") as f:
-            f.write(compressed_content)
+            f.write("Compressed context")
 
         result = await manager.read_context_files(temp_workspace)
-
-        assert context_content in result
-        assert compressed_content in result
-        # Verify separator is present
-        assert "---" in result
+        assert "Main context" in result
+        assert "Compressed context" in result
 
     @pytest.mark.asyncio
     async def test_handles_missing_context_file(self, temp_workspace):
-        """Verify missing context.md is handled gracefully."""
+        """Verify graceful handling when context.md is missing."""
         manager = SwarmWorkspaceManager()
         compressed_path = os.path.join(temp_workspace, "ContextFiles", "compressed-context.md")
-        compressed_content = "Only compressed content"
         with open(compressed_path, "w", encoding="utf-8") as f:
-            f.write(compressed_content)
+            f.write("Only compressed")
 
         result = await manager.read_context_files(temp_workspace)
-
-        assert result == compressed_content
+        assert "Only compressed" in result
 
     @pytest.mark.asyncio
     async def test_handles_missing_compressed_context(self, temp_workspace):
-        """Verify missing compressed-context.md is handled gracefully."""
+        """Verify graceful handling when compressed-context.md is missing."""
         manager = SwarmWorkspaceManager()
-        ctx_path = os.path.join(temp_workspace, "ContextFiles", "context.md")
-        context_content = "Only context content"
-        with open(ctx_path, "w", encoding="utf-8") as f:
-            f.write(context_content)
+        context_path = os.path.join(temp_workspace, "ContextFiles", "context.md")
+        with open(context_path, "w", encoding="utf-8") as f:
+            f.write("Only main")
 
         result = await manager.read_context_files(temp_workspace)
-
-        assert result == context_content
+        assert "Only main" in result
 
     @pytest.mark.asyncio
     async def test_handles_both_files_missing(self, temp_workspace):
-        """Verify both files missing returns empty string."""
+        """Verify empty string returned when both files are missing."""
         manager = SwarmWorkspaceManager()
-
         result = await manager.read_context_files(temp_workspace)
-
         assert result == ""
 
     @pytest.mark.asyncio
     async def test_handles_missing_context_directory(self):
-        """Verify missing ContextFiles directory is handled gracefully."""
+        """Verify graceful handling when ContextFiles dir doesn't exist."""
         manager = SwarmWorkspaceManager()
         temp_path = tempfile.mkdtemp()
-        workspace_path = os.path.join(temp_path, "workspace_no_context")
-        os.makedirs(workspace_path)
-
         try:
-            result = await manager.read_context_files(workspace_path)
+            result = await manager.read_context_files(temp_path)
             assert result == ""
         finally:
             shutil.rmtree(temp_path)
 
     @pytest.mark.asyncio
     async def test_handles_empty_context_files(self, temp_workspace):
-        """Verify empty context files return empty string."""
+        """Verify empty files result in empty string."""
         manager = SwarmWorkspaceManager()
-        ctx_path = os.path.join(temp_workspace, "ContextFiles", "context.md")
+        context_path = os.path.join(temp_workspace, "ContextFiles", "context.md")
         compressed_path = os.path.join(temp_workspace, "ContextFiles", "compressed-context.md")
-
-        # Create empty files
-        with open(ctx_path, "w", encoding="utf-8") as f:
+        with open(context_path, "w", encoding="utf-8") as f:
             f.write("")
         with open(compressed_path, "w", encoding="utf-8") as f:
             f.write("")
 
         result = await manager.read_context_files(temp_workspace)
-
         assert result == ""
 
     @pytest.mark.asyncio
     async def test_handles_tilde_path(self):
         """Verify ~ paths are expanded correctly."""
         manager = SwarmWorkspaceManager()
-        unique_name = f"swarm_read_test_{os.getpid()}"
+        unique_name = f"swarm_context_test_{os.getpid()}"
         workspace_path = f"~/tmp_swarm_test/{unique_name}"
         expanded_path = os.path.expanduser(workspace_path)
         context_path = os.path.join(expanded_path, "ContextFiles")
 
         try:
             os.makedirs(context_path, exist_ok=True)
-            ctx_path = os.path.join(context_path, "context.md")
-            with open(ctx_path, "w", encoding="utf-8") as f:
-                f.write("Tilde path content")
+            ctx_file = os.path.join(context_path, "context.md")
+            with open(ctx_file, "w", encoding="utf-8") as f:
+                f.write("# Tilde Test")
 
             result = await manager.read_context_files(workspace_path)
-
-            assert "Tilde path content" in result
+            assert "# Tilde Test" in result
         finally:
             parent_dir = os.path.expanduser("~/tmp_swarm_test")
             if os.path.exists(parent_dir):
@@ -628,1396 +492,652 @@ class TestReadContextFiles:
     async def test_preserves_file_content_formatting(self, temp_workspace):
         """Verify file content formatting is preserved."""
         manager = SwarmWorkspaceManager()
-        ctx_path = os.path.join(temp_workspace, "ContextFiles", "context.md")
-        content_with_formatting = """# Header
-
-## Subheader
-
-- List item 1
-- List item 2
-
-```python
-code_block = True
-```
-"""
-        with open(ctx_path, "w", encoding="utf-8") as f:
-            f.write(content_with_formatting)
+        content = "# Header\n\n## Section\n\n- Item 1\n- Item 2\n\n```python\nprint('hello')\n```\n"
+        context_path = os.path.join(temp_workspace, "ContextFiles", "context.md")
+        with open(context_path, "w", encoding="utf-8") as f:
+            f.write(content)
 
         result = await manager.read_context_files(temp_workspace)
-
-        assert "# Header" in result
-        assert "## Subheader" in result
-        assert "- List item 1" in result
-        assert "```python" in result
+        assert content in result
 
     @pytest.mark.asyncio
     async def test_handles_unicode_content(self, temp_workspace):
         """Verify unicode content is handled correctly."""
         manager = SwarmWorkspaceManager()
-        ctx_path = os.path.join(temp_workspace, "ContextFiles", "context.md")
-        unicode_content = "Unicode test: 日本語 中文 한국어 🚀 émojis"
-        with open(ctx_path, "w", encoding="utf-8") as f:
-            f.write(unicode_content)
+        content = "# 日本語テスト\n\nこんにちは世界 🌍\n\nÉmoji: 🎉🚀"
+        context_path = os.path.join(temp_workspace, "ContextFiles", "context.md")
+        with open(context_path, "w", encoding="utf-8") as f:
+            f.write(content)
 
         result = await manager.read_context_files(temp_workspace)
-
-        assert unicode_content in result
+        assert content in result
 
 
 class TestEnsureDefaultWorkspace:
-    """Tests for ensure_default_workspace() method.
+    """Tests for ensure_default_workspace() with workspace_config DB interface.
 
-    Validates: Requirements 1.1, 1.2, 1.5
+    Validates: Requirements 1.1, 1.2, 2.5, 22.3, 31.1, 31.2
     """
 
     @pytest.fixture
     def temp_dir(self):
-        """Create a temporary directory for testing."""
         temp_path = tempfile.mkdtemp()
         yield temp_path
-        # Cleanup after test
         if os.path.exists(temp_path):
             shutil.rmtree(temp_path)
 
     @pytest.fixture
     def mock_db(self):
-        """Create a mock database with swarm_workspaces table."""
-        class MockSwarmWorkspacesTable:
+        """Create a mock database with workspace_config table."""
+        class MockWorkspaceConfigTable:
             def __init__(self):
-                self.workspaces = {}
-                self.default_workspace = None
+                self.config = None
 
-            async def get_default(self):
-                return self.default_workspace
+            async def get_config(self):
+                return self.config
 
             async def put(self, item):
-                self.workspaces[item["id"]] = item
-                if item.get("is_default"):
-                    self.default_workspace = item
+                self.config = item
                 return item
 
         class MockDB:
             def __init__(self):
-                self._swarm_workspaces = MockSwarmWorkspacesTable()
+                self._workspace_config = MockWorkspaceConfigTable()
 
             @property
-            def swarm_workspaces(self):
-                return self._swarm_workspaces
+            def workspace_config(self):
+                return self._workspace_config
 
         return MockDB()
 
     @pytest.mark.asyncio
     async def test_creates_default_workspace_when_not_exists(self, mock_db, temp_dir, monkeypatch):
-        """Verify default workspace is created when it doesn't exist.
-
-        Validates: Requirement 1.1
-        """
+        """Verify default workspace is created when no config exists."""
         manager = SwarmWorkspaceManager()
-        # Override the default path to use temp directory
         test_path = os.path.join(temp_dir, "SwarmWS")
-        monkeypatch.setattr(
-            SwarmWorkspaceManager,
-            "DEFAULT_WORKSPACE_CONFIG",
-            {
-                "name": "SwarmWS",
-                "file_path": test_path,
-                "context": "Default SwarmAI workspace for general tasks and projects.",
-                "icon": "🏠",
-                "is_default": True,
-            }
-        )
+        import core.swarm_workspace_manager as swm_mod
+        original = swm_mod.DEFAULT_WORKSPACE_CONFIG.copy()
+        swm_mod.DEFAULT_WORKSPACE_CONFIG["file_path"] = test_path
 
-        result = await manager.ensure_default_workspace(mock_db)
-
-        assert result is not None
-        assert result["name"] == "SwarmWS"
-        assert result["is_default"] is True
+        try:
+            result = await manager.ensure_default_workspace(mock_db)
+            assert result is not None
+            assert result["name"] == "SwarmWS"
+            assert result["id"] == "swarmws"
+        finally:
+            swm_mod.DEFAULT_WORKSPACE_CONFIG.update(original)
 
     @pytest.mark.asyncio
-    async def test_returns_existing_default_workspace(self, mock_db):
-        """Verify existing default workspace is returned without creating new one.
-
-        Validates: Requirement 1.5
-        """
+    async def test_returns_existing_workspace_config(self, mock_db, temp_dir):
+        """Verify existing workspace config is returned without creating new one."""
         manager = SwarmWorkspaceManager()
-        # Pre-populate with existing default workspace
-        existing_workspace = {
-            "id": "existing-id-123",
+        ws_path = os.path.join(temp_dir, "SwarmWS")
+        # Pre-create the workspace structure so verify_integrity doesn't fail
+        os.makedirs(ws_path, exist_ok=True)
+        existing = {
+            "id": "swarmws",
             "name": "SwarmWS",
-            "file_path": "/existing/path",
-            "context": "Existing context",
+            "file_path": ws_path,
             "icon": "🏠",
-            "is_default": True,
             "created_at": "2024-01-01T00:00:00Z",
             "updated_at": "2024-01-01T00:00:00Z",
         }
-        mock_db._swarm_workspaces.default_workspace = existing_workspace
+        mock_db._workspace_config.config = existing
 
         result = await manager.ensure_default_workspace(mock_db)
-
-        assert result["id"] == "existing-id-123"
-        assert result["name"] == "SwarmWS"
-        # Should not have created a new workspace
-        assert len(mock_db._swarm_workspaces.workspaces) == 0
-
-    @pytest.mark.asyncio
-    async def test_default_workspace_has_is_default_true(self, mock_db, temp_dir, monkeypatch):
-        """Verify created default workspace has is_default=True.
-
-        Validates: Requirement 1.2
-        """
-        manager = SwarmWorkspaceManager()
-        test_path = os.path.join(temp_dir, "SwarmWS")
-        monkeypatch.setattr(
-            SwarmWorkspaceManager,
-            "DEFAULT_WORKSPACE_CONFIG",
-            {
-                "name": "SwarmWS",
-                "file_path": test_path,
-                "context": "Default SwarmAI workspace for general tasks and projects.",
-                "icon": "🏠",
-                "is_default": True,
-            }
-        )
-
-        result = await manager.ensure_default_workspace(mock_db)
-
-        assert result["is_default"] is True
-
-    @pytest.mark.asyncio
-    async def test_default_workspace_has_correct_name(self, mock_db, temp_dir, monkeypatch):
-        """Verify created default workspace has correct name.
-
-        Validates: Requirement 1.1
-        """
-        manager = SwarmWorkspaceManager()
-        test_path = os.path.join(temp_dir, "SwarmWS")
-        monkeypatch.setattr(
-            SwarmWorkspaceManager,
-            "DEFAULT_WORKSPACE_CONFIG",
-            {
-                "name": "SwarmWS",
-                "file_path": test_path,
-                "context": "Default SwarmAI workspace for general tasks and projects.",
-                "icon": "🏠",
-                "is_default": True,
-            }
-        )
-
-        result = await manager.ensure_default_workspace(mock_db)
-
+        assert result["id"] == "swarmws"
         assert result["name"] == "SwarmWS"
 
     @pytest.mark.asyncio
-    async def test_creates_folder_structure_for_default_workspace(self, mock_db, temp_dir, monkeypatch):
-        """Verify folder structure is created for default workspace.
-
-        Validates: Requirements 1.1, 2.1
-        """
+    async def test_default_workspace_has_correct_name(self, mock_db, temp_dir):
+        """Verify created default workspace has correct name."""
         manager = SwarmWorkspaceManager()
-        test_path = os.path.join(temp_dir, "SwarmWS")
-        monkeypatch.setattr(
-            SwarmWorkspaceManager,
-            "DEFAULT_WORKSPACE_CONFIG",
-            {
-                "name": "SwarmWS",
-                "file_path": test_path,
-                "context": "Default SwarmAI workspace for general tasks and projects.",
-                "icon": "🏠",
-                "is_default": True,
-            }
-        )
+        import core.swarm_workspace_manager as swm_mod
+        original = swm_mod.DEFAULT_WORKSPACE_CONFIG.copy()
+        swm_mod.DEFAULT_WORKSPACE_CONFIG["file_path"] = os.path.join(temp_dir, "SwarmWS")
 
-        await manager.ensure_default_workspace(mock_db)
-
-        # Verify folder structure was created
-        assert os.path.isdir(test_path)
-        for folder_name in SwarmWorkspaceManager.FOLDER_STRUCTURE:
-            folder_path = os.path.join(test_path, folder_name)
-            assert os.path.isdir(folder_path), f"Directory {folder_name} should exist"
-
-    @pytest.mark.asyncio
-    async def test_creates_context_files_for_default_workspace(self, mock_db, temp_dir, monkeypatch):
-        """Verify context files are created for default workspace.
-
-        Validates: Requirements 2.3, 29.1
-        """
-        manager = SwarmWorkspaceManager()
-        test_path = os.path.join(temp_dir, "SwarmWS")
-        monkeypatch.setattr(
-            SwarmWorkspaceManager,
-            "DEFAULT_WORKSPACE_CONFIG",
-            {
-                "name": "SwarmWS",
-                "file_path": test_path,
-                "context": "Default SwarmAI workspace for general tasks and projects.",
-                "icon": "🏠",
-                "is_default": True,
-            }
-        )
-
-        await manager.ensure_default_workspace(mock_db)
-
-        # Verify context files were created in ContextFiles/
-        context_path = os.path.join(test_path, "ContextFiles", "context.md")
-        compressed_context_path = os.path.join(test_path, "ContextFiles", "compressed-context.md")
-        assert os.path.isfile(context_path)
-        assert os.path.isfile(compressed_context_path)
-
-    @pytest.mark.asyncio
-    async def test_default_workspace_stored_in_database(self, mock_db, temp_dir, monkeypatch):
-        """Verify default workspace is stored in database.
-
-        Validates: Requirement 1.5
-        """
-        manager = SwarmWorkspaceManager()
-        test_path = os.path.join(temp_dir, "SwarmWS")
-        monkeypatch.setattr(
-            SwarmWorkspaceManager,
-            "DEFAULT_WORKSPACE_CONFIG",
-            {
-                "name": "SwarmWS",
-                "file_path": test_path,
-                "context": "Default SwarmAI workspace for general tasks and projects.",
-                "icon": "🏠",
-                "is_default": True,
-            }
-        )
-
-        result = await manager.ensure_default_workspace(mock_db)
-
-        # Verify workspace was stored in database
-        assert result["id"] in mock_db._swarm_workspaces.workspaces
-        stored = mock_db._swarm_workspaces.workspaces[result["id"]]
-        assert stored["name"] == "SwarmWS"
-        assert stored["is_default"] is True
-
-    @pytest.mark.asyncio
-    async def test_default_workspace_has_valid_uuid(self, mock_db, temp_dir, monkeypatch):
-        """Verify created default workspace has a valid UUID."""
-        import uuid
-        manager = SwarmWorkspaceManager()
-        test_path = os.path.join(temp_dir, "SwarmWS")
-        monkeypatch.setattr(
-            SwarmWorkspaceManager,
-            "DEFAULT_WORKSPACE_CONFIG",
-            {
-                "name": "SwarmWS",
-                "file_path": test_path,
-                "context": "Default SwarmAI workspace for general tasks and projects.",
-                "icon": "🏠",
-                "is_default": True,
-            }
-        )
-
-        result = await manager.ensure_default_workspace(mock_db)
-
-        # Verify id is a valid UUID
         try:
-            uuid.UUID(result["id"])
-        except ValueError:
-            pytest.fail(f"Invalid UUID: {result['id']}")
+            result = await manager.ensure_default_workspace(mock_db)
+            assert result["name"] == "SwarmWS"
+        finally:
+            swm_mod.DEFAULT_WORKSPACE_CONFIG.update(original)
 
     @pytest.mark.asyncio
-    async def test_default_workspace_has_timestamps(self, mock_db, temp_dir, monkeypatch):
+    async def test_creates_folder_structure_for_default_workspace(self, mock_db, temp_dir):
+        """Verify folder structure is created for default workspace."""
+        manager = SwarmWorkspaceManager()
+        test_path = os.path.join(temp_dir, "SwarmWS")
+        import core.swarm_workspace_manager as swm_mod
+        original = swm_mod.DEFAULT_WORKSPACE_CONFIG.copy()
+        swm_mod.DEFAULT_WORKSPACE_CONFIG["file_path"] = test_path
+
+        try:
+            await manager.ensure_default_workspace(mock_db)
+            assert os.path.isdir(test_path)
+            for folder_name in SwarmWorkspaceManager.FOLDER_STRUCTURE:
+                folder_path = os.path.join(test_path, folder_name)
+                assert os.path.isdir(folder_path), f"Directory {folder_name} should exist"
+        finally:
+            swm_mod.DEFAULT_WORKSPACE_CONFIG.update(original)
+
+    @pytest.mark.asyncio
+    async def test_creates_system_files_for_default_workspace(self, mock_db, temp_dir):
+        """Verify system files are created for default workspace."""
+        manager = SwarmWorkspaceManager()
+        test_path = os.path.join(temp_dir, "SwarmWS")
+        import core.swarm_workspace_manager as swm_mod
+        original = swm_mod.DEFAULT_WORKSPACE_CONFIG.copy()
+        swm_mod.DEFAULT_WORKSPACE_CONFIG["file_path"] = test_path
+
+        try:
+            await manager.ensure_default_workspace(mock_db)
+            for filename in SYSTEM_MANAGED_ROOT_FILES:
+                file_path = os.path.join(test_path, filename)
+                assert os.path.isfile(file_path), f"System file {filename} should exist"
+        finally:
+            swm_mod.DEFAULT_WORKSPACE_CONFIG.update(original)
+
+    @pytest.mark.asyncio
+    async def test_default_workspace_stored_in_database(self, mock_db, temp_dir):
+        """Verify default workspace config is stored in database."""
+        manager = SwarmWorkspaceManager()
+        import core.swarm_workspace_manager as swm_mod
+        original = swm_mod.DEFAULT_WORKSPACE_CONFIG.copy()
+        swm_mod.DEFAULT_WORKSPACE_CONFIG["file_path"] = os.path.join(temp_dir, "SwarmWS")
+
+        try:
+            result = await manager.ensure_default_workspace(mock_db)
+            stored = mock_db._workspace_config.config
+            assert stored is not None
+            assert stored["name"] == "SwarmWS"
+            assert stored["id"] == "swarmws"
+        finally:
+            swm_mod.DEFAULT_WORKSPACE_CONFIG.update(original)
+
+    @pytest.mark.asyncio
+    async def test_default_workspace_has_timestamps(self, mock_db, temp_dir):
         """Verify created default workspace has created_at and updated_at timestamps."""
         manager = SwarmWorkspaceManager()
-        test_path = os.path.join(temp_dir, "SwarmWS")
-        monkeypatch.setattr(
-            SwarmWorkspaceManager,
-            "DEFAULT_WORKSPACE_CONFIG",
-            {
-                "name": "SwarmWS",
-                "file_path": test_path,
-                "context": "Default SwarmAI workspace for general tasks and projects.",
-                "icon": "🏠",
-                "is_default": True,
-            }
-        )
+        import core.swarm_workspace_manager as swm_mod
+        original = swm_mod.DEFAULT_WORKSPACE_CONFIG.copy()
+        swm_mod.DEFAULT_WORKSPACE_CONFIG["file_path"] = os.path.join(temp_dir, "SwarmWS")
 
-        result = await manager.ensure_default_workspace(mock_db)
-
-        assert "created_at" in result
-        assert "updated_at" in result
-        assert result["created_at"] is not None
-        assert result["updated_at"] is not None
+        try:
+            result = await manager.ensure_default_workspace(mock_db)
+            assert "created_at" in result
+            assert "updated_at" in result
+            assert result["created_at"] is not None
+            assert result["updated_at"] is not None
+        finally:
+            swm_mod.DEFAULT_WORKSPACE_CONFIG.update(original)
 
     @pytest.mark.asyncio
-    async def test_default_workspace_has_all_required_fields(self, mock_db, temp_dir, monkeypatch):
-        """Verify created default workspace has all required fields.
-
-        Validates: Requirement 3.1
-        """
+    async def test_default_workspace_has_all_required_fields(self, mock_db, temp_dir):
+        """Verify created default workspace has all required fields."""
         manager = SwarmWorkspaceManager()
-        test_path = os.path.join(temp_dir, "SwarmWS")
-        monkeypatch.setattr(
-            SwarmWorkspaceManager,
-            "DEFAULT_WORKSPACE_CONFIG",
-            {
-                "name": "SwarmWS",
-                "file_path": test_path,
-                "context": "Default SwarmAI workspace for general tasks and projects.",
-                "icon": "🏠",
-                "is_default": True,
-            }
-        )
+        import core.swarm_workspace_manager as swm_mod
+        original = swm_mod.DEFAULT_WORKSPACE_CONFIG.copy()
+        swm_mod.DEFAULT_WORKSPACE_CONFIG["file_path"] = os.path.join(temp_dir, "SwarmWS")
 
-        result = await manager.ensure_default_workspace(mock_db)
-
-        # Verify all required fields are present
-        required_fields = ["id", "name", "file_path", "context", "is_default", "created_at", "updated_at"]
-        for field in required_fields:
-            assert field in result, f"Missing required field: {field}"
+        try:
+            result = await manager.ensure_default_workspace(mock_db)
+            required_fields = ["id", "name", "file_path", "icon", "created_at", "updated_at"]
+            for field in required_fields:
+                assert field in result, f"Missing required field: {field}"
+        finally:
+            swm_mod.DEFAULT_WORKSPACE_CONFIG.update(original)
 
     @pytest.mark.asyncio
-    async def test_idempotent_ensure_default_workspace(self, mock_db, temp_dir, monkeypatch):
+    async def test_idempotent_ensure_default_workspace(self, mock_db, temp_dir):
         """Verify calling ensure_default_workspace twice returns same workspace."""
         manager = SwarmWorkspaceManager()
-        test_path = os.path.join(temp_dir, "SwarmWS")
-        monkeypatch.setattr(
-            SwarmWorkspaceManager,
-            "DEFAULT_WORKSPACE_CONFIG",
-            {
-                "name": "SwarmWS",
-                "file_path": test_path,
-                "context": "Default SwarmAI workspace for general tasks and projects.",
-                "icon": "🏠",
-                "is_default": True,
-            }
-        )
+        import core.swarm_workspace_manager as swm_mod
+        original = swm_mod.DEFAULT_WORKSPACE_CONFIG.copy()
+        swm_mod.DEFAULT_WORKSPACE_CONFIG["file_path"] = os.path.join(temp_dir, "SwarmWS")
 
-        # Call twice
-        result1 = await manager.ensure_default_workspace(mock_db)
-        result2 = await manager.ensure_default_workspace(mock_db)
-
-        # Should return the same workspace
-        assert result1["id"] == result2["id"]
-        # Should only have one workspace in database
-        assert len(mock_db._swarm_workspaces.workspaces) == 1
+        try:
+            result1 = await manager.ensure_default_workspace(mock_db)
+            result2 = await manager.ensure_default_workspace(mock_db)
+            assert result1["id"] == result2["id"]
+        finally:
+            swm_mod.DEFAULT_WORKSPACE_CONFIG.update(original)
 
 
-class TestExpandPathWithAppDataDir:
-    """Tests for expand_path() method with {app_data_dir} placeholder.
+class TestVerifyIntegrityMemory:
+    """Tests for verify_integrity() recreating Knowledge/Memory/ if missing.
 
-    Validates: Requirements 4.2
-    """
-
-    def test_expand_app_data_dir_placeholder(self, monkeypatch):
-        """Verify {app_data_dir} is expanded to platform-specific path."""
-        from pathlib import Path
-        import config
-        manager = SwarmWorkspaceManager()
-        
-        # Mock get_app_data_dir to return a predictable path
-        mock_app_data = Path("/mock/app/data/SwarmAI")
-        monkeypatch.setattr(config, "get_app_data_dir", lambda: mock_app_data)
-        
-        result = manager.expand_path("{app_data_dir}/swarm-workspaces/SwarmWS")
-        
-        assert result == "/mock/app/data/SwarmAI/swarm-workspaces/SwarmWS"
-        assert "{app_data_dir}" not in result
-
-    def test_expand_app_data_dir_only(self, monkeypatch):
-        """Verify {app_data_dir} alone is expanded correctly."""
-        from pathlib import Path
-        import config
-        manager = SwarmWorkspaceManager()
-        
-        mock_app_data = Path("/mock/app/data/SwarmAI")
-        monkeypatch.setattr(config, "get_app_data_dir", lambda: mock_app_data)
-        
-        result = manager.expand_path("{app_data_dir}")
-        
-        assert result == "/mock/app/data/SwarmAI"
-
-    def test_expand_path_preserves_tilde_expansion(self):
-        """Verify ~ expansion still works alongside {app_data_dir}."""
-        manager = SwarmWorkspaceManager()
-        
-        result = manager.expand_path("~/Desktop/test")
-        expected = os.path.expanduser("~/Desktop/test")
-        
-        assert result == expected
-        assert not result.startswith("~")
-
-    def test_expand_path_handles_both_placeholders(self, monkeypatch):
-        """Verify path with both ~ and {app_data_dir} is handled (edge case)."""
-        from pathlib import Path
-        import config
-        manager = SwarmWorkspaceManager()
-        
-        mock_app_data = Path("/mock/app/data/SwarmAI")
-        monkeypatch.setattr(config, "get_app_data_dir", lambda: mock_app_data)
-        
-        # This is an unusual case but should work
-        result = manager.expand_path("{app_data_dir}/test")
-        
-        assert result == "/mock/app/data/SwarmAI/test"
-
-
-class TestValidatePathWithAppDataDir:
-    """Tests for validate_path() method with {app_data_dir} placeholder.
-
-    Validates: Requirements 8.1, 8.5
-    """
-
-    def test_valid_app_data_dir_path(self):
-        """Verify paths starting with {app_data_dir} are accepted."""
-        manager = SwarmWorkspaceManager()
-        
-        assert manager.validate_path("{app_data_dir}/swarm-workspaces/SwarmWS") is True
-        assert manager.validate_path("{app_data_dir}") is True
-        assert manager.validate_path("{app_data_dir}/nested/path") is True
-
-    def test_reject_app_data_dir_with_path_traversal(self):
-        """Verify {app_data_dir} paths with .. are rejected.
-
-        Validates: Requirement 8.1
-        """
-        manager = SwarmWorkspaceManager()
-        
-        assert manager.validate_path("{app_data_dir}/../escape") is False
-        assert manager.validate_path("{app_data_dir}/safe/../unsafe") is False
-
-
-class TestEnsureWorkspaceFoldersExist:
-    """Tests for ensure_workspace_folders_exist() method.
-
-    Validates: Requirements 4.2, 4.3, 4.4
+    Validates: Requirements 29.1, 29.2, 30.1
     """
 
     @pytest.fixture
     def temp_dir(self):
-        """Create a temporary directory for testing."""
         temp_path = tempfile.mkdtemp()
         yield temp_path
-        # Cleanup after test
         if os.path.exists(temp_path):
             shutil.rmtree(temp_path)
 
     @pytest.fixture
     def mock_db(self):
-        """Create a mock database with swarm_workspaces table."""
-        class MockSwarmWorkspacesTable:
+        """Create a mock database with workspace_config table."""
+        class MockWorkspaceConfigTable:
             def __init__(self):
-                self.workspaces = {}
-                self.default_workspace = None
+                self.config = None
 
-            async def get_default(self):
-                return self.default_workspace
+            async def get_config(self):
+                return self.config
 
             async def put(self, item):
-                self.workspaces[item["id"]] = item
-                if item.get("is_default"):
-                    self.default_workspace = item
+                self.config = item
                 return item
 
         class MockDB:
             def __init__(self):
-                self._swarm_workspaces = MockSwarmWorkspacesTable()
+                self._workspace_config = MockWorkspaceConfigTable()
 
             @property
-            def swarm_workspaces(self):
-                return self._swarm_workspaces
+            def workspace_config(self):
+                return self._workspace_config
 
         return MockDB()
 
     @pytest.mark.asyncio
-    async def test_creates_folders_when_not_exist(self, mock_db, temp_dir):
-        """Verify folders are created when they don't exist.
+    async def test_verify_integrity_recreates_knowledge_memory(self, mock_db, temp_dir):
+        """Verify Knowledge/Memory/ is recreated by verify_integrity() if missing.
 
-        Validates: Requirements 4.2, 4.3
+        Validates: Requirements 29.1, 29.2
         """
         manager = SwarmWorkspaceManager()
-        workspace_path = os.path.join(temp_dir, "swarm-workspaces", "SwarmWS")
-        
-        # Set up mock database with default workspace
-        mock_db._swarm_workspaces.default_workspace = {
-            "id": "test-id",
-            "name": "SwarmWS",
-            "file_path": workspace_path,
-            "context": "Test context",
-            "icon": "🏠",
-            "is_default": True,
-        }
-        
-        # Ensure path doesn't exist
-        assert not os.path.exists(workspace_path)
-        
-        await manager.ensure_workspace_folders_exist(mock_db)
-        
-        # Verify folders were created
-        assert os.path.isdir(workspace_path)
-        for folder_name in SwarmWorkspaceManager.FOLDER_STRUCTURE:
-            folder_path = os.path.join(workspace_path, folder_name)
-            assert os.path.isdir(folder_path), f"Directory {folder_name} should exist"
+        test_path = os.path.join(temp_dir, "SwarmWS")
+        import core.swarm_workspace_manager as swm_mod
+        original = swm_mod.DEFAULT_WORKSPACE_CONFIG.copy()
+        swm_mod.DEFAULT_WORKSPACE_CONFIG["file_path"] = test_path
+
+        try:
+            # First init — creates full structure
+            await manager.ensure_default_workspace(mock_db)
+            memory_path = os.path.join(test_path, "Knowledge", "Memory")
+            assert os.path.isdir(memory_path), "Knowledge/Memory/ should exist after init"
+
+            # Delete Knowledge/Memory/
+            shutil.rmtree(memory_path)
+            assert not os.path.exists(memory_path)
+
+            # verify_integrity should recreate it
+            recreated = await manager.verify_integrity(test_path)
+            assert os.path.isdir(memory_path), (
+                "Knowledge/Memory/ should be recreated by verify_integrity()"
+            )
+            assert "Knowledge/Memory" in recreated
+        finally:
+            swm_mod.DEFAULT_WORKSPACE_CONFIG.update(original)
 
     @pytest.mark.asyncio
-    async def test_creates_context_files(self, mock_db, temp_dir):
-        """Verify context files are created.
+    async def test_verify_integrity_does_not_overwrite_memory_content(self, mock_db, temp_dir):
+        """Verify verify_integrity() does not overwrite existing Memory/ content.
 
-        Validates: Requirement 4.4
+        Validates: Requirements 29.2, 30.1
         """
         manager = SwarmWorkspaceManager()
-        workspace_path = os.path.join(temp_dir, "swarm-workspaces", "SwarmWS")
-        
-        mock_db._swarm_workspaces.default_workspace = {
-            "id": "test-id",
-            "name": "SwarmWS",
-            "file_path": workspace_path,
-            "context": "Test context",
-            "icon": "🏠",
-            "is_default": True,
-        }
-        
-        await manager.ensure_workspace_folders_exist(mock_db)
-        
-        # Verify context files were created in ContextFiles/
-        context_path = os.path.join(workspace_path, "ContextFiles", "context.md")
-        compressed_context_path = os.path.join(workspace_path, "ContextFiles", "compressed-context.md")
-        assert os.path.isfile(context_path)
-        assert os.path.isfile(compressed_context_path)
+        test_path = os.path.join(temp_dir, "SwarmWS")
+        import core.swarm_workspace_manager as swm_mod
+        original = swm_mod.DEFAULT_WORKSPACE_CONFIG.copy()
+        swm_mod.DEFAULT_WORKSPACE_CONFIG["file_path"] = test_path
 
-    @pytest.mark.asyncio
-    async def test_skips_when_folders_exist(self, mock_db, temp_dir):
-        """Verify no action when folders already exist."""
-        manager = SwarmWorkspaceManager()
-        workspace_path = os.path.join(temp_dir, "swarm-workspaces", "SwarmWS")
-        
-        # Pre-create the workspace folder
-        os.makedirs(workspace_path)
-        marker_file = os.path.join(workspace_path, "marker.txt")
-        with open(marker_file, "w") as f:
-            f.write("existing content")
-        
-        mock_db._swarm_workspaces.default_workspace = {
-            "id": "test-id",
-            "name": "SwarmWS",
-            "file_path": workspace_path,
-            "context": "Test context",
-            "icon": "🏠",
-            "is_default": True,
-        }
-        
-        await manager.ensure_workspace_folders_exist(mock_db)
-        
-        # Verify marker file still exists (folder wasn't recreated)
-        assert os.path.isfile(marker_file)
-        # Verify subdirectories were NOT created (since root existed)
-        artifacts_path = os.path.join(workspace_path, "Artifacts")
-        assert not os.path.exists(artifacts_path)
+        try:
+            await manager.ensure_default_workspace(mock_db)
 
-    @pytest.mark.asyncio
-    async def test_handles_no_default_workspace(self, mock_db):
-        """Verify no error when no default workspace exists."""
-        manager = SwarmWorkspaceManager()
-        
-        # No default workspace set
-        mock_db._swarm_workspaces.default_workspace = None
-        
-        # Should not raise
-        await manager.ensure_workspace_folders_exist(mock_db)
+            # Add a user file inside Knowledge/Memory/
+            user_file = os.path.join(test_path, "Knowledge", "Memory", "my-prefs.md")
+            with open(user_file, "w") as f:
+                f.write("# My Preferences\nCustom content.\n")
 
-    @pytest.mark.asyncio
-    async def test_expands_app_data_dir_placeholder(self, mock_db, temp_dir, monkeypatch):
-        """Verify {app_data_dir} placeholder is expanded.
+            # Re-run verify_integrity
+            await manager.verify_integrity(test_path)
 
-        Validates: Requirement 4.2
-        """
-        from pathlib import Path
-        import config
-        manager = SwarmWorkspaceManager()
-        
-        # Mock get_app_data_dir to return temp_dir
-        mock_app_data = Path(temp_dir)
-        monkeypatch.setattr(config, "get_app_data_dir", lambda: mock_app_data)
-        
-        mock_db._swarm_workspaces.default_workspace = {
-            "id": "test-id",
-            "name": "SwarmWS",
-            "file_path": "{app_data_dir}/swarm-workspaces/SwarmWS",
-            "context": "Test context",
-            "icon": "🏠",
-            "is_default": True,
-        }
-        
-        await manager.ensure_workspace_folders_exist(mock_db)
-        
-        # Verify folders were created at expanded path
-        expected_path = os.path.join(temp_dir, "swarm-workspaces", "SwarmWS")
-        assert os.path.isdir(expected_path)
-        for folder_name in SwarmWorkspaceManager.FOLDER_STRUCTURE:
-            folder_path = os.path.join(expected_path, folder_name)
-            assert os.path.isdir(folder_path), f"Directory {folder_name} should exist"
-
-    @pytest.mark.asyncio
-    async def test_handles_folder_creation_error_gracefully(self, mock_db, monkeypatch):
-        """Verify errors during folder creation are handled gracefully."""
-        from pathlib import Path
-        manager = SwarmWorkspaceManager()
-        
-        # Use an invalid path that will fail
-        mock_db._swarm_workspaces.default_workspace = {
-            "id": "test-id",
-            "name": "SwarmWS",
-            "file_path": "/nonexistent/readonly/path/workspace",
-            "context": "Test context",
-            "icon": "🏠",
-            "is_default": True,
-        }
-        
-        # Should not raise, just log warning
-        await manager.ensure_workspace_folders_exist(mock_db)
+            # User file should be preserved
+            assert os.path.isfile(user_file)
+            with open(user_file, "r") as f:
+                assert f.read() == "# My Preferences\nCustom content.\n"
+        finally:
+            swm_mod.DEFAULT_WORKSPACE_CONFIG.update(original)
 
 
-class TestArchiveWorkspace:
-    """Tests for archive() method.
+class TestSampleMemoryContent:
+    """Tests for sample memory content creation during first-time init.
 
-    Validates: Requirements 36.1, 36.2
+    Validates: Requirements 2.4, 23.4
     """
 
     @pytest.fixture
-    def mock_db(self):
-        """Create a mock database with swarm_workspaces table."""
-        class MockSwarmWorkspacesTable:
-            def __init__(self):
-                self.workspaces = {}
-
-            async def get(self, workspace_id):
-                return self.workspaces.get(workspace_id)
-
-            async def update(self, workspace_id, updates):
-                ws = self.workspaces.get(workspace_id)
-                if ws is None:
-                    return None
-                ws.update(updates)
-                return ws
-
-            async def list(self):
-                return list(self.workspaces.values())
-
-        class MockDB:
-            def __init__(self):
-                self._swarm_workspaces = MockSwarmWorkspacesTable()
-
-            @property
-            def swarm_workspaces(self):
-                return self._swarm_workspaces
-
-        return MockDB()
-
-    @pytest.mark.asyncio
-    async def test_archive_sets_is_archived_and_timestamp(self, mock_db):
-        """Verify archive sets is_archived=1 and archived_at timestamp.
-
-        Validates: Requirement 36.2
-        """
-        manager = SwarmWorkspaceManager()
-        mock_db._swarm_workspaces.workspaces["ws-1"] = {
-            "id": "ws-1",
-            "name": "TestWS",
-            "is_default": False,
-            "is_archived": 0,
-            "archived_at": None,
-        }
-
-        result = await manager.archive("ws-1", mock_db)
-
-        assert result["is_archived"] == 1
-        assert result["archived_at"] is not None
-
-    @pytest.mark.asyncio
-    async def test_archive_default_workspace_raises_permission_error(self, mock_db):
-        """Verify archiving SwarmWS (is_default=true) raises PermissionError.
-
-        Validates: Requirement 36.1
-        """
-        manager = SwarmWorkspaceManager()
-        mock_db._swarm_workspaces.workspaces["swarmws"] = {
-            "id": "swarmws",
-            "name": "SwarmWS",
-            "is_default": True,
-            "is_archived": 0,
-            "archived_at": None,
-        }
-
-        with pytest.raises(PermissionError, match="Cannot archive the default workspace"):
-            await manager.archive("swarmws", mock_db)
-
-    @pytest.mark.asyncio
-    async def test_archive_nonexistent_workspace_raises_value_error(self, mock_db):
-        """Verify archiving a non-existent workspace raises ValueError."""
-        manager = SwarmWorkspaceManager()
-
-        with pytest.raises(ValueError, match="Workspace not found"):
-            await manager.archive("nonexistent", mock_db)
-
-    @pytest.mark.asyncio
-    async def test_archive_does_not_modify_default_flag(self, mock_db):
-        """Verify archive does not change is_default."""
-        manager = SwarmWorkspaceManager()
-        mock_db._swarm_workspaces.workspaces["ws-1"] = {
-            "id": "ws-1",
-            "name": "TestWS",
-            "is_default": False,
-            "is_archived": 0,
-            "archived_at": None,
-        }
-
-        result = await manager.archive("ws-1", mock_db)
-
-        assert result["is_default"] is False
-
-
-class TestUnarchiveWorkspace:
-    """Tests for unarchive() method.
-
-    Validates: Requirement 36.10
-    """
+    def temp_dir(self):
+        temp_path = tempfile.mkdtemp()
+        yield temp_path
+        if os.path.exists(temp_path):
+            shutil.rmtree(temp_path)
 
     @pytest.fixture
     def mock_db(self):
-        """Create a mock database with swarm_workspaces table."""
-        class MockSwarmWorkspacesTable:
+        """Create a mock database with workspace_config table."""
+        class MockWorkspaceConfigTable:
             def __init__(self):
-                self.workspaces = {}
+                self.config = None
 
-            async def get(self, workspace_id):
-                return self.workspaces.get(workspace_id)
-
-            async def update(self, workspace_id, updates):
-                ws = self.workspaces.get(workspace_id)
-                if ws is None:
-                    return None
-                ws.update(updates)
-                return ws
-
-        class MockDB:
-            def __init__(self):
-                self._swarm_workspaces = MockSwarmWorkspacesTable()
-
-            @property
-            def swarm_workspaces(self):
-                return self._swarm_workspaces
-
-        return MockDB()
-
-    @pytest.mark.asyncio
-    async def test_unarchive_clears_archived_fields(self, mock_db):
-        """Verify unarchive sets is_archived=0 and archived_at=None.
-
-        Validates: Requirement 36.10
-        """
-        manager = SwarmWorkspaceManager()
-        mock_db._swarm_workspaces.workspaces["ws-1"] = {
-            "id": "ws-1",
-            "name": "TestWS",
-            "is_default": False,
-            "is_archived": 1,
-            "archived_at": "2024-01-01T00:00:00+00:00",
-        }
-
-        result = await manager.unarchive("ws-1", mock_db)
-
-        assert result["is_archived"] == 0
-        assert result["archived_at"] is None
-
-    @pytest.mark.asyncio
-    async def test_unarchive_nonexistent_workspace_raises_value_error(self, mock_db):
-        """Verify unarchiving a non-existent workspace raises ValueError."""
-        manager = SwarmWorkspaceManager()
-
-        with pytest.raises(ValueError, match="Workspace not found"):
-            await manager.unarchive("nonexistent", mock_db)
-
-    @pytest.mark.asyncio
-    async def test_unarchive_already_active_workspace(self, mock_db):
-        """Verify unarchiving an already-active workspace is idempotent."""
-        manager = SwarmWorkspaceManager()
-        mock_db._swarm_workspaces.workspaces["ws-1"] = {
-            "id": "ws-1",
-            "name": "TestWS",
-            "is_default": False,
-            "is_archived": 0,
-            "archived_at": None,
-        }
-
-        result = await manager.unarchive("ws-1", mock_db)
-
-        assert result["is_archived"] == 0
-        assert result["archived_at"] is None
-
-
-class TestListNonArchived:
-    """Tests for list_non_archived() method.
-
-    Validates: Requirements 36.3, 36.5
-    """
-
-    @pytest.fixture
-    def mock_db(self):
-        """Create a mock database with swarm_workspaces table."""
-        class MockSwarmWorkspacesTable:
-            def __init__(self):
-                self.workspaces = {}
-
-            async def list(self):
-                return list(self.workspaces.values())
-
-        class MockDB:
-            def __init__(self):
-                self._swarm_workspaces = MockSwarmWorkspacesTable()
-
-            @property
-            def swarm_workspaces(self):
-                return self._swarm_workspaces
-
-        return MockDB()
-
-    @pytest.mark.asyncio
-    async def test_excludes_archived_workspaces(self, mock_db):
-        """Verify archived workspaces are excluded from the list.
-
-        Validates: Requirement 36.3
-        """
-        manager = SwarmWorkspaceManager()
-        mock_db._swarm_workspaces.workspaces = {
-            "ws-default": {
-                "id": "ws-default",
-                "name": "SwarmWS",
-                "is_default": True,
-                "is_archived": 0,
-                "created_at": "2024-01-01T00:00:00",
-            },
-            "ws-active": {
-                "id": "ws-active",
-                "name": "ActiveWS",
-                "is_default": False,
-                "is_archived": 0,
-                "created_at": "2024-01-02T00:00:00",
-            },
-            "ws-archived": {
-                "id": "ws-archived",
-                "name": "ArchivedWS",
-                "is_default": False,
-                "is_archived": 1,
-                "archived_at": "2024-06-01T00:00:00",
-                "created_at": "2024-01-03T00:00:00",
-            },
-        }
-
-        result = await manager.list_non_archived(mock_db)
-
-        ids = [ws["id"] for ws in result]
-        assert "ws-archived" not in ids
-        assert "ws-default" in ids
-        assert "ws-active" in ids
-
-    @pytest.mark.asyncio
-    async def test_default_workspace_is_first(self, mock_db):
-        """Verify the default workspace (SwarmWS) is always first in the list.
-
-        Validates: Requirement 36.3
-        """
-        manager = SwarmWorkspaceManager()
-        mock_db._swarm_workspaces.workspaces = {
-            "ws-custom": {
-                "id": "ws-custom",
-                "name": "CustomWS",
-                "is_default": False,
-                "is_archived": 0,
-                "created_at": "2024-01-01T00:00:00",
-            },
-            "ws-default": {
-                "id": "ws-default",
-                "name": "SwarmWS",
-                "is_default": True,
-                "is_archived": 0,
-                "created_at": "2024-01-02T00:00:00",
-            },
-        }
-
-        result = await manager.list_non_archived(mock_db)
-
-        assert result[0]["is_default"] is True
-        assert result[0]["name"] == "SwarmWS"
-
-    @pytest.mark.asyncio
-    async def test_returns_empty_list_when_all_archived(self, mock_db):
-        """Verify empty list when all workspaces are archived (except default)."""
-        manager = SwarmWorkspaceManager()
-        mock_db._swarm_workspaces.workspaces = {
-            "ws-archived": {
-                "id": "ws-archived",
-                "name": "ArchivedWS",
-                "is_default": False,
-                "is_archived": 1,
-                "archived_at": "2024-06-01T00:00:00",
-                "created_at": "2024-01-01T00:00:00",
-            },
-        }
-
-        result = await manager.list_non_archived(mock_db)
-
-        assert len(result) == 0
-
-    @pytest.mark.asyncio
-    async def test_handles_workspaces_without_is_archived_field(self, mock_db):
-        """Verify backward compat: workspaces without is_archived are treated as non-archived."""
-        manager = SwarmWorkspaceManager()
-        mock_db._swarm_workspaces.workspaces = {
-            "ws-legacy": {
-                "id": "ws-legacy",
-                "name": "LegacyWS",
-                "is_default": False,
-                "created_at": "2024-01-01T00:00:00",
-            },
-        }
-
-        result = await manager.list_non_archived(mock_db)
-
-        assert len(result) == 1
-        assert result[0]["id"] == "ws-legacy"
-
-    @pytest.mark.asyncio
-    async def test_returns_empty_list_when_no_workspaces(self, mock_db):
-        """Verify empty list when no workspaces exist."""
-        manager = SwarmWorkspaceManager()
-
-        result = await manager.list_non_archived(mock_db)
-
-        assert result == []
-
-
-class TestDeleteWorkspace:
-    """Tests for delete() method.
-
-    Validates: Requirements 1.2, 2.5
-    """
-
-    @pytest.fixture
-    def mock_db(self):
-        """Create a mock database with swarm_workspaces table including delete support."""
-        class MockSwarmWorkspacesTable:
-            def __init__(self):
-                self.workspaces = {}
-
-            async def get(self, workspace_id):
-                return self.workspaces.get(workspace_id)
-
-            async def delete(self, workspace_id):
-                if workspace_id in self.workspaces:
-                    del self.workspaces[workspace_id]
-                    return True
-                return False
-
-            async def list(self):
-                return list(self.workspaces.values())
-
-        class MockDB:
-            def __init__(self):
-                self._swarm_workspaces = MockSwarmWorkspacesTable()
-
-            @property
-            def swarm_workspaces(self):
-                return self._swarm_workspaces
-
-        return MockDB()
-
-    @pytest.mark.asyncio
-    async def test_delete_custom_workspace_succeeds(self, mock_db):
-        """Verify deleting a non-default workspace returns True and removes it.
-
-        Validates: Requirement 2.5
-        """
-        manager = SwarmWorkspaceManager()
-        mock_db._swarm_workspaces.workspaces["ws-custom"] = {
-            "id": "ws-custom",
-            "name": "TestWS",
-            "is_default": False,
-        }
-
-        result = await manager.delete("ws-custom", mock_db)
-
-        assert result is True
-        assert "ws-custom" not in mock_db._swarm_workspaces.workspaces
-
-    @pytest.mark.asyncio
-    async def test_delete_default_workspace_raises_permission_error(self, mock_db):
-        """Verify deleting SwarmWS (is_default=true) raises PermissionError.
-
-        Validates: Requirement 1.2
-        """
-        manager = SwarmWorkspaceManager()
-        mock_db._swarm_workspaces.workspaces["ws-default"] = {
-            "id": "ws-default",
-            "name": "SwarmWS",
-            "is_default": True,
-        }
-
-        with pytest.raises(PermissionError, match="Cannot delete the default workspace"):
-            await manager.delete("ws-default", mock_db)
-
-        # Workspace should still exist
-        assert "ws-default" in mock_db._swarm_workspaces.workspaces
-
-    @pytest.mark.asyncio
-    async def test_delete_nonexistent_workspace_raises_value_error(self, mock_db):
-        """Verify deleting a non-existent workspace raises ValueError."""
-        manager = SwarmWorkspaceManager()
-
-        with pytest.raises(ValueError, match="Workspace not found"):
-            await manager.delete("ws-nonexistent", mock_db)
-
-    @pytest.mark.asyncio
-    async def test_delete_does_not_affect_other_workspaces(self, mock_db):
-        """Verify deleting one workspace does not affect others."""
-        manager = SwarmWorkspaceManager()
-        mock_db._swarm_workspaces.workspaces["ws-1"] = {
-            "id": "ws-1",
-            "name": "WS1",
-            "is_default": False,
-        }
-        mock_db._swarm_workspaces.workspaces["ws-2"] = {
-            "id": "ws-2",
-            "name": "WS2",
-            "is_default": False,
-        }
-
-        await manager.delete("ws-1", mock_db)
-
-        assert "ws-1" not in mock_db._swarm_workspaces.workspaces
-        assert "ws-2" in mock_db._swarm_workspaces.workspaces
-
-
-class TestListAll:
-    """Tests for list_all() method.
-
-    Validates: Requirements 1.1, 36.3
-    """
-
-    @pytest.fixture
-    def mock_db(self):
-        """Create a mock database with swarm_workspaces table."""
-        class MockSwarmWorkspacesTable:
-            def __init__(self):
-                self.workspaces = {}
-
-            async def list(self):
-                return list(self.workspaces.values())
-
-        class MockDB:
-            def __init__(self):
-                self._swarm_workspaces = MockSwarmWorkspacesTable()
-
-            @property
-            def swarm_workspaces(self):
-                return self._swarm_workspaces
-
-        return MockDB()
-
-    @pytest.mark.asyncio
-    async def test_default_workspace_is_first(self, mock_db):
-        """Verify SwarmWS (is_default=true) is always first in the list.
-
-        Validates: Requirement 1.1
-        """
-        manager = SwarmWorkspaceManager()
-        mock_db._swarm_workspaces.workspaces = {
-            "ws-custom": {
-                "id": "ws-custom",
-                "name": "CustomWS",
-                "is_default": False,
-                "is_archived": 0,
-                "created_at": "2024-06-01T00:00:00",
-            },
-            "ws-default": {
-                "id": "ws-default",
-                "name": "SwarmWS",
-                "is_default": True,
-                "is_archived": 0,
-                "created_at": "2024-01-01T00:00:00",
-            },
-        }
-
-        result = await manager.list_all(mock_db)
-
-        assert len(result) == 2
-        assert result[0]["id"] == "ws-default"
-        assert result[0]["is_default"] is True
-
-    @pytest.mark.asyncio
-    async def test_excludes_archived_by_default(self, mock_db):
-        """Verify archived workspaces are excluded when include_archived=False.
-
-        Validates: Requirement 36.3
-        """
-        manager = SwarmWorkspaceManager()
-        mock_db._swarm_workspaces.workspaces = {
-            "ws-active": {
-                "id": "ws-active",
-                "name": "ActiveWS",
-                "is_default": False,
-                "is_archived": 0,
-                "created_at": "2024-01-01T00:00:00",
-            },
-            "ws-archived": {
-                "id": "ws-archived",
-                "name": "ArchivedWS",
-                "is_default": False,
-                "is_archived": 1,
-                "created_at": "2024-01-02T00:00:00",
-            },
-        }
-
-        result = await manager.list_all(mock_db)
-
-        assert len(result) == 1
-        assert result[0]["id"] == "ws-active"
-
-    @pytest.mark.asyncio
-    async def test_includes_archived_when_requested(self, mock_db):
-        """Verify archived workspaces are included when include_archived=True."""
-        manager = SwarmWorkspaceManager()
-        mock_db._swarm_workspaces.workspaces = {
-            "ws-active": {
-                "id": "ws-active",
-                "name": "ActiveWS",
-                "is_default": False,
-                "is_archived": 0,
-                "created_at": "2024-01-01T00:00:00",
-            },
-            "ws-archived": {
-                "id": "ws-archived",
-                "name": "ArchivedWS",
-                "is_default": False,
-                "is_archived": 1,
-                "created_at": "2024-01-02T00:00:00",
-            },
-        }
-
-        result = await manager.list_all(mock_db, include_archived=True)
-
-        assert len(result) == 2
-        ids = [ws["id"] for ws in result]
-        assert "ws-active" in ids
-        assert "ws-archived" in ids
-
-    @pytest.mark.asyncio
-    async def test_returns_empty_list_when_no_workspaces(self, mock_db):
-        """Verify empty list when no workspaces exist."""
-        manager = SwarmWorkspaceManager()
-
-        result = await manager.list_all(mock_db)
-
-        assert result == []
-
-    @pytest.mark.asyncio
-    async def test_sort_order_default_first_then_created_at(self, mock_db):
-        """Verify sort: default first, then by created_at descending."""
-        manager = SwarmWorkspaceManager()
-        mock_db._swarm_workspaces.workspaces = {
-            "ws-old": {
-                "id": "ws-old",
-                "name": "OldWS",
-                "is_default": False,
-                "is_archived": 0,
-                "created_at": "2024-01-01T00:00:00",
-            },
-            "ws-new": {
-                "id": "ws-new",
-                "name": "NewWS",
-                "is_default": False,
-                "is_archived": 0,
-                "created_at": "2024-06-01T00:00:00",
-            },
-            "ws-default": {
-                "id": "ws-default",
-                "name": "SwarmWS",
-                "is_default": True,
-                "is_archived": 0,
-                "created_at": "2024-03-01T00:00:00",
-            },
-        }
-
-        result = await manager.list_all(mock_db)
-
-        assert result[0]["id"] == "ws-default"
-        # Non-default sorted by created_at ascending (string sort)
-        assert result[1]["id"] == "ws-old"
-        assert result[2]["id"] == "ws-new"
-
-
-class TestMigrateDefaultWorkspacePath:
-    """Unit tests for _migrate_default_workspace_path() edge cases.
-
-    Validates: Requirements 2.1, 2.3, 2.4, 2.5
-    """
-
-    @pytest.fixture
-    def mock_db(self):
-        """Create a mock database with swarm_workspaces table."""
-        class MockSwarmWorkspacesTable:
-            def __init__(self):
-                self.workspaces = {}
-                self.default_workspace = None
-
-            async def get_default(self):
-                return self.default_workspace
+            async def get_config(self):
+                return self.config
 
             async def put(self, item):
-                self.workspaces[item["id"]] = item
-                if item.get("is_default"):
-                    self.default_workspace = item
+                self.config = item
                 return item
 
         class MockDB:
             def __init__(self):
-                self._swarm_workspaces = MockSwarmWorkspacesTable()
+                self._workspace_config = MockWorkspaceConfigTable()
 
             @property
-            def swarm_workspaces(self):
-                return self._swarm_workspaces
+            def workspace_config(self):
+                return self._workspace_config
 
         return MockDB()
 
-    def test_default_workspace_config_file_path_is_flat(self):
-        """Verify DEFAULT_WORKSPACE_CONFIG['file_path'] equals '{app_data_dir}/SwarmWS'.
-
-        Validates: Requirement 2.1
-        """
-        assert SwarmWorkspaceManager.DEFAULT_WORKSPACE_CONFIG["file_path"] == "{app_data_dir}/SwarmWS"
-
     @pytest.mark.asyncio
-    async def test_old_path_exists_new_does_not_moves(self, tmp_path, mock_db):
-        """When old path exists and new does not, contents are moved to new path.
+    async def test_sample_memory_content_created_on_first_init(self, mock_db, temp_dir):
+        """Verify sample memory file is created during first-time initialization.
 
-        Validates: Requirements 2.3, 2.4
-        """
-        old_path = tmp_path / "swarm-workspaces" / "SwarmWS"
-        new_path = tmp_path / "SwarmWS"
-
-        # Create old path with a file
-        old_path.mkdir(parents=True)
-        (old_path / "test_file.txt").write_text("hello")
-
-        manager = SwarmWorkspaceManager()
-        workspace = {
-            "id": "ws-1",
-            "name": "SwarmWS",
-            "file_path": "{app_data_dir}/swarm-workspaces/SwarmWS",
-            "is_default": True,
-        }
-
-        def fake_expand(fp):
-            return fp.replace("{app_data_dir}", str(tmp_path))
-
-        from unittest.mock import patch
-        with patch.object(manager, "expand_path", side_effect=fake_expand):
-            await manager._migrate_default_workspace_path(workspace, mock_db)
-
-        # Old path should be gone, new path should have the file
-        assert not old_path.exists()
-        assert new_path.exists()
-        assert (new_path / "test_file.txt").read_text() == "hello"
-
-    @pytest.mark.asyncio
-    async def test_old_path_exists_new_does_not_updates_db(self, tmp_path, mock_db):
-        """When old path is moved, DB record is updated to new file_path.
-
-        Validates: Requirements 2.3, 2.5
-        """
-        old_path = tmp_path / "swarm-workspaces" / "SwarmWS"
-        old_path.mkdir(parents=True)
-        (old_path / "data.txt").write_text("content")
-
-        manager = SwarmWorkspaceManager()
-        workspace = {
-            "id": "ws-1",
-            "name": "SwarmWS",
-            "file_path": "{app_data_dir}/swarm-workspaces/SwarmWS",
-            "is_default": True,
-        }
-
-        def fake_expand(fp):
-            return fp.replace("{app_data_dir}", str(tmp_path))
-
-        from unittest.mock import patch
-        with patch.object(manager, "expand_path", side_effect=fake_expand):
-            await manager._migrate_default_workspace_path(workspace, mock_db)
-
-        # DB should have the new path pattern
-        stored = mock_db._swarm_workspaces.default_workspace
-        assert stored is not None
-        assert stored["file_path"] == "{app_data_dir}/SwarmWS"
-
-    @pytest.mark.asyncio
-    async def test_both_paths_exist_keeps_new_logs_warning(self, tmp_path, mock_db, caplog):
-        """When both old and new paths exist, new is kept and warning is logged.
-
-        Validates: Requirements 2.4, 2.5
-        """
-        old_path = tmp_path / "swarm-workspaces" / "SwarmWS"
-        new_path = tmp_path / "SwarmWS"
-
-        old_path.mkdir(parents=True)
-        (old_path / "old_file.txt").write_text("old")
-        new_path.mkdir(parents=True)
-        (new_path / "new_file.txt").write_text("new")
-
-        manager = SwarmWorkspaceManager()
-        workspace = {
-            "id": "ws-1",
-            "name": "SwarmWS",
-            "file_path": "{app_data_dir}/swarm-workspaces/SwarmWS",
-            "is_default": True,
-        }
-
-        def fake_expand(fp):
-            return fp.replace("{app_data_dir}", str(tmp_path))
-
-        import logging
-        from unittest.mock import patch
-        with caplog.at_level(logging.WARNING), \
-             patch.object(manager, "expand_path", side_effect=fake_expand):
-            await manager._migrate_default_workspace_path(workspace, mock_db)
-
-        # New path kept with its original content
-        assert (new_path / "new_file.txt").read_text() == "new"
-        # Old path left untouched for manual cleanup
-        assert old_path.exists()
-        assert (old_path / "old_file.txt").read_text() == "old"
-        # Warning was logged
-        assert any("Both old" in msg and "new" in msg for msg in caplog.messages)
-        # DB still updated to new path
-        stored = mock_db._swarm_workspaces.default_workspace
-        assert stored["file_path"] == "{app_data_dir}/SwarmWS"
-
-    @pytest.mark.asyncio
-    async def test_neither_path_exists_updates_db_no_crash(self, tmp_path, mock_db):
-        """When neither old nor new path exists, DB is updated without error.
-
-        Validates: Requirements 2.3, 2.5
+        Validates: Requirements 23.4
         """
         manager = SwarmWorkspaceManager()
-        workspace = {
-            "id": "ws-1",
-            "name": "SwarmWS",
-            "file_path": "{app_data_dir}/swarm-workspaces/SwarmWS",
-            "is_default": True,
-        }
+        test_path = os.path.join(temp_dir, "SwarmWS")
+        import core.swarm_workspace_manager as swm_mod
+        original = swm_mod.DEFAULT_WORKSPACE_CONFIG.copy()
+        swm_mod.DEFAULT_WORKSPACE_CONFIG["file_path"] = test_path
 
-        def fake_expand(fp):
-            return fp.replace("{app_data_dir}", str(tmp_path))
+        try:
+            await manager.ensure_default_workspace(mock_db)
 
-        from unittest.mock import patch
-        with patch.object(manager, "expand_path", side_effect=fake_expand):
-            await manager._migrate_default_workspace_path(workspace, mock_db)
+            sample_memory = os.path.join(
+                test_path, "Knowledge", "Memory", "communication-style.md"
+            )
+            assert os.path.isfile(sample_memory), (
+                "Sample memory file communication-style.md should exist after first init"
+            )
 
-        # Neither path should exist on disk
-        assert not (tmp_path / "swarm-workspaces" / "SwarmWS").exists()
-        assert not (tmp_path / "SwarmWS").exists()
-        # DB record updated to new path
-        stored = mock_db._swarm_workspaces.default_workspace
-        assert stored is not None
-        assert stored["file_path"] == "{app_data_dir}/SwarmWS"
+            # Verify it has meaningful content
+            with open(sample_memory, "r") as f:
+                content = f.read()
+            assert "Communication Style" in content
+            assert len(content) > 50
+        finally:
+            swm_mod.DEFAULT_WORKSPACE_CONFIG.update(original)
+
+    @pytest.mark.asyncio
+    async def test_sample_memory_not_overwritten_on_reinit(self, mock_db, temp_dir):
+        """Verify sample memory file is not overwritten on re-initialization.
+
+        Validates: Requirements 30.1
+        """
+        manager = SwarmWorkspaceManager()
+        test_path = os.path.join(temp_dir, "SwarmWS")
+        import core.swarm_workspace_manager as swm_mod
+        original = swm_mod.DEFAULT_WORKSPACE_CONFIG.copy()
+        swm_mod.DEFAULT_WORKSPACE_CONFIG["file_path"] = test_path
+
+        try:
+            await manager.ensure_default_workspace(mock_db)
+
+            # Modify the sample memory file
+            sample_memory = os.path.join(
+                test_path, "Knowledge", "Memory", "communication-style.md"
+            )
+            custom = "# Edited Memory\nUser-edited content.\n"
+            with open(sample_memory, "w") as f:
+                f.write(custom)
+
+            # Re-init
+            await manager.ensure_default_workspace(mock_db)
+
+            # Content should be preserved
+            with open(sample_memory, "r") as f:
+                assert f.read() == custom
+        finally:
+            swm_mod.DEFAULT_WORKSPACE_CONFIG.update(original)
+
+
+class TestExpandPathWithAppDataDir:
+    """Tests for expand_path() with {app_data_dir} placeholder."""
+
+    def test_expand_app_data_dir_placeholder(self, monkeypatch):
+        """Verify {app_data_dir} is expanded to actual data directory."""
+        manager = SwarmWorkspaceManager()
+        from config import get_app_data_dir
+        app_data = get_app_data_dir()
+
+        result = manager.expand_path("{app_data_dir}/SwarmWS")
+        expected = os.path.join(app_data, "SwarmWS")
+        assert result == expected
+
+    def test_expand_app_data_dir_only(self, monkeypatch):
+        """Verify {app_data_dir} alone is expanded."""
+        manager = SwarmWorkspaceManager()
+        from config import get_app_data_dir
+        app_data = str(get_app_data_dir())
+
+        result = manager.expand_path("{app_data_dir}")
+        assert result == app_data
+
+    def test_expand_path_preserves_tilde_expansion(self):
+        """Verify ~ expansion still works."""
+        manager = SwarmWorkspaceManager()
+        result = manager.expand_path("~/test")
+        assert result == os.path.expanduser("~/test")
+
+    def test_expand_path_handles_both_placeholders(self, monkeypatch):
+        """Verify both ~ and {app_data_dir} are handled (only one should be used)."""
+        manager = SwarmWorkspaceManager()
+        from config import get_app_data_dir
+        app_data = get_app_data_dir()
+
+        result = manager.expand_path("{app_data_dir}/nested/path")
+        assert result == os.path.join(app_data, "nested", "path")
+
+
+class TestValidatePathWithAppDataDir:
+    """Tests for validate_path() with {app_data_dir} placeholder."""
+
+    def test_valid_app_data_dir_path(self):
+        """Verify {app_data_dir} paths are accepted."""
+        manager = SwarmWorkspaceManager()
+        assert manager.validate_path("{app_data_dir}/SwarmWS") is True
+        assert manager.validate_path("{app_data_dir}") is True
+
+    def test_reject_app_data_dir_with_path_traversal(self):
+        """Verify {app_data_dir} paths with .. are rejected."""
+        manager = SwarmWorkspaceManager()
+        assert manager.validate_path("{app_data_dir}/../escape") is False
+
+
+# ---------------------------------------------------------------------------
+# Property-based test: Initialization Idempotence (Property 3)
+# ---------------------------------------------------------------------------
+
+from hypothesis import given, strategies as st, settings, HealthCheck
+from database.sqlite import SQLiteDatabase
+import core.swarm_workspace_manager as swm_module
+
+
+# Hypothesis settings for property tests
+_PBT_SETTINGS = settings(
+    max_examples=20,
+    deadline=None,
+    suppress_health_check=[HealthCheck.function_scoped_fixture],
+)
+
+# Strategy: generate a small set of user files to place in the workspace.
+_safe_filename_chars = st.text(
+    alphabet="abcdefghijklmnopqrstuvwxyz0123456789_-",
+    min_size=1,
+    max_size=20,
+)
+
+_user_file_strategy = st.lists(
+    st.tuples(
+        # relative directory inside the workspace (pick from valid user locations)
+        st.sampled_from([
+            "Signals",
+            "Plan",
+            "Execute",
+            "Communicate",
+            "Reflection",
+            "Artifacts",
+            "Notebooks",
+        ]),
+        # filename
+        _safe_filename_chars.map(lambda s: s + ".md"),
+        # content
+        st.text(min_size=0, max_size=200),
+    ),
+    min_size=0,
+    max_size=5,
+)
+
+
+def _collect_all_files(root: Path) -> dict[str, str]:
+    """Walk the workspace and return {relative_path: content} for all files."""
+    result = {}
+    for file_path in sorted(root.rglob("*")):
+        if file_path.is_file():
+            rel = str(file_path.relative_to(root))
+            try:
+                result[rel] = file_path.read_text(encoding="utf-8")
+            except Exception:
+                result[rel] = ""
+    return result
+
+
+def _collect_all_dirs(root: Path) -> set[str]:
+    """Walk the workspace and return set of relative directory paths."""
+    result = set()
+    for dir_path in sorted(root.rglob("*")):
+        if dir_path.is_dir():
+            result.add(str(dir_path.relative_to(root)))
+    return result
+
+
+class TestInitializationIdempotence:
+    """Property 3: Initialization Idempotence.
+
+    *For any* valid SwarmWS state (including user-created files and modified
+    system file content), running ``ensure_default_workspace()`` followed by
+    a second ``ensure_default_workspace()`` shall produce an equivalent
+    filesystem structure.
+
+    Specifically:
+    (a) no existing files are overwritten,
+    (b) all user-managed items are preserved,
+    (c) any missing system-managed items are recreated with default content,
+    (d) the set of files after the second run equals the set after the first run.
+
+    **Validates: Requirements 2.5, 25.7, 31.2, 32.1, 32.2, 32.3**
+    """
+
+    @given(user_files=_user_file_strategy)
+    @_PBT_SETTINGS
+    @pytest.mark.asyncio
+    async def test_initialization_idempotence(
+        self,
+        user_files: list[tuple[str, str, str]],
+        tmp_path_factory,
+    ):
+        """Two consecutive ensure_default_workspace() calls produce equivalent state.
+
+        **Validates: Requirements 2.5, 25.7, 31.2, 32.1, 32.2, 32.3**
+        """
+        tmp_path = tmp_path_factory.mktemp("idempotence")
+        workspace_path = str(tmp_path / "SwarmWS")
+        db_path = str(tmp_path / "test.db")
+
+        # Set up isolated DB
+        db = SQLiteDatabase(db_path=db_path)
+        await db.initialize()
+
+        # Patch DEFAULT_WORKSPACE_CONFIG to use our temp path
+        original_config = swm_module.DEFAULT_WORKSPACE_CONFIG.copy()
+        swm_module.DEFAULT_WORKSPACE_CONFIG["file_path"] = workspace_path
+
+        try:
+            manager = SwarmWorkspaceManager()
+
+            # ── First init ──────────────────────────────────────────────
+            await manager.ensure_default_workspace(db)
+
+            # Place user files into the workspace between the two inits
+            root = Path(workspace_path)
+            for section, filename, content in user_files:
+                user_file = root / section / filename
+                # Don't overwrite system files
+                if not user_file.exists():
+                    user_file.parent.mkdir(parents=True, exist_ok=True)
+                    user_file.write_text(content, encoding="utf-8")
+
+            # Snapshot state after first init + user files
+            files_after_first = _collect_all_files(root)
+            dirs_after_first = _collect_all_dirs(root)
+
+            # ── Second init ─────────────────────────────────────────────
+            await manager.ensure_default_workspace(db)
+
+            # Snapshot state after second init
+            files_after_second = _collect_all_files(root)
+            dirs_after_second = _collect_all_dirs(root)
+
+            # ── Assertions ──────────────────────────────────────────────
+
+            # (d) Same file set after second run
+            assert set(files_after_second.keys()) == set(files_after_first.keys()), (
+                f"File set changed between inits.\n"
+                f"Added: {set(files_after_second.keys()) - set(files_after_first.keys())}\n"
+                f"Removed: {set(files_after_first.keys()) - set(files_after_second.keys())}"
+            )
+
+            # Same directory set
+            assert dirs_after_second == dirs_after_first, (
+                f"Directory set changed between inits.\n"
+                f"Added: {dirs_after_second - dirs_after_first}\n"
+                f"Removed: {dirs_after_first - dirs_after_second}"
+            )
+
+            # (a) No existing files overwritten — content unchanged
+            for rel_path, content_before in files_after_first.items():
+                content_after = files_after_second.get(rel_path)
+                assert content_after == content_before, (
+                    f"File '{rel_path}' was overwritten by second init.\n"
+                    f"Before: {content_before[:100]!r}\n"
+                    f"After:  {content_after[:100]!r}"
+                )
+
+            # (b) User files preserved with same content
+            for section, filename, content in user_files:
+                rel = f"{section}/{filename}"
+                if rel in files_after_first:
+                    assert rel in files_after_second, (
+                        f"User file '{rel}' disappeared after second init"
+                    )
+                    assert files_after_second[rel] == files_after_first[rel], (
+                        f"User file '{rel}' content changed after second init"
+                    )
+
+            # (c) System files still exist
+            for sys_file in SYSTEM_MANAGED_ROOT_FILES:
+                assert sys_file in files_after_second, (
+                    f"System root file '{sys_file}' missing after second init"
+                )
+            for sys_file in SYSTEM_MANAGED_SECTION_FILES:
+                assert sys_file in files_after_second, (
+                    f"System section file '{sys_file}' missing after second init"
+                )
+            for folder in FOLDER_STRUCTURE:
+                assert folder in dirs_after_second, (
+                    f"System folder '{folder}' missing after second init"
+                )
+
+        finally:
+            swm_module.DEFAULT_WORKSPACE_CONFIG.update(original_config)

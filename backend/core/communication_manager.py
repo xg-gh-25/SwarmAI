@@ -44,17 +44,17 @@ class CommunicationManager:
         """Get the default workspace (SwarmWS) ID.
 
         Returns:
-            str: The ID of the default workspace (SwarmWS).
+            str: The constant SwarmWS workspace ID ('swarmws').
 
         Raises:
-            ValueError: If no default workspace exists.
+            ValueError: If workspace config is not initialized.
 
         Validates: Requirements 1.3, 1.4
         """
-        default_workspace = await db.swarm_workspaces.get_default()
-        if not default_workspace:
-            raise ValueError("Default workspace (SwarmWS) not found. Please initialize the application first.")
-        return default_workspace["id"]
+        workspace = await db.workspace_config.get_config()
+        if not workspace:
+            raise ValueError("SwarmWS workspace config not found. Please initialize the application first.")
+        return workspace["id"]
 
     async def create(self, data: CommunicationCreate) -> CommunicationResponse:
         """Create a new Communication.

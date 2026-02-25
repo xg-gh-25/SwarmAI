@@ -51,6 +51,8 @@ def _file_tree(draw: st.DrawFn) -> dict[str, bytes]:
 
     Ensures no file path is a prefix of another (which would make
     mkdir fail because a file already occupies that path segment).
+    Also handles case-insensitive filesystems (macOS) by comparing
+    lowercased paths.
     """
     raw = draw(
         st.dictionaries(
@@ -61,13 +63,17 @@ def _file_tree(draw: st.DrawFn) -> dict[str, bytes]:
         )
     )
     # Remove entries where one path is a parent of another
+    # Use case-insensitive comparison for macOS compatibility
     paths = sorted(raw.keys())
     result: dict[str, bytes] = {}
     for p in paths:
-        # Skip if this path is a prefix of an already-added path or vice versa
+        p_lower = p.lower()
         conflict = False
         for existing in list(result.keys()):
-            if existing.startswith(p + "/") or p.startswith(existing + "/"):
+            existing_lower = existing.lower()
+            if (existing_lower.startswith(p_lower + "/")
+                    or p_lower.startswith(existing_lower + "/")
+                    or existing_lower == p_lower):
                 conflict = True
                 break
         if not conflict:

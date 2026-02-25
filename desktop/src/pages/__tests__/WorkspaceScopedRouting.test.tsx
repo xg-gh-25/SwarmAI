@@ -72,12 +72,7 @@ vi.mock('../../services/agents', () => ({
   },
 }));
 
-// Mock swarmWorkspacesService
-vi.mock('../../services/swarmWorkspaces', () => ({
-  swarmWorkspacesService: {
-    list: () => Promise.resolve([]),
-  },
-}));
+// swarmWorkspacesService removed — singleton workspace model (task 12.9)
 
 // ============== Helpers ==============
 

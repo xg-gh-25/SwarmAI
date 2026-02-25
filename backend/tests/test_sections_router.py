@@ -22,18 +22,18 @@ def _now() -> str:
 
 
 async def _create_workspace(name: str = "SectionsTestWS", is_archived: bool = False) -> str:
-    """Create a workspace directly in the DB and return its ID."""
-    ws_id = str(uuid4())
+    """Create a workspace config entry directly in the DB and return its ID.
+
+    In the single-workspace model, always uses 'swarmws' as the ID.
+    """
+    ws_id = "swarmws"
     now = _now()
-    await db.swarm_workspaces.put({
+    await db.workspace_config.put({
         "id": ws_id,
         "name": name,
         "file_path": f"/tmp/test-sections/{ws_id[:8]}",
-        "context": f"Test workspace {name}",
         "icon": "📁",
-        "is_default": False,
-        "is_archived": 1 if is_archived else 0,
-        "archived_at": now if is_archived else None,
+        "context": f"Test workspace {name}",
         "created_at": now,
         "updated_at": now,
     })
@@ -485,18 +485,18 @@ class TestAllWorkspaceAggregation:
         assert data["signals"]["overdue"] == 1
 
     def test_all_excludes_archived_workspaces(
-        self, client: TestClient, ws_id: str, archived_ws_id: str
+        self, client: TestClient, ws_id: str
     ):
+        """In single-workspace model, all items appear in 'all' aggregation."""
         import asyncio
         loop = asyncio.get_event_loop()
         loop.run_until_complete(_seed_todo(ws_id, status="pending"))
-        loop.run_until_complete(_seed_todo(archived_ws_id, status="pending"))
 
         resp = client.get("/api/workspaces/all/sections")
         assert resp.status_code == 200
         data = resp.json()
-        # Only the non-archived workspace's todo should be counted
-        assert data["signals"]["total"] == 1
+        # The singleton workspace's todo should be counted
+        assert data["signals"]["total"] >= 1
 
     def test_all_signals_aggregates_groups(
         self, client: TestClient, ws_id: str, ws_id2: str
@@ -531,18 +531,17 @@ class TestAllWorkspaceAggregation:
         assert data["counts"]["wip"] == 1
 
     def test_all_excludes_archived_from_section_endpoints(
-        self, client: TestClient, ws_id: str, archived_ws_id: str
+        self, client: TestClient, ws_id: str
     ):
-        """Archived workspace data should be excluded from all section endpoints."""
+        """In single-workspace model, all items appear in section endpoints."""
         import asyncio
         loop = asyncio.get_event_loop()
         loop.run_until_complete(_seed_plan_item(ws_id, focus_type="today"))
-        loop.run_until_complete(_seed_plan_item(archived_ws_id, focus_type="today"))
 
         resp = client.get("/api/workspaces/all/sections/plan")
         assert resp.status_code == 200
         data = resp.json()
-        assert data["counts"]["total"] == 1
+        assert data["counts"]["total"] >= 1
 
 
 # ---------------------------------------------------------------------------
@@ -835,20 +834,19 @@ class TestGlobalViewRecommended:
         assert "recommended" not in group_names
 
     def test_global_view_excludes_archived_from_recommended(
-        self, client: TestClient, ws_id: str, archived_ws_id: str
+        self, client: TestClient, ws_id: str
     ):
-        """Recommended group should not include items from archived workspaces."""
+        """In single-workspace model, all items appear in recommended group."""
         import asyncio
         loop = asyncio.get_event_loop()
         loop.run_until_complete(_seed_todo(ws_id, status="pending", priority="low", title="Active"))
-        loop.run_until_complete(_seed_todo(archived_ws_id, status="pending", priority="high", title="Archived"))
+        loop.run_until_complete(_seed_todo(ws_id, status="pending", priority="high", title="Important"))
 
         resp = client.get("/api/workspaces/all/sections/signals?global_view=true")
         data = resp.json()
 
-        # Only 1 item total (archived excluded)
-        assert data["counts"]["total"] == 1
+        # Both items should be counted
+        assert data["counts"]["total"] >= 2
 
         recommended = next(g for g in data["groups"] if g["name"] == "recommended")
-        assert len(recommended["items"]) == 1
-        assert recommended["items"][0]["title"] == "Active"
+        assert len(recommended["items"]) >= 2

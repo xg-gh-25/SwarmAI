@@ -52,28 +52,25 @@ class ToDoManager:
 
         Validates: Requirements 1.3, 1.4
         """
-        default_workspace = await db.swarm_workspaces.get_default()
+        default_workspace = await db.workspace_config.get_config()
         if not default_workspace:
-            raise ValueError("Default workspace (SwarmWS) not found. Please initialize the application first.")
+            raise ValueError("SwarmWS workspace config not found. Please initialize the application first.")
         return default_workspace["id"]
 
     async def _check_workspace_not_archived(self, workspace_id: str) -> None:
         """Raise PermissionError if the workspace is archived.
 
+        In the single-workspace model, SwarmWS is never archived.
+        This method is kept for backward compatibility but is now a no-op
+        since the archive concept no longer applies.
+
         Args:
             workspace_id: The workspace ID to check.
 
-        Raises:
-            PermissionError: If the workspace is archived (read-only).
-
         Validates: Requirements 36.6, 36.7
         """
-        workspace = await db.swarm_workspaces.get(workspace_id)
-        if workspace and workspace.get("is_archived"):
-            raise PermissionError(
-                f"Cannot create items in archived workspace '{workspace_id}'. "
-                "Archived workspaces are read-only."
-            )
+        # In single-workspace model, SwarmWS is never archived
+        pass
 
 
     async def create(self, data: ToDoCreate) -> ToDoResponse:

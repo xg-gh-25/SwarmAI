@@ -40,39 +40,30 @@ async def has_mock_data() -> bool:
 
 
 async def _get_or_create_swarmws() -> str:
-    """Get the SwarmWS workspace ID, or return a placeholder."""
-    ws = await db.swarm_workspaces.get_default()
+    """Get the SwarmWS workspace ID (always 'swarmws' in singleton model)."""
+    ws = await db.workspace_config.get_config()
     if ws:
         return ws["id"]
-    # Create a minimal SwarmWS for mock data
-    ws_id = str(uuid4())
-    await db.swarm_workspaces.put({
-        "id": ws_id,
+    # Create a minimal workspace_config row for mock data
+    await db.workspace_config.put({
+        "id": "swarmws",
         "name": "SwarmWS",
         "file_path": "",
+        "icon": "🏠",
         "context": "Your Global Work Hub",
-        "is_default": 1,
-        "is_archived": 0,
         "created_at": _now(),
         "updated_at": _now(),
     })
-    return ws_id
+    return "swarmws"
 
 
 async def _create_test_workspace() -> str:
-    """Create a TestWS workspace and return its ID."""
-    ws_id = str(uuid4())
-    await db.swarm_workspaces.put({
-        "id": ws_id,
-        "name": "TestWS",
-        "file_path": "",
-        "context": "Test workspace for development",
-        "is_default": 0,
-        "is_archived": 0,
-        "created_at": _now(),
-        "updated_at": _now(),
-    })
-    return ws_id
+    """Return the SwarmWS workspace ID for test data.
+
+    In the single-workspace model there is no separate TestWS workspace.
+    All mock data is scoped to the singleton SwarmWS ('swarmws').
+    """
+    return "swarmws"
 
 
 async def _get_default_agent_id() -> str:

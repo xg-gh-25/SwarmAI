@@ -29,13 +29,16 @@ PROPERTY_SETTINGS = settings(
 # ---------------------------------------------------------------------------
 
 REQUIRED_FOLDERS = [
+    "Signals",
+    "Plan",
+    "Execute",
+    "Communicate",
+    "Reflection",
     "Artifacts",
-    "Artifacts/Plans",
-    "Artifacts/Reports",
-    "Artifacts/Docs",
-    "Artifacts/Decisions",
-    "ContextFiles",
-    "Transcripts",
+    "Notebooks",
+    "Projects",
+    "Knowledge",
+    "Knowledge/Memory",
 ]
 
 FORBIDDEN_FOLDERS = [
