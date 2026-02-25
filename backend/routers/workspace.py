@@ -1,6 +1,7 @@
 """Workspace router for file browser API."""
 
 import base64
+import logging
 import mimetypes
 from datetime import datetime
 from pathlib import Path
@@ -8,6 +9,9 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Query
 
 from config import settings
+from database import db
+from core.workspace_manager import workspace_manager
+
 from schemas.workspace import (
     WorkspaceFileInfo,
     WorkspaceFileResponse,
@@ -17,7 +21,40 @@ from schemas.workspace import (
     WorkspaceUploadResponse,
 )
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(tags=["workspace"])
+
+
+async def ensure_workspace_exists(agent_id: str, workspace_root: Path, base_path: str | None) -> None:
+    """Ensure workspace directory exists, auto-creating if necessary.
+
+    Args:
+        agent_id: The agent ID
+        workspace_root: The workspace root path
+        base_path: Optional custom base path (if provided, won't auto-create)
+
+    Raises:
+        HTTPException: If workspace doesn't exist and can't be created
+    """
+    if workspace_root.exists():
+        return
+
+    if base_path:
+        # User-selected path doesn't exist - can't auto-create
+        raise HTTPException(status_code=404, detail=f"Directory not found: {base_path}")
+
+    # Auto-create agent workspace with skills
+    agent = await db.agents.get(agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail=f"Agent not found: {agent_id}")
+
+    skill_ids = agent.get("skill_ids", [])
+    allow_all_skills = agent.get("allow_all_skills", False)
+
+    logger.info(f"Auto-creating missing workspace for agent {agent_id}")
+    await workspace_manager.rebuild_agent_workspace(agent_id, skill_ids, allow_all_skills)
+    logger.info(f"Workspace created for agent {agent_id}")
 
 # File size limits
 MAX_TEXT_FILE_SIZE = 1 * 1024 * 1024  # 1MB for text files
@@ -285,9 +322,8 @@ async def list_files(
     """
     workspace_root = get_workspace_root(agent_id, base_path)
 
-    # Check if workspace exists
-    if not workspace_root.exists():
-        raise HTTPException(status_code=404, detail=f"Workspace not found for agent: {agent_id}")
+    # Ensure workspace exists (auto-create if needed)
+    await ensure_workspace_exists(agent_id, workspace_root, base_path)
 
     # Validate and resolve the path
     target_path = validate_path(workspace_root, request.path)
@@ -363,9 +399,8 @@ async def read_file(
     """
     workspace_root = get_workspace_root(agent_id, base_path)
 
-    # Check if workspace exists
-    if not workspace_root.exists():
-        raise HTTPException(status_code=404, detail=f"Workspace not found for agent: {agent_id}")
+    # Ensure workspace exists (auto-create if needed)
+    await ensure_workspace_exists(agent_id, workspace_root, base_path)
 
     # Validate and resolve the path
     file_path = validate_path(workspace_root, path)
