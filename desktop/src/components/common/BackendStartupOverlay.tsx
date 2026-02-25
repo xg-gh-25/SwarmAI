@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import axios from 'axios';
 import { getBackendPort, initializeBackend } from '../../services/tauri';
+import logo from '../../assets/logo.png';
 
 type StartupStatus = 'starting' | 'connected' | 'error';
 
@@ -122,10 +123,8 @@ export default function BackendStartupOverlay({ onReady }: BackendStartupOverlay
     >
       <div className="flex flex-col items-center gap-6 max-w-md px-8">
         {/* Logo */}
-        <div className="w-20 h-20 rounded-2xl bg-primary/20 flex items-center justify-center">
-          <span className="material-symbols-outlined text-5xl text-primary">
-            smart_toy
-          </span>
+        <div className="w-24 h-24 rounded-2xl overflow-hidden">
+          <img src={logo} alt="Owork" className="w-full h-full object-contain" />
         </div>
 
         {/* App Name */}
