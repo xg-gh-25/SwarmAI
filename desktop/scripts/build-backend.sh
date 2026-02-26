@@ -240,6 +240,8 @@ hiddenimports += collect_submodules('claude_agent_sdk')
 datas = []
 datas += collect_data_files('claude_agent_sdk')
 datas += collect_data_files('certifi')
+# Include backend templates for agent workspace initialization
+datas += [('templates', 'templates')]
 
 # Add local modules explicitly (these are in the current directory, not installed packages)
 local_modules = [
