@@ -42,15 +42,56 @@ logger = logging.getLogger(__name__)
 class WorkspaceManager:
     """Manages per-agent workspaces with skill isolation via symlinks."""
 
+    TEMPLATE_FILES = [
+        "AGENTS.md",
+        "BOOTSTRAP.md",
+        "HEARTBEAT.md",
+        "IDENTITY.md",
+        "SOUL.md",
+        "USER.md",
+    ]
+
     def __init__(self):
         self.main_workspace = Path(settings.agent_workspace_dir)
         self.agents_workspace = Path(settings.agent_workspaces_dir)
         self.main_skills_dir = self.main_workspace / ".claude" / "skills"
+        self._templates_dir = Path(__file__).resolve().parent.parent / "templates"
 
     def _ensure_dirs(self):
         """Ensure required directories exist."""
         self.main_skills_dir.mkdir(parents=True, exist_ok=True)
         self.agents_workspace.mkdir(parents=True, exist_ok=True)
+
+    def _copy_templates(self, target_dir: Path, force: bool = False) -> None:
+        """Copy template files into *target_dir*.
+
+        Args:
+            target_dir: Destination directory (must already exist).
+            force: If ``False``, skip files that already exist in the target.
+        """
+        if not self._templates_dir.is_dir():
+            logger.warning(f"Templates directory not found: {self._templates_dir}")
+            return
+
+        for filename in self.TEMPLATE_FILES:
+            src = self._templates_dir / filename
+            dst = target_dir / filename
+            if not src.is_file():
+                continue
+            if not force and dst.exists():
+                continue
+            try:
+                shutil.copy2(src, dst)
+                logger.debug(f"Copied template {filename} -> {dst}")
+            except OSError as e:
+                logger.warning(f"Failed to copy template {filename}: {e}")
+
+    def ensure_templates_in_directory(self, directory: Path) -> None:
+        """Copy template files into *directory* without overwriting existing ones.
+
+        Intended for global-user-mode workspaces (e.g. home directory).
+        """
+        self._copy_templates(directory, force=False)
 
     def get_agent_workspace(self, agent_id: str) -> Path:
         """Get the workspace path for a specific agent."""
@@ -185,12 +226,17 @@ class WorkspaceManager:
         self._ensure_dirs()
 
         agent_workspace = self.get_agent_workspace(agent_id)
+        is_new = not agent_workspace.exists()
         agent_skills_dir = self.get_agent_skills_dir(agent_id)
 
         # Remove existing skills directory and recreate
         if agent_skills_dir.exists():
             shutil.rmtree(agent_skills_dir)
         agent_skills_dir.mkdir(parents=True, exist_ok=True)
+
+        # Seed template files into brand-new workspaces
+        if is_new:
+            self._copy_templates(agent_workspace, force=True)
 
         # Determine which skills to link
         if allow_all_skills:

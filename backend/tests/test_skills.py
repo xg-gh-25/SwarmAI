@@ -1,7 +1,17 @@
 """Tests for skills API endpoints."""
 import pytest
+import zipfile
 from fastapi.testclient import TestClient
 from io import BytesIO
+
+
+def _make_skill_zip(name: str = "test_skill") -> BytesIO:
+    """Create a minimal valid ZIP containing a SKILL.md file."""
+    buf = BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr(f"{name}/SKILL.md", f"# {name}\nA test skill.")
+    buf.seek(0)
+    return buf
 
 
 class TestSkillsList:
@@ -45,9 +55,7 @@ class TestUploadSkill:
 
     def test_upload_skill_success(self, client: TestClient):
         """Test uploading skill ZIP returns 201."""
-        # Create a mock ZIP file
-        zip_content = BytesIO(b"PK\x03\x04" + b"\x00" * 100)  # Minimal ZIP header
-        zip_content.name = "test_skill.zip"
+        zip_content = _make_skill_zip("UploadedSkill")
 
         response = client.post(
             "/api/skills/upload",
@@ -61,7 +69,7 @@ class TestUploadSkill:
 
     def test_upload_skill_without_name(self, client: TestClient):
         """Test uploading skill ZIP uses filename as name."""
-        zip_content = BytesIO(b"PK\x03\x04" + b"\x00" * 100)
+        zip_content = _make_skill_zip("my_skill")
 
         response = client.post(
             "/api/skills/upload",

@@ -27,6 +27,7 @@ from claude_agent_sdk import (
 from database import db
 from config import settings, get_bedrock_model_id
 from .session_manager import session_manager
+from .system_prompt import SystemPromptBuilder
 from .workspace_manager import workspace_manager
 
 logger = logging.getLogger(__name__)
@@ -722,13 +723,6 @@ class AgentManager:
                             "url": config.get("url"),
                         }
 
-        # Build system prompt
-        system_prompt = agent_config.get("system_prompt")
-        if system_prompt:
-            system_prompt_config = system_prompt
-        else:
-            system_prompt_config = f"You are {agent_config.get('name', 'an AI assistant')}. {agent_config.get('description', '')}"
-
         # Build hooks
         hooks = {}
 
@@ -748,7 +742,7 @@ class AgentManager:
         # Use resume_session_id for resumed sessions, or agent_id for new sessions
         # The session_key is used for tracking approved commands - must match what's
         # stored in the permission_request and used in continue_with_permission
-        agent_id = agent_config.get("id")
+        agent_id = agent_config.get("id",'default')
         session_key = resume_session_id or agent_id or "unknown"
 
         # Enable human approval hook if configured
@@ -807,7 +801,9 @@ class AgentManager:
         if global_user_mode:
             # Global User Mode: use home directory, full access, user settings
             working_directory = str(Path.home())
+            # working_directory = str(workspace_manager.get_agent_workspace(agent_id))
             setting_sources = ['project', 'user']
+            workspace_manager.ensure_templates_in_directory(Path(working_directory))
             logger.info(f"Agent {agent_id} running in GLOBAL USER MODE (cwd: {working_directory})")
         elif enable_skills and agent_id:
             # Isolated Mode with skills: per-agent workspace with symlinked skills
@@ -924,8 +920,8 @@ class AgentManager:
 
         # Get add_dirs for ClaudeAgentOptions
         sdk_add_dirs = agent_config.get("add_dirs", [])
-        if sdk_add_dirs:
-            working_directory = sdk_add_dirs[0]
+        # if sdk_add_dirs:
+        #     working_directory = sdk_add_dirs[0]
         # Max buffer size for JSON messages (default 10MB to handle large tool outputs)
         max_buffer_size = int(os.environ.get("MAX_BUFFER_SIZE", 10 * 1024 * 1024))
 
@@ -958,6 +954,15 @@ class AgentManager:
             else:
                 logger.warning(f"Channel-tools MCP script not found: {mcp_script}")
 
+        # Build system prompt via SystemPromptBuilder
+        prompt_builder = SystemPromptBuilder(
+            working_directory=working_directory,
+            agent_config=agent_config,
+            channel_context=channel_context,
+            add_dirs=sdk_add_dirs,
+        )
+        system_prompt_config = prompt_builder.build()
+
         return ClaudeAgentOptions(
             system_prompt=system_prompt_config,
             allowed_tools=allowed_tools if allowed_tools else None,
@@ -977,7 +982,7 @@ class AgentManager:
             sandbox=sandbox_settings,  # Built-in SDK sandbox for bash isolation
             can_use_tool=file_access_handler,  # File access control
             max_buffer_size=max_buffer_size,  # Increase buffer for large JSON messages
-            # add_dirs=sdk_add_dirs if sdk_add_dirs else None,  # Additional directories for Claude to access
+            add_dirs=sdk_add_dirs if sdk_add_dirs else None,  # Additional directories for Claude to access
         )
 
     async def _save_message(
