@@ -194,13 +194,12 @@ async def delete_channel(channel_id: str):
             detail=f"Channel with ID '{channel_id}' not found"
         )
 
-    # Stop channel if it is currently active
-    if channel.get("status") == "active":
-        try:
-            await channel_gateway.stop_channel(channel_id)
-            logger.info(f"Stopped active channel '{channel_id}' before deletion")
-        except Exception as e:
-            logger.warning(f"Error stopping channel '{channel_id}' during deletion: {e}")
+    # Stop channel and cancel any pending retries before deletion
+    try:
+        await channel_gateway.stop_channel(channel_id)
+        logger.info(f"Stopped channel '{channel_id}' before deletion")
+    except Exception as e:
+        logger.warning(f"Error stopping channel '{channel_id}' during deletion: {e}")
 
     # Delete all channel sessions
     deleted_sessions = await db.channel_sessions.delete_by_channel(channel_id)

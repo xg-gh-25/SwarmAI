@@ -72,15 +72,25 @@ class _TokenBucketRateLimiter:
 class ChannelGateway:
     """Singleton gateway that owns channel adapter lifecycle and message routing."""
 
+    # Retry configuration
+    _RETRY_BASE_DELAY = 5.0       # seconds
+    _RETRY_MAX_DELAY = 300.0      # 5 minutes cap
+    _RETRY_BACKOFF_FACTOR = 2.0
+    _RETRY_MAX_ATTEMPTS = 20      # ~1.5 hours at max backoff
+
     def __init__(self) -> None:
         # channel_id -> running ChannelAdapter instance
         self._adapters: dict[str, ChannelAdapter] = {}
         # channel_id -> asyncio.Task running the adapter's ``start()``
         self._tasks: dict[str, asyncio.Task] = {}
+        # channel_id -> asyncio.Task running the retry loop
+        self._retry_tasks: dict[str, asyncio.Task] = {}
         # Per-sender rate limiter (shared across all channels)
         self._rate_limiter = _TokenBucketRateLimiter()
         # In-memory cache of channel configs keyed by channel_id
         self._channel_cache: dict[str, dict] = {}
+        # Flag to prevent retries during shutdown
+        self._shutting_down = False
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -89,25 +99,47 @@ class ChannelGateway:
     async def startup(self) -> None:
         """Called once during FastAPI lifespan startup.
 
-        Loads adapter modules via the registry, then starts every channel
-        whose DB status is ``'active'``.
+        Loads adapter modules via the registry, then auto-starts every
+        channel found in the database (regardless of previous status).
+        Channels that fail to start will be retried automatically.
         """
         logger.info("ChannelGateway starting up")
+        self._shutting_down = False
         load_adapters()
 
         channels = await db.channels.list()
-        active_channels = [ch for ch in channels if ch.get("status") == "active"]
-        logger.info(f"Found {len(active_channels)} active channel(s) to start")
+        logger.info(f"Found {len(channels)} channel(s), auto-starting all")
 
-        for ch in active_channels:
+        for ch in channels:
             try:
                 await self.start_channel(ch["id"])
+            except ValueError:
+                # Config / adapter errors — permanent, do not retry
+                logger.error(
+                    f"Channel {ch['id']} ({ch.get('name')}) has a "
+                    f"configuration error — will not retry"
+                )
             except Exception:
-                logger.exception(f"Failed to start channel {ch['id']} ({ch.get('name')}) during startup")
+                logger.exception(
+                    f"Failed to start channel {ch['id']} ({ch.get('name')}) "
+                    f"during startup — will retry automatically"
+                )
+                self._schedule_retry(ch["id"])
 
     async def shutdown(self) -> None:
-        """Gracefully stop every running channel."""
+        """Gracefully stop every running channel and cancel pending retries."""
         logger.info("ChannelGateway shutting down")
+        self._shutting_down = True
+
+        # Cancel all pending retry tasks first
+        for channel_id, task in list(self._retry_tasks.items()):
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
+        self._retry_tasks.clear()
+
         channel_ids = list(self._adapters.keys())
         for channel_id in channel_ids:
             try:
@@ -170,6 +202,15 @@ class ChannelGateway:
         # Cache the channel record
         self._channel_cache[channel_id] = channel
 
+        # Cancel any pending retry for this channel since we're starting fresh
+        retry_task = self._retry_tasks.pop(channel_id, None)
+        if retry_task and not retry_task.done():
+            retry_task.cancel()
+            try:
+                await retry_task
+            except (asyncio.CancelledError, Exception):
+                pass
+
         # Wrap adapter.start() in an asyncio task so it can run concurrently
         async def _run_adapter(cid: str, adp: ChannelAdapter) -> None:
             try:
@@ -177,6 +218,11 @@ class ChannelGateway:
             except asyncio.CancelledError:
                 logger.info(f"Adapter task for channel {cid} cancelled")
             except Exception:
+                # If the adapter was already removed by stop_channel() or
+                # shutdown, this crash is a side-effect of cancellation —
+                # do not update DB or schedule retry.
+                if cid not in self._adapters or self._shutting_down:
+                    return
                 logger.exception(f"Adapter for channel {cid} crashed")
                 await db.channels.update(cid, {
                     "status": "error",
@@ -186,6 +232,8 @@ class ChannelGateway:
                 self._adapters.pop(cid, None)
                 self._tasks.pop(cid, None)
                 self._channel_cache.pop(cid, None)
+                # Schedule automatic retry
+                self._schedule_retry(cid)
 
         task = asyncio.create_task(_run_adapter(channel_id, adapter))
         self._adapters[channel_id] = adapter
@@ -195,7 +243,16 @@ class ChannelGateway:
         logger.info(f"Channel {channel_id} ({channel.get('name')}) started successfully")
 
     async def stop_channel(self, channel_id: str) -> None:
-        """Stop a running channel adapter and update DB status to ``'inactive'``."""
+        """Stop a running channel adapter and update DB status to ``'inactive'``.
+
+        Also cancels any pending retry — an explicit stop means the user
+        does not want the channel running.
+        """
+        # Cancel pending retry
+        retry_task = self._retry_tasks.pop(channel_id, None)
+        if retry_task and not retry_task.done():
+            retry_task.cancel()
+
         adapter = self._adapters.pop(channel_id, None)
         task = self._tasks.pop(channel_id, None)
         self._channel_cache.pop(channel_id, None)
@@ -222,6 +279,73 @@ class ChannelGateway:
         """Stop and re-start a channel."""
         await self.stop_channel(channel_id)
         await self.start_channel(channel_id)
+
+    # ------------------------------------------------------------------
+    # Auto-retry
+    # ------------------------------------------------------------------
+
+    def _schedule_retry(self, channel_id: str) -> None:
+        """Schedule an automatic reconnection attempt for a failed channel."""
+        if self._shutting_down:
+            return
+        if channel_id in self._retry_tasks and not self._retry_tasks[channel_id].done():
+            return  # retry already scheduled
+        task = asyncio.create_task(self._retry_loop(channel_id))
+        self._retry_tasks[channel_id] = task
+
+    async def _retry_loop(self, channel_id: str) -> None:
+        """Retry starting a channel with exponential backoff.
+
+        Stops on: success, permanent config error (``ValueError``),
+        max attempts reached, shutdown, or explicit stop/start by user.
+        """
+        delay = self._RETRY_BASE_DELAY
+        attempt = 0
+        try:
+            while not self._shutting_down:
+                attempt += 1
+                if attempt > self._RETRY_MAX_ATTEMPTS:
+                    logger.error(
+                        f"Channel {channel_id}: max retries ({self._RETRY_MAX_ATTEMPTS}) "
+                        f"exhausted — giving up"
+                    )
+                    await db.channels.update(channel_id, {
+                        "status": "error",
+                        "error_message": f"Failed to connect after {self._RETRY_MAX_ATTEMPTS} retries",
+                    })
+                    break
+
+                logger.info(
+                    f"Retry #{attempt} for channel {channel_id} in {delay:.0f}s"
+                )
+                await asyncio.sleep(delay)
+
+                if self._shutting_down:
+                    break
+                # If channel was started successfully by another path, stop retrying
+                if channel_id in self._adapters:
+                    logger.info(f"Channel {channel_id} is already running, stopping retry")
+                    break
+
+                try:
+                    await self.start_channel(channel_id)
+                    logger.info(f"Channel {channel_id} reconnected on retry #{attempt}")
+                    break  # success
+                except ValueError:
+                    # Permanent config / adapter error — no point retrying
+                    logger.error(
+                        f"Channel {channel_id}: permanent error on retry "
+                        f"#{attempt} — stopping retries"
+                    )
+                    break
+                except Exception:
+                    logger.warning(
+                        f"Retry #{attempt} failed for channel {channel_id}, "
+                        f"next attempt in {min(delay * self._RETRY_BACKOFF_FACTOR, self._RETRY_MAX_DELAY):.0f}s"
+                    )
+                    delay = min(delay * self._RETRY_BACKOFF_FACTOR, self._RETRY_MAX_DELAY)
+        finally:
+            self._retry_tasks.pop(channel_id, None)
 
     # ------------------------------------------------------------------
     # Status
