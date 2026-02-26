@@ -10,6 +10,7 @@ import re
 import hashlib
 import asyncio
 import platform
+import sys
 
 from claude_agent_sdk import (
     ClaudeSDKClient,
@@ -642,7 +643,8 @@ class AgentManager:
         enable_skills: bool,
         enable_mcp: bool,
         resume_session_id: Optional[str] = None,
-        session_context: Optional[dict] = None
+        session_context: Optional[dict] = None,
+        channel_context: Optional[dict] = None,
     ) -> ClaudeAgentOptions:
         """Build ClaudeAgentOptions from agent configuration.
 
@@ -841,7 +843,7 @@ class AgentManager:
                 elif settings.agent_workspaces_dir in dir_path and agent_id:
                     # This is an agent workspace path - check if it's the current agent's workspace
                     workspace_path = Path(dir_path)
-                    # Agent workspace paths are like: /tmp/agent-platform-workspaces/{agent_id}
+                    # Agent workspace paths are like: <app_data_dir>/workspaces/{agent_id}
                     # Check if this matches the current agent's workspace
                     current_agent_workspace = workspace_manager.get_agent_workspace(agent_id)
                     if workspace_path == current_agent_workspace or str(workspace_path).startswith(str(current_agent_workspace)):
@@ -927,6 +929,35 @@ class AgentManager:
         # Max buffer size for JSON messages (default 10MB to handle large tool outputs)
         max_buffer_size = int(os.environ.get("MAX_BUFFER_SIZE", 10 * 1024 * 1024))
 
+        # Inject channel-tools MCP server when running in channel context
+        if channel_context:
+            channel_type = channel_context.get("channel_type", "")
+            env_vars = {
+                "CHANNEL_TYPE": channel_type,
+                "WORKSPACE_DIR": working_directory,
+            }
+
+            if channel_type == "feishu":
+                env_vars.update({
+                    "FEISHU_APP_ID": channel_context.get("app_id", ""),
+                    "FEISHU_APP_SECRET": channel_context.get("app_secret", ""),
+                    "CHAT_ID": channel_context.get("chat_id", ""),
+                })
+                reply_to = channel_context.get("reply_to_message_id")
+                if reply_to:
+                    env_vars["REPLY_TO_MESSAGE_ID"] = reply_to
+
+            mcp_script = Path(__file__).resolve().parent.parent / "mcp_servers" / "channel_file_sender.py"
+            if mcp_script.exists():
+                mcp_servers["channel-tools"] = {
+                    "type": "stdio",
+                    "command": sys.executable,
+                    "args": [str(mcp_script)],
+                    "env": env_vars,
+                }
+            else:
+                logger.warning(f"Channel-tools MCP script not found: {mcp_script}")
+
         return ClaudeAgentOptions(
             system_prompt=system_prompt_config,
             allowed_tools=allowed_tools if allowed_tools else None,
@@ -998,6 +1029,7 @@ class AgentManager:
         enable_skills: bool = False,
         enable_mcp: bool = False,
         add_dirs: Optional[list[str]] = None,
+        channel_context: Optional[dict] = None,
     ) -> AsyncIterator[dict]:
         """Run conversation with agent and stream responses.
 
@@ -1096,9 +1128,9 @@ class AgentManager:
         session_context = {"sdk_session_id": session_id}  # Will be updated for new sessions
 
         # Build options - use resume parameter if continuing an existing session
-        options = await self._build_options(agent_config, enable_skills, enable_mcp, session_id if is_resuming else None, session_context)
+        options = await self._build_options(agent_config, enable_skills, enable_mcp, session_id if is_resuming else None, session_context, channel_context)
         logger.info(f"Built options - allowed_tools: {options.allowed_tools}, permission_mode: {options.permission_mode}, resume: {session_id if is_resuming else None}")
-        logger.info(f"MCP servers: {options.mcp_servers}")
+        logger.info(f"MCP servers: {list(options.mcp_servers.keys()) if options.mcp_servers else None}")
         logger.info(f"Working directory: {options.cwd}")
         logger.info(f"Add dirs: {options.add_dirs}")
 

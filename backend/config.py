@@ -1,4 +1,5 @@
 """Application configuration settings."""
+import platform
 from pathlib import Path
 from pydantic_settings import BaseSettings
 from functools import lru_cache
@@ -6,6 +7,23 @@ from functools import lru_cache
 # Calculate project root directory (backend's parent directory)
 _BACKEND_DIR = Path(__file__).resolve().parent
 _PROJECT_ROOT = _BACKEND_DIR.parent
+
+
+def get_app_data_dir() -> Path:
+    """Get the platform-specific application data directory.
+
+    Returns:
+        macOS:   ~/Library/Application Support/Owork/
+        Windows: %LOCALAPPDATA%/Owork/  (typically C:/Users/<user>/AppData/Local/Owork/)
+        Linux:   ~/.local/share/owork/
+    """
+    system = platform.system()
+    if system == "Darwin":
+        return Path.home() / "Library" / "Application Support" / "Owork"
+    elif system == "Windows":
+        return Path.home() / "AppData" / "Local" / "Owork"
+    else:
+        return Path.home() / ".local" / "share" / "owork"
 
 # Model ID mapping: Anthropic API model ID -> AWS Bedrock model ID
 # Used when CLAUDE_CODE_USE_BEDROCK=true
@@ -80,8 +98,8 @@ class Settings(BaseSettings):
     # Isolated per-agent workspaces directory (OUTSIDE project tree for skill isolation)
     # Each agent gets its own workspace with absolute symlinks to allowed skills
     # This prevents agents from discovering skills in parent directories
-    # Default: /tmp/agent-platform-workspaces (can be changed to persistent location)
-    agent_workspaces_dir: str = "/tmp/agent-platform-workspaces"
+    # Default: platform-specific app data directory / workspaces
+    agent_workspaces_dir: str = str(get_app_data_dir() / "workspaces")
 
     # Built-in Sandbox Configuration (Claude Agent SDK native bash sandboxing)
     sandbox_enabled_default: bool = True  # Default sandbox state for new agents (enabled for security)
