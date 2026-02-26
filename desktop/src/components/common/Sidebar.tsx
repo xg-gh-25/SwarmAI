@@ -41,6 +41,7 @@ export default function Sidebar({ collapsed, onClose, isOverlay }: SidebarProps)
     { path: '/agents', labelKey: 'nav.agents', icon: 'smart_toy' },
     { path: '/skills', labelKey: 'nav.skills', icon: 'construction' },
     { path: '/plugins', labelKey: 'nav.plugins', icon: 'extension' },
+    { path: '/channels', labelKey: 'nav.channels', icon: 'hub' },
     { path: '/mcp', labelKey: 'nav.mcp', icon: 'dns' },
   ];
 

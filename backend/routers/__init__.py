@@ -8,6 +8,7 @@ from .workspace import router as workspace_router
 from .settings import router as settings_router
 from .plugins import router as plugins_router
 from .tasks import router as tasks_router
+from .channels import router as channels_router
 
 __all__ = [
     "agents_router",
@@ -19,4 +20,5 @@ __all__ = [
     "settings_router",
     "plugins_router",
     "tasks_router",
+    "channels_router",
 ]

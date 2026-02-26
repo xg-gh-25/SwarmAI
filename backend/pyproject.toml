@@ -29,7 +29,10 @@ dependencies = [
     "macholib",
     "pyinstaller>=6.18.0",
     "pyinstaller-hooks-contrib==2025.11",
-    "setuptools>=80.9.0"
+    "setuptools>=80.9.0",
+    "lark-oapi>=1.5.3",
+    # MCP server (for channel file sending tool)
+    "mcp>=1.0.0,<2.0.0",
 ]
 
 [project.optional-dependencies]

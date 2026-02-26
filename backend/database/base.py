@@ -108,6 +108,24 @@ class BaseDatabase(ABC):
         """Get the permission requests table (Human-in-the-Loop)."""
         pass
 
+    @property
+    @abstractmethod
+    def channels(self) -> BaseTable:
+        """Get the channels table."""
+        pass
+
+    @property
+    @abstractmethod
+    def channel_sessions(self) -> BaseTable:
+        """Get the channel sessions table."""
+        pass
+
+    @property
+    @abstractmethod
+    def channel_messages(self) -> BaseTable:
+        """Get the channel messages table."""
+        pass
+
     @abstractmethod
     async def health_check(self) -> bool:
         """Check if the database is healthy."""
