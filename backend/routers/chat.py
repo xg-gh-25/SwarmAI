@@ -1,10 +1,30 @@
-"""Chat SSE streaming API endpoints."""
-from fastapi import APIRouter, Request
+"""Chat SSE streaming API and chat-thread management endpoints.
+
+This module provides two routers:
+
+- ``router``              — SSE streaming endpoints for agent chat, session
+  management, and permission handling (mounted at ``/api/chat``).
+- ``chat_threads_router`` — CRUD and binding endpoints for ChatThread
+  entities, including project-filtered listing, global thread listing,
+  and mid-session thread binding (mounted at ``/api``).
+
+Key endpoints on ``chat_threads_router``:
+
+- ``GET  /api/projects/{project_id}/threads``   — list threads by project
+- ``GET  /api/threads/global``                  — list global (unassociated) threads
+- ``POST /api/chat_threads/{thread_id}/bind``   — mid-session thread binding
+
+Requirements: 26.1, 26.4, 26.5, 35.1, 35.6
+"""
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from schemas.message import ChatRequest, ChatSessionResponse, AnswerQuestionRequest, ChatMessageResponse
+from schemas.chat_thread import ChatThreadResponse
+from schemas.context import ThreadBindRequest, ThreadBindResponse
 from schemas.permission import PermissionResponseRequest, PermissionRequestResponse
 from database import db
 from core.agent_manager import agent_manager, approve_command, set_permission_decision
+from core.chat_thread_manager import chat_thread_manager
 from core.session_manager import session_manager
 from core.exceptions import (
     AgentNotFoundException,
@@ -18,11 +38,12 @@ import asyncio
 import logging
 import time
 from datetime import datetime
-from typing import AsyncIterator
+from typing import AsyncIterator, List, Optional
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+chat_threads_router = APIRouter()
 
 # SSE heartbeat interval in seconds (keeps connection alive during long operations)
 SSE_HEARTBEAT_INTERVAL = 15
@@ -527,4 +548,91 @@ async def permission_continue(request: Request):
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",
         },
+    )
+
+
+
+# ---------------------------------------------------------------------------
+# Chat-thread project association and binding endpoints
+# ---------------------------------------------------------------------------
+
+
+@chat_threads_router.get(
+    "/projects/{project_id}/threads",
+    response_model=List[ChatThreadResponse],
+)
+async def list_threads_by_project(project_id: str):
+    """List all chat threads associated with a specific project.
+
+    Returns threads where ``project_id`` matches the given UUID, ordered
+    by ``updated_at`` descending.
+
+    Validates: Requirements 26.1, 26.5
+    """
+    threads = await chat_thread_manager.list_threads_by_project(project_id)
+    return threads
+
+
+@chat_threads_router.get(
+    "/threads/global",
+    response_model=List[ChatThreadResponse],
+)
+async def list_global_threads():
+    """List all chat threads not associated with any project.
+
+    Returns threads where ``project_id IS NULL``, representing global
+    SwarmWS chats.
+
+    Validates: Requirements 26.4
+    """
+    threads = await chat_thread_manager.list_global_threads()
+    return threads
+
+
+@chat_threads_router.post(
+    "/chat_threads/{thread_id}/bind",
+    response_model=ThreadBindResponse,
+)
+async def bind_thread(
+    thread_id: str,
+    request: ThreadBindRequest,
+    force: bool = Query(False, description="Override cross-project binding guardrail"),
+):
+    """Bind or rebind a thread to a task/todo mid-session.
+
+    Accepts a ``ThreadBindRequest`` body with ``task_id``, ``todo_id``,
+    and ``mode`` (replace | add).  An optional ``force`` query parameter
+    overrides the cross-project binding guardrail.
+
+    Returns 409 Conflict if the task belongs to a different project than
+    the thread and ``force`` is not set (PE Enhancement C).
+
+    Validates: Requirements 35.1, 35.6
+    """
+    # Merge force from query param and body (body takes precedence if set)
+    effective_force = request.force if request.force is not None else force
+
+    result = await chat_thread_manager.bind_thread(
+        thread_id=thread_id,
+        task_id=request.task_id,
+        todo_id=request.todo_id,
+        mode=request.mode,
+        force=effective_force,
+    )
+
+    # Handle error responses from the manager
+    if "error" in result:
+        status_code = result.get("status", 500)
+        if status_code == 409:
+            raise HTTPException(status_code=409, detail=result["error"])
+        elif status_code == 404:
+            raise HTTPException(status_code=404, detail=result["error"])
+        else:
+            raise HTTPException(status_code=status_code, detail=result["error"])
+
+    return ThreadBindResponse(
+        thread_id=result["thread_id"],
+        task_id=result.get("task_id"),
+        todo_id=result.get("todo_id"),
+        context_version=result["context_version"],
     )

@@ -59,9 +59,15 @@ class ChatThreadCreate(BaseModel):
     Requirement 30.1: THE System SHALL store ChatThread entities in the database
     (DB-canonical) with fields: id, workspace_id, agent_id, task_id (nullable),
     todo_id (nullable), mode, title, created_at, updated_at.
+    
+    Requirement 26.5: Threads reference a ``project_id`` (UUID from
+    ``.project.json``) instead of relying solely on ``workspace_id``.
+    Threads not associated with any project have ``project_id`` set to
+    ``None`` (NULL), indicating a global SwarmWS chat.
     """
     workspace_id: str = Field(..., description="ID of the workspace this ChatThread belongs to")
     agent_id: str = Field(..., description="ID of the agent associated with this thread")
+    project_id: Optional[str] = Field(None, description="Project UUID, NULL for global chats")
     task_id: Optional[str] = Field(None, description="ID of the Task this thread is bound to")
     todo_id: Optional[str] = Field(None, description="ID of the ToDo this thread is bound to")
     mode: ChatMode = Field(
@@ -88,14 +94,24 @@ class ChatThreadResponse(BaseModel):
     Requirement 30.1: THE System SHALL store ChatThread entities in the database
     (DB-canonical) with fields: id, workspace_id, agent_id, task_id (nullable),
     todo_id (nullable), mode, title, created_at, updated_at.
+    
+    Requirement 26.5: Includes ``project_id`` referencing the project UUID from
+    ``.project.json``.  A ``None`` value indicates a global SwarmWS chat not
+    associated with any specific project.
+    
+    Requirement 26.6: ``context_version`` is a lightweight integer counter
+    incremented whenever bindings or context-affecting state changes occur.
+    Used for cache invalidation in the context snapshot cache.
     """
     id: str = Field(..., description="Unique identifier for the ChatThread")
     workspace_id: str = Field(..., description="ID of the workspace this ChatThread belongs to")
     agent_id: str = Field(..., description="ID of the agent associated with this thread")
+    project_id: Optional[str] = Field(None, description="Project UUID, NULL for global chats")
     task_id: Optional[str] = Field(None, description="ID of the Task this thread is bound to")
     todo_id: Optional[str] = Field(None, description="ID of the ToDo this thread is bound to")
     mode: ChatMode = Field(..., description="Mode of the chat thread (explore or execute)")
     title: str = Field(..., description="Title of the chat thread")
+    context_version: int = Field(0, description="Version counter for cache invalidation")
     created_at: datetime = Field(..., description="Timestamp when the ChatThread was created")
     updated_at: datetime = Field(..., description="Timestamp when the ChatThread was last updated")
 

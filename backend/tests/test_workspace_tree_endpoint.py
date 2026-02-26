@@ -1,0 +1,394 @@
+"""Property-based tests for the workspace tree endpoint structure.
+
+**Feature: swarmws-explorer-ux, Property: Tree endpoint returns valid nested
+JSON with correct system-managed annotations**
+
+Uses Hypothesis with ``tmp_path`` to generate random filesystem structures on
+disk, then calls the ``_build_tree`` helper directly to verify the response
+shape.  Key invariants checked:
+
+- Every node has the required fields (name, path, type, is_system_managed,
+  children).
+- Directories always have a ``children`` list; files have ``children = None``.
+- Hidden files (starting with ``'.'``) are excluded except ``.project.json``.
+- Nodes are sorted: directories first, then files, both alphabetically.
+- ``is_system_managed`` annotations match the workspace manager's registry.
+
+**Validates: Requirements 10.1, 15.1**
+"""
+
+from pathlib import Path
+from uuid import uuid4
+
+import pytest
+from hypothesis import given, strategies as st, settings, HealthCheck
+
+from routers.workspace_api import _build_tree, _should_include
+from core.swarm_workspace_manager import SwarmWorkspaceManager
+
+
+PROPERTY_SETTINGS = settings(
+    max_examples=100,
+    deadline=None,
+    suppress_health_check=[HealthCheck.function_scoped_fixture],
+)
+
+
+# ---------------------------------------------------------------------------
+# Strategies
+# ---------------------------------------------------------------------------
+
+# Safe filename characters — letters, digits, underscore, hyphen, dot
+_safe_char = st.characters(
+    whitelist_categories=("L", "N"),
+    whitelist_characters="_-.",
+)
+
+# A valid filename: 1–30 chars, never starts with '.' (visible files)
+_visible_name = st.text(
+    alphabet=_safe_char, min_size=1, max_size=30,
+).filter(lambda n: not n.startswith(".") and n.strip() != "")
+
+# A hidden filename (starts with '.', length >= 2)
+_hidden_name = st.text(
+    alphabet=_safe_char, min_size=1, max_size=20,
+).map(lambda n: "." + n.lstrip(".")).filter(lambda n: len(n) >= 2)
+
+
+@st.composite
+def _filesystem_tree(draw: st.DrawFn) -> list[dict]:
+    """Generate a random filesystem tree description.
+
+    Returns a list of dicts, each with:
+    - ``"name"``: str
+    - ``"type"``: ``"file"`` or ``"directory"``
+    - ``"children"``: list (for directories) or absent (for files)
+
+    Generates a mix of visible files, hidden files, and directories
+    (up to 2 levels deep) to exercise filtering and sorting logic.
+    """
+    items: list[dict] = []
+    seen_names: set[str] = set()
+
+    # Visible files
+    num_files = draw(st.integers(min_value=0, max_value=6))
+    for _ in range(num_files):
+        name = draw(_visible_name)
+        lower = name.lower()
+        if lower not in seen_names:
+            seen_names.add(lower)
+            items.append({"name": name, "type": "file"})
+
+    # Hidden files (should be excluded by _should_include)
+    num_hidden = draw(st.integers(min_value=0, max_value=3))
+    for _ in range(num_hidden):
+        name = draw(_hidden_name)
+        lower = name.lower()
+        if lower not in seen_names:
+            seen_names.add(lower)
+            items.append({"name": name, "type": "file"})
+
+    # Optionally add .project.json (should be included despite being hidden)
+    if draw(st.booleans()) and ".project.json" not in seen_names:
+        seen_names.add(".project.json")
+        items.append({"name": ".project.json", "type": "file"})
+
+    # Directories with optional children
+    num_dirs = draw(st.integers(min_value=0, max_value=4))
+    for _ in range(num_dirs):
+        name = draw(_visible_name)
+        lower = name.lower()
+        if lower not in seen_names:
+            seen_names.add(lower)
+            child_items: list[dict] = []
+            child_seen: set[str] = set()
+            num_children = draw(st.integers(min_value=0, max_value=4))
+            for _ in range(num_children):
+                child_name = draw(_visible_name)
+                child_lower = child_name.lower()
+                if child_lower not in child_seen:
+                    child_seen.add(child_lower)
+                    child_type = draw(st.sampled_from(["file", "directory"]))
+                    child_items.append({"name": child_name, "type": child_type})
+            items.append({"name": name, "type": "directory", "children": child_items})
+
+    # Hidden directories (should be excluded)
+    num_hidden_dirs = draw(st.integers(min_value=0, max_value=2))
+    for _ in range(num_hidden_dirs):
+        name = draw(_hidden_name)
+        lower = name.lower()
+        if lower not in seen_names:
+            seen_names.add(lower)
+            items.append({"name": name, "type": "directory", "children": []})
+
+    return items
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def materialize_tree(root: Path, tree: list[dict]) -> None:
+    """Create actual files and directories on disk from a tree description."""
+    for item in tree:
+        item_path = root / item["name"]
+        if item["type"] == "directory":
+            item_path.mkdir(parents=True, exist_ok=True)
+            children = item.get("children", [])
+            for child in children:
+                child_path = item_path / child["name"]
+                if child["type"] == "directory":
+                    child_path.mkdir(parents=True, exist_ok=True)
+                else:
+                    child_path.write_text(f"content of {child['name']}")
+        else:
+            item_path.write_text(f"content of {item['name']}")
+
+
+def collect_all_nodes(tree: list[dict]) -> list[dict]:
+    """Flatten a nested tree response into a list of all nodes."""
+    result: list[dict] = []
+    for node in tree:
+        result.append(node)
+        if node.get("children"):
+            result.extend(collect_all_nodes(node["children"]))
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Property Tests
+# ---------------------------------------------------------------------------
+
+
+class TestTreeEndpointStructure:
+    """Property: Tree endpoint returns valid nested JSON with correct
+    system-managed annotations.
+
+    **Feature: swarmws-explorer-ux**
+
+    **Validates: Requirements 10.1, 15.1**
+    """
+
+    @given(tree=_filesystem_tree())
+    @PROPERTY_SETTINGS
+    def test_every_node_has_required_fields(
+        self,
+        tmp_path: Path,
+        tree: list[dict],
+    ):
+        """Every node in the response has name, path, type, is_system_managed,
+        and children fields.
+
+        **Validates: Requirements 10.1, 15.1**
+        """
+        workspace = tmp_path / str(uuid4())
+        workspace.mkdir()
+        materialize_tree(workspace, tree)
+
+        result = _build_tree(workspace, workspace, depth=3)
+        all_nodes = collect_all_nodes(result)
+
+        for node in all_nodes:
+            assert "name" in node, f"Node missing 'name': {node}"
+            assert "path" in node, f"Node missing 'path': {node}"
+            assert "type" in node, f"Node missing 'type': {node}"
+            assert "is_system_managed" in node, f"Node missing 'is_system_managed': {node}"
+            assert "children" in node, f"Node missing 'children': {node}"
+            assert node["type"] in ("file", "directory"), (
+                f"Invalid type '{node['type']}' for node {node['name']}"
+            )
+
+    @given(tree=_filesystem_tree())
+    @PROPERTY_SETTINGS
+    def test_directories_have_children_list_files_have_none(
+        self,
+        tmp_path: Path,
+        tree: list[dict],
+    ):
+        """Directories have a children list (possibly empty); files have
+        children = None.
+
+        **Validates: Requirements 10.1, 15.1**
+        """
+        workspace = tmp_path / str(uuid4())
+        workspace.mkdir()
+        materialize_tree(workspace, tree)
+
+        result = _build_tree(workspace, workspace, depth=3)
+        all_nodes = collect_all_nodes(result)
+
+        for node in all_nodes:
+            if node["type"] == "directory":
+                assert isinstance(node["children"], list), (
+                    f"Directory '{node['name']}' should have children list, "
+                    f"got {type(node['children'])}"
+                )
+            else:
+                assert node["children"] is None, (
+                    f"File '{node['name']}' should have children=None, "
+                    f"got {node['children']}"
+                )
+
+    @given(tree=_filesystem_tree())
+    @PROPERTY_SETTINGS
+    def test_hidden_files_excluded_except_project_json(
+        self,
+        tmp_path: Path,
+        tree: list[dict],
+    ):
+        """Hidden files/dirs (starting with '.') are excluded from the tree,
+        except .project.json which is included.
+
+        **Validates: Requirements 10.1**
+        """
+        workspace = tmp_path / str(uuid4())
+        workspace.mkdir()
+        materialize_tree(workspace, tree)
+
+        result = _build_tree(workspace, workspace, depth=3)
+        all_nodes = collect_all_nodes(result)
+
+        for node in all_nodes:
+            name = node["name"]
+            if name.startswith("."):
+                assert name == ".project.json", (
+                    f"Hidden entry '{name}' should be excluded "
+                    f"(only .project.json is allowed)"
+                )
+
+    @given(tree=_filesystem_tree())
+    @PROPERTY_SETTINGS
+    def test_sorting_directories_first_then_files_alphabetically(
+        self,
+        tmp_path: Path,
+        tree: list[dict],
+    ):
+        """Nodes are sorted: directories first (alphabetically), then files
+        (alphabetically).
+
+        **Validates: Requirements 10.1**
+        """
+        workspace = tmp_path / str(uuid4())
+        workspace.mkdir()
+        materialize_tree(workspace, tree)
+
+        result = _build_tree(workspace, workspace, depth=3)
+        self._assert_sorted(result)
+
+    def _assert_sorted(self, nodes: list[dict]) -> None:
+        """Recursively verify sorting: dirs first, then files, both alpha."""
+        dirs = [n for n in nodes if n["type"] == "directory"]
+        files = [n for n in nodes if n["type"] == "file"]
+
+        # All directories should come before all files
+        dir_indices = [i for i, n in enumerate(nodes) if n["type"] == "directory"]
+        file_indices = [i for i, n in enumerate(nodes) if n["type"] == "file"]
+        if dir_indices and file_indices:
+            assert max(dir_indices) < min(file_indices), (
+                "Directories must come before files. Got order: "
+                + ", ".join(f"{n['name']}({n['type']})" for n in nodes)
+            )
+
+        # Directories sorted alphabetically (case-insensitive)
+        dir_names = [d["name"].lower() for d in dirs]
+        assert dir_names == sorted(dir_names), (
+            f"Directories not sorted alphabetically: {[d['name'] for d in dirs]}"
+        )
+
+        # Files sorted alphabetically (case-insensitive)
+        file_names = [f["name"].lower() for f in files]
+        assert file_names == sorted(file_names), (
+            f"Files not sorted alphabetically: {[f['name'] for f in files]}"
+        )
+
+        # Recurse into directory children
+        for d in dirs:
+            if d.get("children"):
+                self._assert_sorted(d["children"])
+
+    @given(tree=_filesystem_tree())
+    @PROPERTY_SETTINGS
+    def test_is_system_managed_matches_workspace_manager(
+        self,
+        tmp_path: Path,
+        tree: list[dict],
+    ):
+        """The is_system_managed flag on each node matches what
+        SwarmWorkspaceManager.is_system_managed() returns for that path.
+
+        **Validates: Requirements 10.1**
+        """
+        workspace = tmp_path / str(uuid4())
+        workspace.mkdir()
+        materialize_tree(workspace, tree)
+
+        manager = SwarmWorkspaceManager()
+        result = _build_tree(workspace, workspace, depth=3)
+        all_nodes = collect_all_nodes(result)
+
+        for node in all_nodes:
+            expected = manager.is_system_managed(node["path"])
+            assert node["is_system_managed"] == expected, (
+                f"Node '{node['path']}' has is_system_managed={node['is_system_managed']}, "
+                f"expected {expected}"
+            )
+
+    @given(tree=_filesystem_tree())
+    @PROPERTY_SETTINGS
+    def test_paths_are_relative_to_workspace_root(
+        self,
+        tmp_path: Path,
+        tree: list[dict],
+    ):
+        """All node paths are relative (no leading slash, no absolute path)
+        and use forward slashes.
+
+        **Validates: Requirements 10.1, 15.1**
+        """
+        workspace = tmp_path / str(uuid4())
+        workspace.mkdir()
+        materialize_tree(workspace, tree)
+
+        result = _build_tree(workspace, workspace, depth=3)
+        all_nodes = collect_all_nodes(result)
+
+        for node in all_nodes:
+            path = node["path"]
+            assert not path.startswith("/"), (
+                f"Path '{path}' should be relative, not absolute"
+            )
+            assert "\\" not in path, (
+                f"Path '{path}' should use forward slashes"
+            )
+            # The name should be the last segment of the path
+            assert node["name"] == path.split("/")[-1], (
+                f"Node name '{node['name']}' doesn't match last segment "
+                f"of path '{path}'"
+            )
+
+    @given(tree=_filesystem_tree())
+    @PROPERTY_SETTINGS
+    def test_depth_limiting_respected(
+        self,
+        tmp_path: Path,
+        tree: list[dict],
+    ):
+        """When depth=1, only top-level entries are returned with no children
+        expanded (children is None for directories at the boundary).
+
+        **Validates: Requirements 15.1**
+        """
+        workspace = tmp_path / str(uuid4())
+        workspace.mkdir()
+        materialize_tree(workspace, tree)
+
+        result = _build_tree(workspace, workspace, depth=1)
+
+        for node in result:
+            if node["type"] == "directory":
+                # At depth=1, directories should have children=None
+                # because depth-1 = 0 means no further expansion
+                assert node["children"] is None, (
+                    f"Directory '{node['name']}' at depth=1 should have "
+                    f"children=None (depth limit reached)"
+                )

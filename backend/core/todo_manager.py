@@ -5,7 +5,11 @@ which represent incoming work signals in the Daily Work Operating Loop.
 In the UI, these are displayed as "Signals" but the technical entity
 name is "ToDo".
 
-Requirements: 4.1-4.9, 6.1-6.8
+Increments the context snapshot cache ``todo_version`` counter whenever
+todos are created, updated, or deleted so that the context assembly
+cache is properly invalidated (Requirement 34.2).
+
+Requirements: 4.1-4.9, 6.1-6.8, 34.2
 """
 import logging
 from datetime import datetime, timezone
@@ -13,6 +17,7 @@ from typing import Optional
 from uuid import uuid4
 
 from database import db
+from core.context_snapshot_cache import context_cache
 from schemas.todo import (
     ToDoCreate,
     ToDoUpdate,
@@ -114,6 +119,9 @@ class ToDoManager:
 
         result = await db.todos.put(todo_dict)
         logger.info(f"Created ToDo {todo_id} in workspace {workspace_id}")
+
+        # Increment todo_version for context cache invalidation (Req 34.2)
+        context_cache.increment_todo_version()
 
         return self._dict_to_response(result)
 
@@ -222,6 +230,9 @@ class ToDoManager:
         if not result:
             return None
 
+        # Increment todo_version for context cache invalidation (Req 34.2)
+        context_cache.increment_todo_version()
+
         logger.info(f"Updated ToDo {todo_id}")
         return self._dict_to_response(result)
 
@@ -242,6 +253,10 @@ class ToDoManager:
 
         await db.todos.update(todo_id, {"status": ToDoStatus.DELETED.value})
         logger.info(f"Soft-deleted ToDo {todo_id}")
+
+        # Increment todo_version for context cache invalidation (Req 34.2)
+        context_cache.increment_todo_version()
+
         return True
 
     async def convert_to_task(

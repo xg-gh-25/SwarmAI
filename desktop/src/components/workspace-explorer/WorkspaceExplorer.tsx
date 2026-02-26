@@ -1,159 +1,73 @@
 /**
- * WorkspaceExplorer component — middle column of the three-column layout.
+ * WorkspaceExplorer — middle column of the three-column layout.
  *
- * Refactored for the single-workspace (SwarmWS) model. All multi-workspace
- * listing, archive/unarchive/delete logic, workspace dropdown, and showArchived
- * toggle have been removed. The explorer always shows the singleton SwarmWS.
+ * Redesigned for the single-workspace (SwarmWS) semantic explorer model.
+ * Replaces the old multi-workspace file browser with a semantically-zoned,
+ * virtualized tree view powered by ``ExplorerContext`` state management.
  *
- * Uses section-based navigation following the Daily Work Operating Loop:
- * Signals → Plan → Execute → Communicate → Artifacts → Reflection
+ * Key exports:
+ * - ``WorkspaceExplorer``       — The main explorer component (default export)
+ * - ``WorkspaceExplorerProps``  — Props interface
  *
- * Requirements: 1.6, 3.1, 9.1, 27.2
+ * Component structure:
+ * - ``ExplorerHeader``   — Static "SwarmWS" title, focus mode toggle, refresh, collapse
+ * - ``AutoSizer``        — Dynamic sizing wrapper from react-virtualized-auto-sizer
+ * - ``VirtualizedTree``  — react-window based virtualized tree rendering
+ * - ``ResizeHandle``     — Drag-to-resize right edge
+ *
+ * Removed elements (from old explorer):
+ * - WorkspaceHeader, SectionNavigation, FileTree, FileTreeNode
+ * - OverviewContextCard, WorkspaceFooter, ArtifactsFileTree, RecommendedGroup
+ * - Multi-workspace listing, archive/unarchive/delete logic
+ * - showArchived toggle, workspace dropdown, @tanstack/react-query usage
+ *
+ * Data fetching is handled by ``ExplorerProvider`` (wraps this component in
+ * ThreeColumnLayout). This component reads tree state from ``useTreeData()``
+ * and renders accordingly.
+ *
+ * Requirements: 9.1, 9.3, 9.4, 9.5, 9.6, 9.7, 10.1, 10.4, 11.1, 15.1
  */
 
-import { useState, useCallback } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { useLayout } from '../../contexts/LayoutContext';
-import { sectionsService } from '../../services/sections';
-import { workspaceConfigService } from '../../services/workspaceConfig';
-import WorkspaceHeader from './WorkspaceHeader';
-import OverviewContextCard, {
-  type ContextData,
-  parseContextMd,
-  serializeContextMd,
-} from './OverviewContextCard';
-import SectionNavigation from './SectionNavigation';
-import WorkspaceFooter from './WorkspaceFooter';
-import ArtifactsFileTree from './ArtifactsFileTree';
+import { useCallback } from 'react';
+import { AutoSizer } from 'react-virtualized-auto-sizer';
+import { useLayout, LAYOUT_CONSTANTS } from '../../contexts/LayoutContext';
+import { useTreeData } from '../../contexts/ExplorerContext';
+import ExplorerHeader from './ExplorerHeader';
+import VirtualizedTree from './VirtualizedTree';
 import ResizeHandle from './ResizeHandle';
 import type { FileTreeItem } from './FileTreeNode';
-import RecommendedGroup from './RecommendedGroup';
-import type { WorkspaceSection, SectionCounts } from '../../types/section';
 
 export interface WorkspaceExplorerProps {
-  collapsed?: boolean;
-  width?: number;
-  onCollapsedChange?: (collapsed: boolean) => void;
-  onWidthChange?: (width: number) => void;
-  onSectionClick?: (section: WorkspaceSection) => void;
-  onSubCategoryClick?: (section: WorkspaceSection, subCategory: string) => void;
-  onSearch?: (query: string) => void;
-  onFileDoubleClick?: (file: FileTreeItem) => void;
+  /** Callback when a file node is double-clicked (e.g., to open in editor). */
+  onFileDoubleClick?: (node: FileTreeItem) => void;
 }
 
-const EMPTY_COUNTS: SectionCounts = {
-  signals: { total: 0, pending: 0, overdue: 0, inDiscussion: 0 },
-  plan: { total: 0, today: 0, upcoming: 0, blocked: 0 },
-  execute: { total: 0, draft: 0, wip: 0, blocked: 0, completed: 0 },
-  communicate: { total: 0, pendingReply: 0, aiDraft: 0, followUp: 0 },
-  artifacts: { total: 0, plan: 0, report: 0, doc: 0, decision: 0 },
-  reflection: { total: 0, dailyRecap: 0, weeklySummary: 0, lessonsLearned: 0 },
-};
-
-/** Hardcoded singleton workspace ID used until the new workspace service is wired (task 13.2). */
-const SWARMWS_ID = 'swarmws';
-
-export default function WorkspaceExplorer({
-  collapsed: controlledCollapsed,
-  width: controlledWidth,
-  onCollapsedChange,
-  onWidthChange,
-  onSectionClick,
-  onSubCategoryClick,
-  onSearch,
-  onFileDoubleClick: _onFileDoubleClick,
-}: WorkspaceExplorerProps) {
+// TODO: _onFileDoubleClick is accepted but not yet wired through VirtualizedTree/TreeNodeRow.
+// It will be connected in a future cadence when file editing is integrated with the new explorer.
+export default function WorkspaceExplorer({ onFileDoubleClick: _onFileDoubleClick }: WorkspaceExplorerProps) {
   const {
     workspaceExplorerCollapsed,
     workspaceExplorerWidth,
     setWorkspaceExplorerWidth,
     setWorkspaceExplorerCollapsed,
     isNarrowViewport,
-    openModal,
-    setWorkspaceSettingsId,
   } = useLayout();
 
-  const isCollapsed = controlledCollapsed ?? workspaceExplorerCollapsed;
-  const explorerWidth = controlledWidth ?? workspaceExplorerWidth;
+  const { treeData, isLoading, error, refreshTree } = useTreeData();
 
-  const [activeSection, setActiveSection] = useState<WorkspaceSection | null>(null);
-  const [isEditingContext, setIsEditingContext] = useState(false);
-
-  // Fetch section counts for the singleton workspace
-  const { data: sectionCounts = EMPTY_COUNTS } = useQuery<SectionCounts>({
-    queryKey: ['sectionCounts', SWARMWS_ID],
-    queryFn: () => sectionsService.getCounts(SWARMWS_ID),
-  });
-
-  // Fetch workspace context
-  const { data: contextContent = '' } = useQuery<string>({
-    queryKey: ['workspaceContext', SWARMWS_ID],
-    queryFn: () => workspaceConfigService.getContext(SWARMWS_ID),
-  });
-
-  const contextData: ContextData = contextContent
-    ? parseContextMd(contextContent)
-    : {};
-
-  // Handlers
   const handleWidthChange = useCallback(
     (newWidth: number) => {
-      if (onWidthChange) {
-        onWidthChange(newWidth);
-      } else {
-        setWorkspaceExplorerWidth(newWidth);
-      }
+      setWorkspaceExplorerWidth(newWidth);
     },
-    [onWidthChange, setWorkspaceExplorerWidth]
+    [setWorkspaceExplorerWidth],
   );
 
   const handleCollapseToggle = useCallback(() => {
-    const newCollapsed = !isCollapsed;
-    if (onCollapsedChange) {
-      onCollapsedChange(newCollapsed);
-    } else {
-      setWorkspaceExplorerCollapsed(newCollapsed);
-    }
-  }, [isCollapsed, onCollapsedChange, setWorkspaceExplorerCollapsed]);
+    setWorkspaceExplorerCollapsed(!workspaceExplorerCollapsed);
+  }, [workspaceExplorerCollapsed, setWorkspaceExplorerCollapsed]);
 
-  const handleSectionClick = useCallback(
-    (section: WorkspaceSection) => {
-      setActiveSection(section);
-      onSectionClick?.(section);
-    },
-    [onSectionClick]
-  );
-
-  const handleContextSave = useCallback(
-    async (data: ContextData) => {
-      try {
-        const md = serializeContextMd(data);
-        await workspaceConfigService.updateContext(SWARMWS_ID, md);
-      } catch (err) {
-        console.error('Failed to save context:', err);
-      }
-    },
-    []
-  );
-
-  const handleSettings = useCallback(() => {
-    setWorkspaceSettingsId(SWARMWS_ID);
-    openModal('workspace-settings');
-  }, [openModal, setWorkspaceSettingsId]);
-
-  // Render extra content for artifacts section (file tree)
-  const renderSectionExtra = useCallback(
-    (section: WorkspaceSection) => {
-      if (section === 'artifacts') {
-        return <ArtifactsFileTree />;
-      }
-      return null;
-    },
-    []
-  );
-
-  // Collapsed state
-  if (isCollapsed) {
+  // Collapsed state — 24px wide expand button
+  if (workspaceExplorerCollapsed) {
     return (
       <div
         className="flex-shrink-0 bg-[var(--color-bg)] border-r border-[var(--color-border)] transition-all duration-200 ease-in-out"
@@ -183,55 +97,64 @@ export default function WorkspaceExplorer({
   return (
     <div
       className="relative flex-shrink-0 bg-[var(--color-bg)] border-r border-[var(--color-border)] flex flex-col transition-all duration-200 ease-in-out"
-      style={{ width: explorerWidth, minWidth: 200, maxWidth: 500 }}
+      style={{
+        width: workspaceExplorerWidth,
+        minWidth: LAYOUT_CONSTANTS.MIN_WORKSPACE_EXPLORER_WIDTH,
+        maxWidth: LAYOUT_CONSTANTS.MAX_WORKSPACE_EXPLORER_WIDTH,
+      }}
       data-testid="workspace-explorer"
     >
-      <ResizeHandle currentWidth={explorerWidth} onWidthChange={handleWidthChange} />
+      <ResizeHandle currentWidth={workspaceExplorerWidth} onWidthChange={handleWidthChange} />
 
-      {/* Header: simplified for singleton workspace */}
-      <WorkspaceHeader
-        workspaces={[]}
-        selectedWorkspaceId={SWARMWS_ID}
-        viewScope="scoped"
-        isLoading={false}
-        showArchived={false}
-        onWorkspaceChange={() => {}}
-        onViewScopeChange={() => {}}
-        onShowArchivedChange={() => {}}
-        onSearch={onSearch}
-        onCollapseToggle={handleCollapseToggle}
-      />
+      <ExplorerHeader onCollapseToggle={handleCollapseToggle} />
 
-      {/* Overview Context Card */}
-      <OverviewContextCard
-        contextData={contextData}
-        isEditing={isEditingContext}
-        onEditToggle={() => setIsEditingContext(!isEditingContext)}
-        onSave={handleContextSave}
-      />
+      {/* Tree content area — fills remaining vertical space */}
+      <div className="flex-1 overflow-hidden">
+        {isLoading && (
+          <div
+            className="flex items-center justify-center h-full text-sm text-[var(--color-text-muted)]"
+            data-testid="explorer-loading"
+          >
+            Loading...
+          </div>
+        )}
 
-      {/* Recommended group */}
-      <RecommendedGroup
-        counts={sectionCounts}
-        onItemClick={(section) => handleSectionClick(section as WorkspaceSection)}
-      />
+        {!isLoading && error && (
+          <div
+            className="flex flex-col items-center justify-center h-full gap-2 px-4 text-center"
+            data-testid="explorer-error"
+          >
+            <span className="text-sm text-[var(--color-text-muted)]">
+              Failed to load workspace tree.
+            </span>
+            <button
+              onClick={refreshTree}
+              className="text-sm text-[var(--color-primary)] hover:underline"
+              data-testid="retry-button"
+            >
+              Retry
+            </button>
+          </div>
+        )}
 
-      {/* Section Navigation */}
-      <SectionNavigation
-        counts={sectionCounts}
-        activeSection={activeSection}
-        effectiveWorkspaceId={SWARMWS_ID}
-        onSectionClick={handleSectionClick}
-        onSubCategoryClick={onSubCategoryClick}
-        renderSectionExtra={renderSectionExtra}
-      />
+        {!isLoading && !error && treeData.length === 0 && (
+          <div
+            className="flex items-center justify-center h-full px-4 text-center text-sm text-[var(--color-text-muted)]"
+            data-testid="explorer-empty"
+          >
+            SwarmWS is empty. Initialize your workspace to get started.
+          </div>
+        )}
 
-      {/* Footer: simplified — no archive/delete/new workspace */}
-      <WorkspaceFooter
-        isDefaultWorkspace={true}
-        isArchived={false}
-        onSettings={handleSettings}
-      />
+        {!isLoading && !error && treeData.length > 0 && (
+          <AutoSizer
+            renderProp={({ height, width }) => {
+              if (height === undefined || width === undefined) return null;
+              return <VirtualizedTree height={height} width={width} />;
+            }}
+          />
+        )}
+      </div>
     </div>
   );
 }

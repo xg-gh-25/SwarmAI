@@ -1,4 +1,9 @@
-"""Background task manager for persistent agent execution."""
+"""Background task manager for persistent agent execution.
+
+Increments the context snapshot cache ``task_version`` counter whenever
+tasks are created, updated (status change), or deleted so that the
+context assembly cache is properly invalidated (Requirement 34.2).
+"""
 import asyncio
 import logging
 from contextlib import aclosing
@@ -8,6 +13,7 @@ from uuid import uuid4
 
 from database import db
 from .agent_manager import agent_manager
+from .context_snapshot_cache import context_cache
 
 logger = logging.getLogger(__name__)
 
@@ -183,6 +189,9 @@ class TaskManager:
         )
         self._running_tasks[task_id] = asyncio_task
 
+        # Increment task_version for context cache invalidation (Req 34.2)
+        context_cache.increment_task_version()
+
         logger.info(f"Created task {task_id} for agent {agent_id}")
         return task
 
@@ -195,13 +204,18 @@ class TaskManager:
         enable_skills: bool,
         enable_mcp: bool,
     ) -> None:
-        """Background task execution."""
+        """Background task execution.
+
+        Increments task_version on every status transition for context
+        cache invalidation (Requirement 34.2).
+        """
         try:
             # Update status to wip (was "running")
             await db.tasks.update(task_id, {
                 "status": "wip",
                 "started_at": datetime.now(timezone.utc).isoformat(),
             })
+            context_cache.increment_task_version()
             await self._emit_event(task_id, {"type": "status", "status": "wip"})
 
             # Run agent conversation
@@ -233,6 +247,7 @@ class TaskManager:
                             "completed_at": datetime.now(timezone.utc).isoformat(),
                             "error": error_msg,
                         })
+                        context_cache.increment_task_version()
                         return
 
                     # Check for completion
@@ -241,6 +256,7 @@ class TaskManager:
                             "status": "completed",
                             "completed_at": datetime.now(timezone.utc).isoformat(),
                         })
+                        context_cache.increment_task_version()
                         return
 
                     # Check for ask_user_question - task pauses, waiting for message
@@ -255,6 +271,7 @@ class TaskManager:
                 "status": "cancelled",
                 "completed_at": datetime.now(timezone.utc).isoformat(),
             })
+            context_cache.increment_task_version()
             await self._emit_event(task_id, {"type": "status", "status": "cancelled"})
         except Exception as e:
             logger.error(f"Task {task_id} failed: {e}")
@@ -265,6 +282,7 @@ class TaskManager:
                 "completed_at": datetime.now(timezone.utc).isoformat(),
                 "error": error_msg,
             })
+            context_cache.increment_task_version()
             await self._emit_event(task_id, {"type": "error", "error": error_msg})
         finally:
             # Cleanup running task reference
@@ -482,7 +500,12 @@ class TaskManager:
         return tasks
 
     async def delete_task(self, task_id: str) -> bool:
-        """Delete a task (cancels if running)."""
+        """Delete a task (cancels if running).
+
+        Increments task_version for context cache invalidation.
+
+        Validates: Requirements 34.2
+        """
         # Cancel if running
         if task_id in self._running_tasks:
             await self.cancel_task(task_id)
@@ -492,7 +515,13 @@ class TaskManager:
         self._subscribers.pop(task_id, None)
         self._message_queues.pop(task_id, None)
 
-        return await db.tasks.delete(task_id)
+        result = await db.tasks.delete(task_id)
+
+        if result:
+            # Increment task_version for context cache invalidation (Req 34.2)
+            context_cache.increment_task_version()
+
+        return result
 
     async def get_running_count(self) -> int:
         """Get count of running (wip) tasks."""

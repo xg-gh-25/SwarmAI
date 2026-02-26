@@ -1,9 +1,11 @@
 /**
  * Workspace service for agent file operations, singleton workspace config,
- * project CRUD, and folder management.
+ * project CRUD, folder management, and workspace tree browsing.
  *
  * Key exports:
- * - ``workspaceService``        — Agent-scoped file browsing, reading, writing, uploading
+ * - ``workspaceService``        — Agent-scoped file browsing, reading, writing, uploading;
+ *                                  also ``getTree()`` and ``refreshTree()`` for the workspace
+ *                                  explorer tree (GET /api/workspace/tree) with ETag caching
  * - ``workspaceConfigService``  — Singleton SwarmWS config (GET/PUT /api/workspace)
  * - ``projectService``          — Project CRUD (GET/POST/PUT/DELETE /api/projects)
  * - ``folderService``           — Folder create, delete, rename (/api/workspace/folders, /api/workspace/rename)
@@ -14,6 +16,7 @@
  * - ``projectToCamelCase``        — snake_case project response → camelCase
  * - ``projectUpdateToSnakeCase``  — camelCase project update → snake_case
  * - ``historyEntryToCamelCase``   — snake_case history entry → camelCase
+ * - ``treeNodeToCamelCase``       — snake_case tree node → camelCase (recursive)
  */
 import api from './api';
 import type {
@@ -26,6 +29,7 @@ import type {
   ProjectCreateRequest,
   ProjectUpdateRequest,
   ProjectHistoryEntry,
+  TreeNode,
 } from '../types';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -135,10 +139,100 @@ export const historyEntryToCamelCase = (data: Record<string, unknown>): ProjectH
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Workspace tree converters and ETag cache (Cadence 3)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Module-level ETag cache for the workspace tree endpoint.
+ *
+ * Stores the last ETag received from `GET /api/workspace/tree` and the
+ * corresponding tree data. On subsequent `getTree()` calls the cached ETag
+ * is sent via `If-None-Match`; if the server returns 304 the cached data
+ * is returned without re-parsing. `refreshTree()` bypasses the cache to
+ * force a fresh response after CRUD mutations.
+ */
+let _treeETag: string | null = null;
+let _cachedTree: TreeNode[] | null = null;
+
+/** Convert a snake_case tree node from the backend to a camelCase TreeNode (recursive).
+ *
+ * The backend returns `is_system_managed` while the frontend uses `isSystemManaged`.
+ * Children are recursively converted so the entire tree is camelCase on the frontend.
+ *
+ * Note: For trees with 1000+ nodes, consider deferring conversion to
+ * render time or using a streaming approach. The current eager conversion
+ * is acceptable for trees bounded by depth guardrails (max ~500 nodes).
+ */
+export function treeNodeToCamelCase(data: Record<string, unknown>): TreeNode {
+  return {
+    name: data.name as string,
+    path: data.path as string,
+    type: data.type as 'file' | 'directory',
+    isSystemManaged: data.is_system_managed as boolean,
+    children: data.children
+      ? (data.children as Record<string, unknown>[]).map(treeNodeToCamelCase)
+      : undefined,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Agent-scoped file operations (existing)
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const workspaceService = {
+  /** Fetch the workspace filesystem tree.
+   *
+   * Sends `If-None-Match` with the cached ETag when available. If the
+   * server responds with 304 Not Modified, the previously cached tree is
+   * returned immediately. Otherwise the fresh response is cached and
+   * converted from snake_case to camelCase via `treeNodeToCamelCase`.
+   *
+   * @param depth - Maximum folder depth (1–5). Omit for server default.
+   */
+  async getTree(depth?: number): Promise<TreeNode[]> {
+    const params = depth != null ? `?depth=${depth}` : '';
+    const headers: Record<string, string> = {};
+    if (_treeETag) {
+      headers['If-None-Match'] = _treeETag;
+    }
+
+    try {
+      const response = await api.get<Record<string, unknown>[]>(
+        `/workspace/tree${params}`,
+        { headers }
+      );
+
+      // Cache the ETag from the response
+      const etag = response.headers?.['etag'] as string | undefined;
+      if (etag) {
+        _treeETag = etag;
+      }
+
+      const tree = response.data.map(treeNodeToCamelCase);
+      _cachedTree = tree;
+      return tree;
+    } catch (error: unknown) {
+      // Axios wraps 304 as an error in some configurations; also handle
+      // the case where the interceptor converts it to an ApiError.
+      const axiosErr = error as { statusCode?: number; response?: { status?: number } };
+      const status = axiosErr.statusCode ?? axiosErr.response?.status;
+      if (status === 304 && _cachedTree) {
+        return _cachedTree;
+      }
+      throw error;
+    }
+  },
+
+  /** Force-fetch the workspace tree, bypassing the ETag cache.
+   *
+   * Call this after CRUD mutations (create/delete project, create/delete
+   * file, rename, etc.) to ensure the explorer reflects the latest state.
+   */
+  async refreshTree(depth?: number): Promise<TreeNode[]> {
+    _treeETag = null;
+    _cachedTree = null;
+    return this.getTree(depth);
+  },
+
   /**
    * Browse server filesystem for folder selection (web browser mode)
    * @param path Absolute path to browse (default: home directory)

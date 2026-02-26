@@ -1,0 +1,15 @@
+{
+  "enabled": true,
+  "name": "Code Quality Scan & Auto-Fix",
+  "description": "Post-task hook that runs in two steps: (1) scans modified code for quality issues and lists findings by severity, (2) automatically applies fixes for High and Medium severity issues, then continues to the next task.",
+  "version": "3",
+  "when": {
+    "type": "postTaskExecution"
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "IMPORTANT: Skip this entirely if the only edited files are under `.kiro/specs/`, `docs/`, or are documentation files (README.md, AGENT.md, CLAUDE.md, QUICK_START.md, GITHUB_SUBMISSION.md). Only analyze actual source code changes.\n\n## Step 1 — Code Quality Analysis\nAnalyze the edited files for code quality issues.\n\nScan for issues in these categories and list each with a severity (🔴 High, 🟡 Medium, 🟢 Low):\n1. Code Smells: Long methods, duplicate code, dead code, magic numbers, complex conditionals\n2. Design Patterns: Anti-patterns, missing appropriate patterns\n3. Best Practices: Language conventions, naming, error handling, type safety\n4. Readability: Unclear names, missing comments for complex logic, inconsistent formatting\n5. Maintainability: Tight coupling, missing abstractions, SOLID violations\n6. Performance: Inefficient algorithms, unnecessary computations, memory leaks\n\nPresent findings as a summary table or bullet list.\n\n## Step 2 — Auto-Fix High & Medium Issues\nAfter listing all findings, automatically apply fixes ONLY for 🔴 High and 🟡 Medium severity issues. Leave 🟢 Low as suggestions for the developer. Maintain existing functionality — apply refactors, not feature changes. After fixing, briefly note which items were fixed and why.\n\nOnce complete, continue to the next task."
+  },
+  "workspaceFolderName": "swarmai",
+  "shortName": "code-quality-scan-and-fix"
+}
