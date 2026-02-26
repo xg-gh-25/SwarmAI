@@ -31,15 +31,16 @@ class TestChatStream:
         assert response.status_code in [400, 422]
 
     def test_chat_stream_missing_message(self, client: TestClient):
-        """Test streaming without message returns error."""
+        """Test streaming without explicit message still succeeds (message is optional)."""
         response = client.post(
             "/api/chat/stream",
             json={
                 "agent_id": "default",
-                # missing message
+                # message is optional per ChatRequest schema
             }
         )
-        assert response.status_code in [400, 422]
+        # message field is Optional[str], so this is a valid request
+        assert response.status_code == 200
 
 
 class TestChatSessions:

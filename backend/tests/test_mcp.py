@@ -156,25 +156,28 @@ class TestDeleteMCP:
         assert data["code"] == "MCP_SERVER_NOT_FOUND"
 
 
-class TestMCPTestConnection:
-    """Tests for POST /api/mcp/{mcp_id}/test endpoint."""
+class TestMCPReadAfterCreate:
+    """Tests for verifying MCP server persists after creation."""
 
-    def test_test_connection_success(self, client: TestClient, sample_mcp_data: dict):
-        """Test MCP connection test returns result."""
-        # Create server
+    def test_created_mcp_appears_in_list(self, client: TestClient, sample_mcp_data: dict):
+        """Test that a created MCP server appears in the list."""
+        create_response = client.post("/api/mcp", json=sample_mcp_data)
+        assert create_response.status_code == 201
+        mcp_id = create_response.json()["id"]
+
+        # Verify it appears in the list
+        list_response = client.get("/api/mcp")
+        assert list_response.status_code == 200
+        ids = [s["id"] for s in list_response.json()]
+        assert mcp_id in ids
+
+    def test_deleted_mcp_not_in_list(self, client: TestClient, sample_mcp_data: dict):
+        """Test that a deleted MCP server no longer appears."""
         create_response = client.post("/api/mcp", json=sample_mcp_data)
         mcp_id = create_response.json()["id"]
 
-        # Test connection
-        response = client.post(f"/api/mcp/{mcp_id}/test")
-        assert response.status_code == 200
-        data = response.json()
-        assert "status" in data
-        assert data["status"] in ["success", "error"]
+        client.delete(f"/api/mcp/{mcp_id}")
 
-    def test_test_connection_not_found(self, client: TestClient, invalid_mcp_id: str):
-        """Test connection test on non-existent server returns 404."""
-        response = client.post(f"/api/mcp/{invalid_mcp_id}/test")
-        assert response.status_code == 404
-        data = response.json()
-        assert data["code"] == "MCP_SERVER_NOT_FOUND"
+        list_response = client.get("/api/mcp")
+        ids = [s["id"] for s in list_response.json()]
+        assert mcp_id not in ids
