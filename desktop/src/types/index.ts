@@ -315,7 +315,7 @@ export const SUPPORTED_FILE_TYPES = {
 } as const;
 
 export interface StreamEvent {
-  type: 'assistant' | 'tool_use' | 'tool_result' | 'result' | 'error' | 'ask_user_question' | 'session_start' | 'session_cleared' | 'permission_request' | 'permission_decision' | 'permission_acknowledged' | 'heartbeat';
+  type: 'assistant' | 'tool_use' | 'tool_result' | 'result' | 'error' | 'ask_user_question' | 'session_start' | 'session_cleared' | 'permission_request' | 'permission_decision' | 'permission_acknowledged' | 'heartbeat' | 'agent_activity' | 'tool_invocation' | 'capability_activated' | 'sources_updated' | 'summary_updated';
   content?: ContentBlock[];
   model?: string;
   sessionId?: string;
@@ -345,6 +345,16 @@ export interface StreamEvent {
   code?: string;
   detail?: string;
   suggestedAction?: string;
+  // TSCC telemetry fields
+  threadId?: string;
+  agentName?: string;
+  description?: string;
+  capabilityType?: string;
+  capabilityName?: string;
+  label?: string;
+  sourcePath?: string;
+  origin?: string;
+  keySummary?: string[];
 }
 
 // Human-in-the-Loop Permission Types
@@ -757,4 +767,135 @@ export interface ProjectUpdateRequest {
   status?: 'active' | 'archived' | 'completed';
   tags?: string[];
   priority?: 'low' | 'medium' | 'high' | 'critical' | null;
+}
+
+// ============== Workspace Explorer Types (Cadence 3) ==============
+
+/** A node in the workspace filesystem tree.
+ *
+ * Returned by `GET /api/workspace/tree` and used by the VirtualizedTree
+ * component to render the semantically-zoned workspace explorer.
+ *
+ * - `path` is relative to the workspace root (e.g. "Knowledge/Notes/README.md").
+ * - `isSystemManaged` controls whether delete/rename actions are suppressed.
+ * - `children` is present only for directory nodes that have been expanded
+ *   within the requested depth.
+ */
+export interface TreeNode {
+  name: string;
+  path: string;
+  type: 'file' | 'directory';
+  isSystemManaged: boolean;
+  children?: TreeNode[];
+}
+
+
+// Context Assembly Preview Types (SwarmWS Intelligence)
+
+/** A single layer in the context assembly preview. */
+export interface ContextLayer {
+  layerNumber: number;
+  name: string;
+  sourcePath: string;  // workspace-relative, never absolute
+  tokenCount: number;
+  contentPreview: string;
+  truncated: boolean;
+  truncationStage: number;
+}
+
+/** Full context assembly preview response. */
+export interface ContextPreview {
+  projectId: string;
+  threadId: string | null;
+  layers: ContextLayer[];
+  totalTokenCount: number;
+  budgetExceeded: boolean;
+  tokenBudget: number;
+  truncationSummary: string;
+  etag: string;
+}
+
+/** Thread binding request. */
+export interface ThreadBindRequest {
+  taskId?: string;
+  todoId?: string;
+  mode: 'replace' | 'add';
+}
+
+/** Thread binding response. */
+export interface ThreadBindResponse {
+  threadId: string;
+  taskId: string | null;
+  todoId: string | null;
+  contextVersion: number;
+}
+
+// ============== TSCC (Thread-Scoped Cognitive Context) Types ==============
+
+/** Thread lifecycle state tracking execution phase. */
+export type ThreadLifecycleState = 'new' | 'active' | 'paused' | 'failed' | 'cancelled' | 'idle';
+
+/** Operational scope: workspace-level or project-level. */
+export type ScopeType = 'workspace' | 'project';
+
+/** The five telemetry event types emitted via SSE. */
+export type TelemetryEventType =
+  | 'agent_activity'
+  | 'tool_invocation'
+  | 'capability_activated'
+  | 'sources_updated'
+  | 'summary_updated';
+
+/** Scope and thread metadata for the Current Context module. */
+export interface TSCCContext {
+  scopeLabel: string;
+  threadTitle: string;
+  mode?: string;
+}
+
+/** Grouped capability lists activated during thread execution. */
+export interface TSCCActiveCapabilities {
+  skills: string[];
+  mcps: string[];
+  tools: string[];
+}
+
+/** A source file or material referenced during execution. */
+export interface TSCCSource {
+  path: string;
+  origin: string;
+}
+
+/** Live cognitive state for a single thread (all five modules). */
+export interface TSCCLiveState {
+  context: TSCCContext;
+  activeAgents: string[];
+  activeCapabilities: TSCCActiveCapabilities;
+  whatAiDoing: string[];
+  activeSources: TSCCSource[];
+  keySummary: string[];
+}
+
+/** Full TSCC state for a chat thread. */
+export interface TSCCState {
+  threadId: string;
+  projectId: string | null;
+  scopeType: ScopeType;
+  lastUpdatedAt: string;
+  lifecycleState: ThreadLifecycleState;
+  liveState: TSCCLiveState;
+}
+
+/** Point-in-time capture of TSCC state, stored as JSON file. */
+export interface TSCCSnapshot {
+  snapshotId: string;
+  threadId: string;
+  timestamp: string;
+  reason: string;
+  lifecycleState: ThreadLifecycleState;
+  activeAgents: string[];
+  activeCapabilities: TSCCActiveCapabilities;
+  whatAiDoing: string[];
+  activeSources: TSCCSource[];
+  keySummary: string[];
 }

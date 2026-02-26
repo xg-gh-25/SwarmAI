@@ -1,15 +1,49 @@
-"""Workspace configuration schemas for Skills, MCPs, Knowledgebases, and singleton workspace config.
+"""Workspace configuration schemas for Skills, MCPs, Knowledgebases, workspace tree, and singleton workspace config.
 
 This module defines the Pydantic models for workspace configuration entities,
 including Skills, MCPs, Knowledgebases, audit logging, policy violations,
-and the singleton SwarmWS workspace configuration.
+the singleton SwarmWS workspace configuration, and the workspace filesystem
+tree response model.
 
-Requirements: 19.2, 19.4, 19.5, 19.6, 19.7, 19.8, 25.2
+Key public symbols:
+
+- ``TreeNodeResponse``              — Recursive model for workspace filesystem tree nodes
+- ``WorkspaceSkillConfig``          — Skill configuration within a workspace
+- ``WorkspaceMcpConfig``            — MCP server configuration within a workspace
+- ``WorkspaceKnowledgebaseConfig``  — Knowledgebase source configuration
+- ``AuditLogEntry``                 — Audit log entry for tracking changes
+- ``PolicyViolation``               — Individual policy violation for execution blocking
+- ``WorkspaceConfigResponse``       — Singleton SwarmWS workspace configuration response
+- ``WorkspaceConfigUpdate``         — Update model for singleton workspace configuration
+
+Requirements: 10.1, 15.1, 19.2, 19.4, 19.5, 19.6, 19.7, 19.8, 25.2
 """
 from datetime import datetime
 from enum import Enum
-from typing import Optional, List, Any
+from typing import Literal, Optional, List, Any
 from pydantic import BaseModel, Field
+
+
+# ============================================================================
+# Workspace Filesystem Tree
+# ============================================================================
+
+class TreeNodeResponse(BaseModel):
+    """A single node in the workspace filesystem tree.
+
+    Used by ``GET /api/workspace/tree`` to return the SwarmWS directory
+    structure as nested JSON.  Each node carries a ``is_system_managed``
+    flag so the frontend can show lock badges and suppress delete/rename
+    actions on system-owned items.
+
+    Requirements: 10.1, 15.1
+    """
+
+    name: str
+    path: str                          # relative to workspace root
+    type: Literal["file", "directory"]
+    is_system_managed: bool
+    children: Optional[list["TreeNodeResponse"]] = None
 
 
 class KnowledgebaseSourceType(str, Enum):

@@ -5,6 +5,7 @@ from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
+import asyncio
 import logging
 import shutil
 import sys
@@ -13,7 +14,7 @@ from pathlib import Path
 from config import settings, get_app_data_dir
 from core.agent_manager import agent_manager
 from utils.bundle_paths import get_resource_file
-from routers import agents_router, skills_router, mcp_router, chat_router, auth_router, workspace_router, settings_router, plugins_router, tasks_router, channels_router, system_router, todos_router, sections_router, plan_items_router, communications_router, artifacts_router, reflections_router, search_router, workspace_config_router, workspace_api_router, projects_router
+from routers import agents_router, skills_router, mcp_router, chat_router, chat_threads_router, auth_router, workspace_router, settings_router, plugins_router, tasks_router, channels_router, system_router, todos_router, sections_router, plan_items_router, communications_router, artifacts_router, reflections_router, search_router, workspace_config_router, workspace_api_router, projects_router, context_router, tscc_router
 from channels.gateway import channel_gateway
 from middleware.error_handler import setup_error_handlers
 from middleware.rate_limit import limiter
@@ -120,8 +121,12 @@ async def lifespan(app: FastAPI):
     # Validates: Requirements 3.1, 3.2, 3.4
     _ensure_database_initialized()
 
-    # Initialize database
-    await initialize_database()
+    # Initialize database (with timeout protection)
+    try:
+        await asyncio.wait_for(initialize_database(), timeout=45.0)
+    except asyncio.TimeoutError:
+        logger.error("Database initialization timed out after 45 seconds — check migrations")
+        raise RuntimeError("Database initialization timed out")
     logger.info("Database initialized")
 
     # Check initialization state and run appropriate flow
@@ -144,6 +149,17 @@ async def lifespan(app: FastAPI):
     await channel_gateway.startup()
     logger.info("Channel gateway started")
     
+    # Wire up TSCC managers for the tscc router
+    from core.agent_manager import _tscc_state_manager, set_tscc_snapshot_manager
+    from core.tscc_snapshot_manager import TSCCSnapshotManager
+    from core.swarm_workspace_manager import swarm_workspace_manager
+    from routers.tscc import register_tscc_dependencies
+
+    tscc_snapshot_mgr = TSCCSnapshotManager(swarm_workspace_manager, _tscc_state_manager)
+    register_tscc_dependencies(_tscc_state_manager, tscc_snapshot_mgr)
+    set_tscc_snapshot_manager(tscc_snapshot_mgr)
+    logger.info("TSCC managers initialized (shared state manager from agent_manager)")
+
     # Mark startup as complete - health check will now return healthy
     _startup_complete = True
     logger.info("Startup complete - ready to serve requests")
@@ -215,6 +231,7 @@ app.include_router(agents_router, prefix="/api/agents", tags=["agents"])
 app.include_router(skills_router, prefix="/api/skills", tags=["skills"])
 app.include_router(mcp_router, prefix="/api/mcp", tags=["mcp"])
 app.include_router(chat_router, prefix="/api/chat", tags=["chat"])
+app.include_router(chat_threads_router, prefix="/api", tags=["chat-threads"])
 app.include_router(workspace_router, prefix="/api/workspace", tags=["workspace"])
 app.include_router(settings_router, prefix="/api/settings", tags=["settings"])
 app.include_router(plugins_router, prefix="/api/plugins", tags=["plugins"])
@@ -231,6 +248,8 @@ app.include_router(search_router, prefix="/api/search", tags=["search"])
 app.include_router(workspace_config_router, prefix="/api/workspaces", tags=["workspace-config"])
 app.include_router(workspace_api_router, prefix="/api", tags=["workspace-api"])
 app.include_router(projects_router, prefix="/api", tags=["projects"])
+app.include_router(context_router, prefix="/api", tags=["context"])
+app.include_router(tscc_router, prefix="/api", tags=["tscc"])
 
 # Register development-only router when DEBUG=true
 if settings.debug:

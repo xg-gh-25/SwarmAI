@@ -257,10 +257,6 @@ class SeedDatabaseGenerator:
         
         Uses {app_data_dir}/SwarmWS placeholder path which is expanded
         at runtime to the platform-specific location.
-        
-        Also inserts a legacy swarm_workspaces row so the migration path
-        from seed DB works correctly (migration reads from swarm_workspaces
-        to seed workspace_config).
         """
         now = self._now
         
@@ -275,20 +271,6 @@ class SeedDatabaseGenerator:
             "updated_at": now,
         })
         logger.info("Inserted workspace_config singleton (id=swarmws)")
-        
-        # Also insert a legacy swarm_workspaces row for migration compatibility
-        import aiosqlite
-        async with aiosqlite.connect(str(self.db.db_path)) as conn:
-            await conn.execute(
-                "INSERT OR IGNORE INTO swarm_workspaces "
-                "(id, name, file_path, context, icon, is_default, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (str(uuid.uuid4()), "SwarmWS", "{app_data_dir}/SwarmWS",
-                 "Default SwarmAI workspace for general tasks and projects.",
-                 "🏠", 1, now, now),
-            )
-            await conn.commit()
-        logger.info("Inserted legacy swarm_workspaces row for migration compatibility")
     
     async def _insert_app_settings(self) -> None:
         """Insert app_settings with initialization_complete=true."""

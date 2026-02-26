@@ -238,6 +238,8 @@ class TestChatThreadWorkspaceIdCleared:
                     todo_id TEXT,
                     mode TEXT NOT NULL DEFAULT 'explore',
                     title TEXT NOT NULL,
+                    project_id TEXT DEFAULT NULL,
+                    context_version INTEGER DEFAULT 0,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 )

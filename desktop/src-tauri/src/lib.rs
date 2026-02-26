@@ -366,10 +366,49 @@ async fn start_backend(
         }
     });
 
-    // Wait a bit for the backend to start
-    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+    // Poll the /health endpoint until the backend reports "healthy"
+    let health_url = format!("http://127.0.0.1:{}/health", port);
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(3))
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
 
-    Ok(port)
+    let max_attempts = 30; // 30 attempts × 2s = 60s total timeout
+    for attempt in 1..=max_attempts {
+        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+
+        match client.get(&health_url).send().await {
+            Ok(resp) => {
+                if let Ok(body) = resp.text().await {
+                    if body.contains("\"healthy\"") {
+                        println!("[Tauri] Backend healthy after {} attempts", attempt);
+                        return Ok(port);
+                    }
+                    println!(
+                        "[Tauri] Backend not ready (attempt {}/{}): {}",
+                        attempt, max_attempts, body
+                    );
+                }
+            }
+            Err(e) => {
+                println!(
+                    "[Tauri] Health check attempt {}/{} failed: {}",
+                    attempt, max_attempts, e
+                );
+            }
+        }
+
+        // Check if backend process is still alive
+        let backend = state.lock().await;
+        if !backend.running {
+            return Err("Backend process terminated during startup".to_string());
+        }
+    }
+
+    Err(format!(
+        "Backend failed to become healthy within {} seconds",
+        max_attempts * 2
+    ))
 }
 
 // Stop the Python backend

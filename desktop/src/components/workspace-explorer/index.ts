@@ -1,7 +1,5 @@
 export { default as WorkspaceExplorer } from './WorkspaceExplorer';
-export { default as WorkspaceHeader } from './WorkspaceHeader';
 export { default as OverviewContextCard } from './OverviewContextCard';
-export { default as SectionNavigation } from './SectionNavigation';
 export { default as SectionHeader, SECTION_CONFIG } from './SectionHeader';
 export { default as SectionContent, SECTION_SUB_CATEGORIES } from './SectionContent';
 export { default as WorkspaceFooter } from './WorkspaceFooter';

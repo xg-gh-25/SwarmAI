@@ -29,7 +29,7 @@ The context preview API (`GET /api/projects/{id}/context`) exposes the assembled
 
 5. **Context snapshot caching** with version counters avoids redundant DB + FS reads. Cache keyed by `(project_id, thread_id, token_budget, context_version)`. Lightweight version counters (`thread_version`, `task_version`, `todo_version`, `project_files_version`, `memory_version`) track changes. Cached layers reused when versions unchanged.
 
-6. **`project_id` column added via schema update with safe evolution.** Cadence 1 (foundation) uses a clean-slate approach, but the schema update is applied safely via `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` for non-clean environments. This clarifies the clean-slate expectation while protecting against partial migrations.
+6. **`project_id` column added via schema update with safe evolution.** Cadence 1 (foundation) uses a clean-slate approach, but the schema update is applied safely using `PRAGMA table_info()` to check column existence before `ALTER TABLE ADD COLUMN` (SQLite does not support `IF NOT EXISTS` for columns). This clarifies the clean-slate expectation while protecting against partial migrations.
 
 7. **Stable project pathing** uses `Projects/{project_id}/...` internally instead of `Projects/{name}/...`. Display name is stored in `.project.json`. This prevents path breakage when projects are renamed.
 
@@ -670,13 +670,15 @@ The `chat_threads` table gains a `project_id` column and a `context_version` cou
 
 ```sql
 -- Updated chat_threads table (Validates: Requirement 26.5, PE Fix #10)
--- Safe evolution: works on both clean-slate and existing DBs
-ALTER TABLE chat_threads ADD COLUMN IF NOT EXISTS project_id TEXT DEFAULT NULL;
-ALTER TABLE chat_threads ADD COLUMN IF NOT EXISTS context_version INTEGER DEFAULT 0;
+-- Safe evolution: uses PRAGMA table_info() to check column existence
+-- before ALTER TABLE ADD COLUMN (SQLite lacks IF NOT EXISTS for columns).
+-- See _run_migrations() in sqlite.py for the actual implementation.
+ALTER TABLE chat_threads ADD COLUMN project_id TEXT DEFAULT NULL;
+ALTER TABLE chat_threads ADD COLUMN context_version INTEGER DEFAULT 0;
 CREATE INDEX IF NOT EXISTS idx_chat_threads_project_id ON chat_threads(project_id);
 ```
 
-**Schema Evolution Strategy (PE Fix #10):** The design expects a clean-slate DB from Cadence 1, but applies `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` defensively. This means:
+**Schema Evolution Strategy (PE Fix #10, SE1):** The design expects a clean-slate DB from Cadence 1, but applies safe column addition using `PRAGMA table_info()` to check existence before `ALTER TABLE ADD COLUMN` (SQLite does not support `IF NOT EXISTS` for columns). This means:
 - On clean installs: columns are part of the CREATE TABLE definition
 - On existing installs: ALTER TABLE adds them safely without data loss
 - No complex migration framework needed at this stage
@@ -746,6 +748,7 @@ async def get_project_context(
     thread_id: Optional[str] = Query(None),
     token_budget: int = Query(10000),
     preview_limit: int = Query(500, description="Max chars per layer preview"),
+    since_version: Optional[str] = Query(None, description="Version hash from previous response; returns 304 if unchanged"),
     if_none_match: Optional[str] = Header(None, alias="If-None-Match"),
 ) -> ContextPreviewResponse:
     """Return the assembled context for a project.
@@ -753,6 +756,8 @@ async def get_project_context(
     Supports ETag-based caching (PE Fix #6):
     - Returns ETag header based on context version hash
     - If client sends If-None-Match matching current ETag, returns 304
+    - ``since_version`` query param provides an alternative to ETag for
+      clients that cannot set custom headers (PE Fix API2)
     - Avoids redundant assembly when context hasn't changed
 
     All source_path values are workspace-relative (PE Fix #8).
@@ -1064,6 +1069,16 @@ Note: All source paths are workspace-relative. `Projects/{project_id}/` uses the
 | created_at | TEXT | No | ISO 8601 timestamp |
 | updated_at | TEXT | No | ISO 8601 timestamp |
 
+**Migration Plan: `workspace_id` → `project_id` Transition (PE Fix D1)**
+
+The `workspace_id` column is retained for backward compatibility during the transition period:
+
+1. **Current state (Cadence 4):** `project_id` is the canonical project association column. `workspace_id` is populated by legacy code paths but not used by the context assembler or thread queries.
+2. **Deprecation (Cadence 5+):** New code paths will stop writing `workspace_id`. A migration will copy any remaining `workspace_id` values to `project_id` where `project_id IS NULL`.
+3. **Removal (Cadence 6+):** The `workspace_id` column will be dropped via `ALTER TABLE` after confirming no code references remain.
+
+Until removal, both columns coexist. The context assembler and all new queries use `project_id` exclusively.
+
 ### Token Budget Enforcement — 3-Stage Progressive Truncation
 
 The token budget enforcement algorithm (PE Fix #2):
@@ -1185,12 +1200,6 @@ When a user drags a task/todo from a different project onto a thread:
 *For any* chat thread record in the database, the `project_id` field SHALL be either a valid project UUID (matching an existing `.project.json` `id`) or NULL. Threads created with a project context SHALL have a non-null `project_id`, and threads created without a project context SHALL have `project_id = NULL`.
 
 **Validates: Requirements 26.4, 26.5**
-
-### Property 7: Chat thread project filesystem storage
-
-*For any* chat thread created with a non-null `project_id`, the thread's filesystem storage SHALL be located within the project's `chats/` directory in a dedicated subdirectory (e.g., `chats/{thread_id}/`), respecting the 2-level depth guardrail.
-
-**Validates: Requirements 26.1, 26.2**
 
 ### Property 8: Context preview layer completeness and path safety
 

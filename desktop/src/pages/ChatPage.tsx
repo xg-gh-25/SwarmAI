@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams, useNavigate } from 'react-router-dom';
-import type { Message, ContentBlock, StreamEvent, PermissionRequest, Agent, AgentCreateRequest, ChatSession } from '../types';
+import type { Message, ContentBlock, StreamEvent, PermissionRequest, Agent, AgentCreateRequest, ChatSession, TSCCSnapshot } from '../types';
 import { chatService } from '../services/chat';
 import { agentsService } from '../services/agents';
 import { skillsService } from '../services/skills';
@@ -14,7 +14,11 @@ import { Spinner, ConfirmDialog, AgentFormModal, PolicyViolationToast } from '..
 import { PermissionRequestModal } from '../components/chat';
 import { FilePreviewModal } from '../components/workspace/FilePreviewModal';
 import { useFileAttachment, useTabState, useRightSidebarGroup } from '../hooks';
+import { useTSCCState } from '../hooks/useTSCCState';
 import { ChatHeader, ChatInput, ChatHistorySidebar, FileBrowserSidebar, MessageBubble, TodoRadarSidebar } from './chat/components';
+import { TSCCPanel } from './chat/components/TSCCPanel';
+import { TSCCSnapshotCard } from './chat/components/TSCCSnapshotCard';
+import { listSnapshots } from '../services/tscc';
 import { groupSessionsByTime } from './chat/utils';
 import { createWelcomeMessage, RIGHT_SIDEBAR_WIDTH_CONFIGS } from './chat/constants';
 import type { PendingQuestion } from './chat/types';
@@ -55,6 +59,9 @@ export default function ChatPage() {
 
   // File preview state
   const [previewFile, setPreviewFile] = useState<{ path: string; name: string } | null>(null);
+
+  // TSCC snapshots for inline thread history
+  const [threadSnapshots, setThreadSnapshots] = useState<TSCCSnapshot[]>([]);
 
   // Refs
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -128,6 +135,18 @@ export default function ChatPage() {
     setTabIsNew,
     removeInvalidTabs,
   } = useTabState(selectedAgentId || 'default');
+
+  // TSCC state management
+  const {
+    tsccState,
+    isExpanded: tsccExpanded,
+    isPinned: tsccPinned,
+    toggleExpand: tsccToggleExpand,
+    togglePin: tsccTogglePin,
+    applyTelemetryEvent,
+    setAutoExpand: _tsccSetAutoExpand,
+    triggerAutoExpand: tsccTriggerAutoExpand,
+  } = useTSCCState(sessionId ?? null);
 
   const agentSkills = selectedAgent?.allowAllSkills
     ? skills
@@ -332,6 +351,19 @@ export default function ChatPage() {
     }
   }, [activeTabId, openTabs, sessionId, loadSessionMessages]);
 
+  // Fetch TSCC snapshots when session changes
+  useEffect(() => {
+    if (!sessionId) {
+      setThreadSnapshots([]);
+      return;
+    }
+    let cancelled = false;
+    listSnapshots(sessionId)
+      .then((snaps) => { if (!cancelled) setThreadSnapshots(snaps); })
+      .catch(() => { if (!cancelled) setThreadSnapshots([]); });
+    return () => { cancelled = true; };
+  }, [sessionId]);
+
   // Update tab's sessionId when a new session is created
   useEffect(() => {
     if (sessionId && activeTabId) {
@@ -420,6 +452,8 @@ export default function ChatPage() {
           )
         );
         setIsStreaming(false);
+        // Auto-expand TSCC for blocking issue requiring user input (Req 16.2)
+        tsccTriggerAutoExpand('blocking_issue');
       } else if (event.type === 'permission_request') {
         setPendingPermission({
           requestId: event.requestId!,
@@ -437,9 +471,29 @@ export default function ChatPage() {
         setMessages((prev) =>
           prev.map((msg) => msg.id === assistantMessageId ? { ...msg, content: [{ type: 'text', text: `Error: ${errorMsg}` }] } : msg)
         );
+      } else if (
+        event.type === 'agent_activity' ||
+        event.type === 'tool_invocation' ||
+        event.type === 'capability_activated' ||
+        event.type === 'sources_updated' ||
+        event.type === 'summary_updated'
+      ) {
+        // Route TSCC telemetry events to the hook (silent update, no auto-expand)
+        applyTelemetryEvent(event as any);
+
+        // Auto-expand ONLY for high-signal events (Req 16.1, 16.2):
+        // - First plan creation in thread
+        // - Blocking issue requiring user input
+        // Normal streaming events never trigger auto-expand.
+        if (
+          event.type === 'summary_updated' &&
+          event.description?.toLowerCase().includes('plan')
+        ) {
+          tsccTriggerAutoExpand('first_plan');
+        }
       }
     };
-  }, [queryClient]);
+  }, [queryClient, applyTelemetryEvent, tsccTriggerAutoExpand]);
 
   const createErrorHandler = useCallback((assistantMessageId: string) => {
     return (error: Error) => {
@@ -788,17 +842,42 @@ export default function ChatPage() {
             </div>
           ) : (
             <>
-              {/* Messages */}
+              {/* Messages — interleaved with TSCC snapshot cards */}
               <div className="flex-1 overflow-y-auto p-6 space-y-6">
-                {messages.map((message) => (
-                  <MessageBubble
-                    key={message.id}
-                    message={message}
-                    onAnswerQuestion={handleAnswerQuestion}
-                    pendingToolUseId={pendingQuestion?.toolUseId}
-                    isStreaming={isStreaming}
-                  />
-                ))}
+                {(() => {
+                  // Merge messages and snapshots into a single chronological list
+                  type TimelineItem =
+                    | { kind: 'message'; data: Message }
+                    | { kind: 'snapshot'; data: TSCCSnapshot };
+
+                  const timeline: TimelineItem[] = [
+                    ...messages.map((m): TimelineItem => ({ kind: 'message', data: m })),
+                    ...threadSnapshots.map((s): TimelineItem => ({ kind: 'snapshot', data: s })),
+                  ];
+
+                  timeline.sort((a, b) => {
+                    const tsA = a.kind === 'message' ? a.data.timestamp : a.data.timestamp;
+                    const tsB = b.kind === 'message' ? b.data.timestamp : b.data.timestamp;
+                    return new Date(tsA || 0).getTime() - new Date(tsB || 0).getTime();
+                  });
+
+                  return timeline.map((item) =>
+                    item.kind === 'message' ? (
+                      <MessageBubble
+                        key={item.data.id}
+                        message={item.data}
+                        onAnswerQuestion={handleAnswerQuestion}
+                        pendingToolUseId={pendingQuestion?.toolUseId}
+                        isStreaming={isStreaming}
+                      />
+                    ) : (
+                      <TSCCSnapshotCard
+                        key={`snap-${item.data.snapshotId}`}
+                        snapshot={item.data}
+                      />
+                    ),
+                  );
+                })()}
                 {isStreaming && (
                   <div className="flex items-center gap-2 text-[var(--color-text-muted)]">
                     <Spinner size="sm" />
@@ -807,6 +886,16 @@ export default function ChatPage() {
                 )}
                 <div ref={messagesEndRef} />
               </div>
+
+              {/* TSCC Panel — between messages and input */}
+              <TSCCPanel
+                threadId={sessionId ?? null}
+                tsccState={tsccState}
+                isExpanded={tsccExpanded}
+                isPinned={tsccPinned}
+                onToggleExpand={tsccToggleExpand}
+                onTogglePin={tsccTogglePin}
+              />
 
               {/* Input Area */}
               <ChatInput

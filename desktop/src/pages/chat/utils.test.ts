@@ -310,7 +310,7 @@ describe('Chat Utilities - Property-Based Tests', () => {
     it('should handle valid ISO timestamps correctly', () => {
       fc.assert(
         fc.property(
-          fc.date({ min: new Date('2020-01-01'), max: fixedNow }),
+          fc.date({ min: new Date('2020-01-01'), max: fixedNow }).filter((d) => !isNaN(d.getTime())),
           (date) => {
             const timestamp = date.toISOString();
             const result = formatTimestamp(timestamp);

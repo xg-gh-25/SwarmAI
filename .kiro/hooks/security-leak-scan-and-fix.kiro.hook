@@ -1,0 +1,15 @@
+{
+  "enabled": true,
+  "name": "Security Leak Scan & Auto-Fix",
+  "description": "Post-task hook that runs in two steps: (1) scans generated code for security issues and lists findings by severity, (2) automatically applies fixes for Critical severity issues, then continues to the next task.",
+  "version": "3",
+  "when": {
+    "type": "postTaskExecution"
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "IMPORTANT: Skip this entirely if the only edited files are under `.kiro/specs/`, `docs/`, or are documentation files (README.md, AGENT.md, CLAUDE.md, QUICK_START.md, GITHUB_SUBMISSION.md). Only analyze actual source code changes.\n\n## Step 1 — Security Leak Scan\nReview changed files for potential security issues.\n\nScan for these issues and list each with a severity (🔴 Critical, 🟡 Warning, 🟢 Info):\n- Hardcoded API keys, tokens, or credentials in source code\n- Private keys or sensitive credentials\n- Encryption keys or certificates\n- Authentication tokens or session IDs\n- Passwords or secrets in configuration files\n- IP addresses containing sensitive data\n- Hardcoded internal URLs\n- Database connection credentials\n- Insecure defaults or missing input validation\n\nPresent findings as a summary list.\n\n## Step 2 — Auto-Fix Critical Issues\nAfter listing all findings, automatically fix ONLY 🔴 Critical severity issues (hardcoded secrets, exposed credentials, leaked keys). Replace them with environment variables, config references, or placeholder values following security best practices. Leave 🟡 Warning and 🟢 Info items as suggestions. After fixing, briefly note which critical items were fixed and why.\n\nOnce complete, continue to the next task."
+  },
+  "workspaceFolderName": "swarmai",
+  "shortName": "security-leak-scanner"
+}

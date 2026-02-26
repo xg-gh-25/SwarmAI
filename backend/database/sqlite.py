@@ -829,7 +829,13 @@ class SQLiteWorkspaceAuditLogTable(SQLiteTable[T], Generic[T]):
 
 
 class SQLiteChatThreadsTable(SQLiteTable[T], Generic[T]):
-    """Specialized SQLite table for Chat Threads with workspace filtering."""
+    """Specialized SQLite table for Chat Threads with workspace and project filtering.
+
+    Supports project-scoped thread queries, global (unassociated) thread
+    listing, mid-session thread binding, and context version tracking.
+
+    Validates: Requirements 26.1, 26.4, 26.5, 26.6, 35.1, 35.2, 35.3, 35.4
+    """
 
     async def list_by_workspace(self, workspace_id: str) -> list[T]:
         """List all chat threads for a workspace."""
@@ -841,6 +847,115 @@ class SQLiteChatThreadsTable(SQLiteTable[T], Generic[T]):
             ) as cursor:
                 rows = await cursor.fetchall()
                 return [self._row_to_dict(row) for row in rows]
+
+    async def list_by_project(self, project_id: str) -> list[T]:
+        """List all chat threads associated with a specific project.
+
+        Validates: Requirement 26.1
+        """
+        async with self._get_connection() as conn:
+            conn.row_factory = aiosqlite.Row
+            async with conn.execute(
+                f"SELECT * FROM {self.table_name} WHERE project_id = ? ORDER BY updated_at DESC",
+                (project_id,)
+            ) as cursor:
+                rows = await cursor.fetchall()
+                return [self._row_to_dict(row) for row in rows]
+
+    async def list_global(self) -> list[T]:
+        """List all chat threads not associated with any project (project_id IS NULL).
+
+        Validates: Requirement 26.4
+        """
+        async with self._get_connection() as conn:
+            conn.row_factory = aiosqlite.Row
+            async with conn.execute(
+                f"SELECT * FROM {self.table_name} WHERE project_id IS NULL ORDER BY updated_at DESC"
+            ) as cursor:
+                rows = await cursor.fetchall()
+                return [self._row_to_dict(row) for row in rows]
+
+    async def bind_thread(
+        self, thread_id: str, task_id: Optional[str], todo_id: Optional[str], mode: str
+    ) -> Optional[T]:
+        """Bind or rebind a thread to a task/todo mid-session.
+
+        Args:
+            thread_id: The thread to bind.
+            task_id: Task ID to bind (or None to leave unchanged in 'add' mode).
+            todo_id: ToDo ID to bind (or None to leave unchanged in 'add' mode).
+            mode: 'replace' overwrites existing task_id/todo_id.
+                  'add' only sets fields that are currently NULL.
+
+        Returns:
+            The updated thread dict, or None if thread not found.
+
+        Validates: Requirements 35.1, 35.2, 35.3, 35.4
+        """
+        async with self._get_connection() as conn:
+            conn.row_factory = aiosqlite.Row
+
+            # Fetch current thread state
+            async with conn.execute(
+                f"SELECT * FROM {self.table_name} WHERE id = ?", (thread_id,)
+            ) as cursor:
+                row = await cursor.fetchone()
+                if row is None:
+                    return None
+                current = dict(row)
+
+            if mode == "replace":
+                # Overwrite existing task_id/todo_id with new values
+                new_task_id = task_id
+                new_todo_id = todo_id
+            else:
+                # 'add' mode: only set fields that are currently NULL
+                new_task_id = task_id if current["task_id"] is None else current["task_id"]
+                new_todo_id = todo_id if current["todo_id"] is None else current["todo_id"]
+
+            now = datetime.now().isoformat()
+            await conn.execute(
+                f"UPDATE {self.table_name} "
+                f"SET task_id = ?, todo_id = ?, context_version = context_version + 1, updated_at = ? "
+                f"WHERE id = ?",
+                (new_task_id, new_todo_id, now, thread_id),
+            )
+            await conn.commit()
+
+        # Return the updated thread
+        return await self.get(thread_id)
+
+    async def increment_context_version(self, thread_id: str) -> int:
+        """Increment and return the new context_version for a thread.
+
+        Uses atomic SQL ``context_version + 1`` to avoid race conditions.
+
+        Returns:
+            The new context_version value, or -1 if thread not found.
+
+        Validates: Requirement 26.6
+        """
+        async with self._get_connection() as conn:
+            conn.row_factory = aiosqlite.Row
+            now = datetime.now().isoformat()
+            cursor = await conn.execute(
+                f"UPDATE {self.table_name} "
+                f"SET context_version = context_version + 1, updated_at = ? "
+                f"WHERE id = ?",
+                (now, thread_id),
+            )
+            await conn.commit()
+
+            if cursor.rowcount == 0:
+                return -1
+
+            # Read back the new value
+            async with conn.execute(
+                f"SELECT context_version FROM {self.table_name} WHERE id = ?",
+                (thread_id,),
+            ) as cur:
+                row = await cur.fetchone()
+                return row[0] if row else -1
 
     async def list_by_task(self, task_id: str) -> list[T]:
         """List all chat threads for a task."""
@@ -1497,7 +1612,7 @@ class SQLiteDatabase(BaseDatabase):
     CREATE INDEX IF NOT EXISTS idx_audit_log_changed_at ON workspace_audit_log(changed_at);
 
     -- Chat Threads table (Workspace-bound conversations)
-    -- Validates: Requirements 30.1, 30.3, 30.9
+    -- Validates: Requirements 30.1, 30.3, 30.9, 26.5, 26.6
     CREATE TABLE IF NOT EXISTS chat_threads (
         id TEXT PRIMARY KEY,
         workspace_id TEXT NOT NULL,
@@ -1506,6 +1621,8 @@ class SQLiteDatabase(BaseDatabase):
         todo_id TEXT,
         mode TEXT NOT NULL DEFAULT 'explore' CHECK (mode IN ('explore', 'execute')),
         title TEXT NOT NULL,
+        project_id TEXT DEFAULT NULL,
+        context_version INTEGER DEFAULT 0,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         FOREIGN KEY (workspace_id) REFERENCES swarm_workspaces(id) ON DELETE CASCADE,
@@ -1516,6 +1633,7 @@ class SQLiteDatabase(BaseDatabase):
     CREATE INDEX IF NOT EXISTS idx_chat_threads_workspace_id ON chat_threads(workspace_id);
     CREATE INDEX IF NOT EXISTS idx_chat_threads_agent_id ON chat_threads(agent_id);
     CREATE INDEX IF NOT EXISTS idx_chat_threads_task_id ON chat_threads(task_id);
+    CREATE INDEX IF NOT EXISTS idx_chat_threads_project_id ON chat_threads(project_id);
 
     -- Thread Summaries table (Rolling summaries for chat threads)
     -- Validates: Requirements 30.9
@@ -1603,12 +1721,23 @@ class SQLiteDatabase(BaseDatabase):
         if self._initialized:
             return
 
+        import time
+        t0 = time.monotonic()
+        logger.info("DB init: opening connection to %s", self.db_path)
+
         async with aiosqlite.connect(str(self.db_path)) as conn:
+            t1 = time.monotonic()
+            logger.info("DB init: connection opened in %.2fs, executing schema...", t1 - t0)
+
             await conn.executescript(self.SCHEMA)
             await conn.commit()
+            t2 = time.monotonic()
+            logger.info("DB init: schema executed in %.2fs, running migrations...", t2 - t1)
 
             # Run migrations for existing databases
             await self._run_migrations(conn)
+            t3 = time.monotonic()
+            logger.info("DB init: migrations completed in %.2fs (total: %.2fs)", t3 - t2, t3 - t0)
 
         self._initialized = True
 
@@ -1739,6 +1868,35 @@ class SQLiteDatabase(BaseDatabase):
             await conn.execute("ALTER TABLE workspace_knowledgebases ADD COLUMN excluded_sources TEXT DEFAULT '[]'")
             await conn.commit()
             logger.info("Migration complete: excluded_sources column added")
+
+        # ============================================================================
+        # Chat Thread Project Association Migrations (Cadence 4 — SwarmWS Intelligence)
+        # Validates: Requirements 26.5, 26.6, 37.1, 37.2, 37.3
+        # Safe schema evolution: ADD COLUMN IF NOT EXISTS for existing DBs.
+        # On clean installs these columns already exist in the CREATE TABLE.
+        # ============================================================================
+        cursor = await conn.execute("PRAGMA table_info(chat_threads)")
+        chat_thread_columns = await cursor.fetchall()
+        chat_thread_column_names = [col[1] for col in chat_thread_columns]
+
+        if "project_id" not in chat_thread_column_names:
+            logger.info("Running migration: Adding project_id column to chat_threads table")
+            await conn.execute("ALTER TABLE chat_threads ADD COLUMN project_id TEXT DEFAULT NULL")
+            await conn.commit()
+            logger.info("Migration complete: project_id column added to chat_threads")
+
+        if "context_version" not in chat_thread_column_names:
+            logger.info("Running migration: Adding context_version column to chat_threads table")
+            await conn.execute("ALTER TABLE chat_threads ADD COLUMN context_version INTEGER DEFAULT 0")
+            await conn.commit()
+            logger.info("Migration complete: context_version column added to chat_threads")
+
+        # Ensure index exists (safe: CREATE INDEX IF NOT EXISTS)
+        try:
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_chat_threads_project_id ON chat_threads(project_id)")
+            await conn.commit()
+        except Exception:
+            pass  # Index may already exist
 
         # ============================================================================
         # Workspace Refactor Migrations (Task 1.8)

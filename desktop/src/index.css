@@ -19,6 +19,15 @@
   --color-code-bg: #1e293b;
   --color-status-online: #16a34a;
   --color-status-offline: #94a3b8;
+
+  /* Explorer theme variables */
+  --color-explorer-zone-label: #94a3b8;
+  --color-explorer-zone-separator: #e2e8f0;
+  --color-explorer-indent-guide: #e2e8f0;
+  --color-explorer-search-highlight: rgba(43, 108, 238, 0.12);
+  --color-explorer-accent: #2b6cee;
+  --color-explorer-system-badge: #d97706;
+  --color-explorer-focus-indicator: #2b6cee;
 }
 
 /* Dark theme */
@@ -40,6 +49,15 @@
   --color-code-bg: #101622;
   --color-status-online: #22c55e;
   --color-status-offline: #6b7280;
+
+  /* Explorer theme variables */
+  --color-explorer-zone-label: #6b7280;
+  --color-explorer-zone-separator: #2d3548;
+  --color-explorer-indent-guide: #2d3548;
+  --color-explorer-search-highlight: rgba(43, 108, 238, 0.2);
+  --color-explorer-accent: #3d7ef0;
+  --color-explorer-system-badge: #f59e0b;
+  --color-explorer-focus-indicator: #3d7ef0;
 }
 
 @theme {
@@ -368,4 +386,17 @@ body {
 
 .animate-fade-in {
   animation: fade-in 0.15s ease-out forwards;
+}
+
+/* TreeNodeRow — hover and interaction styles */
+
+/* Hover background — only visible when no inline backgroundColor is set
+   (selected and matched rows set backgroundColor inline, which takes priority) */
+.tree-node-row:hover {
+  background-color: var(--color-hover);
+}
+
+/* Show CRUD action icons only on row hover */
+.tree-node-row:hover .tree-node-actions {
+  display: flex !important;
 }

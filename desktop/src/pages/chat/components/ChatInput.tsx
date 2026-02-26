@@ -1,11 +1,11 @@
 import { useState, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import clsx from 'clsx';
-import type { FileAttachment, SwarmWorkspace, Skill, MCPServer, Plugin } from '../../../types';
+import type { FileAttachment, WorkspaceConfig, Skill, MCPServer, Plugin } from '../../../types';
 import { FileAttachmentButton, FileAttachmentPreview, AttachedFileChips } from '../../../components/chat';
 import { ReadOnlyChips } from '../../../components/common';
 import { SLASH_COMMANDS } from '../constants';
-import type { FileTreeItem } from '../../../components/workspace-explorer/FileTree';
+import type { FileTreeItem } from '../../../components/workspace-explorer/FileTreeNode';
 
 interface ChatInputProps {
   inputValue: string;
@@ -16,7 +16,7 @@ interface ChatInputProps {
   runAsTask: boolean;
   onToggleRunAsTask: () => void;
   selectedAgentId: string | null;
-  selectedWorkspace: SwarmWorkspace | null;
+  selectedWorkspace: WorkspaceConfig | null;
   attachments: FileAttachment[];
   onAddFiles: (files: File[]) => void;
   onRemoveFile: (id: string) => void;
