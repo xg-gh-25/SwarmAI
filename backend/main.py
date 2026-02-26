@@ -6,12 +6,12 @@ from contextlib import asynccontextmanager
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 import logging
-import platform
 from pathlib import Path
 
-from config import settings
+from config import settings, get_app_data_dir
 from core.agent_manager import agent_manager
-from routers import agents_router, skills_router, mcp_router, chat_router, auth_router, workspace_router, settings_router, plugins_router, tasks_router
+from routers import agents_router, skills_router, mcp_router, chat_router, auth_router, workspace_router, settings_router, plugins_router, tasks_router, channels_router
+from channels.gateway import channel_gateway
 from middleware.error_handler import setup_error_handlers
 from middleware.rate_limit import limiter
 from database import initialize_database
@@ -19,12 +19,7 @@ from database import initialize_database
 
 def get_log_file_path() -> Path:
     """Get the log file path based on platform."""
-    if platform.system() == "Darwin":
-        log_dir = Path.home() / "Library" / "Application Support" / "Owork" / "logs"
-    elif platform.system() == "Windows":
-        log_dir = Path.home() / "AppData" / "Local" / "Owork" / "logs"
-    else:
-        log_dir = Path.home() / ".local" / "share" / "owork" / "logs"
+    log_dir = get_app_data_dir() / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     return log_dir / "backend.log"
 
@@ -70,9 +65,15 @@ async def lifespan(app: FastAPI):
     await initialize_database()
     logger.info("Database initialized")
 
+    # Start channel gateway (auto-starts active channels)
+    await channel_gateway.startup()
+    logger.info("Channel gateway started")
+
     yield
     # Shutdown
     logger.info("Shutting down...")
+    await channel_gateway.shutdown()
+    logger.info("Channel gateway stopped")
     await agent_manager.disconnect_all()
     logger.info("All clients disconnected")
 
@@ -138,6 +139,7 @@ app.include_router(workspace_router, prefix="/api/workspace", tags=["workspace"]
 app.include_router(settings_router, prefix="/api/settings", tags=["settings"])
 app.include_router(plugins_router, prefix="/api/plugins", tags=["plugins"])
 app.include_router(tasks_router, prefix="/api/tasks", tags=["tasks"])
+app.include_router(channels_router, prefix="/api/channels", tags=["channels"])
 
 
 @app.get("/health")

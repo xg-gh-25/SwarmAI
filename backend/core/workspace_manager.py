@@ -22,7 +22,7 @@ Directory structure:
         ├── my-skill-1/
         └── my-skill-2/
 
-    /tmp/agent-platform-workspaces/      <- Isolated agent workspaces (outside project!)
+    <app_data_dir>/workspaces/           <- Isolated agent workspaces (outside project!)
     └── {agent_id}/
         └── .claude/skills/              <- Absolute symlinks to allowed skills only
             ├── pptx -> ~/.claude/skills/pptx

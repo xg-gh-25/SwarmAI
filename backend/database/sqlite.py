@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Optional, TypeVar, Generic
 from uuid import uuid4
 
+from config import get_app_data_dir
 from database.base import BaseTable, BaseDatabase
 
 logger = logging.getLogger(__name__)
@@ -379,6 +380,78 @@ class SQLiteTasksTable(SQLiteTable[T], Generic[T]):
                 return [self._row_to_dict(row) for row in rows]
 
 
+class SQLiteChannelSessionsTable(SQLiteTable[T], Generic[T]):
+    """Specialized SQLite table for channel sessions with lookup support."""
+
+    async def find_by_external(
+        self, channel_id: str, external_chat_id: str, external_thread_id: Optional[str] = None
+    ) -> Optional[T]:
+        """Find a channel session by external identifiers."""
+        async with self._get_connection() as conn:
+            conn.row_factory = aiosqlite.Row
+            if external_thread_id:
+                query = (
+                    f"SELECT * FROM {self.table_name} "
+                    "WHERE channel_id = ? AND external_chat_id = ? AND external_thread_id = ?"
+                )
+                params = (channel_id, external_chat_id, external_thread_id)
+            else:
+                query = (
+                    f"SELECT * FROM {self.table_name} "
+                    "WHERE channel_id = ? AND external_chat_id = ? AND external_thread_id IS NULL"
+                )
+                params = (channel_id, external_chat_id)
+            async with conn.execute(query, params) as cursor:
+                row = await cursor.fetchone()
+                return self._row_to_dict(row) if row else None
+
+    async def list_by_channel(self, channel_id: str) -> list[T]:
+        """List all sessions for a channel."""
+        async with self._get_connection() as conn:
+            conn.row_factory = aiosqlite.Row
+            async with conn.execute(
+                f"SELECT * FROM {self.table_name} WHERE channel_id = ? ORDER BY last_message_at DESC",
+                (channel_id,)
+            ) as cursor:
+                rows = await cursor.fetchall()
+                return [self._row_to_dict(row) for row in rows]
+
+    async def count_by_channel(self, channel_id: str) -> int:
+        """Count sessions for a channel."""
+        async with self._get_connection() as conn:
+            async with conn.execute(
+                f"SELECT COUNT(*) FROM {self.table_name} WHERE channel_id = ?",
+                (channel_id,)
+            ) as cursor:
+                row = await cursor.fetchone()
+                return row[0] if row else 0
+
+    async def delete_by_channel(self, channel_id: str) -> int:
+        """Delete all sessions for a channel."""
+        async with self._get_connection() as conn:
+            cursor = await conn.execute(
+                f"DELETE FROM {self.table_name} WHERE channel_id = ?",
+                (channel_id,)
+            )
+            await conn.commit()
+            return cursor.rowcount
+
+
+class SQLiteChannelMessagesTable(SQLiteTable[T], Generic[T]):
+    """Specialized SQLite table for channel messages."""
+
+    async def list_by_session(self, channel_session_id: str) -> list[T]:
+        """List all messages for a channel session."""
+        async with self._get_connection() as conn:
+            conn.row_factory = aiosqlite.Row
+            async with conn.execute(
+                f"SELECT * FROM {self.table_name} WHERE channel_session_id = ? ORDER BY created_at ASC",
+                (channel_session_id,)
+            ) as cursor:
+                rows = await cursor.fetchall()
+                return [self._row_to_dict(row) for row in rows]
+
+
 class SQLiteDatabase(BaseDatabase):
     """SQLite database client implementing BaseDatabase interface."""
 
@@ -621,6 +694,68 @@ class SQLiteDatabase(BaseDatabase):
     );
     CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
     CREATE INDEX IF NOT EXISTS idx_tasks_agent_id ON tasks(agent_id);
+
+    -- Channels table
+    CREATE TABLE IF NOT EXISTS channels (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        channel_type TEXT NOT NULL,
+        agent_id TEXT NOT NULL,
+        config TEXT NOT NULL DEFAULT '{}',
+        status TEXT DEFAULT 'inactive',
+        error_message TEXT,
+        access_mode TEXT DEFAULT 'allowlist',
+        allowed_senders TEXT DEFAULT '[]',
+        blocked_senders TEXT DEFAULT '[]',
+        api_keys TEXT DEFAULT '[]',
+        rate_limit_per_minute INTEGER DEFAULT 10,
+        enable_skills INTEGER DEFAULT 0,
+        enable_mcp INTEGER DEFAULT 0,
+        user_id TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_channels_agent_id ON channels(agent_id);
+    CREATE INDEX IF NOT EXISTS idx_channels_status ON channels(status);
+
+    -- Channel sessions table (maps external conversations to internal sessions)
+    CREATE TABLE IF NOT EXISTS channel_sessions (
+        id TEXT PRIMARY KEY,
+        channel_id TEXT NOT NULL,
+        external_chat_id TEXT NOT NULL,
+        external_sender_id TEXT,
+        external_thread_id TEXT,
+        session_id TEXT NOT NULL,
+        agent_id TEXT NOT NULL,
+        sender_display_name TEXT,
+        last_message_at TEXT,
+        message_count INTEGER DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (channel_id) REFERENCES channels(id) ON DELETE CASCADE,
+        FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+        UNIQUE(channel_id, external_chat_id, external_thread_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_channel_sessions_lookup
+        ON channel_sessions(channel_id, external_chat_id, external_thread_id);
+
+    -- Channel messages table (audit log)
+    CREATE TABLE IF NOT EXISTS channel_messages (
+        id TEXT PRIMARY KEY,
+        channel_session_id TEXT NOT NULL,
+        direction TEXT NOT NULL,
+        external_message_id TEXT,
+        content TEXT NOT NULL,
+        content_type TEXT DEFAULT 'text',
+        metadata TEXT DEFAULT '{}',
+        status TEXT DEFAULT 'sent',
+        error_message TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (channel_session_id) REFERENCES channel_sessions(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_channel_messages_session ON channel_messages(channel_session_id);
     """
 
     def __init__(self, db_path: str | Path | None = None):
@@ -631,13 +766,7 @@ class SQLiteDatabase(BaseDatabase):
         """
         if db_path is None:
             # Default to user data directory
-            import platform
-            if platform.system() == "Darwin":
-                data_dir = Path.home() / "Library" / "Application Support" / "Owork"
-            elif platform.system() == "Windows":
-                data_dir = Path.home() / "AppData" / "Local" / "Owork"
-            else:
-                data_dir = Path.home() / ".local" / "share" / "owork"
+            data_dir = get_app_data_dir()
             data_dir.mkdir(parents=True, exist_ok=True)
             db_path = data_dir / "data.db"
         else:
@@ -660,6 +789,9 @@ class SQLiteDatabase(BaseDatabase):
         self._plugins = SQLitePluginsTable[dict]("plugins", self.db_path)
         self._permission_requests = SQLiteTable[dict]("permission_requests", self.db_path)
         self._tasks = SQLiteTasksTable[dict]("tasks", self.db_path)
+        self._channels = SQLiteTable[dict]("channels", self.db_path)
+        self._channel_sessions = SQLiteChannelSessionsTable[dict]("channel_sessions", self.db_path)
+        self._channel_messages = SQLiteChannelMessagesTable[dict]("channel_messages", self.db_path)
 
     async def initialize(self) -> None:
         """Initialize database schema."""
@@ -796,6 +928,21 @@ class SQLiteDatabase(BaseDatabase):
     def tasks(self) -> SQLiteTasksTable:
         """Get the tasks table."""
         return self._tasks
+
+    @property
+    def channels(self) -> SQLiteTable:
+        """Get the channels table."""
+        return self._channels
+
+    @property
+    def channel_sessions(self) -> SQLiteChannelSessionsTable:
+        """Get the channel sessions table."""
+        return self._channel_sessions
+
+    @property
+    def channel_messages(self) -> SQLiteChannelMessagesTable:
+        """Get the channel messages table."""
+        return self._channel_messages
 
     async def health_check(self) -> bool:
         """Check if the database is healthy."""
