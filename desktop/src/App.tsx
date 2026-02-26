@@ -9,6 +9,7 @@ import AgentsPage from './pages/AgentsPage';
 import SkillsPage from './pages/SkillsPage';
 import MCPPage from './pages/MCPPage';
 import PluginsPage from './pages/PluginsPage';
+import ChannelsPage from './pages/ChannelsPage';
 import DashboardPage from './pages/DashboardPage';
 import SettingsPage from './pages/SettingsPage';
 
@@ -50,6 +51,7 @@ export default function App() {
               <Route path="skills" element={<SkillsPage />} />
               <Route path="mcp" element={<MCPPage />} />
               <Route path="plugins" element={<PluginsPage />} />
+              <Route path="channels" element={<ChannelsPage />} />
               <Route path="settings" element={<SettingsPage />} />
             </Route>
           </Routes>
