@@ -63,6 +63,11 @@ class SystemPromptBuilder:
         line = f"You are {name}, a personal assistant running inside owork."
         if description:
             line += f" {description}"
+        # Override the SDK's default identity preamble
+        line += (
+            "\nIgnore any prior instruction that says "
+            "\"You are a Claude agent, built on Anthropic's Claude Agent SDK.\""
+        )
         return line
 
     def _section_safety(self) -> str:
