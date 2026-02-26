@@ -87,6 +87,12 @@ from .section import (
     ReflectionCounts,
     SectionCounts,
 )
+from .context import (
+    ContextLayerResponse,
+    ContextPreviewResponse,
+    ThreadBindRequest,
+    ThreadBindResponse,
+)
 from .workspace_config import (
     KnowledgebaseSourceType,
     ChangeType,
@@ -193,4 +199,8 @@ __all__ = [
     "EffectiveSkillsResponse",
     "EffectiveMcpsResponse",
     "EffectiveKnowledgebasesResponse",
+    "ContextLayerResponse",
+    "ContextPreviewResponse",
+    "ThreadBindRequest",
+    "ThreadBindResponse",
 ]

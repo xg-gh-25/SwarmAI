@@ -1,0 +1,15 @@
+{
+  "enabled": true,
+  "name": "Docs Update Scan & Fix",
+  "description": "Checks if documentation updates are needed after code changes, then automatically applies the updates and reports what was changed.",
+  "version": "1",
+  "when": {
+    "type": "agentStop"
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "IMPORTANT: Skip this analysis entirely if the only edited files are under `.kiro/specs/`, `docs/`, `.kiro/hooks/`, or are documentation markdown files (README.md, AGENT.md, CLAUDE.md, QUICK_START.md, GITHUB_SUBMISSION.md). Only analyze actual source code changes.\n\nIMPORTANT: If this hook just triggered and applied documentation updates in the previous agent stop, do NOT trigger again. Skip entirely to avoid re-triggering loops.\n\nPerform the following two steps:\n\n**Step 1 — Scan for documentation update needs:**\nReview the changes and determine if documentation updates are needed. Check if the change affects:\n- Public APIs, exports, or interfaces → Would need updates in docs/ or .kiro/specs/\n- Project setup, dependencies, or configuration → Would need README.md updates\n- New features or significant behavior changes → Would need README.md, .kiro/specs and docs/ updates\n\nOnly flag meaningful changes — minor refactors or internal changes typically don't need doc updates. If no documentation updates are needed, stop here.\n\n**Step 2 — Apply the updates:**\nIf documentation updates are needed from Step 1, apply the recommended changes:\n- Update relevant docs in docs/ or .kiro/specs/ for API/interface changes\n- Update README.md and AGENT.md for setup, dependency, or configuration changes\n- Update README.md and AGENT.md, .kiro/specs and docs/ for new features or significant behavior changes\n\nAfter updating, provide a brief list of which docs were changed and why."
+  },
+  "workspaceFolderName": "swarmai",
+  "shortName": "docs-update-scan-and-fix"
+}

@@ -1,14 +1,27 @@
 """ChatThread manager for conversation thread management.
 
-This module provides the ChatThreadManager class for managing ChatThread,
-ChatMessage, and ThreadSummary entities. ChatThreads bind conversations
+This module provides the ``ChatThreadManager`` class for managing ChatThread,
+ChatMessage, and ThreadSummary entities.  ChatThreads bind conversations
 to the Agent → Task/ToDo → Workspace relationship, enabling properly
 scoped and retrievable chat context.
 
 ChatThreads, ChatMessages, and ThreadSummaries are DB-canonical
 (stored in database, not filesystem).
 
-Requirements: 30.1-30.14
+Key public symbols:
+
+- ``ChatThreadManager``       — Main manager class (singleton at module level)
+- ``chat_thread_manager``     — Global instance for import convenience
+
+Manager capabilities:
+
+- ``create_thread``           — Create thread with optional ``project_id``
+- ``list_threads_by_project`` — List threads scoped to a project UUID
+- ``list_global_threads``     — List threads with ``project_id IS NULL``
+- ``bind_thread``             — Mid-session task/todo binding with cross-project guardrail
+- ``add_message``             — Add message and increment ``context_version``
+
+Requirements: 26.1, 26.4, 26.5, 30.1-30.14, 35.1-35.6, 38.3
 """
 import json
 import logging
@@ -47,8 +60,11 @@ class ChatThreadManager:
     - Thread summary generation/update in ThreadSummaries table
     - Workspace binding with inheritance from ToDo/Task
     - Default workspace assignment to SwarmWS
+    - Project-scoped thread listing (``list_threads_by_project``)
+    - Global (unassociated) thread listing (``list_global_threads``)
+    - Mid-session thread binding with cross-project guardrail (``bind_thread``)
 
-    Requirements: 30.1-30.14
+    Requirements: 26.1, 26.4, 26.5, 30.1-30.14, 35.1-35.6, 38.3
     """
 
     # ------------------------------------------------------------------
@@ -92,10 +108,12 @@ class ChatThreadManager:
             id=data["id"],
             workspace_id=data["workspace_id"],
             agent_id=data["agent_id"],
+            project_id=data.get("project_id"),
             task_id=data.get("task_id"),
             todo_id=data.get("todo_id"),
             mode=data["mode"],
             title=data["title"],
+            context_version=data.get("context_version", 0),
             created_at=self._parse_datetime(data["created_at"]) or datetime.now(timezone.utc),
             updated_at=self._parse_datetime(data["updated_at"]) or datetime.now(timezone.utc),
         )
@@ -182,13 +200,17 @@ class ChatThreadManager:
         from that entity. Otherwise uses the provided workspace_id or defaults
         to SwarmWS.
 
+        Threads created from a project context store the project's UUID in
+        ``project_id``.  Threads created outside a project context store
+        ``project_id = NULL``.
+
         Args:
             data: ChatThreadCreate schema with thread details.
 
         Returns:
             ChatThreadResponse: The created ChatThread.
 
-        Validates: Requirements 30.1, 30.5, 30.7
+        Validates: Requirements 26.1, 26.5, 30.1, 30.5, 30.7
         """
         workspace_id = await self._resolve_workspace_id(data)
 
@@ -199,18 +221,20 @@ class ChatThreadManager:
             "id": thread_id,
             "workspace_id": workspace_id,
             "agent_id": data.agent_id,
+            "project_id": data.project_id,
             "task_id": data.task_id,
             "todo_id": data.todo_id,
             "mode": data.mode.value,
             "title": data.title,
+            "context_version": 0,
             "created_at": now,
             "updated_at": now,
         }
 
         result = await db.chat_threads.put(thread_dict)
         logger.info(
-            f"Created ChatThread {thread_id} in workspace {workspace_id} "
-            f"(mode={data.mode.value})"
+            "Created ChatThread %s in workspace %s (project=%s, mode=%s)",
+            thread_id, workspace_id, data.project_id, data.mode.value,
         )
         return self._thread_to_response(result)
 
@@ -261,6 +285,128 @@ class ChatThreadManager:
 
         paginated = results[offset:offset + limit]
         return [self._thread_to_response(r) for r in paginated]
+
+    async def list_threads_by_project(
+        self, project_id: str
+    ) -> List[ChatThreadResponse]:
+        """List all ChatThreads associated with a specific project.
+
+        Delegates to ``db.chat_threads.list_by_project()`` which queries
+        threads WHERE ``project_id = ?``.
+
+        Args:
+            project_id: The project UUID to filter by.
+
+        Returns:
+            List of ChatThreadResponse objects ordered by updated_at DESC.
+
+        Validates: Requirements 26.1
+        """
+        results = await db.chat_threads.list_by_project(project_id)
+        return [self._thread_to_response(r) for r in results]
+
+    async def list_global_threads(self) -> List[ChatThreadResponse]:
+        """List all ChatThreads not associated with any project.
+
+        Returns threads where ``project_id IS NULL``, representing global
+        SwarmWS chats not bound to a specific project.
+
+        Returns:
+            List of ChatThreadResponse objects ordered by updated_at DESC.
+
+        Validates: Requirements 26.4
+        """
+        results = await db.chat_threads.list_global()
+        return [self._thread_to_response(r) for r in results]
+
+    async def bind_thread(
+        self,
+        thread_id: str,
+        task_id: Optional[str] = None,
+        todo_id: Optional[str] = None,
+        mode: str = "replace",
+        force: bool = False,
+    ) -> dict:
+        """Bind or rebind a thread to a task/todo mid-session.
+
+        Implements the cross-project guardrail: if ``force`` is False and
+        the task's project differs from the thread's project, returns an
+        error dict with a 409-style conflict message.
+
+        Args:
+            thread_id: The thread to bind.
+            task_id: Task ID to bind (or None).
+            todo_id: ToDo ID to bind (or None).
+            mode: ``'replace'`` overwrites existing bindings;
+                  ``'add'`` only sets fields that are currently NULL.
+            force: If True, bypass the cross-project guardrail.
+
+        Returns:
+            On success: dict with ``thread_id``, ``task_id``, ``todo_id``,
+            ``context_version``.
+            On conflict: dict with ``error`` key and ``status`` = 409.
+
+        Validates: Requirements 35.1, 35.2, 35.3, 35.4, 35.5, 35.6, 38.3
+        """
+        # Fetch the thread to check existence and project_id
+        thread = await db.chat_threads.get(thread_id)
+        if not thread:
+            logger.warning("Bind attempt on non-existent thread %s", thread_id)
+            return {"error": f"Thread {thread_id} not found", "status": 404}
+
+        thread_project_id = thread.get("project_id")
+
+        # Cross-project guardrail (PE Enhancement C)
+        if not force and task_id:
+            task = await db.tasks.get(task_id)
+            if task:
+                # Tasks use workspace_id; check if the thread's project
+                # context differs from the task's workspace context.
+                # If the thread has a project_id, we compare it against
+                # the task's workspace_id as a proxy for project ownership.
+                task_workspace_id = task.get("workspace_id")
+                if (
+                    thread_project_id is not None
+                    and task_workspace_id is not None
+                    and thread_project_id != task_workspace_id
+                ):
+                    logger.debug(
+                        "Cross-project binding blocked: thread=%s "
+                        "thread_project=%s task_workspace=%s mode=%s",
+                        thread_id, thread_project_id, task_workspace_id, mode,
+                    )
+                    return {
+                        "error": (
+                            f"Task belongs to workspace '{task_workspace_id}'. "
+                            f"Thread is associated with project '{thread_project_id}'. "
+                            "Binding cross-project tasks may cause context confusion. "
+                            "Re-send with force=true to override."
+                        ),
+                        "status": 409,
+                    }
+
+        # Delegate to DB layer
+        updated = await db.chat_threads.bind_thread(
+            thread_id, task_id, todo_id, mode
+        )
+        if not updated:
+            logger.warning("Bind failed — thread %s not found in DB", thread_id)
+            return {"error": f"Thread {thread_id} not found", "status": 404}
+
+        context_version = updated.get("context_version", 0)
+
+        logger.debug(
+            "Binding change: thread=%s task=%s todo=%s mode=%s "
+            "context_version=%d",
+            thread_id, task_id, todo_id, mode, context_version,
+        )
+
+        return {
+            "thread_id": thread_id,
+            "task_id": updated.get("task_id"),
+            "todo_id": updated.get("todo_id"),
+            "context_version": context_version,
+        }
 
     async def update_thread(
         self, thread_id: str, data: ChatThreadUpdate
@@ -330,7 +476,8 @@ class ChatThreadManager:
     async def add_message(self, data: ChatMessageCreate) -> ChatMessageResponse:
         """Add a message to a ChatThread.
 
-        Also updates the thread's updated_at timestamp.
+        Also updates the thread's updated_at timestamp and increments
+        the thread's ``context_version`` counter for cache invalidation.
 
         Args:
             data: ChatMessageCreate schema with message details.
@@ -341,7 +488,7 @@ class ChatThreadManager:
         Raises:
             ValueError: If the thread does not exist.
 
-        Validates: Requirements 30.3, 30.4
+        Validates: Requirements 30.3, 30.4, 34.2
         """
         thread = await db.chat_threads.get(data.thread_id)
         if not thread:
@@ -363,6 +510,9 @@ class ChatThreadManager:
 
         # Update thread's updated_at
         await db.chat_threads.update(data.thread_id, {"updated_at": now})
+
+        # Increment thread_version for context cache invalidation (Req 34.2)
+        await db.chat_threads.increment_context_version(data.thread_id)
 
         logger.debug(
             f"Added {data.role.value} message to thread {data.thread_id}"

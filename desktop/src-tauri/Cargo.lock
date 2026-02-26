@@ -3714,6 +3714,7 @@ name = "swarmai"
 version = "1.0.0"
 dependencies = [
  "portpicker",
+ "reqwest",
  "serde",
  "serde_json",
  "tauri",

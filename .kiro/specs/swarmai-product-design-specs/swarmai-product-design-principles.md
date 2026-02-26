@@ -1,14 +1,18 @@
-# SwarmAI Competitive Design Principles (Revised)
-*Consolidated from comparative analysis of ChatGPT Projects, Claude Code, Claude Co-work, Microsoft Copilot Agent Mode, Google “agentic workspace” efforts, UiPath, OpenClaw, and adjacent agentic tools — and aligned with SwarmAI’s Workspace + Context Engine + Multi-Agent architecture.*
+# SwarmAI Competitive Design Principles (Final)
+*Aligned with SwarmWS (Workspace Memory), Swarm Radar (Attention & Lifecycle Control), and TSCC (Thread-Scoped Cognitive Context)*
 
 ---
 
 ## 1. Purpose
 
-This document defines the core **competitive UX + product design principles** for SwarmAI.
+This document defines the final **competitive UX and product design principles** for SwarmAI.
 
 Goal:
-> Position SwarmAI as an **Agentic Operating System for Knowledge Work** — not just a chat tool, not just automation, but a unified execution workspace where memory persists, work is structured, and outcomes compound.
+
+> Position SwarmAI as an **Agentic Operating System for Knowledge Work** — a unified execution workspace where persistent memory, structured work entities, conversational command, and multi-agent orchestration converge to produce durable, governed outcomes.
+
+SwarmAI is not a chat tool, not a task manager, and not a pure automation engine.  
+It is a **command center for a supervised AI team** operating inside persistent workspaces with structured lifecycle control and transparent cognition.
 
 ---
 
@@ -21,21 +25,23 @@ Across leading AI products:
 | Chat-based AI (ChatGPT, Claude) | Low-friction interaction | Weak structure for long-running work |
 | Projects / Notebooks | Context grouping | Fragmented execution & governance |
 | Copilot-style assistants | Guided steps | Context resets across tools & sessions |
-| Agentic coding tools (Claude Code) | Execution-first threads | Developer-centric, limited knowledge-work model |
+| Agentic coding tools (Claude Code) | Execution-first threads | Developer-centric model |
 | Automation platforms (UiPath) | Deterministic orchestration | Heavy UX, non-conversational |
-| Open-source agents (OpenClaw) | Autonomy primitives (heartbeat, tools) | No strong workspace memory + structured entity model |
-| Collaborative AI (Claude Co-work) | Human-in-the-loop collaboration | Less canonical “work entity” structure |
+| Open-source agents (OpenClaw) | Autonomy primitives | No persistent workspace memory |
+| Collaborative AI (Claude Co-work) | Human-in-the-loop workflows | Weak canonical work entity structure |
 
 ### Key Insight
-No existing product fully unifies:
-- **Persistent workspace memory** (project/domain container)
-- **Structured work entities** (Signals/ToDos, Plans, Tasks, Comms, Artifacts)
-- **Execution-first threads** (iterative runs, transparency)
-- **Multi-agent orchestration** (roles + parallelism)
-- **Enterprise governance** (policy gates, audit, privileges)
-- **Closed-loop channel orchestration** (ingest → structure → reply)
 
-This gap defines SwarmAI’s differentiation.
+No existing product fully unifies:
+
+- Persistent workspace memory (domain container)
+- Structured work entities (Signals/ToDos → Tasks → Artifacts)
+- Execution-first threads with transparent runs
+- Multi-agent orchestration with visible roles
+- Enterprise governance (policy gates, audit, privileges)
+- Closed-loop orchestration across communication channels
+
+This gap defines SwarmAI’s core differentiation.
 
 ---
 
@@ -43,22 +49,22 @@ This gap defines SwarmAI’s differentiation.
 
 ## Principle 1 — Chat is the Command Surface, Not the System
 
-### Competitor Insight
-Chat succeeds for accessibility but fails for sustained, multi-step execution and durable outcomes.
+### Insight
+Chat excels for accessibility but fails as the sole interface for structured, long-running work.
 
 ### SwarmAI Principle
-> Chat is the **Command Surface** — not the product itself.
+> Chat is the **Command Surface** that initiates, controls, and supervises structured execution — not the entire product.
 
 ### Implications
-- Chat initiates and controls structured work
-- Users can explore without committing
-- Execution produces durable entities and artifacts
+- Users can explore freely without committing execution
+- Execution is triggered explicitly via ToDo start, confirmation, or command
+- Chat threads become execution workspaces when commitment occurs
 
-### UX Pattern
+### Pattern
 ```
 
-User Message → Intent → (Explore OR Execute)
-Execute → Task Thread → Multi-Agent Runs → Artifacts + Logs
+User Intent → Explore (no commitment)
+→ Execute (Task thread + multi-agent run)
 
 ```
 
@@ -66,220 +72,279 @@ Execute → Task Thread → Multi-Agent Runs → Artifacts + Logs
 
 ## Principle 2 — Threads Are Execution Workspaces (Not Chat Logs)
 
-### Competitor Insight
-Claude Code demonstrates that users trust AI more when threads behave like *working sessions* with visible execution.
+### Insight
+Users trust AI more when threads behave like working sessions with visible state and progress.
 
 ### SwarmAI Principle
-> Threads are **execution workspaces** with runs, plans, tools, and outputs — not conversational transcripts.
+> Each thread is an **execution workspace** with plan, runs, agents, tools, and outcomes — not a conversational transcript.
 
 ### Implications
-- Threads have explicit state (Explore/Execute)
-- Runs are first-class (queued/running/blocked/completed)
-- Tool usage and outputs are visible
-- Threads culminate in artifactized outcomes
+- Threads have lifecycle states (draft, wip, blocked, completed)
+- Runs and tool usage are transparent
+- Threads culminate in artifactized outputs
+- TSCC provides live cognitive transparency per thread
 
 ---
 
-## Principle 3 — Workspace is the Primary Memory Boundary
+## Principle 3 — Workspace is the Primary Memory Boundary (SwarmWS)
 
-### Competitor Insight
-Projects/Notebooks show contextual grouping is valuable, but memory often fragments across chats and tools.
+### Insight
+Projects and notebooks group context but often fragment execution history and governance.
 
 ### SwarmAI Principle
-> Workspace is the persistent memory container for context, governance, and durable outcomes.
+> The Workspace (SwarmWS) is the **persistent cognitive boundary** for memory, context, governance, and accumulated outcomes.
 
 ### Implications
-Workspace holds:
-- ContextFiles (context.md / compressed-context.md)
-- Knowledgebases (union with exclusions)
-- Skills/MCP policy configuration (intersection governance)
-- Signals/ToDos, Tasks, Comms, Plans
-- Artifacts and Reflections
+Workspace contains:
+- Context files and compressed memory
+- Knowledge sources and retrieval scope
+- Skills & MCP policy configuration
+- ToDos (signals), Tasks, Artifacts, Reflections
+- Persistent execution history
+
+Workspace continuity ensures productivity compounds over time instead of resetting each session.
 
 ---
 
 ## Principle 4 — Signals First: Separate Intent From Execution
 
-### Competitor Insight
-Many systems either:
-- treat everything as chat (no structure), or
-- create tasks too aggressively (too heavy)
+### Insight
+Treating everything as chat loses structure; forcing tasks too early increases friction.
 
 ### SwarmAI Principle
-> Separate **Signals (ToDos)** from **Tasks** to preserve flexibility and reduce cognitive overhead.
+> Separate **Signals (ToDos)** from **Tasks** to preserve flexibility while maintaining execution discipline.
 
 ### Implications
-- Ingest signals from channels into structured ToDos
-- Deduplicate and triage before committing to execution
-- Convert ToDo → Task with explicit user action (or policy-based autonomy)
+- Ingest signals from email, Slack, calendar, chat, and integrations
+- Normalize into structured ToDos inside Swarm Radar
+- Convert ToDo → Task only when execution commitment occurs
+- Maintain full lifecycle traceability
 
----
-
-## Principle 5 — Visible Planning Before Acting Builds Trust
-
-### Competitor Insight
-Copilot Agent Mode and orchestration tools gain trust by showing plans and step-by-step progress.
-
-### SwarmAI Principle
-> AI must show a plan (or checklist) before executing meaningful actions.
-
-### Implications
-- Plan preview is default for non-trivial tasks
-- User can edit/confirm
-- Execution is traceable step-by-step
-- Plans become artifacts when valuable
-
-### UX Pattern
+### Lifecycle Model
 ```
 
-User Goal → Plan Preview → Review Gate → Execute → Result + Artifact
+Source → ToDo (Signal) → Task (Execution) → Completed → Archived
 
 ```
 
 ---
 
-## Principle 6 — The Swarm Must Be Observable (Multi-Agent Transparency)
+## Principle 5 — The Swarm Radar: Glanceable Lifecycle Awareness
 
-### Competitor Insight
-Agentic IDEs and orchestration systems prove users need to understand *which agent is doing what*.
+### Insight
+Users need instant awareness of what needs attention, what is executing, and what is completed.
 
 ### SwarmAI Principle
-> Multi-agent orchestration should be **visible, role-based, and controllable**.
+> Provide a unified **attention & lifecycle control panel** (Swarm Radar) that surfaces only what requires awareness or action.
 
 ### Implications
-- Show active agents, roles, and status per run
-- Display intermediate outputs (collapsible)
-- Allow agent-level capability scoping via workspace policy
-- Provide clear ownership model for steps and outcomes
+Swarm Radar answers at a glance:
+1. What needs my attention? (ToDos, Waiting Input)
+2. What is the AI working on? (WIP Tasks)
+3. What requires my decision? (Waiting Input / Review)
+4. What has been completed? (Recent tasks)
+5. What runs automatically? (Autonomous jobs)
+
+This prevents list overload while enabling effective burn-down of incoming work signals.
 
 ---
 
-## Principle 7 — Governance is a Product Feature (Not a Backend Detail)
+## Principle 6 — Visible Planning Before Acting Builds Trust
 
-### Competitor Insight
-Enterprise adoption fails when autonomy is opaque or uncontrolled.
+### Insight
+Users trust AI more when they can understand intended actions before execution begins.
 
 ### SwarmAI Principle
-> Governance must be explicit: policy checks, privileges, audit trails, and review gates are first-class UX.
+> AI should reveal its **plan (or intent narrative)** before executing meaningful work, when complexity or risk warrants it.
+
+### Adaptive Flow
+```
+
+Goal → (Optional Plan Preview) → (Conditional Approval Gate) → Execute → Outcome + Artifact
+
+```
 
 ### Implications
-- Autonomy levels are visible and configurable
-- Privileged Skills/MCP require explicit enablement
-- Policy conflicts block execution deterministically with “Resolve” UX
-- Every action is auditable (tools used, context hash, outputs)
+- Simple tasks may skip explicit planning
+- Complex or risky tasks surface plan preview
+- Plans may be edited or confirmed
+- Plans can become reusable artifacts
 
 ---
 
-## Principle 8 — Context > Conversation (Context Engine Over Raw Chat)
+## Principle 7 — TSCC: Transparent Cognitive Context Per Thread
 
-### Competitor Insight
-Real productivity comes from grounding AI in files, systems, and ongoing work state — not just chat history.
+### Insight
+Users need continuous understanding of what the AI is doing without interrupting the conversation flow.
 
 ### SwarmAI Principle
-> Attachments and knowledge sources are **execution context**, not chat extras.
+> Provide a **Thread-Scoped Cognitive Context (TSCC)** panel that reveals live cognitive state without overwhelming users.
 
-### Implications
-- Context Engine builds W-Frames from workspace + structured entities
-- Avoid full regeneration: reuse cached frames and refresh via deltas
-- Index summaries rather than raw messages for performance
+### TSCC Reveals
+- Current workspace/project scope
+- Active agents and capabilities
+- Narrative “what AI is doing”
+- Active sources grounding reasoning
+- Working summary and continuity
+
+TSCC is collapsed by default, ensuring transparency without UI noise.
 
 ---
 
-## Principle 9 — Artifacts Are the Real Product Output
+## Principle 8 — Multi-Agent Orchestration Must Be Observable
 
-### Competitor Insight
-Claude Code and Copilot deliver durable outputs (code/docs). Pure chat output is not a durable work product.
+### Insight
+Autonomous systems lose trust if agent roles and actions are opaque.
 
 ### SwarmAI Principle
-> The true output is an **Artifact** (plan, report, doc, decision), not a message.
+> Multi-agent orchestration should be **visible, role-based, and governed**.
 
 ### Implications
-- Artifactization is a first-class end-of-thread action
-- Artifacts are versioned, linked to source thread/task
-- Artifacts compound workspace memory over time
+- Display active agents and responsibilities
+- Show capability usage (skills, MCPs, tools)
+- Provide intermediate outputs when meaningful
+- Enforce workspace-scoped capability governance
+
+This makes the AI feel like a supervised team rather than a black box.
 
 ---
 
-## Principle 10 — Progressive Disclosure: From Lightweight to Powerful
+## Principle 9 — Governance is a First-Class Product Feature
 
-### Competitor Insight
-Heavy automation UX overwhelms; chat-only tools lack power.
+### Insight
+Enterprise adoption requires explicit control over autonomy, privileges, and auditability.
 
 ### SwarmAI Principle
-> Start lightweight like chat, progressively reveal structure and autonomy as complexity increases.
+> Governance must be visible and actionable in the UX, not hidden in backend logic.
 
 ### Implications
-- Default: explore mode + minimal UI
-- Escalate: task threads + plan preview + multi-agent panel
-- Advanced: autonomy policies, knowledgebases, integrations, audits
+- Policy checks before privileged actions
+- Approval gates surfaced in Swarm Radar
+- Autonomy levels configurable per workspace
+- Full audit trails for agent actions and outputs
 
 ---
 
-## Principle 11 — Closed-Loop Channel Orchestration (Ingest → Reply)
+## Principle 10 — Context > Conversation (Context Engine Over Raw Chat)
 
-### Competitor Insight
-Most products can ingest signals, but few close the loop by replying back with structured outcomes.
+### Insight
+Real productivity emerges when AI is grounded in persistent knowledge and structured work state.
 
 ### SwarmAI Principle
-> SwarmAI must operate as a closed-loop orchestration layer across channels.
+> Execution is grounded in a **Context Engine (W-Frames)** that composes workspace memory, tasks, knowledge, and thread summaries.
 
 ### Implications
-- Ingest signals from Slack/Teams/Email/Jira/SIM/Taskei
-- Normalize into Signals/ToDos and Tasks
-- Reply back with structured acknowledgement (IDs, status, next steps)
-- Follow up when tasks complete or need input (policy-based)
+- Reuse cached working memory frames
+- Incrementally refresh context via deltas
+- Index summaries rather than raw message logs
+- Ensure consistent grounding across sessions
 
 ---
 
-## Principle 12 — Collaboration is Native (Not an Add-on)
+## Principle 11 — Artifacts Are the True Product Output
 
-### Competitor Insight
-Co-work style collaboration is valuable, but often lacks canonical shared work structure.
+### Insight
+Durable outcomes matter more than ephemeral chat responses.
 
 ### SwarmAI Principle
-> Collaboration should be workspace-native: shared context, shared tasks, shared artifacts, and assignable work.
+> The primary output of work is an **Artifact** (plan, report, document, decision), not a message.
 
 ### Implications
-- Multi-user workspaces with roles/permissions
-- Assign tasks/signals to other users
-- Sync/routing service for cross-device teams
-- Audit trails across users and agents
+- Artifactization is a first-class action
+- Artifacts are versioned and traceable
+- Artifacts enrich workspace memory
+- Completed tasks produce reusable knowledge
+
+---
+
+## Principle 12 — Progressive Disclosure: Lightweight → Powerful
+
+### Insight
+Users want low friction initially but need power as work complexity grows.
+
+### SwarmAI Principle
+> Start simple like chat; progressively reveal structure, lifecycle control, and autonomy as complexity increases.
+
+### Levels
+- Basic: chat exploration + minimal UI
+- Intermediate: tasks, plans, multi-agent runs
+- Advanced: autonomy policies, integrations, audits
+
+---
+
+## Principle 13 — Closed-Loop Channel Orchestration
+
+### Insight
+Many tools ingest signals but fail to close the loop with structured outcomes and follow-ups.
+
+### SwarmAI Principle
+> SwarmAI must orchestrate a **closed loop**: ingest → structure → execute → reply → follow up.
+
+### Implications
+- Normalize external signals into ToDos
+- Execute via task threads
+- Reply back to channels with structured updates
+- Trigger follow-ups when tasks complete or need input
+
+---
+
+## Principle 14 — Collaboration is Workspace-Native
+
+### Insight
+Collaborative AI must operate on shared context, not isolated chats.
+
+### SwarmAI Principle
+> Collaboration should be native to workspaces with shared context, tasks, artifacts, and audit trails.
+
+### Implications
+- Multi-user workspace roles and permissions
+- Assignable ToDos and Tasks
+- Shared artifact knowledge base
+- Cross-device and cross-user synchronization
 
 ---
 
 # 4. Strategic Positioning Statement
 
-SwarmAI should position itself as:
+SwarmAI is:
 
 > **An Agentic Operating System for Knowledge Work**  
-> where persistent workspaces, structured work entities, multi-agent execution, enterprise governance, and artifactized outcomes converge into a single conversational command center.
+> where persistent workspaces, structured signals and tasks, multi-agent execution, transparent cognition (TSCC), lifecycle awareness (Swarm Radar), and artifactized outcomes converge into a single conversational command center.
 
 ---
 
-# 5. Summary: Competitive Differentiation
+# 5. Unified Product Mental Model
 
-SwarmAI unifies six paradigms into one cohesive experience:
+SwarmAI unifies three core surfaces:
 
-1. **Chat-based command surface** (low friction)
-2. **Workspace-scoped persistent memory** (context continuity)
-3. **Signals/ToDos separated from Tasks** (intent → commitment)
-4. **Execution-first threads with transparent runs** (trust + iteration)
-5. **Visible multi-agent orchestration** (scalable execution)
-6. **Artifacts + closed-loop channel orchestration** (durable outcomes)
+| Surface | Role |
+|---|---|
+| SwarmWS (Left) | Persistent memory, knowledge, and project context |
+| Chat Thread (Center) | Command surface and execution workspace |
+| Swarm Radar (Right) | Lifecycle awareness and attention control |
 
-No single competitor currently integrates all of these into one consistent product.
+Supporting layer:
+- TSCC (Above input): Live cognitive transparency per thread
 
 ---
 
-# 6. Final Design Guideline
+# 6. Summary: Competitive Differentiation
 
-> Design SwarmAI so users feel they are **commanding a governed AI team inside a persistent workspace**, producing durable artifacts — not chatting with a single assistant.
+SwarmAI uniquely integrates:
 
-This guideline should shape:
-- Thread and run UX
-- Signal ingestion + triage
-- Task execution workflows
-- Multi-agent orchestration UI
-- Policy gates and audit experiences
-- Artifactization and knowledge compounding
+1. Conversational command surface (chat-driven control)
+2. Persistent workspace-scoped memory (SwarmWS)
+3. Signals/ToDos separated from Tasks (intent → commitment)
+4. Execution-first threads with transparent runs
+5. Multi-agent orchestration with observable cognition (TSCC)
+6. Lifecycle awareness and burn-down control (Swarm Radar)
+7. Artifactized durable outcomes and knowledge compounding
+
+No single competitor currently delivers all these paradigms in one cohesive, governed workspace experience.
+
+---
+
+# 7. Final Design Guideline
+
+> Design SwarmAI so users feel they are **commanding a governed AI team inside a persistent workspace**, with clear lifecycle awareness and transparent cognition, producing durable artifacts — not merely chatting with a single assistant.
 

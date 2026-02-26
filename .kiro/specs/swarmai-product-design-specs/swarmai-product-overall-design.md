@@ -1,481 +1,240 @@
-# SwarmAI — Product Design & Architecture (Revised)
+# SwarmAI — High-Level Product Design & Architecture (Final)
+*Unified overview integrating SwarmWS, Projects, Swarm Radar, TSCC, and Agent Execution Model*
 
-> This revised version consolidates:
-> - SwarmAI Context Engine & Workspace Memory model
-> - Chat Session & Thread Management design
-> - Multi-Agent Orchestration (SwarmAgent + Sub-Agents)
-> - Lessons from Kiro (governed agents), Claude Code (execution-first threads), Claude Co-work (collaborative AI)
-> - Enterprise governance, artifact-first knowledge model, and local-first performance strategy
-
----
-
-# SwarmAI — Product Overview
-
-## **SwarmAI — Your AI Team, 24/7**
-
-**_Work Smarter. Stress Less._**
-
-SwarmAI provides a supervised team of AI agents that plan, act, and follow through across your daily work. It unifies emails, meetings, communications, tasks, documents, and projects into a single intelligent command center — where context persists, actions are coordinated, and progress compounds over time.
-
-Unlike traditional AI tools that reset every session, SwarmAI maintains persistent private memory. It remembers context, preferences, and ongoing priorities so productivity improves instead of restarting each day. You delegate. Your AI team executes. Every action is transparent, reviewable, and governed.
-
-SwarmAI transforms fragmented effort into coordinated execution — turning daily work into durable outcomes and institutional knowledge.
+> Canonical foundations:
+> - **SwarmWS** — single persistent workspace root (Knowledge + Projects)
+> - **Projects** — primary organization unit for active work
+> - **Chat Threads** — execution surfaces (explore → execute → review)
+> - **Swarm Radar** — right sidebar attention & action control panel
+> - **TSCC** — thread-scoped cognitive context panel above input
+> - **SwarmAgent + Subagents** — governed multi-agent orchestration
+>
+> Goal: Present a simple mental model for users and a clean architecture model for implementation.
 
 ---
 
-## 🎯 Core Product Concept
+# 1. Product Overview
 
-SwarmAI is a **Persistent Agentic Workspace** for knowledge workers.
+## SwarmAI — Your AI Team, 24/7  
+**Work Smarter. Stress Less. Execute Continuously.**
 
-It replaces fragmented tools with a coordinated AI team that executes daily work under human supervision — turning disconnected tasks into structured, compounding progress.
+SwarmAI is a persistent Agentic Operating System for Knowledge Work where a supervised team of AI agents plans, executes, and follows through on your daily work.
 
----
+It unifies emails, meetings, communications, tasks, documents, and projects into a single operating environment — where context persists, priorities stay visible, and progress compounds over time.
 
-## 🧾 Product Thesis
+Unlike traditional AI tools that reset every session, SwarmAI maintains long-lived memory across projects and workflows.
 
-SwarmAI is a persistent, supervised agentic workspace where AI teams execute daily work under human guidance — transforming fragmented effort into durable, reviewable, and reusable knowledge and results.
+You delegate intent signals. The AI team executes under governance. Outcomes become durable knowledge and reusable artifacts.
 
----
-
-## 🧠 Core Product Mental Model
-
-SwarmAI is **not**:
-- A chat app
-- A task manager
-- A project tracker
-- A simple automation bot
-
-It **is**:
-
-> **A Command Center for Your AI Team**
-
-Four foundational principles:
-
-- 🧠 You supervise  
-- 🤖 Agents execute  
-- 📁 Memory persists  
-- 📈 Work compounds  
-
-Over time:
-- Context accumulates inside Workspaces
-- Agents specialize and collaborate
-- Threads execute real work, not just chat
-- Artifacts accumulate as reusable knowledge
-- Productivity scales naturally across sessions and users
+SwarmAI doesn’t just help you think — it helps you **continuously get real work done.**
 
 ---
 
-# SwarmAI — Product Architecture (5 Pillars)
+# 2. Core Mental Model
 
-The architecture aligns with:
-- Kiro: explicit agent governance + skills/MCP scoping
-- Claude Code: threads as executable workspaces with tool transparency
-- Claude Co-work: collaborative human-in-the-loop workflows
-- SwarmAI Context Engine: workspace-scoped persistent memory
+SwarmAI is not:
+- a chat tool
+- a task manager
+- a simple automation bot
+
+It is:
+
+> **A Command Center for Your AI Execution Team**
+
+### Four Core Principles
+
+- 🧠 **You supervise** — define goals, priorities, and guardrails  
+- 🤖 **Agents execute** — plan, coordinate, and carry out work continuously  
+- 📁 **Memory persists** — context, decisions, and knowledge accumulate over time  
+- 📈 **Work compounds** — outputs become reusable artifacts and institutional knowledge  
+
+Over time, SwarmAI transforms scattered daily activities into structured execution flows, durable outputs, and continuously improving operational memory.
+
+
+# 3. Core Layout Model
+
+SwarmAI follows a stable three-column + embedded context layout:
+
+| Area | Role |
+|------|------|
+| **Left — SwarmWS Explorer** | Persistent knowledge + project memory |
+| **Center — Chat Threads** | Command & execution surface |
+| **Above Input — TSCC** | Live cognitive context of current thread |
+| **Right — Swarm Radar** | Unified attention & action control panel |
+
+This layout balances:
+- persistent memory (left)
+- execution (center)
+- transparency (TSCC)
+- workload awareness (right)
 
 ---
 
-# 1️⃣ Command  
-## (Execution & Interaction Layer)
+# 4. SwarmWS — Persistent Workspace Root
 
-### Purpose
-The Command layer is the operational control center where users delegate work to their AI team through **chat threads that become executable work contexts**.
+SwarmWS is the single, non-deletable workspace that acts as the user’s long-term memory container. It organizes content into two semantic zones:
+
+- **Shared Knowledge** (`Knowledge/`) — reusable assets, notes, and distilled memory
+- **Active Work** (`Projects/`) — self-contained execution and knowledge containers
+
+Hierarchical context files (`context-L0.md`, `context-L1.md`) exist at workspace, section, and project levels, enabling efficient agent reasoning and predictable context assembly.
+
+Projects replace the concept of custom workspaces. Each project contains instructions, chats, research, and reports, governed by depth guardrails and system-managed templates. This ensures structure consistency, scalable growth, and agent reasoning clarity.
+
+SwarmWS enforces:
+- single workspace model
+- semantic zone grouping
+- system-managed vs user-managed ownership
+- folder depth guardrails
+- automatic integrity repair and idempotent initialization
+
+This provides a stable, local-first memory foundation for all SwarmAI activity.
 
 ---
 
-## Core Principle
-> Chat is the Command Surface — but not every message becomes a Task.
+# 5. Chat Threads — Execution Surfaces
 
-Threads support both:
-- lightweight exploration
-- structured multi-agent execution
+Chat is the primary command surface. Each thread is a live execution workspace rather than a passive conversation log.
+
+Threads support two modes:
+- **Exploration Mode** — brainstorming, clarification, planning (no task created)
+- **Execution Mode** — governed multi-agent execution tied to a Task
+
+A thread can be associated with a project or run under the workspace root when no project is selected. Threads accumulate context, decisions, artifacts, and execution history, enabling continuity across sessions.
 
 ---
 
-## Dual Interaction Modes
+# 6. TSCC — Thread-Scoped Cognitive Context
 
-### A. Exploration Mode (Lightweight Reasoning)
-Used for:
-- brainstorming
-- clarifying requirements
-- refining goals
-- knowledge exploration
+TSCC is a lightweight, collapsible context panel anchored directly above the chat input. It is owned strictly by the current thread and archived alongside it.
 
-No Task is created automatically. Context still accumulates inside the workspace memory.
+TSCC answers six key questions:
+1. Where am I working?
+2. What is the AI doing right now?
+3. Which agents are involved?
+4. What capabilities and tools are being used?
+5. What sources ground the reasoning?
+6. What is the current working conclusion?
 
-### B. Execution Mode (Structured Multi-Agent Run)
-When user commits intent:
-- A Swarm Task is created
-- SwarmAgent generates execution plan
-- Sub-agents are orchestrated in parallel
-- Outputs become artifacts
+It provides calm, human-readable transparency into multi-agent cognition without exposing low-level orchestration details. TSCC updates live, handles thread lifecycle states (active, paused, failed, resumed), and records periodic context snapshots for continuity.
+
+---
+
+# 7. Swarm Radar — Unified Attention & Action Panel (High-Level)
+
+Swarm Radar is the right sidebar that acts as the **operational cockpit** of SwarmAI. It provides glanceable awareness of all work items across their lifecycle:
+
+> **Source → ToDo → Task (WIP) → Waiting Input / Review → Completed → Archived**
+
+At a glance, users understand:
+- what needs attention
+- what the AI is currently executing
+- what is waiting for input or review
+- what has recently completed
+- what is running automatically in the background
+
+Swarm Radar organizes items into four conceptual zones:
+1. **Needs Attention** — ToDos and items requiring user input
+2. **In Progress** — Active execution tasks
+3. **Completed** — Recently completed outcomes within an archive window
+4. **Autonomous Jobs** — Background and recurring agent jobs
+
+ToDos represent structured intent signals arriving from chat, manual capture, or external integrations (email, Slack, meetings, etc.). Tasks represent governed execution threads derived from those signals or directly from user chat.
+
+Waiting Input items originate from active execution sessions when agents require clarification or permission. Completed tasks provide lightweight closure and traceability without forcing heavy review workflows. Autonomous jobs represent system-managed or user-defined recurring agent work (e.g., daily digest, indexing, scheduled reports).
+
+The interaction model is primarily **click-to-chat**: acting on any Radar item routes the user into the appropriate chat thread where deep work and execution occur. Swarm Radar therefore surfaces workload awareness, while chat remains the execution command surface.
+
+Design goals:
+- Glanceable awareness in seconds
+- Clear separation between intent signals (ToDos) and execution (Tasks)
+- Progressive disclosure via collapsible zones
+- Minimal cognitive load with strong priority and timeline cues
+- Seamless linkage to conversational execution
+
+---
+
+# 8. Swarm ToDos — Intent Signals
+
+ToDos are structured intent signals representing incoming work from:
+- manual quick capture
+- chat commands
+- AI-detected commitments
+- external systems (email, Slack, meetings, integrations)
+
+They are distinct from tasks: ToDos express intent, while tasks represent committed execution. This separation ensures clear triage, prioritization, and lifecycle governance before agents begin execution.
+
+---
+
+# 9. Multi-Agent Orchestration (Autonomy Layer)
+
+SwarmAI uses a governed multi-agent model orchestrated by a central SwarmAgent. The orchestrator interprets goals, selects specialized subagents (planning, research, execution, communication, review), and coordinates parallel work under capability and policy constraints.
+
+Human-in-the-loop checkpoints are enforced before sensitive or irreversible actions. Waiting Input signals surface in Swarm Radar, while TSCC transparently shows which agents, skills, and tools are active in the current thread.
+
+This design enables supervised autonomy: agents act proactively but remain transparent, interruptible, and auditable.
+
+---
+
+# 10. Context Assembly Model
+
+When executing within a project, context is assembled in a predictable priority order:
+1. Base system prompt
+2. Live thread context (current chat, ToDos, tasks, files)
+3. Project instructions and semantic context (L0/L1)
+4. Shared knowledge context (Knowledge L0/L1)
+5. Persistent semantic memory distilled from past interactions
+6. Global workspace semantic context (SwarmWS L0/L1)
+7. Optional scoped retrieval within SwarmWS
+
+L0 files provide fast relevance routing before loading richer L1 context, ensuring performance and bounded token usage.
+
+---
+
+# 11. Unified Relationship Model
+
+| Entity | Role |
+|--------|------|
+| SwarmWS | Persistent memory root |
+| Project | Self-contained execution and knowledge container |
+| ToDo | Structured intent signal |
+| Task | Governed multi-agent execution |
+| Chat Thread | Command & execution surface |
+| TSCC | Thread-owned cognitive transparency panel |
+| Swarm Radar | Workload awareness & attention control |
+| Artifact | Durable reusable knowledge output |
+
+---
+
+# 12. Continuous Value Loop
+
+SwarmAI turns daily work into compounding knowledge through a continuous loop:
 
 ```mermaid
 flowchart LR
-    A[User Message] --> B{Exploration or Execution?}
-    B -->|Explore| C[Thread Only - No Task]
-    B -->|Execute| D[Create Swarm Task]
-    D --> E[SwarmAgent Plan]
-    E --> F[Sub-Agent Execution]
-    F --> G[Artifacts + Logs]
+    A[Workspace & Project Context] --> B[Intent Signals - ToDos]
+    B --> C[Governed Execution - Tasks]
+    C --> D[Artifacts & Decisions]
+    D --> E[Enriched Knowledge & Memory]
+    E --> A
 ````
 
----
-
-## Work Thread Model (Execution-First Threads)
-
-Inspired by Claude Code, each thread is a **live execution workspace**, not a chat log.
-
-A Swarm Task Thread contains:
-
-* Goal and intent
-* Execution plan (editable)
-* Active sub-agents & roles
-* Tool usage logs (Skills/MCP)
-* Status updates & milestones
-* Generated artifacts
-* Human review checkpoints
-* Full audit trail
-
-Threads can run in parallel with isolated execution runs.
+Each cycle enriches persistent memory, improving future reasoning and execution quality.
 
 ---
 
-## Task States (Execution Lifecycle)
+# 13. Final Summary
 
-* **Draft** — Intent being refined (discussion)
-* **WIP** — Active multi-agent execution
-* **Blocked** — Waiting for dependency or approval
-* **Completed** — Successfully finished
-* **Cancelled** — Stopped by user/system
+SwarmAI is a **persistent agentic operating system for knowledge work** built on four tightly integrated pillars:
 
----
+* **SwarmWS** provides a single, local-first memory root with semantic zones and hierarchical context layering.
+* **Projects** structure active work into self-contained execution and knowledge containers.
+* **Swarm Radar** offers a unified, glanceable control panel showing intent signals, execution progress, waiting input, recent outcomes, and autonomous jobs.
+* **TSCC** delivers thread-scoped cognitive transparency, revealing agents, tools, sources, and working conclusions in human-readable form.
 
-# 2️⃣ Workspaces
+Together, these elements create a cohesive experience where:
 
-## (Persistent Memory & Context Engine Layer)
-
-### Purpose
-
-Workspaces are persistent cognitive containers defining:
-
-* memory boundaries
-* context scope
-* knowledge accumulation
-* execution governance
-
-> Workspace = Persistent Memory Boundary for Context + Artifacts + Execution History
-
----
-
-## Workspace Hierarchy
-
-### Root Workspace (SwarmWS — Global Memory)
-
-Automatically created and contains:
-
-* Global goals, role, priorities
-* Shared knowledge sources & tools
-* Cross-workspace ToDos & Tasks
-* Global reflections & artifacts
-
-Acts as the **Global Daily Work Operating System**.
-
----
-
-### Custom Workspaces (Project / Domain Memory)
-
-Each workspace:
-
-* inherits global context
-* maintains domain-specific memory
-* defines execution boundary for tasks & agents
-
-Contains:
-
-* Context files & notes
-* Knowledge sources
-* Tool scope & permissions
-* Artifacts (Plans, Reports, Docs, Decisions)
-* Signals (ToDos) and Tasks
-
----
-
-## Context Engine (Persistent Memory Core)
-
-The Context Engine builds a **W-Frame (Workspace Frame)** for each execution:
-
-* workspace context files
-* active tasks & signals
-* knowledgebase sources
-* effective Skills & MCP configuration
-* thread summaries
-
-This prevents regenerating full context each session and enables fast, local-first execution.
-
----
-
-## Progressive Disclosure Design
-
-| Level    | Default Visibility                         |
-| -------- | ------------------------------------------ |
-| Basic    | Context + Tasks                            |
-| Advanced | Knowledge Sources + Tools                  |
-| Expert   | Artifact graph + integrations + governance |
-
----
-
-# 3️⃣ Swarm ToDos
-
-## (Structured Intent & Signal Layer)
-
-### Purpose
-
-ToDos represent structured **work signals** before execution commitment.
-
-> ToDo = Intent Signal
-> Task = Governed Execution Commitment
-
----
-
-## Signal Ingestion Sources
-
-Automatically extracted from:
-
-* Email
-* Calendar
-* Slack / Teams / communications
-* Jira / SIM / Taskei / task centers
-* Meeting notes
-* Workspace artifacts
-* Other integrations
-
-Signals are normalized, deduplicated, and routed to appropriate workspaces.
-
----
-
-## Refined ToDo Lifecycle
-
-```mermaid
-flowchart LR
-    A[Pending Signal] --> B[In Discussion]
-    B --> C[Handled → Task Created]
-    C --> D[Execution WIP]
-```
-
----
-
-## ToDo Status Model
-
-* Pending
-* Overdue
-* In Discussion
-* Handled (mapped to Task)
-* Cancelled
-* Deleted
-
----
-
-# 4️⃣ Autonomy
-
-## (Supervised Multi-Agent Orchestration Layer)
-
-### Core Principle
-
-> Autonomy with Guardrails, Transparency, and Human Oversight
-
----
-
-## SwarmAgent as Default Orchestrator
-
-SwarmAgent is the central orchestrator that:
-
-* interprets goals
-* selects sub-agents
-* validates workspace capability policies
-* coordinates parallel execution
-* synthesizes outputs
-* proposes artifacts
-
-This design is inspired by:
-
-* Kiro: governed modular agents
-* Claude Code: execution-first workflow
-* Claude Co-work: collaborative checkpoints
-
----
-
-## Multi-Agent Orchestration Model
-
-```mermaid
-flowchart TD
-    A[Task Goal] --> B[SwarmAgent Orchestrator]
-    B --> C1[Planner Agent]
-    B --> C2[Research Agent]
-    B --> C3[Executor Agent]
-    B --> C4[Communication Agent]
-    B --> C5[Reviewer Agent]
-    C1 --> D[Shared Context & Outputs]
-    C2 --> D
-    C3 --> D
-    C4 --> D
-    C5 --> D
-    D --> E[Final Synthesis + Artifacts]
-```
-
----
-
-## Standard Sub-Agent Roles
-
-| Agent               | Responsibility                        |
-| ------------------- | ------------------------------------- |
-| Planner Agent       | Decompose goals into executable plans |
-| Research Agent      | Gather knowledge from sources         |
-| Executor Agent      | Perform tool calls & implementations  |
-| Communication Agent | Draft emails, Slack, updates          |
-| Reviewer Agent      | Validate correctness & compliance     |
-
-Additional agents may be dynamically activated (classifier, summarizer, dedupe).
-
----
-
-## Capability Governance (Kiro-inspired)
-
-Each execution enforces:
-
-```
-effective_skills = swarmws_allowed ∩ workspace_allowed
-effective_mcps   = swarmws_allowed ∩ workspace_allowed
-```
-
-If required capability is disabled:
-
-* Execution is blocked
-* User prompted to resolve policy conflict
-* All actions logged in audit trail
-
----
-
-## Autonomy Guardrails
-
-| Level                     | Behavior                      |
-| ------------------------- | ----------------------------- |
-| Suggest                   | Plan only, no execution       |
-| Ask-before-execute        | Confirm critical steps        |
-| Auto-execute (safe scope) | Runs within approved tools    |
-| Full autonomy             | Requires admin policy & audit |
-
----
-
-## Human-in-the-loop Checkpoints (Co-work Principle)
-
-Before:
-
-* external replies
-* privileged tool usage
-* artifact publishing
-* irreversible actions
-
-SwarmAI requires explicit user approval.
-
----
-
-# 5️⃣ Swarm Core
-
-## (Personalization, Governance, Integrations & Multi-Agent Infrastructure)
-
-### Purpose
-
-Provide the intelligence and governance backbone powering the SwarmAI agent team.
-
----
-
-## Personal Context Memory
-
-Persistent user model including:
-
-* role & profile
-* goals and priorities
-* communication style
-* long-term preferences
-
----
-
-## Memory Strategy (Local-First + Enterprise Sync)
-
-* Local-first persistent memory (default)
-* Optional secure cloud sync for cross-device collaboration
-* Workspace-level sharing permissions for teams
-
----
-
-## Sub-Agents & Skills Model
-
-Sub-agents operate using configured:
-
-* Skills (capabilities)
-* MCP tools (external integrations)
-* Knowledgebases (context sources)
-
-Each agent is capability-scoped and governed by workspace policies.
-
----
-
-## Tools, Integrations & Governance
-
-Includes:
-
-* MCP connectors (Slack, Email, Jira, SIM, Taskei)
-* Execution policies & approval flows
-* Role-based permissions
-* Full audit trail of agent actions
-
----
-
-# 🔁 Unified Relationship Model (Refined)
-
-| Entity      | Layer           | Function                                     |
-| ----------- | --------------- | -------------------------------------------- |
-| Workspace   | Memory Layer    | Persistent context & artifacts               |
-| ToDo        | Intent Layer    | Structured work signal                       |
-| Task        | Execution Layer | Multi-agent governed execution thread        |
-| Chat Thread | Command Layer   | Execution workspace (explore → run → review) |
-| Artifact    | Knowledge Layer | Durable reusable outputs                     |
-
----
-
-# SwarmAI — Core Product Models (Final)
-
-* **Swarm Workspace** = Persistent memory & knowledge container
-* **Swarm ToDo** = Structured intent signal
-* **Swarm Task Thread** = Governed multi-agent execution workspace
-* **Chat** = Command interface (explore → delegate → review)
-* **Artifacts** = Durable reusable knowledge outputs
-
----
-
-## Continuous Value Loop
-
-```mermaid
-flowchart LR
-    A[Workspace Context] --> B[Intent Signals - ToDos]
-    B --> C[Multi-Agent Execution - Tasks]
-    C --> D[Artifacts]
-    D --> E[Enriched Workspace Memory]
-    E --> A
-```
-
-This loop ensures work compounds over time instead of resetting each session.
-
----
-
-# Appendix
-
-> Data directory paths are platform-specific. The app uses `get_app_data_dir()` to resolve local storage. Local-first architecture ensures performance and privacy, while optional sync enables enterprise collaboration.
-
-![SwarmAI Home Mockup](../../../assets/swarmai-home-mockup.png)
-
-![SwarmAI Chat Mockup](../../../assets/swarmai-chat-mockup.png)
-
-![SwarmAI logo](../../../assets/swarmai-logo-final.png)
-
+* users supervise high-level intent,
+* AI agents execute under governance,
+* context persists across sessions,
+* and outcomes accumulate into durable institutional knowledge.

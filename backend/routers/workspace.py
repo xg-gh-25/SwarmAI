@@ -1,4 +1,11 @@
-"""Workspace router for file browser API."""
+"""Workspace router for file browser API.
+
+Increments context snapshot cache version counters when files are
+written to the workspace filesystem (Requirement 34.2):
+
+- ``project_files_version`` — for any file write inside the workspace
+- ``memory_version``        — specifically when Memory/ files are written
+"""
 
 import base64
 import logging
@@ -9,6 +16,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Query
 
 from database import db
+from core.context_snapshot_cache import context_cache
 
 from schemas.workspace import (
     WorkspaceFileInfo,
@@ -565,6 +573,12 @@ async def upload_file(agent_id: str, request: WorkspaceUploadRequest):
     except ValueError:
         relative_path = target_path.resolve().relative_to(workspace_root.resolve())
 
+    # Increment version counters for context cache invalidation (Req 34.2)
+    context_cache.increment_project_files_version()
+    rel_str = str(relative_path).replace("\\", "/")
+    if "Knowledge/Memory" in rel_str:
+        context_cache.increment_memory_version()
+
     return WorkspaceUploadResponse(
         path=str(relative_path),
         filename=target_path.name,
@@ -628,6 +642,12 @@ async def write_file(
         relative_path = file_path.relative_to(workspace_root)
     except ValueError:
         relative_path = file_path.resolve().relative_to(workspace_root.resolve())
+
+    # Increment version counters for context cache invalidation (Req 34.2)
+    context_cache.increment_project_files_version()
+    rel_str = str(relative_path).replace("\\", "/")
+    if "Knowledge/Memory" in rel_str:
+        context_cache.increment_memory_version()
 
     return WorkspaceWriteResponse(
         path=str(relative_path),

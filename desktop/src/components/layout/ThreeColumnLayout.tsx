@@ -2,8 +2,10 @@ import { ReactNode, useState, useCallback } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { LayoutProvider, useLayout, LAYOUT_CONSTANTS, ModalType } from '../../contexts/LayoutContext';
+import { ExplorerProvider } from '../../contexts/ExplorerContext';
 import { WorkspaceExplorer } from '../workspace-explorer';
 import { ChatDropZone } from '../chat';
+import GlobalSearchBar from './GlobalSearchBar';
 import FileEditorModal from '../common/FileEditorModal';
 import SwarmWorkspaceWarningDialog from '../common/SwarmWorkspaceWarningDialog';
 import SkillsModal from '../modals/SkillsModal';
@@ -25,7 +27,10 @@ interface ThreeColumnLayoutProps {
   children: ReactNode;
 }
 
-// TopBar component with window dragging support
+// TopBar component with window dragging support and centered GlobalSearchBar.
+// The bar remains draggable (Tauri window drag) except over the search input,
+// which stops mouseDown propagation to prevent window dragging.
+// Requirements: 9.2, 13.1
 function TopBar() {
   const handleMouseDown = async (e: React.MouseEvent) => {
     // Only start drag on left mouse button and not on traffic light area (macOS)
@@ -41,9 +46,16 @@ function TopBar() {
   return (
     <div
       onMouseDown={handleMouseDown}
-      className="h-10 bg-[var(--color-bg)] border-b border-[var(--color-border)] flex-shrink-0 select-none cursor-default"
+      className="h-10 bg-[var(--color-bg)] border-b border-[var(--color-border)] flex-shrink-0 select-none cursor-default flex items-center"
       data-tauri-drag-region
-    />
+    >
+      {/* Spacer for macOS traffic lights */}
+      <div className="w-20 flex-shrink-0" />
+      {/* GlobalSearchBar — centered, stops drag propagation internally */}
+      <GlobalSearchBar />
+      {/* Right spacer for symmetry */}
+      <div className="w-20 flex-shrink-0" />
+    </div>
   );
 }
 
@@ -233,6 +245,9 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
   }>({ isOpen: false, pendingFile: null });
 
   // Handle file double-click - Requirement 9.1
+  // TODO: This callback uses the deprecated FileTreeItem type from the old explorer.
+  // It is not yet wired through the new VirtualizedTree/TreeNodeRow components.
+  // Needs to be adapted to use TreeNode type and connected in a future cadence.
   const handleFileDoubleClick = useCallback(async (file: FileTreeItem) => {
     // Check if this is a Swarm Workspace file - Requirement 4.3
     if (file.isSwarmWorkspace) {
@@ -299,20 +314,22 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
 
   return (
     <div className="flex flex-col h-screen bg-[var(--color-bg)]">
-      {/* Top bar with traffic lights area - draggable */}
-      <TopBar />
+      <ExplorerProvider>
+        {/* Top bar with traffic lights area - draggable */}
+        <TopBar />
 
-      {/* Main layout below top bar */}
-      <div className="flex flex-1 overflow-hidden">
-        {/* Left Sidebar - 56px fixed width */}
-        <LeftSidebar />
+        {/* Main layout below top bar */}
+        <div className="flex flex-1 overflow-hidden">
+          {/* Left Sidebar - 56px fixed width */}
+          <LeftSidebar />
 
-        {/* Workspace Explorer - 280px default, resizable 200-500px, collapsible */}
-        <WorkspaceExplorer onFileDoubleClick={handleFileDoubleClick} />
+          {/* Workspace Explorer - 280px default, resizable 200-500px, collapsible */}
+          <WorkspaceExplorer onFileDoubleClick={handleFileDoubleClick} />
 
-        {/* Main Chat Panel - flex-1 (remaining space) */}
-        <MainChatPanel>{children}</MainChatPanel>
-      </div>
+          {/* Main Chat Panel - flex-1 (remaining space) */}
+          <MainChatPanel>{children}</MainChatPanel>
+        </div>
+      </ExplorerProvider>
 
       {/* File Editor Modal - Requirement 9.1, 9.2 */}
       {fileEditorState && (
