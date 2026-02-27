@@ -8,6 +8,14 @@
 
 *Work Smarter. Stress Less.*
 
+
+
+**A Persistent Agentic Workspace for Knowledge Workers**
+
+SwarmAI gives you a supervised team of AI agents that plan, act, and follow through across your work. It brings emails, meetings, communications, tasks, documents, and projects into one intelligent command center — where everything stays connected and moving forward.
+
+![SwarmAI Home](./assets/swarmai-home-mockup.png)
+
 [![Python](https://img.shields.io/badge/Python-3.12+-3776AB?style=flat&logo=python&logoColor=white)](https://www.python.org/)
 [![React](https://img.shields.io/badge/React-19-61DAFB?style=flat&logo=react&logoColor=black)](https://react.dev/)
 [![Tauri](https://img.shields.io/badge/Tauri-2.0-FFC131?style=flat&logo=tauri&logoColor=white)](https://tauri.app/)
@@ -16,40 +24,86 @@
 [![Claude](https://img.shields.io/badge/Claude-Agent_SDK-191919?style=flat&logo=anthropic&logoColor=white)](https://github.com/anthropics/claude-code)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat)](./LICENSE)
 
-A full-stack AI agent platform built on Claude Agent SDK, supporting both desktop application and cloud deployment modes.
+</div>
 
-[✨ Features](#features) • [�️ Desktop App](#desktop-application) • [☁️ Cloud Deployment](#cloud-deployment) • [�️ Security](#security) • [📚 Documentation](#documentation)
+---
+
+## Why SwarmAI?
+
+Unlike traditional AI tools that reset every session, SwarmAI builds **private, long-term local memory**. It remembers context, preferences, and ongoing priorities so productivity compounds instead of starting from scratch each day.
+
+**You delegate. Your AI team executes. Every action is transparent, reviewable, and secure.**
+
+<div align="center">
+
+| 🧠 You Supervise | 🤖 Agents Execute | 📁 Memory Persists | 📈 Work Compounds |
+|:---:|:---:|:---:|:---:|
+| Stay in control | Delegate daily tasks | Context accumulates | Productivity scales |
 
 </div>
 
 ---
 
-## Overview
+## Product Architecture
 
-SwarmAI is a powerful AI Agent management platform that enables you to:
+SwarmAI is built on **5 Core Pillars**:
 
-- **Chat with AI Agents**: Interactive chat interface with SSE streaming
-![alt text](./assets/image-4.png)
-- **Background task**: Create and run background tasks in batch mode
-![alt text](./assets/image-5.png)
-![alt text](./assets/image-7.png)
+### 1️⃣ Command — Execution & Interaction Layer
 
-- **Manage Agents**: Create, configure, and monitor AI agents
-![alt text](./assets/image-3.png)
-- **Manage Skills**: Upload, install, and manage custom skills (with Git version control)
-![alt text](./assets/image-2.png)
-- **Manage Plugins**: Plugin system to extend platform functionality
-![alt text](./assets/image-1.png)
-- **Manage MCP Servers**: Configure Model Context Protocol servers
-![alt text](./assets/image.png)
+The operational control center where you interact with your AI team.
 
-## Deployment Modes
+- **Work Threads**: Every chat session maps to a Swarm Task
+- **Parallel Execution**: Run multiple tasks simultaneously
+- **Full Audit Trail**: Transparent activity logs and summary outcomes
 
-| Mode | Frontend | Backend | Database | Skill Storage | Use Case |
-|------|----------|---------|----------|---------------|----------|
-| **Desktop** | Tauri 2.0 + React | Python FastAPI (Sidecar) | SQLite | Local filesystem + Git | Personal use |
+![SwarmAI Chat Interface](./assets/swarmai-chat-mockup.png)
+
+### 2️⃣ Workspaces — Persistent Memory Layer
+
+Structured memory containers that ensure work compounds over time.
+
+- **Root Workspace**: Global memory with context, knowledge sources, and tools
+- **Swarm Workspaces**: Project/domain-specific memory that inherits from Root
+- **Persistent Context**: Every interaction enriches workspace memory
+
+### 3️⃣ Swarm ToDos — Structured Intent Layer
+
+Intelligent task extraction and management.
+
+- **Auto-Extraction**: From email, calendar, Slack, meeting notes, Jira, and more
+- **Smart Lifecycle**: Pending → Handled → Completed
+- **Priority Management**: Organize and prioritize your work queue
+
+### 4️⃣ Autonomy — Supervised Execution Layer
+
+AI agents that execute under human supervision.
+
+- **Delegated Execution**: Plan, execute, communicate, and report
+- **Intelligent Extraction**: Continuous ToDo extraction — nothing slips through
+- **Briefings & Subscriptions**: Inbox summaries, Slack digests, workspace health reports
+
+### 5️⃣ Swarm Core — Personalization Layer
+
+Your personal AI configuration center.
+
+- **Personal Context**: Profile, goals, communication style, priorities
+- **Knowledge Layer**: Local folders, cloud storage, vector database
+- **Sub-Agents & Skills**: Specialized agents for research, documents, communication, and more
+- **Tools & Integrations**: MCP tools, connected apps, plugins
 
 ---
+
+## Core Models
+
+| Entity | Layer | Function |
+|--------|-------|----------|
+| **Workspace** | Memory | Persistent structured context |
+| **ToDo** | Intent | Structured work signal |
+| **Task** | Execution | Active execution thread |
+| **Chat** | Interface | User interaction surface |
+
+---
+
 
 ## Desktop Application
 
@@ -87,18 +141,6 @@ After launching, go to the Settings page to configure:
 - **Anthropic API**: Enter your API Key
 - **AWS Bedrock**: Enable Bedrock toggle and configure authentication
 
-## Add Plugins
-
-In **Plugin Management** page, click **Install Plugin**, copy and paste plugin GitHub repo. Recommended:
-
-| Name | Repo |
-|------|------|
-| Knowledge Work Plugins | https://github.com/anthropics/knowledge-work-plugins.git |
-| Official Skills | https://github.com/anthropics/skills.git |
-| Official Plugins | https://github.com/anthropics/claude-plugins-official.git |
-
-> 📖 For detailed installation instructions, see [QUICK_START.md](./QUICK_START.md)
-
 ### Build from Source
 
 **Prerequisites:**
@@ -135,172 +177,31 @@ npm run build:all
 
 ---
 
-## Cloud Deployment
-
-### Prerequisites
-
-- Node.js 18+ and npm
-- Python 3.12+
-- uv (Python package manager, recommended) or pip
-- AWS account (for Bedrock, optional)
-- ANTHROPIC_API_KEY
-
-### Quick Start
-
-```bash
-# Start backend and frontend
-./start.sh
-
-# Stop all services
-./stop.sh
-```
-
-### Manual Setup
-
-#### Frontend
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-Frontend will be available at http://localhost:5173
-
-#### Backend
-
-```bash
-cd backend
-
-# Create virtual environment
-uv sync
-source .venv/bin/activate
-
-# Configure environment variables
-cp .env.example .env
-# Edit .env and add ANTHROPIC_API_KEY
-
-# Start server
-python main.py
-```
-
-Backend API will be available at http://localhost:8000
-
-API Documentation: http://localhost:8000/docs
-
----
-
 ## Tech Stack
 
-### Desktop Version
-- **Frontend Framework**: Tauri 2.0 + React 19 + TypeScript
-- **Backend**: FastAPI (PyInstaller packaged as Sidecar)
-- **Database**: SQLite
-- **Build Tools**: Vite + Rust
-
-### Common
-- **AI Engine**: Claude Agent SDK
-- **Styling**: Tailwind CSS 4.x
-- **State Management**: TanStack Query
-- **Routing**: React Router v6
-
----
-
-## Features
-
-### Chat Interface
-- SSE real-time streaming responses
-- Message history
-- Tool call visualization
-- File attachment support (images, PDF, TXT, CSV)
-- Drag-and-drop and paste upload
-
-### Agent Management
-- Create, edit, and delete agents
-- Configure model, max tokens, and permissions
-- Assign skills and MCP servers to agents
-- Global user mode (access full filesystem)
-- Human approval mode (confirm dangerous operations)
-
-### Skill Management
-- Install skills from Git repositories
-- Local skill directory
-- Git version control (update, rollback)
-- Install via ZIP upload
-
-### Plugin Management
-- Enable/disable plugins
-- Plugin configuration
-
-### MCP Server Management
-- Support for stdio, SSE, HTTP connection types
-- Connection status monitoring
-- Test connection functionality
-
----
-
-## Project Structure
-
-```
-SwarmAI/
-├── desktop/                 # Desktop app (Tauri 2.0)
-│   ├── src/                 # React frontend source
-│   │   ├── components/      # UI components
-│   │   ├── pages/           # Page components
-│   │   ├── services/        # API services
-│   │   └── types/           # TypeScript types
-│   ├── src-tauri/           # Tauri/Rust code
-│   │   ├── src/lib.rs       # Rust main logic
-│   │   └── tauri.conf.json  # Tauri configuration
-│   ├── scripts/             # Build scripts
-│   └── BUILD_GUIDE.md       # Build guide
-│
-├── frontend/                # Cloud version frontend (React)
-│   ├── src/
-│   └── package.json
-│
-├── backend/                 # FastAPI backend
-│   ├── main.py              # Application entry
-│   ├── config.py            # Configuration
-│   ├── routers/             # API routes
-│   ├── core/                # Core business logic
-│   │   ├── agent_manager.py # Agent management
-│   │   ├── session_manager.py
-│   │   └── local_skill_manager.py
-│   ├── database/
-│   │   └── sqlite.py        # SQLite
-│   └── schemas/             # Pydantic models
-│
-├── CLAUDE.md                # Claude Code development guide
-├── SECURITY.md              # Security architecture documentation
-├── ARCHITECTURE.md          # System architecture documentation
-└── README.md                # This file
-```
+| Component | Technology |
+|-----------|------------|
+| Desktop Framework | Tauri 2.0 + React 19 + TypeScript |
+| Backend | FastAPI (PyInstaller packaged as Sidecar) |
+| AI Engine | Claude Agent SDK |
+| Database | SQLite |
+| Styling | Tailwind CSS 4.x |
+| State Management | TanStack Query |
+| Build Tools | Vite + Rust |
 
 ---
 
 ## Security
 
-The platform implements a **defense-in-depth security model**:
+SwarmAI implements a **defense-in-depth security model** with four layers:
 
-### Four-Layer Security Protection
+| Layer | Protection |
+|-------|------------|
+| **Workspace Isolation** | Each agent runs in an isolated directory |
+| **Skill Access Control** | PreToolUse hooks validate skill invocations |
+| **File Tool Access Control** | Validates all file operation paths |
+| **Bash Command Protection** | Parses and validates file paths in commands |
 
-1. **Workspace Isolation**: Each agent runs in an isolated directory
-2. **Skill Access Control**: PreToolUse hooks validate skill invocations
-3. **File Tool Access Control**: Validates all file operation paths
-4. **Bash Command Protection**: Parses and validates file paths in bash commands
-
-### Agent Modes
-
-| Mode | Description |
-|------|-------------|
-| Default Mode | Can only access files within workspace |
-| Global User Mode | Can access full filesystem (`~/` as working directory) |
-| Human Approval Mode | Dangerous operations require user confirmation |
-
-> 📖 For detailed security documentation, see [SECURITY.md](./SECURITY.md)
-
----
 
 ## Configuration
 
@@ -318,37 +219,31 @@ The platform implements a **defense-in-depth security model**:
 - `DEBUG` - Debug mode
 - `HOST` - Server host
 - `PORT` - Server port
-- `DATABASE_TYPE` - Database type (`sqlite`)
 
 For complete configuration, see `backend/.env.example` or `desktop/backend.env.example`
 
 ---
 
-## Documentation
 
-| Document | Description |
-|----------|-------------|
-| [BUILD_GUIDE.md](./desktop/BUILD_GUIDE.md) | Desktop build guide |
-| [CLAUDE.md](./CLAUDE.md) | Claude Code development guide |
-| [SECURITY.md](./SECURITY.md) | Security architecture documentation |
-| [ARCHITECTURE.md](./ARCHITECTURE.md) | System architecture documentation |
-| [SKILLS_GUIDE.md](./SKILLS_GUIDE.md) | Skill development guide |
+## Project Structure
 
----
-
-## Design System
-
-- **Primary Color**: `#2b6cee` (Blue)
-- **Background**: `#101622` (Dark)
-- **Card Background**: `#1a1f2e`
-- **Font**: Space Grotesk
-- **Icons**: Material Symbols Outlined
-
----
-
-## License
-
-MIT License
+```
+SwarmAI/
+├── desktop/                 # Desktop app (Tauri 2.0)
+│   ├── src/                 # React frontend source
+│   ├── src-tauri/           # Tauri/Rust code
+│   └── scripts/             # Build scripts
+│
+├── backend/                 # FastAPI backend
+│   ├── main.py              # Application entry
+│   ├── routers/             # API routes
+│   ├── core/                # Core business logic
+│   ├── database/            # SQLite database
+│   └── schemas/             # Pydantic models
+│
+├── assets/                  # Images and mockups
+└── .kiro/specs/             # Product specifications
+```
 
 ---
 
@@ -357,3 +252,15 @@ MIT License
 Issues and Pull Requests are welcome!
 
 - **GitHub**: https://github.com/xg-gh-25/SwarmAI
+
+---
+
+
+
+<div align="center">
+
+**SwarmAI — Transform fragmented tasks into coordinated execution.**
+
+*You delegate. Your AI team executes. Work compounds.*
+
+</div>
