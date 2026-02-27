@@ -1,12 +1,12 @@
 [package]
-name = "owork"
-version = "0.0.1"
-description = "Owork - AI Agent Desktop Application"
-authors = ["Owork Team"]
+name = "swarmai"
+version = "1.0.0"
+description = "SwarmAI - Your AI Team, 24/7"
+authors = ["Xiaogang Wang"]
 edition = "2021"
 
 [lib]
-name = "owork_lib"
+name = "swarmai_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

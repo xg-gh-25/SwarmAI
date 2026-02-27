@@ -60,7 +60,7 @@ class SystemPromptBuilder:
     def _section_identity(self) -> str:
         name = self.agent_config.get("name", "Assistant")
         description = self.agent_config.get("description", "")
-        line = f"You are {name}, a personal assistant running inside owork."
+        line = f"You are {name}, a personal assistant running inside SwarmAI."
         if description:
             line += f" {description}"
         # Override the SDK's default identity preamble
@@ -159,7 +159,7 @@ class SystemPromptBuilder:
         For ``BOOTSTRAP.md``, the content is truncated to
         ``BOOTSTRAP_TRUNCATION_LIMIT`` characters.
         """
-        path = Path(self.working_directory) / ".owork" / filename
+        path = Path(self.working_directory) / ".swarmai" / filename
         try:
             if not path.is_file():
                 return None
