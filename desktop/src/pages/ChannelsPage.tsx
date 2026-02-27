@@ -10,6 +10,7 @@ import {
   ResizableTableCell,
   ConfirmDialog,
   Dropdown,
+  Breadcrumb,
 } from '../components/common';
 import type { Channel, ChannelCreateRequest, ChannelUpdateRequest, ChannelType, ChannelAccessMode, Agent } from '../types';
 import { channelsService } from '../services/channels';
@@ -96,6 +97,8 @@ export default function ChannelsPage() {
 
   return (
     <div className="p-8">
+      <Breadcrumb currentPage={t('channels.title')} />
+
       {/* Header */}
       <div className="flex items-start justify-between mb-6">
         <div>
