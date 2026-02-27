@@ -359,13 +359,33 @@ class SQLitePluginsTable(SQLiteTable[T], Generic[T]):
 class SQLiteTasksTable(SQLiteTable[T], Generic[T]):
     """Specialized SQLite table for tasks with status filtering and counting."""
 
-    async def list_all(self, status: Optional[str] = None, agent_id: Optional[str] = None, workspace_id: Optional[str] = None) -> list[T]:
-        """List all tasks, optionally filtered by status, agent_id, or workspace_id."""
+    async def list_all(
+        self,
+        status: Optional[str] = None,
+        statuses: Optional[list[str]] = None,
+        agent_id: Optional[str] = None,
+        workspace_id: Optional[str] = None,
+        completed_after: Optional[str] = None,
+    ) -> list[T]:
+        """List all tasks, optionally filtered.
+
+        Args:
+            status: Single status filter (legacy, use ``statuses`` for multi).
+            statuses: List of statuses with OR semantics.
+            agent_id: Filter by agent ID.
+            workspace_id: Filter by workspace ID.
+            completed_after: ISO 8601 date string; return only tasks with
+                ``completed_at`` after this value.
+        """
         async with self._get_connection() as conn:
             conn.row_factory = aiosqlite.Row
             query = "SELECT * FROM tasks WHERE 1=1"
-            params = []
-            if status:
+            params: list[str] = []
+            if statuses:
+                placeholders = ",".join("?" for _ in statuses)
+                query += f" AND status IN ({placeholders})"
+                params.extend(statuses)
+            elif status:
                 query += " AND status = ?"
                 params.append(status)
             if agent_id:
@@ -374,6 +394,9 @@ class SQLiteTasksTable(SQLiteTable[T], Generic[T]):
             if workspace_id:
                 query += " AND workspace_id = ?"
                 params.append(workspace_id)
+            if completed_after:
+                query += " AND completed_at > ?"
+                params.append(completed_after)
             query += " ORDER BY created_at DESC"
             async with conn.execute(query, params) as cursor:
                 rows = await cursor.fetchall()
@@ -1346,10 +1369,11 @@ class SQLiteDatabase(BaseDatabase):
         title TEXT NOT NULL,
         description TEXT,
         source TEXT,
-        source_type TEXT NOT NULL DEFAULT 'manual' CHECK (source_type IN ('manual', 'email', 'slack', 'meeting', 'integration')),
+        source_type TEXT NOT NULL DEFAULT 'manual' CHECK (source_type IN ('manual', 'email', 'slack', 'meeting', 'integration', 'chat', 'ai_detected')),
         status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'overdue', 'in_discussion', 'handled', 'cancelled', 'deleted')),
         priority TEXT NOT NULL DEFAULT 'none' CHECK (priority IN ('high', 'medium', 'low', 'none')),
         due_date TEXT,
+        linked_context TEXT,
         task_id TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
@@ -1904,6 +1928,79 @@ class SQLiteDatabase(BaseDatabase):
                 logger.warning("Legacy cleanup: Failed to clear chat_threads workspace_id: %s", e)
 
             logger.info("Legacy cleanup: Clean-slate removal complete")
+
+        # ============================================================================
+        # ToDo Schema Extensions (Swarm Radar ToDos — Sub-Spec 2)
+        # Validates: Requirements 5.6
+        # Step 1: Add linked_context column (safe ALTER TABLE)
+        # Step 2: Update source_type CHECK constraint via table-rebuild
+        # ============================================================================
+
+        # Migration Step 1: Add linked_context column to todos table
+        cursor = await conn.execute("PRAGMA table_info(todos)")
+        todo_columns = await cursor.fetchall()
+        todo_column_names = [col[1] for col in todo_columns]
+
+        if "linked_context" not in todo_column_names:
+            logger.info("Running migration: Adding linked_context column to todos table")
+            await conn.execute("ALTER TABLE todos ADD COLUMN linked_context TEXT")
+            await conn.commit()
+            logger.info("Migration complete: linked_context column added to todos")
+
+        # Migration Step 2: Update source_type CHECK constraint to include 'chat' and 'ai_detected'
+        # SQLite cannot ALTER CHECK constraints, so we use the table-rebuild pattern.
+        # Wrapped in BEGIN IMMEDIATE ... COMMIT for crash safety (PE Finding #7).
+        # Idempotency: skip if 'chat' is already in the CREATE TABLE SQL.
+        cursor = await conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='todos'"
+        )
+        row = await cursor.fetchone()
+        create_sql = row[0] if row else ""
+
+        if "'chat'" not in create_sql:
+            logger.info("Running migration: Updating source_type CHECK constraint in todos table")
+            await conn.execute("BEGIN IMMEDIATE")
+            try:
+                await conn.execute("""
+                    CREATE TABLE todos_new (
+                        id TEXT PRIMARY KEY,
+                        workspace_id TEXT NOT NULL,
+                        title TEXT NOT NULL,
+                        description TEXT,
+                        source TEXT,
+                        source_type TEXT NOT NULL DEFAULT 'manual'
+                            CHECK (source_type IN ('manual','email','slack','meeting','integration','chat','ai_detected')),
+                        status TEXT NOT NULL DEFAULT 'pending'
+                            CHECK (status IN ('pending','overdue','in_discussion','handled','cancelled','deleted')),
+                        priority TEXT NOT NULL DEFAULT 'none'
+                            CHECK (priority IN ('high','medium','low','none')),
+                        due_date TEXT,
+                        linked_context TEXT,
+                        task_id TEXT,
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL
+                    )
+                """)
+                await conn.execute("""
+                    INSERT INTO todos_new
+                    SELECT id, workspace_id, title, description, source, source_type,
+                           status, priority, due_date, linked_context, task_id,
+                           created_at, updated_at
+                    FROM todos
+                """)
+                await conn.execute("DROP TABLE todos")
+                await conn.execute("ALTER TABLE todos_new RENAME TO todos")
+                # Recreate indexes lost during table rebuild
+                await conn.execute("CREATE INDEX IF NOT EXISTS idx_todos_workspace_id ON todos(workspace_id)")
+                await conn.execute("CREATE INDEX IF NOT EXISTS idx_todos_status ON todos(status)")
+                await conn.execute("CREATE INDEX IF NOT EXISTS idx_todos_due_date ON todos(due_date)")
+                await conn.execute("CREATE INDEX IF NOT EXISTS idx_todos_workspace_status ON todos(workspace_id, status)")
+                await conn.execute("COMMIT")
+                logger.info("Migration complete: source_type CHECK constraint updated in todos")
+            except Exception as e:
+                await conn.execute("ROLLBACK")
+                logger.error("Migration failed: source_type CHECK update in todos: %s", e)
+                raise
 
         # Migration: Map existing task statuses and assign workspace_id to existing tasks
         # Status mapping: pending→draft, running→wip, failed→blocked

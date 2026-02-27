@@ -15,7 +15,7 @@ import { PermissionRequestModal } from '../components/chat';
 import { FilePreviewModal } from '../components/workspace/FilePreviewModal';
 import { useFileAttachment, useTabState, useRightSidebarGroup } from '../hooks';
 import { useTSCCState } from '../hooks/useTSCCState';
-import { ChatHeader, ChatInput, ChatHistorySidebar, FileBrowserSidebar, MessageBubble, TodoRadarSidebar } from './chat/components';
+import { ChatHeader, ChatInput, ChatHistorySidebar, FileBrowserSidebar, MessageBubble, SwarmRadar } from './chat/components';
 import { TSCCPanel } from './chat/components/TSCCPanel';
 import { TSCCSnapshotCard } from './chat/components/TSCCSnapshotCard';
 import { listSnapshots } from '../services/tscc';
@@ -466,6 +466,9 @@ export default function ChatPage() {
         setIsStreaming(false);
       } else if (event.type === 'result' && event.sessionId) {
         setSessionId(event.sessionId);
+        // Invalidate Radar task caches on stream completion (Spec 4 — Req 9.3)
+        queryClient.invalidateQueries({ queryKey: ['radar', 'wipTasks'] });
+        queryClient.invalidateQueries({ queryKey: ['radar', 'completedTasks'] });
       } else if (event.type === 'error') {
         const errorMsg = event.message || event.error || event.detail || 'An unknown error occurred';
         setMessages((prev) =>
@@ -930,10 +933,13 @@ export default function ChatPage() {
 
         {/* Right Sidebars - Order: TodoRadar, ChatHistory, FileBrowser */}
         {rightSidebars.isActive('todoRadar') && (
-          <TodoRadarSidebar
+          <SwarmRadar
             width={rightSidebars.widths.todoRadar.width}
             isResizing={rightSidebars.widths.todoRadar.isResizing}
             onMouseDown={rightSidebars.widths.todoRadar.handleMouseDown}
+            pendingQuestion={pendingQuestion}
+            pendingPermission={pendingPermission}
+            activeSessionId={sessionId}
           />
         )}
 

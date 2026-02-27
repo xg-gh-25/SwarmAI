@@ -4,7 +4,17 @@ This module defines the Pydantic models for ToDo entities, which represent
 incoming work signals in the Daily Work Operating Loop. In the UI, these
 are displayed as "Signals" but the technical entity name is "ToDo".
 
-Requirements: 4.1, 4.2, 4.3, 4.4
+Key public symbols:
+
+- ``ToDoStatus``       — Enum of lifecycle states (pending, overdue, …, deleted)
+- ``ToDoSourceType``   — Enum of origin types (manual, email, …, chat, ai_detected)
+- ``Priority``         — Enum of priority levels (high, medium, low, none)
+- ``ToDoCreate``       — Request model for creating a ToDo (includes linked_context)
+- ``ToDoUpdate``       — Request model for partial updates (includes linked_context)
+- ``ToDoResponse``     — Response model with all stored fields (includes linked_context)
+- ``ToDoConvertToTaskRequest`` — Request model for ToDo → Task conversion
+
+Requirements: 4.1, 4.2, 4.3, 4.4, 5.1, 5.2, 5.3, 5.5
 """
 from datetime import datetime
 from enum import Enum
@@ -31,12 +41,15 @@ class ToDoSourceType(str, Enum):
     
     Requirement 4.3: THE System SHALL support ToDo source_type values:
     manual, email, slack, meeting, integration.
+    Requirement 5.1: Extended with chat and ai_detected source types.
     """
     MANUAL = "manual"
     EMAIL = "email"
     SLACK = "slack"
     MEETING = "meeting"
     INTEGRATION = "integration"
+    CHAT = "chat"
+    AI_DETECTED = "ai_detected"
 
 
 class Priority(str, Enum):
@@ -71,6 +84,12 @@ class ToDoCreate(BaseModel):
         description="Priority level of the ToDo"
     )
     due_date: Optional[datetime] = Field(None, description="Due date for the ToDo")
+    linked_context: Optional[str] = Field(
+        None,
+        max_length=10000,
+        description="JSON string with reference metadata, e.g. "
+                    '{"type": "thread", "thread_id": "abc123"}'
+    )
 
 
 class ToDoUpdate(BaseModel):
@@ -85,6 +104,11 @@ class ToDoUpdate(BaseModel):
     status: Optional[ToDoStatus] = Field(None, description="Current status of the ToDo")
     priority: Optional[Priority] = Field(None, description="Priority level")
     due_date: Optional[datetime] = Field(None, description="Due date for the ToDo")
+    linked_context: Optional[str] = Field(
+        None,
+        max_length=10000,
+        description="JSON string with reference metadata"
+    )
 
 
 class ToDoResponse(BaseModel):
@@ -106,6 +130,10 @@ class ToDoResponse(BaseModel):
     status: ToDoStatus = Field(..., description="Current status of the ToDo")
     priority: Priority = Field(..., description="Priority level of the ToDo")
     due_date: Optional[datetime] = Field(None, description="Due date for the ToDo")
+    linked_context: Optional[str] = Field(
+        None,
+        description="JSON string with reference metadata"
+    )
     task_id: Optional[str] = Field(None, description="ID of the Task if this ToDo was converted")
     created_at: datetime = Field(..., description="Timestamp when the ToDo was created")
     updated_at: datetime = Field(..., description="Timestamp when the ToDo was last updated")
