@@ -259,6 +259,8 @@
       "enableFileAccessControl": "启用文件访问控制",
       "enableHumanApproval": "启用人工审批",
       "enableHumanApprovalDescription": "危险命令需要用户确认",
+      "sandboxEnabled": "启用沙箱",
+      "sandboxEnabledDescription": "限制 Bash 命令在安全沙箱中执行（例如无法执行删除文件等操作）",
       "globalUserMode": "全局用户模式",
       "globalUserModeDescription": "使用主目录并拥有完整文件访问权限",
       "globalUserModeHelp": "允许 Agent 访问用户主目录下的文件",

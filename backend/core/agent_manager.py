@@ -928,7 +928,7 @@ class AgentManager:
         
         # Build sandbox configuration (SDK built-in bash sandboxing)
         sandbox_settings = None
-        sandbox_enabled = settings.sandbox_enabled_default
+        sandbox_enabled = agent_config.get("sandbox_enabled", settings.sandbox_enabled_default)
 
         # Sandbox only works on macOS/Linux, not Windows
         if sandbox_enabled and platform.system() == "Windows":
