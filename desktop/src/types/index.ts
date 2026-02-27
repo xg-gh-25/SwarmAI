@@ -48,6 +48,7 @@ export interface Agent {
   enableSafetyChecks: boolean;
   globalUserMode: boolean;
   enableHumanApproval: boolean;
+  sandboxEnabled: boolean;
   sandbox?: SandboxConfig;
   status: 'active' | 'inactive';
   createdAt: string;
@@ -70,6 +71,7 @@ export interface AgentCreateRequest {
   enableWebTools?: boolean;
   globalUserMode?: boolean;
   enableHumanApproval?: boolean;
+  sandboxEnabled?: boolean;
   sandbox?: SandboxConfigRequest;
 }
 

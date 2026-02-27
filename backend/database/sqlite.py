@@ -481,6 +481,7 @@ class SQLiteDatabase(BaseDatabase):
         allowed_directories TEXT DEFAULT '[]',
         global_user_mode INTEGER DEFAULT 0,
         enable_human_approval INTEGER DEFAULT 1,
+        sandbox_enabled INTEGER DEFAULT 1,
         sandbox TEXT DEFAULT '{}',
         status TEXT DEFAULT 'active',
         user_id TEXT,
@@ -868,6 +869,14 @@ class SQLiteDatabase(BaseDatabase):
             await conn.execute(f"ALTER TABLE tasks ADD COLUMN updated_at TEXT DEFAULT '{datetime.now().isoformat()}'")
             await conn.commit()
             logger.info("Migration complete: updated_at column added")
+
+        # Migration: Add sandbox_enabled column to agents table (added 2026-02-10)
+        # Per-agent sandbox toggle, defaults to enabled
+        if "sandbox_enabled" not in column_names:
+            logger.info("Running migration: Adding sandbox_enabled column to agents table")
+            await conn.execute("ALTER TABLE agents ADD COLUMN sandbox_enabled INTEGER DEFAULT 1")
+            await conn.commit()
+            logger.info("Migration complete: sandbox_enabled column added")
 
     @property
     def agents(self) -> SQLiteTable:

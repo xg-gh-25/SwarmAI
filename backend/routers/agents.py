@@ -134,6 +134,7 @@ async def create_agent(request: AgentCreateRequest):
         "allowed_directories": request.allowed_directories,
         "global_user_mode": global_user_mode,
         "enable_human_approval": request.enable_human_approval,
+        "sandbox_enabled": request.sandbox_enabled,
         "status": "active",
     }
     agent = await db.agents.put(agent_data)
