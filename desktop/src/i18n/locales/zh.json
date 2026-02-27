@@ -69,7 +69,7 @@
     }
   },
   "nav": {
-    "dashboard": "仪表盘",
+    "swarmcore": "SwarmCore",
     "chat": "对话",
     "tasks": "任务",
     "agents": "Agent 管理",
@@ -80,8 +80,8 @@
     "settings": "设置"
   },
   "dashboard": {
-    "title": "欢迎使用 SwarmAI",
-    "subtitle": "管理你的 AI Agent、Skill 和 MCP 服务器连接",
+    "title": "SwarmCore",
+    "subtitle": "控制记忆、Agent、Skill、工具和集成。",
     "quickActions": "快捷操作",
     "overview": "概览",
     "recentAgents": "最近的 Agent",

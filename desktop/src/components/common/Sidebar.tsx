@@ -36,13 +36,7 @@ export default function Sidebar({ collapsed, onClose, isOverlay }: SidebarProps)
   const { count: runningTaskCount } = useRunningTaskCount();
 
   const navItems: NavItem[] = [
-    { path: '/chat', labelKey: 'nav.chat', icon: 'chat' },
-    { path: '/tasks', labelKey: 'nav.tasks', icon: 'task_alt' },
-    { path: '/agents', labelKey: 'nav.agents', icon: 'smart_toy' },
-    { path: '/skills', labelKey: 'nav.skills', icon: 'construction' },
-    { path: '/plugins', labelKey: 'nav.plugins', icon: 'extension' },
-    { path: '/channels', labelKey: 'nav.channels', icon: 'hub' },
-    { path: '/mcp', labelKey: 'nav.mcp', icon: 'dns' },
+    { path: '/dashboard', labelKey: 'nav.swarmcore', icon: 'psychology' },
   ];
 
   const bottomNavItems: NavItem[] = [
@@ -66,11 +60,11 @@ export default function Sidebar({ collapsed, onClose, isOverlay }: SidebarProps)
   if (collapsed) {
     return (
       <aside className="w-16 bg-[var(--color-bg)] border-r border-[var(--color-border)] flex flex-col flex-shrink-0">
-        {/* Dashboard - Top Icon */}
+        {/* Chat - Top Icon */}
         <div className="h-16 flex items-center justify-center border-b border-[var(--color-border)]">
           <NavLink
             to="/"
-            title={t('nav.dashboard')}
+            title={t('nav.chat')}
             className={clsx(
               'w-10 h-10 rounded-xl flex items-center justify-center transition-colors',
               isActive('/')
@@ -78,7 +72,7 @@ export default function Sidebar({ collapsed, onClose, isOverlay }: SidebarProps)
                 : 'bg-[var(--color-hover)] text-[var(--color-text-muted)] hover:bg-primary/20 hover:text-primary'
             )}
           >
-            <span className="material-symbols-outlined text-xl">dashboard</span>
+            <span className="material-symbols-outlined text-xl">chat</span>
           </NavLink>
         </div>
 
@@ -155,7 +149,7 @@ export default function Sidebar({ collapsed, onClose, isOverlay }: SidebarProps)
         isOverlay && 'fixed left-0 top-0 h-full z-50 animate-slide-in-left shadow-2xl'
       )}
     >
-      {/* Header with Dashboard */}
+      {/* Header with Chat */}
       <div className="h-16 flex items-center px-4 border-b border-[var(--color-border)]">
         <NavLink
           to="/"
@@ -166,11 +160,11 @@ export default function Sidebar({ collapsed, onClose, isOverlay }: SidebarProps)
             'w-10 h-10 rounded-xl flex items-center justify-center transition-colors',
             isActive('/') ? 'bg-primary text-white' : 'bg-[var(--color-hover)] text-[var(--color-text-muted)]'
           )}>
-            <span className="material-symbols-outlined">dashboard</span>
+            <span className="material-symbols-outlined">chat</span>
           </div>
           <div>
-            <h1 className="font-semibold text-[var(--color-text)]">Agent Platform</h1>
-            <p className="text-xs text-[var(--color-text-muted)]">{t('nav.dashboard')}</p>
+            <h1 className="font-semibold text-[var(--color-text)]">SwarmAI</h1>
+            <p className="text-xs text-[var(--color-text-muted)]">{t('nav.chat')}</p>
           </div>
         </NavLink>
         {isOverlay && onClose && (

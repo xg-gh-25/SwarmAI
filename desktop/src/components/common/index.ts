@@ -13,6 +13,7 @@ export { default as AskUserQuestion } from './AskUserQuestion';
 export { default as MarkdownRenderer } from './MarkdownRenderer';
 export { default as TodoWriteWidget } from './TodoWriteWidget';
 export { default as AgentFormModal } from './AgentFormModal';
+export { default as Breadcrumb } from './Breadcrumb';
 export type { AgentFormModalProps } from './AgentFormModal';
 export type { ChipItem } from './ReadOnlyChips';
 export type { DropdownOption } from './Dropdown';

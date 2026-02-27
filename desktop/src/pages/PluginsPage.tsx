@@ -9,6 +9,7 @@ import {
   ResizableTable,
   ResizableTableCell,
   ConfirmDialog,
+  Breadcrumb,
 } from '../components/common';
 import type { Plugin } from '../types';
 import { pluginsService } from '../services/plugins';
@@ -105,6 +106,8 @@ export default function PluginsPage() {
 
   return (
     <div className="p-8">
+      <Breadcrumb currentPage={t('plugins.title')} />
+
       {/* Header */}
       <div className="flex items-start justify-between mb-6">
         <div>

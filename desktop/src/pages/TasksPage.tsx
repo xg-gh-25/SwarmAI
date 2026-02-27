@@ -6,7 +6,7 @@ import { useNavigate } from 'react-router-dom';
 import clsx from 'clsx';
 import { tasksService } from '../services/tasks';
 import { agentsService } from '../services/agents';
-import { ConfirmDialog } from '../components/common';
+import { ConfirmDialog, Breadcrumb } from '../components/common';
 import type { Task, TaskStatus, Agent } from '../types';
 
 // Format relative time with i18n
@@ -139,6 +139,8 @@ export default function TasksPage() {
 
   return (
     <div className="flex-1 p-6 overflow-auto">
+      <Breadcrumb currentPage={t('tasks.title')} />
+
       {/* Error Toast */}
       {errorMessage && (
         <div className="mb-4 p-4 bg-red-500/10 border border-red-500/30 rounded-lg flex items-center justify-between">

@@ -10,7 +10,7 @@ import SkillsPage from './pages/SkillsPage';
 import MCPPage from './pages/MCPPage';
 import PluginsPage from './pages/PluginsPage';
 import ChannelsPage from './pages/ChannelsPage';
-import DashboardPage from './pages/DashboardPage';
+import SwarmCorePage from './pages/SwarmCorePage';
 import SettingsPage from './pages/SettingsPage';
 
 const queryClient = new QueryClient({
@@ -44,8 +44,8 @@ export default function App() {
         <BrowserRouter>
           <Routes>
             <Route path="/" element={<Layout />}>
-              <Route index element={<DashboardPage />} />
-              <Route path="chat" element={<ChatPage />} />
+              <Route index element={<ChatPage />} />
+              <Route path="dashboard" element={<SwarmCorePage />} />
               <Route path="tasks" element={<TasksPage />} />
               <Route path="agents" element={<AgentsPage />} />
               <Route path="skills" element={<SkillsPage />} />
