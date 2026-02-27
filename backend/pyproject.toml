@@ -12,7 +12,8 @@ dependencies = [
     # Data validation
     "pydantic>=2.10.0",
     "pydantic-settings>=2.6.0",
-    # Claude Agent SDK
+    # Claude Agent SDK (>=0.1.31 uses always-streaming mode where the CLI
+    # stays alive for multiple queries; we keep clients alive for reuse)
     "claude-agent-sdk>=0.1.20",
     # SQLite
     "aiosqlite>=0.20.0",
@@ -32,7 +33,7 @@ dependencies = [
     "setuptools>=80.9.0",
     "lark-oapi>=1.5.3",
     # MCP server (for channel file sending tool)
-    "mcp>=1.0.0,<2.0.0",
+    # "mcp>=1.0.0,<2.0.0",
 ]
 
 [project.optional-dependencies]
