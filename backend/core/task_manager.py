@@ -474,23 +474,36 @@ class TaskManager:
         status: Optional[str] = None,
         agent_id: Optional[str] = None,
         workspace_id: Optional[str] = None,
+        completed_after: Optional[str] = None,
     ) -> list[dict]:
         """List all tasks, with optional filtering.
 
         Args:
-            status: Filter by status. Legacy statuses are mapped automatically.
+            status: Filter by status.  Supports comma-separated values with
+                OR semantics (e.g. ``"wip,draft,blocked"``).  Legacy statuses
+                are mapped automatically per value.
             agent_id: Filter by agent ID.
             workspace_id: Filter by workspace ID.
+            completed_after: ISO 8601 date string.  Return only tasks whose
+                ``completed_at`` is after this value.
 
         Returns:
             List of task dicts with statuses mapped to new values.
 
-        Validates: Requirements 5.1, 5.4, 5.7
+        Validates: Requirements 5.1, 5.4, 5.7, 6.1, 6.4, 6.7
         """
-        # Map legacy status if provided
-        mapped_status = self._map_legacy_status(status) if status else None
+        # Split comma-separated statuses and map legacy values
+        mapped_statuses: Optional[list[str]] = None
+        if status:
+            raw_statuses = [s.strip() for s in status.split(",") if s.strip()]
+            mapped_statuses = [self._map_legacy_status(s) for s in raw_statuses]
 
-        tasks = await db.tasks.list_all(status=mapped_status, agent_id=agent_id, workspace_id=workspace_id)
+        tasks = await db.tasks.list_all(
+            statuses=mapped_statuses,
+            agent_id=agent_id,
+            workspace_id=workspace_id,
+            completed_after=completed_after,
+        )
 
         # Map legacy statuses in returned results for backward compatibility
         for task in tasks:

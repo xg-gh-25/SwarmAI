@@ -25,6 +25,8 @@ function toCamelCase(task: Record<string, unknown>): Task {
     completedAt: task.completed_at as string | null,
     error: task.error as string | null,
     workDir: task.work_dir as string | null,
+    reviewRequired: (task.review_required as boolean) ?? false,
+    reviewRiskLevel: (task.review_risk_level as string) ?? null,
   };
 }
 

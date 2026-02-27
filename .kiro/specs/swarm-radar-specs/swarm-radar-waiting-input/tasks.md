@@ -6,8 +6,8 @@ Build the Waiting Input layer of the Swarm Radar — the `useWaitingInputZone` h
 
 ## Tasks
 
-- [ ] 1. Implement derivation logic and hook
-  - [ ] 1.1 Create `desktop/src/pages/chat/components/radar/hooks/useWaitingInputZone.ts`
+- [x] 1. Implement derivation logic and hook
+  - [x] 1.1 Create `desktop/src/pages/chat/components/radar/hooks/useWaitingInputZone.ts`
     - Implement `truncate(text: string, maxLength: number): string` — returns original if ≤ maxLength, otherwise first (maxLength - 3) chars + "..."
     - Implement `computeHasWaitingInput(task, activeSessionId, pendingQuestion, pendingPermission): boolean` — returns `true` iff `activeSessionId` is defined AND `task.sessionId === activeSessionId` AND at least one of `pendingQuestion`/`pendingPermission` is non-null
     - Implement `deriveWaitingItems(pendingQuestion, pendingPermission, activeSessionId, wipTasks): RadarWaitingItem[]` — pure function, no side effects:
@@ -87,11 +87,11 @@ Build the Waiting Input layer of the Swarm Radar — the `useWaitingInputZone` h
     - Minimum 100 iterations
     - **Validates: Requirements 2.6, 8.4**
 
-- [ ] 2. Checkpoint — Derivation logic and property tests
+- [x] 2. Checkpoint — Derivation logic and property tests
   - Ensure all tests pass (`cd desktop && npm test -- --run`), ask the user if questions arise.
 
-- [ ] 3. Build WaitingInputList and WaitingInputItem components
-  - [ ] 3.1 Create `desktop/src/pages/chat/components/radar/WaitingInputList.tsx`
+- [x] 3. Build WaitingInputList and WaitingInputItem components
+  - [x] 3.1 Create `desktop/src/pages/chat/components/radar/WaitingInputList.tsx`
     - Define `WaitingInputItemProps`: `item: RadarWaitingItem`, `onRespond: () => void`
     - Implement `WaitingInputItem` component:
       - Render as `<li role="listitem" className="radar-waiting-item">`
@@ -119,8 +119,8 @@ Build the Waiting Input layer of the Swarm Radar — the `useWaitingInputZone` h
     - Test: `onRespond` called with correct `itemId` when Respond clicked
     - _Requirements: 1.3, 1.4, 1.7, 6.5, 7.3, 7.6, 7.7_
 
-- [ ] 4. Add CSS styles for waiting input components
-  - [ ] 4.1 Add waiting input styles to `desktop/src/pages/chat/components/radar/SwarmRadar.css`
+- [x] 4. Add CSS styles for waiting input components
+  - [x] 4.1 Add waiting input styles to `desktop/src/pages/chat/components/radar/SwarmRadar.css`
     - Define `.radar-waiting-item` — layout for title, question text, and Respond button
     - Define `.radar-waiting-item-title` — uses `--color-text`
     - Define `.radar-waiting-item-question` — uses `--color-text-muted`, single-line truncation
@@ -130,16 +130,16 @@ Build the Waiting Input layer of the Swarm Radar — the `useWaitingInputZone` h
     - Match font sizes, weights, spacing of existing radar components
     - _Requirements: 7.4, 7.5_
 
-- [ ] 5. Checkpoint — UI components and styles
+- [x] 5. Checkpoint — UI components and styles
   - Ensure all tests pass (`cd desktop && npm test -- --run`), ask the user if questions arise.
 
-- [ ] 6. Wire activeSessionId prop and integrate waiting input into SwarmRadar
-  - [ ] 6.1 Extend `SwarmRadarProps` with `activeSessionId` and pass from ChatPage
+- [x] 6. Wire activeSessionId prop and integrate waiting input into SwarmRadar
+  - [x] 6.1 Extend `SwarmRadarProps` with `activeSessionId` and pass from ChatPage
     - Add `activeSessionId: string | undefined` to `SwarmRadarProps` interface in `SwarmRadar.tsx`
     - Update `ChatPage.tsx` to pass `sessionId` state variable as `activeSessionId` prop to `SwarmRadar`
     - _Requirements: 4.1, 4.2_
 
-  - [ ] 6.2 Integrate `useWaitingInputZone` into `SwarmRadar.tsx`
+  - [x] 6.2 Integrate `useWaitingInputZone` into `SwarmRadar.tsx`
     - Import and call `useWaitingInputZone` hook with `pendingQuestion`, `pendingPermission`, `activeSessionId`, and WIP tasks (from mock data or `useSwarmRadar` if composed)
     - Replace mock waiting item `<li>` elements in the Needs Attention zone with `<WaitingInputList>` component
     - Pass `waitingItems` and `respondToItem` from the hook to `WaitingInputList`
@@ -147,7 +147,7 @@ Build the Waiting Input layer of the Swarm Radar — the `useWaitingInputZone` h
     - Update Needs Attention badge count to include `waitingItems.length` (todos.length + waitingItems.length)
     - _Requirements: 1.1, 1.2, 5.1, 5.2, 5.4, 8.1_
 
-  - [ ] 6.3 Augment WIP tasks with `hasWaitingInput` flag
+  - [x] 6.3 Augment WIP tasks with `hasWaitingInput` flag
     - Use `computeHasWaitingInput` to set `hasWaitingInput` on each WIP task before passing to the In Progress zone
     - Ensure WIP tasks with `hasWaitingInput=true` appear in both In Progress zone (as WIP task) and Needs Attention zone (as waiting item) — dual presence by design
     - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.5, 3.6_
@@ -163,7 +163,7 @@ Build the Waiting Input layer of the Swarm Radar — the `useWaitingInputZone` h
     - Test: respondToItem creates new tab for unknown session
     - _Requirements: 1.1, 1.6, 2.2, 2.3, 4.2, 5.4, 6.3_
 
-- [ ] 7. Final checkpoint — Full integration
+- [x] 7. Final checkpoint — Full integration
   - Ensure all tests pass (`cd desktop && npm test -- --run`).
   - Ensure no TypeScript compilation errors (`cd desktop && npx tsc --noEmit`).
   - Ask the user if questions arise.

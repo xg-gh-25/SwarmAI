@@ -6,8 +6,8 @@ Build the foundational shell, shared types, reusable components, utility functio
 
 ## Tasks
 
-- [ ] 1. Define shared TypeScript types in `desktop/src/types/radar.ts`
-  - [ ] 1.1 Create `desktop/src/types/radar.ts` with all Radar type definitions
+- [x] 1. Define shared TypeScript types in `desktop/src/types/radar.ts`
+  - [x] 1.1 Create `desktop/src/types/radar.ts` with all Radar type definitions
     - Define `RadarZoneId` union type
     - Define `RadarTodo` interface with all fields (id, workspaceId, title, description, source, sourceType, status, priority, dueDate, linkedContext, taskId, createdAt, updatedAt)
     - Define `RadarWipTask` type using `Pick<Task, ...> & { hasWaitingInput: boolean }`
@@ -18,12 +18,12 @@ Build the foundational shell, shared types, reusable components, utility functio
     - Include module-level docstring per dev rules
     - _Requirements: 4.1, 4.2, 4.3, 4.4, 4.5, 4.6, 4.7, 4.8_
 
-  - [ ] 1.2 Re-export all Radar types from `desktop/src/types/index.ts`
+  - [x] 1.2 Re-export all Radar types from `desktop/src/types/index.ts`
     - Add `export * from './radar';` to the existing index.ts
     - _Requirements: 4.9_
 
-- [ ] 2. Implement sorting utility functions in `radarSortUtils.ts`
-  - [ ] 2.1 Create `desktop/src/pages/chat/components/radar/radarSortUtils.ts`
+- [x] 2. Implement sorting utility functions in `radarSortUtils.ts`
+  - [x] 2.1 Create `desktop/src/pages/chat/components/radar/radarSortUtils.ts`
     - Implement `sortTodos`: overdue first → priority (high→medium→low→none) → dueDate (earliest first, null last) → createdAt (newest first) → id ascending tiebreaker
     - Implement `sortWipTasks`: status order (blocked→wip→draft) → startedAt (most recent first) → id ascending tiebreaker
     - Implement `sortCompletedTasks`: completedAt descending → id ascending tiebreaker
@@ -44,8 +44,8 @@ Build the foundational shell, shared types, reusable components, utility functio
     - Minimum 100 iterations per property
     - **Validates: Requirements 5.2, 5.3, 5.4, 5.5, 5.6, 5.7, 5.8**
 
-- [ ] 3. Implement indicator and badge tint utilities in `radarIndicators.ts`
-  - [ ] 3.1 Create `desktop/src/pages/chat/components/radar/radarIndicators.ts`
+- [x] 3. Implement indicator and badge tint utilities in `radarIndicators.ts`
+  - [x] 3.1 Create `desktop/src/pages/chat/components/radar/radarIndicators.ts`
     - Implement `getPriorityIndicator`: high→🔴, medium→🟡, low→🔵, none→''
     - Implement `getTimelineIndicator`: overdue→⚠️, due today→⏰, otherwise→''
     - Implement `getSourceTypeLabel`: manual→✏️, email→📧, slack→💬, meeting→📅, integration→🔗, chat→💭, ai_detected→🤖
@@ -72,11 +72,11 @@ Build the foundational shell, shared types, reusable components, utility functio
     - Minimum 100 iterations per property
     - **Validates: Requirements 6.3, 6.4, 6.5, 6.6, 6.10**
 
-- [ ] 4. Checkpoint — Verify utility modules
+- [x] 4. Checkpoint — Verify utility modules
   - Ensure all tests pass (`cd desktop && npm test -- --run`), ask the user if questions arise.
 
-- [ ] 5. Create mock data module
-  - [ ] 5.1 Create `desktop/src/pages/chat/components/radar/mockData.ts`
+- [x] 5. Create mock data module
+  - [x] 5.1 Create `desktop/src/pages/chat/components/radar/mockData.ts`
     - Implement `getMockTodos()`: ≥3 items (one high-priority overdue, one medium due-today, one low-priority), varied source types
     - Implement `getMockWaitingItems()`: ≥2 items (one mid-execution question, one conditional review placeholder), stable `createdAt` timestamps
     - Implement `getMockWipTasks()`: ≥2 items (one `wip`, one `draft`), different agents
@@ -97,8 +97,8 @@ Build the foundational shell, shared types, reusable components, utility functio
     - Verify determinism: calling same factory twice returns items with identical IDs
     - **Validates: Requirements 3.2, 3.3, 3.4, 3.5, 3.9**
 
-- [ ] 6. Build the RadarZone reusable component
-  - [ ] 6.1 Create `desktop/src/pages/chat/components/radar/RadarZone.tsx`
+- [x] 6. Build the RadarZone reusable component
+  - [x] 6.1 Create `desktop/src/pages/chat/components/radar/RadarZone.tsx`
     - Accept props: `zoneId`, `emoji`, `label`, `count`, `badgeTint`, `isExpanded`, `onToggle`, `children`, `emptyMessage?`
     - Render clickable header `<button>` with emoji, label, and tinted badge count
     - Badge uses `clsx('radar-zone-badge', 'badge-${badgeTint}')` and `aria-label` for screen reader (e.g., "Needs Attention, 5 items")
@@ -121,8 +121,8 @@ Build the foundational shell, shared types, reusable components, utility functio
     - Minimum 100 iterations per property
     - **Validates: Requirements 1.4, 1.5, 1.6, 2.5, 6.3–6.6, 8.1–8.4, 8.6, 10.6**
 
-- [ ] 7. Build the SwarmRadar shell component and CSS
-  - [ ] 7.1 Create `desktop/src/pages/chat/components/radar/SwarmRadar.css`
+- [x] 7. Build the SwarmRadar shell component and CSS
+  - [x] 7.1 Create `desktop/src/pages/chat/components/radar/SwarmRadar.css`
     - Define styles for `.swarm-radar` root, `.swarm-radar-header`, `.swarm-radar-content` (scrollable area)
     - Define `.radar-zone`, `.radar-zone-header`, `.radar-zone-content` with expand/collapse animation (150–200ms CSS transition on max-height)
     - Define `.radar-zone-badge` base and tint variants: `.badge-red`, `.badge-yellow`, `.badge-green`, `.badge-neutral`
@@ -132,7 +132,7 @@ Build the foundational shell, shared types, reusable components, utility functio
     - Define hover states using `--color-hover`
     - _Requirements: 9.1, 9.2, 9.3, 9.4, 9.5, 9.7, 6.7, 1.7_
 
-  - [ ] 7.2 Create `desktop/src/pages/chat/components/radar/SwarmRadar.tsx`
+  - [x] 7.2 Create `desktop/src/pages/chat/components/radar/SwarmRadar.tsx`
     - Define `SwarmRadarProps` interface: `width`, `isResizing`, `onClose?`, `onMouseDown`, `pendingQuestion`, `pendingPermission` (passed through, unused until Spec 3)
     - Render fixed header bar with "Swarm Radar" title, `radar` material icon, and close button (same pattern as `TodoRadarSidebar`)
     - Render left-edge resize handle (identical pattern to `TodoRadarSidebar`)
@@ -149,18 +149,18 @@ Build the foundational shell, shared types, reusable components, utility functio
     - Include module-level docstring per dev rules
     - _Requirements: 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 1.10, 1.11, 2.1, 2.2, 2.3, 2.4, 2.5, 7.1, 7.2, 7.3, 7.4, 7.5, 7.6, 8.1, 8.2, 8.3, 8.4, 8.5_
 
-- [ ] 8. Wire SwarmRadar into ChatPage as drop-in replacement
-  - [ ] 8.1 Update `desktop/src/pages/chat/components/index.ts` to export `SwarmRadar`
+- [x] 8. Wire SwarmRadar into ChatPage as drop-in replacement
+  - [x] 8.1 Update `desktop/src/pages/chat/components/index.ts` to export `SwarmRadar`
     - Add export for `SwarmRadar` from the radar directory
     - _Requirements: 1.1, 1.8_
 
-  - [ ] 8.2 Update `ChatPage.tsx` to render `SwarmRadar` instead of `TodoRadarSidebar`
+  - [x] 8.2 Update `ChatPage.tsx` to render `SwarmRadar` instead of `TodoRadarSidebar`
     - Replace `<TodoRadarSidebar>` with `<SwarmRadar>` passing same base props plus `pendingQuestion` and `pendingPermission`
     - Keep `useRightSidebarGroup` hook and `todoRadar` sidebar ID unchanged
     - Keep `RIGHT_SIDEBAR_WIDTH_CONFIGS` unchanged
     - _Requirements: 1.1, 1.8, 1.9, 1.10_
 
-- [ ] 9. Final checkpoint — Ensure all tests pass
+- [x] 9. Final checkpoint — Ensure all tests pass
   - Run `cd desktop && npm test -- --run` and verify all property and unit tests pass.
   - Ensure no TypeScript compilation errors (`cd desktop && npx tsc --noEmit`).
   - Ask the user if questions arise.

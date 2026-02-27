@@ -6,8 +6,8 @@ Build the Autonomous Jobs layer of the Swarm Radar — backend Pydantic models a
 
 ## Tasks
 
-- [ ] 1. Backend Pydantic models and placeholder API
-  - [ ] 1.1 Create `backend/schemas/autonomous_job.py`
+- [x] 1. Backend Pydantic models and placeholder API
+  - [x] 1.1 Create `backend/schemas/autonomous_job.py`
     - Define `AutonomousJobCategory` enum: `system`, `user_defined`
     - Define `AutonomousJobStatus` enum: `running`, `paused`, `error`, `completed`
     - Define `AutonomousJobResponse` model with fields: `id` (str), `name` (str), `category` (AutonomousJobCategory), `status` (AutonomousJobStatus), `schedule` (Optional[str]), `last_run_at` (Optional[str]), `next_run_at` (Optional[str]), `description` (Optional[str])
@@ -15,14 +15,14 @@ Build the Autonomous Jobs layer of the Swarm Radar — backend Pydantic models a
     - Include module-level docstring per dev rules
     - _Requirements: 5.2, 5.5, 5.6, 5.9_
 
-  - [ ] 1.2 Create `backend/routers/autonomous_jobs.py`
+  - [x] 1.2 Create `backend/routers/autonomous_jobs.py`
     - Define `MOCK_JOBS` list with hardcoded mock data: 3 system jobs ("Workspace Sync", "Knowledge Indexing", "Overdue Check" — all running) and 2 user-defined jobs ("Daily Digest" running, "Weekly Report" paused)
     - Implement `GET /api/autonomous-jobs` endpoint returning `MOCK_JOBS` with `response_model=list[AutonomousJobResponse]`
     - Always returns HTTP 200 — no error cases in initial release
     - Include module-level docstring per dev rules
     - _Requirements: 5.1, 5.3, 5.4, 5.7_
 
-  - [ ] 1.3 Register autonomous jobs router in `backend/main.py`
+  - [x] 1.3 Register autonomous jobs router in `backend/main.py`
     - Import `router as autonomous_jobs_router` from `backend.routers.autonomous_jobs`
     - Add `app.include_router(autonomous_jobs_router)` alongside existing router registrations
     - _Requirements: 5.8_
@@ -37,11 +37,11 @@ Build the Autonomous Jobs layer of the Swarm Radar — backend Pydantic models a
     - Minimum 100 iterations
     - **Validates: Requirements 5.1, 5.2, 5.3, 5.4**
 
-- [ ] 2. Checkpoint — Backend models and API
+- [x] 2. Checkpoint — Backend models and API
   - Ensure all backend tests pass (`cd backend && pytest`), ask the user if questions arise.
 
-- [ ] 3. Frontend service layer — add autonomous jobs to `radar.ts`
-  - [ ] 3.1 Add `jobToCamelCase` and `fetchAutonomousJobs` to `desktop/src/services/radar.ts`
+- [x] 3. Frontend service layer — add autonomous jobs to `radar.ts`
+  - [x] 3.1 Add `jobToCamelCase` and `fetchAutonomousJobs` to `desktop/src/services/radar.ts`
     - Implement `jobToCamelCase(job)` mapping snake_case fields to camelCase: `last_run_at` → `lastRunAt`, `next_run_at` → `nextRunAt`, `user_defined` category preserved as-is
     - Add `fetchAutonomousJobs()` to `radarService` object — calls `GET /api/autonomous-jobs`, maps response through `jobToCamelCase`
     - Export `jobToCamelCase` for direct use in tests (Property 5)
@@ -60,8 +60,8 @@ Build the Autonomous Jobs layer of the Swarm Radar — backend Pydantic models a
     - Minimum 100 iterations
     - **Validates: Requirements 6.3**
 
-- [ ] 4. Implement `useJobZone` hook
-  - [ ] 4.1 Create `desktop/src/pages/chat/components/radar/hooks/useJobZone.ts`
+- [x] 4. Implement `useJobZone` hook
+  - [x] 4.1 Create `desktop/src/pages/chat/components/radar/hooks/useJobZone.ts`
     - Implement React Query data fetching with key `['radar', 'autonomousJobs']`, 60-second polling interval, gated by `enabled: isVisible`
     - `queryFn` calls `radarService.fetchAutonomousJobs()`
     - Apply `sortAutonomousJobs` from Spec 1 to fetched results in `useMemo`
@@ -126,11 +126,11 @@ Build the Autonomous Jobs layer of the Swarm Radar — backend Pydantic models a
     - Minimum 100 iterations
     - **Validates: Requirements 3.1, 3.3, 3.4**
 
-- [ ] 5. Checkpoint — Service layer, hook, and property tests
+- [x] 5. Checkpoint — Service layer, hook, and property tests
   - Ensure all tests pass (`cd desktop && npm test -- --run`), ask the user if questions arise.
 
-- [ ] 6. Autonomous Jobs UI components
-  - [ ] 6.1 Create `desktop/src/pages/chat/components/radar/AutonomousJobItem.tsx`
+- [x] 6. Autonomous Jobs UI components
+  - [x] 6.1 Create `desktop/src/pages/chat/components/radar/AutonomousJobItem.tsx`
     - Accept `AutonomousJobItemProps`: `job: RadarAutonomousJob`, `onClick: () => void`
     - Render as `<li role="listitem" className="radar-job-item">` with conditional `radar-job-item--error` class for error status
     - Display job name, status indicator (✅ Running, ⏸️ Paused, ❌ Error, ✔️ Completed), last run timestamp (relative: "5m ago", "1h ago", "2d ago"; "Never" when `lastRunAt` is null)
@@ -144,7 +144,7 @@ Build the Autonomous Jobs layer of the Swarm Radar — backend Pydantic models a
     - Include module-level docstring per dev rules
     - _Requirements: 1.2, 1.3, 1.8, 2.1, 2.2, 2.3, 2.4, 8.1, 8.2, 8.4_
 
-  - [ ] 6.2 Create `desktop/src/pages/chat/components/radar/AutonomousJobList.tsx`
+  - [x] 6.2 Create `desktop/src/pages/chat/components/radar/AutonomousJobList.tsx`
     - Accept `AutonomousJobListProps`: `systemJobs: RadarAutonomousJob[]`, `userJobs: RadarAutonomousJob[]`, `onJobClick: (jobId: string) => void`
     - Render two sub-sections: "System" (`<h4>` with `aria-label="System jobs"`) and "Recurring" (`<h4>` with `aria-label="Recurring jobs"`)
     - Each sub-section renders `<ul role="list">` containing `AutonomousJobItem` components
@@ -173,8 +173,8 @@ Build the Autonomous Jobs layer of the Swarm Radar — backend Pydantic models a
     - Test: sub-section headers have `aria-label` for screen readers
     - _Requirements: 1.1, 1.2, 1.3, 1.8, 2.1, 2.2, 2.3, 2.4, 8.1, 8.2, 8.3, 8.4, 8.5_
 
-- [ ] 7. Add CSS styles for autonomous job components
-  - [ ] 7.1 Add autonomous job styles to `desktop/src/pages/chat/components/radar/SwarmRadar.css`
+- [x] 7. Add CSS styles for autonomous job components
+  - [x] 7.1 Add autonomous job styles to `desktop/src/pages/chat/components/radar/SwarmRadar.css`
     - Define `.radar-job-item` layout: job name, status indicator, last run timestamp, schedule description
     - Define `.radar-job-item--error` for visual emphasis on error-state jobs (uses `--color-danger`)
     - Define `.radar-job-tooltip` for "Coming soon" tooltip: positioned absolutely, `--color-card` background, `--color-text-muted` text, `--color-border` border, small rounded rectangle with subtle shadow
@@ -186,11 +186,11 @@ Build the Autonomous Jobs layer of the Swarm Radar — backend Pydantic models a
     - Match font sizes, weights, spacing of existing radar components
     - _Requirements: 1.2, 1.3, 2.3, 3.2, 4.4_
 
-- [ ] 8. Checkpoint — UI components and styles
+- [x] 8. Checkpoint — UI components and styles
   - Ensure all tests pass (`cd desktop && npm test -- --run`), ask the user if questions arise.
 
-- [ ] 9. Wire Autonomous Jobs components into SwarmRadar
-  - [ ] 9.1 Integrate `useJobZone` into SwarmRadar composition
+- [x] 9. Wire Autonomous Jobs components into SwarmRadar
+  - [x] 9.1 Integrate `useJobZone` into SwarmRadar composition
     - Import and call `useJobZone` hook with `isVisible` from sidebar state
     - Compose into `useSwarmRadar` hook alongside `useTodoZone` (Spec 2), `useWaitingInputZone` (Spec 3), and `useTaskZone` (Spec 4)
     - Replace mock Autonomous Jobs `<li>` elements in the Autonomous Jobs zone with `<AutonomousJobList>` component
@@ -199,7 +199,7 @@ Build the Autonomous Jobs layer of the Swarm Radar — backend Pydantic models a
     - Compute badge tint via `getBadgeTint('autonomousJobs', { jobs: [...systemJobs, ...userJobs] })` from Spec 1
     - _Requirements: 1.1, 1.4, 1.5, 4.1, 4.2, 4.3, 7.8_
 
-  - [ ] 9.2 Add cross-zone error items to Needs Attention zone
+  - [x] 9.2 Add cross-zone error items to Needs Attention zone
     - Pass `errorJobs` from `useJobZone` to the Needs Attention zone in SwarmRadar
     - Render error-state jobs below existing Needs Attention content (below TodoList and WaitingInputList)
     - Each error item displays: job name, "❌ Error" status indicator, and "View in Jobs" button
@@ -219,7 +219,7 @@ Build the Autonomous Jobs layer of the Swarm Radar — backend Pydantic models a
     - Test: "View in Jobs" scrolls to Autonomous Jobs zone
     - _Requirements: 1.1, 3.1, 3.2, 3.3, 3.4, 4.1, 4.2_
 
-- [ ] 10. Final checkpoint — Full integration
+- [x] 10. Final checkpoint — Full integration
   - Ensure all tests pass (`cd desktop && npm test -- --run` and `cd backend && pytest`).
   - Ensure no TypeScript compilation errors (`cd desktop && npx tsc --noEmit`).
   - Ask the user if questions arise.
