@@ -6,15 +6,15 @@ Build the WIP Tasks and Completed Tasks layers of the Swarm Radar — backend ta
 
 ## Tasks
 
-- [ ] 1. Backend schema extensions and query support
-  - [ ] 1.1 Extend `TaskResponse` model in `backend/schemas/task.py`
+- [x] 1. Backend schema extensions and query support
+  - [x] 1.1 Extend `TaskResponse` model in `backend/schemas/task.py`
     - Add `review_required: bool = False` field (always false in initial release)
     - Add `review_risk_level: Optional[str] = None` field (always null in initial release)
     - Use snake_case field names per backend convention
     - Include module-level docstring update per dev rules
     - _Requirements: 6.2, 6.3, 6.5_
 
-  - [ ] 1.2 Extend `list_tasks` endpoint in `backend/routers/tasks.py`
+  - [x] 1.2 Extend `list_tasks` endpoint in `backend/routers/tasks.py`
     - Add `workspace_id: Optional[str]` query parameter
     - Add `completed_after: Optional[str]` query parameter (ISO 8601 date string)
     - Support comma-separated `status` values with OR semantics (e.g., `status=wip,draft,blocked`)
@@ -22,7 +22,7 @@ Build the WIP Tasks and Completed Tasks layers of the Swarm Radar — backend ta
     - Pass new parameters to `task_manager.list_tasks`
     - _Requirements: 6.1, 6.4, 6.7_
 
-  - [ ] 1.3 Implement filtering logic in task manager
+  - [x] 1.3 Implement filtering logic in task manager
     - Extend `task_manager.list_tasks` to support `workspace_id` filtering
     - Extend `task_manager.list_tasks` to support `completed_after` filtering (return only tasks with `completed_at` after the specified ISO 8601 date)
     - Extend `task_manager.list_tasks` to split comma-separated `status` string and filter with OR semantics
@@ -39,28 +39,28 @@ Build the WIP Tasks and Completed Tasks layers of the Swarm Radar — backend ta
     - Minimum 100 iterations
     - **Validates: Requirements 6.1, 6.4, 6.7**
 
-- [ ] 2. Checkpoint — Backend extensions
+- [x] 2. Checkpoint — Backend extensions
   - Ensure all backend tests pass (`cd backend && pytest`), ask the user if questions arise.
 
-- [ ] 3. Frontend type extensions
-  - [ ] 3.1 Update `Task` interface in `desktop/src/types/index.ts`
+- [x] 3. Frontend type extensions
+  - [x] 3.1 Update `Task` interface in `desktop/src/types/index.ts`
     - Add `reviewRequired: boolean` field (always false in initial release)
     - Add `reviewRiskLevel: string | null` field (always null in initial release)
     - _Requirements: 6.6_
 
-  - [ ] 3.2 Update `toCamelCase` in `desktop/src/services/tasks.ts`
+  - [x] 3.2 Update `toCamelCase` in `desktop/src/services/tasks.ts`
     - Add `reviewRequired` mapping from `review_required` (default `false`)
     - Add `reviewRiskLevel` mapping from `review_risk_level` (default `null`)
     - _Requirements: 6.6_
 
-- [ ] 4. Radar constants and service layer
-  - [ ] 4.1 Create `desktop/src/pages/chat/components/radar/radarConstants.ts`
+- [x] 4. Radar constants and service layer
+  - [x] 4.1 Create `desktop/src/pages/chat/components/radar/radarConstants.ts`
     - Define `ARCHIVE_WINDOW_DAYS = 7` constant
     - Define `TASK_POLLING_INTERVAL_MS = 30_000` constant
     - Include module-level docstring per dev rules
     - _Requirements: 5.4, 9.4_
 
-  - [ ] 4.2 Add task functions to `desktop/src/services/radar.ts`
+  - [x] 4.2 Add task functions to `desktop/src/services/radar.ts`
     - Implement `taskToCamelCase(task)` mapping all snake_case fields to camelCase, setting `hasWaitingInput: false`
     - Implement `completedTaskToCamelCase(task)` mapping all snake_case fields including `reviewRequired` and `reviewRiskLevel`
     - Add `fetchWipTasks(workspaceId?)` to `radarService` — fetches with `status=wip,draft,blocked`
@@ -70,8 +70,8 @@ Build the WIP Tasks and Completed Tasks layers of the Swarm Radar — backend ta
     - Include module-level docstring update per dev rules
     - _Requirements: 7.1, 7.2, 7.3, 7.4, 7.5, 7.6, 7.7_
 
-- [ ] 5. Implement `useTaskZone` hook
-  - [ ] 5.1 Create `desktop/src/pages/chat/components/radar/hooks/useTaskZone.ts`
+- [x] 5. Implement `useTaskZone` hook
+  - [x] 5.1 Create `desktop/src/pages/chat/components/radar/hooks/useTaskZone.ts`
     - Implement React Query data fetching for WIP tasks with key `['radar', 'wipTasks']`, polling at `TASK_POLLING_INTERVAL_MS`, gated by `enabled: isVisible`
     - Implement React Query data fetching for completed tasks with key `['radar', 'completedTasks']`, polling at `TASK_POLLING_INTERVAL_MS`, gated by `enabled: isVisible`
     - Compute `completedAfterISO` from `ARCHIVE_WINDOW_DAYS` for server-side pre-filtering
@@ -115,11 +115,11 @@ Build the WIP Tasks and Completed Tasks layers of the Swarm Radar — backend ta
     - Property 6: Generate random `isVisible` state sequences; verify isVisible=false → zero queries, transitions resume/stop polling immediately. Min 100 iterations.
     - **Validates: Requirements 2.4, 2.5, 8.3, 8.8, 8.9, 9.5, 9.6**
 
-- [ ] 6. Checkpoint — Service layer, hook, and property tests
+- [x] 6. Checkpoint — Service layer, hook, and property tests
   - Ensure all tests pass (`cd desktop && npm test -- --run`), ask the user if questions arise.
 
-- [ ] 7. WIP task UI components
-  - [ ] 7.1 Create `desktop/src/pages/chat/components/radar/WipTaskItem.tsx`
+- [x] 7. WIP task UI components
+  - [x] 7.1 Create `desktop/src/pages/chat/components/radar/WipTaskItem.tsx`
     - Accept `WipTaskItemProps`: `task: RadarWipTask`, `onViewThread: () => void`, `onCancel: () => void`
     - Render as `<li role="listitem" className="radar-wip-item">` with conditional `radar-wip-item--blocked` class
     - Display task title (truncated 1 line), status indicator (🔄 WIP, 📋 Draft, 🚫 Blocked), elapsed time from `startedAt`, progress hint from `description`
@@ -133,7 +133,7 @@ Build the WIP Tasks and Completed Tasks layers of the Swarm Radar — backend ta
     - Include module-level docstring per dev rules
     - _Requirements: 1.2, 1.3, 1.8, 2.1, 2.2, 2.3, 2.4, 2.5, 10.1_
 
-  - [ ] 7.2 Create `desktop/src/pages/chat/components/radar/WipTaskList.tsx`
+  - [x] 7.2 Create `desktop/src/pages/chat/components/radar/WipTaskList.tsx`
     - Accept `WipTaskListProps`: `tasks: RadarWipTask[]`, `onViewThread: (taskId) => void`, `onCancel: (taskId) => void`
     - Render `<ul role="list">` containing one `WipTaskItem` per entry
     - Render nothing when `tasks.length === 0` (parent RadarZone handles empty state)
@@ -152,8 +152,8 @@ Build the WIP Tasks and Completed Tasks layers of the Swarm Radar — backend ta
     - Test: Tab key focuses items, Enter/Space activates action menu
     - _Requirements: 1.2, 1.3, 1.8, 2.1, 2.2, 2.4_
 
-- [ ] 8. Completed task UI components
-  - [ ] 8.1 Create `desktop/src/pages/chat/components/radar/CompletedTaskItem.tsx`
+- [x] 8. Completed task UI components
+  - [x] 8.1 Create `desktop/src/pages/chat/components/radar/CompletedTaskItem.tsx`
     - Accept `CompletedTaskItemProps`: `task: RadarCompletedTask`, `onViewThread: () => void`, `onResume: () => void`
     - Render as `<li role="listitem" className="radar-completed-item">`
     - Display task title (truncated 1 line), relative completion timestamp (e.g., "2h ago", "Yesterday", "3d ago"), agent name from `agentId`, brief outcome summary from `description` (truncated 1 line)
@@ -165,7 +165,7 @@ Build the WIP Tasks and Completed Tasks layers of the Swarm Radar — backend ta
     - Include module-level docstring per dev rules
     - _Requirements: 3.2, 3.8, 4.1, 4.2, 4.3, 4.4, 4.5, 10.2, 10.3_
 
-  - [ ] 8.2 Create `desktop/src/pages/chat/components/radar/CompletedTaskList.tsx`
+  - [x] 8.2 Create `desktop/src/pages/chat/components/radar/CompletedTaskList.tsx`
     - Accept `CompletedTaskListProps`: `tasks: RadarCompletedTask[]`, `onViewThread: (taskId) => void`, `onResume: (taskId) => void`
     - Render `<ul role="list">` containing one `CompletedTaskItem` per entry
     - Render nothing when `tasks.length === 0` (parent RadarZone handles empty state)
@@ -183,8 +183,8 @@ Build the WIP Tasks and Completed Tasks layers of the Swarm Radar — backend ta
     - Test: Tab key focuses items, Enter/Space activates action menu
     - _Requirements: 3.2, 3.8, 4.1, 4.2, 4.4_
 
-- [ ] 9. Add CSS styles for WIP and completed task components
-  - [ ] 9.1 Add WIP and completed task styles to `desktop/src/pages/chat/components/radar/SwarmRadar.css`
+- [x] 9. Add CSS styles for WIP and completed task components
+  - [x] 9.1 Add WIP and completed task styles to `desktop/src/pages/chat/components/radar/SwarmRadar.css`
     - Define `.radar-wip-item` layout: title, status indicator, elapsed time, progress hint
     - Define `.radar-wip-item--blocked` for visual emphasis on blocked tasks
     - Define `.radar-wip-item-waiting` for ⏳ waiting badge
@@ -196,11 +196,11 @@ Build the WIP Tasks and Completed Tasks layers of the Swarm Radar — backend ta
     - Match font sizes, weights, spacing of existing radar components
     - _Requirements: 1.2, 1.3, 2.1, 3.2, 4.1_
 
-- [ ] 10. Checkpoint — UI components and styles
+- [x] 10. Checkpoint — UI components and styles
   - Ensure all tests pass (`cd desktop && npm test -- --run`), ask the user if questions arise.
 
-- [ ] 11. Wire WIP and Completed components into SwarmRadar
-  - [ ] 11.1 Integrate `useTaskZone` into `SwarmRadar.tsx`
+- [x] 11. Wire WIP and Completed components into SwarmRadar
+  - [x] 11.1 Integrate `useTaskZone` into `SwarmRadar.tsx`
     - Import and call `useTaskZone` hook with `workspaceId` and `isVisible` from sidebar state
     - Replace mock WIP task `<li>` elements in the In Progress zone with `<WipTaskList>` component
     - Replace mock completed task `<li>` elements in the Completed zone with `<CompletedTaskList>` component
@@ -209,12 +209,12 @@ Build the WIP Tasks and Completed Tasks layers of the Swarm Radar — backend ta
     - Update Completed badge count to use `completedTasks.length` from the hook
     - _Requirements: 1.1, 1.5, 1.6, 3.1, 3.5, 8.1, 8.4_
 
-  - [ ] 11.2 Add SSE-triggered cache invalidation in ChatPage
+  - [x] 11.2 Add SSE-triggered cache invalidation in ChatPage
     - When ChatPage receives SSE events affecting task state (completion, status change), invalidate `['radar', 'wipTasks']` and `['radar', 'completedTasks']` React Query cache keys
     - This triggers immediate refresh rather than waiting for next 30s polling interval
     - _Requirements: 9.3, 9.6_
 
-- [ ] 12. Final checkpoint — Full integration
+- [x] 12. Final checkpoint — Full integration
   - Ensure all tests pass (`cd desktop && npm test -- --run` and `cd backend && pytest`).
   - Ensure no TypeScript compilation errors (`cd desktop && npx tsc --noEmit`).
   - Ask the user if questions arise.

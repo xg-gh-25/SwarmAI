@@ -1,0 +1,834 @@
+/* Swarm Radar — unified attention & action control panel styles.
+ *
+ * Uses only --color-* CSS variables. Matches font sizes, weights,
+ * and spacing of existing sidebars (ChatHistorySidebar, FileBrowserSidebar).
+ */
+
+/* Root shell */
+.swarm-radar {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--color-card);
+  border-left: 1px solid var(--color-border);
+  position: relative;
+}
+
+/* Fixed header */
+.swarm-radar-header {
+  height: 48px;
+  padding: 0 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--color-border);
+  flex-shrink: 0;
+}
+
+.swarm-radar-header-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.swarm-radar-header-title .material-symbols-outlined {
+  font-size: 18px;
+  color: var(--color-primary);
+}
+
+.swarm-radar-header-title span:last-child {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--color-text);
+}
+
+.swarm-radar-close {
+  padding: 6px;
+  border-radius: 8px;
+  border: none;
+  background: none;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+}
+
+.swarm-radar-close:hover {
+  background: var(--color-hover);
+  color: var(--color-text);
+}
+
+/* Scrollable content area */
+.swarm-radar-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 0;
+}
+
+/* Zone */
+.radar-zone {
+  border-bottom: 1px solid var(--color-border);
+}
+
+.radar-zone:last-child {
+  border-bottom: none;
+}
+
+/* Zone header button */
+.radar-zone-header {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-text);
+  text-align: left;
+}
+
+.radar-zone-header:hover {
+  background: var(--color-hover);
+}
+
+.radar-zone-emoji {
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.radar-zone-label {
+  flex: 1;
+}
+
+/* Badge */
+.radar-zone-badge {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 10px;
+  min-width: 20px;
+  text-align: center;
+}
+
+.badge-red {
+  background: color-mix(in srgb, var(--color-danger) 15%, transparent);
+  color: var(--color-danger);
+}
+
+.badge-yellow {
+  background: color-mix(in srgb, var(--color-warning, #eab308) 15%, transparent);
+  color: var(--color-warning, #eab308);
+}
+
+.badge-green {
+  background: color-mix(in srgb, var(--color-success, #22c55e) 15%, transparent);
+  color: var(--color-success, #22c55e);
+}
+
+.badge-neutral {
+  background: color-mix(in srgb, var(--color-text-muted) 15%, transparent);
+  color: var(--color-text-muted);
+}
+
+/* Zone content — expand/collapse */
+.radar-zone-content {
+  padding: 4px 16px 8px;
+  overflow: hidden;
+  transition: max-height 180ms ease-out;
+}
+
+/* Empty state */
+.radar-empty-state {
+  color: var(--color-text-muted);
+  font-size: 13px;
+  text-align: center;
+  padding: 16px 8px;
+}
+
+/* Mock item placeholder (replaced by real components in later specs) */
+.radar-mock-item {
+  font-size: 13px;
+  color: var(--color-text-muted);
+  padding: 6px 0;
+  list-style: none;
+}
+
+/* Resize handle (left edge) */
+.swarm-radar-resize {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 4px;
+  height: 100%;
+  cursor: ew-resize;
+  z-index: 10;
+}
+
+.swarm-radar-resize:hover,
+.swarm-radar-resize--active {
+  background: var(--color-primary);
+}
+
+.swarm-radar-resize-hitarea {
+  position: absolute;
+  inset: 0 -4px 0 -4px;
+}
+
+/* ------------------------------------------------------------------ */
+/* TodoList                                                           */
+/* ------------------------------------------------------------------ */
+
+.radar-todo-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* TodoItem                                                           */
+/* ------------------------------------------------------------------ */
+
+.radar-todo-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 0;
+  font-size: 13px;
+  color: var(--color-text);
+  position: relative;
+  list-style: none;
+}
+
+.radar-todo-item:hover .radar-todo-overflow-btn {
+  opacity: 1;
+}
+
+.radar-todo-item--overdue {
+  color: var(--color-danger);
+}
+
+.radar-todo-item-content {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.radar-todo-item-indicators {
+  display: flex;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.radar-todo-indicator {
+  font-size: 12px;
+  line-height: 1;
+}
+
+.radar-todo-item-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.radar-todo-item-meta {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+
+/* Overflow action menu */
+.radar-todo-item-actions {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.radar-todo-overflow-btn {
+  opacity: 0;
+  padding: 2px 6px;
+  border: none;
+  background: none;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  font-size: 14px;
+  border-radius: 4px;
+  line-height: 1;
+}
+
+.radar-todo-overflow-btn:hover {
+  background: var(--color-hover);
+  color: var(--color-text);
+}
+
+.radar-todo-menu {
+  position: absolute;
+  right: 0;
+  top: 100%;
+  z-index: 20;
+  background: var(--color-card);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  padding: 4px 0;
+  min-width: 120px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.radar-todo-menu button {
+  display: block;
+  width: 100%;
+  padding: 6px 12px;
+  border: none;
+  background: none;
+  color: var(--color-text);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.radar-todo-menu button:hover {
+  background: var(--color-hover);
+}
+
+/* Confirmation prompt within overflow menu */
+.radar-todo-menu--confirm {
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.radar-todo-confirm-text {
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+.radar-todo-confirm-btn {
+  color: var(--color-danger) !important;
+  font-weight: 500;
+}
+
+.radar-todo-back-btn {
+  color: var(--color-text-muted) !important;
+}
+
+/* ------------------------------------------------------------------ */
+/* QuickAddTodo                                                       */
+/* ------------------------------------------------------------------ */
+
+.radar-quick-add {
+  margin-bottom: 8px;
+}
+
+.radar-quick-add-row {
+  display: flex;
+  gap: 4px;
+}
+
+.radar-quick-add-input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 8px;
+  font-size: 13px;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-bg-secondary, var(--color-card));
+  color: var(--color-text);
+  outline: none;
+}
+
+.radar-quick-add-input:focus {
+  border-color: var(--color-primary);
+}
+
+.radar-quick-add-btn {
+  padding: 4px 6px;
+  border: none;
+  background: none;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+}
+
+.radar-quick-add-btn:hover {
+  background: var(--color-hover);
+  color: var(--color-primary);
+}
+
+.radar-quick-add-btn .material-symbols-outlined {
+  font-size: 18px;
+}
+
+.radar-quick-add-error {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--color-danger);
+}
+
+
+/* ------------------------------------------------------------------ */
+/* WaitingInputList                                                   */
+/* ------------------------------------------------------------------ */
+
+.radar-waiting-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* WaitingInputItem                                                   */
+/* ------------------------------------------------------------------ */
+
+.radar-waiting-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  font-size: 13px;
+  list-style: none;
+}
+
+.radar-waiting-item-content {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.radar-waiting-item-title {
+  color: var(--color-text);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.radar-waiting-item-question {
+  color: var(--color-text-muted);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.radar-waiting-item-respond {
+  flex-shrink: 0;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  border: none;
+  border-radius: 6px;
+  background: var(--color-primary);
+  color: var(--color-bg, #fff);
+  cursor: pointer;
+}
+
+.radar-waiting-item-respond:hover {
+  background: var(--color-hover);
+  color: var(--color-text);
+}
+
+
+/* ------------------------------------------------------------------ */
+/* WipTaskList                                                        */
+/* ------------------------------------------------------------------ */
+
+.radar-wip-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* WipTaskItem                                                        */
+/* ------------------------------------------------------------------ */
+
+.radar-wip-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 0;
+  font-size: 13px;
+  color: var(--color-text);
+  position: relative;
+  list-style: none;
+}
+
+.radar-wip-item:hover .radar-wip-overflow-btn {
+  opacity: 1;
+}
+
+.radar-wip-item--blocked {
+  color: var(--color-danger);
+}
+
+.radar-wip-item-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.radar-wip-item-status {
+  font-size: 12px;
+  flex-shrink: 0;
+  line-height: 1;
+}
+
+.radar-wip-item-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.radar-wip-item-waiting {
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.radar-wip-item-elapsed {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  flex-shrink: 0;
+}
+
+/* WIP overflow action menu */
+.radar-wip-item-actions {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.radar-wip-overflow-btn {
+  opacity: 0;
+  padding: 2px 6px;
+  border: none;
+  background: none;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  font-size: 14px;
+  border-radius: 4px;
+  line-height: 1;
+}
+
+.radar-wip-overflow-btn:hover {
+  background: var(--color-hover);
+  color: var(--color-text);
+}
+
+.radar-wip-menu {
+  position: absolute;
+  right: 0;
+  top: 100%;
+  z-index: 20;
+  background: var(--color-card);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  padding: 4px 0;
+  min-width: 120px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.radar-wip-menu button {
+  display: block;
+  width: 100%;
+  padding: 6px 12px;
+  border: none;
+  background: none;
+  color: var(--color-text);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.radar-wip-menu button:hover {
+  background: var(--color-hover);
+}
+
+/* Inline confirmation (shared pattern) */
+.radar-wip-menu--confirm {
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.radar-confirm-text {
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+.radar-confirm-btn {
+  color: var(--color-danger) !important;
+  font-weight: 500;
+}
+
+.radar-confirm-back-btn {
+  color: var(--color-text-muted) !important;
+}
+
+/* ------------------------------------------------------------------ */
+/* CompletedTaskList                                                   */
+/* ------------------------------------------------------------------ */
+
+.radar-completed-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* CompletedTaskItem                                                   */
+/* ------------------------------------------------------------------ */
+
+.radar-completed-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 6px 0;
+  font-size: 13px;
+  color: var(--color-text);
+  position: relative;
+  list-style: none;
+}
+
+.radar-completed-item:hover .radar-completed-overflow-btn {
+  opacity: 1;
+}
+
+.radar-completed-item-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  cursor: pointer;
+}
+
+.radar-completed-item-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.radar-completed-item-meta {
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+
+.radar-completed-item-agent {
+  color: var(--color-text-muted);
+}
+
+.radar-completed-item-summary {
+  font-size: 12px;
+  color: var(--color-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Completed overflow action menu */
+.radar-completed-item-actions {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.radar-completed-overflow-btn {
+  opacity: 0;
+  padding: 2px 6px;
+  border: none;
+  background: none;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  font-size: 14px;
+  border-radius: 4px;
+  line-height: 1;
+}
+
+.radar-completed-overflow-btn:hover {
+  background: var(--color-hover);
+  color: var(--color-text);
+}
+
+.radar-completed-menu {
+  position: absolute;
+  right: 0;
+  top: 100%;
+  z-index: 20;
+  background: var(--color-card);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  padding: 4px 0;
+  min-width: 120px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.radar-completed-menu button {
+  display: block;
+  width: 100%;
+  padding: 6px 12px;
+  border: none;
+  background: none;
+  color: var(--color-text);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.radar-completed-menu button:hover {
+  background: var(--color-hover);
+}
+
+/* -----------------------------------------------------------------------
+ * Autonomous Jobs — Sub-section, Item, Tooltip, Cross-zone Error
+ * ----------------------------------------------------------------------- */
+
+.radar-job-subsection {
+  margin-bottom: 8px;
+}
+
+.radar-job-subsection h4 {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--color-text-muted);
+  margin: 0 0 4px 0;
+  padding: 4px 12px;
+}
+
+.radar-job-subsection ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.radar-job-item {
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  padding: 8px 12px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--color-border);
+  transition: background 0.15s ease;
+}
+
+.radar-job-item:hover {
+  background: var(--color-hover);
+}
+
+.radar-job-item:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: -2px;
+}
+
+.radar-job-item--error {
+  color: var(--color-danger);
+}
+
+.radar-job-item-content {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 13px;
+}
+
+.radar-job-name {
+  font-weight: 500;
+  color: var(--color-text-primary);
+}
+
+.radar-job-item--error .radar-job-name {
+  color: var(--color-danger);
+}
+
+.radar-job-status {
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+.radar-job-time {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  margin-left: auto;
+}
+
+.radar-job-schedule {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  width: 100%;
+}
+
+.radar-job-tooltip {
+  position: absolute;
+  top: -4px;
+  right: 12px;
+  background: var(--color-card);
+  color: var(--color-text-muted);
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 11px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  z-index: 10;
+  white-space: nowrap;
+}
+
+/* Cross-zone error items in Needs Attention zone */
+.radar-error-jobs {
+  margin-top: 4px;
+  padding: 0;
+  list-style: none;
+}
+
+.radar-error-job-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--color-border);
+  font-size: 13px;
+}
+
+.radar-error-job-name {
+  font-weight: 500;
+  color: var(--color-danger);
+}
+
+.radar-error-job-status {
+  font-size: 12px;
+  color: var(--color-danger);
+}
+
+.radar-error-job-link {
+  margin-left: auto;
+  background: none;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-size: 11px;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.radar-error-job-link:hover {
+  background: var(--color-hover);
+}

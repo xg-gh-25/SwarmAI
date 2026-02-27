@@ -6,5 +6,5 @@ export { FileBrowserSidebar } from './FileBrowserSidebar';
 export { MessageBubble } from './MessageBubble';
 export { SessionTab } from './SessionTab';
 export { SessionTabBar } from './SessionTabBar';
-export { TodoRadarSidebar } from './TodoRadarSidebar';
+export { SwarmRadar } from './radar/SwarmRadar';
 export { ToolUseBlock } from './ToolUseBlock';

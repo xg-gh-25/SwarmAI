@@ -18,11 +18,24 @@ router = APIRouter()
 
 @router.get("", response_model=list[TaskResponse])
 async def list_tasks(
-    status: Optional[str] = Query(None, description="Filter by status"),
+    status: Optional[str] = Query(None, description="Filter by status (comma-separated, OR semantics)"),
     agent_id: Optional[str] = Query(None, description="Filter by agent ID"),
+    workspace_id: Optional[str] = Query(None, description="Filter by workspace ID"),
+    completed_after: Optional[str] = Query(None, description="Filter completed tasks after ISO 8601 date"),
 ):
-    """List all tasks, optionally filtered by status or agent_id."""
-    tasks = await task_manager.list_tasks(status=status, agent_id=agent_id)
+    """List all tasks, optionally filtered.
+
+    Status filter uses comma-separated values with OR semantics:
+    ``?status=wip,draft,blocked`` means (status=wip OR status=draft OR status=blocked).
+    Different parameter types use AND semantics:
+    ``?status=completed&workspace_id=abc`` means (status=completed AND workspace_id=abc).
+    """
+    tasks = await task_manager.list_tasks(
+        status=status,
+        agent_id=agent_id,
+        workspace_id=workspace_id,
+        completed_after=completed_after,
+    )
     return [TaskResponse(**task) for task in tasks]
 
 

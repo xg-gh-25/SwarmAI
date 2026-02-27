@@ -672,6 +672,10 @@ export interface Task {
   completedAt: string | null;
   error: string | null;
   workDir: string | null;
+  /** Always false in initial release — risk-assessment deferred. */
+  reviewRequired: boolean;
+  /** Always null in initial release — risk-assessment deferred. */
+  reviewRiskLevel: string | null;
 }
 
 export interface TaskCreateRequest {
@@ -899,3 +903,7 @@ export interface TSCCSnapshot {
   activeSources: TSCCSource[];
   keySummary: string[];
 }
+
+// ============== Radar Types (Swarm Radar Redesign) ==============
+
+export * from './radar';

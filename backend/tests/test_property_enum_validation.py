@@ -56,14 +56,14 @@ class TestToDoEnumValidation:
     *For any* ToDo, the `status` field SHALL be one of: pending, overdue,
     in_discussion, handled, cancelled, deleted.
     *For any* ToDo, the `source_type` field SHALL be one of: manual, email,
-    slack, meeting, integration.
+    slack, meeting, integration, chat, ai_detected.
     *For any* ToDo, the `priority` field SHALL be one of: high, medium, low, none.
 
     **Validates: Requirements 4.2, 4.3, 4.4**
     """
 
     EXPECTED_STATUSES = {"pending", "overdue", "in_discussion", "handled", "cancelled", "deleted"}
-    EXPECTED_SOURCE_TYPES = {"manual", "email", "slack", "meeting", "integration"}
+    EXPECTED_SOURCE_TYPES = {"manual", "email", "slack", "meeting", "integration", "chat", "ai_detected"}
     EXPECTED_PRIORITIES = {"high", "medium", "low", "none"}
 
     @given(status=st.sampled_from(list(ToDoStatus)))
@@ -162,15 +162,10 @@ class TestTaskEnumValidation:
     *For any* Task, the `status` field SHALL be one of: draft, wip, blocked,
     completed, cancelled.
 
-    Note: The current TaskStatus enum still uses legacy values (pending, running,
-    failed). This test validates the current enum values. Once the migration in
-    task 4.10 is complete, the expected values should be updated.
-
     **Validates: Requirements 5.2, 5.3**
     """
 
-    # Current legacy values - the task schema hasn't been migrated yet
-    EXPECTED_TASK_STATUSES = {"pending", "running", "completed", "failed", "cancelled"}
+    EXPECTED_TASK_STATUSES = {"draft", "wip", "blocked", "completed", "cancelled"}
 
     @given(status=st.sampled_from(list(TaskStatus)))
     @PROPERTY_SETTINGS
