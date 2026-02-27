@@ -61,6 +61,8 @@ class FeishuChannelAdapter(ChannelAdapter):
         self._api_client = None
         self._ws_thread: Optional[threading.Thread] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
+        # Event loop running inside the WS thread (for shutdown signalling)
+        self._ws_loop: Optional[asyncio.AbstractEventLoop] = None
         self._stopped = False
 
     # ------------------------------------------------------------------
@@ -151,6 +153,8 @@ class FeishuChannelAdapter(ChannelAdapter):
             new_loop = asyncio.new_event_loop()
             asyncio.set_event_loop(new_loop)
             ws_mod.loop = new_loop          # patch the module-level loop
+            # Store reference so stop() can terminate this loop from main thread
+            self._ws_loop = new_loop
 
             try:
                 # Create the WS client HERE so its asyncio.Lock() and any
@@ -163,11 +167,13 @@ class FeishuChannelAdapter(ChannelAdapter):
                 )
                 self._ws_client.start()
             except Exception:
-                logger.exception(
-                    "Feishu WS client crashed for channel %s",
-                    self.channel_id,
-                )
+                if not self._stopped:
+                    logger.exception(
+                        "Feishu WS client crashed for channel %s",
+                        self.channel_id,
+                    )
             finally:
+                self._ws_loop = None
                 new_loop.close()
 
         self._ws_thread = threading.Thread(
@@ -183,14 +189,37 @@ class FeishuChannelAdapter(ChannelAdapter):
         )
 
     async def stop(self) -> None:
-        """Stop the adapter and release resources."""
+        """Stop the adapter and release resources.
+
+        Terminates the WebSocket daemon thread by stopping its event loop,
+        which causes the blocking ``lark.ws.Client.start()`` call to return.
+        """
         self._stopped = True
-        # The WS thread is a daemon thread, so it will be cleaned up when the
-        # process exits.  We clear references so nothing holds onto stale
-        # objects.
+
+        # Stop the WS thread's event loop so the blocking start() returns and
+        # the daemon thread exits.  call_soon_threadsafe is the only safe way
+        # to signal an event loop from another thread.
+        ws_loop = self._ws_loop
+        if ws_loop is not None and not ws_loop.is_closed():
+            try:
+                ws_loop.call_soon_threadsafe(ws_loop.stop)
+            except RuntimeError:
+                pass  # loop already closed
+
+        # Wait briefly for the thread to finish
+        ws_thread = self._ws_thread
+        if ws_thread is not None and ws_thread.is_alive():
+            ws_thread.join(timeout=3.0)
+            if ws_thread.is_alive():
+                logger.warning(
+                    "Feishu WS thread for channel %s did not stop within 3s",
+                    self.channel_id,
+                )
+
         self._ws_client = None
         self._api_client = None
         self._ws_thread = None
+        self._ws_loop = None
         self._loop = None
         logger.info("Feishu adapter stopped for channel %s", self.channel_id)
 
@@ -204,6 +233,11 @@ class FeishuChannelAdapter(ChannelAdapter):
         This callback runs on the WebSocket thread, NOT on the asyncio event
         loop, so we bridge into asyncio via ``call_soon_threadsafe``.
         """
+        # Fast path: if the adapter has been stopped, discard immediately.
+        # This prevents log noise from daemon threads that outlive stop().
+        if self._stopped:
+            return
+
         logger.info("Feishu message event received for channel %s", self.channel_id)
         try:
             event = data.event

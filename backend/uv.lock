@@ -15,7 +15,6 @@ dependencies = [
     { name = "fastapi" },
     { name = "lark-oapi" },
     { name = "macholib" },
-    { name = "mcp" },
     { name = "passlib", extra = ["bcrypt"] },
     { name = "pydantic" },
     { name = "pydantic-settings" },
@@ -54,7 +53,6 @@ requires-dist = [
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.27.0" },
     { name = "lark-oapi", specifier = ">=1.5.3" },
     { name = "macholib" },
-    { name = "mcp", specifier = ">=1.0.0,<2.0.0" },
     { name = "passlib", extras = ["bcrypt"], specifier = ">=1.7.4" },
     { name = "pydantic", specifier = ">=2.10.0" },
     { name = "pydantic-settings", specifier = ">=2.6.0" },
@@ -309,18 +307,18 @@ wheels = [
 
 [[package]]
 name = "claude-agent-sdk"
-version = "0.1.20"
+version = "0.1.34"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anyio" },
     { name = "mcp" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/41/78/be7848b0a148269e07c3248967b4c382624967b15e9cc00351f5f7374583/claude_agent_sdk-0.1.20.tar.gz", hash = "sha256:bc3cb24f2dc8c7dc7362f52764051b20dbfcc16ec3e3d39787c4946d7ced3848", size = 56178, upload-time = "2026-01-16T21:20:11.864Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/9d/69/faeb64e9c8f0962cbf12bee1b959acc41f87c82947ec7074a6780b417001/claude_agent_sdk-0.1.34.tar.gz", hash = "sha256:db9e4023a754d9a58a0793666fe9174ead277197cd896156d2f8784cc73c5006", size = 61196, upload-time = "2026-02-10T01:04:00.585Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/4b/e6/b34b8358a31cfc9c65df014d038036dbc86bd5f45ff6befc98e2cdb3407a/claude_agent_sdk-0.1.20-py3-none-macosx_11_0_arm64.whl", hash = "sha256:3ff7ab0930fd34fd533fa6216af698df71e7c3a4fcbd2f29eb9d0cd7b51fdfa5", size = 54068867, upload-time = "2026-01-16T21:19:55.29Z" },
-    { url = "https://files.pythonhosted.org/packages/a1/dc/08606e7a7377ca841ff6a961b0db930d13a98656b30176860c28d3407bcf/claude_agent_sdk-0.1.20-py3-none-manylinux_2_17_aarch64.whl", hash = "sha256:7756d35e6b5774270e880403513a347a9a4a504bfa28fd6a51cb0ed724a7851e", size = 68266982, upload-time = "2026-01-16T21:20:00.365Z" },
-    { url = "https://files.pythonhosted.org/packages/00/e3/d8de4f94a1c670ea4c4a933a272b291b85bd6471ac7a28875ef8ae768185/claude_agent_sdk-0.1.20-py3-none-manylinux_2_17_x86_64.whl", hash = "sha256:82dfb7d4f6494c9a977b5593773b91c507bcdd76437f289e2b8f8a91ae5f95c1", size = 69980411, upload-time = "2026-01-16T21:20:04.71Z" },
-    { url = "https://files.pythonhosted.org/packages/3f/9f/af71db6b54e9de08e37c10e0a4d5ea7482227b15a63ee9f97b1599cd3ffc/claude_agent_sdk-0.1.20-py3-none-win_amd64.whl", hash = "sha256:7a5675b1c0bf489a5c82c79f6ad47c3915a50da66e1329dcb0d08332a04889d3", size = 72183062, upload-time = "2026-01-16T21:20:09.069Z" },
+    { url = "https://files.pythonhosted.org/packages/e7/7b/2ccdc12b553a61b59b0470f1cf3b0a864c79ab8a4ac8013ea22fa3e6c461/claude_agent_sdk-0.1.34-py3-none-macosx_11_0_arm64.whl", hash = "sha256:18569ab4bfb5451c4aacb51c0d44eb9802d18d8442d30c29f32b6e8a2479d210", size = 54604881, upload-time = "2026-02-10T01:03:44.575Z" },
+    { url = "https://files.pythonhosted.org/packages/38/59/335b213fb3342c4405fa992cc9e45e52e18a543068f0574ae84010dc4c08/claude_agent_sdk-0.1.34-py3-none-manylinux_2_17_aarch64.whl", hash = "sha256:d7ecd7421066e405376d3feca21ccb3e9245506ba7c219858f7a7f0129877cdb", size = 69359030, upload-time = "2026-02-10T01:03:49.113Z" },
+    { url = "https://files.pythonhosted.org/packages/93/3d/28c715efdad7b5c413e046f5f914d9ab888d25f2c3bb9233f1164d58d2be/claude_agent_sdk-0.1.34-py3-none-manylinux_2_17_x86_64.whl", hash = "sha256:82e9148410ec98ff4061e43e85601d8f0a2e8568d897ab82c324ccf11c297fc5", size = 69949555, upload-time = "2026-02-10T01:03:53.525Z" },
+    { url = "https://files.pythonhosted.org/packages/12/3d/843159343b20d6c9b44cf4a7fe46b568d5b448276ba8ba4c49178d26ba4c/claude_agent_sdk-0.1.34-py3-none-win_amd64.whl", hash = "sha256:a64031a9bf5c70388a6a84368d350d68586d9854a1539f494b46ec6d0b6acf93", size = 72493949, upload-time = "2026-02-10T01:03:57.839Z" },
 ]
 
 [[package]]

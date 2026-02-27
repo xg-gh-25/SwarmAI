@@ -11,6 +11,7 @@ import hashlib
 import asyncio
 import platform
 import sys
+import time
 
 from claude_agent_sdk import (
     ClaudeSDKClient,
@@ -635,8 +636,59 @@ class AgentManager:
     Claude Code (underlying SDK) has built-in support for Skills and MCP servers.
     """
 
+    # TTL for idle sessions before automatic cleanup (2 hours)
+    SESSION_TTL_SECONDS = 2 * 60 * 60
+
     def __init__(self):
         self._clients: dict[str, ClaudeSDKClient] = {}
+        # Long-lived client storage for session reuse across HTTP requests.
+        # Key: session_id, Value: {"client": ClaudeSDKClient, "wrapper": _ClaudeClientWrapper, "created_at": float}
+        self._active_sessions: dict[str, dict] = {}
+        self._cleanup_task: asyncio.Task | None = None
+
+    def _start_cleanup_loop(self):
+        """Start background task to clean up stale sessions."""
+        if self._cleanup_task is None or self._cleanup_task.done():
+            self._cleanup_task = asyncio.create_task(self._cleanup_stale_sessions_loop())
+
+    async def _cleanup_stale_sessions_loop(self):
+        """Periodically clean up sessions that have been idle too long."""
+        while True:
+            try:
+                await asyncio.sleep(60)  # Check every minute
+                now = time.time()
+                stale = [
+                    sid for sid, info in self._active_sessions.items()
+                    if now - info.get("last_used", info["created_at"]) > self.SESSION_TTL_SECONDS
+                ]
+                for sid in stale:
+                    logger.info(f"Cleaning up stale session {sid}")
+                    await self._cleanup_session(sid)
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.error(f"Error in session cleanup loop: {e}")
+
+    async def _cleanup_session(self, session_id: str):
+        """Disconnect and remove a stored session client."""
+        info = self._active_sessions.pop(session_id, None)
+        if info:
+            wrapper = info.get("wrapper")
+            try:
+                if wrapper:
+                    await wrapper.__aexit__(None, None, None)
+                    logger.info(f"Disconnected long-lived client for session {session_id}")
+            except Exception as e:
+                logger.warning(f"Error disconnecting session {session_id}: {e}")
+        self._clients.pop(session_id, None)
+
+    def _get_active_client(self, session_id: str) -> ClaudeSDKClient | None:
+        """Get an existing long-lived client for a session, if available."""
+        info = self._active_sessions.get(session_id)
+        if info:
+            info["last_used"] = time.time()
+            return info["client"]
+        return None
 
     async def _build_options(
         self,
@@ -801,16 +853,14 @@ class AgentManager:
         if global_user_mode:
             # Global User Mode: use home directory, full access, user settings
             working_directory = str(Path.home())
-            # working_directory = str(workspace_manager.get_agent_workspace(agent_id))
             setting_sources = ['project', 'user']
             workspace_manager.ensure_templates_in_directory(Path(working_directory))
             logger.info(f"Agent {agent_id} running in GLOBAL USER MODE (cwd: {working_directory})")
-        elif enable_skills and agent_id:
-            # Isolated Mode with skills: per-agent workspace with symlinked skills
-            # When allow_all_skills=True, all skills will be symlinked
-            # When allow_all_skills=False, only specified skills will be symlinked
+        else:
+            # Isolated Mode: per-agent workspace with symlinked skills
             working_directory = str(workspace_manager.get_agent_workspace(agent_id))
             setting_sources = ['project']
+            workspace_manager.ensure_templates_in_directory(Path(working_directory))
             logger.info(f"Using per-agent workspace: {working_directory} (allow_all_skills={allow_all_skills})")
 
             # Auto-rebuild workspace if it was deleted (e.g., /tmp cleared on reboot)
@@ -822,11 +872,6 @@ class AgentManager:
                     allow_all_skills=allow_all_skills
                 )
                 logger.info(f"Agent workspace rebuilt: {working_directory}")
-        else:
-            # Default workspace (no skills or no agent_id)
-            working_directory = agent_config.get("working_directory") or settings.agent_workspace_dir
-            setting_sources = None
-            logger.info(f"Using default workspace: {working_directory}")
 
         # Validate add_dirs - ensure directories exist before using them
         # This must run regardless of file_access_enabled since add_dirs affects cwd
@@ -1141,281 +1186,350 @@ class AgentManager:
 
         # Collect assistant response content for saving (with O(1) deduplication)
         assistant_content = ContentBlockAccumulator()
-        assistant_model = None
+
+        # Start the stale session cleanup loop if not already running
+        self._start_cleanup_loop()
+
+        # Check if we can reuse an existing long-lived client for resume
+        reused_client = self._get_active_client(session_id) if is_resuming else None
 
         try:
-            logger.info(f"Creating ClaudeSDKClient...")
-            async with _ClaudeClientWrapper(options=options) as client:
-                # For resumed sessions, store client immediately
-                # For new sessions, we'll store after getting SDK session_id
+            if reused_client and session_id:
+                # PATH B: Reuse existing long-lived client
+                client = reused_client
+                logger.info(f"Reusing long-lived client for session {session_id}")
+                self._clients[session_id] = client
+
+                async for event in self._run_query_on_client(
+                    client=client,
+                    query_content=query_content,
+                    display_text=display_text,
+                    agent_config=agent_config,
+                    session_context=session_context,
+                    assistant_content=assistant_content,
+                    is_resuming=is_resuming,
+                    content=content,
+                    user_message=user_message,
+                    work_dir=work_dir,
+                    agent_id=agent_id,
+                ):
+                    yield event
+
+            else:
+                # PATH A: Create new client (manually managed, not async with)
+                # If resuming but no active client exists (server restart, TTL
+                # expiry), the long-lived CLI subprocess is gone and --resume
+                # cannot work (SDK 0.1.34+ doesn't persist transcripts to disk).
+                # Start a fresh session instead.
                 if is_resuming:
-                    self._clients[session_id] = client
+                    logger.info(f"No active client for session {session_id}, starting fresh session instead of --resume")
+                    options = await self._build_options(agent_config, enable_skills, enable_mcp, None, session_context, channel_context)
+                    # Reset to behave as a new session
+                    is_resuming = False
+                    session_context["sdk_session_id"] = None
+
+                logger.info(f"Creating new ClaudeSDKClient...")
+                wrapper = _ClaudeClientWrapper(options=options)
+                client = await wrapper.__aenter__()
                 logger.info(f"ClaudeSDKClient created, is_resuming={is_resuming}")
 
-                # Initialize task variables before try block to ensure they exist in finally
-                sdk_reader_task = None
-                forwarder_task = None
-
                 try:
-                    logger.info(f"Sending query: {display_text[:100] if display_text else 'multimodal'}...")
+                    async for event in self._run_query_on_client(
+                        client=client,
+                        query_content=query_content,
+                        display_text=display_text,
+                        agent_config=agent_config,
+                        session_context=session_context,
+                        assistant_content=assistant_content,
+                        is_resuming=is_resuming,
+                        content=content,
+                        user_message=user_message,
+                        work_dir=work_dir,
+                        agent_id=agent_id,
+                    ):
+                        yield event
+                except Exception:
+                    # On error, disconnect the wrapper instead of keeping alive
+                    try:
+                        await wrapper.__aexit__(None, None, None)
+                    except Exception:
+                        pass
+                    raise
 
-                    # Send query - use content for multimodal, message for simple text
-                    if isinstance(query_content, list):
-                        # For multimodal content, SDK expects AsyncIterable[dict]
-                        # Create an async generator that yields the properly formatted message
-                        async def multimodal_message_generator():
-                            """Async generator for multimodal content."""
-                            message = {
-                                "type": "user",
-                                "message": {"role": "user", "content": query_content},
-                                "parent_tool_use_id": None,
-                            }
-                            yield message
-
-                        await client.query(multimodal_message_generator())
-                    else:
-                        # Simple text string - SDK handles wrapping
-                        await client.query(query_content)
-                    logger.info(f"Query sent, waiting for response...")
-
-                    # Create combined queue for merging SDK messages and permission requests
-                    combined_queue = asyncio.Queue()
-                    message_count = 0
-
-                    # Background task to read SDK messages and put in combined queue
-                    async def sdk_message_reader():
-                        """Read SDK messages and put them in the combined queue."""
-                        try:
-                            async for message in client.receive_response():
-                                await combined_queue.put({"source": "sdk", "message": message})
-                        except Exception as e:
-                            import traceback
-                            error_traceback = traceback.format_exc()
-                            logger.error(f"SDK message reader error: {e}")
-                            logger.error(f"SDK error traceback:\n{error_traceback}")
-                            # Try to get more details from the exception
-                            if hasattr(e, 'stderr'):
-                                logger.error(f"SDK stderr: {e.stderr}")  # type: ignore[attr-defined]
-                            if hasattr(e, 'stdout'):
-                                logger.error(f"SDK stdout: {e.stdout}")  # type: ignore[attr-defined]
-                            await combined_queue.put({"source": "error", "error": str(e), "detail": error_traceback})
-                        finally:
-                            # Signal that SDK stream is done
-                            await combined_queue.put({"source": "sdk_done"})
-                            logger.debug("SDK message reader finished")
-
-                    # Background task to forward permission requests for this session
-                    async def permission_request_forwarder():
-                        """Monitor global queue and forward requests for this session."""
-                        try:
-                            while True:
-                                # Get request from global queue
-                                request = await _permission_request_queue.get()
-
-                                # Check if it belongs to this session
-                                current_session_id = session_context["sdk_session_id"]
-                                if request.get("sessionId") == current_session_id:
-                                    # Forward to combined queue
-                                    logger.info(f"Forwarding permission request {request.get('requestId')} to combined queue for session {current_session_id}")
-                                    await combined_queue.put({"source": "permission", "request": request})
-                                else:
-                                    # Put it back for other sessions
-                                    logger.debug(f"Request {request.get('requestId')} for session {request.get('sessionId')} doesn't match current session {current_session_id}, putting back")
-                                    await _permission_request_queue.put(request)
-                                    # Small delay to avoid busy loop
-                                    await asyncio.sleep(0.01)
-                        except asyncio.CancelledError:
-                            logger.debug("Permission request forwarder cancelled")
-                            raise
-
-                    # Start both background tasks
-                    sdk_reader_task = asyncio.create_task(sdk_message_reader())
-                    forwarder_task = asyncio.create_task(permission_request_forwarder())
-
-                    # Main loop: process items from combined queue
-                    while True:
-                        item = await combined_queue.get()
-
-                        # Check if SDK stream is done
-                        if item["source"] == "sdk_done":
-                            logger.info("SDK iterator finished, exiting message loop")
-                            break
-
-                        # Handle permission requests
-                        if item["source"] == "permission":
-                            request = item["request"]
-                            logger.info(f"Emitting permission request: {request.get('requestId')}")
-                            yield {"type": "permission_request", **request}
-                            continue
-
-                        # Handle errors from SDK reader
-                        if item["source"] == "error":
-                            logger.error(f"Error from SDK reader: {item['error']}")
-                            break
-
-                        # Handle SDK messages
-                        if item["source"] == "sdk":
-                            message = item["message"]
-                            message_count += 1
-                            logger.info(f"Received message {message_count}: {type(message).__name__}")
-                            # Handle ResultMessage
-                            if isinstance(message,ResultMessage):
-                                logger.info(f"ResultMessage subtype: {message.subtype}, data: {message.result}")
-                                # Handle slash command results (e.g., /clear, /help, /compact)
-                                result_text = message.result
-                                if result_text:
-                                    logger.debug(f"ResultMessage result_text: {result_text[:50]}...")
-                                    yield {
-                                        "type": "assistant",
-                                        "content": [{"type": "text", "text": result_text}],
-                                        "model": agent_config.get("model", "claude-sonnet-4-20250514")
-                                    }
-                                    # Add to assistant_content for saving (with deduplication)
-                                    # ResultMessage.result often duplicates AssistantMessage content
-                                    result_block = {"type": "text", "text": result_text}
-                                    assistant_content.add(result_block)
-                            # Handle SystemMessage
-                            if isinstance(message, SystemMessage):
-                                logger.info(f"SystemMessage subtype: {message.subtype}, data: {message.data}")
-
-                                if message.subtype == 'init':
-                                    # Capture session_id from SDK's init message (for new sessions)
-                                    session_context["sdk_session_id"] = message.data.get('session_id')
-                                    logger.info(f"Captured SDK session_id from init: {session_context['sdk_session_id']}")
-
-                                    # For new sessions, now we can send session_start and store session
-                                    if not is_resuming:
-                                        # Store client with SDK session_id
-                                        self._clients[session_context["sdk_session_id"]] = client
-
-                                        yield {
-                                            "type": "session_start",
-                                            "sessionId": session_context["sdk_session_id"],
-                                        }
-
-                                        # Store session with SDK session_id and work_dir for continuity
-                                        title = display_text[:50] + "..." if len(display_text) > 50 else display_text
-                                        await session_manager.store_session(session_context["sdk_session_id"], agent_id, title, work_dir=work_dir)
-
-                                        # Save user message to database with SDK session_id
-                                        # Store original content if multimodal, otherwise wrap text
-                                        user_content = content if content else [{"type": "text", "text": user_message}]
-                                        await self._save_message(
-                                            session_id=session_context["sdk_session_id"],
-                                            role="user",
-                                            content=user_content
-                                        )
-
-                                continue  # Don't format SystemMessage for output
-
-                            # Format and process the message
-                            formatted = await self._format_message(message, agent_config, session_context["sdk_session_id"])
-                            if formatted:
-                                logger.debug(f"Formatted message type: {formatted.get('type')}")
-
-                                # Collect content for saving (with deduplication)
-                                if formatted.get('type') == 'assistant' and formatted.get('content'):
-                                    assistant_content.extend(formatted['content'])
-                                    assistant_model = formatted.get('model')
-
-                                yield formatted
-
-                                # If this is an AskUserQuestion, stop and wait for user input
-                                if formatted.get('type') == 'ask_user_question':
-                                    logger.info(f"AskUserQuestion detected, stopping to wait for user input")
-                                    # Save assistant message before returning
-                                    sdk_session = session_context.get("sdk_session_id")
-                                    if assistant_content and sdk_session:
-                                        await self._save_message(
-                                            session_id=sdk_session,
-                                            role="assistant",
-                                            content=assistant_content.blocks,
-                                            model=assistant_model
-                                        )
-                                    return
-
-                                # If this is a permission_request (from _format_message), stop and wait
-                                # This is a fallback in case the ToolResultBlock contains the prefix
-                                if formatted.get('type') == 'permission_request':
-                                    request_id = formatted.get('requestId')
-                                    logger.info(f"Permission request detected from message: {request_id}, stopping to wait for user decision")
-                                    # Save assistant message before returning
-                                    sdk_session = session_context.get("sdk_session_id")
-                                    if assistant_content and sdk_session:
-                                        await self._save_message(
-                                            session_id=sdk_session,
-                                            role="assistant",
-                                            content=assistant_content.blocks,
-                                            model=assistant_model
-                                        )
-                                    return
-
-                            # If it's a result message, include session info
-                            if isinstance(message, ResultMessage):
-                                logger.info(f"Conversation complete. Total messages: {message_count}")
-
-                                # Check if this was a slash command with no assistant response
-                                is_slash_command = display_text.strip().startswith('/') if display_text else False
-                                if is_slash_command and not assistant_content:
-                                    # Provide a default response for slash commands
-                                    command_name = display_text.strip().split()[0] if display_text else '/unknown'
-                                    default_response = f"Command `{command_name}` executed."
-                                    logger.info(f"Slash command with no content, adding default response: {default_response}")
-                                    yield {
-                                        "type": "assistant",
-                                        "content": [{"type": "text", "text": default_response}],
-                                        "model": agent_config.get("model", "claude-sonnet-4-20250514")
-                                    }
-                                    assistant_content.add({"type": "text", "text": default_response})
-
-                                # Save assistant message
-                                if assistant_content and session_context["sdk_session_id"]:
-                                    await self._save_message(
-                                        session_id=session_context["sdk_session_id"],
-                                        role="assistant",
-                                        content=assistant_content.blocks,
-                                        model=assistant_model
-                                    )
-
-                                yield {
-                                    "type": "result",
-                                    "session_id": session_context["sdk_session_id"],
-                                    "duration_ms": getattr(message, 'duration_ms', 0),
-                                    "total_cost_usd": getattr(message, 'total_cost_usd', None),
-                                    "num_turns": getattr(message, 'num_turns', 1),
-                                }
-                finally:
-                    # Cancel background tasks if they exist
-                    if sdk_reader_task and not sdk_reader_task.done():
-                        sdk_reader_task.cancel()
-                        try:
-                            await sdk_reader_task
-                        except asyncio.CancelledError:
-                            pass
-                        logger.debug("SDK reader task cancelled")
-
-                    if forwarder_task and not forwarder_task.done():
-                        forwarder_task.cancel()
-                        try:
-                            await forwarder_task
-                        except asyncio.CancelledError:
-                            pass
-                        logger.debug("Forwarder task cancelled")
-
-                    # Remove client from tracking when done
-                    if session_context["sdk_session_id"]:
-                        self._clients.pop(session_context["sdk_session_id"], None)
+                # Store client for reuse (keep alive for future resume calls)
+                final_session_id = session_context["sdk_session_id"]
+                if final_session_id:
+                    self._active_sessions[final_session_id] = {
+                        "client": client,
+                        "wrapper": wrapper,
+                        "created_at": time.time(),
+                        "last_used": time.time(),
+                    }
+                    logger.info(f"Stored long-lived client for session {final_session_id}")
 
         except Exception as e:
             import traceback
             error_traceback = traceback.format_exc()
             logger.error(f"Error in conversation: {e}")
             logger.error(f"Full traceback:\n{error_traceback}")
+            # Clean up broken session from reuse pool
+            sid = session_context.get("sdk_session_id")
+            if sid and sid in self._active_sessions:
+                await self._cleanup_session(sid)
             yield {
                 "type": "error",
                 "error": str(e),
                 "detail": error_traceback,
             }
+
+    async def _run_query_on_client(
+        self,
+        client: ClaudeSDKClient,
+        query_content,
+        display_text: str,
+        agent_config: dict,
+        session_context: dict,
+        assistant_content: ContentBlockAccumulator,
+        is_resuming: bool,
+        content: Optional[list[dict]],
+        user_message: Optional[str],
+        work_dir: Optional[str],
+        agent_id: str,
+    ) -> AsyncIterator[dict]:
+        """Send a query on an existing client and yield SSE events.
+
+        This is the shared message-processing loop used by both new and resumed sessions.
+        The client is NOT disconnected after the response completes (caller manages lifecycle).
+        """
+        sdk_reader_task = None
+        forwarder_task = None
+
+        try:
+            logger.info(f"Sending query: {display_text[:100] if display_text else 'multimodal'}...")
+
+            # Send query - use content for multimodal, message for simple text
+            if isinstance(query_content, list):
+                async def multimodal_message_generator():
+                    """Async generator for multimodal content."""
+                    msg = {
+                        "type": "user",
+                        "message": {"role": "user", "content": query_content},
+                        "parent_tool_use_id": None,
+                    }
+                    yield msg
+
+                await client.query(multimodal_message_generator())
+            else:
+                await client.query(query_content)
+            logger.info(f"Query sent, waiting for response...")
+
+            # Create combined queue for merging SDK messages and permission requests
+            combined_queue: asyncio.Queue = asyncio.Queue()
+            message_count = 0
+
+            async def sdk_message_reader():
+                """Read SDK messages and put them in the combined queue."""
+                try:
+                    async for message in client.receive_response():
+                        await combined_queue.put({"source": "sdk", "message": message})
+                except Exception as e:
+                    import traceback
+                    error_traceback = traceback.format_exc()
+                    logger.error(f"SDK message reader error: {e}")
+                    logger.error(f"SDK error traceback:\n{error_traceback}")
+                    if hasattr(e, 'stderr'):
+                        logger.error(f"SDK stderr: {e.stderr}")  # type: ignore[attr-defined]
+                    if hasattr(e, 'stdout'):
+                        logger.error(f"SDK stdout: {e.stdout}")  # type: ignore[attr-defined]
+                    await combined_queue.put({"source": "error", "error": str(e), "detail": error_traceback})
+                finally:
+                    await combined_queue.put({"source": "sdk_done"})
+                    logger.debug("SDK message reader finished")
+
+            async def permission_request_forwarder():
+                """Monitor global queue and forward requests for this session."""
+                try:
+                    while True:
+                        request = await _permission_request_queue.get()
+                        current_session_id = session_context["sdk_session_id"]
+                        if request.get("sessionId") == current_session_id:
+                            logger.info(f"Forwarding permission request {request.get('requestId')} to combined queue for session {current_session_id}")
+                            await combined_queue.put({"source": "permission", "request": request})
+                        else:
+                            logger.debug(f"Request {request.get('requestId')} for session {request.get('sessionId')} doesn't match current session {current_session_id}, putting back")
+                            await _permission_request_queue.put(request)
+                            await asyncio.sleep(0.01)
+                except asyncio.CancelledError:
+                    logger.debug("Permission request forwarder cancelled")
+                    raise
+
+            sdk_reader_task = asyncio.create_task(sdk_message_reader())
+            forwarder_task = asyncio.create_task(permission_request_forwarder())
+
+            formatted = None
+            assistant_model = None
+
+            while True:
+                item = await combined_queue.get()
+
+                if item["source"] == "sdk_done":
+                    logger.info("SDK iterator finished, exiting message loop")
+                    break
+
+                if item["source"] == "permission":
+                    request = item["request"]
+                    logger.info(f"Emitting permission request: {request.get('requestId')}")
+                    yield {"type": "permission_request", **request}
+                    continue
+
+                if item["source"] == "error":
+                    logger.error(f"Error from SDK reader: {item['error']}")
+                    break
+
+                if item["source"] == "sdk":
+                    message = item["message"]
+                    message_count += 1
+                    logger.info(f"Received message {message_count}: {type(message).__name__}")
+
+                    if isinstance(message, ResultMessage):
+                        logger.info(f"ResultMessage: {message}")
+
+                        if message.subtype == 'error_during_execution':
+                            error_text = message.result or "Session failed. This may be a stale session — please start a new conversation."
+                            logger.warning(f"SDK error_during_execution: {error_text}")
+                            # Remove broken session from reuse pool
+                            sid = session_context.get("sdk_session_id")
+                            if sid and sid in self._active_sessions:
+                                await self._cleanup_session(sid)
+                                logger.info(f"Removed broken session {sid} from active sessions pool")
+                            yield {
+                                "type": "error",
+                                "error": error_text,
+                            }
+
+                        result_text = message.result
+                        if result_text:
+                            logger.debug(f"ResultMessage result_text: {result_text[:50]}...")
+                            yield {
+                                "type": "assistant",
+                                "content": [{"type": "text", "text": result_text}],
+                                "model": agent_config.get("model", "claude-sonnet-4-20250514")
+                            }
+                            result_block = {"type": "text", "text": result_text}
+                            assistant_content.add(result_block)
+
+                    if isinstance(message, SystemMessage):
+                        logger.info(f"SystemMessage subtype: {message.subtype}, data: {message.data}")
+
+                        if message.subtype == 'init':
+                            session_context["sdk_session_id"] = message.data.get('session_id')
+                            logger.info(f"Captured SDK session_id from init: {session_context['sdk_session_id']}")
+
+                            if not is_resuming:
+                                self._clients[session_context["sdk_session_id"]] = client
+
+                                yield {
+                                    "type": "session_start",
+                                    "sessionId": session_context["sdk_session_id"],
+                                }
+
+                                title = display_text[:50] + "..." if len(display_text) > 50 else display_text
+                                await session_manager.store_session(session_context["sdk_session_id"], agent_id, title, work_dir=work_dir)
+
+                                user_content = content if content else [{"type": "text", "text": user_message}]
+                                await self._save_message(
+                                    session_id=session_context["sdk_session_id"],
+                                    role="user",
+                                    content=user_content
+                                )
+
+                        continue  # Don't format SystemMessage for output
+
+                    formatted = await self._format_message(message, agent_config, session_context["sdk_session_id"])
+                    if formatted:
+                        logger.debug(f"Formatted message type: {formatted.get('type')}")
+
+                        if formatted.get('type') == 'assistant' and formatted.get('content'):
+                            assistant_content.extend(formatted['content'])
+                            assistant_model = formatted.get('model')
+
+                        yield formatted
+
+                        if formatted.get('type') == 'ask_user_question':
+                            logger.info(f"AskUserQuestion detected, stopping to wait for user input")
+                            sdk_session = session_context.get("sdk_session_id")
+                            if assistant_content and sdk_session:
+                                await self._save_message(
+                                    session_id=sdk_session,
+                                    role="assistant",
+                                    content=assistant_content.blocks,
+                                    model=assistant_model
+                                )
+                            return
+
+                        if formatted.get('type') == 'permission_request':
+                            request_id = formatted.get('requestId')
+                            logger.info(f"Permission request detected from message: {request_id}, stopping to wait for user decision")
+                            sdk_session = session_context.get("sdk_session_id")
+                            if assistant_content and sdk_session:
+                                await self._save_message(
+                                    session_id=sdk_session,
+                                    role="assistant",
+                                    content=assistant_content.blocks,
+                                    model=assistant_model
+                                )
+                            return
+
+                    if isinstance(message, ResultMessage):
+                        logger.info(f"Conversation complete. Total messages: {message_count}")
+
+                        is_slash_command = display_text.strip().startswith('/') if display_text else False
+                        if is_slash_command and not assistant_content:
+                            command_name = display_text.strip().split()[0] if display_text else '/unknown'
+                            default_response = f"Command `{command_name}` executed."
+                            logger.info(f"Slash command with no content, adding default response: {default_response}")
+                            yield {
+                                "type": "assistant",
+                                "content": [{"type": "text", "text": default_response}],
+                                "model": agent_config.get("model", "claude-sonnet-4-20250514")
+                            }
+                            assistant_content.add({"type": "text", "text": default_response})
+
+                        if assistant_content and session_context["sdk_session_id"]:
+                            await self._save_message(
+                                session_id=session_context["sdk_session_id"],
+                                role="assistant",
+                                content=assistant_content.blocks,
+                                model=assistant_model
+                            )
+
+                        yield {
+                            "type": "result",
+                            "session_id": session_context["sdk_session_id"],
+                            "duration_ms": getattr(message, 'duration_ms', 0),
+                            "total_cost_usd": getattr(message, 'total_cost_usd', None),
+                            "num_turns": getattr(message, 'num_turns', 1),
+                        }
+        finally:
+            if sdk_reader_task and not sdk_reader_task.done():
+                sdk_reader_task.cancel()
+                try:
+                    await sdk_reader_task
+                except asyncio.CancelledError:
+                    pass
+                logger.debug("SDK reader task cancelled")
+
+            if forwarder_task and not forwarder_task.done():
+                forwarder_task.cancel()
+                try:
+                    await forwarder_task
+                except asyncio.CancelledError:
+                    pass
+                logger.debug("Forwarder task cancelled")
+
+            # Only remove from _clients tracking (NOT from _active_sessions - that's for reuse)
+            if session_context.get("sdk_session_id"):
+                self._clients.pop(session_context["sdk_session_id"], None)
 
     async def _format_message(self, message: Any, agent_config: dict, session_id: Optional[str] = None) -> Optional[dict]:
         """Format SDK message to API response format."""
@@ -1493,8 +1607,8 @@ class AgentManager:
     ) -> AsyncIterator[dict]:
         """Continue conversation by providing answers to AskUserQuestion.
 
-        This method sends the user's answers as a user message to continue
-        the conversation after Claude asked questions.
+        Reuses the existing long-lived client for the session if available,
+        otherwise falls back to creating a new client with --resume.
 
         Args:
             agent_id: The agent ID
@@ -1528,9 +1642,6 @@ class AgentManager:
         # Configure Claude environment variables
         await _configure_claude_environment()
 
-        # Build options with resume to continue the session
-        options = await self._build_options(agent_config, enable_skills, enable_mcp, resume_session_id=session_id)
-
         # Format answers as a user message
         answer_message = json.dumps({"answers": answers}, indent=2)
 
@@ -1543,127 +1654,86 @@ class AgentManager:
 
         # Collect assistant response content for saving (with O(1) deduplication)
         assistant_content = ContentBlockAccumulator()
-        assistant_model = None
-        forwarder_task = None  # Initialize before try block for finally clause
+        session_context = {"sdk_session_id": session_id}
+
+        # Try to reuse existing long-lived client
+        reused_client = self._get_active_client(session_id)
 
         try:
-            logger.info(f"Creating ClaudeSDKClient for answer continuation with resume={session_id}...")
-            async with ClaudeSDKClient(options=options) as client:
-                # Store client for potential interruption
+            if reused_client:
+                # Reuse existing client
+                client = reused_client
+                logger.info(f"Reusing long-lived client for answer continuation, session {session_id}")
                 self._clients[session_id] = client
 
-                # Send the answers as a regular user message
-                await client.query(answer_message)
-                logger.info(f"Answer sent, waiting for response...")
+                async for event in self._run_query_on_client(
+                    client=client,
+                    query_content=answer_message,
+                    display_text=answer_message[:100],
+                    agent_config=agent_config,
+                    session_context=session_context,
+                    assistant_content=assistant_content,
+                    is_resuming=True,
+                    content=None,
+                    user_message=answer_message,
+                    work_dir=session_info.work_dir if session_info else None,
+                    agent_id=agent_id,
+                ):
+                    yield event
+            else:
+                # No active client — --resume won't work (SDK 0.1.34+ doesn't
+                # persist transcripts). Start a fresh session.
+                logger.info(f"No active client for session {session_id}, starting fresh session for answer")
+                options = await self._build_options(agent_config, enable_skills, enable_mcp)
+                session_context["sdk_session_id"] = None
+                wrapper = _ClaudeClientWrapper(options=options)
+                client = await wrapper.__aenter__()
+                logger.info(f"ClaudeSDKClient created for fresh answer session")
 
-                # Create event queue for this conversation to handle permission requests
-                event_queue = asyncio.Queue()
-
-                # Background task to forward permission requests for this session
-                async def permission_request_forwarder():
-                    """Monitor global queue and forward requests for this session."""
+                try:
+                    async for event in self._run_query_on_client(
+                        client=client,
+                        query_content=answer_message,
+                        display_text=answer_message[:100],
+                        agent_config=agent_config,
+                        session_context=session_context,
+                        assistant_content=assistant_content,
+                        is_resuming=False,
+                        content=None,
+                        user_message=answer_message,
+                        work_dir=session_info.work_dir if session_info else None,
+                        agent_id=agent_id,
+                    ):
+                        yield event
+                except Exception:
                     try:
-                        while True:
-                            request = await _permission_request_queue.get()
-                            if request.get("sessionId") == session_id:
-                                logger.info(f"Forwarding permission request {request.get('requestId')} to event queue")
-                                await event_queue.put({"type": "permission_request", **request})
-                            else:
-                                await _permission_request_queue.put(request)
-                                await asyncio.sleep(0.01)
-                    except asyncio.CancelledError:
-                        logger.debug("Permission request forwarder cancelled")
-                        raise
+                        await wrapper.__aexit__(None, None, None)
+                    except Exception:
+                        pass
+                    raise
 
-                # Start the forwarder task
-                forwarder_task = asyncio.create_task(permission_request_forwarder())
-
-                message_count = 0
-                async for message in client.receive_response():
-                    message_count += 1
-                    logger.debug(f"Received message {message_count}: {type(message).__name__}")
-
-                    # Skip SystemMessage (init message)
-                    if isinstance(message, SystemMessage):
-                        logger.debug(f"Skipping SystemMessage with subtype: {message.subtype}")
-                        continue
-
-                    # Check for queued permission requests BEFORE formatting message
-                    while not event_queue.empty():
-                        try:
-                            queued_event = event_queue.get_nowait()
-                            logger.info(f"Emitting queued permission request: {queued_event.get('requestId')}")
-                            yield queued_event
-                        except asyncio.QueueEmpty:
-                            break
-
-                    formatted = await self._format_message(message, agent_config, session_id)
-                    if formatted:
-                        logger.debug(f"Formatted message type: {formatted.get('type')}")
-
-                        # Collect content for saving (with deduplication)
-                        if formatted.get('type') == 'assistant' and formatted.get('content'):
-                            assistant_content.extend(formatted['content'])
-                            assistant_model = formatted.get('model')
-
-                        yield formatted
-
-                        # If this is an AskUserQuestion, stop and wait for user input
-                        if formatted.get('type') == 'ask_user_question':
-                            logger.info(f"AskUserQuestion detected, stopping to wait for user input")
-                            if assistant_content:
-                                await self._save_message(
-                                    session_id=session_id,
-                                    role="assistant",
-                                    content=assistant_content.blocks,
-                                    model=assistant_model
-                                )
-                            return
-
-                        # Note: permission_request type shouldn't appear here anymore
-                        # The hook now suspends execution until user responds, then continues naturally
-
-                    if isinstance(message, ResultMessage):
-                        logger.info(f"Conversation continued successfully. Total messages: {message_count}")
-
-                        # Save assistant message
-                        if assistant_content:
-                            await self._save_message(
-                                session_id=session_id,
-                                role="assistant",
-                                content=assistant_content.blocks,
-                                model=assistant_model
-                            )
-
-                        yield {
-                            "type": "result",
-                            "session_id": session_id,
-                            "duration_ms": getattr(message, 'duration_ms', 0),
-                            "total_cost_usd": getattr(message, 'total_cost_usd', None),
-                            "num_turns": getattr(message, 'num_turns', 1),
-                        }
+                # Store for reuse
+                self._active_sessions[session_id] = {
+                    "client": client,
+                    "wrapper": wrapper,
+                    "created_at": time.time(),
+                    "last_used": time.time(),
+                }
+                logger.info(f"Stored long-lived client for session {session_id} (from answer continuation)")
 
         except Exception as e:
             import traceback
             error_traceback = traceback.format_exc()
             logger.error(f"Error continuing conversation with answer: {e}")
             logger.error(f"Full traceback:\n{error_traceback}")
+            # Clean up broken session from reuse pool
+            if session_id in self._active_sessions:
+                await self._cleanup_session(session_id)
             yield {
                 "type": "error",
                 "error": str(e),
                 "detail": error_traceback,
             }
-        finally:
-            # Cancel forwarder task if it exists
-            if forwarder_task and not forwarder_task.done():
-                forwarder_task.cancel()
-                try:
-                    await forwarder_task
-                except asyncio.CancelledError:
-                    pass
-                logger.debug("Forwarder task cancelled")
-
-            self._clients.pop(session_id, None)
 
     async def continue_with_permission(
         self,
@@ -1717,18 +1787,6 @@ class AgentManager:
         logger.info(f"Permission decision for request {request_id}: {decision}")
         logger.info(f"Continuing conversation for agent {agent_id}, session {session_id}")
 
-        # Restore work_dir from session for continuity
-        session_info = await session_manager.get_session(session_id)
-        if session_info and session_info.work_dir:
-            agent_config['add_dirs'] = [session_info.work_dir]
-            logger.info(f"Restored work_dir from session: {session_info.work_dir}")
-
-        # Configure Claude environment variables
-        await _configure_claude_environment()
-
-        # Build options with resume to continue the session
-        options = await self._build_options(agent_config, enable_skills, enable_mcp, resume_session_id=session_id)
-
         # Parse the original command from permission request
         tool_input = permission_request.get("tool_input", "{}")
         if isinstance(tool_input, str):
@@ -1771,15 +1829,21 @@ class AgentManager:
         logger.info(f"Permission decision processed, original stream will handle execution")
 
     async def disconnect_all(self):
-        """Disconnect all active clients."""
+        """Disconnect all active clients and long-lived sessions."""
+        # Clean up long-lived sessions
+        for session_id in list(self._active_sessions.keys()):
+            await self._cleanup_session(session_id)
+        # Clean up any remaining transient clients
         for session_id, client in list(self._clients.items()):
             try:
                 logger.info(f"Disconnecting client for session {session_id}")
-                # Try to interrupt if running
                 await client.interrupt()
             except Exception as e:
                 logger.error(f"Error disconnecting client {session_id}: {e}")
         self._clients.clear()
+        # Cancel the cleanup loop
+        if self._cleanup_task and not self._cleanup_task.done():
+            self._cleanup_task.cancel()
 
     async def interrupt_session(self, session_id: str) -> dict:
         """Interrupt a running session.
@@ -1911,84 +1975,94 @@ Current task: Create a skill named "{skill_name}" that {skill_description}"""
         # Configure Claude environment variables
         await _configure_claude_environment()
 
-        # Build options with resume if continuing
-        options = await self._build_options(agent_config, enable_skills=True, enable_mcp=False, resume_session_id=session_id if is_resuming else None)
-        logger.info(f"Skill creator options - allowed_tools: {options.allowed_tools}, resume: {session_id if is_resuming else None}")
-        logger.info(f"Working directory: {options.cwd}")
-
         # Track the actual SDK session_id
-        sdk_session_id = session_id  # Will be updated for new sessions
+        session_context = {"sdk_session_id": session_id}  # Will be updated for new sessions
+        assistant_content = ContentBlockAccumulator()
+
+        # Try to reuse existing long-lived client for resume
+        reused_client = self._get_active_client(session_id) if is_resuming else None
 
         try:
-            logger.info(f"Creating ClaudeSDKClient for skill creation...")
-            async with ClaudeSDKClient(options=options) as client:
-                # For resumed sessions, store client immediately
-                # For new sessions, we'll store after getting SDK session_id
+            if reused_client and session_id:
+                # Reuse existing client
+                client = reused_client
+                logger.info(f"Reusing long-lived client for skill creator, session {session_id}")
+                self._clients[session_id] = client
+
+                async for event in self._run_query_on_client(
+                    client=client,
+                    query_content=prompt,
+                    display_text=f"Creating skill: {skill_name}",
+                    agent_config=agent_config,
+                    session_context=session_context,
+                    assistant_content=assistant_content,
+                    is_resuming=is_resuming,
+                    content=None,
+                    user_message=prompt,
+                    work_dir=None,
+                    agent_id="skill-creator",
+                ):
+                    if event.get("type") == "result":
+                        event["skill_name"] = skill_name
+                    yield event
+            else:
+                # No active client — start fresh (--resume won't work with SDK 0.1.34+)
                 if is_resuming:
-                    self._clients[session_id] = client
-                logger.info(f"ClaudeSDKClient created, is_resuming={is_resuming}")
+                    logger.info(f"No active client for skill creator session {session_id}, starting fresh")
+                    is_resuming = False
+                    session_context["sdk_session_id"] = None
+                options = await self._build_options(agent_config, enable_skills=True, enable_mcp=False)
+                logger.info(f"Skill creator options - allowed_tools: {options.allowed_tools}")
+                logger.info(f"Working directory: {options.cwd}")
+
+                wrapper = _ClaudeClientWrapper(options=options)
+                client = await wrapper.__aenter__()
+                logger.info(f"ClaudeSDKClient created for skill creation")
 
                 try:
-                    logger.info(f"Sending skill creation query...")
-                    await client.query(prompt)
-                    logger.info(f"Query sent, waiting for response...")
+                    async for event in self._run_query_on_client(
+                        client=client,
+                        query_content=prompt,
+                        display_text=f"Creating skill: {skill_name}",
+                        agent_config=agent_config,
+                        session_context=session_context,
+                        assistant_content=assistant_content,
+                        is_resuming=is_resuming,
+                        content=None,
+                        user_message=prompt,
+                        work_dir=None,
+                        agent_id="skill-creator",
+                    ):
+                        if event.get("type") == "result":
+                            event["skill_name"] = skill_name
+                        yield event
+                except Exception:
+                    try:
+                        await wrapper.__aexit__(None, None, None)
+                    except Exception:
+                        pass
+                    raise
 
-                    message_count = 0
-                    async for message in client.receive_response():
-                        message_count += 1
-                        logger.debug(f"Received message {message_count}: {type(message).__name__}")
-
-                        # Capture session_id from SDK's init message (for new sessions)
-                        if isinstance(message, SystemMessage) and message.subtype == 'init':
-                            sdk_session_id = message.data.get('session_id')
-                            logger.info(f"Captured SDK session_id from init: {sdk_session_id}")
-
-                            # For new sessions, now we can send session_start and store session
-                            if not is_resuming:
-                                # Store client with SDK session_id
-                                self._clients[sdk_session_id] = client
-
-                                yield {
-                                    "type": "session_start",
-                                    "sessionId": sdk_session_id,
-                                }
-
-                                # Store session with SDK session_id
-                                title = f"Creating skill: {skill_name}"
-                                await session_manager.store_session(sdk_session_id, "skill-creator", title)
-                            continue  # Don't format SystemMessage for output
-
-                        formatted = await self._format_message(message, agent_config, sdk_session_id)
-                        if formatted:
-                            logger.debug(f"Formatted message type: {formatted.get('type')}")
-                            yield formatted
-
-                            # If this is an AskUserQuestion, stop and wait for user input
-                            if formatted.get('type') == 'ask_user_question':
-                                logger.info(f"AskUserQuestion detected, stopping to wait for user input")
-                                return
-
-                        if isinstance(message, ResultMessage):
-                            logger.info(f"Skill creation conversation complete. Total messages: {message_count}")
-                            yield {
-                                "type": "result",
-                                "session_id": sdk_session_id,
-                                "duration_ms": getattr(message, 'duration_ms', 0),
-                                "total_cost_usd": getattr(message, 'total_cost_usd', None),
-                                "num_turns": getattr(message, 'num_turns', 1),
-                                "skill_name": skill_name,
-                            }
-                finally:
-                    # Remove client from tracking when done
-                    if sdk_session_id:
-                        self._clients.pop(sdk_session_id, None)
-                    logger.info(f"Client removed from tracking for session {sdk_session_id}")
+                # Store for reuse
+                final_session_id = session_context["sdk_session_id"]
+                if final_session_id:
+                    self._active_sessions[final_session_id] = {
+                        "client": client,
+                        "wrapper": wrapper,
+                        "created_at": time.time(),
+                        "last_used": time.time(),
+                    }
+                    logger.info(f"Stored long-lived client for skill creator session {final_session_id}")
 
         except Exception as e:
             import traceback
             error_traceback = traceback.format_exc()
             logger.error(f"Error in skill creation conversation: {e}")
             logger.error(f"Full traceback:\n{error_traceback}")
+            # Clean up broken session from reuse pool
+            sid = session_context.get("sdk_session_id")
+            if sid and sid in self._active_sessions:
+                await self._cleanup_session(sid)
             yield {
                 "type": "error",
                 "error": str(e),
