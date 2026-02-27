@@ -159,7 +159,7 @@ class SystemPromptBuilder:
         For ``BOOTSTRAP.md``, the content is truncated to
         ``BOOTSTRAP_TRUNCATION_LIMIT`` characters.
         """
-        path = Path(self.working_directory) / filename
+        path = Path(self.working_directory) / ".owork" / filename
         try:
             if not path.is_file():
                 return None
