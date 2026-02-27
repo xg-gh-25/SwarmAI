@@ -41,6 +41,9 @@ class OutboundMessage:
 # Type for the on_message callback: async function that takes InboundMessage
 OnMessageCallback = Callable[[InboundMessage], Awaitable[None]]
 
+# Type for the on_error callback: async function that takes (channel_id, error_message)
+OnErrorCallback = Callable[[str, str], Awaitable[None]]
+
 
 class ChannelAdapter(ABC):
     """Base class for channel adapters.
@@ -50,15 +53,25 @@ class ChannelAdapter(ABC):
 
     Lifecycle:
     1. __init__(channel_id, config, on_message) - created by gateway
-    2. start() - begin listening for messages (long-running)
-    3. send_message(outbound) - send a response back to the platform
-    4. stop() - gracefully shut down
+    2. set_on_error(callback) - gateway registers error callback
+    3. start() - begin listening for messages (long-running)
+    4. send_message(outbound) - send a response back to the platform
+    5. stop() - gracefully shut down
+
+    If start() spawns a background thread, runtime failures should be
+    reported via ``self._on_error(channel_id, error_message)`` so the
+    gateway can update the channel status and schedule a retry.
     """
 
     def __init__(self, channel_id: str, config: dict, on_message: OnMessageCallback):
         self.channel_id = channel_id
         self.config = config
         self._on_message = on_message
+        self._on_error: Optional[OnErrorCallback] = None
+
+    def set_on_error(self, callback: OnErrorCallback) -> None:
+        """Register a callback for reporting runtime errors to the gateway."""
+        self._on_error = callback
 
     @abstractmethod
     async def start(self) -> None:
