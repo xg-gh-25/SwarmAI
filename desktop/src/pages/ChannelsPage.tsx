@@ -9,6 +9,7 @@ import {
   ResizableTable,
   ResizableTableCell,
   ConfirmDialog,
+  Dropdown,
 } from '../components/common';
 import type { Channel, ChannelCreateRequest, ChannelUpdateRequest, ChannelType, ChannelAccessMode, Agent } from '../types';
 import { channelsService } from '../services/channels';
@@ -397,51 +398,36 @@ function ChannelFormModal({
 
       {/* Channel Type (only for create) */}
       {!isEdit && (
-        <div>
-          <label className="block text-sm font-medium text-[var(--color-text)] mb-2">
-            {t('channels.form.channelType')} <span className="text-status-error">*</span>
-          </label>
-          <select
-            value={channelType}
-            onChange={(e) => {
-              setChannelType(e.target.value as ChannelType);
-              setConfigFields({});
-            }}
-            className="w-full px-4 py-2.5 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-[var(--color-text)] focus:outline-none focus:border-primary"
-            disabled={isPending}
-          >
-            {channelTypes.map((ct) => (
-              <option key={ct.id} value={ct.id} disabled={!ct.available}>
-                {ct.label} {!ct.available ? `(${t('channels.form.notInstalled')})` : ''}
-              </option>
-            ))}
-          </select>
-          {currentTypeInfo && (
-            <p className="mt-1.5 text-xs text-[var(--color-text-muted)]">{currentTypeInfo.description}</p>
-          )}
-        </div>
+        <Dropdown
+          label={t('channels.form.channelType')}
+          options={channelTypes.map((ct) => ({
+            id: ct.id,
+            name: ct.available ? ct.label : `${ct.label} (${t('channels.form.notInstalled')})`,
+            description: ct.description,
+          }))}
+          selectedId={channelType}
+          onChange={(id) => {
+            setChannelType(id as ChannelType);
+            setConfigFields({});
+          }}
+          placeholder={t('channels.form.channelType')}
+          disabled={isPending}
+        />
       )}
 
       {/* Agent */}
-      <div>
-        <label className="block text-sm font-medium text-[var(--color-text)] mb-2">
-          {t('channels.form.agent')} <span className="text-status-error">*</span>
-        </label>
-        <select
-          value={agentId}
-          onChange={(e) => setAgentId(e.target.value)}
-          className="w-full px-4 py-2.5 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-[var(--color-text)] focus:outline-none focus:border-primary"
-          disabled={isPending}
-          required
-        >
-          <option value="">{t('channels.form.selectAgent')}</option>
-          {agents.map((agent: Agent) => (
-            <option key={agent.id} value={agent.id}>
-              {agent.name}
-            </option>
-          ))}
-        </select>
-      </div>
+      <Dropdown
+        label={t('channels.form.agent')}
+        options={agents.map((agent: Agent) => ({
+          id: agent.id,
+          name: agent.name,
+          description: agent.description,
+        }))}
+        selectedId={agentId}
+        onChange={setAgentId}
+        placeholder={t('channels.form.selectAgent')}
+        disabled={isPending}
+      />
 
       {/* Dynamic Config Fields */}
       {currentTypeInfo && currentTypeInfo.configFields.length > 0 && (
@@ -470,21 +456,18 @@ function ChannelFormModal({
       )}
 
       {/* Access Mode */}
-      <div>
-        <label className="block text-sm font-medium text-[var(--color-text)] mb-2">
-          {t('channels.form.accessMode')}
-        </label>
-        <select
-          value={accessMode}
-          onChange={(e) => setAccessMode(e.target.value as ChannelAccessMode)}
-          className="w-full px-4 py-2.5 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-[var(--color-text)] focus:outline-none focus:border-primary"
-          disabled={isPending}
-        >
-          <option value="open">{t('channels.form.accessOpen')}</option>
-          <option value="allowlist">{t('channels.form.accessAllowlist')}</option>
-          <option value="blocklist">{t('channels.form.accessBlocklist')}</option>
-        </select>
-      </div>
+      <Dropdown
+        label={t('channels.form.accessMode')}
+        options={[
+          { id: 'open', name: t('channels.form.accessOpen') },
+          { id: 'allowlist', name: t('channels.form.accessAllowlist') },
+          { id: 'blocklist', name: t('channels.form.accessBlocklist') },
+        ]}
+        selectedId={accessMode}
+        onChange={(id) => setAccessMode(id as ChannelAccessMode)}
+        placeholder={t('channels.form.accessMode')}
+        disabled={isPending}
+      />
 
       {/* Allowed Senders (shown only for allowlist mode) */}
       {accessMode === 'allowlist' && (
