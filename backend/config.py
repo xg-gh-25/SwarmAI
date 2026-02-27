@@ -13,17 +13,17 @@ def get_app_data_dir() -> Path:
     """Get the platform-specific application data directory.
 
     Returns:
-        macOS:   ~/Library/Application Support/Owork/
-        Windows: %LOCALAPPDATA%/Owork/  (typically C:/Users/<user>/AppData/Local/Owork/)
-        Linux:   ~/.local/share/owork/
+        macOS:   ~/Library/Application Support/SwarmAI/
+        Windows: %LOCALAPPDATA%/SwarmAI/  (typically C:/Users/<user>/AppData/Local/SwarmAI/)
+        Linux:   ~/.local/share/SwarmAI/
     """
     system = platform.system()
     if system == "Darwin":
-        return Path.home() / "Library" / "Application Support" / "Owork"
+        return Path.home() / "Library" / "Application Support" / "SwarmAI"
     elif system == "Windows":
-        return Path.home() / "AppData" / "Local" / "Owork"
+        return Path.home() / "AppData" / "Local" / "SwarmAI"
     else:
-        return Path.home() / ".local" / "share" / "owork"
+        return Path.home() / ".local" / "share" / "SwarmAI"
 
 # Model ID mapping: Anthropic API model ID -> AWS Bedrock model ID
 # Used when CLAUDE_CODE_USE_BEDROCK=true

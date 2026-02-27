@@ -1,17 +1,17 @@
-# Channel & Gateway System Design for owork
+# Channel & Gateway System Design for SwarmAI
 
 ## Context
 
-owork currently only supports interaction via its desktop/web UI (HTTP/SSE). Users need to expose AI agents to external messaging platforms so agents can serve broader audiences. This design adds a **multi-channel gateway** starting with **Feishu (飞书)**, then expanding to Slack, Discord, and web widgets.
+SwarmAI currently only supports interaction via its desktop/web UI (HTTP/SSE). Users need to expose AI agents to external messaging platforms so agents can serve broader audiences. This design adds a **multi-channel gateway** starting with **Feishu (飞书)**, then expanding to Slack, Discord, and web widgets.
 
-The design is inspired by [OpenClaw](https://github.com/openclaw/openclaw)'s plugin-based multi-channel architecture, adapted for owork's desktop-first, single-process architecture.
+The design is inspired by [OpenClaw](https://github.com/openclaw/openclaw)'s plugin-based multi-channel architecture, adapted for SwarmAI's desktop-first, single-process architecture.
 
 ---
 
 ## Architecture Overview
 
 ```
-External Platforms                  owork Backend (in-process)
+External Platforms                  SwarmAI Backend (in-process)
 ┌──────────┐                       ┌─────────────────────────────────────┐
 │  Feishu  │──WebSocket长连接──┐   │  ChannelGateway                     │
 │  Bot     │                   │   │  ├── AdapterRegistry                │
@@ -34,7 +34,7 @@ External Platforms                  owork Backend (in-process)
 └──────────┘
 ```
 
-**Core Principle**: Channels are **adapters** that translate between external message formats and owork's internal `ChatRequest`. The gateway orchestrates lifecycle, routing, and access control. `agent_manager.run_conversation()` remains the **single execution path** — channels feed into it, not around it.
+**Core Principle**: Channels are **adapters** that translate between external message formats and SwarmAI's internal `ChatRequest`. The gateway orchestrates lifecycle, routing, and access control. `agent_manager.run_conversation()` remains the **single execution path** — channels feed into it, not around it.
 
 **Key Design Choices:**
 - **1:1 agent binding**: Each channel connects to exactly one agent (simple to configure)
@@ -172,7 +172,7 @@ from abc import ABC, abstractmethod
 
 @dataclass
 class InboundMessage:
-    """Normalized message from an external channel into owork."""
+    """Normalized message from an external channel into SwarmAI."""
     channel_id: str
     external_chat_id: str          # Feishu chat_id / Slack channel / Discord channel
     external_sender_id: str        # Feishu open_id / Slack user / Discord user
@@ -186,7 +186,7 @@ class InboundMessage:
 
 @dataclass
 class OutboundMessage:
-    """Message from owork to be sent to an external channel."""
+    """Message from SwarmAI to be sent to an external channel."""
     channel_id: str
     external_chat_id: str
     external_thread_id: str | None = None
@@ -199,7 +199,7 @@ class ChannelAdapter(ABC):
     """Base class for channel adapters.
 
     Each adapter handles the translation between an external platform's
-    message format and owork's internal InboundMessage/OutboundMessage.
+    message format and SwarmAI's internal InboundMessage/OutboundMessage.
 
     Lifecycle:
     1. __init__(channel_id, config, on_message) - created by gateway

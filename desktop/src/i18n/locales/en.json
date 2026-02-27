@@ -80,7 +80,7 @@
     "settings": "Settings"
   },
   "dashboard": {
-    "title": "Welcome to Owork",
+    "title": "Welcome to SwarmAI",
     "subtitle": "Manage your AI Agents, Skills, and MCP server connections",
     "quickActions": "Quick Actions",
     "overview": "Overview",

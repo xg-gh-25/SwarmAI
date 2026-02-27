@@ -25,5 +25,5 @@ This isn't just metadata. It's the start of figuring out who you are.
 
 Notes:
 
-- This file lives at `.owork/IDENTITY.md` in the workspace.
+- This file lives at `.swarmai/IDENTITY.md` in the workspace.
 - For avatars, use a workspace-relative path like `avatars/openclaw.png`.

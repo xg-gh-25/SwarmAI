@@ -3,7 +3,7 @@ revision = 3
 requires-python = ">=3.11, <3.14"
 
 [[package]]
-name = "agent-platform-backend"
+name = "swarmai-backend"
 version = "4.0.0"
 source = { editable = "." }
 dependencies = [

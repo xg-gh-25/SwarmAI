@@ -101,7 +101,7 @@ jobs:
       - name: Verify sidecar in app bundle
         run: |
           echo "=== Checking sidecar in app bundle ==="
-          APP_PATH="desktop/src-tauri/target/${{ matrix.target }}/release/bundle/macos/Owork.app"
+          APP_PATH="desktop/src-tauri/target/${{ matrix.target }}/release/bundle/macos/SwarmAI.app"
           if [ -d "$APP_PATH" ]; then
             echo "App bundle exists: $APP_PATH"
             echo ""
@@ -124,14 +124,14 @@ jobs:
       - name: Upload DMG
         uses: actions/upload-artifact@v4
         with:
-          name: Owork-macOS-${{ matrix.arch }}-dmg
+          name: SwarmAI-macOS-${{ matrix.arch }}-dmg
           path: desktop/src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
           if-no-files-found: error
 
       - name: Upload App Bundle
         uses: actions/upload-artifact@v4
         with:
-          name: Owork-macOS-${{ matrix.arch }}-app
+          name: SwarmAI-macOS-${{ matrix.arch }}-app
           path: desktop/src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.app
           if-no-files-found: warn
           compression-level: 9
@@ -197,7 +197,7 @@ jobs:
       - name: Upload DMG (Intel)
         uses: actions/upload-artifact@v4
         with:
-          name: Owork-macOS-x86_64-dmg
+          name: SwarmAI-macOS-x86_64-dmg
           path: desktop/src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg
           if-no-files-found: error
 
@@ -222,4 +222,4 @@ jobs:
           files: artifacts/**/*.dmg
           draft: true
           generate_release_notes: true
-          name: "Owork ${{ github.ref_name }} (macOS)"
+          name: "SwarmAI ${{ github.ref_name }} (macOS)"

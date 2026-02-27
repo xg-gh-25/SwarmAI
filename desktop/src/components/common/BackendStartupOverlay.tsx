@@ -9,12 +9,12 @@ type StartupStatus = 'starting' | 'connected' | 'error';
 function getLogPath(): string {
   const userAgent = navigator.userAgent.toLowerCase();
   if (userAgent.includes('mac')) {
-    return '~/Library/Application Support/Owork/logs/';
+    return '~/Library/Application Support/SwarmAI/logs/';
   } else if (userAgent.includes('win')) {
-    return '%LOCALAPPDATA%\\Owork\\logs\\';
+    return '%LOCALAPPDATA%\\SwarmAI\\logs\\';
   } else {
     // Linux and other Unix-like systems
-    return '~/.local/share/owork/logs/';
+    return '~/.local/share/SwarmAI/logs/';
   }
 }
 
@@ -124,11 +124,11 @@ export default function BackendStartupOverlay({ onReady }: BackendStartupOverlay
       <div className="flex flex-col items-center gap-6 max-w-md px-8">
         {/* Logo */}
         <div className="w-24 h-24 rounded-2xl overflow-hidden">
-          <img src={logo} alt="Owork" className="w-full h-full object-contain" />
+          <img src={logo} alt="SwarmAI" className="w-full h-full object-contain" />
         </div>
 
         {/* App Name */}
-        <h1 className="text-3xl font-bold text-[var(--color-text)]">Owork</h1>
+        <h1 className="text-3xl font-bold text-[var(--color-text)]">SwarmAI</h1>
 
         {status === 'starting' && (
           <>

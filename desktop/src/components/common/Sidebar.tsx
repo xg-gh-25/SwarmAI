@@ -9,7 +9,7 @@ interface NavItem {
   icon: string;
 }
 
-const GITHUB_URL = 'https://github.com/xiehust/owork.git';
+const GITHUB_URL = 'https://github.com/xg-gh-25/SwarmAI.git';
 
 // GitHub SVG icon component
 const GitHubIcon = ({ className }: { className?: string }) => (

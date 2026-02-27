@@ -1,6 +1,6 @@
 # GitHub Actions Workflows
 
-This directory contains automated build workflows for the Owork desktop application.
+This directory contains automated build workflows for the SwarmAI desktop application.
 
 ## Available Workflows
 
@@ -13,8 +13,8 @@ This directory contains automated build workflows for the Owork desktop applicat
 - Manual trigger via GitHub Actions UI
 
 **Outputs**:
-- `Owork_*_x64.msi` - Windows Installer (MSI)
-- `Owork_*_x64-setup.exe` - NSIS installer
+- `SwarmAI_*_x64.msi` - Windows Installer (MSI)
+- `SwarmAI_*_x64-setup.exe` - NSIS installer
 
 **Artifacts**: Available in GitHub Actions artifacts section after build completes.
 

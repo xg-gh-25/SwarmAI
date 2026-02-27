@@ -18,7 +18,7 @@ from database.sqlite import SQLiteDatabase
 # ---------------------------------------------------------------------------
 
 # Create a temp file for the test database (once per process).
-_test_db_fd, _test_db_path = tempfile.mkstemp(suffix=".db", prefix="owork_test_")
+_test_db_fd, _test_db_path = tempfile.mkstemp(suffix=".db", prefix="swarmai_test_")
 os.close(_test_db_fd)
 
 # Replace the global db singleton with one pointing at the temp file.

@@ -1,0 +1,13 @@
+{
+  "enabled": true,
+  "name": "Security Leak Scanner",
+  "description": "Scans generated code for potential security leaks including hardcoded credentials, API keys, secrets, and other sensitive data after agent code generation stops.",
+  "version": "1",
+  "when": {
+    "type": "agentStop"
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "Review changed files for potential security issues:\n\nSecurity Checks:\n- Look for API keys, tokens, or credentials in source code\n- Check for private keys or sensitive credentials\n- Scan for encryption keys or certificates\n- Identify authentication tokens or session IDs\n- Flag passwords or secrets in configuration files\n- Detect IP addresses containing sensitive data\n- Find hardcoded internal URLs\n- Spot database connection credentials\n\nFor each issue found:\n1. Highlight the specific security risk\n2. Suggest a secure alternative approach\n3. Recommend security best practices"
+  }
+}
