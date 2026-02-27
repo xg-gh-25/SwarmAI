@@ -33,7 +33,7 @@ interface DashboardStats {
   recentAgents: Agent[];
 }
 
-export default function DashboardPage() {
+export default function SwarmCorePage() {
   const { t } = useTranslation();
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -43,7 +43,7 @@ export default function DashboardPage() {
       titleKey: 'dashboard.action.startChat',
       descriptionKey: 'dashboard.action.startChatDesc',
       icon: 'chat',
-      path: '/chat',
+      path: '/',
       color: 'bg-blue-500/20 text-blue-400',
     },
     {

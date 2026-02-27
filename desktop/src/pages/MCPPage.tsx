@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { SearchBar, Button, Modal, SkeletonTable, ResizableTable, ResizableTableCell, ConfirmDialog } from '../components/common';
+import { SearchBar, Button, Modal, SkeletonTable, ResizableTable, ResizableTableCell, ConfirmDialog, Breadcrumb } from '../components/common';
 import type { MCPServer, MCPServerCreateRequest } from '../types';
 import { mcpService } from '../services/mcp';
 
@@ -85,6 +85,8 @@ export default function MCPPage() {
 
   return (
     <div className="p-8">
+      <Breadcrumb currentPage={t('mcp.title')} />
+
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div>

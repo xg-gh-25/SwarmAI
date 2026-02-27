@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
-import { SearchBar, StatusBadge, Button, SkeletonTable, ResizableTable, ResizableTableCell, ConfirmDialog, AgentFormModal } from '../components/common';
+import { SearchBar, StatusBadge, Button, SkeletonTable, ResizableTable, ResizableTableCell, ConfirmDialog, AgentFormModal, Breadcrumb } from '../components/common';
 import type { Agent, AgentCreateRequest, Skill, MCPServer } from '../types';
 import { agentsService } from '../services/agents';
 import { skillsService } from '../services/skills';
@@ -146,6 +146,8 @@ export default function AgentsPage() {
 
   return (
     <div className="p-8">
+      <Breadcrumb currentPage={t('agents.title')} />
+
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div>

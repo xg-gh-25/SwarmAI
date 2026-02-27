@@ -69,7 +69,7 @@
     }
   },
   "nav": {
-    "dashboard": "Dashboard",
+    "swarmcore": "SwarmCore",
     "chat": "Chat",
     "tasks": "Tasks",
     "agents": "Agent Management",
@@ -80,8 +80,8 @@
     "settings": "Settings"
   },
   "dashboard": {
-    "title": "Welcome to SwarmAI",
-    "subtitle": "Manage your AI Agents, Skills, and MCP server connections",
+    "title": "SwarmCore",
+    "subtitle": "Control memory, agents, skills, tools, and integrations.",
     "quickActions": "Quick Actions",
     "overview": "Overview",
     "recentAgents": "Recent Agents",
