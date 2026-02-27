@@ -35,11 +35,6 @@ _TABLES_TO_CLEAR = [
     "chat_messages",
     "thread_summaries",
     "chat_threads",
-    "artifact_tags",
-    "artifacts",
-    "reflections",
-    "communications",
-    "plan_items",
     "todos",
     "tasks",
     "permission_requests",
@@ -118,11 +113,12 @@ async def reset_database():
     now = datetime.now().isoformat()
     await _test_db.agents.put({
         "id": "default",
-        "name": "Default Agent",
+        "name": "SwarmAgent",
         "description": "Default system agent",
         "model": "claude-sonnet-4-20250514",
         "permission_mode": "default",
         "is_default": True,  # Mark as default agent
+        "is_system_agent": True,  # Mark as protected system agent
         "created_at": now,
         "updated_at": now,
     })

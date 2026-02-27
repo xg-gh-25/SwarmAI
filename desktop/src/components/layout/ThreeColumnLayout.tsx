@@ -1,5 +1,4 @@
 import { ReactNode, useState, useCallback } from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { LayoutProvider, useLayout, LAYOUT_CONSTANTS, ModalType } from '../../contexts/LayoutContext';
 import { ExplorerProvider } from '../../contexts/ExplorerContext';
@@ -63,8 +62,6 @@ function TopBar() {
 // Requirements: 2.1, 2.2, 2.3, 2.4, 2.6
 function LeftSidebar() {
   const { activeModal, openModal } = useLayout();
-  const navigate = useNavigate();
-  const location = useLocation();
 
   // Modal-based navigation items
   const navItems: { icon: string; label: string; modalType: ModalType }[] = [
@@ -73,16 +70,6 @@ function LeftSidebar() {
     { icon: 'smart_toy', label: 'Agents', modalType: 'agents' },
     { icon: 'auto_awesome', label: 'Skills', modalType: 'skills' },
     { icon: 'hub', label: 'MCP Servers', modalType: 'mcp' },
-  ];
-
-  // Section page navigation items - Requirements: 15.4, 15.5
-  const sectionNavItems: { icon: string; label: string; path: string }[] = [
-    { icon: 'notifications', label: 'Signals', path: '/signals' },
-    { icon: 'calendar_today', label: 'Plan', path: '/plan' },
-    { icon: 'play_arrow', label: 'Execute', path: '/execute' },
-    { icon: 'chat', label: 'Communicate', path: '/communicate' },
-    { icon: 'inventory_2', label: 'Artifacts', path: '/artifacts' },
-    { icon: 'psychology', label: 'Reflection', path: '/reflection' },
   ];
 
   return (
@@ -106,21 +93,6 @@ function LeftSidebar() {
             isActive={activeModal === item.modalType}
             onClick={() => openModal(item.modalType)}
             data-testid={`nav-${item.modalType}`}
-          />
-        ))}
-
-        {/* Divider between modal nav and section nav */}
-        <div className="my-2 border-t border-[var(--color-border)]" />
-
-        {/* Section page navigation - Requirements: 15.4, 15.5 */}
-        {sectionNavItems.map((item) => (
-          <NavIconButton
-            key={item.path}
-            icon={item.icon}
-            label={item.label}
-            isActive={location.pathname === item.path}
-            onClick={() => navigate(item.path)}
-            data-testid={`nav-section-${item.path.slice(1)}`}
           />
         ))}
       </nav>

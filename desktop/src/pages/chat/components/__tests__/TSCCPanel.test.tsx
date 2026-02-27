@@ -58,18 +58,20 @@ describe('TSCCPanel', () => {
     onTogglePin: vi.fn(),
   };
 
-  it('returns null when threadId is null', () => {
-    const { container } = render(
+  it('renders default collapsed bar when threadId is null', () => {
+    render(
       <TSCCPanel {...defaultProps} threadId={null} />,
     );
-    expect(container.innerHTML).toBe('');
+    // Should show default "new" state with workspace scope label (Req 1.2, 9.1)
+    expect(screen.getByText('Workspace: SwarmWS (General)')).toBeInTheDocument();
   });
 
-  it('returns null when tsccState is null', () => {
-    const { container } = render(
+  it('renders default collapsed bar when tsccState is null', () => {
+    render(
       <TSCCPanel {...defaultProps} tsccState={null} />,
     );
-    expect(container.innerHTML).toBe('');
+    // Should show default "new" state with workspace scope label (Req 1.2, 9.1)
+    expect(screen.getByText('Workspace: SwarmWS (General)')).toBeInTheDocument();
   });
 
   describe('CollapsedBar', () => {

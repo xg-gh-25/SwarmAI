@@ -291,7 +291,7 @@ def _build_tree(
 
 @router.get("/workspace/tree")
 async def get_workspace_tree(
-    depth: int = Query(default=3, ge=1, le=5),
+    depth: int = Query(default=4, ge=1, le=5),
     if_none_match: Optional[str] = Header(default=None),
 ) -> list[dict]:
     """Return the SwarmWS filesystem tree as nested JSON.

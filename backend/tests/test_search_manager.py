@@ -1,7 +1,6 @@
 """Unit tests for SearchManager.
 
-Tests global search across entity types (ToDos, Tasks, PlanItems,
-Communications, Artifacts, Reflections) and thread search via
+Tests global search across entity types (ToDos, Tasks) and thread search via
 ThreadSummary (NOT raw ChatMessages).
 
 Requirements: 31.1-31.7, 38.1-38.12
@@ -66,77 +65,6 @@ async def _create_task(workspace_id: str, agent_id: str, title: str = "Test Task
     }
     await db.tasks.put(task)
     return task
-
-
-async def _create_plan_item(workspace_id: str, title: str = "Test Plan", description: str = "A plan item") -> dict:
-    now = now_iso()
-    item = {
-        "id": str(uuid4()),
-        "workspace_id": workspace_id,
-        "title": title,
-        "description": description,
-        "status": "active",
-        "priority": "none",
-        "focus_type": "today",
-        "sort_order": 0,
-        "created_at": now,
-        "updated_at": now,
-    }
-    await db.plan_items.put(item)
-    return item
-
-
-async def _create_communication(workspace_id: str, title: str = "Test Comm", description: str = "A communication") -> dict:
-    now = now_iso()
-    comm = {
-        "id": str(uuid4()),
-        "workspace_id": workspace_id,
-        "title": title,
-        "description": description,
-        "recipient": "user@example.com",
-        "channel_type": "email",
-        "status": "pending_reply",
-        "priority": "none",
-        "created_at": now,
-        "updated_at": now,
-    }
-    await db.communications.put(comm)
-    return comm
-
-
-async def _create_artifact(workspace_id: str, title: str = "Test Artifact") -> dict:
-    now = now_iso()
-    artifact = {
-        "id": str(uuid4()),
-        "workspace_id": workspace_id,
-        "artifact_type": "doc",
-        "title": title,
-        "file_path": f"/tmp/artifacts/{title}.md",
-        "version": 1,
-        "created_by": "user",
-        "created_at": now,
-        "updated_at": now,
-    }
-    await db.artifacts.put(artifact)
-    return artifact
-
-
-async def _create_reflection(workspace_id: str, title: str = "Test Reflection") -> dict:
-    now = now_iso()
-    reflection = {
-        "id": str(uuid4()),
-        "workspace_id": workspace_id,
-        "reflection_type": "daily_recap",
-        "title": title,
-        "file_path": f"/tmp/reflections/{title}.md",
-        "period_start": now,
-        "period_end": now,
-        "generated_by": "user",
-        "created_at": now,
-        "updated_at": now,
-    }
-    await db.reflections.put(reflection)
-    return reflection
 
 
 async def _create_thread_with_summary(
@@ -223,50 +151,6 @@ class TestSearchBasic:
         task_group = next((g for g in result.groups if g.entity_type == "task"), None)
         assert task_group is not None
         assert task_group.total >= 1
-
-    @pytest.mark.asyncio
-    async def test_search_finds_plan_item(self):
-        """Search matches PlanItem title."""
-        ws = await create_workspace("SearchWS")
-        await _create_plan_item(ws["id"], title="Review quarterly OKRs")
-
-        result = await search_manager.search("quarterly")
-        pi_group = next((g for g in result.groups if g.entity_type == "plan_item"), None)
-        assert pi_group is not None
-        assert pi_group.total >= 1
-
-    @pytest.mark.asyncio
-    async def test_search_finds_communication(self):
-        """Search matches Communication title."""
-        ws = await create_workspace("SearchWS")
-        await _create_communication(ws["id"], title="Follow up with design team")
-
-        result = await search_manager.search("design team")
-        comm_group = next((g for g in result.groups if g.entity_type == "communication"), None)
-        assert comm_group is not None
-        assert comm_group.total >= 1
-
-    @pytest.mark.asyncio
-    async def test_search_finds_artifact(self):
-        """Search matches Artifact title."""
-        ws = await create_workspace("SearchWS")
-        await _create_artifact(ws["id"], title="Architecture Decision Record")
-
-        result = await search_manager.search("Architecture")
-        art_group = next((g for g in result.groups if g.entity_type == "artifact"), None)
-        assert art_group is not None
-        assert art_group.total >= 1
-
-    @pytest.mark.asyncio
-    async def test_search_finds_reflection(self):
-        """Search matches Reflection title."""
-        ws = await create_workspace("SearchWS")
-        await _create_reflection(ws["id"], title="Weekly sprint retrospective")
-
-        result = await search_manager.search("retrospective")
-        ref_group = next((g for g in result.groups if g.entity_type == "reflection"), None)
-        assert ref_group is not None
-        assert ref_group.total >= 1
 
     @pytest.mark.asyncio
     async def test_search_no_match(self):
@@ -457,15 +341,14 @@ class TestEntityTypeFilter:
     async def test_filter_multiple_entity_types(self):
         """entity_types filter with multiple types."""
         ws = await create_workspace("FilterWS")
+        agent = await _create_agent()
         await _create_todo(ws["id"], title="Multi filter test")
-        await _create_plan_item(ws["id"], title="Multi filter test")
-        await _create_artifact(ws["id"], title="Multi filter test")
+        await _create_task(ws["id"], agent["id"], title="Multi filter test")
 
-        result = await search_manager.search("Multi filter", entity_types=["todo", "plan_item"])
+        result = await search_manager.search("Multi filter", entity_types=["todo", "task"])
         entity_types_found = {g.entity_type for g in result.groups}
         assert "todo" in entity_types_found
-        assert "plan_item" in entity_types_found
-        assert "artifact" not in entity_types_found
+        assert "task" in entity_types_found
 
 
 # ---------------------------------------------------------------------------
@@ -536,11 +419,10 @@ class TestSearchResultStructure:
         agent = await _create_agent()
         await _create_todo(ws["id"], title="Grouped search term")
         await _create_task(ws["id"], agent["id"], title="Grouped search term")
-        await _create_plan_item(ws["id"], title="Grouped search term")
 
         result = await search_manager.search("Grouped search term")
         entity_types = [g.entity_type for g in result.groups]
         # Should have multiple groups
-        assert len(entity_types) >= 3
+        assert len(entity_types) >= 2
         # Each group should be unique
         assert len(entity_types) == len(set(entity_types))

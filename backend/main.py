@@ -7,14 +7,16 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 import asyncio
 import logging
+import os
 import shutil
+import sqlite3
 import sys
 from pathlib import Path
 
 from config import settings, get_app_data_dir
 from core.agent_manager import agent_manager
 from utils.bundle_paths import get_resource_file
-from routers import agents_router, skills_router, mcp_router, chat_router, chat_threads_router, auth_router, workspace_router, settings_router, plugins_router, tasks_router, channels_router, system_router, todos_router, sections_router, plan_items_router, communications_router, artifacts_router, reflections_router, search_router, workspace_config_router, workspace_api_router, projects_router, context_router, tscc_router
+from routers import agents_router, skills_router, mcp_router, chat_router, chat_threads_router, auth_router, workspace_router, settings_router, plugins_router, tasks_router, channels_router, system_router, todos_router, search_router, workspace_config_router, workspace_api_router, projects_router, context_router, tscc_router
 from channels.gateway import channel_gateway
 from middleware.error_handler import setup_error_handlers
 from middleware.rate_limit import limiter
@@ -73,36 +75,68 @@ def _get_seed_database_path() -> Path | None:
     return get_resource_file("seed.db", dev_seed_path)
 
 
-def _ensure_database_initialized() -> None:
+def _ensure_database_initialized() -> bool:
     """Ensure the user database exists, copying from seed if needed.
-    
-    This function checks if a user database already exists. If not, it attempts
-    to copy the bundled seed database to the user data directory. If the seed
-    database is not found, the application will fall back to runtime initialization.
-    
-    Validates: Requirements 3.1, 3.2, 3.4
+
+    Checks whether a user database already exists at ``~/.swarm-ai/data.db``.
+
+    * **Returning user** (``data.db`` exists): returns ``True`` immediately so
+      the caller can skip the expensive init pipeline — user data is preserved.
+    * **First launch** (``data.db`` missing, ``seed.db`` available): performs an
+      atomic copy (write to a temp file, then ``os.replace``) and sets WAL mode
+      + busy_timeout pragmas on the fresh copy.  Returns ``True``.
+    * **Dev mode** (no ``seed.db``): logs a warning and returns ``False`` so the
+      caller falls back to runtime initialization.
+
+    Returns:
+        ``True``  — database is ready; skip the init pipeline.
+        ``False`` — no seed available; caller must run runtime init.
+
+    Validates: Requirements 2.1, 2.2, 2.3, 2.5, 2.7, 2.8
     """
     user_db_path = get_app_data_dir() / "data.db"
-    
+
     # Ensure the app data directory exists
     user_db_path.parent.mkdir(parents=True, exist_ok=True)
-    
+
+    # --- Returning user: preserve existing data.db, skip init pipeline ---
     if user_db_path.exists():
         logger.info(f"Using existing user database at {user_db_path}")
-        return
-    
-    # Try to copy seed database
+        return True
+
+    # --- First launch: attempt atomic seed copy ---
     seed_db_path = _get_seed_database_path()
-    
-    if seed_db_path and seed_db_path.exists():
+
+    if not seed_db_path or not seed_db_path.exists():
+        logger.warning("Seed database not found, falling back to runtime initialization")
+        return False
+
+    tmp_path = user_db_path.with_suffix(".db.tmp")
+    try:
+        shutil.copy2(seed_db_path, tmp_path)
+        os.replace(tmp_path, user_db_path)  # atomic on POSIX
+        logger.info(f"Copied seed database from {seed_db_path} to {user_db_path}")
+    except Exception as e:
+        logger.error(f"Failed to copy seed database: {e}")
+        # Clean up partial file to avoid leaving corrupted state
         try:
-            shutil.copy2(seed_db_path, user_db_path)
-            logger.info(f"Copied seed database from {seed_db_path} to {user_db_path}")
-        except Exception as e:
-            logger.error(f"Failed to copy seed database: {e}")
-            logger.warning("Will fall back to runtime initialization")
-    else:
-        logger.warning("Seed database not found, will use runtime initialization")
+            tmp_path.unlink(missing_ok=True)
+            user_db_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        logger.warning("Will fall back to runtime initialization")
+        return False
+
+    # --- Set WAL mode and busy_timeout on the freshly copied database ---
+    try:
+        with sqlite3.connect(str(user_db_path)) as conn:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA busy_timeout=5000")
+        logger.info("Set WAL mode and busy_timeout on seed-copied database")
+    except Exception as e:
+        logger.warning(f"Failed to set database pragmas (non-fatal): {e}")
+
+    return True
 
 
 @asynccontextmanager
@@ -118,32 +152,56 @@ async def lifespan(app: FastAPI):
     logger.info(f"Rate limit: {settings.rate_limit_per_minute}/minute")
 
     # Ensure database exists (copy seed DB if needed)
-    # Validates: Requirements 3.1, 3.2, 3.4
-    _ensure_database_initialized()
+    # Validates: Requirements 2.1, 2.2, 2.5, 2.6, 3.1
+    skip_init_pipeline = _ensure_database_initialized()
 
-    # Initialize database (with timeout protection)
-    try:
-        await asyncio.wait_for(initialize_database(), timeout=45.0)
-    except asyncio.TimeoutError:
-        logger.error("Database initialization timed out after 45 seconds — check migrations")
-        raise RuntimeError("Database initialization timed out")
-    logger.info("Database initialized")
+    if skip_init_pipeline:
+        # Fast startup path — seed-sourced or returning user.
+        # Create the DB instance (connection pool) without running DDL or migrations.
+        logger.info("Fast startup (seed-sourced) — skipping schema DDL, migrations, and full init")
+        await initialize_database(skip_schema=True)
+        logger.info("Database instance created (schema skipped)")
 
-    # Check initialization state and run appropriate flow
-    # Validates: Requirements 2.1, 3.1, 3.6
-    if await initialization_manager.is_initialization_complete():
-        # Quick validation path - fast startup for returning users
-        logger.info("Initialization complete flag is set, running quick validation...")
-        if not await initialization_manager.run_quick_validation():
-            # Resources missing, fall back to full init
-            logger.warning("Quick validation failed, falling back to full initialization...")
-            await initialization_manager.run_full_initialization()
-        else:
-            logger.info("Quick validation passed - fast startup complete")
+        # Ensure workspace filesystem exists on disk.
+        # The seed DB contains the workspace_config row but NOT the
+        # actual directories/files.  For returning users this also
+        # heals any missing system-managed items via verify_integrity().
+        from database import db as _db
+        from core.swarm_workspace_manager import swarm_workspace_manager
+        try:
+            workspace = await swarm_workspace_manager.ensure_default_workspace(_db)
+            initialization_manager._cached_workspace_path = (
+                swarm_workspace_manager.expand_path(workspace["file_path"])
+            )
+            logger.info("Workspace filesystem verified on fast startup path")
+        except Exception as e:
+            logger.error("Failed to ensure workspace on fast startup: %s", e)
     else:
-        # First-time initialization
-        logger.info("First-time startup, running full initialization...")
-        await initialization_manager.run_full_initialization()
+        # Full initialization path — dev-mode fallback (no seed.db available).
+        # Preserve the existing init pipeline exactly.
+        logger.info("Full initialization (runtime) — running schema DDL + migrations + init")
+        try:
+            await asyncio.wait_for(initialize_database(), timeout=45.0)
+        except asyncio.TimeoutError:
+            logger.error("Database initialization timed out after 45 seconds — check migrations")
+            raise RuntimeError("Database initialization timed out")
+        logger.info("Database initialized")
+
+        # Check initialization state and run appropriate flow
+        # Validates: Requirements 3.1
+        if await initialization_manager.is_initialization_complete():
+            # Quick validation path - fast startup for returning users
+            logger.info("Initialization complete flag is set, running quick validation...")
+            if not await initialization_manager.run_quick_validation():
+                # Resources missing, fall back to full init
+                logger.warning("Quick validation failed, falling back to full initialization...")
+                await initialization_manager.run_full_initialization()
+            else:
+                logger.info("Quick validation passed - fast startup complete")
+        else:
+            # First-time initialization
+            logger.info("First-time startup, running full initialization...")
+            await initialization_manager.run_full_initialization()
 
     # Start channel gateway (auto-starts active channels)
     await channel_gateway.startup()
@@ -239,11 +297,6 @@ app.include_router(tasks_router, prefix="/api/tasks", tags=["tasks"])
 app.include_router(channels_router, prefix="/api/channels", tags=["channels"])
 app.include_router(system_router, prefix="/api/system", tags=["system"])
 app.include_router(todos_router, prefix="/api/todos", tags=["todos"])
-app.include_router(sections_router, prefix="/api/workspaces", tags=["sections"])
-app.include_router(plan_items_router, prefix="/api/workspaces", tags=["plan-items"])
-app.include_router(communications_router, prefix="/api/workspaces", tags=["communications"])
-app.include_router(artifacts_router, prefix="/api/workspaces", tags=["artifacts"])
-app.include_router(reflections_router, prefix="/api/workspaces", tags=["reflections"])
 app.include_router(search_router, prefix="/api/search", tags=["search"])
 app.include_router(workspace_config_router, prefix="/api/workspaces", tags=["workspace-config"])
 app.include_router(workspace_api_router, prefix="/api", tags=["workspace-api"])

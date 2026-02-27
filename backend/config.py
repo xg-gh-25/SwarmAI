@@ -27,6 +27,7 @@ ANTHROPIC_TO_BEDROCK_MODEL_MAP: dict[str, str] = {
     # Claude 4.5 models
     "claude-haiku-4-5-20251001": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
     "claude-sonnet-4-5-20250929": "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "claude-opus-4-5-20250514": "global.anthropic.claude-opus-4-5-20250514-v1:0",
     "claude-opus-4-5-20251101": "global.anthropic.claude-opus-4-5-20251101-v1:0",
 }
 

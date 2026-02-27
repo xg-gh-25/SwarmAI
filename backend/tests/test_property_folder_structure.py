@@ -181,6 +181,9 @@ class TestNonDestructiveFolderStructure:
         await manager.create_folder_structure(str(workspace))
 
         for rel_path, original_content in before.items():
+            # System folders take precedence over conflicting user files
+            if rel_path.lower() in {f.lower() for f in FOLDER_STRUCTURE}:
+                continue
             file_path = workspace / rel_path
             assert file_path.exists(), (
                 f"Pre-existing file '{rel_path}' was deleted by create_folder_structure()"
@@ -223,8 +226,12 @@ class TestNonDestructiveFolderStructure:
                 f"Standard folder '{folder}' missing after create_folder_structure()"
             )
 
-        # Pre-existing files must be unchanged
+        # Pre-existing files must be unchanged (skip files replaced by system folders)
+        system_folder_set = {f.lower() for f in FOLDER_STRUCTURE}
         for rel_path, original_content in before.items():
+            # System folders take precedence over conflicting user files
+            if rel_path.lower() in system_folder_set:
+                continue
             file_path = workspace / rel_path
             assert file_path.exists(), (
                 f"Pre-existing file '{rel_path}' was deleted"

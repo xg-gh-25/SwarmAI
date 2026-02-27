@@ -584,95 +584,6 @@ class SQLiteToDosTable(WorkspaceScopedTable[T], Generic[T]):
         return await self.count_by_workspace_and_filter(workspace_id, status)
 
 
-class SQLitePlanItemsTable(WorkspaceScopedTable[T], Generic[T]):
-    """Specialized SQLite table for PlanItems with workspace and focus type filtering."""
-    
-    filter_field: ClassVar[str] = "focus_type"
-    order_by: ClassVar[str] = "sort_order ASC"
-
-    # Backward-compatible alias
-    async def count_by_workspace_and_focus(self, workspace_id: str, focus_type: str) -> int:
-        """Count PlanItems by workspace and focus type."""
-        return await self.count_by_workspace_and_filter(workspace_id, focus_type)
-
-
-class SQLiteCommunicationsTable(WorkspaceScopedTable[T], Generic[T]):
-    """Specialized SQLite table for Communications with workspace and status filtering."""
-    
-    filter_field: ClassVar[str] = "status"
-    order_by: ClassVar[str] = "created_at DESC"
-
-    # Backward-compatible alias
-    async def count_by_workspace_and_status(self, workspace_id: str, status: str) -> int:
-        """Count Communications by workspace and status."""
-        return await self.count_by_workspace_and_filter(workspace_id, status)
-
-
-class SQLiteArtifactsTable(WorkspaceScopedTable[T], Generic[T]):
-    """Specialized SQLite table for Artifacts with workspace and type filtering."""
-    
-    filter_field: ClassVar[str] = "artifact_type"
-    order_by: ClassVar[str] = "created_at DESC"
-
-    # Backward-compatible alias
-    async def count_by_workspace_and_type(self, workspace_id: str, artifact_type: str) -> int:
-        """Count Artifacts by workspace and type."""
-        return await self.count_by_workspace_and_filter(workspace_id, artifact_type)
-
-
-class SQLiteArtifactTagsTable(SQLiteTable[T], Generic[T]):
-    """Specialized SQLite table for Artifact Tags."""
-
-    async def list_by_artifact(self, artifact_id: str) -> list[T]:
-        """List all tags for an artifact."""
-        async with self._get_connection() as conn:
-            conn.row_factory = aiosqlite.Row
-            async with conn.execute(
-                f"SELECT * FROM {self.table_name} WHERE artifact_id = ? ORDER BY created_at ASC",
-                (artifact_id,)
-            ) as cursor:
-                rows = await cursor.fetchall()
-                return [self._row_to_dict(row) for row in rows]
-
-    async def delete_by_artifact(self, artifact_id: str) -> int:
-        """Delete all tags for an artifact."""
-        async with self._get_connection() as conn:
-            cursor = await conn.execute(
-                f"DELETE FROM {self.table_name} WHERE artifact_id = ?",
-                (artifact_id,)
-            )
-            await conn.commit()
-            return cursor.rowcount
-
-
-class SQLiteReflectionsTable(SQLiteTable[T], Generic[T]):
-    """Specialized SQLite table for Reflections with workspace and type filtering."""
-
-    async def list_by_workspace(self, workspace_id: str, reflection_type: Optional[str] = None) -> list[T]:
-        """List all Reflections for a workspace, optionally filtered by type."""
-        async with self._get_connection() as conn:
-            conn.row_factory = aiosqlite.Row
-            if reflection_type:
-                query = f"SELECT * FROM {self.table_name} WHERE workspace_id = ? AND reflection_type = ? ORDER BY created_at DESC"
-                params = (workspace_id, reflection_type)
-            else:
-                query = f"SELECT * FROM {self.table_name} WHERE workspace_id = ? ORDER BY created_at DESC"
-                params = (workspace_id,)
-            async with conn.execute(query, params) as cursor:
-                rows = await cursor.fetchall()
-                return [self._row_to_dict(row) for row in rows]
-
-    async def count_by_workspace_and_type(self, workspace_id: str, reflection_type: str) -> int:
-        """Count Reflections by workspace and type."""
-        async with self._get_connection() as conn:
-            async with conn.execute(
-                f"SELECT COUNT(*) FROM {self.table_name} WHERE workspace_id = ? AND reflection_type = ?",
-                (workspace_id, reflection_type)
-            ) as cursor:
-                row = await cursor.fetchone()
-                return row[0] if row else 0
-
-
 class SQLiteWorkspaceSkillsTable(SQLiteTable[T], Generic[T]):
     """Specialized SQLite table for Workspace Skills configuration."""
 
@@ -1450,106 +1361,6 @@ class SQLiteDatabase(BaseDatabase):
     CREATE INDEX IF NOT EXISTS idx_todos_due_date ON todos(due_date);
     CREATE INDEX IF NOT EXISTS idx_todos_workspace_status ON todos(workspace_id, status);
 
-    -- Plan Items table (Plan section in Daily Work Operating Loop)
-    -- Validates: Requirements 22.1, 22.2, 22.3, 22.4
-    CREATE TABLE IF NOT EXISTS plan_items (
-        id TEXT PRIMARY KEY,
-        workspace_id TEXT NOT NULL,
-        title TEXT NOT NULL,
-        description TEXT,
-        source_todo_id TEXT,
-        source_task_id TEXT,
-        status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'deferred', 'completed', 'cancelled')),
-        priority TEXT NOT NULL DEFAULT 'none' CHECK (priority IN ('high', 'medium', 'low', 'none')),
-        scheduled_date TEXT,
-        focus_type TEXT NOT NULL DEFAULT 'upcoming' CHECK (focus_type IN ('today', 'upcoming', 'blocked')),
-        sort_order INTEGER NOT NULL DEFAULT 0,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        FOREIGN KEY (workspace_id) REFERENCES swarm_workspaces(id) ON DELETE CASCADE,
-        FOREIGN KEY (source_todo_id) REFERENCES todos(id) ON DELETE SET NULL,
-        FOREIGN KEY (source_task_id) REFERENCES tasks(id) ON DELETE SET NULL
-    );
-    CREATE INDEX IF NOT EXISTS idx_plan_items_workspace_id ON plan_items(workspace_id);
-    CREATE INDEX IF NOT EXISTS idx_plan_items_focus_type ON plan_items(focus_type);
-    CREATE INDEX IF NOT EXISTS idx_plan_items_workspace_focus ON plan_items(workspace_id, focus_type);
-
-    -- Communications table (Communicate section in Daily Work Operating Loop)
-    -- Validates: Requirements 23.1, 23.2, 23.3, 23.4
-    CREATE TABLE IF NOT EXISTS communications (
-        id TEXT PRIMARY KEY,
-        workspace_id TEXT NOT NULL,
-        title TEXT NOT NULL,
-        description TEXT,
-        recipient TEXT NOT NULL,
-        channel_type TEXT NOT NULL DEFAULT 'other' CHECK (channel_type IN ('email', 'slack', 'meeting', 'other')),
-        status TEXT NOT NULL DEFAULT 'pending_reply' CHECK (status IN ('pending_reply', 'ai_draft', 'follow_up', 'sent', 'cancelled')),
-        priority TEXT NOT NULL DEFAULT 'none' CHECK (priority IN ('high', 'medium', 'low', 'none')),
-        due_date TEXT,
-        ai_draft_content TEXT,
-        source_task_id TEXT,
-        source_todo_id TEXT,
-        sent_at TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        FOREIGN KEY (workspace_id) REFERENCES swarm_workspaces(id) ON DELETE CASCADE,
-        FOREIGN KEY (source_task_id) REFERENCES tasks(id) ON DELETE SET NULL,
-        FOREIGN KEY (source_todo_id) REFERENCES todos(id) ON DELETE SET NULL
-    );
-    CREATE INDEX IF NOT EXISTS idx_communications_workspace_id ON communications(workspace_id);
-    CREATE INDEX IF NOT EXISTS idx_communications_status ON communications(status);
-    CREATE INDEX IF NOT EXISTS idx_communications_workspace_status ON communications(workspace_id, status);
-
-    -- Artifacts table (Artifacts section in Daily Work Operating Loop)
-    -- Validates: Requirements 27.2, 27.3, 27.7
-    CREATE TABLE IF NOT EXISTS artifacts (
-        id TEXT PRIMARY KEY,
-        workspace_id TEXT NOT NULL,
-        task_id TEXT,
-        artifact_type TEXT NOT NULL DEFAULT 'other' CHECK (artifact_type IN ('plan', 'report', 'doc', 'decision', 'other')),
-        title TEXT NOT NULL,
-        file_path TEXT NOT NULL,
-        version INTEGER NOT NULL DEFAULT 1,
-        created_by TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        FOREIGN KEY (workspace_id) REFERENCES swarm_workspaces(id) ON DELETE CASCADE,
-        FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE SET NULL
-    );
-    CREATE INDEX IF NOT EXISTS idx_artifacts_workspace_id ON artifacts(workspace_id);
-    CREATE INDEX IF NOT EXISTS idx_artifacts_type ON artifacts(artifact_type);
-    CREATE INDEX IF NOT EXISTS idx_artifacts_workspace_type ON artifacts(workspace_id, artifact_type);
-
-    -- Artifact Tags table
-    CREATE TABLE IF NOT EXISTS artifact_tags (
-        id TEXT PRIMARY KEY,
-        artifact_id TEXT NOT NULL,
-        tag TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        FOREIGN KEY (artifact_id) REFERENCES artifacts(id) ON DELETE CASCADE
-    );
-    CREATE INDEX IF NOT EXISTS idx_artifact_tags_artifact_id ON artifact_tags(artifact_id);
-    CREATE INDEX IF NOT EXISTS idx_artifact_tags_tag ON artifact_tags(tag);
-
-    -- Reflections table (Reflection section in Daily Work Operating Loop)
-    -- Validates: Requirements 28.2, 28.3, 28.4
-    CREATE TABLE IF NOT EXISTS reflections (
-        id TEXT PRIMARY KEY,
-        workspace_id TEXT NOT NULL,
-        reflection_type TEXT NOT NULL CHECK (reflection_type IN ('daily_recap', 'weekly_summary', 'lessons_learned')),
-        title TEXT NOT NULL,
-        file_path TEXT NOT NULL,
-        period_start TEXT NOT NULL,
-        period_end TEXT NOT NULL,
-        generated_by TEXT NOT NULL DEFAULT 'user' CHECK (generated_by IN ('user', 'agent', 'system')),
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        FOREIGN KEY (workspace_id) REFERENCES swarm_workspaces(id) ON DELETE CASCADE
-    );
-    CREATE INDEX IF NOT EXISTS idx_reflections_workspace_id ON reflections(workspace_id);
-    CREATE INDEX IF NOT EXISTS idx_reflections_type ON reflections(reflection_type);
-    CREATE INDEX IF NOT EXISTS idx_reflections_workspace_type ON reflections(workspace_id, reflection_type);
-
     -- Workspace Skills junction table (Skills configuration per workspace)
     -- Validates: Requirements 19.1
     CREATE TABLE IF NOT EXISTS workspace_skills (
@@ -1701,11 +1512,6 @@ class SQLiteDatabase(BaseDatabase):
         self._workspace_config = SQLiteWorkspaceConfigTable[dict]("workspace_config", self.db_path)
         # Daily Work Operating Loop tables
         self._todos = SQLiteToDosTable[dict]("todos", self.db_path)
-        self._plan_items = SQLitePlanItemsTable[dict]("plan_items", self.db_path)
-        self._communications = SQLiteCommunicationsTable[dict]("communications", self.db_path)
-        self._artifacts = SQLiteArtifactsTable[dict]("artifacts", self.db_path)
-        self._artifact_tags = SQLiteArtifactTagsTable[dict]("artifact_tags", self.db_path)
-        self._reflections = SQLiteReflectionsTable[dict]("reflections", self.db_path)
         # Workspace configuration tables
         self._workspace_skills = SQLiteWorkspaceSkillsTable[dict]("workspace_skills", self.db_path)
         self._workspace_mcps = SQLiteWorkspaceMcpsTable[dict]("workspace_mcps", self.db_path)
@@ -1716,9 +1522,20 @@ class SQLiteDatabase(BaseDatabase):
         self._thread_summaries = SQLiteThreadSummariesTable[dict]("thread_summaries", self.db_path)
         self._chat_messages = SQLiteChatMessagesTable[dict]("chat_messages", self.db_path)
 
-    async def initialize(self) -> None:
-        """Initialize database schema."""
+    async def initialize(self, skip_init: bool = False) -> None:
+        """Initialize database schema.
+
+        Args:
+            skip_init: When True, mark the database as initialized without
+                running schema DDL or migrations.  Used for seed-sourced
+                databases that already contain the complete schema and data.
+        """
         if self._initialized:
+            return
+
+        if skip_init:
+            logger.info("Skipping schema DDL and migrations (seed-sourced)")
+            self._initialized = True
             return
 
         import time
@@ -2280,31 +2097,6 @@ class SQLiteDatabase(BaseDatabase):
     def todos(self) -> SQLiteToDosTable:
         """Get the todos table."""
         return self._todos
-
-    @property
-    def plan_items(self) -> SQLitePlanItemsTable:
-        """Get the plan items table."""
-        return self._plan_items
-
-    @property
-    def communications(self) -> SQLiteCommunicationsTable:
-        """Get the communications table."""
-        return self._communications
-
-    @property
-    def artifacts(self) -> SQLiteArtifactsTable:
-        """Get the artifacts table."""
-        return self._artifacts
-
-    @property
-    def artifact_tags(self) -> SQLiteArtifactTagsTable:
-        """Get the artifact tags table."""
-        return self._artifact_tags
-
-    @property
-    def reflections(self) -> SQLiteReflectionsTable:
-        """Get the reflections table."""
-        return self._reflections
 
     @property
     def workspace_skills(self) -> SQLiteWorkspaceSkillsTable:

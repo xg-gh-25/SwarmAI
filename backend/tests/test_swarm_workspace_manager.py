@@ -45,15 +45,11 @@ class TestSwarmWorkspaceManagerConstants:
         Validates: Requirements 2.1, 2.3
         """
         required_dirs = [
-            "Signals",
-            "Plan",
-            "Execute",
-            "Communicate",
-            "Reflection",
-            "Artifacts",
-            "Notebooks",
-            "Projects",
+            "Knowledge",
+            "Knowledge/Knowledge Base",
+            "Knowledge/Notes",
             "Knowledge/Memory",
+            "Projects",
         ]
         assert SwarmWorkspaceManager.FOLDER_STRUCTURE == required_dirs
 
@@ -74,16 +70,18 @@ class TestSwarmWorkspaceManagerConstants:
         assert SYSTEM_MANAGED_ROOT_FILES == expected
 
     def test_system_managed_section_files(self):
-        """Verify SYSTEM_MANAGED_SECTION_FILES has context files for shared sections."""
-        for section in ("Artifacts", "Notebooks", "Projects"):
-            assert f"{section}/context-L0.md" in SYSTEM_MANAGED_SECTION_FILES
-            assert f"{section}/context-L1.md" in SYSTEM_MANAGED_SECTION_FILES
+        """Verify SYSTEM_MANAGED_SECTION_FILES has context files for Knowledge and Projects."""
+        expected = {
+            "Knowledge/context-L0.md", "Knowledge/context-L1.md",
+            "Knowledge/index.md", "Knowledge/knowledge-map.md",
+            "Projects/context-L0.md", "Projects/context-L1.md",
+        }
+        assert SYSTEM_MANAGED_SECTION_FILES == expected
 
     def test_depth_limits_has_all_sections(self):
         """Verify DEPTH_LIMITS covers all section types."""
         limits = SwarmWorkspaceManager.DEPTH_LIMITS
-        assert "operating_loop" in limits
-        assert "shared_knowledge" in limits
+        assert "knowledge" in limits
         assert "project_system" in limits
         assert "project_user" in limits
 
@@ -168,7 +166,7 @@ class TestGlobalInstance:
         assert isinstance(swarm_workspace_manager, SwarmWorkspaceManager)
 
     def test_global_instance_has_folder_structure(self):
-        assert len(swarm_workspace_manager.FOLDER_STRUCTURE) == 9
+        assert len(swarm_workspace_manager.FOLDER_STRUCTURE) == 5
 
 
 class TestKnowledgeMemorySystemManaged:
@@ -982,13 +980,11 @@ _user_file_strategy = st.lists(
     st.tuples(
         # relative directory inside the workspace (pick from valid user locations)
         st.sampled_from([
-            "Signals",
-            "Plan",
-            "Execute",
-            "Communicate",
-            "Reflection",
-            "Artifacts",
-            "Notebooks",
+            "Knowledge",
+            "Knowledge/Knowledge Base",
+            "Knowledge/Notes",
+            "Knowledge/Memory",
+            "Projects",
         ]),
         # filename
         _safe_filename_chars.map(lambda s: s + ".md"),

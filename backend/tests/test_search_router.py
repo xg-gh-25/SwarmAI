@@ -75,84 +75,12 @@ async def _seed_task(workspace_id: str, title: str, **kw) -> str:
     return task_id
 
 
-async def _seed_plan_item(workspace_id: str, title: str, **kw) -> str:
-    now = _now_iso()
-    item_id = str(uuid4())
-    await db.plan_items.put({
-        "id": item_id,
-        "workspace_id": workspace_id,
-        "title": title,
-        "description": kw.get("description", f"Desc for {title}"),
-        "source_todo_id": None,
-        "source_task_id": None,
-        "status": kw.get("status", "active"),
-        "priority": kw.get("priority", "none"),
-        "scheduled_date": None,
-        "focus_type": kw.get("focus_type", "upcoming"),
-        "sort_order": 0,
-        "created_at": now,
-        "updated_at": now,
-    })
-    return item_id
 
 
-async def _seed_communication(workspace_id: str, title: str, **kw) -> str:
-    now = _now_iso()
-    comm_id = str(uuid4())
-    await db.communications.put({
-        "id": comm_id,
-        "workspace_id": workspace_id,
-        "title": title,
-        "description": kw.get("description", f"Desc for {title}"),
-        "recipient": kw.get("recipient", "someone@example.com"),
-        "channel_type": kw.get("channel_type", "email"),
-        "status": kw.get("status", "pending_reply"),
-        "priority": kw.get("priority", "none"),
-        "due_date": None,
-        "ai_draft_content": None,
-        "source_task_id": None,
-        "source_todo_id": None,
-        "sent_at": None,
-        "created_at": now,
-        "updated_at": now,
-    })
-    return comm_id
 
 
-async def _seed_artifact(workspace_id: str, title: str, **kw) -> str:
-    now = _now_iso()
-    art_id = str(uuid4())
-    await db.artifacts.put({
-        "id": art_id,
-        "workspace_id": workspace_id,
-        "task_id": None,
-        "artifact_type": kw.get("artifact_type", "doc"),
-        "title": title,
-        "file_path": kw.get("file_path", f"Artifacts/Docs/{title}.md"),
-        "version": 1,
-        "created_by": "user",
-        "created_at": now,
-        "updated_at": now,
-    })
-    return art_id
 
 
-async def _seed_reflection(workspace_id: str, title: str, **kw) -> str:
-    now = _now_iso()
-    ref_id = str(uuid4())
-    await db.reflections.put({
-        "id": ref_id,
-        "workspace_id": workspace_id,
-        "reflection_type": kw.get("reflection_type", "daily_recap"),
-        "title": title,
-        "file_path": kw.get("file_path", f"Artifacts/Reports/{title}.md"),
-        "period_start": kw.get("period_start", "2025-01-01T00:00:00Z"),
-        "period_end": kw.get("period_end", "2025-01-01T23:59:59Z"),
-        "generated_by": kw.get("generated_by", "user"),
-        "created_at": now,
-        "updated_at": now,
-    })
-    return ref_id
 
 
 async def _seed_thread_with_summary(
@@ -244,10 +172,9 @@ class TestGlobalSearch:
 
     @pytest.mark.anyio
     async def test_search_finds_across_types(self, client: TestClient, workspace_id: str):
-        """Search returns results from multiple entity types."""
+        """Search returns results from multiple preserved entity types."""
         await _seed_todo(workspace_id, "Review quarterly report")
         await _seed_task(workspace_id, "Generate quarterly report")
-        await _seed_artifact(workspace_id, "Quarterly report draft")
 
         resp = client.get("/api/search", params={"query": "quarterly report"})
         assert resp.status_code == 200
@@ -255,7 +182,8 @@ class TestGlobalSearch:
         entity_types_found = {g["entity_type"] for g in data["groups"]}
         assert "todo" in entity_types_found
         assert "task" in entity_types_found
-        assert "artifact" in entity_types_found
+        # Operating Loop entity types should NOT appear
+        assert "artifact" not in entity_types_found
 
     @pytest.mark.anyio
     async def test_search_matches_description(self, client: TestClient, workspace_id: str):
@@ -341,7 +269,6 @@ class TestEntityTypeFiltering:
         """entity_types=todo,task returns only those types."""
         await _seed_todo(workspace_id, "Multi filter test")
         await _seed_task(workspace_id, "Multi filter test")
-        await _seed_communication(workspace_id, "Multi filter test")
 
         resp = client.get("/api/search", params={
             "query": "Multi filter test",
@@ -354,9 +281,9 @@ class TestEntityTypeFiltering:
 
     @pytest.mark.anyio
     async def test_no_entity_types_searches_all(self, client: TestClient, workspace_id: str):
-        """Omitting entity_types searches all entity types."""
+        """Omitting entity_types searches all preserved entity types."""
         await _seed_todo(workspace_id, "Omit filter test")
-        await _seed_plan_item(workspace_id, "Omit filter test")
+        await _seed_task(workspace_id, "Omit filter test")
 
         resp = client.get("/api/search", params={"query": "Omit filter test"})
         assert resp.status_code == 200
