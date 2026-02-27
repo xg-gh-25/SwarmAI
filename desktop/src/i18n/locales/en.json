@@ -367,7 +367,12 @@
       "endpoint": "Endpoint URL",
       "endpointPlaceholder": "https://example.com/mcp",
       "url": "URL",
-      "urlPlaceholder": "http://server:port"
+      "urlPlaceholder": "http://server:port",
+      "env": "Environment Variables",
+      "envHelp": "Set environment variables for the MCP server process",
+      "envKeyPlaceholder": "Variable name",
+      "envValuePlaceholder": "Value",
+      "addEnvVar": "Add Variable"
     }
   },
   "plugins": {

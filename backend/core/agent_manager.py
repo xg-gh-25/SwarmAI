@@ -764,6 +764,9 @@ class AgentManager:
                             "command": config.get("command"),
                             "args": config.get("args", []),
                         }
+                        env = config.get("env")
+                        if env and isinstance(env, dict):
+                            mcp_servers[server_name]["env"] = env
                     elif connection_type == "sse":
                         mcp_servers[server_name] = {
                             "type": "sse",

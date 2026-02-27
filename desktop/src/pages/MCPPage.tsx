@@ -232,17 +232,44 @@ function MCPServerForm({
   const [args, setArgs] = useState(
     server?.connectionType === 'stdio' ? (server.config.args as string[]).join(' ') : ''
   );
+  const [envVars, setEnvVars] = useState<{ key: string; value: string }[]>(() => {
+    if (server?.connectionType === 'stdio' && server.config.env) {
+      const env = server.config.env as Record<string, string>;
+      return Object.entries(env).map(([key, value]) => ({ key, value }));
+    }
+    return [];
+  });
   const [url, setUrl] = useState(
     server?.connectionType !== 'stdio' ? (server?.config.url as string) || '' : ''
   );
 
+  // Compute duplicate env var keys for validation
+  const duplicateEnvKeys = new Set<string>();
+  const seenEnvKeys = new Set<string>();
+  envVars.forEach(({ key }) => {
+    const trimmed = key.trim();
+    if (trimmed) {
+      if (seenEnvKeys.has(trimmed)) duplicateEnvKeys.add(trimmed);
+      seenEnvKeys.add(trimmed);
+    }
+  });
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+
+    if (connectionType === 'stdio' && duplicateEnvKeys.size > 0) return;
 
     let config: Record<string, unknown> = {};
 
     if (connectionType === 'stdio') {
+      const env: Record<string, string> = {};
+      envVars.forEach(({ key, value }) => {
+        if (key.trim()) env[key.trim()] = value;
+      });
       config = { command, args: args.split(' ').filter(Boolean) };
+      if (Object.keys(env).length > 0) {
+        config.env = env;
+      }
     } else {
       config = { url };
     }
@@ -323,6 +350,56 @@ function MCPServerForm({
               placeholder={t('mcp.form.argsPlaceholder')}
               className="w-full px-4 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-primary"
             />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-[var(--color-text-muted)] mb-2">{t('mcp.form.env')}</label>
+            <p className="text-xs text-[var(--color-text-muted)] mb-3">{t('mcp.form.envHelp')}</p>
+            <div className="space-y-2">
+              {envVars.map((envVar, index) => {
+                const isDuplicate = envVar.key.trim() && duplicateEnvKeys.has(envVar.key.trim());
+                return (
+                  <div key={index} className="flex gap-2 items-center">
+                    <input
+                      type="text"
+                      value={envVar.key}
+                      onChange={(e) => {
+                        const updated = [...envVars];
+                        updated[index] = { ...updated[index], key: e.target.value };
+                        setEnvVars(updated);
+                      }}
+                      placeholder={t('mcp.form.envKeyPlaceholder')}
+                      className={`flex-1 px-3 py-2 bg-[var(--color-bg)] border rounded-lg text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none text-sm ${isDuplicate ? 'border-status-error focus:border-status-error' : 'border-[var(--color-border)] focus:border-primary'}`}
+                    />
+                    <input
+                      type="password"
+                      value={envVar.value}
+                      onChange={(e) => {
+                        const updated = [...envVars];
+                        updated[index] = { ...updated[index], value: e.target.value };
+                        setEnvVars(updated);
+                      }}
+                      placeholder={t('mcp.form.envValuePlaceholder')}
+                      className="flex-1 px-3 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-primary text-sm"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setEnvVars(envVars.filter((_, i) => i !== index))}
+                      className="p-2 rounded-lg text-[var(--color-text-muted)] hover:text-status-error hover:bg-status-error/10 transition-colors"
+                    >
+                      <span className="material-symbols-outlined text-lg">close</span>
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+            <button
+              type="button"
+              onClick={() => setEnvVars([...envVars, { key: '', value: '' }])}
+              className="mt-2 flex items-center gap-1 text-sm text-primary hover:text-primary/80 transition-colors"
+            >
+              <span className="material-symbols-outlined text-lg">add</span>
+              {t('mcp.form.addEnvVar')}
+            </button>
           </div>
         </>
       ) : (
