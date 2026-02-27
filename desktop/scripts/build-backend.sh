@@ -192,15 +192,15 @@ uv pip install \
     "pydantic>=2.10.0" \
     "pydantic-settings>=2.6.0" \
     "claude-agent-sdk>=0.1.20" \
-    "boto3>=1.40.37" \
-    "aioboto3>=13.0.0" \
     "aiosqlite>=0.20.0" \
     "python-jose[cryptography]>=3.3.0" \
     "passlib[bcrypt]>=1.7.4" \
     "bcrypt>=4.0.0" \
     "slowapi>=0.1.9" \
     "pyyaml>=6.0.0" \
-    "anyio>=4.0.0"
+    "anyio>=4.0.0" \
+    "lark-oapi>=1.5.3" 
+    # "mcp>=1.0.0,<2.0.0"
 
 # Verify key local modules are accessible from current directory
 echo "Verifying local modules are importable..."

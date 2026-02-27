@@ -63,7 +63,7 @@ class WorkspaceManager:
         self.agents_workspace.mkdir(parents=True, exist_ok=True)
 
     def _copy_templates(self, target_dir: Path, force: bool = False) -> None:
-        """Copy template files into *target_dir*.
+        """Copy template files into *target_dir*/.owork/.
 
         Args:
             target_dir: Destination directory (must already exist).
@@ -73,9 +73,12 @@ class WorkspaceManager:
             logger.warning(f"Templates directory not found: {self._templates_dir}")
             return
 
+        owork_dir = target_dir / ".owork"
+        owork_dir.mkdir(parents=True, exist_ok=True)
+
         for filename in self.TEMPLATE_FILES:
             src = self._templates_dir / filename
-            dst = target_dir / filename
+            dst = owork_dir / filename
             if not src.is_file():
                 continue
             if not force and dst.exists():
@@ -234,9 +237,8 @@ class WorkspaceManager:
             shutil.rmtree(agent_skills_dir)
         agent_skills_dir.mkdir(parents=True, exist_ok=True)
 
-        # Seed template files into brand-new workspaces
-        if is_new:
-            self._copy_templates(agent_workspace, force=True)
+        # Seed template files (force=True for new, force=False for existing)
+        self._copy_templates(agent_workspace, force=is_new)
 
         # Determine which skills to link
         if allow_all_skills:

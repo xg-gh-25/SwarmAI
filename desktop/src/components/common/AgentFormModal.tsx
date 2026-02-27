@@ -72,25 +72,28 @@ export default function AgentFormModal({
   // Convert model IDs to dropdown options
   const modelOptions = useMemo(() => availableModels.map(modelIdToOption), [availableModels]);
 
-  // Fetch skills
+  // Fetch skills (refetch every time modal opens to avoid stale cache)
   const { data: skills = [], isLoading: loadingSkills } = useQuery({
-    queryKey: ['skills'],
+    queryKey: ['skills', isOpen],
     queryFn: skillsService.list,
     enabled: isOpen,
+    staleTime: 0,
   });
 
   // Fetch MCP servers
   const { data: mcpServers = [], isLoading: loadingMCPs } = useQuery({
-    queryKey: ['mcpServers'],
+    queryKey: ['mcpServers', isOpen],
     queryFn: mcpService.list,
     enabled: isOpen,
+    staleTime: 0,
   });
 
   // Fetch plugins
   const { data: plugins = [], isLoading: loadingPlugins } = useQuery({
-    queryKey: ['plugins'],
+    queryKey: ['plugins', isOpen],
     queryFn: pluginsService.listPlugins,
     enabled: isOpen,
+    staleTime: 0,
   });
 
   // Filter to only show installed plugins
