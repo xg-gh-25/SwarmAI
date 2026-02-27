@@ -1,8 +1,10 @@
 """SearchManager for global search across entity types.
 
-Implements search across ToDos, Tasks, PlanItems, Communications, Artifacts,
-Reflections, and ChatThreads (via ThreadSummary). Supports workspace scope
-filtering and limits results to 50 per entity type.
+Implements search across ToDos, Tasks, and ChatThreads (via ThreadSummary).
+Supports workspace scope filtering and limits results to 50 per entity type.
+
+Legacy Operating Loop entities (PlanItems, Communications, Artifacts,
+Reflections) were removed as part of the operating-loop-cleanup spec.
 
 CRITICAL: Thread search queries ThreadSummary.summary_text, NOT raw
 ChatMessages.content (Requirement 31.1).
@@ -30,10 +32,6 @@ MAX_RESULTS_PER_TYPE = 50
 SEARCHABLE_ENTITY_TYPES = [
     "todo",
     "task",
-    "plan_item",
-    "communication",
-    "artifact",
-    "reflection",
     "thread",
 ]
 
@@ -42,10 +40,6 @@ SEARCHABLE_ENTITY_TYPES = [
 _ENTITY_TABLE_CONFIG = [
     ("todos", "todo", "title", "description"),
     ("tasks", "task", "title", "description"),
-    ("plan_items", "plan_item", "title", "description"),
-    ("communications", "communication", "title", "description"),
-    ("artifacts", "artifact", "title", None),
-    ("reflections", "reflection", "title", None),
 ]
 
 

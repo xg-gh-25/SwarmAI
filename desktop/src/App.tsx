@@ -2,8 +2,7 @@
  * Root application component for SwarmAI desktop app.
  *
  * Sets up routing, React Query, theme provider, and backend startup overlay.
- * Uses a three-column layout (Left Sidebar, Workspace Explorer, Main Chat Panel)
- * with section-based navigation for the Daily Work Operating Loop.
+ * Uses a three-column layout (Left Sidebar, Workspace Explorer, Main Chat Panel).
  */
 
 import { useEffect, useState } from 'react';
@@ -17,12 +16,6 @@ import TasksPage from './pages/TasksPage';
 import PluginsPage from './pages/PluginsPage';
 import ChannelsPage from './pages/ChannelsPage';
 import SwarmCorePage from './pages/SwarmCorePage';
-import SignalsPage from './pages/SignalsPage';
-import ExecutePage from './pages/ExecutePage';
-import PlanPage from './pages/PlanPage';
-import CommunicatePage from './pages/CommunicatePage';
-import ArtifactsPage from './pages/ArtifactsPage';
-import ReflectionPage from './pages/ReflectionPage';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -85,37 +78,6 @@ export default function App() {
               <Route path="/channels" element={
                 <ThreeColumnLayout>
                   <ChannelsPage />
-                </ThreeColumnLayout>
-              } />
-              {/* Section pages - Daily Work Operating Loop */}
-              <Route path="/signals" element={
-                <ThreeColumnLayout>
-                  <SignalsPage />
-                </ThreeColumnLayout>
-              } />
-              <Route path="/execute" element={
-                <ThreeColumnLayout>
-                  <ExecutePage />
-                </ThreeColumnLayout>
-              } />
-              <Route path="/plan" element={
-                <ThreeColumnLayout>
-                  <PlanPage />
-                </ThreeColumnLayout>
-              } />
-              <Route path="/communicate" element={
-                <ThreeColumnLayout>
-                  <CommunicatePage />
-                </ThreeColumnLayout>
-              } />
-              <Route path="/artifacts" element={
-                <ThreeColumnLayout>
-                  <ArtifactsPage />
-                </ThreeColumnLayout>
-              } />
-              <Route path="/reflection" element={
-                <ThreeColumnLayout>
-                  <ReflectionPage />
                 </ThreeColumnLayout>
               } />
             </Routes>

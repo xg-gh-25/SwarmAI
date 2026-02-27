@@ -9,10 +9,14 @@ This script creates a seed database at build time containing:
 
 The seed database is bundled with the app and copied to the user's
 data directory on first launch, eliminating runtime initialization delays.
+
+The output DB uses DELETE journal mode (not WAL) so it is a single
+portable file suitable for bundling — no ``-wal`` / ``-shm`` sidecars.
 """
 import asyncio
 import json
 import logging
+import sqlite3
 import sys
 import uuid
 from datetime import datetime, timezone
@@ -111,6 +115,18 @@ class SeedDatabaseGenerator:
         if not await self._validate():
             logger.error("Seed database validation failed")
             return False
+        
+        # Ensure DELETE journal mode so the seed DB is a single portable file
+        # (WAL mode creates -wal and -shm sidecar files that break bundling)
+        conn = sqlite3.connect(str(self.output_path))
+        try:
+            mode = conn.execute("PRAGMA journal_mode=DELETE").fetchone()[0]
+            if mode.lower() != "delete":
+                logger.warning(f"Failed to set DELETE journal mode, got: {mode}")
+            else:
+                logger.info("Set journal_mode=DELETE for portable seed DB")
+        finally:
+            conn.close()
         
         logger.info("Seed database generated successfully")
         return True

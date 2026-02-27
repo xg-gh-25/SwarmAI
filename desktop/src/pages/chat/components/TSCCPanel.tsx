@@ -401,28 +401,49 @@ function ExpandedView({
 // ---------------------------------------------------------------------------
 // Main export
 // ---------------------------------------------------------------------------
+/** Default TSCC state shown before a session is created (Req 1.2, 9.1). */
+const DEFAULT_TSCC_STATE: TSCCState = {
+  threadId: '',
+  projectId: null,
+  scopeType: 'workspace',
+  lastUpdatedAt: new Date().toISOString(),
+  lifecycleState: 'new',
+  liveState: {
+    context: {
+      scopeLabel: 'Workspace: SwarmWS (General)',
+      threadTitle: '',
+    },
+    activeAgents: [],
+    activeCapabilities: { skills: [], mcps: [], tools: [] },
+    whatAiDoing: [],
+    activeSources: [],
+    keySummary: [],
+  },
+};
+
 export function TSCCPanel({
-  threadId,
+  threadId: _threadId,
   tsccState,
   isExpanded,
   isPinned,
   onToggleExpand,
   onTogglePin,
 }: TSCCPanelProps) {
-  if (!threadId || !tsccState) return null;
+  // Show default "new" state when no session exists yet (Req 1.2, 9.1)
+  const effectiveState = tsccState ?? DEFAULT_TSCC_STATE;
 
   return (
     <div className="px-4 py-2 flex-shrink-0">
       {isExpanded ? (
         <ExpandedView
-          tsccState={tsccState}
+          tsccState={effectiveState}
           isPinned={isPinned}
           onToggleExpand={onToggleExpand}
           onTogglePin={onTogglePin}
         />
       ) : (
         <CollapsedBar
-          tsccState={tsccState}
+          tsccState={effectiveState}
           isPinned={isPinned}
           onToggleExpand={onToggleExpand}
           onTogglePin={onTogglePin}

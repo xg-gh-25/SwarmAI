@@ -4,23 +4,12 @@ This module was refactored from a multi-workspace model to a single-workspace
 + projects model centred on the ``SwarmWS`` workspace.  It is responsible for:
 
 - ``SwarmWorkspaceManager``          — Main class managing workspace filesystem
-- ``FOLDER_STRUCTURE``               — Hierarchical folder layout (Operating Loop,
-                                       Shared Knowledge, Projects)
+- ``FOLDER_STRUCTURE``               — Hierarchical folder layout (Knowledge, Projects)
 - ``SYSTEM_MANAGED_*`` constants     — Sets of paths that cannot be deleted/renamed
 - ``DEPTH_LIMITS``                   — Per-section folder-depth guardrails
 - ``CONTEXT_L0_TEMPLATE`` / ``CONTEXT_L1_TEMPLATE`` — Layered context templates
 - ``SYSTEM_PROMPTS_TEMPLATE``        — Default agent instruction template
-- ``SAMPLE_SECTION_READMES``         — README content for each Operating Loop section
 - Project CRUD methods               — create / delete / get / list projects
-
-Removed in this refactor (multi-workspace artefacts):
-- ``archive()`` / ``unarchive()`` / ``delete()``
-- ``list_non_archived()`` / ``list_all()``
-- ``_migrate_default_workspace_path()``
-- ``ensure_workspace_folders_exist()``
-- Old ``OVERALL_CONTEXT_TEMPLATE``, ``FOLDER_STRUCTURE``, ``DEFAULT_WORKSPACE_CONFIG``
-- Old ``create_context_files()`` / ``create_folder_structure()``
-- Old ``ensure_default_workspace()``
 
 The global singleton ``swarm_workspace_manager`` is created at module level.
 """
@@ -48,20 +37,16 @@ logger = logging.getLogger(__name__)
 
 # New hierarchical folder structure
 FOLDER_STRUCTURE = [
-    "Signals",
-    "Plan",
-    "Execute",
-    "Communicate",
-    "Reflection",
-    "Artifacts",
-    "Notebooks",
-    "Projects",
+    "Knowledge",
+    "Knowledge/Knowledge Base",
+    "Knowledge/Notes",
     "Knowledge/Memory",
+    "Projects",
 ]
 
 SYSTEM_MANAGED_FOLDERS = {
-    "Signals", "Plan", "Execute", "Communicate", "Reflection",
-    "Artifacts", "Notebooks", "Projects", "Knowledge/Memory",
+    "Knowledge", "Knowledge/Knowledge Base", "Knowledge/Notes",
+    "Knowledge/Memory", "Projects",
 }
 
 SYSTEM_MANAGED_ROOT_FILES = {
@@ -69,8 +54,8 @@ SYSTEM_MANAGED_ROOT_FILES = {
 }
 
 SYSTEM_MANAGED_SECTION_FILES = {
-    "Artifacts/context-L0.md", "Artifacts/context-L1.md",
-    "Notebooks/context-L0.md", "Notebooks/context-L1.md",
+    "Knowledge/context-L0.md", "Knowledge/context-L1.md",
+    "Knowledge/index.md", "Knowledge/knowledge-map.md",
     "Projects/context-L0.md", "Projects/context-L1.md",
 }
 
@@ -83,18 +68,15 @@ PROJECT_SYSTEM_FOLDERS = {
 }
 
 DEPTH_LIMITS = {
-    "operating_loop": 2,
-    "shared_knowledge": 3,
+    "knowledge": 3,
     "project_system": 2,
     "project_user": 3,
 }
 
-OPERATING_LOOP_SECTIONS = {"Signals", "Plan", "Execute", "Communicate", "Reflection"}
-SHARED_KNOWLEDGE_SECTIONS = {"Artifacts", "Notebooks"}
+KNOWLEDGE_SECTIONS = {"Knowledge", "Knowledge/Knowledge Base", "Knowledge/Notes", "Knowledge/Memory"}
 
 # Section type keys for DEPTH_LIMITS (avoids string-key typos)
-SECTION_OPERATING_LOOP = "operating_loop"
-SECTION_SHARED_KNOWLEDGE = "shared_knowledge"
+SECTION_KNOWLEDGE = "knowledge"
 SECTION_PROJECT_SYSTEM = "project_system"
 SECTION_PROJECT_USER = "project_user"
 
@@ -162,18 +144,16 @@ SYSTEM_PROMPTS_TEMPLATE = """# SwarmWS System Prompts
 ## Agent Instructions
 You are working within the SwarmWS workspace. This workspace is organized into:
 
-- **Signals/** — Incoming tasks, requests, and triggers
-- **Plan/** — Prioritized work items and sprint planning
-- **Execute/** — Active task execution and progress tracking
-- **Communicate/** — Status updates and team coordination
-- **Reflection/** — Retrospectives and learning capture
-- **Artifacts/** — Durable outputs like documents, reports, and decisions
-- **Notebooks/** — Ongoing research notes and explorations
+- **Knowledge/** — Shared knowledge domain
+  - **Knowledge Base/** — Durable, reusable knowledge assets
+  - **Notes/** — Ongoing research notes and working documents
+  - **Memory/** — Persistent semantic memory distilled from interactions
 - **Projects/** — Active project containers with their own context
 
 ## Guidelines
 - Always check context files (context-L0.md, context-L1.md) before starting work
-- Create artifacts for any durable output
+- Store durable knowledge outputs in Knowledge/Knowledge Base/
+- Store working notes in Knowledge/Notes/
 - Update context files when significant changes occur
 """
 
@@ -189,56 +169,114 @@ SAMPLE_SECTION_READMES = {
     "Reflection": "# Reflection\n\nRetrospectives and learning capture.\n\nCapture lessons learned, retrospectives, and insights here.\n",
 }
 
-SAMPLE_ARTIFACT_CONTENT = """# Sample Artifact — Decision Record
+SAMPLE_KNOWLEDGE_BASE_CONTENT = """# API Design Guidelines
 
-## Decision
-[What was decided]
+## Purpose
+Standard guidelines for designing REST APIs across all SwarmAI projects.
 
-## Context
-[Why this decision was needed]
+## Conventions
+- Use snake_case for JSON field names in API responses
+- Use camelCase in frontend TypeScript interfaces
+- Always version APIs with a /v1/ prefix for breaking changes
+- Return 201 for resource creation, 200 for updates, 204 for deletes
 
-## Options Considered
-1. Option A — [description]
-2. Option B — [description]
-
-## Outcome
-[What was chosen and why]
+## Error Response Format
+All errors follow a consistent structure:
+```json
+{
+  "detail": "Human-readable error message",
+  "code": "MACHINE_READABLE_CODE"
+}
+```
 
 ## Status
-Draft
+Active — last reviewed 2025-01
 """
 
-SAMPLE_NOTEBOOK_CONTENT = """# Sample Notebook — Research Notes
+SAMPLE_NOTES_CONTENT = """# Meeting Notes — Weekly Planning
 
-## Topic
-[What you're researching]
+## Date
+2025-01-20
 
-## Notes
-- [Note 1]
-- [Note 2]
+## Attendees
+- Product lead, Engineering lead, Design lead
 
-## Questions
-- [Open question 1]
+## Key Decisions
+- Prioritize workspace redesign for Q1 release
+- Defer multi-agent orchestration to Q2
+- Knowledge Base structure approved as proposed
 
-## References
-- [Link or source]
+## Action Items
+- [ ] Draft project brief for workspace redesign
+- [ ] Set up research folder with competitor analysis
+- [ ] Schedule design review for next Thursday
+
+## Open Questions
+- How should we handle migration from the old folder structure?
+- What's the right depth limit for Knowledge subfolders?
 """
 
-SAMPLE_PROJECT_INSTRUCTIONS = """# Sample Project
+SAMPLE_PROJECT_INSTRUCTIONS = """# Website Redesign
 
 ## Overview
-This is a sample project to demonstrate the project structure.
+Redesign the company marketing website to improve conversion rates and
+align with the updated brand guidelines released in Q4 2024.
 
 ## Goals
-- [Goal 1]
-- [Goal 2]
+- Increase landing page conversion rate from 2.1% to 3.5%
+- Reduce page load time to under 2 seconds on mobile
+- Implement new brand color palette and typography
 
 ## Instructions for Agents
-- Check context-L0.md for a quick overview
-- Check context-L1.md for detailed context
-- Store research in the research/ folder
-- Store reports and deliverables in the reports/ folder
-- Chat transcripts are saved in chats/
+- Check context-L0.md for a quick overview of project scope
+- Check context-L1.md for detailed context and constraints
+- Store competitor analysis and user research in research/
+- Store deliverables (mockups, reports, copy drafts) in reports/
+- Chat transcripts are saved automatically in chats/
+
+## Key Constraints
+- Must maintain SEO rankings during migration
+- Budget: 40 engineering hours for frontend, 20 for backend
+- Launch target: end of Q1 2025
+"""
+
+SAMPLE_RESEARCH_CONTENT = """# Competitor Analysis — Landing Pages
+
+## Competitors Reviewed
+1. **Notion** — Clean, minimal hero with single CTA
+2. **Linear** — Dark theme, animated product demo above fold
+3. **Figma** — Community-driven social proof, interactive examples
+
+## Key Takeaways
+- All top performers use a single primary CTA above the fold
+- Social proof (logos, testimonials) appears within first viewport
+- Page load times are consistently under 1.5s on mobile
+- Video/animation is used sparingly — only when it demonstrates the product
+
+## Recommendations
+- Simplify our hero to one headline + one CTA
+- Add customer logos bar below the fold
+- Replace stock imagery with actual product screenshots
+"""
+
+SAMPLE_REPORT_CONTENT = """# Performance Audit — Current Website
+
+## Summary
+Current marketing site scores 62/100 on Lighthouse mobile performance.
+Main bottlenecks are unoptimized images and render-blocking JavaScript.
+
+## Findings
+| Issue | Impact | Effort |
+|-------|--------|--------|
+| Unoptimized hero image (2.4MB) | High | Low |
+| Render-blocking third-party scripts | High | Medium |
+| No lazy loading on below-fold images | Medium | Low |
+| Missing font-display: swap | Low | Low |
+
+## Next Steps
+- [ ] Convert images to WebP with responsive srcset
+- [ ] Defer non-critical JavaScript
+- [ ] Implement intersection observer for lazy loading
 """
 
 SAMPLE_MEMORY_CONTENT = """# User Preference — Communication Style
@@ -290,8 +328,7 @@ class SwarmWorkspaceManager:
     PROJECT_SYSTEM_FILES = PROJECT_SYSTEM_FILES
     PROJECT_SYSTEM_FOLDERS = PROJECT_SYSTEM_FOLDERS
     DEPTH_LIMITS = DEPTH_LIMITS
-    OPERATING_LOOP_SECTIONS = OPERATING_LOOP_SECTIONS
-    SHARED_KNOWLEDGE_SECTIONS = SHARED_KNOWLEDGE_SECTIONS
+    KNOWLEDGE_SECTIONS = KNOWLEDGE_SECTIONS
     DEFAULT_WORKSPACE_CONFIG = DEFAULT_WORKSPACE_CONFIG
 
     def __init__(self):
@@ -425,11 +462,8 @@ class SwarmWorkspaceManager:
         section_type: Optional[str] = None
         depth = 0
 
-        if first in OPERATING_LOOP_SECTIONS:
-            section_type = SECTION_OPERATING_LOOP
-            depth = len(parts) - 1
-        elif first in SHARED_KNOWLEDGE_SECTIONS:
-            section_type = SECTION_SHARED_KNOWLEDGE
+        if first == "Knowledge" or normalized.startswith("Knowledge/"):
+            section_type = SECTION_KNOWLEDGE
             depth = len(parts) - 1
         elif first == "Projects":
             if len(parts) < 3:
@@ -481,7 +515,7 @@ class SwarmWorkspaceManager:
 
         Creates the root directory, all section folders from FOLDER_STRUCTURE,
         root-level system files (system-prompts.md, context-L0.md, context-L1.md),
-        and section-level context files for Artifacts/, Notebooks/, Projects/.
+        and section-level context/system files for Knowledge/ and Projects/.
 
         Files are only created if they do not already exist (idempotent).
 
@@ -516,9 +550,11 @@ class SwarmWorkspaceManager:
         for folder_name in FOLDER_STRUCTURE:
             folder_path = root / folder_name
             try:
-                await anyio.to_thread.run_sync(
-                    lambda fp=folder_path: fp.mkdir(parents=True, exist_ok=True)
-                )
+                def _ensure_dir(fp=folder_path):
+                    if fp.exists() and not fp.is_dir():
+                        fp.unlink()  # Remove conflicting file; system folders take precedence
+                    fp.mkdir(parents=True, exist_ok=True)
+                await anyio.to_thread.run_sync(_ensure_dir)
                 logger.debug("Created subdirectory: %s", folder_path)
             except OSError as e:
                 logger.error("Failed to create subdirectory '%s': %s", folder_path, e)
@@ -545,8 +581,8 @@ class SwarmWorkspaceManager:
             )
         )
 
-        # Create section-level context files for Artifacts, Notebooks, Projects
-        for section in ("Artifacts", "Notebooks", "Projects"):
+        # Create section-level context and system files for Knowledge/ and Projects/
+        for section in ("Knowledge", "Projects"):
             await anyio.to_thread.run_sync(
                 lambda s=section: self._write_file_if_missing(
                     root / s / "context-L0.md",
@@ -559,6 +595,20 @@ class SwarmWorkspaceManager:
                     CONTEXT_L1_TEMPLATE.format(section_name=s),
                 )
             )
+
+        # Knowledge-specific system files
+        await anyio.to_thread.run_sync(
+            lambda: self._write_file_if_missing(
+                root / "Knowledge" / "index.md",
+                "# Knowledge Index\n\n[Auto-generated index of knowledge assets]\n",
+            )
+        )
+        await anyio.to_thread.run_sync(
+            lambda: self._write_file_if_missing(
+                root / "Knowledge" / "knowledge-map.md",
+                "# Knowledge Map\n\n[Visual map of knowledge relationships]\n",
+            )
+        )
 
         logger.info(
             "Successfully created folder structure for workspace at '%s'", expanded_path
@@ -654,6 +704,13 @@ class SwarmWorkspaceManager:
                 logger.info(
                     "Integrity check recreated %d items: %s", len(recreated), recreated
                 )
+            # Populate sample data if workspace was freshly scaffolded
+            # (seed DB has config row but filesystem was empty).
+            # _populate_sample_data is idempotent — skips existing files.
+            try:
+                await self._populate_sample_data(file_path)
+            except Exception as e:
+                logger.warning("Failed to populate sample data on integrity path: %s", e)
             return existing
 
         logger.info("Creating default workspace for the first time")
@@ -732,14 +789,15 @@ class SwarmWorkspaceManager:
                 logger.info("Recreated missing root file: %s", filename)
 
         # 3. Ensure section-level context files exist
-        for rel_path in sorted(SYSTEM_MANAGED_SECTION_FILES):
-            parts = rel_path.split("/")
-            section_name = parts[0]
-            template_name = parts[1]
-            if "L0" in template_name:
-                content = CONTEXT_L0_TEMPLATE.format(section_name=section_name)
-            else:
-                content = CONTEXT_L1_TEMPLATE.format(section_name=section_name)
+        section_file_templates = {
+            "Knowledge/context-L0.md": CONTEXT_L0_TEMPLATE.format(section_name="Knowledge"),
+            "Knowledge/context-L1.md": CONTEXT_L1_TEMPLATE.format(section_name="Knowledge"),
+            "Knowledge/index.md": "# Knowledge Index\n\n[Auto-generated index of knowledge assets]\n",
+            "Knowledge/knowledge-map.md": "# Knowledge Map\n\n[Visual map of knowledge relationships]\n",
+            "Projects/context-L0.md": CONTEXT_L0_TEMPLATE.format(section_name="Projects"),
+            "Projects/context-L1.md": CONTEXT_L1_TEMPLATE.format(section_name="Projects"),
+        }
+        for rel_path, content in sorted(section_file_templates.items()):
             written = await anyio.to_thread.run_sync(
                 lambda fp=root / rel_path, c=content: self._write_file_if_missing(fp, c)
             )
@@ -811,8 +869,8 @@ class SwarmWorkspaceManager:
     async def _populate_sample_data(self, workspace_path: str) -> None:
         """Populate sample data for first-time workspace initialization.
 
-        Creates Operating Loop READMEs, a sample artifact, a sample notebook,
-        a sample memory item, and a sample project with full scaffold.
+        Creates sample Knowledge Base asset, Notes file, Memory item,
+        and a sample project with full scaffold.
 
         Args:
             workspace_path: Workspace root path (may contain placeholders).
@@ -820,29 +878,23 @@ class SwarmWorkspaceManager:
         expanded = self.expand_path(workspace_path)
         root = Path(expanded)
 
-        # 1. Operating Loop READMEs
-        for section_name, readme_content in SAMPLE_SECTION_READMES.items():
-            await anyio.to_thread.run_sync(
-                lambda fp=root / section_name / "README.md", c=readme_content: (
-                    self._write_file_if_missing(fp, c)
-                )
-            )
-
-        # 2. Sample artifact
+        # 1. Sample Knowledge Base asset
         await anyio.to_thread.run_sync(
             lambda: self._write_file_if_missing(
-                root / "Artifacts" / "sample-artifact.md", SAMPLE_ARTIFACT_CONTENT
+                root / "Knowledge" / "Knowledge Base" / "sample-knowledge-asset.md",
+                SAMPLE_KNOWLEDGE_BASE_CONTENT,
             )
         )
 
-        # 3. Sample notebook
+        # 2. Sample Notes file
         await anyio.to_thread.run_sync(
             lambda: self._write_file_if_missing(
-                root / "Notebooks" / "sample-notebook.md", SAMPLE_NOTEBOOK_CONTENT
+                root / "Knowledge" / "Notes" / "sample-note.md",
+                SAMPLE_NOTES_CONTENT,
             )
         )
 
-        # 4. Sample memory item
+        # 3. Sample memory item
         await anyio.to_thread.run_sync(
             lambda: self._write_file_if_missing(
                 root / "Knowledge" / "Memory" / "communication-style.md",
@@ -850,7 +902,7 @@ class SwarmWorkspaceManager:
             )
         )
 
-        # 5. Sample project
+        # 4. Sample project
         try:
             await self._create_sample_project(expanded)
             logger.info("Created sample project")
@@ -865,7 +917,7 @@ class SwarmWorkspaceManager:
         Args:
             workspace_path: Expanded absolute workspace root path.
         """
-        project_dir = Path(workspace_path) / "Projects" / "sample-project"
+        project_dir = Path(workspace_path) / "Projects" / "Website Redesign"
 
         def _check_exists():
             return project_dir.exists()
@@ -877,13 +929,13 @@ class SwarmWorkspaceManager:
         project_id = str(uuid4())
         metadata = {
             "id": project_id,
-            "name": "sample-project",
-            "description": "",
+            "name": "Website Redesign",
+            "description": "Redesign the marketing website to improve conversion rates and align with updated brand guidelines.",
             "created_at": now,
             "updated_at": now,
             "status": "active",
-            "tags": ["sample"],
-            "priority": None,
+            "tags": ["marketing", "frontend", "q1-2025"],
+            "priority": "high",
             "schema_version": CURRENT_SCHEMA_VERSION,
             "version": 1,
             "update_history": [
@@ -911,13 +963,13 @@ class SwarmWorkspaceManager:
         await anyio.to_thread.run_sync(
             lambda: self._write_file_if_missing(
                 project_dir / "context-L0.md",
-                CONTEXT_L0_TEMPLATE.format(section_name="sample-project"),
+                CONTEXT_L0_TEMPLATE.format(section_name="Website Redesign"),
             )
         )
         await anyio.to_thread.run_sync(
             lambda: self._write_file_if_missing(
                 project_dir / "context-L1.md",
-                CONTEXT_L1_TEMPLATE.format(section_name="sample-project"),
+                CONTEXT_L1_TEMPLATE.format(section_name="Website Redesign"),
             )
         )
         await anyio.to_thread.run_sync(
@@ -932,6 +984,20 @@ class SwarmWorkspaceManager:
             await anyio.to_thread.run_sync(
                 lambda fp=folder_path: fp.mkdir(parents=True, exist_ok=True)
             )
+
+        # Populate sample research and report content
+        await anyio.to_thread.run_sync(
+            lambda: self._write_file_if_missing(
+                project_dir / "research" / "competitor-analysis.md",
+                SAMPLE_RESEARCH_CONTENT,
+            )
+        )
+        await anyio.to_thread.run_sync(
+            lambda: self._write_file_if_missing(
+                project_dir / "reports" / "performance-audit.md",
+                SAMPLE_REPORT_CONTENT,
+            )
+        )
 
         # Update in-memory UUID index
         self._uuid_index[project_id] = project_dir
