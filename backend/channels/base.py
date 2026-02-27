@@ -15,7 +15,7 @@ MAX_ATTACHMENT_SIZE = 20 * 1024 * 1024
 
 @dataclass
 class InboundMessage:
-    """Normalized message from an external channel into owork."""
+    """Normalized message from an external channel into SwarmAI."""
     channel_id: str
     external_chat_id: str
     external_sender_id: str
@@ -29,7 +29,7 @@ class InboundMessage:
 
 @dataclass
 class OutboundMessage:
-    """Message from owork to be sent to an external channel."""
+    """Message from SwarmAI to be sent to an external channel."""
     channel_id: str
     external_chat_id: str
     external_thread_id: Optional[str] = None
@@ -49,7 +49,7 @@ class ChannelAdapter(ABC):
     """Base class for channel adapters.
 
     Each adapter handles the translation between an external platform's
-    message format and owork's internal InboundMessage/OutboundMessage.
+    message format and SwarmAI's internal InboundMessage/OutboundMessage.
 
     Lifecycle:
     1. __init__(channel_id, config, on_message) - created by gateway

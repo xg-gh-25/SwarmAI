@@ -42,13 +42,13 @@ jobs:
       - name: Upload MSI installer
         uses: actions/upload-artifact@v4
         with:
-          name: Owork-Windows-msi
+          name: SwarmAI-Windows-msi
           path: desktop/src-tauri/target/release/bundle/msi/*.msi
 
       - name: Upload NSIS installer
         uses: actions/upload-artifact@v4
         with:
-          name: Owork-Windows-nsis
+          name: SwarmAI-Windows-nsis
           path: desktop/src-tauri/target/release/bundle/nsis/*.exe
 
   # Create release when triggered by tag
@@ -74,6 +74,6 @@ jobs:
             artifacts/**/*.exe
           draft: true
           generate_release_notes: true
-          name: "Owork ${{ github.ref_name }} (Windows)"
+          name: "SwarmAI ${{ github.ref_name }} (Windows)"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

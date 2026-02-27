@@ -231,7 +231,7 @@ fn kill_process_tree(pid: u32) {
 #[cfg(target_os = "windows")]
 fn kill_claude_child_processes(parent_pid: u32) {
     // Use PowerShell Get-CimInstance to find claude.exe processes that were children of our backend
-    // This avoids killing claude.exe processes from other Owork instances or direct CLI usage
+    // This avoids killing claude.exe processes from other SwarmAI instances or direct CLI usage
     let ps_script = format!(
         "Get-CimInstance Win32_Process | Where-Object {{ $_.Name -eq 'claude.exe' -and $_.ParentProcessId -eq {} }} | ForEach-Object {{ $_.ProcessId }}",
         parent_pid
@@ -738,7 +738,7 @@ pub fn run() {
             // Backend will be started by frontend via initializeBackend()
             // This allows proper error handling in the UI
 
-            // Open DevTools automatically in debug builds or when OWORK_DEBUG is set
+            // Open DevTools automatically in debug builds or when SWARMAI_DEBUG is set
             #[cfg(debug_assertions)]
             {
                 if let Some(window) = app.get_webview_window("main") {
@@ -746,10 +746,10 @@ pub fn run() {
                 }
             }
 
-            // Also check for OWORK_DEBUG env var to enable in release builds
+            // Also check for SWARMAI_DEBUG env var to enable in release builds
             #[cfg(not(debug_assertions))]
             {
-                if std::env::var("OWORK_DEBUG").is_ok() {
+                if std::env::var("SWARMAI_DEBUG").is_ok() {
                     if let Some(window) = app.get_webview_window("main") {
                         window.open_devtools();
                     }

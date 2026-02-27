@@ -1,7 +1,7 @@
 [project]
-name = "agent-platform-backend"
+name = "swarmai-backend"
 version = "4.0.0"
-description = "AI Agent Platform Backend with Claude Agent SDK"
+description = "SwarmAI Backend - Your AI Team, 24/7"
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
 dependencies = [

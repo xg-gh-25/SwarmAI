@@ -1,0 +1,22 @@
+{
+  "enabled": true,
+  "name": "Update Docs on Code Change",
+  "description": "Automatically updates README.md, .kiro/specs/ or docs/ folder when TypeScript source files, configuration files, or package.json files are modified",
+  "version": "1",
+  "when": {
+    "type": "fileEdited",
+    "patterns": [
+      "**/*.ts",
+      "**/*.tsx",
+      "**/package.json",
+      "**/tsconfig.json",
+      "**/vite.config.ts",
+      "**/vitest.config.ts",
+      "Config"
+    ]
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "A source file was edited. Review the changes and determine if documentation updates are needed. If the change affects:\n- Public APIs, exports, or interfaces → Update relevant docs in the docs/ folder\n- Project setup, dependencies, or configuration → Update README.md\n- New features or significant behavior changes → Update README.md, .kiro/specs and docs/ as appropriate\n\nOnly make documentation updates if the code change is meaningful enough to warrant it. Minor refactors or internal changes typically don't need doc updates."
+  }
+}

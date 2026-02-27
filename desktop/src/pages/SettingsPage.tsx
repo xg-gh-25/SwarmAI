@@ -25,24 +25,24 @@ function getPlatformInfo(): { platform: string; dataDir: string; skillsDir: stri
   if (userAgent.includes('win')) {
     return {
       platform: 'Windows',
-      dataDir: '%LOCALAPPDATA%\\Owork\\',
-      skillsDir: '%LOCALAPPDATA%\\Owork\\skills\\',
-      logsDir: '%LOCALAPPDATA%\\Owork\\logs\\'
+      dataDir: '%LOCALAPPDATA%\\SwarmAI\\',
+      skillsDir: '%LOCALAPPDATA%\\SwarmAI\\skills\\',
+      logsDir: '%LOCALAPPDATA%\\SwarmAI\\logs\\'
     };
   } else if (userAgent.includes('mac')) {
     return {
       platform: 'macOS',
-      dataDir: '~/Library/Application Support/Owork/',
-      skillsDir: '~/Library/Application Support/Owork/skills/',
-      logsDir: '~/Library/Application Support/Owork/logs/'
+      dataDir: '~/Library/Application Support/SwarmAI/',
+      skillsDir: '~/Library/Application Support/SwarmAI/skills/',
+      logsDir: '~/Library/Application Support/SwarmAI/logs/'
     };
   } else {
     // Linux and other Unix-like systems
     return {
       platform: 'Linux',
-      dataDir: '~/.local/share/owork/',
-      skillsDir: '~/.local/share/owork/skills/',
-      logsDir: '~/.local/share/owork/logs/'
+      dataDir: '~/.local/share/SwarmAI/',
+      skillsDir: '~/.local/share/SwarmAI/skills/',
+      logsDir: '~/.local/share/SwarmAI/logs/'
     };
   }
 }

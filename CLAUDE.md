@@ -98,9 +98,9 @@ Tauri App
 - Port is dynamically assigned via `portpicker` in Rust
 - Frontend uses `getBackendPort()` from `services/tauri.ts` to get the port
 - Data stored in platform-specific directories:
-  - macOS: `~/Library/Application Support/Owork/`
-  - Windows: `%LOCALAPPDATA%\Owork\` (typically `C:\Users\YourUsername\AppData\Local\Owork\`)
-  - Linux: `~/.local/share/owork/`
+  - macOS: `~/Library/Application Support/SwarmAI/`
+  - Windows: `%LOCALAPPDATA%\SwarmAI\` (typically `C:\Users\YourUsername\AppData\Local\SwarmAI\`)
+  - Linux: `~/.local/share/SwarmAI/`
 
 ### Backend Structure
 
@@ -240,12 +240,12 @@ RATE_LIMIT_PER_MINUTE=1000
 ### Debugging
 - debug tauri app
 ```shell
-open -n /Applications/Owork.app --env OWORK_DEBUG=1
+open -n /Applications/SwarmAI.app --env SWARMAI_DEBUG=1
 ```
 
 ```bat
-set OWORK_DEBUG=1                                                                                                   
-"C:\Users\Administrator\AppData\Local\Owork\owork.exe"
+set SWARMAI_DEBUG=1                                                                                                   
+"C:\Users\Administrator\AppData\Local\SwarmAI\swarmai.exe"
 ```
 
 ```bash
@@ -320,27 +320,27 @@ className="bg-dark-card text-white border-dark-border"
 **Desktop (macOS):**
 ```
 desktop/src-tauri/target/release/bundle/
-├── dmg/Owork_*.dmg
-└── macos/Owork.app
+├── dmg/SwarmAI_*.dmg
+└── macos/SwarmAI.app
 ```
 
 **Desktop (Windows):**
 ```
 desktop/src-tauri/target/release/bundle/
-├── msi/Owork_*_x64.msi
-└── nsis/Owork_*_x64-setup.exe
+├── msi/SwarmAI_*_x64.msi
+└── nsis/SwarmAI_*_x64-setup.exe
 ```
 
 **Desktop (Linux):**
 ```
 desktop/src-tauri/target/release/bundle/
-├── deb/owork_*.deb
-└── appimage/owork_*.AppImage
+├── deb/swarmai_*.deb
+└── appimage/swarmai_*.AppImage
 ```
 
 ## Related Documentation
 
-- [SECURITY.md](./SECURITY.md) - Complete security architecture
-- [SKILLS_GUIDE.md](./SKILLS_GUIDE.md) - Creating and using skills
-- [ARCHITECTURE.md](./ARCHITECTURE.md) - Cloud deployment architecture
-- [desktop/BUILD_GUIDE.md](./desktop/BUILD_GUIDE.md) - Desktop build instructions (Chinese)
+- [SECURITY.md](./.kiro/specs/SECURITY.md) - Complete security architecture
+- [SKILLS_GUIDE.md](./.kiro/specs/SKILLS_GUIDE.md) - Creating and using skills
+- [ARCHITECTURE.md](./.kiro/specs/ARCHITECTURE.md) - Cloud deployment architecture
+- [desktop/BUILD_GUIDE.md](./.kiro/specs/DESKTOP_BUILD_GUIDE.md) - Desktop build instructions (Chinese)

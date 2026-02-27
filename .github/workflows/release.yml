@@ -242,8 +242,8 @@ jobs:
           WINDOWS_SIG=$(find artifacts/windows-x64-sig -name "*-setup.exe.sig" | head -1)
 
           # Standardize filenames
-          MACOS_UPDATER_NAME="Owork_${VERSION}_aarch64.app.tar.gz"
-          WINDOWS_UPDATER_NAME="Owork_${VERSION}_x64-setup.exe"
+          MACOS_UPDATER_NAME="SwarmAI_${VERSION}_aarch64.app.tar.gz"
+          WINDOWS_UPDATER_NAME="SwarmAI_${VERSION}_x64-setup.exe"
 
           cp "$MACOS_UPDATER" "release/${MACOS_UPDATER_NAME}"
           cp "$MACOS_SIG" "release/${MACOS_UPDATER_NAME}.sig"
@@ -253,7 +253,7 @@ jobs:
           cp "$WINDOWS_SIG" "release/${WINDOWS_UPDATER_NAME}.sig"
 
           # Create Windows zip for direct browser download
-          WINDOWS_ZIP_NAME="Owork_${VERSION}_x64-setup.zip"
+          WINDOWS_ZIP_NAME="SwarmAI_${VERSION}_x64-setup.zip"
           cd release && zip "${WINDOWS_ZIP_NAME}" "${WINDOWS_UPDATER_NAME}" && cd ..
 
           # Set outputs for update manifest
@@ -308,7 +308,7 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          name: "Owork v${{ needs.prepare.outputs.version }}"
+          name: "SwarmAI v${{ needs.prepare.outputs.version }}"
           draft: true
           generate_release_notes: true
           files: |
