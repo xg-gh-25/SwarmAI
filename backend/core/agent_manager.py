@@ -636,8 +636,8 @@ class AgentManager:
     Claude Code (underlying SDK) has built-in support for Skills and MCP servers.
     """
 
-    # TTL for idle sessions before automatic cleanup (2 hours)
-    SESSION_TTL_SECONDS = 2 * 60 * 60
+    # TTL for idle sessions before automatic cleanup (12 hours)
+    SESSION_TTL_SECONDS = 12 * 60 * 60
 
     def __init__(self):
         self._clients: dict[str, ClaudeSDKClient] = {}
