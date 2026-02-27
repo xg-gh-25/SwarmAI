@@ -57,6 +57,7 @@ const toSnakeCase = (data: AgentCreateRequest | AgentUpdateRequest) => {
   if (data.enableWebTools !== undefined) result.enable_web_tools = data.enableWebTools;
   if (data.globalUserMode !== undefined) result.global_user_mode = data.globalUserMode;
   if (data.enableHumanApproval !== undefined) result.enable_human_approval = data.enableHumanApproval;
+  if (data.sandboxEnabled !== undefined) result.sandbox_enabled = data.sandboxEnabled;
   if (data.sandbox !== undefined) result.sandbox = sandboxToSnakeCase(data.sandbox);
   return result;
 };
@@ -89,6 +90,7 @@ const toCamelCase = (data: Record<string, unknown>): Agent => {
     enableSafetyChecks: (data.enable_safety_checks as boolean) ?? true,
     globalUserMode: (data.global_user_mode as boolean) ?? false,
     enableHumanApproval: (data.enable_human_approval as boolean) ?? true,
+    sandboxEnabled: (data.sandbox_enabled as boolean) ?? true,
     sandbox,
     status: (data.status as 'active' | 'inactive') ?? 'active',
     createdAt: (data.created_at as string) ?? '',
