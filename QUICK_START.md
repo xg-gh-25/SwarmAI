@@ -10,6 +10,7 @@ Owork 是一个基于 Claude Agent SDK 的 AI Agent 桌面应用，支持创建�
   - [2. 安装 Claude Code CLI](#2-安装-claude-code-cli)
   - [3. 安装 Owork](#3-安装-owork)
   - [4. 配置 API](#4-配置-api)
+- [可选：配置feishu渠道](#5-配置feishu渠道)
 - [验证安装](#验证安装)
 - [常见问题](#常见问题)
 
@@ -140,6 +141,82 @@ model_list:
    - 点击「Save API Configuration」
 
 ---
+
+## 5. 配置feishu渠道
+
+### 第一步：创建飞书应用
+​
+1. 打开飞书开放平台
+访问 **飞书开放平台**，使用飞书账号登录。  
+Lark（国际版）请使用 https://open.larksuite.com/app，并在配置中设置 domain: "lark"。
+​
+2. 创建应用
+- 点击 **创建企业自建应用**
+- 填写应用名称和描述
+- 选择应用图标
+- 创建企业自建应用
+​
+3. 获取应用凭证
+- 在应用的 **凭证与基础信息** 页面，复制：
+- App ID（格式如 cli_xxx）
+- App Secret
+❗ 重要：请妥善保管 App Secret，不要分享给他人。
+- 获取应用凭证
+​
+4. 配置应用权限
+- 在 **权限管理** 页面，点击 **批量导入** 按钮，粘贴以下 JSON 配置一键导入所需权限：
+```json
+{
+  "scopes": {
+    "tenant": [
+      "aily:file:read",
+      "aily:file:write",
+      "application:application.app_message_stats.overview:readonly",
+      "application:application:self_manage",
+      "application:bot.menu:write",
+      "cardkit:card:write",
+      "contact:user.employee_id:readonly",
+      "corehr:file:download",
+      "docs:document.content:read",
+      "event:ip_list",
+      "im:chat",
+      "im:chat.access_event.bot_p2p_chat:read",
+      "im:chat.members:bot_access",
+      "im:message",
+      "im:message.group_at_msg:readonly",
+      "im:message.group_msg",
+      "im:message.p2p_msg:readonly",
+      "im:message:readonly",
+      "im:message:send_as_bot",
+      "im:resource",
+      "sheets:spreadsheet",
+      "wiki:wiki:readonly"
+    ],
+    "user": ["aily:file:read", "aily:file:write", "im:chat.access_event.bot_p2p_chat:read"]
+  }
+}
+```
+- 配置应用权限
+​
+5. 启用机器人能力
+- 在 **应用能力 > 机器人** 页面：
+- 开启机器人能力
+- 配置机器人名称
+- 启用机器人能力
+​
+6. 配置事件订阅
+⚠️ 重要提醒：在配置事件订阅前，请务必确保已完成以下步骤：
+- Owork已经成功启动
+- 在 事件订阅 页面：
+- 选择 使用长连接接收事件（WebSocket 模式）
+- 添加事件：im.message.receive_v1（接收消息）
+⚠️ 注意：如果网关未启动或渠道未添加，长连接设置将保存失败。
+- 配置事件订阅
+​
+7. 发布应用
+- 在 **版本管理与发布** 页面创建版本
+- 提交审核并发布
+- 等待管理员审批（企业自建应用通常自动通过）
 
 ## 验证安装
 

@@ -56,6 +56,7 @@ export default function AgentFormModal({
   const [allowedTools, setAllowedTools] = useState<string[]>(getDefaultEnabledTools());
   const [globalUserMode, setGlobalUserMode] = useState(true); // Default to global mode
   const [enableHumanApproval, setEnableHumanApproval] = useState(true);
+  const [sandboxEnabled, setSandboxEnabled] = useState(true);
 
   const [isSaving, setIsSaving] = useState(false);
 
@@ -72,25 +73,28 @@ export default function AgentFormModal({
   // Convert model IDs to dropdown options
   const modelOptions = useMemo(() => availableModels.map(modelIdToOption), [availableModels]);
 
-  // Fetch skills
+  // Fetch skills (refetch every time modal opens to avoid stale cache)
   const { data: skills = [], isLoading: loadingSkills } = useQuery({
-    queryKey: ['skills'],
+    queryKey: ['skills', isOpen],
     queryFn: skillsService.list,
     enabled: isOpen,
+    staleTime: 0,
   });
 
   // Fetch MCP servers
   const { data: mcpServers = [], isLoading: loadingMCPs } = useQuery({
-    queryKey: ['mcpServers'],
+    queryKey: ['mcpServers', isOpen],
     queryFn: mcpService.list,
     enabled: isOpen,
+    staleTime: 0,
   });
 
   // Fetch plugins
   const { data: plugins = [], isLoading: loadingPlugins } = useQuery({
-    queryKey: ['plugins'],
+    queryKey: ['plugins', isOpen],
     queryFn: pluginsService.listPlugins,
     enabled: isOpen,
+    staleTime: 0,
   });
 
   // Filter to only show installed plugins
@@ -112,6 +116,7 @@ export default function AgentFormModal({
         setAllowedTools(agent.allowedTools || getDefaultEnabledTools());
         setGlobalUserMode(agent.globalUserMode ?? true); // Default to global mode
         setEnableHumanApproval(agent.enableHumanApproval ?? true);
+        setSandboxEnabled(agent.sandboxEnabled ?? true);
       } else {
         // Create mode - reset to defaults
         setName('');
@@ -125,6 +130,7 @@ export default function AgentFormModal({
         setAllowedTools(getDefaultEnabledTools());
         setGlobalUserMode(true); // Default to global mode
         setEnableHumanApproval(true);
+        setSandboxEnabled(true);
       }
     }
   }, [isOpen, agent]);
@@ -167,6 +173,7 @@ export default function AgentFormModal({
           allowedTools,
           globalUserMode,
           enableHumanApproval,
+          sandboxEnabled,
         };
         await onSave(updatedAgent);
       } else {
@@ -184,6 +191,7 @@ export default function AgentFormModal({
           allowedTools,
           globalUserMode,
           enableHumanApproval,
+          sandboxEnabled,
         };
         await onSave(newAgent);
       }
@@ -282,6 +290,29 @@ export default function AgentFormModal({
               className={clsx(
                 'pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
                 enableHumanApproval ? 'translate-x-5' : 'translate-x-0'
+              )}
+            />
+          </button>
+        </div>
+
+        {/* Enable Sandbox Toggle */}
+        <div className="flex items-center justify-between">
+          <div>
+            <label className="block text-sm font-medium text-[var(--color-text-muted)]">{t('agents.form.sandboxEnabled')}</label>
+            <p className="text-xs text-[var(--color-text-muted)] mt-0.5">{t('agents.form.sandboxEnabledDescription')}</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setSandboxEnabled(!sandboxEnabled)}
+            className={clsx(
+              'relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none',
+              sandboxEnabled ? 'bg-primary' : 'bg-[var(--color-border)]'
+            )}
+          >
+            <span
+              className={clsx(
+                'pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
+                sandboxEnabled ? 'translate-x-5' : 'translate-x-0'
               )}
             />
           </button>

@@ -48,6 +48,7 @@ export interface Agent {
   enableSafetyChecks: boolean;
   globalUserMode: boolean;
   enableHumanApproval: boolean;
+  sandboxEnabled: boolean;
   sandbox?: SandboxConfig;
   status: 'active' | 'inactive';
   createdAt: string;
@@ -70,6 +71,7 @@ export interface AgentCreateRequest {
   enableWebTools?: boolean;
   globalUserMode?: boolean;
   enableHumanApproval?: boolean;
+  sandboxEnabled?: boolean;
   sandbox?: SandboxConfigRequest;
 }
 
@@ -534,6 +536,91 @@ export interface PluginUninstallResponse {
   removedCommands: string[];
   removedAgents: string[];
   removedHooks: string[];
+}
+
+// ============== Channel Types ==============
+
+export type ChannelType = 'feishu' | 'slack' | 'discord' | 'web_widget';
+export type ChannelStatus = 'active' | 'inactive' | 'error' | 'starting';
+export type ChannelAccessMode = 'open' | 'allowlist' | 'blocklist';
+
+export interface Channel {
+  id: string;
+  name: string;
+  channelType: ChannelType;
+  agentId: string;
+  agentName?: string;
+  config: Record<string, unknown>;
+  status: ChannelStatus;
+  errorMessage?: string;
+  accessMode: ChannelAccessMode;
+  allowedSenders: string[];
+  blockedSenders: string[];
+  rateLimitPerMinute: number;
+  enableSkills: boolean;
+  enableMcp: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ChannelCreateRequest {
+  name: string;
+  channelType: ChannelType;
+  agentId: string;
+  config?: Record<string, unknown>;
+  accessMode?: ChannelAccessMode;
+  allowedSenders?: string[];
+  rateLimitPerMinute?: number;
+  enableSkills?: boolean;
+  enableMcp?: boolean;
+}
+
+export interface ChannelUpdateRequest {
+  name?: string;
+  config?: Record<string, unknown>;
+  agentId?: string;
+  accessMode?: ChannelAccessMode;
+  allowedSenders?: string[];
+  blockedSenders?: string[];
+  rateLimitPerMinute?: number;
+  enableSkills?: boolean;
+  enableMcp?: boolean;
+}
+
+export interface ChannelStatusResponse {
+  channelId: string;
+  status: string;
+  uptimeSeconds?: number;
+  messagesProcessed: number;
+  activeSessions: number;
+  errorMessage?: string;
+}
+
+export interface ChannelSession {
+  id: string;
+  channelId: string;
+  externalChatId: string;
+  externalSenderId?: string;
+  externalThreadId?: string;
+  sessionId: string;
+  senderDisplayName?: string;
+  messageCount: number;
+  lastMessageAt?: string;
+  createdAt: string;
+}
+
+export interface ChannelTypeInfo {
+  id: string;
+  label: string;
+  description: string;
+  configFields: {
+    key: string;
+    label: string;
+    type: string;
+    required: boolean;
+    options?: string[];
+  }[];
+  available: boolean;
 }
 
 // ============== Task Types ==============

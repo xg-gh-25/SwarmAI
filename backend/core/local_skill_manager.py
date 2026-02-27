@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 from datetime import datetime
 
-from config import settings
+from config import settings, get_app_data_dir
 
 logger = logging.getLogger(__name__)
 
@@ -80,13 +80,7 @@ class LocalSkillManager:
             data_dir: Base data directory. If None, uses platform-specific default.
         """
         if data_dir is None:
-            import platform
-            if platform.system() == "Darwin":
-                data_dir = Path.home() / "Library" / "Application Support" / "Owork"
-            elif platform.system() == "Windows":
-                data_dir = Path.home() / "AppData" / "Local" / "Owork"
-            else:
-                data_dir = Path.home() / ".local" / "share" / "owork"
+            data_dir = get_app_data_dir()
 
         self.data_dir = data_dir
         self.skills_dir = data_dir / "skills"

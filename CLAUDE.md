@@ -186,7 +186,7 @@ async with ClaudeSDKClient(options=options) as client:
 
 Four-layer defense-in-depth model (see `SECURITY.md` for details):
 
-1. **Workspace Isolation**: Per-agent directories in `/tmp/agent-platform-workspaces/{agent_id}/`
+1. **Workspace Isolation**: Per-agent directories in `<app_data_dir>/workspaces/{agent_id}/`
 2. **Skill Access Control**: PreToolUse hook validates authorized skills
 3. **File Tool Access Control**: Permission handler validates file paths
 4. **Bash Command Protection**: Regex parsing blocks absolute paths outside workspace

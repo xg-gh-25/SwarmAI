@@ -70,7 +70,7 @@ Project Tree:
     └── skill-3/
 
 Isolated Agent Workspaces:
-/tmp/agent-platform-workspaces/      ← Per-agent workspaces
+<app_data_dir>/workspaces/           ← Per-agent workspaces (persistent)
 └── {agent_id}/
     └── .claude/skills/              ← Symlinks to authorized skills only
         ├── skill-1 -> /path/to/workspace/.claude/skills/skill-1
@@ -237,8 +237,8 @@ Main Workspace (Skill Storage):
     ├── pdf/
     └── ... (all other skills)
 
-Isolated Agent Workspaces:
-/tmp/agent-platform-workspaces/
+Isolated Agent Workspaces (platform-specific app data dir):
+<app_data_dir>/workspaces/
 ├── agent-123/
 │   └── .claude/skills/
 │       ├── skill-creator -> /workspace/.claude/skills/skill-creator
@@ -440,7 +440,7 @@ class Settings(BaseSettings):
     agent_workspace_dir: str = str(_PROJECT_ROOT / "workspace")
 
     # Isolated per-agent workspaces (outside project tree)
-    agent_workspaces_dir: str = "/tmp/agent-platform-workspaces"
+    agent_workspaces_dir: str = str(get_app_data_dir() / "workspaces")
 
     # Built-in Sandbox Configuration
     sandbox_enabled_default: bool = True
@@ -557,7 +557,7 @@ $(cat /etc/passwd)
 
 ### For Platform Administrators
 
-1. **Keep Workspaces Isolated**: Use `/tmp/agent-platform-workspaces` or similar isolated location
+1. **Keep Workspaces Isolated**: Use the platform-specific app data directory (default) or a custom isolated location
 2. **Enable All Layers**: Don't disable file access control unless absolutely necessary
 3. **Monitor Logs**: Regularly review security logs for suspicious activity
 4. **Limit Sandbox Exclusions**: Minimize `excluded_commands` to essential tools only

@@ -76,6 +76,7 @@
     "skills": "Skill Management",
     "plugins": "Plugin Management",
     "mcp": "MCP Management",
+    "channels": "Channels",
     "settings": "Settings"
   },
   "dashboard": {
@@ -258,6 +259,8 @@
       "enableFileAccessControl": "Enable File Access Control",
       "enableHumanApproval": "Enable Human Approval",
       "enableHumanApprovalDescription": "Dangerous commands require user confirmation",
+      "sandboxEnabled": "Enable Sandbox",
+      "sandboxEnabledDescription": "Restrict bash commands to a secure sandbox (e.g. cannot delete files)",
       "globalUserMode": "Global User Mode",
       "globalUserModeDescription": "Use home directory with full file access",
       "globalUserModeHelp": "Allow agent to access files in user home directory",
@@ -409,6 +412,53 @@
       "installButton": "Install Plugin",
       "noPluginsFound": "No plugins found in repository. Repository must contain a plugin.yaml file with skills in a skills/ directory.",
       "installFailed": "Failed to install plugin"
+    }
+  },
+  "channels": {
+    "title": "Channel Management",
+    "subtitle": "Connect agents to external messaging platforms.",
+    "addChannel": "Add Channel",
+    "createChannel": "Create Channel",
+    "editChannel": "Edit Channel",
+    "deleteChannel": "Delete Channel",
+    "noChannels": "No channels configured",
+    "searchPlaceholder": "Search channels...",
+    "start": "Start Channel",
+    "stop": "Stop Channel",
+    "restart": "Restart Channel",
+    "testConfig": "Test Config",
+    "testSuccess": "Configuration is valid!",
+    "testFailed": "Configuration test failed",
+    "table": {
+      "name": "Channel Name",
+      "type": "Type",
+      "agent": "Agent",
+      "status": "Status",
+      "accessMode": "Access",
+      "actions": "Actions"
+    },
+    "form": {
+      "name": "Channel Name",
+      "namePlaceholder": "Enter channel name",
+      "channelType": "Channel Type",
+      "agent": "Linked Agent",
+      "selectAgent": "Select an agent...",
+      "configuration": "Configuration",
+      "accessMode": "Access Mode",
+      "accessOpen": "Open (anyone can message)",
+      "accessAllowlist": "Allowlist (only specified senders)",
+      "accessBlocklist": "Blocklist (everyone except blocked senders)",
+      "blockedSenders": "Blocked Senders",
+      "blockedSendersPlaceholder": "Comma-separated sender IDs to block",
+      "blockedSendersHelp": "Comma-separated list of platform user IDs blocked from messaging this channel.",
+      "allowedSenders": "Allowed Senders",
+      "allowedSendersPlaceholder": "Comma-separated sender IDs",
+      "allowedSendersHelp": "Comma-separated list of platform user IDs allowed to message this channel.",
+      "rateLimit": "Rate Limit (per minute)",
+      "rateLimitHelp": "Maximum messages per sender per minute (1-100).",
+      "enableSkills": "Enable Skills",
+      "enableMcp": "Enable MCP",
+      "notInstalled": "not installed"
     }
   },
   "settings": {

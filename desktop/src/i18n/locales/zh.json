@@ -76,6 +76,7 @@
     "skills": "Skill 管理",
     "plugins": "Plugin 管理",
     "mcp": "MCP 管理",
+    "channels": "渠道管理",
     "settings": "设置"
   },
   "dashboard": {
@@ -258,6 +259,8 @@
       "enableFileAccessControl": "启用文件访问控制",
       "enableHumanApproval": "启用人工审批",
       "enableHumanApprovalDescription": "危险命令需要用户确认",
+      "sandboxEnabled": "启用沙箱",
+      "sandboxEnabledDescription": "限制 Bash 命令在安全沙箱中执行（例如无法执行删除文件等操作）",
       "globalUserMode": "全局用户模式",
       "globalUserModeDescription": "使用主目录并拥有完整文件访问权限",
       "globalUserModeHelp": "允许 Agent 访问用户主目录下的文件",
@@ -409,6 +412,53 @@
       "installButton": "安装 Plugin",
       "noPluginsFound": "仓库中未找到 Plugin。仓库必须包含 plugin.yaml 文件，并在 skills/ 目录中包含 Skill。",
       "installFailed": "安装 Plugin 失败"
+    }
+  },
+  "channels": {
+    "title": "渠道管理",
+    "subtitle": "将 Agent 连接到外部消息平台。",
+    "addChannel": "添加渠道",
+    "createChannel": "创建渠道",
+    "editChannel": "编辑渠道",
+    "deleteChannel": "删除渠道",
+    "noChannels": "暂无渠道",
+    "searchPlaceholder": "搜索渠道...",
+    "start": "启动渠道",
+    "stop": "停止渠道",
+    "restart": "重启渠道",
+    "testConfig": "测试配置",
+    "testSuccess": "配置验证通过！",
+    "testFailed": "配置测试失败",
+    "table": {
+      "name": "渠道名称",
+      "type": "类型",
+      "agent": "Agent",
+      "status": "状态",
+      "accessMode": "访问控制",
+      "actions": "操作"
+    },
+    "form": {
+      "name": "渠道名称",
+      "namePlaceholder": "输入渠道名称",
+      "channelType": "渠道类型",
+      "agent": "关联 Agent",
+      "selectAgent": "选择一个 Agent...",
+      "configuration": "配置",
+      "accessMode": "访问模式",
+      "accessOpen": "开放（任何人可发消息）",
+      "accessAllowlist": "白名单（仅允许指定发送者）",
+      "accessBlocklist": "黑名单（除被屏蔽者外所有人）",
+      "blockedSenders": "屏蔽的发送者",
+      "blockedSendersPlaceholder": "逗号分隔的需屏蔽发送者 ID",
+      "blockedSendersHelp": "逗号分隔的平台用户 ID 列表，将被禁止向此渠道发送消息。",
+      "allowedSenders": "允许的发送者",
+      "allowedSendersPlaceholder": "逗号分隔的发送者 ID",
+      "allowedSendersHelp": "逗号分隔的平台用户 ID 列表，允许向此渠道发送消息。",
+      "rateLimit": "速率限制（每分钟）",
+      "rateLimitHelp": "每个发送者每分钟最大消息数（1-100）。",
+      "enableSkills": "启用 Skill",
+      "enableMcp": "启用 MCP",
+      "notInstalled": "未安装"
     }
   },
   "settings": {
