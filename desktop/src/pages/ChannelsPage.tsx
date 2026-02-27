@@ -36,6 +36,7 @@ function StatusBadgeInline({ status }: { status: string }) {
     inactive: 'bg-[var(--color-hover)] text-[var(--color-text-muted)]',
     error: 'bg-status-error/20 text-status-error',
     starting: 'bg-status-warning/20 text-status-warning',
+    failed: 'bg-status-error/20 text-status-error',
   };
   return (
     <span className={`px-2 py-0.5 text-xs rounded ${colorMap[status] || colorMap.inactive}`}>

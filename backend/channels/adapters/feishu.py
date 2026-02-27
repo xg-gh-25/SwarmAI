@@ -166,12 +166,27 @@ class FeishuChannelAdapter(ChannelAdapter):
                     log_level=lark.LogLevel.INFO,
                 )
                 self._ws_client.start()
-            except Exception:
+            except Exception as exc:
                 if not self._stopped:
                     logger.exception(
                         "Feishu WS client crashed for channel %s",
                         self.channel_id,
                     )
+                    # Report the failure back to the gateway via error callback
+                    error_msg = f"WebSocket connection failed: {exc}"
+                    main_loop = self._loop
+                    if (
+                        self._on_error is not None
+                        and main_loop is not None
+                        and not main_loop.is_closed()
+                    ):
+                        try:
+                            main_loop.call_soon_threadsafe(
+                                asyncio.ensure_future,
+                                self._on_error(self.channel_id, error_msg),
+                            )
+                        except RuntimeError:
+                            pass  # loop already closed
             finally:
                 self._ws_loop = None
                 new_loop.close()

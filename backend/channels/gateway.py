@@ -157,8 +157,9 @@ class ChannelGateway:
     async def start_channel(self, channel_id: str) -> None:
         """Load a channel from DB, instantiate its adapter, and start it.
 
-        Updates the channel status to ``'active'`` on success or ``'error'``
-        on failure.
+        Updates the channel status to ``'active'`` on success, ``'error'``
+        for permanent configuration problems (bad credentials, missing
+        adapter), or ``'failed'`` for runtime crashes (retriable).
         """
         if channel_id in self._adapters:
             logger.warning(f"Channel {channel_id} is already running; stopping first")
@@ -190,6 +191,7 @@ class ChannelGateway:
             config=config,
             on_message=self.handle_inbound_message,
         )
+        adapter.set_on_error(self._handle_adapter_error)
 
         # Validate config before attempting to start
         is_valid, validation_error = await adapter.validate_config()
@@ -213,6 +215,12 @@ class ChannelGateway:
 
         # Wrap adapter.start() in an asyncio task so it can run concurrently
         async def _run_adapter(cid: str, adp: ChannelAdapter) -> None:
+            # NOTE: This handler catches exceptions from blocking start()
+            # implementations.  For adapters whose start() spawns a
+            # background thread and returns immediately (e.g. Feishu),
+            # runtime failures are reported via the on_error callback
+            # instead, which invokes _handle_adapter_error.  The two
+            # paths do not overlap for the same failure.
             try:
                 await adp.start()
             except asyncio.CancelledError:
@@ -225,7 +233,7 @@ class ChannelGateway:
                     return
                 logger.exception(f"Adapter for channel {cid} crashed")
                 await db.channels.update(cid, {
-                    "status": "error",
+                    "status": "failed",
                     "error_message": "Adapter crashed unexpectedly",
                 })
                 # Clean up references
@@ -279,6 +287,41 @@ class ChannelGateway:
         """Stop and re-start a channel."""
         await self.stop_channel(channel_id)
         await self.start_channel(channel_id)
+
+    # ------------------------------------------------------------------
+    # Adapter error callback
+    # ------------------------------------------------------------------
+
+    async def _handle_adapter_error(self, channel_id: str, error_message: str) -> None:
+        """Handle a runtime error reported by an adapter (e.g. WS crash).
+
+        Called from the adapter's error callback.  Cleans up references,
+        updates DB status to ``'failed'``, and schedules an automatic retry.
+        """
+        if self._shutting_down or channel_id not in self._adapters:
+            return
+
+        logger.error(f"Adapter error callback for channel {channel_id}: {error_message}")
+
+        adapter = self._adapters.pop(channel_id, None)
+        self._tasks.pop(channel_id, None)
+        self._channel_cache.pop(channel_id, None)
+
+        # Best-effort cleanup: the adapter likely already crashed, so
+        # stop() may be a partial no-op.  The try/except ensures any
+        # secondary errors during teardown don't prevent DB update.
+        if adapter is not None:
+            try:
+                await adapter.stop()
+            except Exception:
+                logger.exception(f"Error stopping adapter during error handling for channel {channel_id}")
+
+        await db.channels.update(channel_id, {
+            "status": "failed",
+            "error_message": error_message,
+        })
+
+        self._schedule_retry(channel_id)
 
     # ------------------------------------------------------------------
     # Auto-retry
