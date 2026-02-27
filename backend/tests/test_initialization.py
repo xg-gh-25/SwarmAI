@@ -113,16 +113,13 @@ class TestFirstLaunchCreatesFullStructure:
                 f"Section file {rel_path} should exist"
             )
 
-        # Sample data: Operating Loop READMEs
-        for section in ("Signals", "Plan", "Execute", "Communicate", "Reflection"):
-            readme = os.path.join(root, section, "README.md")
-            assert os.path.isfile(readme), (
-                f"Sample README in {section}/ should exist"
-            )
-
-        # Sample data: sample artifact and notebook
-        assert os.path.isfile(os.path.join(root, "Artifacts", "sample-artifact.md"))
-        assert os.path.isfile(os.path.join(root, "Notebooks", "sample-notebook.md"))
+        # Sample data: Knowledge Base asset and Notes file
+        assert os.path.isfile(os.path.join(
+            root, "Knowledge", "Knowledge Base", "sample-knowledge-asset.md"
+        ))
+        assert os.path.isfile(os.path.join(
+            root, "Knowledge", "Notes", "sample-note.md"
+        ))
 
         # Sample data: Knowledge/Memory/ directory and sample memory item
         memory_dir = os.path.join(root, "Knowledge", "Memory")
@@ -135,7 +132,7 @@ class TestFirstLaunchCreatesFullStructure:
         )
 
         # Sample data: sample project with full scaffold
-        project_dir = os.path.join(root, "Projects", "sample-project")
+        project_dir = os.path.join(root, "Projects", "Website Redesign")
         assert os.path.isdir(project_dir), "Sample project directory should exist"
         assert os.path.isfile(os.path.join(project_dir, ".project.json"))
         assert os.path.isfile(os.path.join(project_dir, "instructions.md"))
@@ -195,10 +192,10 @@ class TestMissingSystemItemsRecreated:
         os.remove(os.path.join(tmp_workspace, "system-prompts.md"))
 
         # Delete a section context file
-        os.remove(os.path.join(tmp_workspace, "Artifacts", "context-L0.md"))
+        os.remove(os.path.join(tmp_workspace, "Knowledge", "context-L0.md"))
 
         # Delete a section folder entirely
-        shutil.rmtree(os.path.join(tmp_workspace, "Plan"))
+        shutil.rmtree(os.path.join(tmp_workspace, "Knowledge", "Notes"))
 
         # Re-init
         await manager.ensure_default_workspace(real_db)
@@ -208,10 +205,10 @@ class TestMissingSystemItemsRecreated:
             "system-prompts.md should be recreated"
         )
         assert os.path.isfile(
-            os.path.join(tmp_workspace, "Artifacts", "context-L0.md")
-        ), "Artifacts/context-L0.md should be recreated"
-        assert os.path.isdir(os.path.join(tmp_workspace, "Plan")), (
-            "Plan/ folder should be recreated"
+            os.path.join(tmp_workspace, "Knowledge", "context-L0.md")
+        ), "Knowledge/context-L0.md should be recreated"
+        assert os.path.isdir(os.path.join(tmp_workspace, "Knowledge", "Notes")), (
+            "Knowledge/Notes/ folder should be recreated"
         )
 
     @pytest.mark.asyncio
@@ -260,19 +257,19 @@ class TestSampleDataNotOverwritten:
         # First init
         await manager.ensure_default_workspace(real_db)
 
-        # Modify sample artifact
+        # Modify sample knowledge base asset
         artifact_path = os.path.join(
-            tmp_workspace, "Artifacts", "sample-artifact.md"
+            tmp_workspace, "Knowledge", "Knowledge Base", "sample-knowledge-asset.md"
         )
-        custom_artifact = "# My Edited Artifact\nCustom content.\n"
+        custom_artifact = "# My Edited Knowledge Asset\nCustom content.\n"
         with open(artifact_path, "w", encoding="utf-8") as f:
             f.write(custom_artifact)
 
-        # Modify sample notebook
+        # Modify sample note
         notebook_path = os.path.join(
-            tmp_workspace, "Notebooks", "sample-notebook.md"
+            tmp_workspace, "Knowledge", "Notes", "sample-note.md"
         )
-        custom_notebook = "# My Edited Notebook\nCustom notes.\n"
+        custom_notebook = "# My Edited Note\nCustom notes.\n"
         with open(notebook_path, "w", encoding="utf-8") as f:
             f.write(custom_notebook)
 

@@ -874,10 +874,10 @@ During chat sessions, `_build_options()` uses the cached workspace path:
 
 ### Future Vision
 
-The `TODO-SwarmWS-refactor.md` document describes planned evolution of the workspace model:
+The workspace model is evolving toward two semantic zones:
 
-- **Projects** — Named project containers within SwarmWS for multi-project support
-- **Operating Loop sections** — Structured areas (Plans/, Reports/, Decisions/) for agent workflow artifacts
+- **Knowledge/** — Shared knowledge base, context files, and reference materials
+- **Projects/** — Named project containers within SwarmWS for multi-project support
 - **Context layering** — L0 (workspace-level) and L1 (project-level) context injection for hierarchical knowledge management
 
 

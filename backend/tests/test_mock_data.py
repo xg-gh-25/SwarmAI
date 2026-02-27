@@ -24,10 +24,6 @@ async def test_generate_mock_data_creates_records():
     counts = result["counts"]
     assert counts["todos"] > 0
     assert counts["tasks"] > 0
-    assert counts["plan_items"] > 0
-    assert counts["communications"] > 0
-    assert counts["artifacts"] > 0
-    assert counts["reflections"] > 0
 
 
 @pytest.mark.asyncio

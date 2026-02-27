@@ -55,53 +55,6 @@ async def _enable_skill(workspace_id: str, skill_id: str, enabled: bool = True) 
     })
 
 
-async def _seed_communication(workspace_id: str, title: str, status: str = "pending_reply") -> str:
-    """Insert a communication row and return its ID."""
-    now = now_iso()
-    cid = str(uuid4())
-    await db.communications.put({
-        "id": cid,
-        "workspace_id": workspace_id,
-        "title": title,
-        "description": f"Desc for {title}",
-        "recipient": "team@example.com",
-        "channel_type": "email",
-        "status": status,
-        "priority": "medium",
-        "due_date": None,
-        "ai_draft_content": None,
-        "source_task_id": None,
-        "source_todo_id": None,
-        "sent_at": None,
-        "created_at": now,
-        "updated_at": now,
-    })
-    return cid
-
-
-async def _seed_plan_item(workspace_id: str, title: str, focus_type: str = "today") -> str:
-    """Insert a plan_item row and return its ID."""
-    now = now_iso()
-    pid = str(uuid4())
-    await db.plan_items.put({
-        "id": pid,
-        "workspace_id": workspace_id,
-        "title": title,
-        "description": f"Desc for {title}",
-        "source_todo_id": None,
-        "source_task_id": None,
-        "status": "active",
-        "priority": "medium",
-        "scheduled_date": None,
-        "focus_type": focus_type,
-        "sort_order": 0,
-        "created_at": now,
-        "updated_at": now,
-    })
-    return pid
-
-
-
 # =========================================================================
 # 28.1 — ToDo lifecycle: Create → Edit → Convert to Task → Verify linkage
 # Requirements: 4.7, 4.8
@@ -270,63 +223,52 @@ class TestWorkspaceConfigInheritance:
 
 
 class TestGlobalViewAggregation:
-    """End-to-end test for Global View aggregation across workspaces."""
+    """End-to-end test for ToDo aggregation across workspaces.
+
+    Operating Loop sections endpoint was removed. This test now only verifies
+    ToDo listing across workspaces via the /api/todos endpoint.
+    """
 
     async def test_aggregation_totals_across_workspaces(self, client: TestClient):
-        """Create items in multiple workspaces → Get counts with workspace_id='all' → Verify totals."""
+        """Create ToDos in multiple workspaces → List all → Verify totals."""
         swarmws_id = await ensure_default_workspace()
         ws_a_id = await create_custom_workspace(name="WorkspaceA")
         ws_b_id = await create_custom_workspace(name="WorkspaceB")
 
-        # Seed ToDos (signals) in each workspace
+        # Seed ToDos in each workspace
         await seed_todo(swarmws_id, title="SwarmWS signal 1", status="pending")
         await seed_todo(swarmws_id, title="SwarmWS signal 2", status="overdue")
         await seed_todo(ws_a_id, title="WS-A signal 1", status="pending")
         await seed_todo(ws_b_id, title="WS-B signal 1", status="pending")
         await seed_todo(ws_b_id, title="WS-B signal 2", status="in_discussion")
 
-        # Seed plan items
-        await _seed_plan_item(swarmws_id, "Plan SwarmWS", focus_type="today")
-        await _seed_plan_item(ws_a_id, "Plan WS-A", focus_type="upcoming")
-
-        # Seed communications
-        await _seed_communication(swarmws_id, "Comm SwarmWS", status="pending_reply")
-        await _seed_communication(ws_b_id, "Comm WS-B", status="ai_draft")
-
-        # Get aggregated section counts
-        resp = client.get("/api/workspaces/all/sections")
+        # List todos per workspace
+        resp = client.get("/api/todos", params={"workspace_id": swarmws_id})
         assert resp.status_code == 200, resp.text
-        counts = resp.json()
+        swarmws_todos = resp.json()
+        assert len(swarmws_todos) >= 2
 
-        # Signals: 2 pending (SwarmWS + WS-A + WS-B = 1+1+1=3 pending), 1 overdue, 1 in_discussion
-        assert counts["signals"]["pending"] == 3
-        assert counts["signals"]["overdue"] == 1
-        assert counts["signals"]["in_discussion"] == 1
-        assert counts["signals"]["total"] == 5
+        resp = client.get("/api/todos", params={"workspace_id": ws_a_id})
+        assert resp.status_code == 200
+        ws_a_todos = resp.json()
+        assert len(ws_a_todos) >= 1
 
-        # Plan: 1 today, 1 upcoming
-        assert counts["plan"]["today"] == 1
-        assert counts["plan"]["upcoming"] == 1
-        assert counts["plan"]["total"] == 2
-
-        # Communicate: 1 pending_reply, 1 ai_draft
-        assert counts["communicate"]["pending_reply"] == 1
-        assert counts["communicate"]["ai_draft"] == 1
-        assert counts["communicate"]["total"] == 2
+        resp = client.get("/api/todos", params={"workspace_id": ws_b_id})
+        assert resp.status_code == 200
+        ws_b_todos = resp.json()
+        assert len(ws_b_todos) >= 2
 
     async def test_single_workspace_scope(self, client: TestClient):
-        """Scoped view returns items for the singleton workspace."""
+        """Scoped view returns ToDos for a single workspace."""
         ws_id = await ensure_default_workspace()
 
         await seed_todo(ws_id, title="A signal", status="pending")
         await seed_todo(ws_id, title="B signal", status="pending")
 
-        # Scoped to the singleton workspace
-        resp = client.get(f"/api/workspaces/{ws_id}/sections")
+        resp = client.get("/api/todos", params={"workspace_id": ws_id})
         assert resp.status_code == 200
-        counts = resp.json()
-        assert counts["signals"]["total"] >= 2
-        assert counts["signals"]["pending"] >= 2
+        todos = resp.json()
+        assert len(todos) >= 2
 
 
 
@@ -397,12 +339,11 @@ class TestSearchFunctionality:
         assert len(all_items) == 2
 
     async def test_search_across_entity_types(self, client: TestClient):
-        """Search returns results from multiple entity types."""
+        """Search returns results from ToDo entity type (Operating Loop entities removed)."""
         ws_id = await ensure_default_workspace()
 
         await seed_todo(ws_id, title="Omega signal item")
-        await _seed_communication(ws_id, title="Omega comm item")
-        await _seed_plan_item(ws_id, title="Omega plan item")
+        await seed_todo(ws_id, title="Omega second item")
 
         resp = client.get("/api/search", params={"query": "Omega"})
         assert resp.status_code == 200
@@ -410,6 +351,7 @@ class TestSearchFunctionality:
 
         entity_types_found = {g["entity_type"] for g in results["groups"]}
         assert "todo" in entity_types_found
-        assert "communication" in entity_types_found
-        assert "plan_item" in entity_types_found
-        assert results["total"] >= 3
+        # Operating Loop entity types should NOT appear
+        assert "communication" not in entity_types_found
+        assert "plan_item" not in entity_types_found
+        assert results["total"] >= 2

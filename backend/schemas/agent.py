@@ -1,5 +1,7 @@
 """Agent-related Pydantic models."""
-from pydantic import BaseModel, Field
+import json
+
+from pydantic import BaseModel, Field, field_validator
 from typing import Literal
 from datetime import datetime
 
@@ -181,6 +183,14 @@ class AgentResponse(BaseModel):
     id: str
     name: str
     description: str | None = None
+
+    @field_validator('description', mode='before')
+    @classmethod
+    def coerce_description(cls, v):
+        """Coerce non-string values to str to handle SQLite JSON-parse artifacts."""
+        if v is not None and not isinstance(v, str):
+            return json.dumps(v) if isinstance(v, (dict, list)) else str(v)
+        return v
     model: str | None = None
     permission_mode: str = "default"
     max_turns: int | None = None

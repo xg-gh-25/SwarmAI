@@ -36,12 +36,19 @@ def get_database() -> SQLiteDatabase:
     return _db_instance
 
 
-async def initialize_database() -> None:
-    """Initialize the database schema."""
+async def initialize_database(skip_schema: bool = False) -> None:
+    """Initialize the database schema.
+
+    Args:
+        skip_schema: When True, creates the DB instance but skips schema DDL
+            and migrations (used for seed-sourced databases that already have
+            a complete schema). When False (default), runs the full schema
+            initialization — preserving existing behavior.
+    """
     global _db_instance
     if _db_instance is None:
         _db_instance = _create_database()
-    await _db_instance.initialize()
+    await _db_instance.initialize(skip_init=skip_schema)
 
 
 # Convenience alias for direct access
