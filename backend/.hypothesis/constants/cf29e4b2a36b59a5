@@ -1,4 +1,0 @@
-# file: /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/backend/schemas/error.py
-# hypothesis_version: 6.151.6
-
-[200, 500, 2000, 'AGENT_NOT_FOUND', 'RATE_LIMIT_EXCEEDED', 'VALIDATION_FAILED', '^[A-Z][A-Z0-9_]*$', 'req_abc123xyz']

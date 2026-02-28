@@ -1,4 +1,0 @@
-# file: /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/backend/middleware/rate_limit.py
-# hypothesis_version: 6.151.6
-
-['/', '/docs', '/health', '/openapi.json', '/redoc', 'Authorization', 'Bearer ', 'user']

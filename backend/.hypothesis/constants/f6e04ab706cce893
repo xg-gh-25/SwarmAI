@@ -1,4 +1,0 @@
-# file: /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/backend/config.py
-# hypothesis_version: 6.151.6
-
-[100, 8000, '.env', '.local', '0.0.0.0', '4.0.0', 'Agent Platform API', 'AppData', 'Application Support', 'Darwin', 'HS256', 'Library', 'Local', 'SwarmAI', 'Windows', 'docker', 'share', 'sqlite', 'tauri://localhost', 'us-west-2', 'utf-8', 'workspace', 'workspaces']

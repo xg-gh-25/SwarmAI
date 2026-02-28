@@ -1,4 +1,0 @@
-# file: /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/backend/routers/channels.py
-# hypothesis_version: 6.151.6
-
-[201, 204, '/', '/types', '/{channel_id}', '/{channel_id}/start', '/{channel_id}/status', '/{channel_id}/stop', '/{channel_id}/test', 'access_mode', 'active', 'active_sessions', 'agent_id', 'allowed_senders', 'allowlist', 'blocked_senders', 'channel_id', 'channel_type', 'config', 'created_at', 'enable_mcp', 'enable_skills', 'error', 'error_message', 'external_chat_id', 'external_sender_id', 'external_thread_id', 'id', 'inactive', 'last_message_at', 'message_count', 'messages_processed', 'name', 'sender_display_name', 'session_id', 'status', 'updated_at', 'uptime_seconds', 'valid']

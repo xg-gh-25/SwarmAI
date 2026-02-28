@@ -1,4 +1,0 @@
-# file: /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/backend/channels/adapters/feishu.py
-# hypothesis_version: 6.151.6
-
-[b'BM', b'GIF87a', b'GIF89a', b'RIFF', b'\x89PNG\r\n\x1a\n', b'\xff\xd8\xff', 3.0, '@_user_\\d+\\s*', 'app_id', 'app_secret', 'attachment', 'chat_id', 'chat_type', 'feishu', 'file', 'file_bytes', 'file_key', 'file_name', 'file_size', 'group', 'image', 'image/', 'image/bmp', 'image/gif', 'image/jpeg', 'image/png', 'image/webp', 'image_key', 'message_type', 'mime_type', 'text', 'type']

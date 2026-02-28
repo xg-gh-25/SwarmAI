@@ -1,4 +1,0 @@
-# file: /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/backend/routers/settings.py
-# hypothesis_version: 6.151.6
-
-[400, 'anthropic_api_key', 'anthropic_base_url', 'available_models', 'aws_access_key_id', 'aws_bearer_token', 'aws_region', 'aws_session_token', 'bedrock_auth_type', 'created_at', 'credentials', 'default', 'default_model', 'id', 'updated_at', 'us-east-1', 'use_bedrock']

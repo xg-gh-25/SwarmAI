@@ -1,4 +1,0 @@
-# file: /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/backend/schemas/message.py
-# hypothesis_version: 6.151.6
-
-['assistant', 'base64', 'document', 'image', 'result', 'text', 'tool_result', 'tool_use']

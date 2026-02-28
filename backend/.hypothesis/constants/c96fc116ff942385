@@ -1,4 +1,0 @@
-# file: /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/backend/routers/__init__.py
-# hypothesis_version: 6.151.6
-
-['agents_router', 'auth_router', 'channels_router', 'chat_router', 'mcp_router', 'plugins_router', 'settings_router', 'skills_router', 'tasks_router', 'workspace_router']

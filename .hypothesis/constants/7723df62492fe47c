@@ -1,4 +1,0 @@
-# file: /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/backend/core/plugin_manager.py
-# hypothesis_version: 6.151.6
-
-[200, '#', '*.md', '--depth', '--ff-only', '--hard', '-C', '-b', '.', './', '.claude', '.claude-plugin', '.git', '.mcp.json', '/', '1', '1.0.0', 'Unknown', 'Unknown Marketplace', '\\', '_sources', '```', 'agents', 'author', 'cache', 'clone', 'commands', 'description', 'fetch', 'git', 'homepage', 'hooks', 'keywords', 'license', 'main', 'marketplace.json', 'mcpServers', 'mcp_servers', 'metadata', 'name', 'origin', 'owner', 'packages', 'plugin.json', 'plugins', 'pull', 'readme.md', 'repository', 'reset', 'skill', 'skill.json', 'skill.md', 'skills', 'source', 'url', 'utf-8', 'version']

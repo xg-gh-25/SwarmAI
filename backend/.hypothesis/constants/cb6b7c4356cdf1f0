@@ -1,4 +1,0 @@
-# file: /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/backend/routers/chat.py
-# hypothesis_version: 6.151.6
-
-[204, '/answer-question', '/permission-continue', '/permission-response', '/sessions', '/stop/{session_id}', '/stream', 'AGENT_TIMEOUT', 'Cache-Control', 'Connection', 'Invalid JSON format', 'Invalid request data', 'Please try again', 'SERVICE_UNAVAILABLE', 'Session mismatch', 'X-Accel-Buffering', 'approve', 'code', 'command', 'connection', 'content', 'created_at', 'd', 'decided_at', 'detail', 'done', 'enable_mcp', 'enable_skills', 'error', 'id', 'keep-alive', 'message', 'model', 'network', 'no', 'no-cache', 'not_found', 'recorded', 'role', 'session_id', 'status', 'stopped', 'success', 'suggested_action', 'text/event-stream', 'timeout', 'tool_input', 'type', 'user_feedback']

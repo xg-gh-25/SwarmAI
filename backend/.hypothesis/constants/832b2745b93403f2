@@ -1,4 +1,0 @@
-# file: /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/backend/core/task_manager.py
-# hypothesis_version: 6.151.6
-
-[100, 300, '...', '[Attachment message]', 'agent_id', 'ask_user_question', 'cancelled', 'completed', 'completed_at', 'content', 'created_at', 'error', 'failed', 'id', 'message', 'model', 'pending', 'result', 'running', 'sessionId', 'session_id', 'session_start', 'started_at', 'status', 'text', 'title', 'type', 'work_dir']

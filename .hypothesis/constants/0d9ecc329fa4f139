@@ -1,4 +1,0 @@
-# file: /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/backend/schemas/channel.py
-# hypothesis_version: 6.151.6
-
-[100, 255, 'allowlist', 'blocklist', 'discord', 'feishu', 'open', 'slack', 'web_widget']

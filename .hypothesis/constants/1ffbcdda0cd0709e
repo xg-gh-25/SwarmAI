@@ -1,4 +1,0 @@
-# file: /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/backend/channels/registry.py
-# hypothesis_version: 6.151.6
-
-['Allowed Origins', 'App ID', 'App Secret', 'App Token (xapp-)', 'Bot Token', 'Bot Token (xoxb-)', 'Discord', 'Feishu (飞书)', 'Greeting Message', 'Guild ID (optional)', 'Slack', 'Theme', 'Web Widget', 'allowed_origins', 'app_id', 'app_secret', 'app_token', 'available', 'bot_token', 'config_fields', 'dark', 'description', 'discord', 'feishu', 'greeting_message', 'guild_id', 'id', 'key', 'label', 'light', 'options', 'password', 'required', 'select', 'slack', 'text', 'text_list', 'type', 'web_widget', 'widget_theme']

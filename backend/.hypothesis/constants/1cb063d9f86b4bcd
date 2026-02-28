@@ -1,4 +1,0 @@
-# file: /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/backend/main.py
-# hypothesis_version: 6.151.6
-
-[600, '/', '/api/agents', '/api/auth', '/api/channels', '/api/chat', '/api/mcp', '/api/plugins', '/api/settings', '/api/skills', '/api/tasks', '/api/workspace', '/docs', '/health', '/shutdown', 'Accept', 'Authorization', 'Content-Type', 'DELETE', 'Database initialized', 'GET', 'OPTIONS', 'Origin', 'PATCH', 'POST', 'PUT', 'Retry-After', 'Shutting down...', 'X-RateLimit-Limit', 'X-RateLimit-Reset', 'X-Request-ID', 'X-Requested-With', '__main__', 'agents', 'auth', 'backend.log', 'channels', 'chat', 'claude-agent-sdk', 'docs', 'health', 'healthy', 'logs', 'main:app', 'mcp', 'name', 'plugins', 'sdk', 'settings', 'shutting_down', 'skills', 'status', 'tasks', 'urllib3', 'utf-8', 'version', 'workspace']
