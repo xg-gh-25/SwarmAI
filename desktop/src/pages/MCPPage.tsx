@@ -4,12 +4,44 @@ import { SearchBar, Button, Modal, SkeletonTable, ResizableTable, ResizableTable
 import type { MCPServer, MCPServerCreateRequest } from '../types';
 import { mcpService } from '../services/mcp';
 
+// Helper function to get source display info
+function getSourceDisplay(server: MCPServer): { label: string; icon: string; color: string } {
+  switch (server.sourceType) {
+    case 'system':
+      return {
+        label: 'System',
+        icon: 'verified',
+        color: 'text-cyan-400',
+      };
+    case 'plugin':
+      return {
+        label: 'Plugin',
+        icon: 'extension',
+        color: 'text-purple-400',
+      };
+    case 'marketplace':
+      return {
+        label: 'Marketplace',
+        icon: 'store',
+        color: 'text-blue-400',
+      };
+    case 'user':
+    default:
+      return {
+        label: 'User Created',
+        icon: 'person',
+        color: 'text-[var(--color-text-muted)]',
+      };
+  }
+}
+
 // MCP table column configuration - will be translated via hook
 const getMcpColumns = (t: (key: string) => string) => [
   { key: 'name', header: t('mcp.table.name'), initialWidth: 180, minWidth: 120 },
-  { key: 'connectionType', header: t('mcp.table.type'), initialWidth: 140, minWidth: 100 },
-  { key: 'endpoint', header: t('mcp.form.endpoint') || 'Endpoint', initialWidth: 300, minWidth: 150 },
-  { key: 'description', header: t('common.label.description'), initialWidth: 250, minWidth: 120 },
+  { key: 'connectionType', header: t('mcp.table.type'), initialWidth: 120, minWidth: 80 },
+  { key: 'source', header: t('common.label.source') || 'Source', initialWidth: 120, minWidth: 100 },
+  { key: 'endpoint', header: t('mcp.form.endpoint') || 'Endpoint', initialWidth: 250, minWidth: 150 },
+  { key: 'description', header: t('common.label.description'), initialWidth: 200, minWidth: 120 },
   { key: 'actions', header: t('mcp.table.actions'), initialWidth: 100, minWidth: 80, align: 'right' as const },
 ];
 
@@ -114,7 +146,9 @@ export default function MCPPage() {
           <SkeletonTable rows={5} columns={5} />
         ) : (
           <ResizableTable columns={MCP_COLUMNS}>
-            {filteredServers.map((server) => (
+            {filteredServers.map((server) => {
+              const sourceInfo = getSourceDisplay(server);
+              return (
               <tr
                 key={server.id}
                 className="border-b border-[var(--color-border)] hover:bg-[var(--color-hover)] transition-colors"
@@ -126,6 +160,14 @@ export default function MCPPage() {
                   <span className="px-2 py-1 text-xs font-medium bg-primary/10 text-primary rounded uppercase">
                     {server.connectionType}
                   </span>
+                </ResizableTableCell>
+                <ResizableTableCell>
+                  <div className="flex items-center gap-1.5">
+                    <span className={`material-symbols-outlined text-base ${sourceInfo.color}`}>
+                      {sourceInfo.icon}
+                    </span>
+                    <span className={`text-sm ${sourceInfo.color}`}>{sourceInfo.label}</span>
+                  </div>
                 </ResizableTableCell>
                 <ResizableTableCell>
                   <span className="text-[var(--color-text-muted)]" title={server.endpoint}>
@@ -143,24 +185,27 @@ export default function MCPPage() {
                       onClick={() => setSelectedServer(server)}
                       className="p-2 rounded-lg text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)] transition-colors"
                       title={t('mcp.editMcp')}
+                      disabled={server.isSystem}
                     >
-                      <span className="material-symbols-outlined text-xl">edit</span>
+                      <span className={`material-symbols-outlined text-xl ${server.isSystem ? 'opacity-30' : ''}`}>edit</span>
                     </button>
                     <button
                       onClick={() => handleDeleteClick(server)}
                       className="p-2 rounded-lg text-[var(--color-text-muted)] hover:text-status-error hover:bg-status-error/10 transition-colors"
                       title={t('mcp.deleteMcp')}
+                      disabled={server.isSystem}
                     >
-                      <span className="material-symbols-outlined text-xl">delete</span>
+                      <span className={`material-symbols-outlined text-xl ${server.isSystem ? 'opacity-30' : ''}`}>delete</span>
                     </button>
                   </div>
                 </ResizableTableCell>
               </tr>
-            ))}
+              );
+            })}
 
             {filteredServers.length === 0 && (
               <tr>
-                <td colSpan={5} className="px-6 py-12 text-center">
+                <td colSpan={6} className="px-6 py-12 text-center">
                   <span className="material-symbols-outlined text-4xl text-[var(--color-text-muted)] mb-2">dns</span>
                   <p className="text-[var(--color-text-muted)]">{t('mcp.noMcps')}</p>
                 </td>

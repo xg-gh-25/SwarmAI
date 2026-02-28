@@ -1,0 +1,4 @@
+# file: /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/backend/schemas/permission.py
+# hypothesis_version: 6.151.6
+
+['Chat session ID', "User's decision", 'approve', 'deny', 'recorded']

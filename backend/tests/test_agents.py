@@ -13,13 +13,13 @@ class TestAgentsList:
         data = response.json()
         assert isinstance(data, list)
 
-    def test_list_agents_excludes_default(self, client: TestClient):
-        """Test that default agent is excluded from list."""
+    def test_list_agents_includes_default(self, client: TestClient):
+        """Test that default agent is included in list."""
         response = client.get("/api/agents")
         assert response.status_code == 200
         data = response.json()
         agent_ids = [agent["id"] for agent in data]
-        assert "default" not in agent_ids
+        assert "default" in agent_ids
 
 
 class TestGetDefaultAgent:
@@ -32,6 +32,23 @@ class TestGetDefaultAgent:
         data = response.json()
         assert data["id"] == "default"
         assert "name" in data
+
+    def test_get_default_agent_has_required_fields(self, client: TestClient):
+        """Test default agent response contains all required fields.
+
+        Validates: Requirements 4.1
+        """
+        response = client.get("/api/agents/default")
+        assert response.status_code == 200
+        data = response.json()
+
+        # Verify required fields are present
+        assert data["id"] == "default"
+        assert "name" in data
+        assert "description" in data
+        assert "model" in data
+        assert "created_at" in data
+        assert "updated_at" in data
 
 
 class TestGetAgent:
@@ -127,6 +144,41 @@ class TestUpdateAgent:
         data = response.json()
         assert data["code"] == "AGENT_NOT_FOUND"
 
+    def test_update_default_agent_name_rejected(self, client: TestClient):
+        """Test updating default agent name is rejected (SwarmAgent protection).
+
+        Validates: Requirements 1.2 - SwarmAgent name cannot be changed
+        """
+        # Attempt to update the default agent's name (should be rejected)
+        response = client.put(
+            "/api/agents/default",
+            json={"name": "Updated SwarmAI", "description": "Updated description"}
+        )
+        assert response.status_code == 400
+        data = response.json()
+        assert data["code"] == "VALIDATION_FAILED"
+        assert "system agent" in data["message"].lower()
+
+    def test_update_default_agent_editable_properties(self, client: TestClient):
+        """Test updating default agent's editable properties works (except name).
+
+        Validates: Requirements 1.2 - SwarmAgent name is protected, but other properties can be updated
+        """
+        # Update editable properties (without changing name)
+        response = client.put(
+            "/api/agents/default",
+            json={
+                "description": "Custom description",
+                "system_prompt": "Custom system prompt",
+            }
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["name"] == "SwarmAgent"  # Name should remain unchanged
+        assert data["description"] == "Custom description"
+        assert data["system_prompt"] == "Custom system prompt"
+        assert data["id"] == "default"
+
 
 class TestDeleteAgent:
     """Tests for DELETE /api/agents/{agent_id} endpoint."""
@@ -155,9 +207,548 @@ class TestDeleteAgent:
         data = response.json()
         assert "code" in data
 
+    def test_delete_default_agent_returns_400(self, client: TestClient):
+        """Test deleting default agent returns 400 with proper error message.
+
+        Validates: Requirements 2.1 - Delete request for default agent SHALL be rejected
+        """
+        response = client.delete("/api/agents/default")
+        assert response.status_code == 400
+        data = response.json()
+        assert data["code"] == "VALIDATION_FAILED"
+        assert "default agent" in data["message"].lower()
+        assert "suggested_action" in data
+
     def test_delete_agent_not_found(self, client: TestClient, invalid_agent_id: str):
         """Test deleting non-existent agent returns 404."""
         response = client.delete(f"/api/agents/{invalid_agent_id}")
         assert response.status_code == 404
         data = response.json()
         assert data["code"] == "AGENT_NOT_FOUND"
+
+
+class TestSwarmAgentProtections:
+    """Tests for SwarmAgent (system agent) API protections.
+
+    **Validates: Requirements 1.2, 1.3, 4.1, 4.2, 5.1, 5.2**
+    """
+
+    @pytest.fixture
+    def swarm_agent_id(self, client: TestClient) -> str:
+        """Create a SwarmAgent (system agent) for testing.
+
+        Returns the agent ID of the created system agent.
+        """
+        # Create a system agent with is_system_agent=True
+        # We need to insert directly into the database since the API doesn't allow creating system agents
+        import asyncio
+        from database import db
+        from datetime import datetime
+
+        async def create_system_agent():
+            now = datetime.now().isoformat()
+            agent_data = {
+                "id": "swarm-agent-test",
+                "name": "SwarmAgent",
+                "description": "System agent for testing",
+                "model": "claude-sonnet-4-20250514",
+                "permission_mode": "default",
+                "is_default": False,
+                "is_system_agent": True,
+                "skill_ids": [],
+                "mcp_ids": [],
+                "created_at": now,
+                "updated_at": now,
+            }
+            await db.agents.put(agent_data)
+            return agent_data["id"]
+
+        return asyncio.get_event_loop().run_until_complete(create_system_agent())
+
+    @pytest.fixture
+    def user_skill_id(self, client: TestClient) -> str:
+        """Create a user skill for testing.
+
+        Returns the skill ID of the created user skill.
+        """
+        import asyncio
+        from database import db
+        from datetime import datetime
+
+        async def create_user_skill():
+            now = datetime.now().isoformat()
+            skill_data = {
+                "id": "user-skill-test",
+                "name": "UserTestSkill",
+                "description": "A user skill for testing",
+                "version": "1.0.0",
+                "is_system": False,
+                "created_at": now,
+                "updated_at": now,
+            }
+            await db.skills.put(skill_data)
+            return skill_data["id"]
+
+        return asyncio.get_event_loop().run_until_complete(create_user_skill())
+
+    @pytest.fixture
+    def user_mcp_id(self, client: TestClient) -> str:
+        """Create a user MCP server for testing.
+
+        Returns the MCP ID of the created user MCP server.
+        """
+        import asyncio
+        from database import db
+        from datetime import datetime
+
+        async def create_user_mcp():
+            now = datetime.now().isoformat()
+            mcp_data = {
+                "id": "user-mcp-test",
+                "name": "UserTestMCP",
+                "description": "A user MCP server for testing",
+                "connection_type": "stdio",
+                "config": {"command": "test", "args": []},
+                "is_system": False,
+                "created_at": now,
+                "updated_at": now,
+            }
+            await db.mcp_servers.put(mcp_data)
+            return mcp_data["id"]
+
+        return asyncio.get_event_loop().run_until_complete(create_user_mcp())
+
+    @pytest.fixture
+    def swarm_agent_with_system_resources(self, client: TestClient) -> dict:
+        """Create a SwarmAgent with system skill and MCP bound.
+
+        Returns a dict with agent_id, system_skill_id, and system_mcp_id.
+        The system resources are created first, then the agent is created with them bound.
+        """
+        import asyncio
+        from database import db
+        from datetime import datetime
+
+        async def setup():
+            now = datetime.now().isoformat()
+
+            # Create system skill
+            skill_data = {
+                "id": "system-skill-for-agent",
+                "name": "SystemSkillForAgent",
+                "description": "A system skill for testing",
+                "version": "1.0.0",
+                "is_system": True,
+                "created_at": now,
+                "updated_at": now,
+            }
+            await db.skills.put(skill_data)
+
+            # Create system MCP
+            mcp_data = {
+                "id": "system-mcp-for-agent",
+                "name": "SystemMCPForAgent",
+                "description": "A system MCP server for testing",
+                "connection_type": "stdio",
+                "config": {"command": "test", "args": []},
+                "is_system": True,
+                "created_at": now,
+                "updated_at": now,
+            }
+            await db.mcp_servers.put(mcp_data)
+
+            # Create agent with system resources bound
+            agent_data = {
+                "id": "swarm-agent-resources-test",
+                "name": "SwarmAgent",
+                "description": "System agent with resources for testing",
+                "model": "claude-sonnet-4-20250514",
+                "permission_mode": "default",
+                "is_default": False,
+                "is_system_agent": True,
+                "skill_ids": [skill_data["id"]],
+                "mcp_ids": [mcp_data["id"]],
+                "created_at": now,
+                "updated_at": now,
+            }
+            await db.agents.put(agent_data)
+
+            return {
+                "agent_id": agent_data["id"],
+                "system_skill_id": skill_data["id"],
+                "system_mcp_id": mcp_data["id"],
+            }
+
+        return asyncio.get_event_loop().run_until_complete(setup())
+
+    # -------------------------------------------------------------------------
+    # Name Update Protection Tests
+    # -------------------------------------------------------------------------
+
+    def test_swarm_agent_name_update_rejected(self, client: TestClient, swarm_agent_id: str):
+        """Test that changing SwarmAgent name is rejected.
+
+        **Validates: Requirements 1.2**
+        """
+        response = client.put(
+            f"/api/agents/{swarm_agent_id}",
+            json={"name": "CustomAgentName"}
+        )
+        assert response.status_code == 400
+        data = response.json()
+        assert data["code"] == "VALIDATION_FAILED"
+        assert "system agent" in data["message"].lower()
+
+    def test_swarm_agent_same_name_update_allowed(self, client: TestClient, swarm_agent_id: str):
+        """Test that updating SwarmAgent with same name is allowed.
+
+        **Validates: Requirements 1.2**
+        """
+        response = client.put(
+            f"/api/agents/{swarm_agent_id}",
+            json={"name": "SwarmAgent", "description": "Updated description"}
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["name"] == "SwarmAgent"
+        assert data["description"] == "Updated description"
+
+    def test_swarm_agent_other_properties_update_allowed(self, client: TestClient, swarm_agent_id: str):
+        """Test that updating SwarmAgent's other properties is allowed.
+
+        **Validates: Requirements 1.2**
+        """
+        response = client.put(
+            f"/api/agents/{swarm_agent_id}",
+            json={
+                "description": "New description",
+                "system_prompt": "New system prompt",
+                "max_turns": 20,
+            }
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["description"] == "New description"
+        assert data["system_prompt"] == "New system prompt"
+        assert data["max_turns"] == 20
+
+    # -------------------------------------------------------------------------
+    # System Skill Unbind Protection Tests
+    # -------------------------------------------------------------------------
+
+    def test_system_skill_unbind_rejected(
+        self, client: TestClient, swarm_agent_with_system_resources: dict
+    ):
+        """Test that unbinding system skill from SwarmAgent is rejected.
+
+        **Validates: Requirements 4.1**
+        """
+        agent_id = swarm_agent_with_system_resources["agent_id"]
+        # Try to update with empty skill_ids (removing the system skill)
+        response = client.put(
+            f"/api/agents/{agent_id}",
+            json={"skill_ids": []}
+        )
+        assert response.status_code == 400
+        data = response.json()
+        assert data["code"] == "VALIDATION_FAILED"
+        assert "system skills" in data["message"].lower()
+
+    def test_system_skill_unbind_partial_rejected(
+        self, client: TestClient, swarm_agent_with_system_resources: dict,
+        user_skill_id: str
+    ):
+        """Test that partially unbinding system skill is rejected.
+
+        **Validates: Requirements 4.1**
+        """
+        import asyncio
+        from database import db
+
+        agent_id = swarm_agent_with_system_resources["agent_id"]
+
+        # Get ALL system skills from database
+        async def get_all_system_skills():
+            return await db.skills.list_by_system()
+
+        all_system_skills = asyncio.get_event_loop().run_until_complete(get_all_system_skills())
+        all_system_skill_ids = [s["id"] for s in all_system_skills]
+
+        # First add a user skill while keeping ALL system skills
+        response = client.put(
+            f"/api/agents/{agent_id}",
+            json={"skill_ids": all_system_skill_ids + [user_skill_id]}
+        )
+        assert response.status_code == 200
+
+        # Now try to remove one system skill (keeping user skill and other system skills)
+        # This should fail because we're removing a system skill
+        remaining_skill_ids = all_system_skill_ids[1:] + [user_skill_id]  # Remove first system skill
+        response = client.put(
+            f"/api/agents/{agent_id}",
+            json={"skill_ids": remaining_skill_ids}
+        )
+        assert response.status_code == 400
+        data = response.json()
+        assert data["code"] == "VALIDATION_FAILED"
+        assert "system skills" in data["message"].lower()
+
+    # -------------------------------------------------------------------------
+    # System MCP Unbind Protection Tests
+    # -------------------------------------------------------------------------
+
+    def test_system_mcp_unbind_rejected(
+        self, client: TestClient, swarm_agent_with_system_resources: dict
+    ):
+        """Test that unbinding system MCP from SwarmAgent is rejected.
+
+        **Validates: Requirements 4.2**
+        """
+        agent_id = swarm_agent_with_system_resources["agent_id"]
+        # Try to update with empty mcp_ids (removing the system MCP)
+        response = client.put(
+            f"/api/agents/{agent_id}",
+            json={"mcp_ids": []}
+        )
+        assert response.status_code == 400
+        data = response.json()
+        assert data["code"] == "VALIDATION_FAILED"
+        assert "system mcp" in data["message"].lower()
+
+    def test_system_mcp_unbind_partial_rejected(
+        self, client: TestClient, swarm_agent_with_system_resources: dict,
+        user_mcp_id: str
+    ):
+        """Test that partially unbinding system MCP is rejected.
+
+        **Validates: Requirements 4.2**
+        """
+        agent_id = swarm_agent_with_system_resources["agent_id"]
+        system_mcp_id = swarm_agent_with_system_resources["system_mcp_id"]
+
+        # First add a user MCP while keeping system MCP
+        response = client.put(
+            f"/api/agents/{agent_id}",
+            json={"mcp_ids": [system_mcp_id, user_mcp_id]}
+        )
+        assert response.status_code == 200
+
+        # Now try to remove only the system MCP (keeping user MCP)
+        response = client.put(
+            f"/api/agents/{agent_id}",
+            json={"mcp_ids": [user_mcp_id]}
+        )
+        assert response.status_code == 400
+        data = response.json()
+        assert data["code"] == "VALIDATION_FAILED"
+        assert "system mcp" in data["message"].lower()
+
+    # -------------------------------------------------------------------------
+    # User Skill Bind/Unbind Success Tests
+    # -------------------------------------------------------------------------
+
+    def test_user_skill_bind_to_swarm_agent_success(
+        self, client: TestClient, swarm_agent_with_system_resources: dict,
+        user_skill_id: str
+    ):
+        """Test that binding user skill to SwarmAgent succeeds.
+
+        **Validates: Requirements 5.1**
+        """
+        import asyncio
+        from database import db
+
+        agent_id = swarm_agent_with_system_resources["agent_id"]
+
+        # Get ALL system skills from database
+        async def get_all_system_skills():
+            return await db.skills.list_by_system()
+
+        all_system_skills = asyncio.get_event_loop().run_until_complete(get_all_system_skills())
+        all_system_skill_ids = [s["id"] for s in all_system_skills]
+
+        # Add user skill while keeping ALL system skills
+        response = client.put(
+            f"/api/agents/{agent_id}",
+            json={"skill_ids": all_system_skill_ids + [user_skill_id]}
+        )
+        assert response.status_code == 200
+        data = response.json()
+        # Verify all system skills are still bound
+        for skill_id in all_system_skill_ids:
+            assert skill_id in data["skill_ids"]
+        # Verify user skill is now bound
+        assert user_skill_id in data["skill_ids"]
+
+    def test_user_skill_unbind_from_swarm_agent_success(
+        self, client: TestClient, swarm_agent_with_system_resources: dict,
+        user_skill_id: str
+    ):
+        """Test that unbinding user skill from SwarmAgent succeeds.
+
+        **Validates: Requirements 5.2**
+        """
+        import asyncio
+        from database import db
+
+        agent_id = swarm_agent_with_system_resources["agent_id"]
+
+        # Get ALL system skills from database
+        async def get_all_system_skills():
+            return await db.skills.list_by_system()
+
+        all_system_skills = asyncio.get_event_loop().run_until_complete(get_all_system_skills())
+        all_system_skill_ids = [s["id"] for s in all_system_skills]
+
+        # First add user skill while keeping ALL system skills
+        response = client.put(
+            f"/api/agents/{agent_id}",
+            json={"skill_ids": all_system_skill_ids + [user_skill_id]}
+        )
+        assert response.status_code == 200
+
+        # Now remove only the user skill (keeping ALL system skills)
+        response = client.put(
+            f"/api/agents/{agent_id}",
+            json={"skill_ids": all_system_skill_ids}
+        )
+        assert response.status_code == 200
+        data = response.json()
+        # Verify all system skills are still bound
+        for skill_id in all_system_skill_ids:
+            assert skill_id in data["skill_ids"]
+        # Verify user skill is no longer bound
+        assert user_skill_id not in data["skill_ids"]
+
+    # -------------------------------------------------------------------------
+    # User MCP Bind/Unbind Success Tests
+    # -------------------------------------------------------------------------
+
+    def test_user_mcp_bind_to_swarm_agent_success(
+        self, client: TestClient, swarm_agent_with_system_resources: dict,
+        user_mcp_id: str
+    ):
+        """Test that binding user MCP to SwarmAgent succeeds.
+
+        **Validates: Requirements 5.4**
+        """
+        agent_id = swarm_agent_with_system_resources["agent_id"]
+        system_mcp_id = swarm_agent_with_system_resources["system_mcp_id"]
+
+        # Add user MCP while keeping system MCP
+        response = client.put(
+            f"/api/agents/{agent_id}",
+            json={"mcp_ids": [system_mcp_id, user_mcp_id]}
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert system_mcp_id in data["mcp_ids"]
+        assert user_mcp_id in data["mcp_ids"]
+
+    def test_user_mcp_unbind_from_swarm_agent_success(
+        self, client: TestClient, swarm_agent_with_system_resources: dict,
+        user_mcp_id: str
+    ):
+        """Test that unbinding user MCP from SwarmAgent succeeds.
+
+        **Validates: Requirements 5.5**
+        """
+        agent_id = swarm_agent_with_system_resources["agent_id"]
+        system_mcp_id = swarm_agent_with_system_resources["system_mcp_id"]
+
+        # First add user MCP
+        response = client.put(
+            f"/api/agents/{agent_id}",
+            json={"mcp_ids": [system_mcp_id, user_mcp_id]}
+        )
+        assert response.status_code == 200
+
+        # Now remove only the user MCP (keeping system MCP)
+        response = client.put(
+            f"/api/agents/{agent_id}",
+            json={"mcp_ids": [system_mcp_id]}
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert system_mcp_id in data["mcp_ids"]
+        assert user_mcp_id not in data["mcp_ids"]
+
+    # -------------------------------------------------------------------------
+    # Delete Protection Tests
+    # -------------------------------------------------------------------------
+
+    def test_swarm_agent_delete_rejected(self, client: TestClient, swarm_agent_id: str):
+        """Test that deleting SwarmAgent is rejected.
+
+        **Validates: Requirements 1.3**
+        """
+        response = client.delete(f"/api/agents/{swarm_agent_id}")
+        assert response.status_code == 400
+        data = response.json()
+        assert data["code"] == "VALIDATION_FAILED"
+        assert "system agent" in data["message"].lower()
+
+    def test_swarm_agent_still_exists_after_delete_attempt(
+        self, client: TestClient, swarm_agent_id: str
+    ):
+        """Test that SwarmAgent still exists after failed delete attempt.
+
+        **Validates: Requirements 1.3**
+        """
+        # Attempt to delete
+        delete_response = client.delete(f"/api/agents/{swarm_agent_id}")
+        assert delete_response.status_code == 400
+
+        # Verify agent still exists
+        get_response = client.get(f"/api/agents/{swarm_agent_id}")
+        assert get_response.status_code == 200
+        data = get_response.json()
+        assert data["id"] == swarm_agent_id
+        assert data["name"] == "SwarmAgent"
+
+    # -------------------------------------------------------------------------
+    # Non-System Agent Tests (Control Group)
+    # -------------------------------------------------------------------------
+
+    def test_regular_agent_name_update_allowed(self, client: TestClient):
+        """Test that regular (non-system) agent name can be changed.
+
+        Control test to ensure protection only applies to system agents.
+        """
+        # Create a regular agent
+        create_response = client.post(
+            "/api/agents",
+            json={"name": "Regular Agent"}
+        )
+        assert create_response.status_code == 201
+        agent_id = create_response.json()["id"]
+
+        # Update the name
+        response = client.put(
+            f"/api/agents/{agent_id}",
+            json={"name": "New Name"}
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["name"] == "New Name"
+
+    def test_regular_agent_delete_allowed(self, client: TestClient):
+        """Test that regular (non-system) agent can be deleted.
+
+        Control test to ensure protection only applies to system agents.
+        """
+        # Create a regular agent
+        create_response = client.post(
+            "/api/agents",
+            json={"name": "Agent to Delete"}
+        )
+        assert create_response.status_code == 201
+        agent_id = create_response.json()["id"]
+
+        # Delete it
+        response = client.delete(f"/api/agents/{agent_id}")
+        assert response.status_code == 204
+
+        # Verify it's gone
+        get_response = client.get(f"/api/agents/{agent_id}")
+        assert get_response.status_code == 404

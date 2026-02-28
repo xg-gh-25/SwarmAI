@@ -1,0 +1,4 @@
+# file: /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/backend/core/auth.py
+# hypothesis_version: 6.151.6
+
+['access', 'auto', 'bcrypt', 'exp', 'iat', 'refresh', 'sub', 'type', 'verify_exp']

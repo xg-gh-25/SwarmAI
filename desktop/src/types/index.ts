@@ -50,6 +50,8 @@ export interface Agent {
   enableHumanApproval: boolean;
   sandboxEnabled: boolean;
   sandbox?: SandboxConfig;
+  isDefault: boolean;
+  isSystemAgent: boolean;
   status: 'active' | 'inactive';
   createdAt: string;
   updatedAt: string;
@@ -85,7 +87,7 @@ export interface Skill {
   folderName?: string;
   localPath?: string;
   // Source tracking
-  sourceType: 'user' | 'plugin' | 'marketplace' | 'local';
+  sourceType: 'user' | 'plugin' | 'marketplace' | 'local' | 'system';
   sourcePluginId?: string;
   sourceMarketplaceId?: string;
   sourcePluginName?: string;
@@ -154,6 +156,9 @@ export interface MCPServer {
   rejectedTools?: string[];
   endpoint?: string;
   version?: string;
+  // Source tracking
+  sourceType: 'user' | 'plugin' | 'marketplace' | 'system';
+  isSystem: boolean;
   createdAt: string;
   updatedAt: string;
 }

@@ -9,8 +9,8 @@ import logging
 from pathlib import Path
 
 from config import settings, get_app_data_dir
-from core.agent_manager import agent_manager
-from routers import agents_router, skills_router, mcp_router, chat_router, auth_router, workspace_router, settings_router, plugins_router, tasks_router, channels_router
+from core.agent_manager import agent_manager, ensure_default_agent
+from routers import agents_router, skills_router, mcp_router, chat_router, auth_router, workspace_router, settings_router, plugins_router, tasks_router, channels_router, system_router
 from channels.gateway import channel_gateway
 from middleware.error_handler import setup_error_handlers
 from middleware.rate_limit import limiter
@@ -64,6 +64,13 @@ async def lifespan(app: FastAPI):
     # Initialize database
     await initialize_database()
     logger.info("Database initialized")
+
+    # Ensure default agent exists
+    try:
+        await ensure_default_agent()
+        logger.info("Default agent ensured")
+    except Exception as e:
+        logger.error(f"Failed to ensure default agent: {e}")
 
     # Start channel gateway (auto-starts active channels)
     await channel_gateway.startup()
@@ -140,6 +147,7 @@ app.include_router(settings_router, prefix="/api/settings", tags=["settings"])
 app.include_router(plugins_router, prefix="/api/plugins", tags=["plugins"])
 app.include_router(tasks_router, prefix="/api/tasks", tags=["tasks"])
 app.include_router(channels_router, prefix="/api/channels", tags=["channels"])
+app.include_router(system_router, prefix="/api/system", tags=["system"])
 
 
 @app.get("/health")

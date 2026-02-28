@@ -1,0 +1,4 @@
+# file: /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/backend/schemas/settings.py
+# hypothesis_version: 6.151.6
+
+['AWS Access Key ID', 'AWS Region', 'Anthropic API Key', 'bearer_token', 'credentials', 'us-east-1']

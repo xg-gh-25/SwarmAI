@@ -1,0 +1,4 @@
+# file: /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/backend/routers/workspace.py
+# hypothesis_version: 6.151.6
+
+[400, 403, 404, 413, 500, 1024, '.', '..', '.bash', '.bmp', '.c', '.cfg', '.conf', '.cpp', '.css', '.csv', '.dockerignore', '.editorconfig', '.env', '.eslintrc', '.fish', '.gif', '.gitignore', '.go', '.h', '.hpp', '.html', '.ico', '.ini', '.java', '.jpeg', '.jpg', '.js', '.json', '.jsx', '.less', '.log', '.md', '.php', '.png', '.prettierrc', '.py', '.rb', '.rs', '.scss', '.sh', '.sql', '.svg', '.toml', '.ts', '.tsx', '.txt', '.webp', '.xml', '.yaml', '.yml', '.zsh', '/', '/browse', '/{agent_id}/list', '/{agent_id}/read', '/{agent_id}/upload', 'Dockerfile', 'Makefile', 'Permission denied', 'allow_all_skills', 'ascii', 'base64', 'directory', 'file', 'skill_ids', 'utf-8', 'workspace']

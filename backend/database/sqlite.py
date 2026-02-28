@@ -259,6 +259,30 @@ class SQLiteSkillsTable(SQLiteTable[T], Generic[T]):
                 rows = await cursor.fetchall()
                 return [self._row_to_dict(row) for row in rows]
 
+    async def list_by_system(self) -> list[T]:
+        """List all skills where is_system=True."""
+        async with self._get_connection() as conn:
+            conn.row_factory = aiosqlite.Row
+            async with conn.execute(
+                f"SELECT * FROM {self.table_name} WHERE is_system = 1 ORDER BY created_at DESC"
+            ) as cursor:
+                rows = await cursor.fetchall()
+                return [self._row_to_dict(row) for row in rows]
+
+
+class SQLiteMCPServersTable(SQLiteTable[T], Generic[T]):
+    """Specialized SQLite table for MCP servers with system resource querying support."""
+
+    async def list_by_system(self) -> list[T]:
+        """List all MCP servers where is_system=True."""
+        async with self._get_connection() as conn:
+            conn.row_factory = aiosqlite.Row
+            async with conn.execute(
+                f"SELECT * FROM {self.table_name} WHERE is_system = 1 ORDER BY created_at DESC"
+            ) as cursor:
+                rows = await cursor.fetchall()
+                return [self._row_to_dict(row) for row in rows]
+
 
 class SQLitePluginsTable(SQLiteTable[T], Generic[T]):
     """Specialized SQLite table for plugins with installed_at ordering.
@@ -483,6 +507,8 @@ class SQLiteDatabase(BaseDatabase):
         enable_human_approval INTEGER DEFAULT 1,
         sandbox_enabled INTEGER DEFAULT 1,
         sandbox TEXT DEFAULT '{}',
+        is_default INTEGER DEFAULT 0,
+        is_system_agent INTEGER DEFAULT 0,
         status TEXT DEFAULT 'active',
         user_id TEXT,
         created_at TEXT NOT NULL,
@@ -547,6 +573,7 @@ class SQLiteDatabase(BaseDatabase):
         endpoint TEXT,
         version TEXT,
         is_active INTEGER DEFAULT 1,
+        is_system INTEGER DEFAULT 0,
         user_id TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
@@ -780,7 +807,7 @@ class SQLiteDatabase(BaseDatabase):
         # Initialize tables
         self._agents = SQLiteTable[dict]("agents", self.db_path)
         self._skills = SQLiteSkillsTable[dict]("skills", self.db_path)
-        self._mcp_servers = SQLiteTable[dict]("mcp_servers", self.db_path)
+        self._mcp_servers = SQLiteMCPServersTable[dict]("mcp_servers", self.db_path)
         self._sessions = SQLiteTable[dict]("sessions", self.db_path)
         self._messages = SQLiteMessagesTable[dict]("messages", self.db_path)
         self._users = SQLiteTable[dict]("users", self.db_path)
@@ -878,6 +905,34 @@ class SQLiteDatabase(BaseDatabase):
             await conn.commit()
             logger.info("Migration complete: sandbox_enabled column added")
 
+        # Migration: Add is_default column to agents table (added 2026-02-13)
+        # Marks the protected default agent that cannot be deleted
+        if "is_default" not in column_names:
+            logger.info("Running migration: Adding is_default column to agents table")
+            await conn.execute("ALTER TABLE agents ADD COLUMN is_default INTEGER DEFAULT 0")
+            await conn.commit()
+            logger.info("Migration complete: is_default column added")
+
+        # Migration: Add is_system_agent column to agents table (added 2026-02-15)
+        # Marks the protected system agent (SwarmAgent) that cannot be deleted or renamed
+        if "is_system_agent" not in column_names:
+            logger.info("Running migration: Adding is_system_agent column to agents table")
+            await conn.execute("ALTER TABLE agents ADD COLUMN is_system_agent INTEGER DEFAULT 0")
+            await conn.commit()
+            logger.info("Migration complete: is_system_agent column added")
+
+        # Migration: Add is_system column to mcp_servers table (added 2026-02-15)
+        # Marks system MCP servers that are automatically bound to SwarmAgent
+        cursor = await conn.execute("PRAGMA table_info(mcp_servers)")
+        mcp_columns = await cursor.fetchall()
+        mcp_column_names = [col[1] for col in mcp_columns]
+
+        if "is_system" not in mcp_column_names:
+            logger.info("Running migration: Adding is_system column to mcp_servers table")
+            await conn.execute("ALTER TABLE mcp_servers ADD COLUMN is_system INTEGER DEFAULT 0")
+            await conn.commit()
+            logger.info("Migration complete: is_system column added to mcp_servers")
+
     @property
     def agents(self) -> SQLiteTable:
         """Get the agents table."""
@@ -889,7 +944,7 @@ class SQLiteDatabase(BaseDatabase):
         return self._skills
 
     @property
-    def mcp_servers(self) -> SQLiteTable:
+    def mcp_servers(self) -> SQLiteMCPServersTable:
         """Get the MCP servers table."""
         return self._mcp_servers
 
