@@ -5,6 +5,7 @@ export interface MultiSelectOption {
   id: string;
   name: string;
   description?: string;
+  isSystem?: boolean;
 }
 
 interface MultiSelectProps {
@@ -18,6 +19,7 @@ interface MultiSelectProps {
   onOpen?: () => void;
   className?: string;
   disabled?: boolean;
+  protectSystemItems?: boolean;
 }
 
 export default function MultiSelect({
@@ -31,6 +33,7 @@ export default function MultiSelect({
   onOpen,
   className,
   disabled = false,
+  protectSystemItems = false,
 }: MultiSelectProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -65,7 +68,10 @@ export default function MultiSelect({
 
   const handleSelect = (optionId: string) => {
     if (disabled) return;
+    const option = options.find((opt) => opt.id === optionId);
     if (selectedIds.includes(optionId)) {
+      // Prevent deselecting system items when protectSystemItems is enabled
+      if (protectSystemItems && option?.isSystem) return;
       onChange(selectedIds.filter((id) => id !== optionId));
     } else {
       onChange([...selectedIds, optionId]);
@@ -103,12 +109,19 @@ export default function MultiSelect({
                 className="inline-flex items-center gap-1 px-2 py-1 bg-primary/10 text-primary rounded text-sm"
               >
                 {option.name}
-                <button
-                  onClick={(e) => handleRemove(option.id, e)}
-                  className="hover:bg-primary/20 rounded-full p-0.5"
-                >
-                  <span className="material-symbols-outlined text-sm">close</span>
-                </button>
+                {option.isSystem && (
+                  <span className="px-1.5 py-0.5 text-xs bg-[var(--color-bg-tertiary)] text-[var(--color-text-muted)] rounded ml-1">
+                    System
+                  </span>
+                )}
+                {!option.isSystem && (
+                  <button
+                    onClick={(e) => handleRemove(option.id, e)}
+                    className="hover:bg-primary/20 rounded-full p-0.5"
+                  >
+                    <span className="material-symbols-outlined text-sm">close</span>
+                  </button>
+                )}
               </span>
             ))}
           </div>
@@ -187,7 +200,14 @@ export default function MultiSelect({
 
                       {/* Option Content */}
                       <div className="flex-1 min-w-0">
-                        <div className="text-[var(--color-text)] font-medium">{option.name}</div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-[var(--color-text)] font-medium">{option.name}</span>
+                          {option.isSystem && (
+                            <span className="px-1.5 py-0.5 text-xs bg-[var(--color-bg-tertiary)] text-[var(--color-text-muted)] rounded">
+                              System
+                            </span>
+                          )}
+                        </div>
                         {option.description && (
                           <div className="text-sm text-[var(--color-text-muted)] mt-0.5 line-clamp-1">
                             {option.description}
@@ -212,7 +232,15 @@ export default function MultiSelect({
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
-                      onChange([]);
+                      // When protectSystemItems is enabled, preserve system items
+                      if (protectSystemItems) {
+                        const systemIds = options
+                          .filter((opt) => opt.isSystem && selectedIds.includes(opt.id))
+                          .map((opt) => opt.id);
+                        onChange(systemIds);
+                      } else {
+                        onChange([]);
+                      }
                     }}
                     className="text-primary hover:text-primary/80 transition-colors"
                   >

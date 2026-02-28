@@ -1,0 +1,4 @@
+# file: /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/backend/schemas/marketplace.py
+# hypothesis_version: 6.151.6
+
+['Homepage URL', 'License type', 'List of agent names', 'Plugin author', 'Plugin description', 'Plugin name', 'Repository URL', 'Search keywords', 'disabled', 'error', 'git', 'http', 'installed', 'local', 'main']

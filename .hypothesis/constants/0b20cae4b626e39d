@@ -1,0 +1,4 @@
+# file: /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/backend/schemas/task.py
+# hypothesis_version: 6.151.6
+
+['cancelled', 'completed', 'failed', 'pending', 'running']

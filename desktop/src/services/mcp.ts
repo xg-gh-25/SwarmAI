@@ -25,6 +25,9 @@ const toCamelCase = (data: Record<string, unknown>): MCPServer => {
     rejectedTools: data.rejected_tools as string[] | undefined,
     endpoint: data.endpoint as string | undefined,
     version: data.version as string | undefined,
+    // Source tracking
+    sourceType: (data.source_type as 'user' | 'plugin' | 'marketplace' | 'system') || 'user',
+    isSystem: (data.is_system as boolean) || false,
     createdAt: data.created_at as string,
     updatedAt: data.updated_at as string,
   };

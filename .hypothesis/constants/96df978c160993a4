@@ -1,0 +1,4 @@
+# file: /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/backend/core/session_manager.py
+# hypothesis_version: 6.151.6
+
+['New Chat', 'agent_id', 'created_at', 'id', 'last_accessed', 'session_id', 'title', 'user_id', 'work_dir']

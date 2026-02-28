@@ -1,0 +1,4 @@
+# file: /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/backend/core/skill_manager.py
+# hypothesis_version: 6.151.6
+
+['-', '.', '.claude', '.zip', '/', '1.0.0', 'SKILL.md', '^#[^\\n]+\\n+([^\\n#]+)', '^#\\s+(.+)$', 'created_by', 'description', 'draft_s3_location', 'error', 'folder_name', 'is_system', 'local', 'local_path', 'name', 'plugin', 'r', 'skill', 'skills', 'source_type', 'sync', 'unknown', 'user', 'utf-8', 'version']

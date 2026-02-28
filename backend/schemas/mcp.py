@@ -18,6 +18,11 @@ class MCPConfig(BaseModel):
     rejected_tools: list[str] | None = None
     endpoint: str | None = None
     version: str | None = None
+    # Source tracking
+    source_type: Literal["user", "plugin", "marketplace", "system"] = Field(
+        default="user", description="Where this MCP server came from"
+    )
+    is_system: bool = Field(default=False, description="Whether this is a system MCP server")
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
@@ -70,5 +75,8 @@ class MCPResponse(BaseModel):
     rejected_tools: list[str] | None = None
     endpoint: str | None = None
     version: str | None = None
+    # Source tracking
+    source_type: Literal["user", "plugin", "marketplace", "system"] = "user"
+    is_system: bool = False
     created_at: str
     updated_at: str

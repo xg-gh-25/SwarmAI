@@ -1,0 +1,4 @@
+# file: /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/backend/routers/mcp.py
+# hypothesis_version: 6.151.6
+
+[201, 204, '/{mcp_id}', 'allowed_tools', 'args', 'command', 'config', 'config.command', 'config.url', 'connection_type', 'description', 'endpoint', 'error', 'field', 'http', 'http://', 'https://', 'name', 'rejected_tools', 'sse', 'stdio', 'url', 'v1.0.0', 'version']

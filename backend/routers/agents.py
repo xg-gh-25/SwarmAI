@@ -12,7 +12,7 @@ from core.exceptions import (
 )
 from core.workspace_manager import workspace_manager
 from core.task_manager import task_manager
-from core.agent_manager import expand_skill_ids_with_plugins
+from core.agent_manager import SWARM_AGENT_NAME, expand_skill_ids_with_plugins
 
 
 class WorkingDirectoryResponse(BaseModel):
@@ -36,10 +36,9 @@ async def list_available_models():
 
 @router.get("", response_model=list[AgentResponse])
 async def list_agents():
-    """List all agents."""
+    """List all agents including the default agent."""
     agents = await db.agents.list()
-    # Filter out the default agent from the list
-    return [a for a in agents if a.get("id") != "default"]
+    return agents
 
 
 @router.get("/default", response_model=AgentResponse)
@@ -167,6 +166,43 @@ async def update_agent(agent_id: str, request: AgentUpdateRequest):
             suggested_action="Please check the agent ID and try again"
         )
 
+    # Protect system agent name from being changed
+    if existing.get("is_system_agent"):
+        if request.name is not None and request.name != SWARM_AGENT_NAME:
+            raise ValidationException(
+                message="Cannot change the name of the system agent",
+                detail="The SwarmAgent name is protected and cannot be modified",
+                suggested_action="If you need a custom agent, create a new one instead"
+            )
+
+    # Protect system resources from being unbound from SwarmAgent
+    if existing.get("is_system_agent"):
+        # Get all system skills and MCPs
+        system_skills = await db.skills.list_by_system()
+        system_mcps = await db.mcp_servers.list_by_system()
+        system_skill_ids = {s["id"] for s in system_skills}
+        system_mcp_ids = {m["id"] for m in system_mcps}
+
+        # Check if skill_ids update would remove system skills
+        if request.skill_ids is not None:
+            new_skill_ids = set(request.skill_ids)
+            if not system_skill_ids.issubset(new_skill_ids):
+                raise ValidationException(
+                    message="Cannot unbind system skills from SwarmAgent",
+                    detail="System skills are permanently bound to the system agent",
+                    suggested_action="You can add your own skills, but system skills cannot be removed"
+                )
+
+        # Check if mcp_ids update would remove system MCPs
+        if request.mcp_ids is not None:
+            new_mcp_ids = set(request.mcp_ids)
+            if not system_mcp_ids.issubset(new_mcp_ids):
+                raise ValidationException(
+                    message="Cannot unbind system MCP servers from SwarmAgent",
+                    detail="System MCP servers are permanently bound to the system agent",
+                    suggested_action="You can add your own MCP servers, but system MCPs cannot be removed"
+                )
+
     updates = request.model_dump(exclude_unset=True)
 
     # Global User Mode requires allow_all_skills=True (skill restrictions not supported)
@@ -215,6 +251,15 @@ async def delete_agent(agent_id: str):
             message="Cannot delete the default agent",
             detail="The default agent is a system resource and cannot be deleted",
             suggested_action="If you need to modify the default agent, use the update endpoint instead"
+        )
+
+    # Check if agent exists and if it's a system agent
+    agent = await db.agents.get(agent_id)
+    if agent and agent.get("is_system_agent"):
+        raise ValidationException(
+            message="Cannot delete the system agent",
+            detail="The system agent (SwarmAgent) is a protected resource and cannot be deleted",
+            suggested_action="If you need to modify the system agent, use the update endpoint instead"
         )
 
     deleted = await db.agents.delete(agent_id)

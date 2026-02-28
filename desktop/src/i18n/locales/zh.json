@@ -267,9 +267,11 @@
       "pluginsOptional": "Plugin（可选）",
       "enabledPlugins": "已启用的 Plugin",
       "selectPlugins": "选择 Plugin...",
-      "thirdPartyModelsNote": "第三方模型（MiniMax、Qwen）仅在使用 API Proxy 模式时可用。"
+      "thirdPartyModelsNote": "第三方模型（MiniMax、Qwen）仅在使用 API Proxy 模式时可用。",
+      "systemAgentNameReadonly": "系统 Agent 名称无法更改"
     },
-    "allSkills": "所有 Skill"
+    "allSkills": "所有 Skill",
+    "cannotDeleteDefault": "无法删除默认 Agent"
   },
   "skills": {
     "title": "Skill 管理",

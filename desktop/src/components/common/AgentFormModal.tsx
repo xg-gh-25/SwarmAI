@@ -221,8 +221,19 @@ export default function AgentFormModal({
             onChange={(e) => setName(e.target.value)}
             placeholder={t('agents.form.namePlaceholder')}
             required
-            className="w-full px-4 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-primary"
+            readOnly={agent?.isSystemAgent}
+            className={clsx(
+              'w-full px-4 py-2 border border-[var(--color-border)] rounded-lg text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none',
+              agent?.isSystemAgent
+                ? 'bg-[var(--color-bg-secondary)] cursor-not-allowed opacity-70'
+                : 'bg-[var(--color-bg)] focus:border-primary'
+            )}
           />
+          {agent?.isSystemAgent && (
+            <p className="mt-1 text-xs text-[var(--color-text-muted)]">
+              {t('agents.form.systemAgentNameReadonly')}
+            </p>
+          )}
         </div>
 
         {/* Description */}
@@ -395,11 +406,13 @@ export default function AgentFormModal({
             id: skill.id,
             name: skill.name,
             description: skill.description,
+            isSystem: skill.isSystem,
           }))}
           selectedIds={allowAllSkills ? [] : skillIds}
           onChange={setSkillIds}
           loading={loadingSkills}
           disabled={allowAllSkills || globalUserMode}
+          protectSystemItems={agent?.isSystemAgent}
         />
 
         {/* MCP Servers Selection */}
@@ -410,10 +423,12 @@ export default function AgentFormModal({
             id: mcp.id,
             name: mcp.name,
             description: mcp.description,
+            isSystem: mcp.isSystem,
           }))}
           selectedIds={mcpIds}
           onChange={setMcpIds}
           loading={loadingMCPs}
+          protectSystemItems={agent?.isSystemAgent}
         />
 
         {/* Action Buttons */}

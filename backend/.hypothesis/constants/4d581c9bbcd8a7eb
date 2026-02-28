@@ -1,0 +1,4 @@
+# file: /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/backend/core/__init__.py
+# hypothesis_version: 6.151.6
+
+['AgentManager', 'SessionManager', 'SystemPromptBuilder', 'agent_manager', 'session_manager']

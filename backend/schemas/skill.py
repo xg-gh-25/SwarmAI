@@ -13,7 +13,7 @@ class SkillMetadata(BaseModel):
     folder_name: str | None = None  # Folder name in ~/.claude/skills/
     local_path: str | None = None  # Full local path
     # Source tracking
-    source_type: Literal["user", "plugin", "marketplace", "local"] = Field(
+    source_type: Literal["user", "plugin", "marketplace", "local", "system"] = Field(
         default="user", description="Where this skill came from"
     )
     source_plugin_id: str | None = Field(default=None, description="Plugin ID if from plugin")
@@ -61,7 +61,7 @@ class SkillResponse(BaseModel):
     folder_name: str | None = None
     local_path: str | None = None
     # Source tracking
-    source_type: Literal["user", "plugin", "marketplace", "local"] = "user"
+    source_type: Literal["user", "plugin", "marketplace", "local", "system"] = "user"
     source_plugin_id: str | None = None
     source_marketplace_id: str | None = None
     source_plugin_name: str | None = None  # Display name of source plugin

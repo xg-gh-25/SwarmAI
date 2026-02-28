@@ -1,0 +1,12 @@
+[
+  {
+    "id": "default-filesystem",
+    "name": "Filesystem",
+    "description": "File system operations for reading and writing files",
+    "connection_type": "stdio",
+    "config": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/"]
+    }
+  }
+]

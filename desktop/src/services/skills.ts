@@ -20,7 +20,7 @@ const toCamelCase = (data: Record<string, unknown>): Skill => {
     folderName: data.folder_name as string | undefined,
     localPath: data.local_path as string | undefined,
     // Source tracking
-    sourceType: (data.source_type as 'user' | 'plugin' | 'marketplace' | 'local') || 'user',
+    sourceType: (data.source_type as 'user' | 'plugin' | 'marketplace' | 'local' | 'system') || 'user',
     sourcePluginId: data.source_plugin_id as string | undefined,
     sourceMarketplaceId: data.source_marketplace_id as string | undefined,
     sourcePluginName: data.source_plugin_name as string | undefined,

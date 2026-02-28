@@ -1,0 +1,4 @@
+# file: /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/backend/middleware/error_handler.py
+# hypothesis_version: 6.151.6
+
+[400, 500, '.', 'Invalid input data', 'Retry-After', 'SERVER_ERROR', 'VALIDATION_FAILED', 'Validation error', 'error_code', 'errors', 'loc', 'method', 'msg', 'path', 'request_id', 'traceback']

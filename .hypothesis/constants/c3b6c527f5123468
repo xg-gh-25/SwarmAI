@@ -1,0 +1,4 @@
+# file: /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/backend/routers/auth.py
+# hypothesis_version: 6.151.6
+
+[201, 204, '/login', '/logout', '/me', '/password', '/refresh', '/register', '@', 'Invalid credentials', 'Please log in again', 'User not found', 'created_at', 'email', 'id', 'last_login', 'name', 'password_hash', 'refresh']

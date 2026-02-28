@@ -1,0 +1,16 @@
+{
+  "id": "default",
+  "name": "SwarmAI",
+  "description": "SwarmAI — Your AI Team, 24/7",
+  "model": "claude-opus-4-5-20250514",
+  "permission_mode": "bypassPermissions",
+  "max_turns": 100,
+  "is_default": true,
+  "enable_bash_tool": true,
+  "enable_file_tools": true,
+  "enable_web_tools": true,
+  "global_user_mode": true,
+  "enable_human_approval": true,
+  "sandbox_enabled": true,
+  "allow_all_skills": true
+}

@@ -9,6 +9,7 @@ from .settings import router as settings_router
 from .plugins import router as plugins_router
 from .tasks import router as tasks_router
 from .channels import router as channels_router
+from .system import router as system_router
 
 __all__ = [
     "agents_router",
@@ -21,4 +22,5 @@ __all__ = [
     "plugins_router",
     "tasks_router",
     "channels_router",
+    "system_router",
 ]

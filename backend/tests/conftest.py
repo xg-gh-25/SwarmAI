@@ -108,6 +108,7 @@ async def reset_database():
         "description": "Default system agent",
         "model": "claude-sonnet-4-20250514",
         "permission_mode": "default",
+        "is_default": True,  # Mark as default agent
         "created_at": now,
         "updated_at": now,
     })

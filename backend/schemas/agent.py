@@ -64,6 +64,8 @@ class AgentConfig(BaseModel):
     enable_human_approval: bool = Field(default=True, description="If True, dangerous commands require user approval instead of auto-blocking")
     sandbox_enabled: bool = Field(default=True, description="Enable sandbox for bash command isolation")
     sandbox: SandboxConfig = Field(default_factory=SandboxConfig, description="Sandbox configuration for bash isolation")
+    is_default: bool = Field(default=False, description="Whether this is the protected default agent that cannot be deleted")
+    is_system_agent: bool = Field(default=False, description="Whether this is the protected system agent (SwarmAgent)")
     status: Literal["active", "inactive"] = "active"
     created_at: datetime | None = None
     updated_at: datetime | None = None
@@ -152,6 +154,7 @@ class AgentUpdateRequest(BaseModel):
     sandbox_enabled: bool | None = None
     sandbox: SandboxConfigRequest | None = None
     status: Literal["active", "inactive"] | None = None
+    # Note: is_system_agent is intentionally not included here - it should not be updatable by users
 
 
 class SandboxNetworkConfigResponse(BaseModel):
@@ -199,6 +202,8 @@ class AgentResponse(BaseModel):
     enable_human_approval: bool = True
     sandbox_enabled: bool = True
     sandbox: SandboxConfigResponse = Field(default_factory=SandboxConfigResponse)
+    is_default: bool = False
+    is_system_agent: bool = False
     status: str = "active"
     created_at: str = ""
     updated_at: str = ""
