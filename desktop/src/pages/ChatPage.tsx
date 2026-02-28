@@ -361,6 +361,10 @@ export default function ChatPage() {
         const contextMessage = workDir
           ? `Working directory changed to: ${workDir}`
           : 'Working directory cleared';
+        // Use branded welcome for default agent (Requirement 5.2)
+        const welcomePart = selectedAgent.isDefault
+          ? `Hello! I'm SwarmAI — Your AI Team, 24/7!!!`
+          : `Hello, I'm ${selectedAgent.name}. ${selectedAgent.description || 'How can I assist you today?'}`;
         setMessages([
           {
             id: Date.now().toString(),
@@ -368,7 +372,7 @@ export default function ChatPage() {
             content: [
               {
                 type: 'text',
-                text: `${contextMessage}\n\nHello, I'm ${selectedAgent.name}. ${selectedAgent.description || 'How can I assist you today?'}`,
+                text: `${contextMessage}\n\n${welcomePart}`,
               },
             ],
             timestamp: new Date().toISOString(),
@@ -404,7 +408,10 @@ export default function ChatPage() {
     setSessionId(undefined);
     setPendingQuestion(null);
     if (selectedAgent) {
-      // Add welcome message
+      // Add welcome message - use branded message for default agent (Requirement 5.2)
+      const welcomeText = selectedAgent.isDefault
+        ? `Hello! I'm SwarmAI — Your AI Team, 24/7!!!`
+        : `Hello, I'm ${selectedAgent.name}. ${selectedAgent.description || 'How can I assist you today?'}`;
       setMessages([
         {
           id: '1',
@@ -412,7 +419,7 @@ export default function ChatPage() {
           content: [
             {
               type: 'text',
-              text: `Hello, I'm ${selectedAgent.name}. ${selectedAgent.description || 'How can I assist you today?'}`,
+              text: welcomeText,
             },
           ],
           timestamp: new Date().toISOString(),
@@ -445,7 +452,10 @@ export default function ChatPage() {
       const agent = agents.find((a) => a.id === agentIdFromUrl);
       if (agent && selectedAgentId !== agentIdFromUrl) {
         setSelectedAgentId(agentIdFromUrl);
-        // Initialize chat with welcome message
+        // Initialize chat with welcome message - use branded message for default agent (Requirement 5.2)
+        const welcomeText = agent.isDefault
+          ? `Hello! I'm SwarmAI — Your AI Team, 24/7!!!`
+          : `Hello, I'm ${agent.name}. ${agent.description || 'How can I assist you today?'}`;
         setMessages([
           {
             id: '1',
@@ -453,7 +463,7 @@ export default function ChatPage() {
             content: [
               {
                 type: 'text',
-                text: `Hello, I'm ${agent.name}. ${agent.description || 'How can I assist you today?'}`,
+                text: welcomeText,
               },
             ],
             timestamp: new Date().toISOString(),
@@ -467,35 +477,80 @@ export default function ChatPage() {
   }, [agents, searchParams, selectedAgentId, setSearchParams]);
 
   // Restore last selected agent on mount (validate it still exists)
+  // Falls back to default agent if no valid localStorage selection
   // Note: Using selectedAgentId instead of selectedAgent in deps to avoid infinite loop
   useEffect(() => {
-    if (agents.length > 0 && !selectedAgentId) {
-      const lastId = localStorage.getItem('lastSelectedAgentId');
-      if (lastId) {
-        const existingAgent = agents.find((a) => a.id === lastId);
-        if (existingAgent) {
-          setSelectedAgentId(lastId);
-          // Show welcome message for restored agent
+    // Wait for agents to load
+    if (agents.length === 0) return;
+    
+    // If we have a selectedAgentId, validate it exists in the agents list
+    if (selectedAgentId) {
+      const existingAgent = agents.find((a) => a.id === selectedAgentId);
+      if (existingAgent) {
+        // Valid selection, show welcome message if no messages yet
+        if (messages.length === 0) {
+          const welcomeText = existingAgent.isDefault
+            ? `Hello! I'm SwarmAI — Your AI Team, 24/7!!!`
+            : `Hello, I'm ${existingAgent.name}. ${existingAgent.description || 'How can I assist you today?'}`;
           setMessages([
             {
               id: '1',
               role: 'assistant',
-              content: [
-                {
-                  type: 'text',
-                  text: `Hello, I'm ${existingAgent.name}. ${existingAgent.description || 'How can I assist you today?'}`,
-                },
-              ],
+              content: [{ type: 'text', text: welcomeText }],
               timestamp: new Date().toISOString(),
             },
           ]);
-        } else {
-          // Agent was deleted, clear localStorage
-          localStorage.removeItem('lastSelectedAgentId');
         }
+        return;
       }
+      // Agent was deleted, clear localStorage and selectedAgentId
+      localStorage.removeItem('lastSelectedAgentId');
+      setSelectedAgentId(null);
+      // Don't return - fall through to select default agent
     }
-  }, [agents, selectedAgentId]);
+    
+    // No valid selection, fetch and select default agent
+    agentsService.getDefault().then(defaultAgent => {
+      setSelectedAgentId(defaultAgent.id);
+      // Persist selection to localStorage (Requirement 5.4)
+      localStorage.setItem('lastSelectedAgentId', defaultAgent.id);
+      // Show SwarmAI branded welcome message for default agent (Requirement 5.2)
+      setMessages([
+        {
+          id: '1',
+          role: 'assistant',
+          content: [
+            {
+              type: 'text',
+              text: `Hello! I'm SwarmAI — Your AI Team, 24/7!!!`,
+            },
+          ],
+          timestamp: new Date().toISOString(),
+        },
+      ]);
+    }).catch(error => {
+      console.error('Failed to fetch default agent:', error);
+      // Fall back to first available agent if default fetch fails
+      if (agents.length > 0) {
+        const firstAgent = agents[0];
+        setSelectedAgentId(firstAgent.id);
+        localStorage.setItem('lastSelectedAgentId', firstAgent.id);
+        setMessages([
+          {
+            id: '1',
+            role: 'assistant',
+            content: [
+              {
+                type: 'text',
+                text: `Hello, I'm ${firstAgent.name}. ${firstAgent.description || 'How can I assist you today?'}`,
+              },
+            ],
+            timestamp: new Date().toISOString(),
+          },
+        ]);
+      }
+    });
+  }, [agents, selectedAgentId, messages.length]);
 
   // Refetch sessions when conversation completes
   useEffect(() => {
@@ -1569,37 +1624,118 @@ export default function ChatPage() {
     setRightSidebarCollapsed((prev) => !prev);
   }, []);
 
+  // Agent dropdown state for header selector (Requirement 5.3: visible agent dropdown)
+  const [isAgentDropdownOpen, setIsAgentDropdownOpen] = useState(false);
+  const agentDropdownRef = useRef<HTMLDivElement>(null);
+
+  // Close agent dropdown when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (agentDropdownRef.current && !agentDropdownRef.current.contains(event.target as Node)) {
+        setIsAgentDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
   return (
     <div className="flex flex-col h-full">
       {/* Enhanced Chat Header - spans full width */}
       <div className="h-16 px-4 flex items-center justify-between border-b border-[var(--color-border)] flex-shrink-0">
         <div className="flex items-center gap-3">
-          {/* Agent info - clickable to expand sidebar */}
-          {selectedAgent ? (
+          {/* Agent Selector Dropdown - always visible (Requirement 5.3) */}
+          <div className="relative" ref={agentDropdownRef}>
             <button
-              onClick={toggleChatSidebar}
+              onClick={() => setIsAgentDropdownOpen(!isAgentDropdownOpen)}
               className="flex items-center gap-3 hover:bg-[var(--color-hover)] rounded-lg px-3 py-2 transition-colors"
             >
               <div className="w-10 h-10 rounded-full bg-primary/20 flex items-center justify-center flex-shrink-0">
-                <span className="material-symbols-outlined text-primary">history</span>
+                <span className="material-symbols-outlined text-primary">smart_toy</span>
               </div>
               <div className="text-left">
-                <h1 className="font-semibold text-[var(--color-text)]">{selectedAgent.name}</h1>
+                <h1 className="font-semibold text-[var(--color-text)]">
+                  {selectedAgent?.name || t('chat.selectAgent')}
+                </h1>
                 <p className="text-xs text-[var(--color-text-muted)] truncate max-w-[200px]">
-                  {selectedAgent.description || 'AI Assistant'}
+                  {selectedAgent?.description || t('chat.chooseAgent')}
                 </p>
               </div>
-              <span className="material-symbols-outlined text-[var(--color-text-muted)] text-sm">expand_more</span>
+              <span className={clsx(
+                'material-symbols-outlined text-[var(--color-text-muted)] text-sm transition-transform',
+                isAgentDropdownOpen && 'rotate-180'
+              )}>expand_more</span>
             </button>
-          ) : (
-            <button
-              onClick={toggleChatSidebar}
-              className="flex items-center gap-2 px-4 py-2 bg-primary hover:bg-primary-hover text-white rounded-lg transition-colors"
-            >
-              <span className="material-symbols-outlined">history</span>
-              Select Agent
-            </button>
-          )}
+
+            {/* Agent Dropdown Menu */}
+            {isAgentDropdownOpen && (
+              <div className="absolute top-full left-0 mt-1 w-72 bg-[var(--color-card)] border border-[var(--color-border)] rounded-lg shadow-lg z-50 max-h-80 overflow-y-auto">
+                {isLoadingAgents ? (
+                  <div className="p-4 text-center text-[var(--color-text-muted)]">
+                    <Spinner size="sm" />
+                  </div>
+                ) : agents.length === 0 ? (
+                  <div className="p-4 text-center">
+                    <p className="text-sm text-[var(--color-text-muted)] mb-2">{t('chat.noAgentsAvailable')}</p>
+                    <a href="/agents" className="text-primary hover:underline text-sm">
+                      {t('chat.createAgentFirst')}
+                    </a>
+                  </div>
+                ) : (
+                  agents.map((agent) => (
+                    <button
+                      key={agent.id}
+                      onClick={() => {
+                        handleSelectAgent(agent.id);
+                        setIsAgentDropdownOpen(false);
+                      }}
+                      className={clsx(
+                        'w-full px-4 py-3 text-left hover:bg-[var(--color-hover)] transition-colors flex items-center gap-3',
+                        selectedAgentId === agent.id && 'bg-[var(--color-hover)]'
+                      )}
+                    >
+                      <div className={clsx(
+                        'w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0',
+                        selectedAgentId === agent.id ? 'bg-primary text-white' : 'bg-[var(--color-hover)]'
+                      )}>
+                        <span className="material-symbols-outlined text-sm">smart_toy</span>
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium text-[var(--color-text)] truncate">{agent.name}</span>
+                          {agent.isDefault && (
+                            <span className="px-1.5 py-0.5 text-[10px] bg-primary/10 text-primary rounded">
+                              Default
+                            </span>
+                          )}
+                        </div>
+                        {agent.description && (
+                          <p className="text-xs text-[var(--color-text-muted)] truncate">{agent.description}</p>
+                        )}
+                      </div>
+                      {selectedAgentId === agent.id && (
+                        <span className="material-symbols-outlined text-primary text-sm">check</span>
+                      )}
+                    </button>
+                  ))
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* History button - opens sidebar */}
+          <button
+            onClick={toggleChatSidebar}
+            className={clsx(
+              'p-2 rounded-lg transition-colors',
+              !chatSidebarCollapsed
+                ? 'text-primary bg-primary/10 hover:bg-primary/20'
+                : 'text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)]'
+            )}
+            title={t('chat.history')}
+          >
+            <span className="material-symbols-outlined">history</span>
+          </button>
         </div>
 
         <div className="flex items-center gap-2">
