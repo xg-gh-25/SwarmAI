@@ -1,0 +1,4 @@
+# file: /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/backend/routers/system.py
+# hypothesis_version: 6.151.6
+
+['/status', 'mcp_ids', 'name', 'skill_ids']

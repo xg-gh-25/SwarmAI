@@ -92,6 +92,8 @@ const toCamelCase = (data: Record<string, unknown>): Agent => {
     enableHumanApproval: (data.enable_human_approval as boolean) ?? true,
     sandboxEnabled: (data.sandbox_enabled as boolean) ?? true,
     sandbox,
+    isDefault: (data.is_default as boolean) ?? false,
+    isSystemAgent: (data.is_system_agent as boolean) ?? false,
     status: (data.status as 'active' | 'inactive') ?? 'active',
     createdAt: (data.created_at as string) ?? '',
     updatedAt: (data.updated_at as string) ?? '',

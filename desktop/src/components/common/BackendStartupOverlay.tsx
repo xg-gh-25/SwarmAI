@@ -1,9 +1,22 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, type ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 import axios from 'axios';
 import { getBackendPort, initializeBackend } from '../../services/tauri';
+import { systemService, SystemStatus } from '../../services/system';
 import logo from '../../assets/logo.png';
 
-type StartupStatus = 'starting' | 'connected' | 'error';
+type StartupStatus = 'starting' | 'connecting' | 'fetching_status' | 'connected' | 'error';
+
+type InitStepStatus = 'pending' | 'success' | 'error';
+
+interface InitStep {
+  id: string;
+  labelKey: string;
+  status: InitStepStatus;
+  error?: string;
+  interpolation?: Record<string, string | number>;
+  children?: InitStep[];
+}
 
 // Get the log directory path based on the current platform
 function getLogPath(): string {
@@ -23,13 +36,106 @@ interface BackendStartupOverlayProps {
 }
 
 export default function BackendStartupOverlay({ onReady }: BackendStartupOverlayProps) {
+  const { t } = useTranslation();
   const [status, setStatus] = useState<StartupStatus>('starting');
   const [errorMessage, setErrorMessage] = useState<string>('');
   const [isVisible, setIsVisible] = useState(true);
   const [isFadingOut, setIsFadingOut] = useState(false);
+  const [initSteps, setInitSteps] = useState<InitStep[]>([]);
+  const [visibleStepCount, setVisibleStepCount] = useState(0);
 
   // Get platform-specific log path
   const logPath = useMemo(() => getLogPath(), []);
+
+  // Build initialization steps from system status
+  const buildInitSteps = useCallback((systemStatus: SystemStatus): InitStep[] => {
+    const steps: InitStep[] = [];
+
+    // Database step
+    steps.push({
+      id: 'database',
+      labelKey: 'startup.databaseInitialized',
+      status: systemStatus.database.healthy ? 'success' : 'error',
+      error: systemStatus.database.error,
+    });
+
+    // SwarmAgent step with children
+    const agentChildren: InitStep[] = [
+      {
+        id: 'skills',
+        labelKey: 'startup.systemSkillsBound',
+        status: systemStatus.agent.ready ? 'success' : 'pending',
+        interpolation: { count: systemStatus.agent.skillsCount },
+      },
+      {
+        id: 'mcpServers',
+        labelKey: 'startup.systemMcpServersBound',
+        status: systemStatus.agent.ready ? 'success' : 'pending',
+        interpolation: { count: systemStatus.agent.mcpServersCount },
+      },
+    ];
+
+    steps.push({
+      id: 'agent',
+      labelKey: 'startup.swarmAgentReady',
+      status: systemStatus.agent.ready ? 'success' : 'error',
+      children: agentChildren,
+    });
+
+    // Channel gateway step
+    steps.push({
+      id: 'channelGateway',
+      labelKey: 'startup.channelGatewayStarted',
+      status: systemStatus.channelGateway.running ? 'success' : 'error',
+    });
+
+    return steps;
+  }, []);
+
+  // Count total visible items (including children)
+  const getTotalStepCount = useCallback((steps: InitStep[]): number => {
+    let count = 0;
+    for (const step of steps) {
+      count++;
+      if (step.children) {
+        count += step.children.length;
+      }
+    }
+    return count;
+  }, []);
+
+  // Animate steps appearing sequentially
+  useEffect(() => {
+    if (initSteps.length === 0) return;
+
+    const totalSteps = getTotalStepCount(initSteps);
+    if (visibleStepCount >= totalSteps) return;
+
+    const timer = setTimeout(() => {
+      setVisibleStepCount((prev) => prev + 1);
+    }, 150); // 150ms delay between each step
+
+    return () => clearTimeout(timer);
+  }, [initSteps, visibleStepCount, getTotalStepCount]);
+
+  // Proceed to fade out after all steps are visible
+  useEffect(() => {
+    if (initSteps.length === 0) return;
+
+    const totalSteps = getTotalStepCount(initSteps);
+    if (visibleStepCount < totalSteps) return;
+
+    // All steps visible, wait a moment then fade out
+    const timer = setTimeout(() => {
+      setIsFadingOut(true);
+      setTimeout(() => {
+        setIsVisible(false);
+        onReady?.();
+      }, 500); // Match animation duration
+    }, 500); // Wait 500ms after all steps are shown
+
+    return () => clearTimeout(timer);
+  }, [initSteps, visibleStepCount, getTotalStepCount, onReady]);
 
   const checkHealth = useCallback(async (): Promise<boolean> => {
     try {
@@ -43,6 +149,18 @@ export default function BackendStartupOverlay({ onReady }: BackendStartupOverlay
     } catch (error) {
       console.error(`[Health Check] Failed:`, error);
       return false;
+    }
+  }, []);
+
+  const fetchSystemStatus = useCallback(async (): Promise<SystemStatus | null> => {
+    try {
+      console.log('[System Status] Fetching system status...');
+      const systemStatus = await systemService.getStatus();
+      console.log('[System Status] Response:', systemStatus);
+      return systemStatus;
+    } catch (error) {
+      console.warn('[System Status] Failed to fetch (graceful degradation):', error);
+      return null;
     }
   }, []);
 
@@ -60,15 +178,30 @@ export default function BackendStartupOverlay({ onReady }: BackendStartupOverlay
       if (!mounted) return;
 
       if (isHealthy) {
-        setStatus('connected');
-        // Start fade out animation
-        setIsFadingOut(true);
-        setTimeout(() => {
-          if (mounted) {
-            setIsVisible(false);
-            onReady?.();
-          }
-        }, 500); // Match animation duration
+        setStatus('fetching_status');
+
+        // Fetch system status (with graceful degradation)
+        const systemStatus = await fetchSystemStatus();
+
+        if (!mounted) return;
+
+        if (systemStatus) {
+          // Build and display initialization steps
+          const steps = buildInitSteps(systemStatus);
+          setInitSteps(steps);
+          setStatus('connected');
+          // Animation will handle fade out
+        } else {
+          // Graceful degradation: proceed without status display
+          setStatus('connected');
+          setIsFadingOut(true);
+          setTimeout(() => {
+            if (mounted) {
+              setIsVisible(false);
+              onReady?.();
+            }
+          }, 500);
+        }
       } else {
         attempts++;
         if (attempts >= maxAttempts) {
@@ -91,6 +224,7 @@ export default function BackendStartupOverlay({ onReady }: BackendStartupOverlay
 
         if (!mounted) return;
 
+        setStatus('connecting');
         // Start polling after backend is initialized
         console.log('[Startup] Starting health polling in 500ms...');
         timeoutId = setTimeout(pollHealth, 500);
@@ -109,7 +243,77 @@ export default function BackendStartupOverlay({ onReady }: BackendStartupOverlay
       mounted = false;
       clearTimeout(timeoutId);
     };
-  }, [checkHealth, onReady]);
+  }, [checkHealth, fetchSystemStatus, buildInitSteps, onReady]);
+
+  // Render a single init step
+  const renderInitStep = (step: InitStep, index: number, isChild: boolean = false) => {
+    const isVisible = index < visibleStepCount;
+    if (!isVisible) return null;
+
+    const statusIcon = step.status === 'success' 
+      ? '✓' 
+      : step.status === 'error' 
+        ? '✗' 
+        : '○';
+    
+    const statusColor = step.status === 'success'
+      ? 'var(--color-success, #22c55e)'
+      : step.status === 'error'
+        ? 'var(--color-error, #ef4444)'
+        : 'var(--color-text-muted)';
+
+    const prefix = isChild ? '└─ ' : '';
+    const label = t(step.labelKey, step.interpolation);
+
+    return (
+      <div
+        key={step.id}
+        className="flex items-start gap-2 animate-fade-in"
+        style={{
+          fontFamily: 'monospace',
+          fontSize: '14px',
+          paddingLeft: isChild ? '20px' : '0',
+          opacity: isVisible ? 1 : 0,
+          transition: 'opacity 0.2s ease-in',
+        }}
+      >
+        <span style={{ color: statusColor, fontWeight: 'bold' }}>
+          {statusIcon}
+        </span>
+        <span className="text-[var(--color-text)]">
+          {prefix}{label}
+        </span>
+        {step.error && (
+          <span className="text-[var(--color-error,#ef4444)] text-xs ml-2">
+            ({step.error})
+          </span>
+        )}
+      </div>
+    );
+  };
+
+  // Render all init steps with proper indexing for animation
+  const renderInitSteps = () => {
+    let globalIndex = 0;
+    const elements: ReactNode[] = [];
+
+    for (const step of initSteps) {
+      const stepElement = renderInitStep(step, globalIndex, false);
+      if (stepElement) elements.push(stepElement);
+      globalIndex++;
+
+      // Render children
+      if (step.children) {
+        for (const child of step.children) {
+          const childElement = renderInitStep(child, globalIndex, true);
+          if (childElement) elements.push(childElement);
+          globalIndex++;
+        }
+      }
+    }
+
+    return elements;
+  };
 
   if (!isVisible) {
     return null;
@@ -130,12 +334,13 @@ export default function BackendStartupOverlay({ onReady }: BackendStartupOverlay
         {/* App Name */}
         <h1 className="text-3xl font-bold text-[var(--color-text)]">SwarmAI</h1>
 
-        {status === 'starting' && (
+        {/* Connecting state - show spinner */}
+        {(status === 'starting' || status === 'connecting') && (
           <>
-            {/* Loading Spinner */}
-            <div className="flex items-center gap-3">
+            {/* Loading Spinner with connecting message */}
+            <div className="flex items-center gap-3" style={{ fontFamily: 'monospace' }}>
               <svg
-                className="animate-spin h-5 w-5 text-primary"
+                className="animate-spin h-4 w-4 text-primary"
                 xmlns="http://www.w3.org/2000/svg"
                 fill="none"
                 viewBox="0 0 24 24"
@@ -154,7 +359,9 @@ export default function BackendStartupOverlay({ onReady }: BackendStartupOverlay
                   d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
                 />
               </svg>
-              <span className="text-[var(--color-text-muted)]">Starting...</span>
+              <span className="text-[var(--color-text-muted)]">
+                {t('startup.connectingToBackend')}
+              </span>
             </div>
 
             {/* Progress bar */}
@@ -162,6 +369,42 @@ export default function BackendStartupOverlay({ onReady }: BackendStartupOverlay
               <div className="h-full bg-primary rounded-full animate-pulse" style={{ width: '60%' }} />
             </div>
           </>
+        )}
+
+        {/* Fetching status state */}
+        {status === 'fetching_status' && (
+          <div className="flex items-center gap-3" style={{ fontFamily: 'monospace' }}>
+            <svg
+              className="animate-spin h-4 w-4 text-primary"
+              xmlns="http://www.w3.org/2000/svg"
+              fill="none"
+              viewBox="0 0 24 24"
+            >
+              <circle
+                className="opacity-25"
+                cx="12"
+                cy="12"
+                r="10"
+                stroke="currentColor"
+                strokeWidth="4"
+              />
+              <path
+                className="opacity-75"
+                fill="currentColor"
+                d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+              />
+            </svg>
+            <span className="text-[var(--color-text-muted)]">
+              {t('startup.connectingToBackend')}
+            </span>
+          </div>
+        )}
+
+        {/* Connected state - show initialization steps */}
+        {status === 'connected' && initSteps.length > 0 && (
+          <div className="flex flex-col gap-2 w-full max-w-sm">
+            {renderInitSteps()}
+          </div>
         )}
 
         {status === 'error' && (

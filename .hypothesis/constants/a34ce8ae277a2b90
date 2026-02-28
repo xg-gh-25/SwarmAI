@@ -1,0 +1,4 @@
+# file: /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/backend/routers/tasks.py
+# hypothesis_version: 6.151.6
+
+[400, 404, '/running/count', '/{task_id}', '/{task_id}/cancel', '/{task_id}/message', '/{task_id}/stream', 'Cache-Control', 'Connection', 'Filter by agent ID', 'Filter by status', 'X-Accel-Buffering', 'cancelled', 'deleted', 'keep-alive', 'no', 'no-cache', 'sent', 'status', 'task_id', 'text/event-stream']

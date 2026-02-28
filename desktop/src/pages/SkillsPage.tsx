@@ -38,6 +38,12 @@ const getSkillColumns = (t: (key: string) => string) => [
 // Get source display for a skill
 function getSourceDisplay(skill: Skill): { label: string; icon: string; color: string } {
   switch (skill.sourceType) {
+    case 'system':
+      return {
+        label: 'System',
+        icon: 'verified',
+        color: 'text-cyan-400',
+      };
     case 'plugin':
       return {
         label: skill.sourcePluginName || 'Plugin',

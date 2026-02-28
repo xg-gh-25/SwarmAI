@@ -1,4 +1,16 @@
 {
+  "startup": {
+    "connectingToBackend": "Connecting to backend...",
+    "databaseInitialized": "Database initialized",
+    "swarmAgentReady": "SwarmAgent ready",
+    "channelGatewayStarted": "Channel gateway started",
+    "systemSkillsBound": "{{count}} system skills bound",
+    "systemMcpServersBound": "{{count}} system MCP servers bound",
+    "initializationFailed": "Initialization failed",
+    "databaseError": "Database error: {{error}}",
+    "agentNotReady": "SwarmAgent not ready",
+    "channelGatewayNotRunning": "Channel gateway not running"
+  },
   "common": {
     "button": {
       "save": "Save",
@@ -267,9 +279,11 @@
       "pluginsOptional": "Plugins (Optional)",
       "enabledPlugins": "Enabled Plugins",
       "selectPlugins": "Select plugins...",
-      "thirdPartyModelsNote": "Third-party models (MiniMax, Qwen) are only available when using API Proxy mode."
+      "thirdPartyModelsNote": "Third-party models (MiniMax, Qwen) are only available when using API Proxy mode.",
+      "systemAgentNameReadonly": "System agent name cannot be changed"
     },
-    "allSkills": "All Skills"
+    "allSkills": "All Skills",
+    "cannotDeleteDefault": "Cannot delete the default agent"
   },
   "skills": {
     "title": "Skill Management",

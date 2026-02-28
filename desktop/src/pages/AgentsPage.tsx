@@ -180,7 +180,19 @@ export default function AgentsPage() {
                     className="border-b border-[var(--color-border)] hover:bg-[var(--color-hover)] transition-colors"
                   >
                     <ResizableTableCell>
-                      <span className="text-[var(--color-text)] font-medium">{agent.name}</span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-[var(--color-text)] font-medium">{agent.name}</span>
+                        {agent.isSystemAgent && (
+                          <span className="px-2 py-0.5 text-xs bg-[var(--color-primary)]/10 text-[var(--color-primary)] rounded-full">
+                            System
+                          </span>
+                        )}
+                        {agent.isDefault && (
+                          <span className="px-2 py-0.5 text-xs bg-[var(--color-primary)]/10 text-[var(--color-primary)] rounded-full">
+                            Default
+                          </span>
+                        )}
+                      </div>
                     </ResizableTableCell>
                     <ResizableTableCell>
                       <StatusBadge status={agent.status} />
@@ -225,8 +237,13 @@ export default function AgentsPage() {
                             e.stopPropagation();
                             handleDeleteClick(agent);
                           }}
-                          className="p-2 rounded-lg text-[var(--color-text-muted)] hover:text-status-error hover:bg-status-error/10 transition-colors"
-                          title={t('agents.deleteAgent')}
+                          disabled={agent.isDefault || agent.isSystemAgent}
+                          className={`p-2 rounded-lg transition-colors ${
+                            agent.isDefault || agent.isSystemAgent
+                              ? 'text-[var(--color-text-muted)] opacity-50 cursor-not-allowed'
+                              : 'text-[var(--color-text-muted)] hover:text-status-error hover:bg-status-error/10'
+                          }`}
+                          title={agent.isDefault || agent.isSystemAgent ? t('agents.cannotDeleteDefault') : t('agents.deleteAgent')}
                         >
                           <span className="material-symbols-outlined text-xl">delete</span>
                         </button>

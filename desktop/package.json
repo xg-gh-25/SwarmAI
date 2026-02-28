@@ -57,6 +57,7 @@
     "eslint": "^9.36.0",
     "eslint-plugin-react-hooks": "^5.2.0",
     "eslint-plugin-react-refresh": "^0.4.22",
+    "fast-check": "^4.5.3",
     "globals": "^16.4.0",
     "jsdom": "^28.0.0",
     "postcss": "^8.5.6",
