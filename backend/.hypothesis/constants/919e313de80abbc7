@@ -1,4 +1,0 @@
-# file: /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/backend/database/sqlite.py
-# hypothesis_version: 6.151.6
-
-[' AND agent_id = ?', ' AND status = ?', ', ', '?', 'SELECT 1', 'T', '[', 'agents', 'app_settings', 'available_models', 'channel_messages', 'channel_sessions', 'channels', 'created_at', 'data.db', 'default_model', 'expires_at', 'id', 'installed_at', 'is_default', 'marketplaces', 'mcp_servers', 'messages', 'permission_requests', 'plugin_ids', 'plugins', 'sandbox_enabled', 'sessions', 'skill_versions', 'skills', 'tasks', 'updated_at', 'users', 'work_dir', '{']

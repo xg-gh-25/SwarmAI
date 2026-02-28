@@ -1,4 +1,0 @@
-# file: /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/backend/core/workspace_manager.py
-# hypothesis_version: 6.151.6
-
-['-', '.', '.claude', '.swarmai', 'AGENTS.md', 'BOOTSTRAP.md', 'HEARTBEAT.md', 'IDENTITY.md', 'SKILL.md', 'SOUL.md', 'USER.md', '[^a-zA-Z0-9_-]', 'folder_name', 'local_path', 'name', 'skills', 'templates']

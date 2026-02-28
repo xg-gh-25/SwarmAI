@@ -1,4 +1,0 @@
-# file: /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/backend/channels/__init__.py
-# hypothesis_version: 6.151.6
-
-['ChannelAdapter', 'InboundMessage', 'OutboundMessage', 'channel_gateway', 'get_adapter_class', 'list_supported_types', 'register_adapter']

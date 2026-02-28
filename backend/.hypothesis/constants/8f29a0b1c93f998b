@@ -1,4 +1,0 @@
-# file: /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/backend/schemas/mcp.py
-# hypothesis_version: 6.151.6
-
-[255, 'Database query tool', 'PostgreSQL MCP', 'allowed_tools', 'args', 'command', 'config', 'connection_type', 'description', 'example', 'http', 'list_tables', 'marketplace', 'mcp-server-postgres', 'name', 'plugin', 'postgresql://...', 'query_database', 'sse', 'stdio', 'system', 'user', 'uvx']
