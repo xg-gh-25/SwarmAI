@@ -1,4 +1,0 @@
-# file: /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/backend/routers/agents.py
-# hypothesis_version: 6.151.6
-
-[201, 204, '/default', '/models', '/{agent_id}', 'active', 'allow_all_skills', 'allowed_directories', 'allowed_tools', 'default', 'description', 'enable_bash_tool', 'enable_file_tools', 'enable_safety_checks', 'enable_tool_logging', 'enable_web_tools', 'global_user_mode', 'id', 'is_system_agent', 'max_turns', 'mcp_ids', 'model', 'name', 'permission_mode', 'plugin_ids', 'running', 'sandbox_enabled', 'skill_ids', 'status', 'system_prompt', 'working_directory']

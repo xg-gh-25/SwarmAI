@@ -1,4 +1,0 @@
-# file: /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/backend/schemas/agent.py
-# hypothesis_version: 6.151.6
-
-[100, 255, 'Data Analyst Agent', 'acceptEdits', 'active', 'bypassPermissions', 'default', 'description', 'docx-skill', 'enable_web_tools', 'example', 'inactive', 'max_turns', 'mcp_ids', 'model', 'name', 'permission_mode', 'plan', 'postgres-mcp', 'skill_ids', 'sonnet', 'xlsx-skill']

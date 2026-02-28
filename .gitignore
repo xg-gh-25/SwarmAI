@@ -72,6 +72,7 @@ Thumbs.db
 htmlcov/
 .pytest_cache/
 coverage/
+.hypothesis/
 
 # Temporary files
 *.tmp

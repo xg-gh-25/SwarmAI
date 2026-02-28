@@ -1,4 +1,0 @@
-# file: /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/backend/schemas/auth.py
-# hypothesis_version: 6.151.6
-
-['Current password', 'Invalid email format', 'JWT access token', 'JWT refresh token', 'Last login timestamp', 'New password', 'Refresh token', 'Token type', "User's display name", "User's email address", "User's password", 'bearer', 'email', 'new_password', 'password']

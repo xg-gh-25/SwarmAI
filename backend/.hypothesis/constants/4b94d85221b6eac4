@@ -1,4 +1,0 @@
-# file: /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/backend/schemas/__init__.py
-# hypothesis_version: 6.151.6
-
-['AgentConfig', 'AgentCreateRequest', 'AgentResponse', 'AgentUpdateRequest', 'ChatRequest', 'ChatSession', 'MCPConfig', 'MCPCreateRequest', 'MCPResponse', 'MCPUpdateRequest', 'SkillCreateRequest', 'SkillGenerateRequest', 'SkillMetadata', 'SkillResponse', 'TextContent', 'ToolResultContent', 'ToolUseContent']

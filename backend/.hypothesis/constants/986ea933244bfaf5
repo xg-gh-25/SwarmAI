@@ -1,4 +1,0 @@
-# file: /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/backend/core/system_prompt.py
-# hypothesis_version: 6.151.6
-
-[20000, '## Project Context\n', '## User', '### Bootstrap', '### Identity', '### Soul', '%Z', '.swarmai', 'Assistant', 'BOOTSTRAP.md', 'IDENTITY.md', 'Local', 'SOUL.md', 'USER.md', 'channel_type', 'default', 'description', 'direct', 'model', 'name', 'system_prompt', 'utf-8']

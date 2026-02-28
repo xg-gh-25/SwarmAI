@@ -1,4 +1,0 @@
-# file: /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/backend/core/exceptions.py
-# hypothesis_version: 6.151.6
-
-[400, 401, 403, 404, 409, 429, 500, 503, 'AGENT_NOT_FOUND', 'AGENT_TIMEOUT', 'AUTH_ERROR', 'AUTH_TOKEN_EXPIRED', 'AUTH_TOKEN_INVALID', 'AUTH_TOKEN_MISSING', 'CONFLICT', 'DATABASE_UNAVAILABLE', 'DUPLICATE_RESOURCE', 'FORBIDDEN', 'Invalid input data', 'MCP_SERVER_NOT_FOUND', 'NOT_FOUND', 'Please log in again', 'Please try again', 'RATE_LIMIT_EXCEEDED', 'Resource not found', 'SERVER_ERROR', 'SERVICE_UNAVAILABLE', 'SESSION_NOT_FOUND', 'SKILL_NOT_FOUND', 'VALIDATION_FAILED']
