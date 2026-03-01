@@ -17,7 +17,7 @@
  * - ``KeySummaryModule``      — 3–5 bullet summary points
  */
 
-import { useState, useEffect } from 'react';
+import { useMemo } from 'react';
 import type { TSCCState, ThreadLifecycleState } from '../../../types';
 
 // ---------------------------------------------------------------------------
@@ -145,8 +145,11 @@ function CollapsedBar({
         aria-label={isPinned ? 'Unpin panel' : 'Pin panel'}
         aria-pressed={isPinned}
       >
-        <span className="material-symbols-outlined text-base">
-          {isPinned ? 'push_pin' : 'push_pin'}
+        <span
+          className={`material-symbols-outlined text-base ${isPinned ? '' : 'rotate-45'}`}
+          style={isPinned ? { fontVariationSettings: "'FILL' 1" } : undefined}
+        >
+          push_pin
         </span>
       </button>
       <span className="material-symbols-outlined text-base text-[var(--color-text-muted)]">
@@ -315,17 +318,6 @@ function ExpandedView({
   onToggleExpand: () => void;
   onTogglePin: () => void;
 }) {
-  // Transient "Resumed" indicator after cancelled→active
-  const [showResumed, _setShowResumed] = useState(false);
-
-  useEffect(() => {
-    if (tsccState.lifecycleState === 'active') {
-      // We can't easily detect the transition from cancelled→active here
-      // without tracking previous state, so we rely on the parent to
-      // call setAutoExpand which triggers this render.
-    }
-  }, [tsccState.lifecycleState]);
-
   return (
     <div
       role="region"
@@ -356,9 +348,7 @@ function ExpandedView({
           className="ml-1 text-xs text-[var(--color-text-muted)]"
           aria-live="polite"
         >
-          {showResumed
-            ? 'Resumed · Continuing previous analysis'
-            : lifecycleLabel(tsccState.lifecycleState)}
+          {lifecycleLabel(tsccState.lifecycleState)}
         </span>
         <div className="ml-auto flex items-center gap-1">
           <button
@@ -374,7 +364,12 @@ function ExpandedView({
             aria-label={isPinned ? 'Unpin panel' : 'Pin panel'}
             aria-pressed={isPinned}
           >
-            <span className="material-symbols-outlined text-base">push_pin</span>
+            <span
+              className={`material-symbols-outlined text-base ${isPinned ? '' : 'rotate-45'}`}
+              style={isPinned ? { fontVariationSettings: "'FILL' 1" } : undefined}
+            >
+              push_pin
+            </span>
           </button>
           <span className="material-symbols-outlined text-base text-[var(--color-text-muted)]">
             expand_less
@@ -401,25 +396,33 @@ function ExpandedView({
 // ---------------------------------------------------------------------------
 // Main export
 // ---------------------------------------------------------------------------
-/** Default TSCC state shown before a session is created (Req 1.2, 9.1). */
-const DEFAULT_TSCC_STATE: TSCCState = {
-  threadId: '',
-  projectId: null,
-  scopeType: 'workspace',
-  lastUpdatedAt: new Date().toISOString(),
-  lifecycleState: 'new',
-  liveState: {
-    context: {
-      scopeLabel: 'Workspace: SwarmWS (General)',
-      threadTitle: '',
+/** Default scope label shown when no session context exists yet. */
+const DEFAULT_SCOPE_LABEL = 'Workspace: SwarmWS (General)';
+
+/**
+ * Factory for default TSCC state — generates a fresh ``lastUpdatedAt``
+ * timestamp on every call so freshness calculations are accurate (Req 12.1, 12.2).
+ */
+export function createDefaultTSCCState(): TSCCState {
+  return {
+    threadId: '',
+    projectId: null,
+    scopeType: 'workspace',
+    lastUpdatedAt: new Date().toISOString(),
+    lifecycleState: 'new',
+    liveState: {
+      context: {
+        scopeLabel: DEFAULT_SCOPE_LABEL,
+        threadTitle: '',
+      },
+      activeAgents: [],
+      activeCapabilities: { skills: [], mcps: [], tools: [] },
+      whatAiDoing: [],
+      activeSources: [],
+      keySummary: [],
     },
-    activeAgents: [],
-    activeCapabilities: { skills: [], mcps: [], tools: [] },
-    whatAiDoing: [],
-    activeSources: [],
-    keySummary: [],
-  },
-};
+  };
+}
 
 export function TSCCPanel({
   threadId: _threadId,
@@ -429,8 +432,12 @@ export function TSCCPanel({
   onToggleExpand,
   onTogglePin,
 }: TSCCPanelProps) {
-  // Show default "new" state when no session exists yet (Req 1.2, 9.1)
-  const effectiveState = tsccState ?? DEFAULT_TSCC_STATE;
+  // Show default "new" state when no session exists yet (Req 12.1, 12.2)
+  // useMemo ensures a fresh timestamp without creating a new object every render
+  const effectiveState = useMemo(
+    () => tsccState ?? createDefaultTSCCState(),
+    [tsccState]
+  );
 
   return (
     <div className="px-4 py-2 flex-shrink-0">
