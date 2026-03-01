@@ -1151,23 +1151,6 @@ class SQLiteDatabase(BaseDatabase):
     CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);
     CREATE INDEX IF NOT EXISTS idx_sessions_agent_id ON sessions(agent_id);
 
-    -- Permission requests table (Human-in-the-Loop)
-    CREATE TABLE IF NOT EXISTS permission_requests (
-        id TEXT PRIMARY KEY,
-        session_id TEXT NOT NULL,
-        tool_name TEXT NOT NULL,
-        tool_input TEXT NOT NULL,
-        reason TEXT,
-        status TEXT DEFAULT 'pending',
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        decided_at TEXT,
-        user_feedback TEXT,
-        FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
-    );
-    CREATE INDEX IF NOT EXISTS idx_permission_requests_session_id ON permission_requests(session_id);
-    CREATE INDEX IF NOT EXISTS idx_permission_requests_status ON permission_requests(status);
-
     -- Messages table (with TTL support)
     CREATE TABLE IF NOT EXISTS messages (
         id TEXT PRIMARY KEY,
@@ -1198,19 +1181,10 @@ class SQLiteDatabase(BaseDatabase):
     );
 
     -- App settings table (single row for app-wide settings)
+    -- Non-credential config moved to ~/.swarm-ai/config.json (AppConfigManager)
+    -- Credentials delegated to AWS credential chain (never stored in DB)
     CREATE TABLE IF NOT EXISTS app_settings (
         id TEXT PRIMARY KEY DEFAULT 'default',
-        anthropic_api_key TEXT DEFAULT '',
-        anthropic_base_url TEXT,
-        use_bedrock INTEGER DEFAULT 0,
-        bedrock_auth_type TEXT DEFAULT 'credentials',
-        aws_access_key_id TEXT DEFAULT '',
-        aws_secret_access_key TEXT DEFAULT '',
-        aws_session_token TEXT,
-        aws_bearer_token TEXT DEFAULT '',
-        aws_region TEXT DEFAULT 'us-east-1',
-        available_models TEXT DEFAULT '[]',
-        default_model TEXT DEFAULT 'claude-sonnet-4-5-20250929',
         initialization_complete INTEGER DEFAULT 0,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
@@ -1528,7 +1502,6 @@ class SQLiteDatabase(BaseDatabase):
         self._app_settings = SQLiteTable[dict]("app_settings", self.db_path)
         self._marketplaces = SQLiteTable[dict]("marketplaces", self.db_path)
         self._plugins = SQLitePluginsTable[dict]("plugins", self.db_path)
-        self._permission_requests = SQLiteTable[dict]("permission_requests", self.db_path)
         self._tasks = SQLiteTasksTable[dict]("tasks", self.db_path)
         self._channels = SQLiteTable[dict]("channels", self.db_path)
         self._channel_sessions = SQLiteChannelSessionsTable[dict]("channel_sessions", self.db_path)
@@ -1621,24 +1594,6 @@ class SQLiteDatabase(BaseDatabase):
             await conn.commit()
             logger.info("Migration complete: workspace_id column added")
 
-        # Migration: Add available_models and default_model columns to app_settings table (added 2026-02-02)
-        # Stores model configuration for agent creation
-        cursor = await conn.execute("PRAGMA table_info(app_settings)")
-        app_settings_columns = await cursor.fetchall()
-        app_settings_column_names = [col[1] for col in app_settings_columns]
-
-        if "available_models" not in app_settings_column_names:
-            logger.info("Running migration: Adding available_models column to app_settings table")
-            await conn.execute("ALTER TABLE app_settings ADD COLUMN available_models TEXT DEFAULT '[]'")
-            await conn.commit()
-            logger.info("Migration complete: available_models column added")
-
-        if "default_model" not in app_settings_column_names:
-            logger.info("Running migration: Adding default_model column to app_settings table")
-            await conn.execute("ALTER TABLE app_settings ADD COLUMN default_model TEXT DEFAULT 'claude-sonnet-4-5-20250929'")
-            await conn.commit()
-            logger.info("Migration complete: default_model column added")
-
         # Migration: Add updated_at column to tasks table (added 2026-02-03)
         # Required by base SQLiteTable.put() method
         cursor = await conn.execute("PRAGMA table_info(tasks)")
@@ -1687,15 +1642,6 @@ class SQLiteDatabase(BaseDatabase):
             await conn.execute("ALTER TABLE mcp_servers ADD COLUMN is_system INTEGER DEFAULT 0")
             await conn.commit()
             logger.info("Migration complete: is_system column added to mcp_servers")
-
-        # Migration: Add initialization_complete column to app_settings table (added 2026-02-20)
-        # Tracks whether first-time initialization has been completed for fast startup optimization
-        # Validates: Requirements 1.1, 1.4
-        if "initialization_complete" not in app_settings_column_names:
-            logger.info("Running migration: Adding initialization_complete column to app_settings table")
-            await conn.execute("ALTER TABLE app_settings ADD COLUMN initialization_complete INTEGER DEFAULT 0")
-            await conn.commit()
-            logger.info("Migration complete: initialization_complete column added")
 
         # Migration: Add excluded_sources column to workspace_knowledgebases table (added 2026-02-25)
         # Stores JSON array of KnowledgebaseSource IDs to exclude from inheritance
@@ -2159,11 +2105,6 @@ class SQLiteDatabase(BaseDatabase):
     def plugins(self) -> SQLiteTable:
         """Get the plugins table."""
         return self._plugins
-
-    @property
-    def permission_requests(self) -> SQLiteTable:
-        """Get the permission requests table."""
-        return self._permission_requests
 
     @property
     def tasks(self) -> SQLiteTasksTable:

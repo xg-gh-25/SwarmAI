@@ -279,7 +279,7 @@ export function ChatInput({
           {/* Input Row */}
           <div className="relative flex items-center gap-3">
             {/* File Attachment Button */}
-            <FileAttachmentButton onFilesSelected={onAddFiles} disabled={isProcessingFiles} canAddMore={canAddMore} />
+            <FileAttachmentButton onFilesSelected={onAddFiles} disabled={isProcessingFiles || isStreaming} canAddMore={canAddMore} />
 
             {/* Slash Command Suggestions */}
             {showCommandSuggestions && filteredCommands.length > 0 && (
@@ -326,15 +326,19 @@ export function ChatInput({
               </div>
             )}
 
-            {/* Text Input */}
+            {/* Text Input — disabled during streaming to prevent concurrent sessions */}
             <textarea
               value={inputValue}
               onChange={handleInputChange}
               onKeyDown={handleKeyDown}
               onPaste={handlePaste}
-              placeholder={t('chat.placeholder')}
+              placeholder={isStreaming ? t('chat.streamingPlaceholder', 'Waiting for response...') : t('chat.placeholder')}
               rows={1}
-              className="flex-1 bg-transparent text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] resize-none focus:outline-none py-2"
+              disabled={isStreaming}
+              className={clsx(
+                'flex-1 bg-transparent text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] resize-none focus:outline-none py-2',
+                isStreaming && 'opacity-50 cursor-not-allowed'
+              )}
             />
 
             {/* Send Button */}

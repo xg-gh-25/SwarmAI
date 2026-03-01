@@ -4,7 +4,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useTheme } from '../contexts/ThemeContext';
 import { getVersion } from '@tauri-apps/api/app';
 import { tauriService, BackendStatus, getBackendPort, setBackendPort } from '../services/tauri';
-import { settingsService, APIConfigurationResponse, BedrockAuthType } from '../services/settings';
+import { settingsService, APIConfigurationResponse } from '../services/settings';
 import {
   checkForUpdates,
   downloadAndInstallUpdate,
@@ -61,14 +61,8 @@ export default function SettingsPage() {
   const [apiConfig, setApiConfig] = useState<APIConfigurationResponse | null>(null);
 
   // Form fields
-  const [apiKey, setApiKey] = useState('');
   const [baseUrl, setBaseUrl] = useState('');
   const [useBedrock, setUseBedrock] = useState(false);
-  const [bedrockAuthType, setBedrockAuthType] = useState<BedrockAuthType>('credentials');
-  const [awsAccessKey, setAwsAccessKey] = useState('');
-  const [awsSecretKey, setAwsSecretKey] = useState('');
-  const [awsSessionToken, setAwsSessionToken] = useState('');
-  const [awsBearerToken, setAwsBearerToken] = useState('');
   const [awsRegion, setAwsRegion] = useState('us-east-1');
 
   const [saving, setSaving] = useState(false);
@@ -181,13 +175,12 @@ export default function SettingsPage() {
     try {
       const config = await settingsService.getAPIConfiguration();
       setApiConfig(config);
-      setBaseUrl(config.anthropic_base_url || '');
-      setUseBedrock(config.use_bedrock);
-      setBedrockAuthType(config.bedrock_auth_type || 'credentials');
-      setAwsRegion(config.aws_region);
+      setBaseUrl(config.anthropicBaseUrl || '');
+      setUseBedrock(config.useBedrock);
+      setAwsRegion(config.awsRegion);
       // Model configuration
-      setAvailableModels(config.available_models || []);
-      setDefaultModel(config.default_model || '');
+      setAvailableModels(config.availableModels || []);
+      setDefaultModel(config.defaultModel || '');
     } catch (error) {
       console.error('Failed to load API config:', error);
     }
@@ -199,35 +192,15 @@ export default function SettingsPage() {
     try {
       const updateData: Record<string, unknown> = {};
 
-      // Only include fields that have values
-      if (apiKey) updateData.anthropic_api_key = apiKey;
       updateData.anthropic_base_url = baseUrl || '';
       updateData.use_bedrock = useBedrock;
 
       if (useBedrock) {
-        updateData.bedrock_auth_type = bedrockAuthType;
         updateData.aws_region = awsRegion;
-
-        if (bedrockAuthType === 'credentials') {
-          // AK/SK authentication
-          if (awsAccessKey) updateData.aws_access_key_id = awsAccessKey;
-          if (awsSecretKey) updateData.aws_secret_access_key = awsSecretKey;
-          updateData.aws_session_token = awsSessionToken || '';
-        } else {
-          // Bearer token authentication
-          if (awsBearerToken) updateData.aws_bearer_token = awsBearerToken;
-        }
       }
 
       const config = await settingsService.updateAPIConfiguration(updateData);
       setApiConfig(config);
-
-      // Clear sensitive fields after save
-      setApiKey('');
-      setAwsAccessKey('');
-      setAwsSecretKey('');
-      setAwsSessionToken('');
-      setAwsBearerToken('');
 
       setMessage({ type: 'success', text: 'API configuration saved!' });
     } catch (error) {
@@ -290,8 +263,8 @@ export default function SettingsPage() {
         available_models: models,
         default_model: defaultMdl,
       });
-      setAvailableModels(config.available_models || []);
-      setDefaultModel(config.default_model || '');
+      setAvailableModels(config.availableModels || []);
+      setDefaultModel(config.defaultModel || '');
       // Invalidate cache so AgentFormModal gets updated models
       queryClient.invalidateQueries({ queryKey: ['apiConfig'] });
       setMessage({ type: 'success', text: t('common.message.saveSuccess') });
@@ -502,132 +475,68 @@ export default function SettingsPage() {
                 </p>
               </div>
 
-              {/* API Key */}
-              <div>
-                <label className="block text-sm text-[var(--color-text-muted)] mb-2">
-                  API Key
-                  {apiConfig?.anthropic_api_key_set && (
-                    <span className="ml-2 text-green-400 text-xs">✓ Configured</span>
+              {/* Anthropic API Key Status */}
+              <div className="p-3 bg-[var(--color-bg)] rounded-lg">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-[var(--color-text-muted)]">Anthropic API Key</span>
+                  {apiConfig?.anthropicApiKeyConfigured ? (
+                    <span className="text-green-400 text-sm flex items-center gap-1">
+                      <span className="material-symbols-outlined text-sm">check_circle</span>
+                      Configured (env var)
+                    </span>
+                  ) : (
+                    <span className="text-amber-400 text-sm flex items-center gap-1">
+                      <span className="material-symbols-outlined text-sm">warning</span>
+                      Not configured
+                    </span>
                   )}
-                </label>
-                <input
-                  type="password"
-                  value={apiKey}
-                  onChange={(e) => setApiKey(e.target.value)}
-                  placeholder={apiConfig?.anthropic_api_key_set ? '••••••••••••••••' : 'sk-ant-...'}
-                  className="w-full px-4 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-[var(--color-text)] placeholder-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-primary)]"
-                />
-                <p className="text-xs text-[var(--color-text-muted)] mt-1">
-                  Leave blank to keep existing key. Your API key is stored securely.
-                </p>
+                </div>
+                {!apiConfig?.anthropicApiKeyConfigured && (
+                  <div className="mt-2 p-3 bg-amber-500/10 border border-amber-500/20 rounded-lg">
+                    <p className="text-xs text-[var(--color-text)] mb-2">
+                      Set the <code className="px-1 py-0.5 bg-[var(--color-bg)] rounded text-xs">ANTHROPIC_API_KEY</code> environment variable before launching SwarmAI:
+                    </p>
+                    <code className="block text-xs font-mono text-[var(--color-text-muted)] bg-[var(--color-bg)] p-2 rounded">
+                      export ANTHROPIC_API_KEY=sk-ant-...
+                    </code>
+                  </div>
+                )}
               </div>
             </>
           )}
 
           {useBedrock && (
             <>
-              {/* Authentication Type Selector */}
-              <div>
-                <label className="block text-sm text-[var(--color-text-muted)] mb-2">Authentication Method</label>
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setBedrockAuthType('credentials')}
-                    className={`flex-1 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                      bedrockAuthType === 'credentials'
-                        ? 'bg-[var(--color-primary)] text-white'
-                        : 'bg-[var(--color-bg)] text-[var(--color-text-muted)] border border-[var(--color-border)] hover:border-[var(--color-text-muted)]'
-                    }`}
-                  >
-                    AK/SK Credentials
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setBedrockAuthType('bearer_token')}
-                    className={`flex-1 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                      bedrockAuthType === 'bearer_token'
-                        ? 'bg-[var(--color-primary)] text-white'
-                        : 'bg-[var(--color-bg)] text-[var(--color-text-muted)] border border-[var(--color-border)] hover:border-[var(--color-text-muted)]'
-                    }`}
-                  >
-                    Bearer Token
-                  </button>
+              {/* AWS Credentials Status */}
+              <div className="p-3 bg-[var(--color-bg)] rounded-lg">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-[var(--color-text-muted)]">AWS Credentials</span>
+                  {apiConfig?.awsCredentialsConfigured ? (
+                    <span className="text-green-400 text-sm flex items-center gap-1">
+                      <span className="material-symbols-outlined text-sm">check_circle</span>
+                      Configured
+                    </span>
+                  ) : (
+                    <span className="text-amber-400 text-sm flex items-center gap-1">
+                      <span className="material-symbols-outlined text-sm">warning</span>
+                      Not configured
+                    </span>
+                  )}
                 </div>
+                {!apiConfig?.awsCredentialsConfigured && (
+                  <div className="mt-2 p-3 bg-amber-500/10 border border-amber-500/20 rounded-lg">
+                    <p className="text-xs text-[var(--color-text)] mb-2">
+                      AWS credentials are resolved from the standard credential chain. Refresh with ADA CLI:
+                    </p>
+                    <code className="block text-xs font-mono text-[var(--color-text-muted)] bg-[var(--color-bg)] p-2 rounded">
+                      ada credentials update --account=ACCOUNT_ID --role=ROLE_NAME --provider=isengard
+                    </code>
+                    <p className="text-xs text-[var(--color-text-muted)] mt-2">
+                      Credentials are read from <code className="px-1 py-0.5 bg-[var(--color-bg)] rounded">~/.aws/credentials</code>, <code className="px-1 py-0.5 bg-[var(--color-bg)] rounded">~/.ada/credentials</code>, or environment variables.
+                    </p>
+                  </div>
+                )}
               </div>
-
-              {bedrockAuthType === 'credentials' && (
-                <>
-                  {/* AWS Access Key ID */}
-                  <div>
-                    <label className="block text-sm text-[var(--color-text-muted)] mb-2">
-                      AWS Access Key ID
-                      {apiConfig?.aws_access_key_id_set && (
-                        <span className="ml-2 text-green-400 text-xs">✓ Configured</span>
-                      )}
-                    </label>
-                    <input
-                      type="text"
-                      value={awsAccessKey}
-                      onChange={(e) => setAwsAccessKey(e.target.value)}
-                      placeholder={apiConfig?.aws_access_key_id_set ? '••••••••••••' : 'AKIA...'}
-                      className="w-full px-4 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-[var(--color-text)] placeholder-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-primary)]"
-                    />
-                  </div>
-
-                  {/* AWS Secret Access Key */}
-                  <div>
-                    <label className="block text-sm text-[var(--color-text-muted)] mb-2">AWS Secret Access Key</label>
-                    <input
-                      type="password"
-                      value={awsSecretKey}
-                      onChange={(e) => setAwsSecretKey(e.target.value)}
-                      placeholder="••••••••••••••••"
-                      className="w-full px-4 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-[var(--color-text)] placeholder-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-primary)]"
-                    />
-                  </div>
-
-                  {/* AWS Session Token */}
-                  <div>
-                    <label className="block text-sm text-[var(--color-text-muted)] mb-2">
-                      AWS Session Token (Optional)
-                    </label>
-                    <input
-                      type="password"
-                      value={awsSessionToken}
-                      onChange={(e) => setAwsSessionToken(e.target.value)}
-                      placeholder="For temporary credentials"
-                      className="w-full px-4 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-[var(--color-text)] placeholder-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-primary)]"
-                    />
-                    <p className="text-xs text-[var(--color-text-muted)] mt-1">
-                      Only needed for temporary security credentials (STS).
-                    </p>
-                  </div>
-                </>
-              )}
-
-              {bedrockAuthType === 'bearer_token' && (
-                <>
-                  {/* AWS Bearer Token */}
-                  <div>
-                    <label className="block text-sm text-[var(--color-text-muted)] mb-2">
-                      AWS Bearer Token
-                      {apiConfig?.aws_bearer_token_set && (
-                        <span className="ml-2 text-green-400 text-xs">✓ Configured</span>
-                      )}
-                    </label>
-                    <input
-                      type="password"
-                      value={awsBearerToken}
-                      onChange={(e) => setAwsBearerToken(e.target.value)}
-                      placeholder={apiConfig?.aws_bearer_token_set ? '••••••••••••••••' : 'Enter bearer token...'}
-                      className="w-full px-4 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-[var(--color-text)] placeholder-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-primary)]"
-                    />
-                    <p className="text-xs text-[var(--color-text-muted)] mt-1">
-                      Bearer token for AWS Bedrock authentication.
-                    </p>
-                  </div>
-                </>
-              )}
 
               {/* AWS Region */}
               <Dropdown

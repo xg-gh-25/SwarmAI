@@ -8,6 +8,11 @@ Layer 4: Bash Command Protection (dangerous command blocking + human approval)
 This module contains hook factory functions and constants used by AgentManager
 to enforce security policies during agent execution. Each hook is composed into
 the Claude Agent SDK's hook system via HookMatcher configurations.
+
+The human approval hook now delegates dangerous-command detection and approval
+storage to ``CmdPermissionManager`` (filesystem-backed, shared across sessions)
+while retaining the ``PermissionManager`` for the asyncio-based permission
+request/response flow (SSE event signaling).
 """
 
 import json
@@ -20,6 +25,7 @@ from uuid import uuid4
 
 from database import db
 from .permission_manager import PermissionManager
+from .cmd_permission_manager import CmdPermissionManager
 
 logger = logging.getLogger(__name__)
 
@@ -95,14 +101,24 @@ def create_human_approval_hook(
     session_key: str,
     enable_human_approval: bool,
     permission_mgr: PermissionManager,
+    cmd_permission_mgr: CmdPermissionManager | None = None,
 ) -> Callable[..., Any]:
     """Create a human approval hook for dangerous commands.
+
+    Uses ``CmdPermissionManager`` (filesystem-backed, shared across sessions)
+    for dangerous-command detection and approval storage.  Falls back to the
+    old ``PermissionManager`` per-session dict when ``cmd_permission_mgr`` is
+    ``None`` (backward compatibility during migration).
+
+    The ``PermissionManager`` is still used for the asyncio-based permission
+    request/response flow (queue + event signaling for the SSE dialog).
 
     Args:
         session_context: Dict with {"sdk_session_id": ...} that gets updated with actual SDK session
         session_key: The session key for tracking approved commands (agent_id or resume_session_id)
         enable_human_approval: Whether human approval is enabled for this agent
-        permission_mgr: PermissionManager instance for permission state management
+        permission_mgr: PermissionManager instance for permission request/response flow (queue + events)
+        cmd_permission_mgr: CmdPermissionManager for dangerous detection + approval storage
 
     Returns:
         Async hook function that checks for dangerous commands and requests approval
@@ -120,8 +136,15 @@ def create_human_approval_hook(
         if not command:
             return {}
 
-        # Check if command is dangerous
-        danger_reason = check_dangerous_command(command)
+        # Check if command is dangerous — prefer CmdPermissionManager (glob-based,
+        # filesystem-backed) over legacy regex DANGEROUS_PATTERNS
+        if cmd_permission_mgr is not None:
+            is_dangerous = cmd_permission_mgr.is_dangerous(command)
+            danger_reason = "Matches dangerous command pattern" if is_dangerous else None
+        else:
+            # Legacy fallback: regex-based check
+            danger_reason = check_dangerous_command(command)
+
         if not danger_reason:
             return {}
 
@@ -136,10 +159,17 @@ def create_human_approval_hook(
                 }
             }
 
-        # Check if this command was previously approved (use session_key for tracking)
-        if permission_mgr.is_command_approved(session_key, command):
-            logger.info(f"[APPROVED] Previously approved command: {command[:50]}...")
-            return {}  # Allow execution
+        # Check if this command was previously approved — prefer CmdPermissionManager
+        # (shared across all sessions, persisted to filesystem)
+        if cmd_permission_mgr is not None:
+            if cmd_permission_mgr.is_approved(command):
+                logger.info(f"[APPROVED] CmdPermissionManager approved: {command[:50]}...")
+                return {}  # Allow execution
+        else:
+            # Legacy fallback: per-session in-memory check
+            if permission_mgr.is_command_approved(session_key, command):
+                logger.info(f"[APPROVED] Previously approved command: {command[:50]}...")
+                return {}  # Allow execution
 
         # Get the actual SDK session_id (may have been updated after init message)
         actual_session_id = session_context.get("sdk_session_id")
@@ -158,8 +188,8 @@ def create_human_approval_hook(
             "created_at": datetime.now().isoformat()
         }
 
-        # Store in database
-        await db.permission_requests.put(permission_request)
+        # Store in memory via PermissionManager (replaces DB storage)
+        permission_mgr.store_pending_request(permission_request)
 
         # Put permission request in queue for SSE streaming (use actual SDK session_id!)
         await permission_mgr.get_permission_queue().put({
@@ -181,7 +211,18 @@ def create_human_approval_hook(
 
         # Return the decision to the SDK
         if decision == "approve":
-            # Allow the command to execute
+            # Store approval in CmdPermissionManager (shared, persistent)
+            if cmd_permission_mgr is not None:
+                try:
+                    cmd_permission_mgr.approve(command)
+                    logger.info(f"Command approved via CmdPermissionManager: {command[:50]}...")
+                except ValueError as exc:
+                    # Overly broad pattern rejected — still allow this one execution
+                    logger.warning(f"CmdPermissionManager rejected pattern: {exc}")
+                    # Fall back to legacy per-session approval
+                    permission_mgr.approve_command(session_key, command)
+            else:
+                permission_mgr.approve_command(session_key, command)
             return {}
         else:
             # Deny the command

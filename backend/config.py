@@ -21,26 +21,36 @@ def get_app_data_dir() -> Path:
     """
     return Path.home() / ".swarm-ai"
 
-# Model ID mapping: Anthropic API model ID -> AWS Bedrock model ID
-# Used when CLAUDE_CODE_USE_BEDROCK=true
+# Default model ID mapping: Anthropic API model ID -> AWS Bedrock cross-region inference profile
+# Used when CLAUDE_CODE_USE_BEDROCK=true and no override exists in config.json
+# Format: us.anthropic.<model>-v1 (cross-region inference profile)
+# See: https://docs.anthropic.com/en/docs/claude-code/model-config
 ANTHROPIC_TO_BEDROCK_MODEL_MAP: dict[str, str] = {
+    # Claude 4.6 models (latest)
+    "claude-opus-4-6": "us.anthropic.claude-opus-4-6-v1",
+    "claude-sonnet-4-6": "us.anthropic.claude-sonnet-4-6",
     # Claude 4.5 models
-    "claude-haiku-4-5-20251001": "global.anthropic.claude-haiku-4-5-20251001-v1:0",
-    "claude-sonnet-4-5-20250929": "global.anthropic.claude-sonnet-4-5-20250929-v1:0",
-    "claude-opus-4-5-20250514": "global.anthropic.claude-opus-4-5-20250514-v1:0",
-    "claude-opus-4-5-20251101": "global.anthropic.claude-opus-4-5-20251101-v1:0",
+    "claude-sonnet-4-5-20250929": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "claude-opus-4-5-20251101": "us.anthropic.claude-opus-4-5-20251101-v1:0",
 }
 
 
-def get_bedrock_model_id(anthropic_model_id: str) -> str:
+def get_bedrock_model_id(anthropic_model_id: str, config_map: dict[str, str] | None = None) -> str:
     """Convert Anthropic model ID to AWS Bedrock model ID.
+
+    Checks ``config_map`` (from config.json ``bedrock_model_map``) first,
+    then falls back to the hardcoded ``ANTHROPIC_TO_BEDROCK_MODEL_MAP``.
+    Unknown model IDs pass through unchanged (allows custom ARNs).
 
     Args:
         anthropic_model_id: The Anthropic API model identifier
+        config_map: Optional override map from config.json (checked first)
 
     Returns:
         The corresponding AWS Bedrock model identifier, or the original ID if no mapping exists
     """
+    if config_map and anthropic_model_id in config_map:
+        return config_map[anthropic_model_id]
     return ANTHROPIC_TO_BEDROCK_MODEL_MAP.get(anthropic_model_id, anthropic_model_id)
 
 
@@ -82,7 +92,7 @@ class Settings(BaseSettings):
     # Claude Agent SDK / Anthropic API Configuration
     anthropic_api_key: str = ""
     anthropic_base_url: str | None = None  # Custom API endpoint (optional)
-    default_model: str = "claude-sonnet-4-5-20250929"
+    default_model: str = "claude-opus-4-6"
 
     # Claude Code Configuration
     claude_code_use_bedrock: bool = True  # Use AWS Bedrock instead of Anthropic API
