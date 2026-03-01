@@ -565,6 +565,8 @@ export interface ChatStreamingLifecycle {
 
   // Per-tab pending state for ChatPage guard
   pendingStreamTabs: Set<string>;
+  /** Remove a specific tab from pendingStreamTabs (e.g. on tab close). */
+  clearPendingStreamTab: (tabId: string) => void;
   /** Force re-derivation of isStreaming (e.g. after tab switch). */
   bumpStreamingDerivation: () => void;
 
@@ -1240,6 +1242,20 @@ export function useChatStreamingLifecycle(
   }, [setIsStreaming]);
 
   /**
+   * Remove a specific tab from ``pendingStreamTabs``. Called by ChatPage
+   * when closing a tab to prevent stale entries from lingering in the Set
+   * after the tab's map entry has been deleted.
+   */
+  const clearPendingStreamTab = useCallback((tabId: string) => {
+    setPendingStreamTabs((prev) => {
+      if (!prev.has(tabId)) return prev; // no-op — avoid unnecessary re-render
+      const next = new Set(prev);
+      next.delete(tabId);
+      return next;
+    });
+  }, []);
+
+  /**
    * Force re-derivation of ``isStreaming`` by triggering a re-render via
    * ``setPendingStreamTabs``. Used by ChatPage on tab switch so the
    * derivation picks up the new active tab's state from ``tabMapRef``.
@@ -1262,6 +1278,7 @@ export function useChatStreamingLifecycle(
     displayedActivity,
     elapsedSeconds,
     pendingStreamTabs,
+    clearPendingStreamTab,
     bumpStreamingDerivation,
     messagesEndRef,
     streamGenRef,
