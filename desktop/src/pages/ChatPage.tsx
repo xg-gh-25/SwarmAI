@@ -35,9 +35,10 @@ import { tasksService, PolicyViolationError } from '../services/tasks';
 import { Spinner, ConfirmDialog, AgentFormModal, PolicyViolationToast, Toast } from '../components/common';
 import { PermissionRequestModal } from '../components/chat';
 import { FilePreviewModal } from '../components/workspace/FilePreviewModal';
-import { useFileAttachment, useTabState, useRightSidebarGroup } from '../hooks';
+import { useFileAttachment, useRightSidebarGroup } from '../hooks';
 import { useTSCCState } from '../hooks/useTSCCState';
-import { useChatStreamingLifecycle, formatElapsed, ELAPSED_DISPLAY_THRESHOLD_MS, MAX_OPEN_TABS } from '../hooks/useChatStreamingLifecycle';
+import { useUnifiedTabState, MAX_OPEN_TABS } from '../hooks/useUnifiedTabState';
+import { useChatStreamingLifecycle, formatElapsed, ELAPSED_DISPLAY_THRESHOLD_MS } from '../hooks/useChatStreamingLifecycle';
 import { ChatHeader, ChatInput, ChatHistorySidebar, FileBrowserSidebar, MessageBubble, SwarmRadar } from './chat/components';
 import { TSCCPanel } from './chat/components/TSCCPanel';
 import { TSCCSnapshotCard } from './chat/components/TSCCSnapshotCard';
@@ -49,10 +50,11 @@ import { useLayout } from '../contexts/LayoutContext';
 
 /**
  * Re-export ``deriveStreamingActivity`` and ``MAX_OPEN_TABS`` from the
- * extracted hook so existing test imports (``from '../pages/ChatPage'``)
+ * extracted hooks so existing test imports (``from '../pages/ChatPage'``)
  * continue to resolve.
  */
-export { deriveStreamingActivity, MAX_OPEN_TABS, formatElapsed, ELAPSED_DISPLAY_THRESHOLD_MS, MIN_ACTIVITY_DISPLAY_MS, sanitizeCommand, extractToolContext } from '../hooks/useChatStreamingLifecycle';
+export { deriveStreamingActivity, formatElapsed, ELAPSED_DISPLAY_THRESHOLD_MS, MIN_ACTIVITY_DISPLAY_MS, sanitizeCommand, extractToolContext } from '../hooks/useChatStreamingLifecycle';
+export { MAX_OPEN_TABS } from '../hooks/useUnifiedTabState';
 
 export default function ChatPage() {
   const { t } = useTranslation();
@@ -142,7 +144,7 @@ export default function ChatPage() {
   const effectiveBasePath = workDir || agentWorkDir?.path;
   const selectedAgent = agents.find((a) => a.id === selectedAgentId);
 
-  // Tab state management (Req 1.7, 2.2, 2.3, 3.1, 3.2, 3.3)
+  // Tab state management — unified hook (single source of truth)
   const {
     openTabs,
     activeTabId,
@@ -153,10 +155,22 @@ export default function ChatPage() {
     updateTabSessionId,
     setTabIsNew,
     removeInvalidTabs,
-  } = useTabState(selectedAgentId || 'default');
+    tabStatuses,
+    updateTabStatus,
+    getTabState,
+    updateTabState,
+    tabMapRef,
+    activeTabIdRef,
+    saveCurrentTab,
+    restoreTab,
+    initTabState,
+    cleanupTabState,
+  } = useUnifiedTabState(selectedAgentId || 'default');
 
   // Streaming lifecycle hook — owns messages, sessionId, pendingQuestion,
   // isStreaming, refs, and stream handler factories (Phase 0 extraction).
+  // Tab state is now managed by useUnifiedTabState; unified hook methods
+  // are passed as deps so stream handlers can read/write the Tab_Map.
   // Called before useTSCCState so sessionId is available for TSCC.
   const {
     messages,
@@ -174,14 +188,6 @@ export default function ChatPage() {
     incrementStreamGen,
     userScrolledUpRef,
     resetUserScroll,
-    tabStateRef,
-    activeTabIdRef,
-    saveTabState,
-    restoreTabState,
-    initTabState,
-    cleanupTabState,
-    tabStatuses,
-    updateTabStatus,
     createStreamHandler,
     createCompleteHandler,
     createErrorHandler,
@@ -189,6 +195,11 @@ export default function ChatPage() {
     queryClient,
     applyTelemetryEvent: (event: unknown) => applyTelemetryEventRef.current(event as never),
     tsccTriggerAutoExpand: (reason: string) => tsccTriggerAutoExpandRef.current(reason as never),
+    getTabState,
+    updateTabState,
+    updateTabStatus,
+    tabMapRef,
+    activeTabIdRef,
   });
 
   // TSCC state management — called after the streaming hook so sessionId is available
@@ -312,21 +323,21 @@ export default function ChatPage() {
   const handleNewSession = useCallback(() => {
     if (!selectedAgentId) return;
     // Fix 7: Tab limit enforcement — check authoritative tab count from per-tab map
-    if (tabStateRef.current.size >= MAX_OPEN_TABS) {
+    if (tabMapRef.current.size >= MAX_OPEN_TABS) {
       setTabLimitToast('Maximum tabs reached. Close a tab to open a new one.');
       return;
     }
     // Save current tab state before switching away
-    saveTabState();
+    saveCurrentTab();
     const newTab = addTab(selectedAgentId);
     const welcomeMessages = [createWelcomeMessage()];
     // Initialize new tab entry in per-tab map with defaults
-    initTabState(newTab.id, welcomeMessages);
+    initTabState(newTab!.id, welcomeMessages);
     // Clear current session state for the new tab
     setMessages(welcomeMessages);
     setSessionId(undefined);
     setPendingQuestion(null);
-  }, [selectedAgentId, addTab, saveTabState, initTabState, tabStateRef]);
+  }, [selectedAgentId, addTab, saveCurrentTab, initTabState, tabMapRef]);
 
   // Handle tab selection - switches active tab and loads session messages (Req 1.6)
   // Fix 6: Save current tab state, restore target tab state from per-tab map
@@ -335,13 +346,20 @@ export default function ChatPage() {
     if (!tab) return;
     
     // Save current tab state before switching away
-    saveTabState();
+    saveCurrentTab();
     
     selectTab(tabId);
     
     // Try to restore from per-tab map first (authoritative)
-    const restored = restoreTabState(tabId);
+    const restored = restoreTab(tabId);
     if (restored) {
+      // Restore React state from the unified tab map
+      const tabState = getTabState(tabId);
+      if (tabState) {
+        setMessages(tabState.messages);
+        setSessionId(tabState.sessionId);
+        setPendingQuestion(tabState.pendingQuestion);
+      }
       // Fix 8: Clear unread indicator when switching to a tab with 'complete_unread' status
       if (tabStatuses[tabId] === 'complete_unread') {
         updateTabStatus(tabId, 'idle');
@@ -370,8 +388,7 @@ export default function ChatPage() {
         setSessionId(tab.sessionId);
         // Initialize the tab in the per-tab map now that we have data
         initTabState(loadedTabId, formattedMessages);
-        const tabState = tabStateRef.current.get(loadedTabId);
-        if (tabState) tabState.sessionId = tab.sessionId;
+        updateTabState(loadedTabId, { sessionId: tab.sessionId });
       } catch (error) {
         console.error('Failed to load session messages:', error);
       } finally {
@@ -388,22 +405,16 @@ export default function ChatPage() {
       setPendingQuestion(null);
       initTabState(tabId, welcomeMessages);
     }
-  }, [openTabs, selectTab, saveTabState, restoreTabState, initTabState, activeTabIdRef, tabStateRef]);
+  }, [openTabs, selectTab, saveCurrentTab, restoreTab, getTabState, initTabState, updateTabState, activeTabIdRef, tabStatuses, updateTabStatus]);
 
   // Handle tab close - removes tab, handles last-tab case (Req 3.3)
   // Fix 6: Clean up per-tab state map entry and abort controller
   const handleTabClose = useCallback((tabId: string) => {
-    const isActiveTab = tabId === activeTabId;
     // Clean up per-tab state: remove from map, abort controller if active
     cleanupTabState(tabId);
     closeTab(tabId);
-    
-    // If closing active tab, the closeTab function handles switching to adjacent tab
-    // We need to load the new active tab's content after state updates
-    if (isActiveTab) {
-      // The closeTab function will update activeTabId, so we need to handle this
-      // in a useEffect that watches activeTabId changes
-    }
+    // If closing active tab, closeTab handles switching to adjacent tab.
+    // The activeTabId change triggers the sync useEffect to load content.
   }, [activeTabId, closeTab, cleanupTabState]);
 
   // Handle session selection
@@ -453,10 +464,10 @@ export default function ChatPage() {
   }, [messages]);
 
   // Register the initial/default tab in the per-tab state map on mount.
-  // Without this, the first tab has no entry in tabStateRef and all
+  // Without this, the first tab has no entry in tabMapRef and all
   // per-tab features (message tracking, abort isolation, status) are broken.
   useEffect(() => {
-    if (activeTabId && !tabStateRef.current.has(activeTabId)) {
+    if (activeTabId && !tabMapRef.current.has(activeTabId)) {
       initTabState(activeTabId, messages.length > 0 ? messages : [createWelcomeMessage()]);
     }
   }, [activeTabId]); // eslint-disable-line react-hooks/exhaustive-deps — mount-only for initial tab
@@ -828,7 +839,7 @@ export default function ChatPage() {
     // Ensure the active tab is registered in the per-tab state map BEFORE
     // creating the stream handler. Without this, capturedTabId would be null
     // and isActiveTab would become false once initTabState fires later.
-    if (currentActiveTabId && !tabStateRef.current.has(currentActiveTabId)) {
+    if (currentActiveTabId && !tabMapRef.current.has(currentActiveTabId)) {
       initTabState(currentActiveTabId, messagesRef.current);
     }
 
@@ -847,7 +858,7 @@ export default function ChatPage() {
     );
 
     abortRef.current = abort;
-  }, [selectedAgentId, enableSkills, enableMCP, selectedWorkspace, handlePluginCommand, buildContentArray, clearAttachments, resetUserScroll, incrementStreamGen, setIsStreaming, setMessages, setInputValue, updateTabStatus, updateTabTitle, setTabIsNew, initTabState, wrappedCreateStreamHandler, createErrorHandler, createCompleteHandler, abortRef, activeTabIdRef, tabStateRef, queryClient, navigate, t, setPolicyViolation, setRunAsTask]);
+  }, [selectedAgentId, enableSkills, enableMCP, selectedWorkspace, handlePluginCommand, buildContentArray, clearAttachments, resetUserScroll, incrementStreamGen, setIsStreaming, setMessages, setInputValue, updateTabStatus, updateTabTitle, setTabIsNew, initTabState, wrappedCreateStreamHandler, createErrorHandler, createCompleteHandler, abortRef, activeTabIdRef, tabMapRef, queryClient, navigate, t, setPolicyViolation, setRunAsTask]);
 
   // Handle answering AskUserQuestion
   const handleAnswerQuestion = (toolUseId: string, answers: Record<string, string>) => {

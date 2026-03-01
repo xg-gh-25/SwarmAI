@@ -12,7 +12,7 @@
  *
  * @module TabStatusIndicator
  */
-import type { TabStatus } from '../../../hooks/useChatStreamingLifecycle';
+import type { TabStatus } from '../../../hooks/useUnifiedTabState';
 
 interface TabStatusIndicatorProps {
   status: TabStatus;
