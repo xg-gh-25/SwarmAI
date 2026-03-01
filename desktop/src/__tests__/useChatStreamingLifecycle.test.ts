@@ -12,7 +12,7 @@
  *     isStreaming, streamingActivity)
  *   - Hook returns all expected setters (setMessages, setSessionId,
  *     setPendingQuestion, setIsStreaming)
- *   - Hook returns all expected refs (abortRef, messagesEndRef)
+ *   - Hook returns all expected refs (messagesEndRef)
  *   - Hook returns all expected factories (createStreamHandler,
  *     createCompleteHandler, createErrorHandler)
  *   - ``deriveStreamingActivity`` standalone export works identically to
@@ -92,79 +92,16 @@ import React from 'react';
 import type { StreamEvent } from '../types';
 import type { PendingQuestion } from '../pages/chat/types';
 import type { Message, ContentBlock } from '../types';
-
-// ---------------------------------------------------------------------------
-// Test helpers
-// ---------------------------------------------------------------------------
-
-/** Shared tab map and activeTabIdRef for test deps — tests can read/write these directly. */
-const testTabMap = new Map<string, UnifiedTab>();
-const testTabMapRef = { current: testTabMap };
-const testActiveTabIdRef = { current: null as string | null };
-
-/** Create mock deps for the hook */
-function createMockDeps(): ChatStreamingLifecycleDeps {
-  return {
-    queryClient: {
-      invalidateQueries: vi.fn(),
-    },
-    applyTelemetryEvent: vi.fn(),
-    tsccTriggerAutoExpand: vi.fn(),
-    getTabState: (tabId: string) => testTabMap.get(tabId),
-    updateTabState: vi.fn((tabId: string, patch: Partial<Omit<UnifiedTab, 'id'>>) => {
-      const tab = testTabMap.get(tabId);
-      if (tab) Object.assign(tab, patch);
-    }),
-    updateTabStatus: vi.fn((tabId: string, status: TabStatus) => {
-      const tab = testTabMap.get(tabId);
-      if (tab) tab.status = status;
-    }),
-    tabMapRef: testTabMapRef as React.MutableRefObject<Map<string, UnifiedTab>>,
-    activeTabIdRef: testActiveTabIdRef as React.MutableRefObject<string | null>,
-  };
-}
-
-/** Helper: create a UnifiedTab entry in the test map (replaces result.current.initTabState). */
-function initTestTab(tabId: string, initialMessages?: Message[]): void {
-  testTabMap.set(tabId, {
-    id: tabId,
-    title: 'New Session',
-    agentId: 'default',
-    isNew: true,
-    sessionId: undefined,
-    messages: initialMessages ?? [],
-    pendingQuestion: null,
-    isStreaming: false,
-    abortController: null,
-    streamGen: 0,
-    status: 'idle' as TabStatus,
-  });
-  testActiveTabIdRef.current = tabId;
-}
-
-/** Helper to build a Message */
-function makeMessage(
-  overrides: Partial<Message> & { role: Message['role'] },
-): Message {
-  const { role, id, content, timestamp, ...rest } = overrides;
-  return {
-    id: id ?? crypto.randomUUID(),
-    role,
-    content: content ?? [],
-    timestamp: timestamp ?? new Date().toISOString(),
-    ...rest,
-  };
-}
-
-/** Helper to build a tool_use ContentBlock */
-function makeToolUse(name: string, id?: string): ContentBlock {
-  return {
-    type: 'tool_use' as const,
-    id: id ?? crypto.randomUUID(),
-    name,
-    input: {},
-  };
-}
+import {
+  testTabMap,
+  testTabMapRef,
+  testActiveTabIdRef,
+  createMockDeps,
+  initTestTab,
+  makeMessage,
+  makeToolUse,
+  resetTestState,
+} from './helpers/streamingTestUtils';
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -173,8 +110,7 @@ function makeToolUse(name: string, id?: string): ContentBlock {
 describe('useChatStreamingLifecycle', () => {
   // Clear shared test tab map between tests to prevent cross-contamination
   beforeEach(() => {
-    testTabMap.clear();
-    testActiveTabIdRef.current = null;
+    resetTestState();
   });
 
   // ── Hook return shape ───────────────────────────────────────────────────
@@ -208,9 +144,9 @@ describe('useChatStreamingLifecycle', () => {
         useChatStreamingLifecycle(createMockDeps()),
       );
 
-      // abortRef should be a ref object with current = null initially
-      expect(result.current.abortRef).toBeDefined();
-      expect(result.current.abortRef.current).toBeNull();
+      // pendingStreamTabs should be an empty Set initially
+      expect(result.current.pendingStreamTabs).toBeDefined();
+      expect(result.current.pendingStreamTabs.size).toBe(0);
 
       // messagesEndRef should be a ref object
       expect(result.current.messagesEndRef).toBeDefined();
@@ -239,6 +175,7 @@ describe('useChatStreamingLifecycle', () => {
     });
 
     it('becomes true when setIsStreaming(true) is called', () => {
+      initTestTab('tab-iso-1');
       const { result } = renderHook(() =>
         useChatStreamingLifecycle(createMockDeps()),
       );
@@ -251,6 +188,7 @@ describe('useChatStreamingLifecycle', () => {
     });
 
     it('returns to false when setIsStreaming(false) is called', () => {
+      initTestTab('tab-iso-2');
       const { result } = renderHook(() =>
         useChatStreamingLifecycle(createMockDeps()),
       );
@@ -278,6 +216,7 @@ describe('useChatStreamingLifecycle', () => {
     });
 
     it('is null when streaming but no messages', () => {
+      initTestTab('tab-sa-1');
       const { result } = renderHook(() =>
         useChatStreamingLifecycle(createMockDeps()),
       );
@@ -291,6 +230,7 @@ describe('useChatStreamingLifecycle', () => {
     });
 
     it('returns activity with toolName when streaming with tool_use', () => {
+      initTestTab('tab-sa-2');
       const { result } = renderHook(() =>
         useChatStreamingLifecycle(createMockDeps()),
       );
@@ -433,6 +373,7 @@ describe('useChatStreamingLifecycle', () => {
 
   describe('createCompleteHandler', () => {
     it('returns a function that sets isStreaming to false', () => {
+      initTestTab('tab-ch-1');
       const { result } = renderHook(() =>
         useChatStreamingLifecycle(createMockDeps()),
       );
@@ -2514,8 +2455,7 @@ describe('Fix 5: cleanupStalePendingEntries', () => {
 
 describe('Fix 7: Tab limit enforcement', () => {
   beforeEach(() => {
-    testTabMap.clear();
-    testActiveTabIdRef.current = null;
+    resetTestState();
   });
   describe('MAX_OPEN_TABS constant', () => {
     it('is 6', () => {
@@ -2618,8 +2558,7 @@ describe('Fix 7: Tab limit enforcement', () => {
 
 describe('Fix 8: Tab status indicators', () => {
   beforeEach(() => {
-    testTabMap.clear();
-    testActiveTabIdRef.current = null;
+    resetTestState();
   });
   describe('updateTabStatus', () => {
     it('updates tab map entry status in sync', () => {

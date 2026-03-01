@@ -182,7 +182,8 @@ export default function ChatPage() {
     setIsStreaming,
     displayedActivity,
     elapsedSeconds,
-    abortRef,
+    pendingStreamTabs,
+    bumpStreamingDerivation,
     messagesEndRef,
     incrementStreamGen,
     userScrolledUpRef,
@@ -227,8 +228,6 @@ export default function ChatPage() {
   inputValueRef.current = inputValue;
   const attachmentsRef = useRef(attachments);
   attachmentsRef.current = attachments;
-  const isStreamingRef = useRef(isStreaming);
-  isStreamingRef.current = isStreaming;
   const runAsTaskRef = useRef(runAsTask);
   runAsTaskRef.current = runAsTask;
   const messagesRef = useRef(messages);
@@ -332,7 +331,7 @@ export default function ChatPage() {
         messages: messagesRef.current,
         sessionId: sessionIdRef.current,
         pendingQuestion: null,
-        isStreaming: isStreamingRef.current,
+        // isStreaming is already authoritative in tabMapRef — no need to write it back
       });
     }
     const newTab = addTab(selectedAgentId);
@@ -341,7 +340,7 @@ export default function ChatPage() {
     setMessages(welcomeMessages);
     setSessionId(undefined);
     setPendingQuestion(null);
-    setIsStreaming(false); // New tab is not streaming
+    setIsStreaming(false, newTab!.id); // New tab is not streaming
   }, [selectedAgentId, addTab, initTabState, tabMapRef, updateTabState, activeTabIdRef, setIsStreaming]);
 
   // Handle tab selection - switches active tab and loads session messages (Req 1.6)
@@ -357,7 +356,7 @@ export default function ChatPage() {
         messages: messagesRef.current,
         sessionId: sessionIdRef.current,
         pendingQuestion: pendingQuestion,
-        isStreaming: isStreamingRef.current,
+        // isStreaming is already authoritative in tabMapRef — no need to write it back
       });
     }
     
@@ -372,10 +371,10 @@ export default function ChatPage() {
         setMessages(tabState.messages);
         setSessionId(tabState.sessionId);
         setPendingQuestion(tabState.pendingQuestion);
-        // Restore isStreaming from the target tab's state — prevents the
-        // spinner from leaking across tabs when switching away from a
-        // streaming tab to an idle one.
-        setIsStreaming(tabState.isStreaming);
+        // isStreaming derivation automatically reflects target tab's state
+        // from tabMapRef — no need to call setIsStreaming which would corrupt
+        // the source tab's streaming state. Just bump to re-derive.
+        bumpStreamingDerivation();
       }
       // Clear permission state — it's not per-tab in the map, but it
       // should not carry over from the previous tab.
@@ -390,7 +389,7 @@ export default function ChatPage() {
     // Not in map — load from API or initialize fresh
     activeTabIdRef.current = tabId;
     setPendingPermission(null);
-    setIsStreaming(false); // Target tab is not streaming (loading from API or fresh)
+    bumpStreamingDerivation(); // re-derive isStreaming for new active tab
     if (tab.sessionId) {
       // New tab with existing session — load from API with async guard
       const loadedTabId = tabId; // capture for closure
@@ -788,7 +787,11 @@ export default function ChatPage() {
     const hasText = messageText.trim().length > 0;
     const hasAttachments = currentAttachments.some((a) => a.base64);
 
-    if ((!hasText && !hasAttachments) || isStreamingRef.current || !selectedAgentId) return;
+    if ((!hasText && !hasAttachments) || !selectedAgentId) return;
+
+    // Per-tab streaming guard: check only the active tab's state
+    const activeTabForGuard = tabMapRef.current.get(activeTabIdRef.current ?? '');
+    if (activeTabForGuard?.isStreaming || pendingStreamTabs.has(activeTabIdRef.current ?? '')) return;
 
     if (messageText.trim().startsWith('/plugin')) {
       setInputValue('');
@@ -840,7 +843,7 @@ export default function ChatPage() {
     clearAttachments();
     resetUserScroll(); // Fix 2: resume auto-scroll on new user message
     incrementStreamGen(); // Fix 1: new stream generation
-    setIsStreaming(true);
+    setIsStreaming(true, activeTabIdRef.current ?? undefined);
 
     // Fix 8: Transition tab status to 'streaming' (handles error → streaming case too)
     const currentActiveTabId = activeTabIdRef.current;
@@ -882,51 +885,52 @@ export default function ChatPage() {
       createCompleteHandler(activeTabIdRef.current ?? undefined)
     );
 
-    abortRef.current = abort;
-    // Store abort controller in the tab map for per-tab stop isolation
+    // Store abort function in the tab map for per-tab stop isolation.
+    // Only the .abort() method is used by handleStop — no signal needed.
     if (currentActiveTabId) {
-      const abortController = new AbortController();
-      // Wrap the abort function into an AbortController-like interface
       updateTabState(currentActiveTabId, {
-        abortController: { abort: () => { abort(); }, signal: abortController.signal } as unknown as AbortController,
+        abortController: { abort: () => { abort(); }, signal: { aborted: false } } as unknown as AbortController,
       });
     }
-  }, [selectedAgentId, enableSkills, enableMCP, selectedWorkspace, handlePluginCommand, buildContentArray, clearAttachments, resetUserScroll, incrementStreamGen, setIsStreaming, setMessages, setInputValue, updateTabStatus, updateTabTitle, setTabIsNew, initTabState, wrappedCreateStreamHandler, createErrorHandler, createCompleteHandler, abortRef, activeTabIdRef, tabMapRef, queryClient, navigate, t, setPolicyViolation, setRunAsTask]);
+  }, [selectedAgentId, enableSkills, enableMCP, selectedWorkspace, handlePluginCommand, buildContentArray, clearAttachments, resetUserScroll, incrementStreamGen, setIsStreaming, setMessages, setInputValue, updateTabStatus, updateTabTitle, setTabIsNew, initTabState, wrappedCreateStreamHandler, createErrorHandler, createCompleteHandler, activeTabIdRef, tabMapRef, pendingStreamTabs, queryClient, navigate, t, setPolicyViolation, setRunAsTask]);
 
   // Handle answering AskUserQuestion
   const handleAnswerQuestion = (toolUseId: string, answers: Record<string, string>) => {
-    if (!selectedAgentId || !sessionId) return;
+    const tabId = activeTabIdRef.current ?? undefined;
+    const tabSessionId = tabId ? tabMapRef.current.get(tabId)?.sessionId : undefined;
+    if (!selectedAgentId || !tabSessionId) return;
 
     setPendingQuestion(null);
     incrementStreamGen(); // Fix 1: new stream generation
-    setIsStreaming(true);
+    setIsStreaming(true, tabId);
 
     // Fix 8: Transition tab status from waiting_input → streaming
-    const tabId = activeTabIdRef.current ?? undefined;
     if (tabId) updateTabStatus(tabId, 'streaming');
 
     const assistantMessageId = Date.now().toString();
     setMessages((prev) => [...prev, { id: assistantMessageId, role: 'assistant', content: [], timestamp: new Date().toISOString() }]);
 
     const abort = chatService.streamAnswerQuestion(
-      { agentId: selectedAgentId, sessionId, toolUseId, answers, enableSkills, enableMCP },
+      { agentId: selectedAgentId, sessionId: tabSessionId, toolUseId, answers, enableSkills, enableMCP },
       wrappedCreateStreamHandler(assistantMessageId),
       createErrorHandler(assistantMessageId, tabId),
       createCompleteHandler(tabId)
     );
 
-    abortRef.current = abort;
-    // Store in tab map for per-tab stop isolation
+    // Store abort function in the tab map for per-tab stop isolation.
+    // Only the .abort() method is used by handleStop — no signal needed.
     if (tabId) {
       updateTabState(tabId, {
-        abortController: { abort: () => { abort(); }, signal: new AbortController().signal } as unknown as AbortController,
+        abortController: { abort: () => { abort(); }, signal: { aborted: false } } as unknown as AbortController,
       });
     }
   };
 
   // Handle permission decision
   const handlePermissionDecision = async (decision: 'approve' | 'deny', feedback?: string) => {
-    if (!pendingPermission || !sessionId || !selectedAgentId) return;
+    const tabId = activeTabIdRef.current ?? undefined;
+    const tabSessionId = tabId ? tabMapRef.current.get(tabId)?.sessionId : undefined;
+    if (!pendingPermission || !tabSessionId || !selectedAgentId) return;
 
     setIsPermissionLoading(true);
     setPendingPermission(null);
@@ -936,32 +940,31 @@ export default function ChatPage() {
 
     if (decision === 'deny') {
       try {
-        await chatService.submitCmdPermissionDecision({ sessionId, requestId: pendingPermission.requestId, decision: 'deny', feedback });
+        await chatService.submitCmdPermissionDecision({ sessionId: tabSessionId, requestId: pendingPermission.requestId, decision: 'deny', feedback });
       } catch (error) {
         console.error('Failed to submit deny decision:', error);
       } finally {
         setIsPermissionLoading(false);
-        setIsStreaming(false);
+        setIsStreaming(false, tabId);
       }
       return;
     }
 
     incrementStreamGen(); // Fix 1: new stream generation
-    setIsStreaming(true);
+    setIsStreaming(true, tabId);
 
     // Fix 8: Transition tab status from permission_needed → streaming
-    const tabId = activeTabIdRef.current ?? undefined;
     if (tabId) updateTabStatus(tabId, 'streaming');
 
     const assistantMessageId = (Date.now() + 1).toString();
     setMessages((prev) => [...prev, { id: assistantMessageId, role: 'assistant', content: [], timestamp: new Date().toISOString() }]);
 
     const abort = chatService.streamCmdPermissionContinue(
-      { sessionId, requestId: pendingPermission.requestId, decision, feedback, enableSkills, enableMCP },
+      { sessionId: tabSessionId, requestId: pendingPermission.requestId, decision, feedback, enableSkills, enableMCP },
       (event: StreamEvent) => {
         if (event.type === 'cmd_permission_acknowledged') {
           setMessages((prev) => prev.filter((msg) => msg.id !== assistantMessageId));
-          setIsStreaming(false);
+          setIsStreaming(false, tabId);
         } else {
           wrappedCreateStreamHandler(assistantMessageId)(event);
         }
@@ -970,22 +973,22 @@ export default function ChatPage() {
       () => { createCompleteHandler(tabId)(); setIsPermissionLoading(false); }
     );
 
-    abortRef.current = abort;
-    // Store in tab map for per-tab stop isolation
+    // Store abort function in the tab map for per-tab stop isolation.
+    // Only the .abort() method is used by handleStop — no signal needed.
     if (tabId) {
       updateTabState(tabId, {
-        abortController: { abort: () => { abort(); }, signal: new AbortController().signal } as unknown as AbortController,
+        abortController: { abort: () => { abort(); }, signal: { aborted: false } } as unknown as AbortController,
       });
     }
   };
 
   // Handle stop
   const handleStop = async () => {
-    if (!sessionId) return;
+    const currentTabId = activeTabIdRef.current;
+    const tabSessionId = currentTabId ? tabMapRef.current.get(currentTabId)?.sessionId : undefined;
+    if (!tabSessionId) return;
     try {
       // Use the active tab's abort controller from the tab map (per-tab isolation)
-      // instead of the shared abortRef which can be overwritten by other tabs.
-      const currentTabId = activeTabIdRef.current;
       if (currentTabId) {
         const tabState = tabMapRef.current.get(currentTabId);
         if (tabState?.abortController) {
@@ -993,17 +996,14 @@ export default function ChatPage() {
           tabState.abortController = null;
         }
       }
-      // Also clear the shared abortRef as a fallback
-      if (abortRef.current) { abortRef.current(); abortRef.current = null; }
-      await chatService.stopSession(sessionId);
+      await chatService.stopSession(tabSessionId);
       setMessages((prev) => [...prev, { id: Date.now().toString(), role: 'assistant', content: [{ type: 'text', text: '⏹️ Generation stopped by user.' }], timestamp: new Date().toISOString() }]);
     } catch (error) {
       console.error('Failed to stop session:', error);
     } finally {
-      setIsStreaming(false);
+      setIsStreaming(false, currentTabId ?? undefined);
       // Update tab status to idle
-      const tabId = activeTabIdRef.current;
-      if (tabId) updateTabStatus(tabId, 'idle');
+      if (currentTabId) updateTabStatus(currentTabId, 'idle');
     }
   };
 
