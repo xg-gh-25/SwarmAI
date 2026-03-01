@@ -1,3 +1,25 @@
+/**
+ * Main chat page component for SwarmAI.
+ *
+ * Renders the chat interface including message history, streaming indicators,
+ * input area, TSCC panel, and right sidebars (Radar, History, File Browser).
+ *
+ * Streaming lifecycle state (messages, sessionId, pendingQuestion, isStreaming,
+ * refs, and handler factories) is delegated to ``useChatStreamingLifecycle``.
+ * This component focuses on:
+ *
+ * - JSX rendering and layout
+ * - User interaction handlers (send, stop, answer, permission)
+ * - Query hooks (agents, sessions, skills, plugins)
+ * - Tab management
+ * - TSCC panel integration
+ * - Plugin command routing
+ *
+ * ``deriveStreamingActivity`` is re-exported for backward compatibility with
+ * existing test imports.
+ *
+ * @module ChatPage
+ */
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -10,20 +32,27 @@ import { mcpService } from '../services/mcp';
 import { pluginsService } from '../services/plugins';
 import { workspaceService } from '../services/workspace';
 import { tasksService, PolicyViolationError } from '../services/tasks';
-import { Spinner, ConfirmDialog, AgentFormModal, PolicyViolationToast } from '../components/common';
+import { Spinner, ConfirmDialog, AgentFormModal, PolicyViolationToast, Toast } from '../components/common';
 import { PermissionRequestModal } from '../components/chat';
 import { FilePreviewModal } from '../components/workspace/FilePreviewModal';
 import { useFileAttachment, useTabState, useRightSidebarGroup } from '../hooks';
 import { useTSCCState } from '../hooks/useTSCCState';
+import { useChatStreamingLifecycle, formatElapsed, ELAPSED_DISPLAY_THRESHOLD_MS, MAX_OPEN_TABS } from '../hooks/useChatStreamingLifecycle';
 import { ChatHeader, ChatInput, ChatHistorySidebar, FileBrowserSidebar, MessageBubble, SwarmRadar } from './chat/components';
 import { TSCCPanel } from './chat/components/TSCCPanel';
 import { TSCCSnapshotCard } from './chat/components/TSCCSnapshotCard';
 import { listSnapshots } from '../services/tscc';
 import { groupSessionsByTime } from './chat/utils';
 import { createWelcomeMessage, RIGHT_SIDEBAR_WIDTH_CONFIGS } from './chat/constants';
-import type { PendingQuestion } from './chat/types';
 import { useWorkspaceSelection } from '../hooks/useWorkspaceSelection';
 import { useLayout } from '../contexts/LayoutContext';
+
+/**
+ * Re-export ``deriveStreamingActivity`` and ``MAX_OPEN_TABS`` from the
+ * extracted hook so existing test imports (``from '../pages/ChatPage'``)
+ * continue to resolve.
+ */
+export { deriveStreamingActivity, MAX_OPEN_TABS, formatElapsed, ELAPSED_DISPLAY_THRESHOLD_MS, MIN_ACTIVITY_DISPLAY_MS, sanitizeCommand, extractToolContext } from '../hooks/useChatStreamingLifecycle';
 
 export default function ChatPage() {
   const { t } = useTranslation();
@@ -31,11 +60,9 @@ export default function ChatPage() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
 
-  // Core chat state
-  const [messages, setMessages] = useState<Message[]>([]);
+  // Core chat state — streaming lifecycle delegated to extracted hook
   const [inputValue, setInputValue] = useState('');
-  const [isStreaming, setIsStreaming] = useState(false);
-  const [sessionId, setSessionId] = useState<string | undefined>();
+
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const [agentLoadError, setAgentLoadError] = useState<string | null>(null);
@@ -46,8 +73,7 @@ export default function ChatPage() {
   // Policy violation toast state
   const [policyViolation, setPolicyViolation] = useState<{ message: string; violations: Array<{ entityType: string; entityId: string; message: string; suggestedAction: string }> } | null>(null);
 
-  // Pending states
-  const [pendingQuestion, setPendingQuestion] = useState<PendingQuestion | null>(null);
+  // Pending states (permission is ChatPage-only; question is in the hook)
   const [pendingPermission, setPendingPermission] = useState<PermissionRequest | null>(null);
   const [isPermissionLoading, setIsPermissionLoading] = useState(false);
   const [deleteConfirmSession, setDeleteConfirmSession] = useState<ChatSession | null>(null);
@@ -59,13 +85,6 @@ export default function ChatPage() {
 
   // File preview state
   const [previewFile, setPreviewFile] = useState<{ path: string; name: string } | null>(null);
-
-  // TSCC snapshots for inline thread history
-  const [threadSnapshots, setThreadSnapshots] = useState<TSCCSnapshot[]>([]);
-
-  // Refs
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const abortRef = useRef<(() => void) | null>(null);
 
   // Right sidebar group with mutual exclusion
   const rightSidebars = useRightSidebarGroup({
@@ -136,7 +155,43 @@ export default function ChatPage() {
     removeInvalidTabs,
   } = useTabState(selectedAgentId || 'default');
 
-  // TSCC state management
+  // Streaming lifecycle hook — owns messages, sessionId, pendingQuestion,
+  // isStreaming, refs, and stream handler factories (Phase 0 extraction).
+  // Called before useTSCCState so sessionId is available for TSCC.
+  const {
+    messages,
+    setMessages,
+    sessionId,
+    setSessionId,
+    pendingQuestion,
+    setPendingQuestion,
+    isStreaming,
+    setIsStreaming,
+    displayedActivity,
+    elapsedSeconds,
+    abortRef,
+    messagesEndRef,
+    incrementStreamGen,
+    userScrolledUpRef,
+    resetUserScroll,
+    tabStateRef,
+    activeTabIdRef,
+    saveTabState,
+    restoreTabState,
+    initTabState,
+    cleanupTabState,
+    tabStatuses,
+    updateTabStatus,
+    createStreamHandler,
+    createCompleteHandler,
+    createErrorHandler,
+  } = useChatStreamingLifecycle({
+    queryClient,
+    applyTelemetryEvent: (event: unknown) => applyTelemetryEventRef.current(event as never),
+    tsccTriggerAutoExpand: (reason: string) => tsccTriggerAutoExpandRef.current(reason as never),
+  });
+
+  // TSCC state management — called after the streaming hook so sessionId is available
   const {
     tsccState,
     isExpanded: tsccExpanded,
@@ -144,9 +199,62 @@ export default function ChatPage() {
     toggleExpand: tsccToggleExpand,
     togglePin: tsccTogglePin,
     applyTelemetryEvent,
-    setAutoExpand: _tsccSetAutoExpand,
     triggerAutoExpand: tsccTriggerAutoExpand,
   } = useTSCCState(sessionId ?? null);
+
+  // Stable refs to break the circular dependency between the streaming hook
+  // (which needs TSCC callbacks) and useTSCCState (which needs sessionId).
+  // The hook captures these refs via closures; the refs are updated each render.
+  const applyTelemetryEventRef = useRef(applyTelemetryEvent);
+  applyTelemetryEventRef.current = applyTelemetryEvent;
+  const tsccTriggerAutoExpandRef = useRef(tsccTriggerAutoExpand);
+  tsccTriggerAutoExpandRef.current = tsccTriggerAutoExpand;
+
+  // Refs for frequently-changing values — stabilizes useCallback identity for
+  // handleSendMessage (Req 7.1, 7.3). Without these, the callback would need
+  // every volatile dep in its dependency array and re-create on every keystroke.
+  const inputValueRef = useRef(inputValue);
+  inputValueRef.current = inputValue;
+  const attachmentsRef = useRef(attachments);
+  attachmentsRef.current = attachments;
+  const isStreamingRef = useRef(isStreaming);
+  isStreamingRef.current = isStreaming;
+  const runAsTaskRef = useRef(runAsTask);
+  runAsTaskRef.current = runAsTask;
+  const messagesRef = useRef(messages);
+  messagesRef.current = messages;
+  const openTabsRef = useRef(openTabs);
+  openTabsRef.current = openTabs;
+  const sessionIdRef = useRef(sessionId);
+  sessionIdRef.current = sessionId;
+
+  // TSCC snapshots for inline thread history
+  const [threadSnapshots, setThreadSnapshots] = useState<TSCCSnapshot[]>([]);
+
+  // Memoized timeline: merge messages + TSCC snapshots into a single sorted list (Req 8.1, 8.2)
+  type TimelineItem =
+    | { kind: 'message'; data: Message }
+    | { kind: 'snapshot'; data: TSCCSnapshot };
+
+  const timeline = useMemo(() => {
+    const items: TimelineItem[] = [
+      ...messages.map((m): TimelineItem => ({ kind: 'message', data: m })),
+      ...threadSnapshots.map((s): TimelineItem => ({ kind: 'snapshot', data: s })),
+    ];
+
+    items.sort((a, b) => {
+      // Both Message and TSCCSnapshot share a `timestamp` field
+      const tsA = a.data.timestamp;
+      const tsB = b.data.timestamp;
+      const diff = new Date(tsA || 0).getTime() - new Date(tsB || 0).getTime();
+      // Stable sort tiebreaker: messages before snapshots, then by id/snapshotId
+      if (diff !== 0) return diff;
+      if (a.kind !== b.kind) return a.kind === 'message' ? -1 : 1;
+      return 0;
+    });
+
+    return items;
+  }, [messages, threadSnapshots]);
 
   const agentSkills = selectedAgent?.allowAllSkills
     ? skills
@@ -185,48 +293,109 @@ export default function ChatPage() {
     } finally {
       setIsLoadingHistory(false);
     }
-  }, []);
+  }, [setMessages, setSessionId, setPendingQuestion, setIsLoadingHistory]);
 
   // Handle new chat
   const handleNewChat = useCallback(() => {
-    setMessages([]);
+    setMessages([createWelcomeMessage()]);
     setSessionId(undefined);
     setPendingQuestion(null);
-    setMessages([createWelcomeMessage()]);
     // Note: Sidebar visibility is now managed by toggle buttons, no need to collapse
   }, []);
 
+  // Tab limit toast state (Fix 7)
+  const [tabLimitToast, setTabLimitToast] = useState<string | null>(null);
+
   // Handle new session - creates new tab with "New Session" title (Req 2.2, 2.3)
+  // Fix 6: Save current tab state before creating new tab, initialize new tab in per-tab map
+  // Fix 7: Guard against exceeding MAX_OPEN_TABS
   const handleNewSession = useCallback(() => {
     if (!selectedAgentId) return;
-    addTab(selectedAgentId);
+    // Fix 7: Tab limit enforcement — check authoritative tab count from per-tab map
+    if (tabStateRef.current.size >= MAX_OPEN_TABS) {
+      setTabLimitToast('Maximum tabs reached. Close a tab to open a new one.');
+      return;
+    }
+    // Save current tab state before switching away
+    saveTabState();
+    const newTab = addTab(selectedAgentId);
+    const welcomeMessages = [createWelcomeMessage()];
+    // Initialize new tab entry in per-tab map with defaults
+    initTabState(newTab.id, welcomeMessages);
     // Clear current session state for the new tab
-    setMessages([createWelcomeMessage()]);
+    setMessages(welcomeMessages);
     setSessionId(undefined);
     setPendingQuestion(null);
-  }, [selectedAgentId, addTab]);
+  }, [selectedAgentId, addTab, saveTabState, initTabState, tabStateRef]);
 
   // Handle tab selection - switches active tab and loads session messages (Req 1.6)
+  // Fix 6: Save current tab state, restore target tab state from per-tab map
   const handleTabSelect = useCallback(async (tabId: string) => {
     const tab = openTabs.find(t => t.id === tabId);
     if (!tab) return;
     
+    // Save current tab state before switching away
+    saveTabState();
+    
     selectTab(tabId);
     
-    // If tab has a session, load its messages
+    // Try to restore from per-tab map first (authoritative)
+    const restored = restoreTabState(tabId);
+    if (restored) {
+      // Fix 8: Clear unread indicator when switching to a tab with 'complete_unread' status
+      if (tabStatuses[tabId] === 'complete_unread') {
+        updateTabStatus(tabId, 'idle');
+      }
+      return;
+    }
+    
+    // Not in map — load from API or initialize fresh
+    activeTabIdRef.current = tabId;
     if (tab.sessionId) {
-      await loadSessionMessages(tab.sessionId);
+      // New tab with existing session — load from API with async guard
+      const loadedTabId = tabId; // capture for closure
+      setIsLoadingHistory(true);
+      try {
+        const sessionMessages = await chatService.getSessionMessages(tab.sessionId);
+        // Async guard: only apply if user hasn't switched away during the load
+        if (activeTabIdRef.current !== loadedTabId) return;
+        const formattedMessages: Message[] = sessionMessages.map((msg) => ({
+          id: msg.id,
+          role: msg.role as 'user' | 'assistant',
+          content: msg.content as ContentBlock[],
+          timestamp: msg.createdAt,
+          model: msg.model,
+        }));
+        setMessages(formattedMessages);
+        setSessionId(tab.sessionId);
+        // Initialize the tab in the per-tab map now that we have data
+        initTabState(loadedTabId, formattedMessages);
+        const tabState = tabStateRef.current.get(loadedTabId);
+        if (tabState) tabState.sessionId = tab.sessionId;
+      } catch (error) {
+        console.error('Failed to load session messages:', error);
+      } finally {
+        if (activeTabIdRef.current === loadedTabId) {
+          setIsLoadingHistory(false);
+        }
+      }
+      setPendingQuestion(null);
     } else {
-      // New tab without session - show welcome message
-      setMessages([createWelcomeMessage()]);
+      // Brand new tab — initialize empty
+      const welcomeMessages = [createWelcomeMessage()];
+      setMessages(welcomeMessages);
       setSessionId(undefined);
       setPendingQuestion(null);
+      initTabState(tabId, welcomeMessages);
     }
-  }, [openTabs, selectTab, loadSessionMessages]);
+  }, [openTabs, selectTab, saveTabState, restoreTabState, initTabState, activeTabIdRef, tabStateRef]);
 
   // Handle tab close - removes tab, handles last-tab case (Req 3.3)
+  // Fix 6: Clean up per-tab state map entry and abort controller
   const handleTabClose = useCallback((tabId: string) => {
     const isActiveTab = tabId === activeTabId;
+    // Clean up per-tab state: remove from map, abort controller if active
+    cleanupTabState(tabId);
     closeTab(tabId);
     
     // If closing active tab, the closeTab function handles switching to adjacent tab
@@ -235,7 +404,7 @@ export default function ChatPage() {
       // The closeTab function will update activeTabId, so we need to handle this
       // in a useEffect that watches activeTabId changes
     }
-  }, [activeTabId, closeTab]);
+  }, [activeTabId, closeTab, cleanupTabState]);
 
   // Handle session selection
   const handleSelectSession = useCallback(async (session: ChatSession) => {
@@ -260,14 +429,37 @@ export default function ChatPage() {
     setDeleteConfirmSession(null);
   };
 
-  // Scroll to bottom on new messages
+  // Scroll to bottom on new messages — conditional on user scroll position (Fix 2)
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
+
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
+  /** Fix 2: Detect user scroll-up to suppress auto-scroll during streaming. */
+  const handleMessagesScroll = useCallback(() => {
+    const el = messagesContainerRef.current;
+    if (!el) return;
+    const threshold = 100; // px from bottom
+    const isNearBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - threshold;
+    userScrolledUpRef.current = !isNearBottom;
+  }, [userScrolledUpRef]);
+
   useEffect(() => {
-    scrollToBottom();
+    // Only auto-scroll if user hasn't scrolled up (Fix 2)
+    if (!userScrolledUpRef.current) {
+      scrollToBottom();
+    }
   }, [messages]);
+
+  // Register the initial/default tab in the per-tab state map on mount.
+  // Without this, the first tab has no entry in tabStateRef and all
+  // per-tab features (message tracking, abort isolation, status) are broken.
+  useEffect(() => {
+    if (activeTabId && !tabStateRef.current.has(activeTabId)) {
+      initTabState(activeTabId, messages.length > 0 ? messages : [createWelcomeMessage()]);
+    }
+  }, [activeTabId]); // eslint-disable-line react-hooks/exhaustive-deps — mount-only for initial tab
 
   // Initialize with default agent - always use the default SwarmAgent
   useEffect(() => {
@@ -286,7 +478,10 @@ export default function ChatPage() {
     setAgentLoadError(null);
     agentsService.getDefault().then(defaultAgent => {
       setSelectedAgentId(defaultAgent.id);
-      setMessages([createWelcomeMessage()]);
+      // Only set welcome message if not currently streaming (avoid wiping in-progress chat)
+      if (!messages.some((m: Message) => m.role === 'user')) {
+        setMessages([createWelcomeMessage()]);
+      }
     }).catch(error => {
       console.error('Failed to fetch default agent:', error);
       setAgentLoadError(t('chat.defaultAgentError', 'Failed to load the default agent. Please restart the application or check the backend service.'));
@@ -334,22 +529,29 @@ export default function ChatPage() {
   }, [sessions, removeInvalidTabs]);
 
   // Sync active tab content when activeTabId changes (for tab switching/closing)
+  // IMPORTANT: Only react to activeTabId changes — NOT sessionId changes.
+  // sessionId changes during streaming (session_start event) must not trigger
+  // a reload, or it will wipe in-progress messages.
+  const prevActiveTabIdRef = useRef<string | null>(null);
   useEffect(() => {
     if (!activeTabId) return;
+    // Skip if activeTabId hasn't actually changed (sessionId change triggered this)
+    if (prevActiveTabIdRef.current === activeTabId) return;
+    prevActiveTabIdRef.current = activeTabId;
     
     const activeTab = openTabs.find(t => t.id === activeTabId);
     if (!activeTab) return;
     
-    // Only load if the current sessionId doesn't match the tab's sessionId
+    // Only load if the tab has a persisted session we haven't loaded yet
     if (activeTab.sessionId && activeTab.sessionId !== sessionId) {
       loadSessionMessages(activeTab.sessionId);
-    } else if (!activeTab.sessionId && sessionId) {
-      // Tab has no session but we have a sessionId - reset to welcome
+    } else if (!activeTab.sessionId && !isStreaming && sessionId) {
+      // Tab has no session and we're not streaming — reset to welcome
       setMessages([createWelcomeMessage()]);
       setSessionId(undefined);
       setPendingQuestion(null);
     }
-  }, [activeTabId, openTabs, sessionId, loadSessionMessages]);
+  }, [activeTabId, openTabs, sessionId, isStreaming, loadSessionMessages]);
 
   // Fetch TSCC snapshots when session changes
   useEffect(() => {
@@ -415,105 +617,35 @@ export default function ChatPage() {
     [selectedAgentId]
   );
 
-  // Stream event handler - extracted to reduce duplication
-  const createStreamHandler = useCallback((assistantMessageId: string) => {
+  // Wrap the hook's createStreamHandler to add ChatPage-local cmd_permission_request handling.
+  // The hook handles sessionId/isStreaming; ChatPage adds setPendingPermission.
+  // Fix 6: Pass activeTabIdRef.current as tabId for tab-aware streaming.
+  const wrappedCreateStreamHandler = useCallback((assistantMessageId: string) => {
+    const tabId = activeTabIdRef.current ?? undefined;
+    const hookHandler = createStreamHandler(assistantMessageId, tabId);
     return (event: StreamEvent) => {
-      if (event.type === 'session_start' && event.sessionId) {
-        setSessionId(event.sessionId);
-      } else if (event.type === 'session_cleared' && event.newSessionId) {
-        setSessionId(event.newSessionId);
-        setMessages([]);
-        queryClient.invalidateQueries({ queryKey: ['chat-sessions'] });
-      } else if (event.type === 'assistant' && event.content) {
-        setMessages((prev) =>
-          prev.map((msg) => {
-            if (msg.id !== assistantMessageId) return msg;
-            const existingContent = msg.content;
-            const newContent = event.content!.filter((newBlock) => {
-              return !existingContent.some((existing) => {
-                if (newBlock.type !== existing.type) return false;
-                if (newBlock.type === 'text' && existing.type === 'text') return newBlock.text === existing.text;
-                if (newBlock.type === 'tool_use' && existing.type === 'tool_use') return newBlock.id === existing.id;
-                if (newBlock.type === 'tool_result' && existing.type === 'tool_result') return newBlock.toolUseId === existing.toolUseId;
-                return false;
-              });
-            });
-            return { ...msg, content: [...existingContent, ...newContent], model: event.model };
-          })
-        );
-      } else if (event.type === 'ask_user_question' && event.questions && event.toolUseId) {
-        setPendingQuestion({ toolUseId: event.toolUseId, questions: event.questions });
-        if (event.sessionId) setSessionId(event.sessionId);
-        setMessages((prev) =>
-          prev.map((msg) =>
-            msg.id === assistantMessageId
-              ? { ...msg, content: [...msg.content, { type: 'ask_user_question' as const, toolUseId: event.toolUseId!, questions: event.questions! }] }
-              : msg
-          )
-        );
-        setIsStreaming(false);
-        // Auto-expand TSCC for blocking issue requiring user input (Req 16.2)
-        tsccTriggerAutoExpand('blocking_issue');
-      } else if (event.type === 'permission_request') {
+      if (event.type === 'cmd_permission_request') {
+        // Extract permission fields (handle both camelCase and snake_case)
+        const raw = event as unknown as Record<string, unknown>;
+        const requestId = event.requestId || raw.request_id as string;
+        const toolName = event.toolName || raw.tool_name as string;
+        const toolInput = event.toolInput || raw.tool_input as Record<string, unknown>;
         setPendingPermission({
-          requestId: event.requestId!,
-          toolName: event.toolName!,
-          toolInput: event.toolInput!,
+          requestId: requestId!,
+          toolName: toolName!,
+          toolInput: toolInput!,
           reason: event.reason!,
           options: event.options || ['approve', 'deny'],
         });
-        if (event.sessionId) setSessionId(event.sessionId);
-        setIsStreaming(false);
-      } else if (event.type === 'result' && event.sessionId) {
-        setSessionId(event.sessionId);
-        // Invalidate Radar task caches on stream completion (Spec 4 — Req 9.3)
-        queryClient.invalidateQueries({ queryKey: ['radar', 'wipTasks'] });
-        queryClient.invalidateQueries({ queryKey: ['radar', 'completedTasks'] });
-      } else if (event.type === 'error') {
-        const errorMsg = event.message || event.error || event.detail || 'An unknown error occurred';
-        setMessages((prev) =>
-          prev.map((msg) => msg.id === assistantMessageId ? { ...msg, content: [{ type: 'text', text: `Error: ${errorMsg}` }] } : msg)
-        );
-      } else if (
-        event.type === 'agent_activity' ||
-        event.type === 'tool_invocation' ||
-        event.type === 'capability_activated' ||
-        event.type === 'sources_updated' ||
-        event.type === 'summary_updated'
-      ) {
-        // Route TSCC telemetry events to the hook (silent update, no auto-expand)
-        applyTelemetryEvent(event as any);
-
-        // Auto-expand ONLY for high-signal events (Req 16.1, 16.2):
-        // - First plan creation in thread
-        // - Blocking issue requiring user input
-        // Normal streaming events never trigger auto-expand.
-        if (
-          event.type === 'summary_updated' &&
-          event.description?.toLowerCase().includes('plan')
-        ) {
-          tsccTriggerAutoExpand('first_plan');
-        }
       }
+      // Delegate to hook handler for all events (including cmd_permission_request
+      // which also needs sessionId/isStreaming updates)
+      hookHandler(event);
     };
-  }, [queryClient, applyTelemetryEvent, tsccTriggerAutoExpand]);
+  }, [createStreamHandler, activeTabIdRef]);
 
-  const createErrorHandler = useCallback((assistantMessageId: string) => {
-    return (error: Error) => {
-      console.error('Stream error:', error);
-      setMessages((prev) =>
-        prev.map((msg) => msg.id === assistantMessageId ? { ...msg, content: [{ type: 'text', text: `Connection error: ${error.message}` }] } : msg)
-      );
-      setIsStreaming(false);
-    };
-  }, []);
-
-  const createCompleteHandler = useCallback(() => {
-    return () => setIsStreaming(false);
-  }, []);
-
-  // Handle plugin commands
-  const handlePluginCommand = async (command: string): Promise<boolean> => {
+  // Handle plugin commands (Req 7.2 — memoized with useCallback)
+  const handlePluginCommand = useCallback(async (command: string): Promise<boolean> => {
     const parts = command.trim().split(/\s+/);
     if (parts[0] !== '/plugin') return false;
 
@@ -611,15 +743,16 @@ export default function ChatPage() {
 
     setMessages((prev) => [...prev, { id: assistantMessageId, role: 'assistant', content: [{ type: 'text', text: responseText }], timestamp: new Date().toISOString() }]);
     return true;
-  };
+  }, [setMessages]);
 
-  // Handle send message
-  const handleSendMessage = async () => {
-    const messageText = inputValue;
+  // Handle send message (Req 7.1 — memoized with useCallback, volatile deps via refs)
+  const handleSendMessage = useCallback(async () => {
+    const messageText = inputValueRef.current;
+    const currentAttachments = attachmentsRef.current;
     const hasText = messageText.trim().length > 0;
-    const hasAttachments = attachments.some((a) => a.base64);
+    const hasAttachments = currentAttachments.some((a) => a.base64);
 
-    if ((!hasText && !hasAttachments) || isStreaming || !selectedAgentId) return;
+    if ((!hasText && !hasAttachments) || isStreamingRef.current || !selectedAgentId) return;
 
     if (messageText.trim().startsWith('/plugin')) {
       setInputValue('');
@@ -627,10 +760,10 @@ export default function ChatPage() {
       return;
     }
 
-    const content = await buildContentArray(messageText, attachments);
+    const content = await buildContentArray(messageText, currentAttachments);
     if (content.length === 0) return;
 
-    if (runAsTask) {
+    if (runAsTaskRef.current) {
       try {
         await tasksService.create({
           agentId: selectedAgentId,
@@ -662,60 +795,80 @@ export default function ChatPage() {
     const displayText = hasText ? messageText : '[Attachments]';
     const userMessageContent: ContentBlock[] = [{ type: 'text', text: displayText }];
     if (hasAttachments && hasText) {
-      userMessageContent.push({ type: 'text', text: `📎 ${attachments.map((a) => a.name).join(', ')}` });
+      userMessageContent.push({ type: 'text', text: `📎 ${currentAttachments.map((a) => a.name).join(', ')}` });
     }
 
     const userMessage: Message = { id: Date.now().toString(), role: 'user', content: userMessageContent, timestamp: new Date().toISOString() };
     setMessages((prev) => [...prev, userMessage]);
     setInputValue('');
     clearAttachments();
+    resetUserScroll(); // Fix 2: resume auto-scroll on new user message
+    incrementStreamGen(); // Fix 1: new stream generation
     setIsStreaming(true);
 
+    // Fix 8: Transition tab status to 'streaming' (handles error → streaming case too)
+    const currentActiveTabId = activeTabIdRef.current;
+    if (currentActiveTabId) {
+      updateTabStatus(currentActiveTabId, 'streaming');
+    }
+
     // Update tab title on first message (Req 2.4)
-    if (activeTabId) {
-      const activeTab = openTabs.find(t => t.id === activeTabId);
+    if (currentActiveTabId) {
+      const activeTab = openTabsRef.current.find(t => t.id === currentActiveTabId);
       if (activeTab?.isNew && messageText.trim()) {
         const newTitle = messageText.slice(0, 25) + (messageText.length > 25 ? '...' : '');
-        updateTabTitle(activeTabId, newTitle);
-        setTabIsNew(activeTabId, false);
+        updateTabTitle(currentActiveTabId, newTitle);
+        setTabIsNew(currentActiveTabId, false);
       }
     }
 
     const assistantMessageId = (Date.now() + 1).toString();
     setMessages((prev) => [...prev, { id: assistantMessageId, role: 'assistant', content: [], timestamp: new Date().toISOString() }]);
 
+    // Ensure the active tab is registered in the per-tab state map BEFORE
+    // creating the stream handler. Without this, capturedTabId would be null
+    // and isActiveTab would become false once initTabState fires later.
+    if (currentActiveTabId && !tabStateRef.current.has(currentActiveTabId)) {
+      initTabState(currentActiveTabId, messagesRef.current);
+    }
+
     const abort = chatService.streamChat(
       {
         agentId: selectedAgentId,
         ...(hasAttachments ? { content } : { message: messageText }),
-        sessionId,
+        sessionId: sessionIdRef.current,
         enableSkills,
         enableMCP,
         workspaceContext: selectedWorkspace?.context,
       },
-      createStreamHandler(assistantMessageId),
-      createErrorHandler(assistantMessageId),
-      createCompleteHandler()
+      wrappedCreateStreamHandler(assistantMessageId),
+      createErrorHandler(assistantMessageId, activeTabIdRef.current ?? undefined),
+      createCompleteHandler(activeTabIdRef.current ?? undefined)
     );
 
     abortRef.current = abort;
-  };
+  }, [selectedAgentId, enableSkills, enableMCP, selectedWorkspace, handlePluginCommand, buildContentArray, clearAttachments, resetUserScroll, incrementStreamGen, setIsStreaming, setMessages, setInputValue, updateTabStatus, updateTabTitle, setTabIsNew, initTabState, wrappedCreateStreamHandler, createErrorHandler, createCompleteHandler, abortRef, activeTabIdRef, tabStateRef, queryClient, navigate, t, setPolicyViolation, setRunAsTask]);
 
   // Handle answering AskUserQuestion
   const handleAnswerQuestion = (toolUseId: string, answers: Record<string, string>) => {
     if (!selectedAgentId || !sessionId) return;
 
     setPendingQuestion(null);
+    incrementStreamGen(); // Fix 1: new stream generation
     setIsStreaming(true);
+
+    // Fix 8: Transition tab status from waiting_input → streaming
+    const tabId = activeTabIdRef.current ?? undefined;
+    if (tabId) updateTabStatus(tabId, 'streaming');
 
     const assistantMessageId = Date.now().toString();
     setMessages((prev) => [...prev, { id: assistantMessageId, role: 'assistant', content: [], timestamp: new Date().toISOString() }]);
 
     const abort = chatService.streamAnswerQuestion(
       { agentId: selectedAgentId, sessionId, toolUseId, answers, enableSkills, enableMCP },
-      createStreamHandler(assistantMessageId),
-      createErrorHandler(assistantMessageId),
-      createCompleteHandler()
+      wrappedCreateStreamHandler(assistantMessageId),
+      createErrorHandler(assistantMessageId, tabId),
+      createCompleteHandler(tabId)
     );
 
     abortRef.current = abort;
@@ -733,7 +886,7 @@ export default function ChatPage() {
 
     if (decision === 'deny') {
       try {
-        await chatService.submitPermissionDecision({ sessionId, requestId: pendingPermission.requestId, decision: 'deny', feedback });
+        await chatService.submitCmdPermissionDecision({ sessionId, requestId: pendingPermission.requestId, decision: 'deny', feedback });
       } catch (error) {
         console.error('Failed to submit deny decision:', error);
       } finally {
@@ -743,22 +896,28 @@ export default function ChatPage() {
       return;
     }
 
+    incrementStreamGen(); // Fix 1: new stream generation
     setIsStreaming(true);
+
+    // Fix 8: Transition tab status from permission_needed → streaming
+    const tabId = activeTabIdRef.current ?? undefined;
+    if (tabId) updateTabStatus(tabId, 'streaming');
+
     const assistantMessageId = (Date.now() + 1).toString();
     setMessages((prev) => [...prev, { id: assistantMessageId, role: 'assistant', content: [], timestamp: new Date().toISOString() }]);
 
-    const abort = chatService.streamPermissionContinue(
+    const abort = chatService.streamCmdPermissionContinue(
       { sessionId, requestId: pendingPermission.requestId, decision, feedback, enableSkills, enableMCP },
       (event: StreamEvent) => {
-        if (event.type === 'permission_acknowledged') {
+        if (event.type === 'cmd_permission_acknowledged') {
           setMessages((prev) => prev.filter((msg) => msg.id !== assistantMessageId));
           setIsStreaming(false);
         } else {
-          createStreamHandler(assistantMessageId)(event);
+          wrappedCreateStreamHandler(assistantMessageId)(event);
         }
       },
-      (error) => { createErrorHandler(assistantMessageId)(error); setIsPermissionLoading(false); },
-      () => { setIsStreaming(false); setIsPermissionLoading(false); }
+      (error) => { createErrorHandler(assistantMessageId, tabId)(error); setIsPermissionLoading(false); },
+      () => { createCompleteHandler(tabId)(); setIsPermissionLoading(false); }
     );
 
     abortRef.current = abort;
@@ -795,6 +954,7 @@ export default function ChatPage() {
         onTabSelect={handleTabSelect}
         onTabClose={handleTabClose}
         onNewSession={handleNewSession}
+        tabStatuses={tabStatuses}
         activeSidebar={rightSidebars.activeSidebar}
         onOpenSidebar={rightSidebars.openSidebar}
       />
@@ -846,25 +1006,8 @@ export default function ChatPage() {
           ) : (
             <>
               {/* Messages — interleaved with TSCC snapshot cards */}
-              <div className="flex-1 overflow-y-auto p-6 space-y-6">
-                {(() => {
-                  // Merge messages and snapshots into a single chronological list
-                  type TimelineItem =
-                    | { kind: 'message'; data: Message }
-                    | { kind: 'snapshot'; data: TSCCSnapshot };
-
-                  const timeline: TimelineItem[] = [
-                    ...messages.map((m): TimelineItem => ({ kind: 'message', data: m })),
-                    ...threadSnapshots.map((s): TimelineItem => ({ kind: 'snapshot', data: s })),
-                  ];
-
-                  timeline.sort((a, b) => {
-                    const tsA = a.kind === 'message' ? a.data.timestamp : a.data.timestamp;
-                    const tsB = b.kind === 'message' ? b.data.timestamp : b.data.timestamp;
-                    return new Date(tsA || 0).getTime() - new Date(tsB || 0).getTime();
-                  });
-
-                  return timeline.map((item) =>
+              <div ref={messagesContainerRef} onScroll={handleMessagesScroll} className="flex-1 overflow-y-auto p-6 space-y-6">
+                {timeline.map((item) =>
                     item.kind === 'message' ? (
                       <MessageBubble
                         key={item.data.id}
@@ -879,12 +1022,30 @@ export default function ChatPage() {
                         snapshot={item.data}
                       />
                     ),
-                  );
-                })()}
+                  )}
                 {isStreaming && (
                   <div className="flex items-center gap-2 text-[var(--color-text-muted)]">
                     <Spinner size="sm" />
-                    <span className="text-sm">{t('chat.thinking')}</span>
+                    <span className="text-sm">
+                      {displayedActivity?.toolName
+                        ? (displayedActivity.toolContext
+                            ? t('chat.runningToolWithContext', {
+                                tool: displayedActivity.toolName,
+                                context: displayedActivity.toolContext,
+                                count: displayedActivity.toolCount,
+                              })
+                            : displayedActivity.toolCount > 1
+                              ? t('chat.runningToolWithCount', {
+                                  tool: displayedActivity.toolName,
+                                  count: displayedActivity.toolCount,
+                                })
+                              : t('chat.runningTool', { tool: displayedActivity.toolName }))
+                        : displayedActivity?.hasContent
+                          ? t('chat.processing')
+                          : elapsedSeconds >= ELAPSED_DISPLAY_THRESHOLD_MS / 1000
+                            ? t('chat.thinkingWithElapsed', { elapsed: formatElapsed(elapsedSeconds) })
+                            : t('chat.thinking')}
+                    </span>
                   </div>
                 )}
                 <div ref={messagesEndRef} />
@@ -992,6 +1153,11 @@ export default function ChatPage() {
           }}
           onDismiss={() => setPolicyViolation(null)}
         />
+      )}
+
+      {/* Tab Limit Toast - Fix 7 (Req 2.16) */}
+      {tabLimitToast && (
+        <Toast message={tabLimitToast} type="info" onDismiss={() => setTabLimitToast(null)} />
       )}
     </div>
   );

@@ -18,7 +18,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
+import { render, screen, fireEvent, act, cleanup } from '@testing-library/react';
 import type { ContextPreview } from '../../types';
 
 // ---------------------------------------------------------------------------
@@ -35,7 +35,7 @@ vi.mock('../../services/context', () => ({
 }));
 
 // Import after mock setup
-import { ContextPreviewPanel } from '../workspace/ContextPreviewPanel';
+import { ContextPreviewPanel, DEBOUNCE_MS } from '../workspace/ContextPreviewPanel';
 
 // ---------------------------------------------------------------------------
 // Shared mock data
@@ -95,12 +95,32 @@ const mockPreviewWithTruncation: ContextPreview = {
 describe('ContextPreviewPanel', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.useFakeTimers();
     mockGetContextPreview.mockResolvedValue(mockPreview);
+    // Ensure page is visible for tests
+    Object.defineProperty(document, 'hidden', { value: false, writable: true, configurable: true });
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     cleanup();
   });
+
+  /**
+   * Helper: expand the panel and advance past the debounce timer so the
+   * initial fetch fires and resolves.
+   */
+  async function expandAndWaitForFetch() {
+    fireEvent.click(screen.getByText('Context Preview'));
+    // Advance past debounce delay
+    await act(async () => {
+      vi.advanceTimersByTime(DEBOUNCE_MS + 50);
+    });
+    // Flush the resolved promise from the async fetch
+    await act(async () => {
+      await Promise.resolve();
+    });
+  }
 
   // -----------------------------------------------------------------
   // Rendering with mock data
@@ -109,18 +129,17 @@ describe('ContextPreviewPanel', () => {
     it('should show the panel header with "Context Preview" text', async () => {
       render(<ContextPreviewPanel projectId="proj-uuid-1" />);
 
-      await waitFor(() => {
-        expect(screen.getByText('Context Preview')).toBeInTheDocument();
-      });
+      // Header is always visible regardless of fetch state
+      expect(screen.getByText('Context Preview')).toBeInTheDocument();
     });
 
     it('should display total token count badge in the header', async () => {
       render(<ContextPreviewPanel projectId="proj-uuid-1" />);
 
-      // 1850 → "1.9k tokens" (formatTokenCount rounds)
-      await waitFor(() => {
-        expect(screen.getByText('1.9k tokens')).toBeInTheDocument();
-      });
+      // Expand panel and wait for debounced fetch
+      await expandAndWaitForFetch();
+
+      expect(screen.getByText('1.9k tokens')).toBeInTheDocument();
     });
 
     it('should call getContextPreview with the provided projectId and threadId', async () => {
@@ -128,12 +147,13 @@ describe('ContextPreviewPanel', () => {
         <ContextPreviewPanel projectId="proj-uuid-1" threadId="thread-abc" />,
       );
 
-      await waitFor(() => {
-        expect(mockGetContextPreview).toHaveBeenCalledWith(
-          'proj-uuid-1',
-          'thread-abc',
-        );
-      });
+      // Expand panel to trigger debounced fetch
+      await expandAndWaitForFetch();
+
+      expect(mockGetContextPreview).toHaveBeenCalledWith(
+        'proj-uuid-1',
+        'thread-abc',
+      );
     });
   });
 
@@ -144,23 +164,14 @@ describe('ContextPreviewPanel', () => {
     it('should start collapsed — layer list not visible', async () => {
       render(<ContextPreviewPanel projectId="proj-uuid-1" />);
 
-      await waitFor(() => {
-        expect(screen.getByText('1.9k tokens')).toBeInTheDocument();
-      });
-
-      // Layers should NOT be visible when collapsed
+      // Panel starts collapsed — no fetch fires, no token badge
       expect(screen.queryByText('System Prompt')).not.toBeInTheDocument();
     });
 
     it('should expand when header is clicked, showing layers', async () => {
       render(<ContextPreviewPanel projectId="proj-uuid-1" />);
 
-      await waitFor(() => {
-        expect(screen.getByText('1.9k tokens')).toBeInTheDocument();
-      });
-
-      // Click header to expand
-      fireEvent.click(screen.getByText('Context Preview'));
+      await expandAndWaitForFetch();
 
       expect(screen.getByText('System Prompt')).toBeInTheDocument();
       expect(screen.getByText('Live Work')).toBeInTheDocument();
@@ -170,12 +181,7 @@ describe('ContextPreviewPanel', () => {
     it('should collapse again when header is clicked a second time', async () => {
       render(<ContextPreviewPanel projectId="proj-uuid-1" />);
 
-      await waitFor(() => {
-        expect(screen.getByText('1.9k tokens')).toBeInTheDocument();
-      });
-
-      // Expand
-      fireEvent.click(screen.getByText('Context Preview'));
+      await expandAndWaitForFetch();
       expect(screen.getByText('System Prompt')).toBeInTheDocument();
 
       // Collapse
@@ -191,11 +197,7 @@ describe('ContextPreviewPanel', () => {
     it('should render each layer with its name', async () => {
       render(<ContextPreviewPanel projectId="proj-uuid-1" />);
 
-      await waitFor(() => {
-        expect(screen.getByText('1.9k tokens')).toBeInTheDocument();
-      });
-
-      fireEvent.click(screen.getByText('Context Preview'));
+      await expandAndWaitForFetch();
 
       expect(screen.getByText('System Prompt')).toBeInTheDocument();
       expect(screen.getByText('Live Work')).toBeInTheDocument();
@@ -205,11 +207,7 @@ describe('ContextPreviewPanel', () => {
     it('should display formatted token counts for each layer', async () => {
       render(<ContextPreviewPanel projectId="proj-uuid-1" />);
 
-      await waitFor(() => {
-        expect(screen.getByText('1.9k tokens')).toBeInTheDocument();
-      });
-
-      fireEvent.click(screen.getByText('Context Preview'));
+      await expandAndWaitForFetch();
 
       // 300 → "300 tokens", 750 → "750 tokens", 800 → "800 tokens"
       expect(screen.getByText('300 tokens')).toBeInTheDocument();
@@ -220,11 +218,7 @@ describe('ContextPreviewPanel', () => {
     it('should display workspace-relative source paths', async () => {
       render(<ContextPreviewPanel projectId="proj-uuid-1" />);
 
-      await waitFor(() => {
-        expect(screen.getByText('1.9k tokens')).toBeInTheDocument();
-      });
-
-      fireEvent.click(screen.getByText('Context Preview'));
+      await expandAndWaitForFetch();
 
       expect(screen.getByText('system-prompts.md')).toBeInTheDocument();
       expect(screen.getByText('Knowledge/Memory/prefs.md')).toBeInTheDocument();
@@ -238,11 +232,7 @@ describe('ContextPreviewPanel', () => {
     it('should show truncation badge for truncated layers', async () => {
       render(<ContextPreviewPanel projectId="proj-uuid-1" />);
 
-      await waitFor(() => {
-        expect(screen.getByText('1.9k tokens')).toBeInTheDocument();
-      });
-
-      fireEvent.click(screen.getByText('Context Preview'));
+      await expandAndWaitForFetch();
 
       // Memory layer (stage 2 = snippet-removal)
       expect(
@@ -253,11 +243,7 @@ describe('ContextPreviewPanel', () => {
     it('should NOT show truncation badge for non-truncated layers', async () => {
       render(<ContextPreviewPanel projectId="proj-uuid-1" />);
 
-      await waitFor(() => {
-        expect(screen.getByText('1.9k tokens')).toBeInTheDocument();
-      });
-
-      fireEvent.click(screen.getByText('Context Preview'));
+      await expandAndWaitForFetch();
 
       // Only one truncation badge should exist (for Memory layer)
       const truncationBadges = screen.getAllByText(/truncated ·/);
@@ -284,11 +270,7 @@ describe('ContextPreviewPanel', () => {
 
       render(<ContextPreviewPanel projectId="proj-stage1" />);
 
-      await waitFor(() => {
-        expect(screen.getByText('500 tokens')).toBeInTheDocument();
-      });
-
-      fireEvent.click(screen.getByText('Context Preview'));
+      await expandAndWaitForFetch();
 
       expect(
         screen.getByText('truncated · within-layer'),
@@ -305,11 +287,7 @@ describe('ContextPreviewPanel', () => {
 
       render(<ContextPreviewPanel projectId="proj-uuid-1" />);
 
-      await waitFor(() => {
-        expect(screen.getByText('1.9k tokens')).toBeInTheDocument();
-      });
-
-      fireEvent.click(screen.getByText('Context Preview'));
+      await expandAndWaitForFetch();
 
       expect(
         screen.getByText(
@@ -322,11 +300,7 @@ describe('ContextPreviewPanel', () => {
       // mockPreview has empty truncationSummary
       render(<ContextPreviewPanel projectId="proj-uuid-1" />);
 
-      await waitFor(() => {
-        expect(screen.getByText('1.9k tokens')).toBeInTheDocument();
-      });
-
-      fireEvent.click(screen.getByText('Context Preview'));
+      await expandAndWaitForFetch();
 
       // Layers are visible but no truncation banner
       expect(screen.getByText('System Prompt')).toBeInTheDocument();
