@@ -46,6 +46,8 @@ class ChatRequest(BaseModel):
     enable_skills: bool = False
     enable_mcp: bool = False
     add_dirs: list[str] | None = None  # Additional directories for Claude to access
+    workspace_id: str | None = None  # Swarm Workspace ID for session tracking
+    workspace_context: str | None = None  # Workspace context to inject into system prompt
 
 
 class AnswerQuestionRequest(BaseModel):
@@ -125,6 +127,7 @@ class ChatSessionResponse(BaseModel):
     created_at: str
     last_accessed_at: str
     work_dir: str | None = None
+    workspace_id: str | None = None
 
 
 class ChatMessageResponse(BaseModel):

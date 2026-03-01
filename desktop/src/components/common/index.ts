@@ -9,6 +9,7 @@ export { default as MultiSelect } from './MultiSelect';
 export { default as Dropdown } from './Dropdown';
 export { default as ReadOnlyChips } from './ReadOnlyChips';
 export { default as ConfirmDialog } from './ConfirmDialog';
+export { default as SwarmWorkspaceWarningDialog } from './SwarmWorkspaceWarningDialog';
 export { default as AskUserQuestion } from './AskUserQuestion';
 export { default as MarkdownRenderer } from './MarkdownRenderer';
 export { default as TodoWriteWidget } from './TodoWriteWidget';
@@ -32,3 +33,5 @@ export {
 export { ResizableTable, ResizableTableCell } from './ResizableTable';
 export { default as BackendStartupOverlay } from './BackendStartupOverlay';
 export { default as UpdateNotification } from './UpdateNotification';
+export { Toast } from './Toast';
+export type { ToastType } from './Toast';

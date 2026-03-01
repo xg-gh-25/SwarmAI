@@ -10,20 +10,15 @@ _PROJECT_ROOT = _BACKEND_DIR.parent
 
 
 def get_app_data_dir() -> Path:
-    """Get the platform-specific application data directory.
+    """Get the application data directory.
 
     Returns:
-        macOS:   ~/Library/Application Support/SwarmAI/
-        Windows: %LOCALAPPDATA%/SwarmAI/  (typically C:/Users/<user>/AppData/Local/SwarmAI/)
-        Linux:   ~/.local/share/SwarmAI/
+        All platforms: ~/.swarm-ai/
+        
+    Uses a consistent hidden directory in the user's home folder across
+    all platforms for simplicity and easy access.
     """
-    system = platform.system()
-    if system == "Darwin":
-        return Path.home() / "Library" / "Application Support" / "SwarmAI"
-    elif system == "Windows":
-        return Path.home() / "AppData" / "Local" / "SwarmAI"
-    else:
-        return Path.home() / ".local" / "share" / "SwarmAI"
+    return Path.home() / ".swarm-ai"
 
 # Model ID mapping: Anthropic API model ID -> AWS Bedrock model ID
 # Used when CLAUDE_CODE_USE_BEDROCK=true

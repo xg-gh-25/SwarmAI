@@ -363,15 +363,25 @@ class TestAllComponentsReady:
                 "mcp_ids": ["mcp-1"]
             }
 
+        # Mock swarm workspace as ready
+        async def mock_get_default_workspace():
+            return {
+                "name": "SwarmWS",
+                "file_path": "{app_data_dir}/swarm-workspaces/SwarmWS"
+            }
+
         # Mock gateway as running
         mock_gateway = MagicMock()
         mock_gateway._shutting_down = False
 
-        with patch("routers.system.db") as mock_db, \
+        # Create mock db with proper async methods
+        mock_db = MagicMock()
+        mock_db.health_check = mock_health_check
+        mock_db.swarm_workspaces.get_default = mock_get_default_workspace
+
+        with patch("routers.system.db", mock_db), \
              patch("routers.system.get_default_agent", mock_get_default_agent), \
              patch("routers.system.channel_gateway", mock_gateway):
-
-            mock_db.health_check = mock_health_check
 
             response = client.get("/api/system/status")
 
@@ -380,4 +390,5 @@ class TestAllComponentsReady:
             assert data["database"]["healthy"] is True
             assert data["agent"]["ready"] is True
             assert data["channel_gateway"]["running"] is True
+            assert data["swarm_workspace"]["ready"] is True
             assert data["initialized"] is True

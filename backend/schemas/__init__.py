@@ -17,6 +17,12 @@ from .mcp import (
     MCPUpdateRequest,
     MCPResponse,
 )
+from .swarm_workspace import (
+    SwarmWorkspaceBase,
+    SwarmWorkspaceCreate,
+    SwarmWorkspaceUpdate,
+    SwarmWorkspaceResponse,
+)
 from .message import (
     ChatRequest,
     TextContent,
@@ -40,6 +46,10 @@ __all__ = [
     "MCPCreateRequest",
     "MCPUpdateRequest",
     "MCPResponse",
+    "SwarmWorkspaceBase",
+    "SwarmWorkspaceCreate",
+    "SwarmWorkspaceUpdate",
+    "SwarmWorkspaceResponse",
     "ChatRequest",
     "TextContent",
     "ToolUseContent",

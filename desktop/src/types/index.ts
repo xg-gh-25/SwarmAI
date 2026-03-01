@@ -182,6 +182,7 @@ export interface ChatSession {
   createdAt: string;
   lastAccessedAt: string;
   workDir?: string;
+  workspaceId?: string;
 }
 
 export interface ChatMessage {
@@ -255,6 +256,8 @@ export interface ChatRequest {
   enableSkills?: boolean;
   enableMCP?: boolean;
   addDirs?: string[];  // Additional directories for Claude to access
+  workspaceId?: string;  // Swarm Workspace ID for context injection
+  workspaceContext?: string;  // Workspace context to inject into system prompt
 }
 
 // File Attachment Types
@@ -662,4 +665,31 @@ export interface TaskMessageRequest {
 
 export interface RunningTaskCount {
   count: number;
+}
+
+// ============== Swarm Workspace Types ==============
+
+export interface SwarmWorkspace {
+  id: string;
+  name: string;
+  filePath: string;
+  context: string;
+  icon?: string;
+  isDefault: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SwarmWorkspaceCreateRequest {
+  name: string;
+  filePath: string;
+  context: string;
+  icon?: string;
+}
+
+export interface SwarmWorkspaceUpdateRequest {
+  name?: string;
+  filePath?: string;
+  context?: string;
+  icon?: string;
 }

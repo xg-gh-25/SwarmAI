@@ -8,7 +8,25 @@ inclusion: always
 - Desktop app: Tauri 2.0 + React + Python FastAPI sidecar
 - Backend uses Claude Agent SDK with ClaudeSDKClient
 - SQLite database, local filesystem for skills
-- Data dirs: macOS `~/Library/Application Support/SwarmAI/`, Linux `~/.local/share/SwarmAI/`, Windows `%LOCALAPPDATA%\SwarmAI\`
+- Data dirs: `~/.swarm-ai/` (all platforms)
+
+## Data Directory Structure
+```
+<app_data_dir>/
+├── data.db                    # SQLite database
+├── logs/                      # Application logs
+├── workspaces/{agent_id}/     # Per-agent isolated workspaces (security)
+└── swarm-workspaces/          # SwarmWorkspace folders
+    └── SwarmWS/               # Default workspace
+        ├── Context/
+        ├── Docs/
+        ├── Projects/
+        ├── Tasks/
+        ├── ToDos/
+        ├── Plans/
+        ├── Historical-Chats/
+        └── Reports/
+```
 
 ## API Naming Convention (CRITICAL)
 - Backend: `snake_case` (Python/Pydantic)
@@ -29,6 +47,10 @@ cd desktop && npm run tauri:dev
 # Backend dev
 cd backend && uv sync && source .venv/bin/activate && python main.py
 
+# Run tests
+cd desktop && npm test -- --run
+cd backend && pytest
+
 # Build
 cd desktop && npm run build:all
 ```
@@ -38,6 +60,7 @@ cd desktop && npm run build:all
 - Skills are SKILL.md files with YAML frontmatter
 - MCP servers: stdio/sse/http connection types
 - Theme: CSS variables in `--color-*` format, never hardcode colors
+- Default SwarmWorkspace path: `{app_data_dir}/swarm-workspaces/SwarmWS`
 
 ## Adding New Agent Fields
 1. `backend/schemas/agent.py` - Pydantic model
@@ -46,6 +69,13 @@ cd desktop && npm run build:all
 4. `desktop/src/types/index.ts` - TypeScript interface
 5. `desktop/src/services/agents.ts` - Both `toSnakeCase` AND `toCamelCase`
 6. `desktop/src/pages/AgentsPage.tsx` - UI
+
+## Key Files
+- `backend/config.py` - `get_app_data_dir()` returns platform-specific data directory
+- `backend/utils/bundle_paths.py` - Tauri bundle resource path detection (dev vs production)
+- `backend/core/swarm_workspace_manager.py` - SwarmWorkspace management, `DEFAULT_WORKSPACE_CONFIG`
+- `backend/core/agent_manager.py` - Agent lifecycle, `ensure_default_agent()`
+- `backend/core/initialization_manager.py` - App initialization logic
 
 ## Reference Docs
 - Security: `.kiro/specs/SECURITY.md`

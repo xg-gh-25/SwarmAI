@@ -2,11 +2,12 @@
 
 ## Introduction
 
-This feature adds a system initialization status display to the BackendStartupOverlay (app starting page/splash screen) of the SwarmAI desktop application. When the application starts, the backend initializes the database, creates/updates the SwarmAgent with system skills and MCP servers, and starts the channel gateway. Currently, the startup overlay only shows a generic "Starting..." message. This feature will display the detailed initialization process in a CLI-like format, similar to how Kiro CLI shows its initialization status, providing users with visibility into each startup step.
+This feature adds a system initialization status display to the BackendStartupOverlay (app starting page/splash screen) of the SwarmAI desktop application. When the application starts, the backend initializes the database, creates/updates the SwarmAgent with system skills and MCP servers, starts the channel gateway, and initializes the default SwarmWorkspace. Currently, the startup overlay only shows a generic "Starting..." message. This feature will display the detailed initialization process in a CLI-like format, similar to how Kiro CLI shows its initialization status, providing users with visibility into each startup step.
 
 ## Glossary
 
 - **SwarmAgent**: The default system agent that is automatically created and configured during application startup
+- **SwarmWorkspace**: The default system workspace that is automatically created during application startup for organizing user work
 - **System_Status_API**: The backend endpoint that provides initialization status information
 - **Backend_Startup_Overlay**: The existing React component (BackendStartupOverlay.tsx) that displays during app startup
 - **System_Skills**: Skills that are bundled with the application and automatically registered during startup
@@ -25,9 +26,11 @@ This feature adds a system initialization status display to the BackendStartupOv
 2. WHEN the endpoint is called, THE System_Status_API SHALL return the database health status as a boolean
 3. WHEN the endpoint is called, THE System_Status_API SHALL return the SwarmAgent information including name, bound skills count, and bound MCP servers count
 4. WHEN the endpoint is called, THE System_Status_API SHALL return the channel gateway running status as a boolean
-5. WHEN the endpoint is called, THE System_Status_API SHALL return an overall initialization status indicating whether all components are ready
-6. IF the database is unavailable, THEN THE System_Status_API SHALL return database status as false with an appropriate error message
-7. IF the SwarmAgent does not exist, THEN THE System_Status_API SHALL return agent status as not ready with an appropriate message
+5. WHEN the endpoint is called, THE System_Status_API SHALL return the SwarmWorkspace status including ready state, name, and path
+6. WHEN the endpoint is called, THE System_Status_API SHALL return an overall initialization status indicating whether all components are ready
+7. IF the database is unavailable, THEN THE System_Status_API SHALL return database status as false with an appropriate error message
+8. IF the SwarmAgent does not exist, THEN THE System_Status_API SHALL return agent status as not ready with an appropriate message
+9. IF the SwarmWorkspace does not exist, THEN THE System_Status_API SHALL return workspace status as not ready with an appropriate message
 
 ### Requirement 2: System Status Response Schema
 
@@ -38,8 +41,9 @@ This feature adds a system initialization status display to the BackendStartupOv
 1. THE System_Status_API SHALL return a JSON response with a `database` object containing `healthy` boolean and optional `error` string
 2. THE System_Status_API SHALL return a JSON response with an `agent` object containing `ready` boolean, `name` string, `skillsCount` number, and `mcpServersCount` number
 3. THE System_Status_API SHALL return a JSON response with a `channelGateway` object containing `running` boolean
-4. THE System_Status_API SHALL return a JSON response with an `initialized` boolean indicating overall system readiness
-5. THE System_Status_API SHALL return a JSON response with a `timestamp` string in ISO format
+4. THE System_Status_API SHALL return a JSON response with a `swarmWorkspace` object containing `ready` boolean, `name` string, and `path` string
+5. THE System_Status_API SHALL return a JSON response with an `initialized` boolean indicating overall system readiness
+6. THE System_Status_API SHALL return a JSON response with a `timestamp` string in ISO format
 
 ### Requirement 3: Frontend System Service
 
@@ -49,7 +53,8 @@ This feature adds a system initialization status display to the BackendStartupOv
 
 1. THE Frontend_System_Service SHALL provide a `getStatus()` function that calls the `/api/system/status` endpoint
 2. THE Frontend_System_Service SHALL convert snake_case response fields to camelCase for TypeScript consumption
-3. WHEN the API call fails, THE Frontend_System_Service SHALL propagate the error to the caller
+3. THE Frontend_System_Service SHALL convert the `swarm_workspace` snake_case response fields to camelCase (`swarmWorkspace`)
+4. WHEN the API call fails, THE Frontend_System_Service SHALL propagate the error to the caller
 
 ### Requirement 4: Startup Overlay Initialization Status Display
 
@@ -65,7 +70,10 @@ This feature adds a system initialization status display to the BackendStartupOv
 6. WHEN the system status is received, THE Backend_Startup_Overlay SHALL display the bound skills count as a nested item under SwarmAgent (e.g., "└─ 3 system skills bound")
 7. WHEN the system status is received, THE Backend_Startup_Overlay SHALL display the bound MCP servers count as a nested item under SwarmAgent (e.g., "└─ 2 system MCP servers bound")
 8. WHEN the system status is received, THE Backend_Startup_Overlay SHALL display a green checkmark (✓) next to "Channel gateway started"
-9. IF any initialization step fails, THEN THE Backend_Startup_Overlay SHALL display a red X (✗) next to the failed step with an error message
+9. WHEN the system status is received, THE Backend_Startup_Overlay SHALL display a green checkmark (✓) next to "Swarm Workspace initialized" when ready
+10. WHEN the system status is received, THE Backend_Startup_Overlay SHALL display the workspace path as a nested item under Swarm Workspace (e.g., "└─ ~/.swarm-ai/swarm-workspaces/SwarmWS")
+11. IF the Swarm_Workspace is not ready, THEN THE Backend_Startup_Overlay SHALL display a red X (✗) next to "Swarm Workspace initialized" with an error message
+12. IF any initialization step fails, THEN THE Backend_Startup_Overlay SHALL display a red X (✗) next to the failed step with an error message
 
 ### Requirement 5: CLI-Style Visual Formatting
 
@@ -86,8 +94,8 @@ This feature adds a system initialization status display to the BackendStartupOv
 #### Acceptance Criteria
 
 1. THE Backend_Startup_Overlay SHALL use i18n translation keys for all initialization status text
-2. THE Translation_File SHALL include keys for "Connecting to backend", "Database initialized", "SwarmAgent ready", "Channel gateway started", and related messages
-3. THE Translation_File SHALL include keys for nested items like "system skills bound" and "system MCP servers bound"
+2. THE Translation_File SHALL include keys for "Connecting to backend", "Database initialized", "SwarmAgent ready", "Channel gateway started", "Swarm Workspace initialized", and related messages
+3. THE Translation_File SHALL include keys for nested items like "system skills bound", "system MCP servers bound", and workspace path display
 4. THE Translation_File SHALL include keys for error messages
 
 ### Requirement 7: Startup Flow Integration
