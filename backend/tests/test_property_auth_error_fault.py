@@ -299,6 +299,11 @@ class TestErrorSessionNotStored:
         **Validates: Requirements 1.2, 2.2**
         """
         agent_manager = AgentManager()
+        # Provide mock config so _execute_on_session doesn't crash on
+        # self._config.get("use_bedrock") during Bedrock pre-flight check
+        mock_config = MagicMock()
+        mock_config.get = MagicMock(return_value=False)
+        agent_manager._config = mock_config
 
         init_msg = make_init_system_message(session_id="error-session-456")
         error_msg = make_result_message(
