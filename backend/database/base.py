@@ -104,12 +104,6 @@ class BaseDatabase(ABC):
 
     @property
     @abstractmethod
-    def permission_requests(self) -> BaseTable:
-        """Get the permission requests table (Human-in-the-Loop)."""
-        pass
-
-    @property
-    @abstractmethod
     def channels(self) -> BaseTable:
         """Get the channels table."""
         pass

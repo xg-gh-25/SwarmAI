@@ -245,6 +245,8 @@ export interface Message {
   content: ContentBlock[];
   timestamp: string;
   model?: string;
+  /** When true, the message contains an error and should be visually distinguished (red border). */
+  isError?: boolean;
 }
 
 export interface ChatRequest {
@@ -315,7 +317,7 @@ export const SUPPORTED_FILE_TYPES = {
 } as const;
 
 export interface StreamEvent {
-  type: 'assistant' | 'tool_use' | 'tool_result' | 'result' | 'error' | 'ask_user_question' | 'session_start' | 'session_cleared' | 'permission_request' | 'permission_decision' | 'permission_acknowledged' | 'heartbeat' | 'agent_activity' | 'tool_invocation' | 'capability_activated' | 'sources_updated' | 'summary_updated';
+  type: 'assistant' | 'tool_use' | 'tool_result' | 'result' | 'error' | 'ask_user_question' | 'session_start' | 'session_cleared' | 'cmd_permission_request' | 'cmd_permission_decision' | 'cmd_permission_acknowledged' | 'heartbeat' | 'agent_activity' | 'tool_invocation' | 'capability_activated' | 'sources_updated' | 'summary_updated' | (string & {});
   content?: ContentBlock[];
   model?: string;
   sessionId?: string;
@@ -326,13 +328,13 @@ export interface StreamEvent {
   // AskUserQuestion fields
   toolUseId?: string;
   questions?: AskUserQuestion[];
-  // PermissionRequest fields
+  // CmdPermissionRequest fields
   requestId?: string;
   toolName?: string;
   toolInput?: Record<string, unknown>;
   reason?: string;
   options?: string[];
-  // PermissionDecision fields (response to permission_request)
+  // CmdPermissionDecision fields (response to cmd_permission_request)
   decision?: 'approve' | 'deny';
   // SessionCleared fields (for /clear command)
   oldSessionId?: string;

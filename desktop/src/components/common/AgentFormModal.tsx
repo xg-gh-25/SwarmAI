@@ -66,9 +66,9 @@ export default function AgentFormModal({
     queryFn: settingsService.getAPIConfiguration,
     enabled: isOpen,
   });
-  const useBedrock = apiConfig?.use_bedrock ?? false;
-  const availableModels = useMemo(() => apiConfig?.available_models ?? [], [apiConfig?.available_models]);
-  const defaultModelFromSettings = apiConfig?.default_model ?? '';
+  const useBedrock = apiConfig?.useBedrock ?? false;
+  const availableModels = useMemo(() => apiConfig?.availableModels ?? [], [apiConfig?.availableModels]);
+  const defaultModelFromSettings = apiConfig?.defaultModel ?? '';
 
   // Convert model IDs to dropdown options
   const modelOptions = useMemo(() => availableModels.map(modelIdToOption), [availableModels]);

@@ -1,180 +1,204 @@
-"""Settings API endpoints."""
+"""Settings API endpoints backed by file-based AppConfigManager.
+
+This module was refactored from a DB-backed settings store to use
+``AppConfigManager`` (``~/.swarm-ai/config.json``) for all non-secret
+application configuration.  Credential fields have been removed from
+request/response models — AWS credentials are resolved via the standard
+AWS credential chain.
+
+Public symbols:
+
+- ``router``                — FastAPI ``APIRouter`` mounted at ``/api/settings``.
+- ``get_app_configuration`` — GET handler returning ``AppConfigResponse``.
+- ``update_app_configuration`` — PUT handler accepting ``AppConfigRequest``.
+- ``get_config_manager``    — Returns the module-level ``AppConfigManager`` instance.
+- ``set_config_manager``    — Replaces the module-level instance (for testing / DI).
+- ``_probe_aws_credentials`` — Check if AWS credentials are available via the credential chain.
+- ``_probe_anthropic_api_key`` — Check if ``ANTHROPIC_API_KEY`` env var is set.
+"""
+
 import logging
-from datetime import datetime
+import os
 from fastapi import APIRouter, HTTPException
 
-from schemas.settings import APIConfigurationRequest, APIConfigurationResponse
-from config import settings as app_config, ANTHROPIC_TO_BEDROCK_MODEL_MAP
-from database import db
+from schemas.settings import AppConfigRequest, AppConfigResponse
+from core.app_config_manager import AppConfigManager, DEFAULT_CONFIG
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-DEFAULT_SETTINGS_ID = "default"
+# ---------------------------------------------------------------------------
+# Module-level AppConfigManager instance (set at startup or via DI)
+# ---------------------------------------------------------------------------
+
+_config_manager: AppConfigManager | None = None
 
 
-@router.get("", response_model=APIConfigurationResponse)
-async def get_api_configuration():
-    """Get current API configuration.
+def get_config_manager() -> AppConfigManager:
+    """Return the active ``AppConfigManager`` instance.
 
-    Returns configuration with masked sensitive values.
+    If none has been set via ``set_config_manager()``, a default instance
+    is created and loaded automatically.
     """
-    settings = await db.app_settings.get(DEFAULT_SETTINGS_ID)
+    global _config_manager
+    if _config_manager is None:
+        _config_manager = AppConfigManager()
+        _config_manager.load()
+    return _config_manager
 
-    # Default models from config
-    default_models = list(ANTHROPIC_TO_BEDROCK_MODEL_MAP.keys())
 
-    if not settings:
-        # Return default settings if none exist
-        return APIConfigurationResponse(
-            anthropic_api_key_set=False,
-            anthropic_base_url=None,
-            use_bedrock=False,
-            bedrock_auth_type="credentials",
-            aws_access_key_id_set=False,
-            aws_bearer_token_set=False,
-            aws_region="us-east-1",
-            available_models=default_models,
-            default_model=app_config.default_model,
-        )
+def set_config_manager(manager: AppConfigManager) -> None:
+    """Replace the module-level ``AppConfigManager`` (for startup wiring / tests)."""
+    global _config_manager
+    _config_manager = manager
 
-    # Get available_models from database, or use config defaults if empty
-    available_models = settings.get("available_models")
-    if not available_models:
-        available_models = default_models
 
-    return APIConfigurationResponse(
-        anthropic_api_key_set=bool(settings.get("anthropic_api_key")),
-        anthropic_base_url=settings.get("anthropic_base_url"),
-        use_bedrock=bool(settings.get("use_bedrock")),
-        bedrock_auth_type=settings.get("bedrock_auth_type", "credentials"),
-        aws_access_key_id_set=bool(settings.get("aws_access_key_id")),
-        aws_bearer_token_set=bool(settings.get("aws_bearer_token")),
-        aws_region=settings.get("aws_region", "us-east-1"),
-        available_models=available_models,
-        default_model=settings.get("default_model", app_config.default_model),
+# ---------------------------------------------------------------------------
+# Credential probing helpers
+# ---------------------------------------------------------------------------
+
+
+def _probe_aws_credentials() -> bool:
+    """Check if AWS credentials are available via the credential chain.
+
+    Uses ``boto3.Session().get_credentials()`` to probe the standard AWS
+    credential resolution order (env vars, ``~/.aws/credentials``,
+    ``~/.ada/credentials``, config profiles, instance metadata) without
+    exposing actual credential values.
+    """
+    try:
+        import boto3
+        session = boto3.Session()
+        creds = session.get_credentials()
+        return creds is not None
+    except Exception:
+        return False
+
+
+def _probe_anthropic_api_key() -> bool:
+    """Check if ``ANTHROPIC_API_KEY`` env var is set and non-empty."""
+    return bool(os.environ.get("ANTHROPIC_API_KEY"))
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _build_response(cfg: AppConfigManager) -> AppConfigResponse:
+    """Build an ``AppConfigResponse`` from the current in-memory config cache.
+
+    Credential status fields are computed at call time by probing the AWS
+    credential chain and checking the ``ANTHROPIC_API_KEY`` env var.  No
+    actual credential values are exposed in the response.
+    """
+    return AppConfigResponse(
+        use_bedrock=cfg.get("use_bedrock", DEFAULT_CONFIG["use_bedrock"]),
+        aws_region=cfg.get("aws_region", DEFAULT_CONFIG["aws_region"]),
+        anthropic_base_url=cfg.get("anthropic_base_url"),
+        available_models=cfg.get("available_models", DEFAULT_CONFIG["available_models"]),
+        default_model=cfg.get("default_model", DEFAULT_CONFIG["default_model"]),
+        claude_code_disable_experimental_betas=cfg.get(
+            "claude_code_disable_experimental_betas",
+            DEFAULT_CONFIG["claude_code_disable_experimental_betas"],
+        ),
+        aws_credentials_configured=_probe_aws_credentials(),
+        anthropic_api_key_configured=_probe_anthropic_api_key(),
     )
 
 
-@router.put("", response_model=APIConfigurationResponse)
-async def update_api_configuration(request: APIConfigurationRequest):
-    """Update API configuration.
+# ---------------------------------------------------------------------------
+# Endpoints
+# ---------------------------------------------------------------------------
 
-    Only updates fields that are provided (not None).
+
+@router.get("", response_model=AppConfigResponse)
+async def get_app_configuration():
+    """Get current application configuration.
+
+    Returns all non-secret config fields from the in-memory cache.
+    Credential status fields are computed at call time by probing the
+    AWS credential chain and the ``ANTHROPIC_API_KEY`` env var.
     """
-    # Get existing settings or create new
-    settings = await db.app_settings.get(DEFAULT_SETTINGS_ID)
-    now = datetime.now().isoformat()
+    cfg = get_config_manager()
+    return _build_response(cfg)
 
-    # Default models from config
-    default_models = list(ANTHROPIC_TO_BEDROCK_MODEL_MAP.keys())
 
-    if not settings:
-        settings = {
-            "id": DEFAULT_SETTINGS_ID,
-            "anthropic_api_key": "",
-            "anthropic_base_url": None,
-            "use_bedrock": False,
-            "bedrock_auth_type": "credentials",
-            "aws_access_key_id": "",
-            "aws_secret_access_key": "",
-            "aws_session_token": None,
-            "aws_bearer_token": "",
-            "aws_region": "us-east-1",
-            "available_models": [],
-            "default_model": app_config.default_model,
-            "created_at": now,
-            "updated_at": now,
-        }
+@router.put("", response_model=AppConfigResponse)
+async def update_app_configuration(request: AppConfigRequest):
+    """Update application configuration (partial update semantics).
 
-    # Update only provided fields
-    if request.anthropic_api_key is not None:
-        settings["anthropic_api_key"] = request.anthropic_api_key
+    Only fields that are provided (not ``None``) are merged into the
+    existing configuration.  Validation rules:
 
-    if request.anthropic_base_url is not None:
-        # Allow empty string to clear the value
-        settings["anthropic_base_url"] = request.anthropic_base_url if request.anthropic_base_url else None
+    - ``default_model`` must be in ``available_models`` when both are
+      provided in the same request.
+    - When ``available_models`` is updated and the current
+      ``default_model`` is not in the new list, ``default_model`` is
+      auto-reset to the first model in the new list.
+    - Empty string for ``anthropic_base_url`` clears the value (→ None).
+    """
+    cfg = get_config_manager()
+    updates: dict = {}
+
+    # --- Collect provided fields into updates dict ---
 
     if request.use_bedrock is not None:
-        settings["use_bedrock"] = request.use_bedrock
-
-    if request.bedrock_auth_type is not None:
-        settings["bedrock_auth_type"] = request.bedrock_auth_type
-
-    if request.aws_access_key_id is not None:
-        settings["aws_access_key_id"] = request.aws_access_key_id
-
-    if request.aws_secret_access_key is not None:
-        settings["aws_secret_access_key"] = request.aws_secret_access_key
-
-    if request.aws_session_token is not None:
-        # Allow empty string to clear the value
-        settings["aws_session_token"] = request.aws_session_token if request.aws_session_token else None
-
-    if request.aws_bearer_token is not None:
-        settings["aws_bearer_token"] = request.aws_bearer_token
+        updates["use_bedrock"] = request.use_bedrock
 
     if request.aws_region is not None:
-        settings["aws_region"] = request.aws_region
+        updates["aws_region"] = request.aws_region
 
-    # Handle available_models update
+    if request.anthropic_base_url is not None:
+        # Empty string clears the value
+        updates["anthropic_base_url"] = (
+            request.anthropic_base_url if request.anthropic_base_url else None
+        )
+
+    if request.claude_code_disable_experimental_betas is not None:
+        updates["claude_code_disable_experimental_betas"] = (
+            request.claude_code_disable_experimental_betas
+        )
+
     if request.available_models is not None:
-        settings["available_models"] = request.available_models
+        updates["available_models"] = request.available_models
 
-    # Handle default_model update with validation
     if request.default_model is not None:
-        available = settings.get("available_models", [])
-        if available and request.default_model not in available:
-            raise HTTPException(
-                status_code=400,
-                detail="default_model must be in available_models"
-            )
-        settings["default_model"] = request.default_model
+        updates["default_model"] = request.default_model
 
-    settings["updated_at"] = now
+    # --- Validation: default_model must be in available_models ---
 
-    # Save settings
-    await db.app_settings.put(settings)
-
-    logger.info(f"API configuration updated: use_bedrock={settings.get('use_bedrock')}, auth_type={settings.get('bedrock_auth_type')}")
-
-    # Get available_models for response, or use config defaults if empty
-    available_models = settings.get("available_models")
-    if not available_models:
-        available_models = default_models
-
-    return APIConfigurationResponse(
-        anthropic_api_key_set=bool(settings.get("anthropic_api_key")),
-        anthropic_base_url=settings.get("anthropic_base_url"),
-        use_bedrock=bool(settings.get("use_bedrock")),
-        bedrock_auth_type=settings.get("bedrock_auth_type", "credentials"),
-        aws_access_key_id_set=bool(settings.get("aws_access_key_id")),
-        aws_bearer_token_set=bool(settings.get("aws_bearer_token")),
-        aws_region=settings.get("aws_region", "us-east-1"),
-        available_models=available_models,
-        default_model=settings.get("default_model", app_config.default_model),
+    # Determine the effective available_models after this update
+    effective_available = updates.get(
+        "available_models",
+        cfg.get("available_models", DEFAULT_CONFIG["available_models"]),
     )
 
+    if "default_model" in updates and effective_available:
+        if updates["default_model"] not in effective_available:
+            raise HTTPException(
+                status_code=400,
+                detail="default_model must be in available_models",
+            )
 
-async def get_api_settings() -> dict:
-    """Get raw API settings for internal use.
+    # --- Apply updates ---
+    if updates:
+        cfg.update(updates)
 
-    This returns the full settings including secrets for use by agent_manager.
-    """
-    settings = await db.app_settings.get(DEFAULT_SETTINGS_ID)
+    # --- Auto-reset default_model when available_models changed ---
 
-    if not settings:
-        return {
-            "anthropic_api_key": "",
-            "anthropic_base_url": None,
-            "use_bedrock": False,
-            "bedrock_auth_type": "credentials",
-            "aws_access_key_id": "",
-            "aws_secret_access_key": "",
-            "aws_session_token": None,
-            "aws_bearer_token": "",
-            "aws_region": "us-east-1",
-        }
+    if "available_models" in updates:
+        current_default = cfg.get("default_model", DEFAULT_CONFIG["default_model"])
+        new_models = updates["available_models"]
+        if new_models and current_default not in new_models:
+            cfg.update({"default_model": new_models[0]})
+            logger.info("Auto-reset default_model to %s", new_models[0])
 
-    return settings
+    logger.info(
+        "App configuration updated: use_bedrock=%s, region=%s",
+        cfg.get("use_bedrock"),
+        cfg.get("aws_region"),
+    )
+
+    return _build_response(cfg)

@@ -138,12 +138,18 @@ model_list:
 
 1. Ensure you have an AWS account with Bedrock service enabled
 2. Request Claude model access in AWS Console
-3. In SwarmAI settings:
+3. Configure AWS credentials via the standard credential chain (SwarmAI does **not** store credentials):
+   ```bash
+   # For Amazon internal users — refresh temporary credentials with ADA CLI:
+   ada credentials update --account=ACCOUNT_ID --role=ROLE_NAME --provider=isengard
+
+   # Or configure standard AWS credentials:
+   aws configure
+   ```
+4. In SwarmAI settings:
    - Enable "Use AWS Bedrock" toggle
-   - Select authentication method:
-     - **AK/SK Credentials**: Enter Access Key ID and Secret Access Key
-     - **Bearer Token**: Enter Bearer Token
    - Select AWS Region
+   - Verify the "AWS Credentials" status indicator shows ✅ Configured
    - Click "Save API Configuration"
 
 ---

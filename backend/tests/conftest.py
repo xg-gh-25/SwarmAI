@@ -37,7 +37,6 @@ _TABLES_TO_CLEAR = [
     "chat_threads",
     "todos",
     "tasks",
-    "permission_requests",
     "messages",
     "sessions",
     "skill_versions",

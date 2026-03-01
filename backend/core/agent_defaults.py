@@ -177,7 +177,7 @@ async def ensure_default_agent(skip_registration: bool = False) -> dict:
         "id": DEFAULT_AGENT_ID,
         "name": SWARM_AGENT_NAME,  # Hardcoded system agent name
         "description": agent_config.get("description", "Your AI Team, 24/7"),
-        "model": agent_config.get("model", settings.default_model),
+        "model": None,  # Model resolved at runtime from config.json, not stored in DB
         "permission_mode": agent_config.get("permission_mode", "default"),
         "max_turns": agent_config.get("max_turns", 100),
         "system_prompt": system_prompt,

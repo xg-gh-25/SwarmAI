@@ -50,17 +50,7 @@ class TestSeedDatabaseMigrations:
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS app_settings (
                 id TEXT PRIMARY KEY DEFAULT 'default',
-                anthropic_api_key TEXT DEFAULT '',
-                anthropic_base_url TEXT,
-                use_bedrock INTEGER DEFAULT 0,
-                bedrock_auth_type TEXT DEFAULT 'credentials',
-                aws_access_key_id TEXT DEFAULT '',
-                aws_secret_access_key TEXT DEFAULT '',
-                aws_session_token TEXT,
-                aws_bearer_token TEXT DEFAULT '',
-                aws_region TEXT DEFAULT 'us-east-1',
-                available_models TEXT DEFAULT '[]',
-                default_model TEXT DEFAULT 'claude-sonnet-4-5-20250929',
+                initialization_complete INTEGER DEFAULT 0,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             )
@@ -131,13 +121,7 @@ class TestSeedDatabaseMigrations:
         """
         # Verify the old schema is missing the initialization_complete column
         async with aiosqlite.connect(str(old_schema_db_path)) as conn:
-            cursor = await conn.execute("PRAGMA table_info(app_settings)")
-            columns = await cursor.fetchall()
-            column_names = [col[1] for col in columns]
-            assert "initialization_complete" not in column_names, \
-                "Test setup error: old schema should not have initialization_complete"
-            
-            # Also verify is_system_agent is missing from agents
+            # Verify is_system_agent is missing from agents (old schema)
             cursor = await conn.execute("PRAGMA table_info(agents)")
             agent_columns = await cursor.fetchall()
             agent_column_names = [col[1] for col in agent_columns]
@@ -150,13 +134,6 @@ class TestSeedDatabaseMigrations:
         
         # Verify migrations added the missing columns
         async with aiosqlite.connect(str(old_schema_db_path)) as conn:
-            # Check app_settings has initialization_complete
-            cursor = await conn.execute("PRAGMA table_info(app_settings)")
-            columns = await cursor.fetchall()
-            column_names = [col[1] for col in columns]
-            assert "initialization_complete" in column_names, \
-                "Migration should have added initialization_complete column"
-            
             # Check agents has is_system_agent
             cursor = await conn.execute("PRAGMA table_info(agents)")
             agent_columns = await cursor.fetchall()
@@ -277,13 +254,13 @@ class TestSeedDatabaseMigrations:
         # Step 1: Copy the "seed" database (old schema) to "user" location
         shutil.copy2(old_schema_db_path, user_db_path)
         
-        # Verify the copy has the old schema
+        # Verify the copy has the old schema (missing is_system_agent on agents)
         async with aiosqlite.connect(str(user_db_path)) as conn:
-            cursor = await conn.execute("PRAGMA table_info(app_settings)")
+            cursor = await conn.execute("PRAGMA table_info(agents)")
             columns = await cursor.fetchall()
             column_names = [col[1] for col in columns]
-            assert "initialization_complete" not in column_names, \
-                "Copied database should have old schema"
+            assert "is_system_agent" not in column_names, \
+                "Copied database should have old schema (missing is_system_agent)"
         
         # Step 2: Initialize the database (simulates initialize_database() call)
         db = SQLiteDatabase(db_path=user_db_path)
@@ -291,10 +268,10 @@ class TestSeedDatabaseMigrations:
         
         # Step 3: Verify migrations ran and schema is updated
         async with aiosqlite.connect(str(user_db_path)) as conn:
-            cursor = await conn.execute("PRAGMA table_info(app_settings)")
+            cursor = await conn.execute("PRAGMA table_info(agents)")
             columns = await cursor.fetchall()
             column_names = [col[1] for col in columns]
-            assert "initialization_complete" in column_names, \
+            assert "is_system_agent" in column_names, \
                 "Migrations should have updated the schema"
         
         # Verify data is preserved

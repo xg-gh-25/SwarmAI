@@ -150,7 +150,12 @@ export const chatService = {
                 if (event.type === 'heartbeat') {
                   continue;
                 }
-                onMessage(event);
+                try {
+                  onMessage(event);
+                } catch (handlerError) {
+                  console.error('[SSE] Error in onMessage handler:', handlerError, 'Event:', event.type);
+                  // Don't break the loop — continue processing remaining events
+                }
               } catch {
                 // Ignore parse errors for incomplete data
               }
@@ -296,12 +301,12 @@ export const chatService = {
     };
   },
 
-  // Submit permission decision for dangerous command approval (non-streaming)
-  async submitPermissionDecision(
+  // Submit command permission decision for dangerous command approval (non-streaming)
+  async submitCmdPermissionDecision(
     request: PermissionResponse
   ): Promise<{ status: string; requestId: string }> {
     const response = await api.post<{ status: string; request_id: string }>(
-      '/chat/permission-response',
+      '/chat/cmd-permission-response',
       {
         session_id: request.sessionId,
         request_id: request.requestId,
@@ -315,8 +320,8 @@ export const chatService = {
     };
   },
 
-  // Submit permission decision and continue streaming
-  streamPermissionContinue(
+  // Submit command permission decision and continue streaming
+  streamCmdPermissionContinue(
     request: PermissionResponse & {
       enableSkills?: boolean;
       enableMCP?: boolean;
@@ -328,7 +333,7 @@ export const chatService = {
     const controller = new AbortController();
     const port = getBackendPort();
 
-    fetch(`http://localhost:${port}/api/chat/permission-continue`, {
+    fetch(`http://localhost:${port}/api/chat/cmd-permission-continue`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

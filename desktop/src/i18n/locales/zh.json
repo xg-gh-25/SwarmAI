@@ -140,6 +140,7 @@
   "chat": {
     "title": "对话",
     "placeholder": "输入消息...",
+    "streamingPlaceholder": "等待回复中...",
     "selectAgent": "选择一个 Agent 开始对话",
     "noAgent": "请先选择一个 Agent",
     "loadingAgent": "正在加载 Agent...",
@@ -164,6 +165,10 @@
     "attachFile": "附加文件",
     "sending": "发送中...",
     "thinking": "思考中...",
+    "runningTool": "运行中: {{tool}}...",
+    "runningToolWithContext": "运行中: {{tool}} — {{context}} ({{count}} 个工具已使用)",
+    "runningToolWithCount": "运行中: {{tool}} ({{count}} 个工具已使用)",
+    "processing": "处理中...",
     "editAgent": "编辑 Agent",
     "deleteSession": "删除会话",
     "deleteSessionConfirm": "确定要删除这个会话吗？",

@@ -1,76 +1,40 @@
-"""Settings-related Pydantic models."""
+"""Settings-related Pydantic models.
+
+This module defines the request and response schemas for the Settings API
+(``/api/settings``).  The models deliberately exclude all credential fields
+— AWS credentials are resolved via the standard AWS credential chain and
+are never stored in ``config.json`` or exposed through the API.
+
+Public symbols:
+
+- ``AppConfigRequest``          — Partial-update request (PUT body).
+- ``AppConfigResponse``         — Full config response (GET result).
+"""
+
 from pydantic import BaseModel, Field
-from typing import Optional, Literal
+from typing import Optional
 
 
-class AWSCredentials(BaseModel):
-    """AWS credentials for Bedrock access."""
+class AppConfigRequest(BaseModel):
+    """Request model for updating app configuration. No credential fields."""
 
-    access_key_id: str = Field(default="", description="AWS Access Key ID")
-    secret_access_key: str = Field(default="", description="AWS Secret Access Key")
-    session_token: Optional[str] = Field(default=None, description="AWS Session Token (optional)")
-    region: str = Field(default="us-east-1", description="AWS Region")
-
-
-class APIConfiguration(BaseModel):
-    """API configuration settings."""
-
-    # Anthropic API settings
-    anthropic_api_key: str = Field(default="", description="Anthropic API Key")
-    anthropic_base_url: Optional[str] = Field(
-        default=None,
-        description="Custom Anthropic API base URL (for proxies)"
-    )
-
-    # Bedrock settings
-    use_bedrock: bool = Field(
-        default=False,
-        description="Use AWS Bedrock instead of Anthropic API"
-    )
-    aws_credentials: AWSCredentials = Field(
-        default_factory=AWSCredentials,
-        description="AWS credentials for Bedrock"
-    )
-
-
-class APIConfigurationRequest(BaseModel):
-    """Request model for updating API configuration."""
-
-    anthropic_api_key: Optional[str] = None
-    anthropic_base_url: Optional[str] = None
     use_bedrock: Optional[bool] = None
-    # Bedrock auth type: "credentials" for AK/SK, "bearer_token" for Bearer Token
-    bedrock_auth_type: Optional[Literal["credentials", "bearer_token"]] = None
-    # AK/SK credentials
-    aws_access_key_id: Optional[str] = None
-    aws_secret_access_key: Optional[str] = None
-    aws_session_token: Optional[str] = None
     aws_region: Optional[str] = None
-    # Bearer token auth
-    aws_bearer_token: Optional[str] = None
-    # Model configuration
+    anthropic_base_url: Optional[str] = None
     available_models: Optional[list[str]] = None
     default_model: Optional[str] = None
+    claude_code_disable_experimental_betas: Optional[bool] = None
 
 
-class APIConfigurationResponse(BaseModel):
-    """Response model for API configuration."""
+class AppConfigResponse(BaseModel):
+    """Response model for app configuration. No secrets."""
 
-    # Don't return full API key/secrets, just masked versions
-    anthropic_api_key_set: bool = Field(description="Whether Anthropic API key is configured")
-    anthropic_base_url: Optional[str] = None
     use_bedrock: bool = False
-    # Bedrock auth type: "credentials" or "bearer_token"
-    bedrock_auth_type: Literal["credentials", "bearer_token"] = "credentials"
-    aws_access_key_id_set: bool = Field(description="Whether AWS Access Key ID is configured")
-    aws_bearer_token_set: bool = Field(default=False, description="Whether AWS Bearer Token is configured")
     aws_region: str = "us-east-1"
-    # Model configuration
-    available_models: list[str] = Field(
-        default_factory=list,
-        description="Available model IDs for agent configuration"
-    )
-    default_model: str = Field(
-        default="claude-sonnet-4-5-20250929",
-        description="Default model for new agents"
-    )
+    anthropic_base_url: Optional[str] = None
+    available_models: list[str] = Field(default_factory=list)
+    default_model: str = "claude-sonnet-4-5-20250929"
+    claude_code_disable_experimental_betas: bool = True
+    # Credential status (read-only, derived at GET time)
+    aws_credentials_configured: bool = False
+    anthropic_api_key_configured: bool = False

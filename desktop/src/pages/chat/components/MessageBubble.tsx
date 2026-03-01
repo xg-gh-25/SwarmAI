@@ -45,7 +45,24 @@ export function MessageBubble({
         </div>
 
         <div className={clsx('space-y-3', isUser && 'inline-block text-left')}>
-          {message.content.map((block, index) => (
+          {message.isError && (
+            <div
+              className="border border-red-500/60 bg-red-500/10 rounded-lg p-3"
+              role="alert"
+              aria-label="Error message"
+            >
+              {message.content.map((block, index) => (
+                <ContentBlockRenderer
+                  key={index}
+                  block={block}
+                  onAnswerQuestion={onAnswerQuestion}
+                  pendingToolUseId={pendingToolUseId}
+                  isStreaming={isStreaming}
+                />
+              ))}
+            </div>
+          )}
+          {!message.isError && message.content.map((block, index) => (
             <ContentBlockRenderer
               key={index}
               block={block}

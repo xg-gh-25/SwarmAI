@@ -1,5 +1,6 @@
 import { useRef, useCallback } from 'react';
 import type { OpenTab } from '../types';
+import type { TabStatus } from '../../../hooks/useChatStreamingLifecycle';
 import { SessionTab } from './SessionTab';
 
 interface SessionTabBarProps {
@@ -7,6 +8,7 @@ interface SessionTabBarProps {
   activeTabId: string | null;
   onTabSelect: (tabId: string) => void;
   onTabClose: (tabId: string) => void;
+  tabStatuses?: Record<string, TabStatus>;
   maxTitleLength?: number;
 }
 
@@ -22,6 +24,7 @@ export function SessionTabBar({
   activeTabId,
   onTabSelect,
   onTabClose,
+  tabStatuses,
   maxTitleLength = 25,
 }: SessionTabBarProps) {
   const tabRefs = useRef<Map<string, HTMLDivElement>>(new Map());
@@ -96,6 +99,7 @@ export function SessionTabBar({
           isActive={tab.id === activeTabId}
           onSelect={onTabSelect}
           onClose={onTabClose}
+          status={tabStatuses?.[tab.id]}
           maxTitleLength={maxTitleLength}
           onKeyDown={(e) => handleKeyDown(e, tab.id)}
           ref={(el) => setTabRef(tab.id, el)}

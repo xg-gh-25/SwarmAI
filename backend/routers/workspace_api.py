@@ -175,15 +175,23 @@ async def update_workspace(request: WorkspaceConfigUpdate):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+# Internal directories that exist on disk but should not appear in the
+# workspace explorer tree.  These are runtime/system data, not user content.
+_HIDDEN_DIRS = frozenset({"chats"})
+
+
 def _should_include(name: str) -> bool:
     """Return True if a file/directory name should appear in the tree.
 
     Excludes hidden entries (starting with ``'.'``) except ``.project.json``
-    which carries project metadata.
+    which carries project metadata.  Also excludes internal runtime
+    directories listed in ``_HIDDEN_DIRS``.
     """
     if name == ".project.json":
         return True
     if name.startswith("."):
+        return False
+    if name in _HIDDEN_DIRS:
         return False
     return True
 

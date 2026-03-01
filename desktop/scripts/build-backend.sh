@@ -95,7 +95,6 @@ def main():
 
     # Set environment for desktop mode BEFORE any imports
     os.environ.setdefault("DATABASE_TYPE", "sqlite")
-    os.environ.setdefault("CLAUDE_CODE_USE_BEDROCK", "false")
     write_startup_log(f"DATABASE_TYPE: {os.environ.get('DATABASE_TYPE')}")
 
     try:
@@ -197,6 +196,7 @@ uv pip install \
     "passlib[bcrypt]>=1.7.4" \
     "bcrypt>=4.0.0" \
     "slowapi>=0.1.9" \
+    "boto3>=1.35.0" \
     "pyyaml>=6.0.0" \
     "anyio>=4.0.0" \
     "lark-oapi>=1.5.3" 
@@ -235,6 +235,8 @@ hiddenimports += collect_submodules('pydantic_settings')
 hiddenimports += collect_submodules('anyio')
 hiddenimports += collect_submodules('slowapi')
 hiddenimports += collect_submodules('claude_agent_sdk')
+hiddenimports += collect_submodules('boto3')
+hiddenimports += collect_submodules('botocore')
 
 # Collect data files (including bundled CLI binary from claude_agent_sdk)
 datas = []
