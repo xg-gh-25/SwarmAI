@@ -23,6 +23,9 @@ interface ContextPreviewPanelProps {
 /** Polling interval in milliseconds (5 seconds per PE Fix #6). */
 const POLL_INTERVAL_MS = 5_000;
 
+/** Debounce delay before firing the initial fetch on expand (Req 15). */
+export const DEBOUNCE_MS = 300;
+
 /** Human-readable names for truncation stages. */
 const TRUNCATION_STAGE_LABELS: Record<number, string> = {
   1: 'within-layer',
@@ -109,6 +112,15 @@ export function ContextPreviewPanel({ projectId, threadId }: ContextPreviewPanel
   const [error, setError] = useState<string | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  // Req 14: Track page visibility to pause polling when tab is backgrounded
+  const [isPageVisible, setIsPageVisible] = useState(!document.hidden);
+
+  useEffect(() => {
+    const handler = () => setIsPageVisible(!document.hidden);
+    document.addEventListener('visibilitychange', handler);
+    return () => document.removeEventListener('visibilitychange', handler);
+  }, []);
+
   /**
    * Fetch context preview, handling ETag 304 (null return = no change).
    */
@@ -126,47 +138,54 @@ export function ContextPreviewPanel({ projectId, threadId }: ContextPreviewPanel
   }, [projectId, threadId]);
 
   /**
-   * Initial fetch on mount; polling starts only when panel is expanded.
-   * Pauses polling when collapsed to avoid unnecessary network traffic
-   * (PE Fix P2).
+   * Debounced fetch + polling when panel is expanded and page is visible.
+   * Req 14: Pauses polling when page is not visible (Page Visibility API).
+   * Req 15: Debounces the initial fetch by DEBOUNCE_MS to prevent API bursts
+   * from rapid expand/collapse toggling. Polling starts only after the
+   * debounced fetch completes.
    */
   useEffect(() => {
     let cancelled = false;
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 
-    const doInitialFetch = async () => {
-      setLoading(true);
-      try {
-        const result = await getContextPreview(projectId, threadId);
-        if (!cancelled && result !== null) {
-          setPreview(result);
-          setError(null);
+    if (!collapsed && isPageVisible) {
+      // NOTE: This duplicates fetchPreview's try/catch intentionally because
+      // the initial fetch also manages the `loading` spinner state, which
+      // fetchPreview (used for polling) does not — polling updates silently.
+      debounceTimer = setTimeout(async () => {
+        if (cancelled) return;
+        setLoading(true);
+        try {
+          const result = await getContextPreview(projectId, threadId);
+          if (!cancelled && result !== null) {
+            setPreview(result);
+            setError(null);
+          }
+        } catch (err) {
+          if (!cancelled) {
+            setError(err instanceof Error ? err.message : 'Failed to load context preview');
+          }
+        } finally {
+          if (!cancelled) setLoading(false);
         }
-      } catch (err) {
+        // Start polling only after the debounced fetch completes
         if (!cancelled) {
-          setError(err instanceof Error ? err.message : 'Failed to load context preview');
+          timerRef.current = setInterval(() => {
+            if (!cancelled) fetchPreview();
+          }, POLL_INTERVAL_MS);
         }
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    };
-
-    doInitialFetch();
-
-    // Only poll when panel is expanded (PE Fix P2)
-    if (!collapsed) {
-      timerRef.current = setInterval(() => {
-        if (!cancelled) fetchPreview();
-      }, POLL_INTERVAL_MS);
+      }, DEBOUNCE_MS);
     }
 
     return () => {
       cancelled = true;
+      if (debounceTimer) clearTimeout(debounceTimer);
       if (timerRef.current) {
         clearInterval(timerRef.current);
         timerRef.current = null;
       }
     };
-  }, [projectId, threadId, fetchPreview, collapsed]);
+  }, [projectId, threadId, fetchPreview, collapsed, isPageVisible]);
 
   return (
     <div className="border border-[var(--color-border)] rounded-lg bg-[var(--color-card)] overflow-hidden">

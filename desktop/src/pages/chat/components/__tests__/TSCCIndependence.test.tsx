@@ -12,7 +12,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react';
+import { render, screen, fireEvent, act, cleanup } from '@testing-library/react';
 import { TSCCPanel } from '../TSCCPanel';
 import type { TSCCState } from '../../../../types';
 
@@ -26,7 +26,7 @@ vi.mock('../../../../services/context', () => ({
 }));
 
 // Import ContextPreviewPanel after mock setup
-import { ContextPreviewPanel } from '../../../../components/workspace/ContextPreviewPanel';
+import { ContextPreviewPanel, DEBOUNCE_MS } from '../../../../components/workspace/ContextPreviewPanel';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -81,12 +81,28 @@ const mockContextPreview = {
 describe('TSCC and ContextPreviewPanel independence', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.useFakeTimers();
     mockGetContextPreview.mockResolvedValue(mockContextPreview);
+    Object.defineProperty(document, 'hidden', { value: false, writable: true, configurable: true });
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     cleanup();
   });
+
+  /**
+   * Helper: expand ContextPreviewPanel and advance past the debounce timer.
+   */
+  async function expandContextPanelAndWait() {
+    fireEvent.click(screen.getByText('Context Preview'));
+    await act(async () => {
+      vi.advanceTimersByTime(DEBOUNCE_MS + 50);
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+  }
 
   describe('state isolation', () => {
     it('expanding TSCCPanel does not expand ContextPreviewPanel', async () => {
@@ -111,9 +127,7 @@ describe('TSCC and ContextPreviewPanel independence', () => {
       // Render ContextPreviewPanel separately — it should start collapsed
       render(<ContextPreviewPanel projectId="proj-1" />);
 
-      await waitFor(() => {
-        expect(screen.getByText('Context Preview')).toBeInTheDocument();
-      });
+      expect(screen.getByText('Context Preview')).toBeInTheDocument();
 
       // ContextPreviewPanel starts collapsed — layers NOT visible
       expect(screen.queryByText('System Prompt')).not.toBeInTheDocument();
@@ -123,11 +137,9 @@ describe('TSCC and ContextPreviewPanel independence', () => {
       // Render ContextPreviewPanel and expand it
       render(<ContextPreviewPanel projectId="proj-1" />);
 
-      await waitFor(() => {
-        expect(screen.getByText('Context Preview')).toBeInTheDocument();
-      });
+      expect(screen.getByText('Context Preview')).toBeInTheDocument();
 
-      fireEvent.click(screen.getByText('Context Preview'));
+      await expandContextPanelAndWait();
       expect(screen.getByText('System Prompt')).toBeInTheDocument();
 
       cleanup();
@@ -156,11 +168,9 @@ describe('TSCC and ContextPreviewPanel independence', () => {
       // Render ContextPreviewPanel expanded
       render(<ContextPreviewPanel projectId="proj-1" />);
 
-      await waitFor(() => {
-        expect(screen.getByText('Context Preview')).toBeInTheDocument();
-      });
+      expect(screen.getByText('Context Preview')).toBeInTheDocument();
 
-      fireEvent.click(screen.getByText('Context Preview'));
+      await expandContextPanelAndWait();
       expect(screen.getByText('System Prompt')).toBeInTheDocument();
 
       // TSCCPanel uses external isExpanded prop — toggling it is independent
@@ -216,15 +226,13 @@ describe('TSCC and ContextPreviewPanel independence', () => {
     it('ContextPreviewPanel uses internal useState for collapse', async () => {
       render(<ContextPreviewPanel projectId="proj-1" />);
 
-      await waitFor(() => {
-        expect(screen.getByText('Context Preview')).toBeInTheDocument();
-      });
+      expect(screen.getByText('Context Preview')).toBeInTheDocument();
 
       // Starts collapsed
       expect(screen.queryByText('System Prompt')).not.toBeInTheDocument();
 
-      // Click to expand — internal state toggle
-      fireEvent.click(screen.getByText('Context Preview'));
+      // Click to expand — internal state toggle + debounce
+      await expandContextPanelAndWait();
       expect(screen.getByText('System Prompt')).toBeInTheDocument();
 
       // Click to collapse — internal state toggle
@@ -252,7 +260,7 @@ describe('TSCC and ContextPreviewPanel independence', () => {
       expect(region).toBeInTheDocument();
     });
 
-    it('TSCCPanel returns null without threadId (not in chat view)', () => {
+    it('TSCCPanel renders default state without threadId (not in chat view)', () => {
       const { container } = render(
         <TSCCPanel
           threadId={null}
@@ -263,15 +271,16 @@ describe('TSCC and ContextPreviewPanel independence', () => {
           onTogglePin={vi.fn()}
         />,
       );
-      expect(container.innerHTML).toBe('');
+      // After Req 12 fix, TSCCPanel renders with default state even when
+      // threadId is null — it shows the collapsed bar with default scope label
+      expect(container.innerHTML).not.toBe('');
+      expect(screen.getByRole('region', { name: /thread cognitive context/i })).toBeInTheDocument();
     });
 
     it('ContextPreviewPanel renders in project detail view context', async () => {
       render(<ContextPreviewPanel projectId="proj-1" />);
 
-      await waitFor(() => {
-        expect(screen.getByText('Context Preview')).toBeInTheDocument();
-      });
+      expect(screen.getByText('Context Preview')).toBeInTheDocument();
     });
   });
 });
