@@ -127,11 +127,11 @@ function LeftSidebar() {
 function SwarmAILogo() {
   return (
     <div 
-      className="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center"
+      className="w-8 h-8 rounded-lg flex items-center justify-center overflow-hidden"
       title="SwarmAI"
       data-testid="swarm-logo"
     >
-      <span className="text-white text-sm font-bold">S</span>
+      <img src="/swarmai-icon-3.png" alt="SwarmAI" className="w-full h-full object-contain" />
     </div>
   );
 }
