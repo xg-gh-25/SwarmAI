@@ -183,6 +183,7 @@ export default function ChatPage() {
     displayedActivity,
     elapsedSeconds,
     pendingStreamTabs,
+    clearPendingStreamTab,
     bumpStreamingDerivation,
     messagesEndRef,
     incrementStreamGen,
@@ -430,13 +431,31 @@ export default function ChatPage() {
 
   // Handle tab close - removes tab, handles last-tab case (Req 3.3)
   // Fix 6: Clean up per-tab state map entry and abort controller
+  // Fix 10: Stop backend session for streaming tabs, clean up pendingStreamTabs
   const handleTabClose = useCallback((tabId: string) => {
+    // Read tab state before cleanup to determine if backend stop is needed
+    const tab = tabMapRef.current.get(tabId);
+    const tabSessionId = tab?.sessionId;
+    const wasStreaming = tab?.isStreaming || pendingStreamTabs.has(tabId);
+
+    // Clean up pendingStreamTabs entry for this tab (prevents stale entries)
+    clearPendingStreamTab(tabId);
+
     // Clean up per-tab state: remove from map, abort controller if active
     cleanupTabState(tabId);
     closeTab(tabId);
+
+    // Fire-and-forget backend stop for tabs that were actively streaming.
+    // The abort controller (handled by cleanupTabState) severs the SSE
+    // connection client-side; this call tells the backend to stop the agent.
+    if (wasStreaming && tabSessionId) {
+      chatService.stopSession(tabSessionId).catch((err) => {
+        console.warn('[handleTabClose] Failed to stop backend session:', err);
+      });
+    }
     // If closing active tab, closeTab handles switching to adjacent tab.
     // The activeTabId change triggers the sync useEffect to load content.
-  }, [activeTabId, closeTab, cleanupTabState]);
+  }, [activeTabId, closeTab, cleanupTabState, clearPendingStreamTab, pendingStreamTabs, tabMapRef]);
 
   // Handle session selection
   const handleSelectSession = useCallback(async (session: ChatSession) => {
