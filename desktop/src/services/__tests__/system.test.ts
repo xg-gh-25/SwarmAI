@@ -45,6 +45,7 @@ describe('System Service - Unit Tests', () => {
           database: { healthy: true },
           agent: { ready: true, name: 'SwarmAgent', skills_count: 3, mcp_servers_count: 2 },
           channel_gateway: { running: true },
+          swarm_workspace: { ready: true, name: 'Default', path: '/test' },
           initialized: true,
           timestamp: '2024-01-15T10:30:00.000Z',
         },
@@ -70,6 +71,7 @@ describe('System Service - Unit Tests', () => {
           database: { healthy: true },
           agent: { ready: true, name: 'SwarmAgent', skills_count: 5, mcp_servers_count: 3 },
           channel_gateway: { running: true },
+          swarm_workspace: { ready: true, name: 'Default', path: '/test' },
           initialized: true,
           timestamp: '2024-01-15T10:30:00.000Z',
         },
@@ -87,6 +89,7 @@ describe('System Service - Unit Tests', () => {
       expect(result.database).toBeDefined();
       expect(result.agent).toBeDefined();
       expect(result.channelGateway).toBeDefined();
+      expect(result.swarmWorkspace).toBeDefined();
       expect(result.initialized).toBe(true);
       expect(result.timestamp).toBe('2024-01-15T10:30:00.000Z');
     });
@@ -103,6 +106,7 @@ describe('System Service - Unit Tests', () => {
           database: { healthy: true },
           agent: { ready: true, name: 'TestAgent', skills_count: 7, mcp_servers_count: 4 },
           channel_gateway: { running: true },
+          swarm_workspace: { ready: true, name: 'Default', path: '/test' },
           initialized: true,
           timestamp: '2024-01-15T10:30:00.000Z',
         },
@@ -126,6 +130,7 @@ describe('System Service - Unit Tests', () => {
           database: { healthy: true },
           agent: { ready: true, name: 'TestAgent', skills_count: 3, mcp_servers_count: 10 },
           channel_gateway: { running: true },
+          swarm_workspace: { ready: true, name: 'Default', path: '/test' },
           initialized: true,
           timestamp: '2024-01-15T10:30:00.000Z',
         },
@@ -149,6 +154,7 @@ describe('System Service - Unit Tests', () => {
           database: { healthy: true },
           agent: { ready: true, name: 'TestAgent', skills_count: 0, mcp_servers_count: 0 },
           channel_gateway: { running: false },
+          swarm_workspace: { ready: false },
           initialized: false,
           timestamp: '2024-01-15T10:30:00.000Z',
         },
@@ -173,6 +179,7 @@ describe('System Service - Unit Tests', () => {
           database: { healthy: true },
           agent: { ready: false, skills_count: 0, mcp_servers_count: 0 },
           channel_gateway: { running: false },
+          swarm_workspace: { ready: false },
           initialized: false,
           timestamp: '2024-01-15T10:30:00.000Z',
         },
@@ -196,6 +203,7 @@ describe('System Service - Unit Tests', () => {
           database: { healthy: false, error: 'Connection failed' },
           agent: { ready: false, skills_count: 0, mcp_servers_count: 0 },
           channel_gateway: { running: false },
+          swarm_workspace: { ready: false },
           initialized: false,
           timestamp: '2024-01-15T10:30:00.000Z',
         },
@@ -219,6 +227,7 @@ describe('System Service - Unit Tests', () => {
           database: { healthy: true },
           agent: { ready: false, name: undefined, skills_count: 0, mcp_servers_count: 0 },
           channel_gateway: { running: false },
+          swarm_workspace: { ready: false },
           initialized: false,
           timestamp: '2024-01-15T10:30:00.000Z',
         },
@@ -274,6 +283,7 @@ describe('System Service - Unit Tests', () => {
           database: { healthy: true, error: undefined },
           agent: { ready: true, name: 'SwarmAgent', skills_count: 5, mcp_servers_count: 2 },
           channel_gateway: { running: true },
+          swarm_workspace: { ready: true, name: 'Default', path: '/test' },
           initialized: true,
           timestamp: '2024-06-20T14:45:30.000Z',
         },
@@ -299,6 +309,9 @@ describe('System Service - Unit Tests', () => {
 
       // Verify channelGateway structure
       expect(typeof result.channelGateway.running).toBe('boolean');
+
+      // Verify swarmWorkspace structure
+      expect(typeof result.swarmWorkspace.ready).toBe('boolean');
 
       // Verify top-level fields
       expect(typeof result.initialized).toBe('boolean');

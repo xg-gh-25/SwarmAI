@@ -4,20 +4,7 @@
   "description": "Analyzes modified code for potential improvements including code smells, design patterns, and best practices. Generates suggestions for improving readability, maintainability, and performance while preserving functionality.",
   "version": "1",
   "when": {
-    "type": "fileEdited",
-    "patterns": [
-      "**/*.ts",
-      "**/*.tsx",
-      "**/*.js",
-      "**/*.jsx",
-      "**/*.py",
-      "**/*.java",
-      "**/*.go",
-      "**/*.rs",
-      "**/*.cpp",
-      "**/*.c",
-      "**/*.cs"
-    ]
+    "type": "agentStop"
   },
   "then": {
     "type": "askAgent",

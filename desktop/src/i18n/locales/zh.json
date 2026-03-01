@@ -1,4 +1,23 @@
 {
+  "startup": {
+    "connectingToBackend": "正在连接后端...",
+    "databaseInitialized": "数据库已初始化",
+    "swarmAgentReady": "SwarmAgent 已就绪",
+    "channelGatewayStarted": "通道网关已启动",
+    "systemSkillsBound": "已绑定 {{count}} 个系统技能",
+    "systemMcpServersBound": "已绑定 {{count}} 个系统 MCP 服务器",
+    "swarmWorkspaceInitialized": "Swarm 工作区已初始化",
+    "swarmWorkspacePath": "{{path}}",
+    "swarmWorkspaceNotReady": "Swarm 工作区未就绪",
+    "initializationFailed": "初始化失败",
+    "databaseError": "数据库错误: {{error}}",
+    "agentNotReady": "SwarmAgent 未就绪",
+    "channelGatewayNotRunning": "通道网关未运行",
+    "waitingForReady": "等待系统就绪...",
+    "waitingForAgent": "等待 SwarmAgent 就绪...",
+    "waitingForWorkspace": "等待 SwarmWorkspace 就绪...",
+    "initializationTimeout": "初始化超时，已等待 {{seconds}} 秒"
+  },
   "common": {
     "button": {
       "save": "保存",
@@ -51,7 +70,8 @@
       "custom": "自定义",
       "system": "系统",
       "user": "用户",
-      "updated": "更新时间"
+      "updated": "更新时间",
+      "optional": "可选"
     },
     "message": {
       "confirmDelete": "确定要删除吗？",
@@ -73,6 +93,7 @@
     "chat": "对话",
     "tasks": "任务",
     "agents": "Agent 管理",
+    "workspaces": "工作区",
     "skills": "Skill 管理",
     "plugins": "Plugin 管理",
     "mcp": "MCP 管理",
@@ -121,8 +142,13 @@
     "placeholder": "输入消息...",
     "selectAgent": "选择一个 Agent 开始对话",
     "noAgent": "请先选择一个 Agent",
+    "loadingAgent": "正在加载 Agent...",
+    "agentLoadFailed": "加载 Agent 失败",
+    "defaultAgentError": "无法加载默认 Agent。请重启应用或检查后端服务。",
     "newChat": "新对话",
-    "history": "历史记录",
+    "newSession": "新会话",
+    "todoRadar": "待办雷达",
+    "history": "聊天记录",
     "noHistory": "暂无历史记录",
     "today": "今天",
     "yesterday": "昨天",
@@ -272,6 +298,47 @@
     },
     "allSkills": "所有 Skill",
     "cannotDeleteDefault": "无法删除默认 Agent"
+  },
+  "workspaces": {
+    "title": "工作区",
+    "subtitle": "管理你的项目工作区和上下文边界。",
+    "createWorkspace": "创建工作区",
+    "editWorkspace": "编辑工作区",
+    "deleteWorkspace": "删除工作区",
+    "deleteConfirm": "确定要删除 ",
+    "deleteConfirmTitle": "删除工作区",
+    "deleteConfirmMessage": "确定要删除 \"{{name}}\" 吗？",
+    "deleteConfirmWarning": "此操作无法撤销。工作区文件夹和文件不会从文件系统中删除。",
+    "deleteError": "删除工作区失败",
+    "noWorkspaces": "未找到工作区",
+    "noResults": "没有匹配的工作区",
+    "searchPlaceholder": "按名称或路径搜索工作区...",
+    "loadError": "加载工作区失败",
+    "default": "默认",
+    "cannotDeleteDefault": "无法删除默认工作区",
+    "table": {
+      "name": "名称",
+      "filePath": "文件路径",
+      "context": "上下文",
+      "actions": "操作"
+    },
+    "form": {
+      "name": "工作区名称",
+      "namePlaceholder": "输入工作区名称",
+      "nameRequired": "工作区名称为必填项",
+      "nameTooLong": "名称不能超过100个字符",
+      "filePath": "文件夹路径",
+      "filePathPlaceholder": "选择或输入文件夹路径",
+      "filePathRequired": "文件夹路径为必填项",
+      "filePathReadOnly": "创建后无法更改文件夹路径",
+      "browse": "浏览",
+      "context": "上下文描述",
+      "contextPlaceholder": "描述此工作区的用途和范围...",
+      "contextRequired": "上下文描述为必填项",
+      "icon": "图标",
+      "iconPlaceholder": "🏠",
+      "iconHint": "输入一个表情符号来代表此工作区"
+    }
   },
   "skills": {
     "title": "Skill 管理",

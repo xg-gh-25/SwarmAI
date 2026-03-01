@@ -557,8 +557,7 @@ PORT=8000
 # 数据库 - 桌面版使用 SQLite
 DATABASE_TYPE=sqlite
 # SQLITE_DB_PATH leave empty to use default path:
-# - macOS: ~/Library/Application Support/SwarmAI/data.db
-# - Linux: ~/.local/share/SwarmAI/data.db
+# ~/.swarm-ai/data.db (all platforms)
 
 # Claude API 配置 (必须)
 ANTHROPIC_API_KEY=sk-ant-xxx
@@ -598,8 +597,7 @@ RATE_LIMIT_PER_MINUTE=1000
 
 | Platform | Data Directory |
 |------|----------|
-| macOS | `~/Library/Application Support/SwarmAI/` |
-| Linux | `~/.local/share/SwarmAI/` |
+| All | `~/.swarm-ai/` |
 
 Directory structure:
 ```

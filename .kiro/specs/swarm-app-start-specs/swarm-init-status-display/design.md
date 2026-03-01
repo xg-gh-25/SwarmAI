@@ -20,6 +20,7 @@ sequenceDiagram
     participant DB as Database
     participant Agent as AgentManager
     participant Gateway as ChannelGateway
+    participant WS as SwarmWorkspaceManager
 
     UI->>Health: Poll health check
     Health-->>UI: healthy: true
@@ -30,6 +31,8 @@ sequenceDiagram
     Agent-->>Status: SwarmAgent data
     Status->>Gateway: Check running status
     Gateway-->>Status: running: true
+    Status->>WS: Get default workspace
+    WS-->>Status: SwarmWorkspace data
     Status-->>UI: SystemStatus response
     UI->>UI: Display status items
     UI->>UI: Fade out after delay
@@ -43,6 +46,7 @@ graph TB
         SR[system.py Router]
         AM[agent_manager.py]
         CG[channel_gateway.py]
+        WSM[swarm_workspace_manager.py]
         DB[(SQLite DB)]
     end
     
@@ -57,6 +61,7 @@ graph TB
     SR --> DB
     SR --> AM
     SR --> CG
+    SR --> WSM
     BSO --> I18N
 ```
 
@@ -87,10 +92,16 @@ class AgentStatus(BaseModel):
 class ChannelGatewayStatus(BaseModel):
     running: bool
 
+class SwarmWorkspaceStatus(BaseModel):
+    ready: bool
+    name: Optional[str] = None
+    path: Optional[str] = None
+
 class SystemStatusResponse(BaseModel):
     database: DatabaseStatus
     agent: AgentStatus
     channel_gateway: ChannelGatewayStatus
+    swarm_workspace: SwarmWorkspaceStatus
     initialized: bool
     timestamp: str
 
@@ -122,10 +133,17 @@ interface ChannelGatewayStatus {
   running: boolean;
 }
 
+interface SwarmWorkspaceStatus {
+  ready: boolean;
+  name?: string;
+  path?: string;
+}
+
 export interface SystemStatus {
   database: DatabaseStatus;
   agent: AgentStatus;
   channelGateway: ChannelGatewayStatus;
+  swarmWorkspace: SwarmWorkspaceStatus;
   initialized: boolean;
   timestamp: string;
 }
@@ -173,6 +191,11 @@ interface InitStep {
   "channel_gateway": {
     "running": true
   },
+  "swarm_workspace": {
+    "ready": true,
+    "name": "SwarmWS-Default",
+    "path": "{app_data_dir}/swarm-workspaces/SwarmWS"
+  },
   "initialized": true,
   "timestamp": "2024-01-15T10:30:00.000Z"
 }
@@ -196,27 +219,33 @@ interface InitializationState {
 
 ### Property 1: System Status Response Schema Validity
 
-*For any* call to the `/api/system/status` endpoint, the response SHALL contain a valid `database` object with a `healthy` boolean field, an `agent` object with `ready` boolean, `name` string (when ready), `skills_count` number, and `mcp_servers_count` number, a `channel_gateway` object with `running` boolean, an `initialized` boolean, and a `timestamp` string in ISO 8601 format.
+*For any* call to the `/api/system/status` endpoint, the response SHALL contain a valid `database` object with a `healthy` boolean field, an `agent` object with `ready` boolean, `name` string (when ready), `skills_count` number, and `mcp_servers_count` number, a `channel_gateway` object with `running` boolean, a `swarm_workspace` object with `ready` boolean, `name` string (when ready), and `path` string (when ready), an `initialized` boolean, and a `timestamp` string in ISO 8601 format.
 
-**Validates: Requirements 1.2, 1.3, 1.4, 2.1, 2.2, 2.3, 2.5**
+**Validates: Requirements 1.2, 1.3, 1.4, 1.5, 2.1, 2.2, 2.3, 2.4, 2.5, 2.6**
 
 ### Property 2: Initialized Field Consistency
 
-*For any* system status response, the `initialized` field SHALL be `true` if and only if `database.healthy` is `true` AND `agent.ready` is `true` AND `channel_gateway.running` is `true`.
+*For any* system status response, the `initialized` field SHALL be `true` if and only if `database.healthy` is `true` AND `agent.ready` is `true` AND `channel_gateway.running` is `true` AND `swarm_workspace.ready` is `true`.
 
-**Validates: Requirements 1.5, 2.4**
+**Validates: Requirements 1.6, 2.5**
 
 ### Property 3: Snake Case to Camel Case Transformation
 
-*For any* valid API response from `/api/system/status`, the frontend service's `getStatus()` function SHALL return an object where all snake_case keys (`skills_count`, `mcp_servers_count`, `channel_gateway`) are converted to camelCase (`skillsCount`, `mcpServersCount`, `channelGateway`).
+*For any* valid API response from `/api/system/status`, the frontend service's `getStatus()` function SHALL return an object where all snake_case keys (`skills_count`, `mcp_servers_count`, `channel_gateway`, `swarm_workspace`) are converted to camelCase (`skillsCount`, `mcpServersCount`, `channelGateway`, `swarmWorkspace`).
 
-**Validates: Requirements 3.2**
+**Validates: Requirements 3.2, 3.3**
 
 ### Property 4: Timestamp Format Validity
 
 *For any* system status response, the `timestamp` field SHALL be a valid ISO 8601 formatted string that can be parsed by JavaScript's `Date` constructor without error.
 
-**Validates: Requirements 2.5**
+**Validates: Requirements 2.6**
+
+### Property 5: SwarmWorkspace Status Display
+
+*For any* system status where `swarmWorkspace.ready` is `true`, the Backend_Startup_Overlay SHALL display a green checkmark next to "Swarm Workspace initialized" and show the workspace path as a nested item.
+
+**Validates: Requirements 4.9, 4.10, 4.11**
 
 ## Error Handling
 

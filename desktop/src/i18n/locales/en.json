@@ -6,10 +6,19 @@
     "channelGatewayStarted": "Channel gateway started",
     "systemSkillsBound": "{{count}} system skills bound",
     "systemMcpServersBound": "{{count}} system MCP servers bound",
+    "swarmWorkspaceInitialized": "Swarm Workspace initialized",
+    "swarmWorkspacePath": "{{path}}",
+    "swarmWorkspaceNotReady": "Swarm Workspace not ready",
     "initializationFailed": "Initialization failed",
     "databaseError": "Database error: {{error}}",
     "agentNotReady": "SwarmAgent not ready",
-    "channelGatewayNotRunning": "Channel gateway not running"
+    "channelGatewayNotRunning": "Channel gateway not running",
+    "waitingForReady": "Waiting for system to be ready...",
+    "waitingForAgent": "Waiting for SwarmAgent to be ready...",
+    "waitingForWorkspace": "Waiting for SwarmWorkspace to be ready...",
+    "initializationTimeout": "Initialization timed out after {{seconds}} seconds",
+    "agentInitFailed": "SwarmAgent initialization failed",
+    "workspaceInitFailed": "SwarmWorkspace initialization failed"
   },
   "common": {
     "button": {
@@ -63,7 +72,8 @@
       "custom": "Custom",
       "system": "System",
       "user": "User",
-      "updated": "Updated"
+      "updated": "Updated",
+      "optional": "Optional"
     },
     "message": {
       "confirmDelete": "Are you sure you want to delete?",
@@ -85,6 +95,7 @@
     "chat": "Chat",
     "tasks": "Tasks",
     "agents": "Agent Management",
+    "workspaces": "Workspaces",
     "skills": "Skill Management",
     "plugins": "Plugin Management",
     "mcp": "MCP Management",
@@ -133,8 +144,13 @@
     "placeholder": "Type a message...",
     "selectAgent": "Select an Agent to start chatting",
     "noAgent": "Please select an Agent first",
+    "loadingAgent": "Loading agent...",
+    "agentLoadFailed": "Failed to Load Agent",
+    "defaultAgentError": "Failed to load the default agent. Please restart the application or check the backend service.",
     "newChat": "New Chat",
-    "history": "History",
+    "newSession": "New Session",
+    "todoRadar": "ToDo Radar",
+    "history": "Chat History",
     "noHistory": "No history yet",
     "today": "Today",
     "yesterday": "Yesterday",
@@ -284,6 +300,47 @@
     },
     "allSkills": "All Skills",
     "cannotDeleteDefault": "Cannot delete the default agent"
+  },
+  "workspaces": {
+    "title": "Workspaces",
+    "subtitle": "Manage your project workspaces and context boundaries.",
+    "createWorkspace": "Create Workspace",
+    "editWorkspace": "Edit Workspace",
+    "deleteWorkspace": "Delete Workspace",
+    "deleteConfirm": "Are you sure you want to delete ",
+    "deleteConfirmTitle": "Delete Workspace",
+    "deleteConfirmMessage": "Are you sure you want to delete \"{{name}}\"?",
+    "deleteConfirmWarning": "This action cannot be undone. The workspace folder and files will not be deleted from your filesystem.",
+    "deleteError": "Failed to delete workspace",
+    "noWorkspaces": "No workspaces found",
+    "noResults": "No workspaces match your search",
+    "searchPlaceholder": "Search workspaces by name or path...",
+    "loadError": "Failed to load workspaces",
+    "default": "Default",
+    "cannotDeleteDefault": "Cannot delete the default workspace",
+    "table": {
+      "name": "Name",
+      "filePath": "File Path",
+      "context": "Context",
+      "actions": "Actions"
+    },
+    "form": {
+      "name": "Workspace Name",
+      "namePlaceholder": "Enter workspace name",
+      "nameRequired": "Workspace name is required",
+      "nameTooLong": "Name must be 100 characters or less",
+      "filePath": "Folder Path",
+      "filePathPlaceholder": "Select or enter folder path",
+      "filePathRequired": "Folder path is required",
+      "filePathReadOnly": "Folder path cannot be changed after creation",
+      "browse": "Browse",
+      "context": "Context Description",
+      "contextPlaceholder": "Describe the purpose and scope of this workspace...",
+      "contextRequired": "Context description is required",
+      "icon": "Icon",
+      "iconPlaceholder": "🏠",
+      "iconHint": "Enter an emoji to represent this workspace"
+    }
   },
   "skills": {
     "title": "Skill Management",

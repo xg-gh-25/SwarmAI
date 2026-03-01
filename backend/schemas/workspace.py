@@ -52,3 +52,17 @@ class WorkspaceUploadResponse(BaseModel):
     path: str  # Full relative path to the uploaded file
     filename: str
     size: int
+
+
+class WorkspaceWriteRequest(BaseModel):
+    """Request to write content to a file."""
+
+    path: str  # Relative path to the file
+    content: str  # File content (UTF-8 text)
+
+
+class WorkspaceWriteResponse(BaseModel):
+    """Response after file write."""
+
+    path: str  # Relative path to the written file
+    size: int  # Size in bytes

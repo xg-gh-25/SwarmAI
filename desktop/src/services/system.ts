@@ -12,17 +12,28 @@ export interface AgentStatus {
   name?: string;
   skillsCount: number;
   mcpServersCount: number;
+  error?: string;
 }
 
 export interface ChannelGatewayStatus {
   running: boolean;
 }
 
+export interface SwarmWorkspaceStatus {
+  ready: boolean;
+  name?: string;
+  path?: string;
+  error?: string;
+}
+
 export interface SystemStatus {
   database: DatabaseStatus;
   agent: AgentStatus;
   channelGateway: ChannelGatewayStatus;
+  swarmWorkspace: SwarmWorkspaceStatus;
   initialized: boolean;
+  initializationMode: string;  // 'first_run', 'quick_validation', or 'reset'
+  initializationComplete: boolean;  // The persistent flag value
   timestamp: string;
 }
 
@@ -35,11 +46,13 @@ export interface SystemStatus {
  * - skills_count -> skillsCount
  * - mcp_servers_count -> mcpServersCount
  * - channel_gateway -> channelGateway
+ * - swarm_workspace -> swarmWorkspace
  */
 const toCamelCase = (data: Record<string, unknown>): SystemStatus => {
   const database = data.database as Record<string, unknown>;
   const agent = data.agent as Record<string, unknown>;
   const channelGateway = data.channel_gateway as Record<string, unknown>;
+  const swarmWorkspace = data.swarm_workspace as Record<string, unknown>;
 
   return {
     database: {
@@ -51,11 +64,20 @@ const toCamelCase = (data: Record<string, unknown>): SystemStatus => {
       name: agent.name as string | undefined,
       skillsCount: (agent.skills_count as number) ?? 0,
       mcpServersCount: (agent.mcp_servers_count as number) ?? 0,
+      error: agent.error as string | undefined,
     },
     channelGateway: {
       running: channelGateway.running as boolean,
     },
+    swarmWorkspace: {
+      ready: swarmWorkspace.ready as boolean,
+      name: swarmWorkspace.name as string | undefined,
+      path: swarmWorkspace.path as string | undefined,
+      error: swarmWorkspace.error as string | undefined,
+    },
     initialized: data.initialized as boolean,
+    initializationMode: (data.initialization_mode as string) ?? 'unknown',
+    initializationComplete: (data.initialization_complete as boolean) ?? false,
     timestamp: data.timestamp as string,
   };
 };

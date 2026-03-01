@@ -168,12 +168,12 @@ npm run build:all
 
 ### Data Storage
 
-| Type | macOS Path | Windows Path |
-|------|------------|--------------|
-| Data Directory | `~/Library/Application Support/SwarmAI/` | `%LOCALAPPDATA%\SwarmAI\` |
-| Database | `~/Library/Application Support/SwarmAI/data.db` | `%LOCALAPPDATA%\SwarmAI\data.db` |
-| Skills | `~/Library/Application Support/SwarmAI/skills/` | `%LOCALAPPDATA%\SwarmAI\skills\` |
-| Logs | `~/Library/Application Support/SwarmAI/logs/` | `%LOCALAPPDATA%\SwarmAI\logs\` |
+| Type | Path |
+|------|------|
+| Data Directory | `~/.swarm-ai/` |
+| Database | `~/.swarm-ai/data.db` |
+| Skills Directory | `~/.swarm-ai/skills/` |
+| Logs Directory | `~/.swarm-ai/logs/` |
 
 ---
 

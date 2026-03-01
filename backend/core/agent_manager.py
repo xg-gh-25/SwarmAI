@@ -27,6 +27,7 @@ from claude_agent_sdk import (
 
 from database import db
 from config import settings, get_bedrock_model_id, get_app_data_dir
+from utils.bundle_paths import get_resources_dir
 from .session_manager import session_manager
 from .system_prompt import SystemPromptBuilder
 from .workspace_manager import workspace_manager
@@ -43,23 +44,12 @@ SWARM_AGENT_NAME = "SwarmAgent"
 def _get_resources_dir() -> Path:
     """Get the resources directory path.
     
-    In development: desktop/resources/
-    In production (bundled): resources/ relative to backend
+    See utils.bundle_paths for Tauri bundle structure documentation.
     """
-    # Try development path first (desktop/resources/)
     backend_dir = Path(__file__).resolve().parent.parent
     project_root = backend_dir.parent
     dev_resources = project_root / "desktop" / "resources"
-    if dev_resources.exists():
-        return dev_resources
-    
-    # Try bundled path (resources/ next to backend)
-    bundled_resources = backend_dir / "resources"
-    if bundled_resources.exists():
-        return bundled_resources
-    
-    # Fallback to development path
-    return dev_resources
+    return get_resources_dir(dev_resources)
 
 
 def _get_templates_dir() -> Path:
@@ -77,35 +67,40 @@ async def get_default_agent() -> dict | None:
     return agent
 
 
-async def ensure_default_agent() -> dict:
+async def ensure_default_agent(skip_registration: bool = False) -> dict:
     """Ensure the default agent exists, creating it if necessary.
     
     Called during application startup. Loads configuration from
     desktop/resources/default-agent.json and creates the agent
     with associated skills and MCP servers.
     
+    Args:
+        skip_registration: If True, skip skill/MCP registration (used during
+            quick validation when we know resources already exist).
+    
     Returns:
         The default agent configuration dict
     """
     resources_dir = _get_resources_dir()
     
-    # Always ensure default skills are registered (even if agent exists)
-    skills_dir = resources_dir / "default-skills"
-    if skills_dir.exists():
-        skill_ids = await _register_default_skills(skills_dir)
-        if skill_ids:
-            logger.info(f"Ensured {len(skill_ids)} default skills are registered")
-    else:
-        logger.warning(f"Default skills directory not found: {skills_dir}")
-    
-    # Always ensure default MCP servers are registered (even if agent exists)
-    mcp_config_path = resources_dir / "default-mcp-servers.json"
-    if mcp_config_path.exists():
-        mcp_ids = await _register_default_mcp_servers(mcp_config_path)
-        if mcp_ids:
-            logger.info(f"Ensured {len(mcp_ids)} default MCP servers are registered")
-    else:
-        logger.warning(f"Default MCP servers config not found: {mcp_config_path}")
+    if not skip_registration:
+        # Register default skills (only during full initialization)
+        skills_dir = resources_dir / "default-skills"
+        if skills_dir.exists():
+            skill_ids = await _register_default_skills(skills_dir)
+            if skill_ids:
+                logger.info(f"Ensured {len(skill_ids)} default skills are registered")
+        else:
+            logger.warning(f"Default skills directory not found: {skills_dir}")
+        
+        # Register default MCP servers (only during full initialization)
+        mcp_config_path = resources_dir / "default-mcp-servers.json"
+        if mcp_config_path.exists():
+            mcp_ids = await _register_default_mcp_servers(mcp_config_path)
+            if mcp_ids:
+                logger.info(f"Ensured {len(mcp_ids)} default MCP servers are registered")
+        else:
+            logger.warning(f"Default MCP servers config not found: {mcp_config_path}")
     
     # Query ALL system resources from database (not just the ones we registered above)
     # This ensures that if a new system skill/MCP is added to the resources folder,
@@ -1381,6 +1376,8 @@ class AgentManager:
         enable_mcp: bool = False,
         add_dirs: Optional[list[str]] = None,
         channel_context: Optional[dict] = None,
+        workspace_id: Optional[str] = None,
+        workspace_context: Optional[str] = None,
     ) -> AsyncIterator[dict]:
         """Run conversation with agent and stream responses.
 
@@ -1401,6 +1398,8 @@ class AgentManager:
             enable_skills: Whether to enable skills
             enable_mcp: Whether to enable MCP servers
             add_dirs: Additional directories for Claude to access
+            workspace_id: Optional Swarm Workspace ID for session tracking
+            workspace_context: Optional workspace context to inject into system prompt
         """
         # Check if this is a new session or resuming an existing one
         is_resuming = session_id is not None
@@ -1459,7 +1458,7 @@ class AgentManager:
             }
             # Store/update session for resumed conversations
             title = display_text[:50] + "..." if len(display_text) > 50 else display_text
-            await session_manager.store_session(session_id, agent_id, title, work_dir=work_dir)
+            await session_manager.store_session(session_id, agent_id, title, work_dir=work_dir, workspace_id=workspace_id)
 
             # Save user message to database for resumed sessions
             # Store original content if multimodal, otherwise wrap text
@@ -1513,6 +1512,7 @@ class AgentManager:
                     user_message=user_message,
                     work_dir=work_dir,
                     agent_id=agent_id,
+                    workspace_id=workspace_id,
                 ):
                     yield event
 
@@ -1547,6 +1547,7 @@ class AgentManager:
                         user_message=user_message,
                         work_dir=work_dir,
                         agent_id=agent_id,
+                        workspace_id=workspace_id,
                     ):
                         yield event
                 except Exception:
@@ -1596,6 +1597,7 @@ class AgentManager:
         user_message: Optional[str],
         work_dir: Optional[str],
         agent_id: str,
+        workspace_id: Optional[str] = None,
     ) -> AsyncIterator[dict]:
         """Send a query on an existing client and yield SSE events.
 
@@ -1735,7 +1737,7 @@ class AgentManager:
                                 }
 
                                 title = display_text[:50] + "..." if len(display_text) > 50 else display_text
-                                await session_manager.store_session(session_context["sdk_session_id"], agent_id, title, work_dir=work_dir)
+                                await session_manager.store_session(session_context["sdk_session_id"], agent_id, title, work_dir=work_dir, workspace_id=workspace_id)
 
                                 user_content = content if content else [{"type": "text", "text": user_message}]
                                 await self._save_message(

@@ -1,4 +1,4 @@
-# CLAUDE.md
+# AGENT.md
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
@@ -31,9 +31,15 @@ cp backend.env.example ../backend/.env
 # Development mode (hot reload)
 npm run tauri:dev
 
+# Debug mode (Front-end and backend)
+Terminal 1: cd desktop && npm run tauri:dev (frontend)
+Terminal 2: cd backend && source .venv/bin/activate && python main.py (backend)
+
 # Build production
 npm run build:all      # Full build: backend + frontend + Tauri
+
 npm run build:backend  # Only Python backend (PyInstaller)
+
 npm run tauri:build    # Only Tauri app (requires backend built first)
 
 # Testing
@@ -103,10 +109,7 @@ Tauri App
 - Python backend runs as a **sidecar process** managed by Tauri
 - Port is dynamically assigned via `portpicker` in Rust
 - Frontend uses `getBackendPort()` from `services/tauri.ts` to get the port
-- Data stored in platform-specific directories:
-  - macOS: `~/Library/Application Support/SwarmAI/`
-  - Windows: `%LOCALAPPDATA%\SwarmAI\` (typically `C:\Users\YourUsername\AppData\Local\SwarmAI\`)
-  - Linux: `~/.local/share/SwarmAI/`
+- Data stored in: `~/.swarm-ai/` (all platforms)
 
 ### Backend Structure
 

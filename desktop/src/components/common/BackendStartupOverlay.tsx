@@ -1,13 +1,89 @@
-import { useState, useEffect, useCallback, useMemo, type ReactNode } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import axios from 'axios';
 import { getBackendPort, initializeBackend } from '../../services/tauri';
 import { systemService, SystemStatus } from '../../services/system';
 import logo from '../../assets/logo.png';
 
-type StartupStatus = 'starting' | 'connecting' | 'fetching_status' | 'connected' | 'error';
+// ============================================================================
+// Constants
+// ============================================================================
 
-type InitStepStatus = 'pending' | 'success' | 'error';
+const TIMING = {
+  healthCheckTimeout: 3000,
+  maxHealthAttempts: 60,
+  readinessTimeout: 60000,
+  pollInterval: 1000,
+  stepAnimationDelay: 150,
+  fadeOutDelay: 500,      // Delay before starting fade-out (after all steps visible)
+  fadeOutDuration: 500,   // Duration of fade-out animation (matches CSS duration-500)
+  initialPollDelay: 500,
+} as const;
+
+// ============================================================================
+// Types
+// ============================================================================
+
+type StartupStatus = 'starting' | 'connecting' | 'fetching_status' | 'waiting_for_ready' | 'connected' | 'error';
+
+type InitStepStatus = 'pending' | 'in_progress' | 'success' | 'error';
+
+// ============================================================================
+// Status Display Mappings
+// ============================================================================
+
+const STATUS_ICONS = {
+  success: '✓',
+  error: '✗',
+  pending: '○',
+  in_progress: null, // Uses spinner component instead
+} as const satisfies Record<InitStepStatus, string | null>;
+
+const STATUS_COLORS = {
+  success: 'var(--color-success, #22c55e)',
+  error: 'var(--color-error, #ef4444)',
+  pending: 'var(--color-text-muted)',
+  in_progress: 'var(--color-primary)',
+} as const satisfies Record<InitStepStatus, string>;
+
+// ============================================================================
+// Reusable Components
+// ============================================================================
+
+const SPINNER_SIZES = {
+  sm: 'h-3 w-3',
+  md: 'h-4 w-4',
+} as const;
+
+interface SpinnerProps {
+  size?: keyof typeof SPINNER_SIZES;
+}
+
+function Spinner({ size = 'md' }: SpinnerProps) {
+  return (
+    <svg
+      className={`animate-spin ${SPINNER_SIZES[size]}`}
+      style={{ color: 'var(--color-primary)' }}
+      xmlns="http://www.w3.org/2000/svg"
+      fill="none"
+      viewBox="0 0 24 24"
+    >
+      <circle
+        className="opacity-25"
+        cx="12"
+        cy="12"
+        r="10"
+        stroke="currentColor"
+        strokeWidth="4"
+      />
+      <path
+        className="opacity-75"
+        fill="currentColor"
+        d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+      />
+    </svg>
+  );
+}
 
 interface InitStep {
   id: string;
@@ -18,17 +94,48 @@ interface InitStep {
   children?: InitStep[];
 }
 
-// Get the log directory path based on the current platform
-function getLogPath(): string {
-  const userAgent = navigator.userAgent.toLowerCase();
-  if (userAgent.includes('mac')) {
-    return '~/Library/Application Support/SwarmAI/logs/';
-  } else if (userAgent.includes('win')) {
-    return '%LOCALAPPDATA%\\SwarmAI\\logs\\';
-  } else {
-    // Linux and other Unix-like systems
-    return '~/.local/share/SwarmAI/logs/';
+interface ReadinessCheckResult {
+  agentReady: boolean;
+  workspaceReady: boolean;
+  allReady: boolean;
+  error?: string;
+}
+
+// ============================================================================
+// Utility Functions
+// ============================================================================
+
+/**
+ * Check if both SwarmAgent and SwarmWorkspace are ready.
+ * Returns a ReadinessCheckResult with individual and combined readiness flags.
+ * 
+ * @param systemStatus - The current system status from the backend
+ * @returns ReadinessCheckResult with agentReady, workspaceReady, and allReady flags
+ */
+export function checkReadiness(systemStatus: SystemStatus): ReadinessCheckResult {
+  const agentReady = systemStatus.agent.ready === true;
+  const workspaceReady = systemStatus.swarmWorkspace.ready === true;
+  const allReady = agentReady && workspaceReady;
+
+  // Collect any errors from components that aren't ready
+  let error: string | undefined;
+  if (!agentReady && systemStatus.agent.error) {
+    error = systemStatus.agent.error;
+  } else if (!workspaceReady && systemStatus.swarmWorkspace.error) {
+    error = systemStatus.swarmWorkspace.error;
   }
+
+  return {
+    agentReady,
+    workspaceReady,
+    allReady,
+    error,
+  };
+}
+
+// Get the log directory path - same for all platforms
+function getLogPath(): string {
+  return '~/.swarm-ai/logs/';
 }
 
 interface BackendStartupOverlayProps {
@@ -43,9 +150,45 @@ export default function BackendStartupOverlay({ onReady }: BackendStartupOverlay
   const [isFadingOut, setIsFadingOut] = useState(false);
   const [initSteps, setInitSteps] = useState<InitStep[]>([]);
   const [visibleStepCount, setVisibleStepCount] = useState(0);
+  // Ref for internal timeout tracking (avoids stale closure issues)
+  const startTimeRef = useRef<number | null>(null);
+  // Retry trigger to restart initialization (Requirements 7.3, 7.4)
+  const [retryCount, setRetryCount] = useState(0);
 
   // Get platform-specific log path
   const logPath = useMemo(() => getLogPath(), []);
+
+  /**
+   * Retry handler that resets all state and restarts initialization.
+   * Implements Requirements 7.3 (restart from beginning) and 7.4 (reset timeout counter).
+   */
+  const handleRetry = useCallback(() => {
+    // Reset all state (Requirements 7.3)
+    setStatus('starting');
+    setErrorMessage('');
+    setInitSteps([]);
+    setVisibleStepCount(0);
+    setIsFadingOut(false);
+    setIsVisible(true);
+    
+    // Reset timeout counter (Requirements 7.4)
+    startTimeRef.current = null;
+    
+    // Increment retry count to trigger useEffect re-run
+    setRetryCount(prev => prev + 1);
+  }, []);
+
+  /**
+   * Determine the status of an initialization step based on readiness and error state.
+   * - 'success' when the component is ready
+   * - 'error' when the component has an error
+   * - 'in_progress' when the component is not ready but has no error
+   */
+  const getStepStatus = useCallback((ready: boolean, error?: string): InitStepStatus => {
+    if (ready) return 'success';
+    if (error) return 'error';
+    return 'in_progress';
+  }, []);
 
   // Build initialization steps from system status
   const buildInitSteps = useCallback((systemStatus: SystemStatus): InitStep[] => {
@@ -55,22 +198,23 @@ export default function BackendStartupOverlay({ onReady }: BackendStartupOverlay
     steps.push({
       id: 'database',
       labelKey: 'startup.databaseInitialized',
-      status: systemStatus.database.healthy ? 'success' : 'error',
+      status: getStepStatus(systemStatus.database.healthy, systemStatus.database.error),
       error: systemStatus.database.error,
     });
 
     // SwarmAgent step with children
+    const agentStatus = getStepStatus(systemStatus.agent.ready, systemStatus.agent.error);
     const agentChildren: InitStep[] = [
       {
         id: 'skills',
         labelKey: 'startup.systemSkillsBound',
-        status: systemStatus.agent.ready ? 'success' : 'pending',
+        status: systemStatus.agent.ready ? 'success' : 'in_progress',
         interpolation: { count: systemStatus.agent.skillsCount },
       },
       {
         id: 'mcpServers',
         labelKey: 'startup.systemMcpServersBound',
-        status: systemStatus.agent.ready ? 'success' : 'pending',
+        status: systemStatus.agent.ready ? 'success' : 'in_progress',
         interpolation: { count: systemStatus.agent.mcpServersCount },
       },
     ];
@@ -78,19 +222,40 @@ export default function BackendStartupOverlay({ onReady }: BackendStartupOverlay
     steps.push({
       id: 'agent',
       labelKey: 'startup.swarmAgentReady',
-      status: systemStatus.agent.ready ? 'success' : 'error',
+      status: agentStatus,
+      error: systemStatus.agent.error,
       children: agentChildren,
     });
 
-    // Channel gateway step
+    // Channel gateway step (no error field available, so only success or in_progress)
     steps.push({
       id: 'channelGateway',
       labelKey: 'startup.channelGatewayStarted',
-      status: systemStatus.channelGateway.running ? 'success' : 'error',
+      status: systemStatus.channelGateway.running ? 'success' : 'in_progress',
+    });
+
+    // Swarm Workspace step with path child
+    const workspaceStatus = getStepStatus(systemStatus.swarmWorkspace.ready, systemStatus.swarmWorkspace.error);
+    const workspaceChildren: InitStep[] = [];
+    if (systemStatus.swarmWorkspace.path) {
+      workspaceChildren.push({
+        id: 'workspacePath',
+        labelKey: 'startup.swarmWorkspacePath',
+        status: systemStatus.swarmWorkspace.ready ? 'success' : 'in_progress',
+        interpolation: { path: systemStatus.swarmWorkspace.path },
+      });
+    }
+
+    steps.push({
+      id: 'swarmWorkspace',
+      labelKey: 'startup.swarmWorkspaceInitialized',
+      status: workspaceStatus,
+      error: systemStatus.swarmWorkspace.error,
+      children: workspaceChildren.length > 0 ? workspaceChildren : undefined,
     });
 
     return steps;
-  }, []);
+  }, [getStepStatus]);
 
   // Count total visible items (including children)
   const getTotalStepCount = useCallback((steps: InitStep[]): number => {
@@ -113,36 +278,41 @@ export default function BackendStartupOverlay({ onReady }: BackendStartupOverlay
 
     const timer = setTimeout(() => {
       setVisibleStepCount((prev) => prev + 1);
-    }, 150); // 150ms delay between each step
+    }, TIMING.stepAnimationDelay);
 
     return () => clearTimeout(timer);
   }, [initSteps, visibleStepCount, getTotalStepCount]);
 
-  // Proceed to fade out after all steps are visible
+  // Proceed to fade out after all steps are visible AND status is connected
+  // Requirements 5.1, 5.2, 5.3: Fade-out only starts after all initialization complete
   useEffect(() => {
+    // Only start fade-out when status is 'connected' (both agent and workspace ready)
+    if (status !== 'connected') return;
     if (initSteps.length === 0) return;
 
     const totalSteps = getTotalStepCount(initSteps);
     if (visibleStepCount < totalSteps) return;
 
-    // All steps visible, wait a moment then fade out
+    // All steps visible AND connected, wait 500ms then start fade-out (Requirement 5.3)
     const timer = setTimeout(() => {
       setIsFadingOut(true);
+      // Wait for fade-out animation to complete before calling onReady (Requirement 5.5)
+      // This ensures Main_Chat_Window is fully rendered and ready for interaction when visible
       setTimeout(() => {
         setIsVisible(false);
         onReady?.();
-      }, 500); // Match animation duration
-    }, 500); // Wait 500ms after all steps are shown
+      }, TIMING.fadeOutDuration);
+    }, TIMING.fadeOutDelay);
 
     return () => clearTimeout(timer);
-  }, [initSteps, visibleStepCount, getTotalStepCount, onReady]);
+  }, [status, initSteps, visibleStepCount, getTotalStepCount, onReady]);
 
   const checkHealth = useCallback(async (): Promise<boolean> => {
     try {
       const port = getBackendPort();
       console.log(`[Health Check] Checking health on port ${port}...`);
       const response = await axios.get(`http://127.0.0.1:${port}/health`, {
-        timeout: 3000,
+        timeout: TIMING.healthCheckTimeout,
       });
       console.log(`[Health Check] Response:`, response.data);
       return response.data?.status === 'healthy';
@@ -165,10 +335,51 @@ export default function BackendStartupOverlay({ onReady }: BackendStartupOverlay
   }, []);
 
   useEffect(() => {
-    let attempts = 0;
-    const maxAttempts = 60; // 60 attempts * 1 second = 60 seconds timeout
+    let healthAttempts = 0;
     let timeoutId: ReturnType<typeof setTimeout>;
     let mounted = true;
+
+    // Poll for readiness after initial status fetch
+    const pollReadiness = async () => {
+      if (!mounted) return;
+
+      // Check for timeout using startTimeRef (avoids stale closure)
+      const currentElapsed = startTimeRef.current !== null ? Date.now() - startTimeRef.current : 0;
+      if (currentElapsed >= TIMING.readinessTimeout) {
+        console.log('[Readiness] Timeout reached after', currentElapsed, 'ms');
+        setStatus('error');
+        setErrorMessage(t('startup.initializationTimeout', { seconds: Math.round(currentElapsed / 1000) }));
+        return;
+      }
+
+      console.log('[Readiness] Polling system status...');
+      const systemStatus = await fetchSystemStatus();
+
+      if (!mounted) return;
+
+      if (systemStatus) {
+        const readiness = checkReadiness(systemStatus);
+        console.log('[Readiness] Check result:', readiness);
+
+        // Update init steps with current status
+        const steps = buildInitSteps(systemStatus);
+        setInitSteps(steps);
+
+        if (readiness.allReady) {
+          console.log('[Readiness] All components ready, transitioning to connected');
+          setStatus('connected');
+          // Animation will handle fade out
+        } else {
+          // Continue polling
+          console.log('[Readiness] Not all ready, continuing to poll...');
+          timeoutId = setTimeout(pollReadiness, TIMING.pollInterval);
+        }
+      } else {
+        // Status fetch failed, continue polling
+        console.warn('[Readiness] Status fetch failed, continuing to poll...');
+        timeoutId = setTimeout(pollReadiness, TIMING.pollInterval);
+      }
+    };
 
     const pollHealth = async () => {
       if (!mounted) return;
@@ -189,26 +400,42 @@ export default function BackendStartupOverlay({ onReady }: BackendStartupOverlay
           // Build and display initialization steps
           const steps = buildInitSteps(systemStatus);
           setInitSteps(steps);
-          setStatus('connected');
-          // Animation will handle fade out
+
+          // Check if all components are ready
+          const readiness = checkReadiness(systemStatus);
+          console.log('[Startup] Initial readiness check:', readiness);
+
+          if (readiness.allReady) {
+            // All ready, proceed to connected state
+            setStatus('connected');
+            // Animation will handle fade out
+          } else {
+            // Not all ready, transition to waiting_for_ready and start polling
+            console.log('[Startup] Not all ready, transitioning to waiting_for_ready');
+            setStatus('waiting_for_ready');
+            const now = Date.now();
+            startTimeRef.current = now; // Set ref for internal timeout tracking
+            timeoutId = setTimeout(pollReadiness, TIMING.pollInterval);
+          }
         } else {
           // Graceful degradation: proceed without status display
           setStatus('connected');
           setIsFadingOut(true);
+          // Wait for fade-out animation to complete before calling onReady (Requirement 5.5)
           setTimeout(() => {
             if (mounted) {
               setIsVisible(false);
               onReady?.();
             }
-          }, 500);
+          }, TIMING.fadeOutDuration);
         }
       } else {
-        attempts++;
-        if (attempts >= maxAttempts) {
+        healthAttempts++;
+        if (healthAttempts >= TIMING.maxHealthAttempts) {
           setStatus('error');
           setErrorMessage('Backend service failed to start within 60 seconds');
         } else {
-          timeoutId = setTimeout(pollHealth, 1000);
+          timeoutId = setTimeout(pollHealth, TIMING.pollInterval);
         }
       }
     };
@@ -226,8 +453,8 @@ export default function BackendStartupOverlay({ onReady }: BackendStartupOverlay
 
         setStatus('connecting');
         // Start polling after backend is initialized
-        console.log('[Startup] Starting health polling in 500ms...');
-        timeoutId = setTimeout(pollHealth, 500);
+        console.log('[Startup] Starting health polling...');
+        timeoutId = setTimeout(pollHealth, TIMING.initialPollDelay);
       } catch (error) {
         console.error('[Startup] Failed to initialize backend:', error);
         if (mounted) {
@@ -243,24 +470,15 @@ export default function BackendStartupOverlay({ onReady }: BackendStartupOverlay
       mounted = false;
       clearTimeout(timeoutId);
     };
-  }, [checkHealth, fetchSystemStatus, buildInitSteps, onReady]);
+  }, [checkHealth, fetchSystemStatus, buildInitSteps, onReady, t, retryCount]);
 
   // Render a single init step
   const renderInitStep = (step: InitStep, index: number, isChild: boolean = false) => {
-    const isVisible = index < visibleStepCount;
-    if (!isVisible) return null;
+    const isStepVisible = index < visibleStepCount;
+    if (!isStepVisible) return null;
 
-    const statusIcon = step.status === 'success' 
-      ? '✓' 
-      : step.status === 'error' 
-        ? '✗' 
-        : '○';
-    
-    const statusColor = step.status === 'success'
-      ? 'var(--color-success, #22c55e)'
-      : step.status === 'error'
-        ? 'var(--color-error, #ef4444)'
-        : 'var(--color-text-muted)';
+    const statusIcon = STATUS_ICONS[step.status];
+    const statusColor = STATUS_COLORS[step.status];
 
     const prefix = isChild ? '└─ ' : '';
     const label = t(step.labelKey, step.interpolation);
@@ -273,13 +491,17 @@ export default function BackendStartupOverlay({ onReady }: BackendStartupOverlay
           fontFamily: 'monospace',
           fontSize: '14px',
           paddingLeft: isChild ? '20px' : '0',
-          opacity: isVisible ? 1 : 0,
+          opacity: isStepVisible ? 1 : 0,
           transition: 'opacity 0.2s ease-in',
         }}
       >
-        <span style={{ color: statusColor, fontWeight: 'bold' }}>
-          {statusIcon}
-        </span>
+        {step.status === 'in_progress' ? (
+          <Spinner size="sm" />
+        ) : (
+          <span style={{ color: statusColor, fontWeight: 'bold' }}>
+            {statusIcon}
+          </span>
+        )}
         <span className="text-[var(--color-text)]">
           {prefix}{label}
         </span>
@@ -339,26 +561,7 @@ export default function BackendStartupOverlay({ onReady }: BackendStartupOverlay
           <>
             {/* Loading Spinner with connecting message */}
             <div className="flex items-center gap-3" style={{ fontFamily: 'monospace' }}>
-              <svg
-                className="animate-spin h-4 w-4 text-primary"
-                xmlns="http://www.w3.org/2000/svg"
-                fill="none"
-                viewBox="0 0 24 24"
-              >
-                <circle
-                  className="opacity-25"
-                  cx="12"
-                  cy="12"
-                  r="10"
-                  stroke="currentColor"
-                  strokeWidth="4"
-                />
-                <path
-                  className="opacity-75"
-                  fill="currentColor"
-                  d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                />
-              </svg>
+              <Spinner size="md" />
               <span className="text-[var(--color-text-muted)]">
                 {t('startup.connectingToBackend')}
               </span>
@@ -374,29 +577,24 @@ export default function BackendStartupOverlay({ onReady }: BackendStartupOverlay
         {/* Fetching status state */}
         {status === 'fetching_status' && (
           <div className="flex items-center gap-3" style={{ fontFamily: 'monospace' }}>
-            <svg
-              className="animate-spin h-4 w-4 text-primary"
-              xmlns="http://www.w3.org/2000/svg"
-              fill="none"
-              viewBox="0 0 24 24"
-            >
-              <circle
-                className="opacity-25"
-                cx="12"
-                cy="12"
-                r="10"
-                stroke="currentColor"
-                strokeWidth="4"
-              />
-              <path
-                className="opacity-75"
-                fill="currentColor"
-                d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-              />
-            </svg>
+            <Spinner size="md" />
             <span className="text-[var(--color-text-muted)]">
               {t('startup.connectingToBackend')}
             </span>
+          </div>
+        )}
+
+        {/* Waiting for ready state - show initialization steps with polling indicator */}
+        {status === 'waiting_for_ready' && initSteps.length > 0 && (
+          <div className="flex flex-col gap-2 w-full max-w-sm">
+            {renderInitSteps()}
+            {/* Polling indicator */}
+            <div className="flex items-center gap-2 mt-2" style={{ fontFamily: 'monospace', fontSize: '12px' }}>
+              <Spinner size="sm" />
+              <span className="text-[var(--color-text-muted)]">
+                {t('startup.waitingForReady')}
+              </span>
+            </div>
           </div>
         )}
 
@@ -432,7 +630,7 @@ export default function BackendStartupOverlay({ onReady }: BackendStartupOverlay
 
             {/* Retry Button */}
             <button
-              onClick={() => window.location.reload()}
+              onClick={handleRetry}
               className="mt-4 px-6 py-2 bg-primary hover:bg-primary-hover text-[var(--color-text)] rounded-lg transition-colors flex items-center gap-2"
             >
               <span className="material-symbols-outlined text-xl">refresh</span>

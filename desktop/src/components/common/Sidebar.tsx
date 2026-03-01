@@ -37,6 +37,7 @@ export default function Sidebar({ collapsed, onClose, isOverlay }: SidebarProps)
 
   const navItems: NavItem[] = [
     { path: '/dashboard', labelKey: 'nav.swarmcore', icon: 'psychology' },
+    { path: '/workspaces', labelKey: 'nav.workspaces', icon: 'folder_special' },
   ];
 
   const bottomNavItems: NavItem[] = [

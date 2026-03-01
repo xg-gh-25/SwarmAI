@@ -97,10 +97,7 @@ Tauri App
 - Python backend runs as a **sidecar process** managed by Tauri
 - Port is dynamically assigned via `portpicker` in Rust
 - Frontend uses `getBackendPort()` from `services/tauri.ts` to get the port
-- Data stored in platform-specific directories:
-  - macOS: `~/Library/Application Support/SwarmAI/`
-  - Windows: `%LOCALAPPDATA%\SwarmAI\` (typically `C:\Users\YourUsername\AppData\Local\SwarmAI\`)
-  - Linux: `~/.local/share/SwarmAI/`
+- Data stored in: `~/.swarm-ai/` (all platforms)
 
 ### Backend Structure
 

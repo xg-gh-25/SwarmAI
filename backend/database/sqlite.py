@@ -476,6 +476,30 @@ class SQLiteChannelMessagesTable(SQLiteTable[T], Generic[T]):
                 return [self._row_to_dict(row) for row in rows]
 
 
+class SQLiteSwarmWorkspacesTable(SQLiteTable[T], Generic[T]):
+    """Specialized SQLite table for swarm workspaces with default workspace querying support."""
+
+    async def get_default(self) -> Optional[T]:
+        """Get the default workspace (where is_default=1)."""
+        async with self._get_connection() as conn:
+            conn.row_factory = aiosqlite.Row
+            async with conn.execute(
+                f"SELECT * FROM {self.table_name} WHERE is_default = 1"
+            ) as cursor:
+                row = await cursor.fetchone()
+                return self._row_to_dict(row) if row else None
+
+    async def list_non_default(self) -> list[T]:
+        """List all non-default workspaces (where is_default=0), ordered by created_at descending."""
+        async with self._get_connection() as conn:
+            conn.row_factory = aiosqlite.Row
+            async with conn.execute(
+                f"SELECT * FROM {self.table_name} WHERE is_default = 0 ORDER BY created_at DESC"
+            ) as cursor:
+                rows = await cursor.fetchall()
+                return [self._row_to_dict(row) for row in rows]
+
+
 class SQLiteDatabase(BaseDatabase):
     """SQLite database client implementing BaseDatabase interface."""
 
@@ -589,6 +613,7 @@ class SQLiteDatabase(BaseDatabase):
         status TEXT DEFAULT 'active',
         metadata TEXT DEFAULT '{}',
         work_dir TEXT,
+        workspace_id TEXT,
         last_accessed TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
@@ -656,6 +681,7 @@ class SQLiteDatabase(BaseDatabase):
         aws_region TEXT DEFAULT 'us-east-1',
         available_models TEXT DEFAULT '[]',
         default_model TEXT DEFAULT 'claude-sonnet-4-5-20250929',
+        initialization_complete INTEGER DEFAULT 0,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
     );
@@ -784,6 +810,19 @@ class SQLiteDatabase(BaseDatabase):
         FOREIGN KEY (channel_session_id) REFERENCES channel_sessions(id) ON DELETE CASCADE
     );
     CREATE INDEX IF NOT EXISTS idx_channel_messages_session ON channel_messages(channel_session_id);
+
+    -- Swarm Workspaces table
+    CREATE TABLE IF NOT EXISTS swarm_workspaces (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        file_path TEXT NOT NULL,
+        context TEXT NOT NULL,
+        icon TEXT,
+        is_default INTEGER DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_swarm_workspaces_is_default ON swarm_workspaces(is_default);
     """
 
     def __init__(self, db_path: str | Path | None = None):
@@ -820,6 +859,7 @@ class SQLiteDatabase(BaseDatabase):
         self._channels = SQLiteTable[dict]("channels", self.db_path)
         self._channel_sessions = SQLiteChannelSessionsTable[dict]("channel_sessions", self.db_path)
         self._channel_messages = SQLiteChannelMessagesTable[dict]("channel_messages", self.db_path)
+        self._swarm_workspaces = SQLiteSwarmWorkspacesTable[dict]("swarm_workspaces", self.db_path)
 
     async def initialize(self) -> None:
         """Initialize database schema."""
@@ -865,6 +905,14 @@ class SQLiteDatabase(BaseDatabase):
             await conn.execute("ALTER TABLE sessions ADD COLUMN work_dir TEXT")
             await conn.commit()
             logger.info("Migration complete: work_dir column added")
+
+        # Migration: Add workspace_id column to sessions table (added 2026-02-15)
+        # Stores the Swarm Workspace ID for session workspace tracking (Requirement 5.7)
+        if "workspace_id" not in session_column_names:
+            logger.info("Running migration: Adding workspace_id column to sessions table")
+            await conn.execute("ALTER TABLE sessions ADD COLUMN workspace_id TEXT")
+            await conn.commit()
+            logger.info("Migration complete: workspace_id column added")
 
         # Migration: Add available_models and default_model columns to app_settings table (added 2026-02-02)
         # Stores model configuration for agent creation
@@ -932,6 +980,15 @@ class SQLiteDatabase(BaseDatabase):
             await conn.execute("ALTER TABLE mcp_servers ADD COLUMN is_system INTEGER DEFAULT 0")
             await conn.commit()
             logger.info("Migration complete: is_system column added to mcp_servers")
+
+        # Migration: Add initialization_complete column to app_settings table (added 2026-02-20)
+        # Tracks whether first-time initialization has been completed for fast startup optimization
+        # Validates: Requirements 1.1, 1.4
+        if "initialization_complete" not in app_settings_column_names:
+            logger.info("Running migration: Adding initialization_complete column to app_settings table")
+            await conn.execute("ALTER TABLE app_settings ADD COLUMN initialization_complete INTEGER DEFAULT 0")
+            await conn.commit()
+            logger.info("Migration complete: initialization_complete column added")
 
     @property
     def agents(self) -> SQLiteTable:
@@ -1007,6 +1064,11 @@ class SQLiteDatabase(BaseDatabase):
     def channel_messages(self) -> SQLiteChannelMessagesTable:
         """Get the channel messages table."""
         return self._channel_messages
+
+    @property
+    def swarm_workspaces(self) -> SQLiteSwarmWorkspacesTable:
+        """Get the swarm workspaces table."""
+        return self._swarm_workspaces
 
     async def health_check(self) -> bool:
         """Check if the database is healthy."""
