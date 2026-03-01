@@ -5,8 +5,8 @@
  * concerns into a testable, self-contained unit. This hook owns:
  *
  * - **State**: ``messages``, ``sessionId``, ``pendingQuestion``, ``isStreaming``,
- *   ``_pendingStream``, ``streamingSessions``
- * - **Refs**: ``abortRef``, ``messagesEndRef``, ``sessionIdRef``, ``messagesRef``
+ *   ``pendingStreamTabs`` (per-tab pending tracking)
+ * - **Refs**: ``messagesEndRef``, ``sessionIdRef``, ``messagesRef``
  * - **Factories**: ``createStreamHandler``, ``createCompleteHandler``,
  *   ``createErrorHandler``
  * - **Pure function**: ``deriveStreamingActivity`` (exported standalone for
@@ -553,7 +553,7 @@ export interface ChatStreamingLifecycle {
   pendingQuestion: PendingQuestion | null;
   setPendingQuestion: React.Dispatch<React.SetStateAction<PendingQuestion | null>>;
   isStreaming: boolean;
-  setIsStreaming: (streaming: boolean) => void;
+  setIsStreaming: (streaming: boolean, tabId?: string) => void;
   streamingActivity: StreamingActivity | null;
   /** Debounced activity — stable for at least MIN_ACTIVITY_DISPLAY_MS. */
   displayedActivity: StreamingActivity | null;
@@ -561,8 +561,12 @@ export interface ChatStreamingLifecycle {
   elapsedSeconds: number;
 
   // Refs for external access
-  abortRef: React.MutableRefObject<(() => void) | null>;
   messagesEndRef: React.RefObject<HTMLDivElement | null>;
+
+  // Per-tab pending state for ChatPage guard
+  pendingStreamTabs: Set<string>;
+  /** Force re-derivation of isStreaming (e.g. after tab switch). */
+  bumpStreamingDerivation: () => void;
 
   // Fix 1: Stream generation counter
   streamGenRef: React.MutableRefObject<number>;
@@ -632,16 +636,17 @@ export function useChatStreamingLifecycle(
   const [messages, setMessages] = useState<Message[]>([]);
   const [sessionId, setSessionId] = useState<string | undefined>();
 
-  // Track streaming state per session so tabs don't interfere with each other.
-  // _pendingStream covers the gap before session_start assigns a sessionId.
-  const [streamingSessions, setStreamingSessions] = useState<Set<string>>(
-    new Set(),
-  );
-  const [_pendingStream, _setPendingStream] = useState(false);
+  // Per-tab pending state: tracks tabs between handleSendMessage and session_start.
+  // Replaces the old single `_pendingStream` boolean — each tab's pending state
+  // is independent, keyed by tabId.
+  const [pendingStreamTabs, setPendingStreamTabs] = useState<Set<string>>(new Set());
 
-  const isStreaming = sessionId
-    ? streamingSessions.has(sessionId) || _pendingStream
-    : _pendingStream;
+  // Derive isStreaming from the active tab's per-tab state + pending set.
+  // tabMapRef is authoritative for isStreaming; pendingStreamTabs covers the
+  // gap before session_start. This useState triggers re-renders when pending changes.
+  const activeTabIdCurrent = activeTabIdRef.current;
+  const activeTabState = activeTabIdCurrent ? tabMapRef.current.get(activeTabIdCurrent) : undefined;
+  const isStreaming = (activeTabState?.isStreaming ?? false) || pendingStreamTabs.has(activeTabIdCurrent ?? '');
 
   // --- Refs: streaming lifecycle ---
   // These refs are used by stream handlers, scroll detection, etc.
@@ -652,7 +657,6 @@ export function useChatStreamingLifecycle(
   const messagesRef = useRef<Message[]>(messages);
   const userScrolledUpRef = useRef<boolean>(false); // Fix 2: auto-scroll detection
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const abortRef = useRef<(() => void) | null>(null);
   const streamStartTimeRef = useRef<number | null>(null); // Fix 9: elapsed time counter
 
   // Pending states
@@ -673,26 +677,35 @@ export function useChatStreamingLifecycle(
   }, [messages, sessionId, pendingQuestion]);
 
   /**
-   * Transition isStreaming state using ``sessionIdRef.current`` (not a
-   * stale closure over ``sessionId``). When starting a stream, sets
-   * ``_pendingStream`` so the spinner shows immediately. When stopping,
-   * removes the current sessionId from ``streamingSessions``.
+   * Transition isStreaming state for a specific tab. Updates the per-tab map
+   * entry and the ``pendingStreamTabs`` Set (which triggers re-render for
+   * isStreaming derivation). When no ``tabId`` is provided, defaults to
+   * ``activeTabIdRef.current`` for backward compatibility.
    */
   const setIsStreaming = useCallback(
-    (streaming: boolean) => {
-      const currentSessionId = sessionIdRef.current;
-      _setPendingStream(streaming);
-      setStreamingSessions((prev) => {
+    (streaming: boolean, tabId?: string) => {
+      const targetTabId = tabId ?? activeTabIdRef.current;
+
+      // Always update per-tab map
+      if (targetTabId) {
+        const tabState = tabMapRef.current.get(targetTabId);
+        if (tabState) {
+          tabState.isStreaming = streaming;
+        }
+      }
+
+      // Update pendingStreamTabs (triggers re-render for isStreaming derivation)
+      setPendingStreamTabs((prev) => {
         const next = new Set(prev);
-        if (streaming && currentSessionId) {
-          next.add(currentSessionId);
-        } else if (!streaming) {
-          if (currentSessionId) next.delete(currentSessionId);
+        if (streaming && targetTabId) {
+          next.add(targetTabId);
+        } else if (!streaming && targetTabId) {
+          next.delete(targetTabId);
         }
         return next;
       });
     },
-    [], // no sessionId dependency — reads from ref
+    [], // no dependencies — reads from refs
   );
 
   /**
@@ -895,20 +908,26 @@ export function useChatStreamingLifecycle(
         }
 
         if (event.type === 'session_start' && event.sessionId) {
-          // Update per-tab map
+          // Update per-tab map. Keep isStreaming true — the tab is still
+          // actively streaming after session_start. The pending phase ends
+          // (pendingStreamTabs removal below) but the tab remains streaming
+          // until result/error/ask_user_question arrives.
           if (tabState) {
             tabState.sessionId = event.sessionId;
-            tabState.isStreaming = false;
+            // Keep tabState.isStreaming = true (set by setIsStreaming(true) in handleSendMessage)
           }
           // Only update useState if this is the active foreground tab
           if (isActiveTab) {
             setSessionId(event.sessionId);
-            setStreamingSessions((prev) => {
+          }
+          // Clear pending for this specific tab — the tab is now tracked
+          // by tabState.isStreaming (true) rather than pendingStreamTabs.
+          if (capturedTabId) {
+            setPendingStreamTabs((prev) => {
               const next = new Set(prev);
-              next.add(event.sessionId!);
+              next.delete(capturedTabId);
               return next;
             });
-            _setPendingStream(false);
           }
         } else if (event.type === 'session_cleared' && event.newSessionId) {
           if (tabState) {
@@ -979,8 +998,8 @@ export function useChatStreamingLifecycle(
             setPendingQuestion(pq);
             if (event.sessionId) setSessionId(event.sessionId);
             setMessages(auqMessages);
-            setIsStreaming(false);
           }
+          setIsStreaming(false, capturedTabId ?? undefined);
           // Fix 1: Increment stream generation so the pending
           // createCompleteHandler from the SSE reader becomes a no-op.
           incrementStreamGen();
@@ -1008,8 +1027,8 @@ export function useChatStreamingLifecycle(
 
           if (isActiveTab) {
             if (sid) setSessionId(sid);
-            setIsStreaming(false);
           }
+          setIsStreaming(false, capturedTabId ?? undefined);
           incrementStreamGen();
 
           // Fix 8: Update tab status to 'permission_needed'
@@ -1031,6 +1050,14 @@ export function useChatStreamingLifecycle(
             queryClient.invalidateQueries({ queryKey: ['radar', 'wipTasks'] });
             queryClient.invalidateQueries({ queryKey: ['radar', 'completedTasks'] });
           }
+
+          // Result is the definitive signal that the conversation turn is
+          // complete. Clear streaming state for this tab so the spinner
+          // stops and the input re-enables. Without this, the tab stays
+          // in "processing..." state until the SSE [DONE] signal fires
+          // the createCompleteHandler — which may be stale or delayed.
+          setIsStreaming(false, capturedTabId ?? undefined);
+          incrementStreamGen();
 
           // Fix 5: Remove persisted pending state — session completed successfully
           const resultSessionId = sid ?? tabState?.sessionId;
@@ -1097,8 +1124,10 @@ export function useChatStreamingLifecycle(
           if (isActiveTab) {
             // Use functional updater to get latest state (avoids stale ref)
             setMessages((prev) => applyError(prev));
-            // Fix 3: Stop streaming on error so spinner doesn't persist
-            setIsStreaming(false);
+          }
+          // Tab-aware: clear only this tab's streaming state
+          setIsStreaming(false, capturedTabId ?? undefined);
+          if (isActiveTab) {
             // Fix 3: Force scroll to error — reset user-scrolled-up and scroll to bottom
             userScrolledUpRef.current = false;
             messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -1173,8 +1202,9 @@ export function useChatStreamingLifecycle(
 
         if (isActiveTab) {
           setMessages((prev) => applyError(prev));
-          setIsStreaming(false);
         }
+        // Tab-aware: clear only this tab's streaming state
+        setIsStreaming(false, capturedTabId ?? undefined);
         incrementStreamGen();
       };
     },
@@ -1204,12 +1234,19 @@ export function useChatStreamingLifecycle(
 
       if (streamGenRef.current !== capturedGen) return; // stale — no-op
 
-      // Only update useState if this is still the active foreground tab
-      if (capturedTabId === activeTabIdRef.current) {
-        setIsStreaming(false);
-      }
+      // Tab-aware: clear only this tab's streaming state
+      setIsStreaming(false, capturedTabId ?? undefined);
     };
   }, [setIsStreaming]);
+
+  /**
+   * Force re-derivation of ``isStreaming`` by triggering a re-render via
+   * ``setPendingStreamTabs``. Used by ChatPage on tab switch so the
+   * derivation picks up the new active tab's state from ``tabMapRef``.
+   */
+  const bumpStreamingDerivation = useCallback(() => {
+    setPendingStreamTabs((prev) => new Set(prev));
+  }, []);
 
   // --- Return lifecycle interface ---
   return {
@@ -1224,7 +1261,8 @@ export function useChatStreamingLifecycle(
     streamingActivity,
     displayedActivity,
     elapsedSeconds,
-    abortRef,
+    pendingStreamTabs,
+    bumpStreamingDerivation,
     messagesEndRef,
     streamGenRef,
     incrementStreamGen,
