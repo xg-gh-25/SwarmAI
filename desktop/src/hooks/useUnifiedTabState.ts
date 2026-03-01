@@ -395,10 +395,14 @@ export function useUnifiedTabState(
    * the Tab_Map entry for the active tab.
    */
   const saveCurrentTab = useCallback(() => {
-    // No-op — the active tab's state is already in the map.
-    // Callers that need to persist specific React state should use
-    // updateTabState(activeTabIdRef.current, { ... }) directly.
-    // This method exists for API compatibility with the legacy interface.
+    const tabId = activeTabIdRef.current;
+    if (!tabId) return;
+    const tab = tabMapRef.current.get(tabId);
+    if (!tab) return;
+    // No-op: In the unified hook, the tab map IS the source of truth.
+    // Stream handlers write directly to the map via updateTabState.
+    // This method exists for API compatibility — callers that need to
+    // sync React state into the map should call updateTabState directly.
   }, []);
 
   const restoreTab = useCallback((tabId: string): boolean => {

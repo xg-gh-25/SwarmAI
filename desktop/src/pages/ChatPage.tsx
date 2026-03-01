@@ -161,7 +161,6 @@ export default function ChatPage() {
     updateTabState,
     tabMapRef,
     activeTabIdRef,
-    saveCurrentTab,
     restoreTab,
     initTabState,
     cleanupTabState,
@@ -322,22 +321,28 @@ export default function ChatPage() {
   // Fix 7: Guard against exceeding MAX_OPEN_TABS
   const handleNewSession = useCallback(() => {
     if (!selectedAgentId) return;
-    // Fix 7: Tab limit enforcement — check authoritative tab count from per-tab map
     if (tabMapRef.current.size >= MAX_OPEN_TABS) {
       setTabLimitToast('Maximum tabs reached. Close a tab to open a new one.');
       return;
     }
-    // Save current tab state before switching away
-    saveCurrentTab();
+    // Save current React state into the active tab's map entry before switching
+    const currentTabId = activeTabIdRef.current;
+    if (currentTabId && tabMapRef.current.has(currentTabId)) {
+      updateTabState(currentTabId, {
+        messages: messagesRef.current,
+        sessionId: sessionIdRef.current,
+        pendingQuestion: null,
+        isStreaming: isStreamingRef.current,
+      });
+    }
     const newTab = addTab(selectedAgentId);
     const welcomeMessages = [createWelcomeMessage()];
-    // Initialize new tab entry in per-tab map with defaults
     initTabState(newTab!.id, welcomeMessages);
-    // Clear current session state for the new tab
     setMessages(welcomeMessages);
     setSessionId(undefined);
     setPendingQuestion(null);
-  }, [selectedAgentId, addTab, saveCurrentTab, initTabState, tabMapRef]);
+    setIsStreaming(false); // New tab is not streaming
+  }, [selectedAgentId, addTab, initTabState, tabMapRef, updateTabState, activeTabIdRef, setIsStreaming]);
 
   // Handle tab selection - switches active tab and loads session messages (Req 1.6)
   // Fix 6: Save current tab state, restore target tab state from per-tab map
@@ -345,8 +350,16 @@ export default function ChatPage() {
     const tab = openTabs.find(t => t.id === tabId);
     if (!tab) return;
     
-    // Save current tab state before switching away
-    saveCurrentTab();
+    // Save current React state into the active tab's map entry before switching
+    const currentTabId = activeTabIdRef.current;
+    if (currentTabId && tabMapRef.current.has(currentTabId)) {
+      updateTabState(currentTabId, {
+        messages: messagesRef.current,
+        sessionId: sessionIdRef.current,
+        pendingQuestion: pendingQuestion,
+        isStreaming: isStreamingRef.current,
+      });
+    }
     
     selectTab(tabId);
     
@@ -359,7 +372,14 @@ export default function ChatPage() {
         setMessages(tabState.messages);
         setSessionId(tabState.sessionId);
         setPendingQuestion(tabState.pendingQuestion);
+        // Restore isStreaming from the target tab's state — prevents the
+        // spinner from leaking across tabs when switching away from a
+        // streaming tab to an idle one.
+        setIsStreaming(tabState.isStreaming);
       }
+      // Clear permission state — it's not per-tab in the map, but it
+      // should not carry over from the previous tab.
+      setPendingPermission(null);
       // Fix 8: Clear unread indicator when switching to a tab with 'complete_unread' status
       if (tabStatuses[tabId] === 'complete_unread') {
         updateTabStatus(tabId, 'idle');
@@ -369,6 +389,8 @@ export default function ChatPage() {
     
     // Not in map — load from API or initialize fresh
     activeTabIdRef.current = tabId;
+    setPendingPermission(null);
+    setIsStreaming(false); // Target tab is not streaming (loading from API or fresh)
     if (tab.sessionId) {
       // New tab with existing session — load from API with async guard
       const loadedTabId = tabId; // capture for closure
@@ -405,7 +427,7 @@ export default function ChatPage() {
       setPendingQuestion(null);
       initTabState(tabId, welcomeMessages);
     }
-  }, [openTabs, selectTab, saveCurrentTab, restoreTab, getTabState, initTabState, updateTabState, activeTabIdRef, tabStatuses, updateTabStatus]);
+  }, [openTabs, selectTab, restoreTab, getTabState, initTabState, updateTabState, activeTabIdRef, tabMapRef, tabStatuses, updateTabStatus, pendingQuestion]);
 
   // Handle tab close - removes tab, handles last-tab case (Req 3.3)
   // Fix 6: Clean up per-tab state map entry and abort controller
@@ -540,29 +562,31 @@ export default function ChatPage() {
   }, [sessions, removeInvalidTabs]);
 
   // Sync active tab content when activeTabId changes (for tab switching/closing)
-  // IMPORTANT: Only react to activeTabId changes — NOT sessionId changes.
+  // IMPORTANT: Only react to activeTabId changes — NOT sessionId or openTabs changes.
   // sessionId changes during streaming (session_start event) must not trigger
   // a reload, or it will wipe in-progress messages.
+  // openTabs changes (from render counter bumps) must not re-trigger this effect.
   const prevActiveTabIdRef = useRef<string | null>(null);
   useEffect(() => {
     if (!activeTabId) return;
-    // Skip if activeTabId hasn't actually changed (sessionId change triggered this)
+    // Skip if activeTabId hasn't actually changed
     if (prevActiveTabIdRef.current === activeTabId) return;
     prevActiveTabIdRef.current = activeTabId;
     
-    const activeTab = openTabs.find(t => t.id === activeTabId);
-    if (!activeTab) return;
+    // Read tab metadata from the map (stable, not from openTabs which triggers re-renders)
+    const activeTabState = tabMapRef.current.get(activeTabId);
+    if (!activeTabState) return;
     
     // Only load if the tab has a persisted session we haven't loaded yet
-    if (activeTab.sessionId && activeTab.sessionId !== sessionId) {
-      loadSessionMessages(activeTab.sessionId);
-    } else if (!activeTab.sessionId && !isStreaming && sessionId) {
+    if (activeTabState.sessionId && activeTabState.sessionId !== sessionId) {
+      loadSessionMessages(activeTabState.sessionId);
+    } else if (!activeTabState.sessionId && !isStreaming && sessionId) {
       // Tab has no session and we're not streaming — reset to welcome
       setMessages([createWelcomeMessage()]);
       setSessionId(undefined);
       setPendingQuestion(null);
     }
-  }, [activeTabId, openTabs, sessionId, isStreaming, loadSessionMessages]);
+  }, [activeTabId, sessionId, isStreaming, loadSessionMessages, tabMapRef]);
 
   // Fetch TSCC snapshots when session changes
   useEffect(() => {
@@ -580,12 +604,13 @@ export default function ChatPage() {
   // Update tab's sessionId when a new session is created
   useEffect(() => {
     if (sessionId && activeTabId) {
-      const activeTab = openTabs.find(t => t.id === activeTabId);
-      if (activeTab && !activeTab.sessionId) {
+      // Read from the map directly (stable, avoids openTabs dependency)
+      const tabState = tabMapRef.current.get(activeTabId);
+      if (tabState && !tabState.sessionId) {
         updateTabSessionId(activeTabId, sessionId);
       }
     }
-  }, [sessionId, activeTabId, openTabs, updateTabSessionId]);
+  }, [sessionId, activeTabId, updateTabSessionId, tabMapRef]);
 
   // Build content array from text and attachments
   const buildContentArray = useCallback(
@@ -858,6 +883,14 @@ export default function ChatPage() {
     );
 
     abortRef.current = abort;
+    // Store abort controller in the tab map for per-tab stop isolation
+    if (currentActiveTabId) {
+      const abortController = new AbortController();
+      // Wrap the abort function into an AbortController-like interface
+      updateTabState(currentActiveTabId, {
+        abortController: { abort: () => { abort(); }, signal: abortController.signal } as unknown as AbortController,
+      });
+    }
   }, [selectedAgentId, enableSkills, enableMCP, selectedWorkspace, handlePluginCommand, buildContentArray, clearAttachments, resetUserScroll, incrementStreamGen, setIsStreaming, setMessages, setInputValue, updateTabStatus, updateTabTitle, setTabIsNew, initTabState, wrappedCreateStreamHandler, createErrorHandler, createCompleteHandler, abortRef, activeTabIdRef, tabMapRef, queryClient, navigate, t, setPolicyViolation, setRunAsTask]);
 
   // Handle answering AskUserQuestion
@@ -883,6 +916,12 @@ export default function ChatPage() {
     );
 
     abortRef.current = abort;
+    // Store in tab map for per-tab stop isolation
+    if (tabId) {
+      updateTabState(tabId, {
+        abortController: { abort: () => { abort(); }, signal: new AbortController().signal } as unknown as AbortController,
+      });
+    }
   };
 
   // Handle permission decision
@@ -932,12 +971,29 @@ export default function ChatPage() {
     );
 
     abortRef.current = abort;
+    // Store in tab map for per-tab stop isolation
+    if (tabId) {
+      updateTabState(tabId, {
+        abortController: { abort: () => { abort(); }, signal: new AbortController().signal } as unknown as AbortController,
+      });
+    }
   };
 
   // Handle stop
   const handleStop = async () => {
     if (!sessionId) return;
     try {
+      // Use the active tab's abort controller from the tab map (per-tab isolation)
+      // instead of the shared abortRef which can be overwritten by other tabs.
+      const currentTabId = activeTabIdRef.current;
+      if (currentTabId) {
+        const tabState = tabMapRef.current.get(currentTabId);
+        if (tabState?.abortController) {
+          try { tabState.abortController.abort(); } catch { /* already aborted */ }
+          tabState.abortController = null;
+        }
+      }
+      // Also clear the shared abortRef as a fallback
       if (abortRef.current) { abortRef.current(); abortRef.current = null; }
       await chatService.stopSession(sessionId);
       setMessages((prev) => [...prev, { id: Date.now().toString(), role: 'assistant', content: [{ type: 'text', text: '⏹️ Generation stopped by user.' }], timestamp: new Date().toISOString() }]);
@@ -945,6 +1001,9 @@ export default function ChatPage() {
       console.error('Failed to stop session:', error);
     } finally {
       setIsStreaming(false);
+      // Update tab status to idle
+      const tabId = activeTabIdRef.current;
+      if (tabId) updateTabStatus(tabId, 'idle');
     }
   };
 
