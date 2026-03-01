@@ -353,6 +353,11 @@ class TestSuccessfulSessionStoragePreservation:
         **Validates: Requirements 3.3**
         """
         agent_manager = AgentManager()
+        # Provide mock config so _execute_on_session doesn't crash on
+        # self._config.get("use_bedrock") during Bedrock pre-flight check
+        mock_config = MagicMock()
+        mock_config.get = MagicMock(return_value=False)
+        agent_manager._config = mock_config
 
         session_id = "success-session-001"
         init_msg = make_init_system_message(session_id=session_id)
