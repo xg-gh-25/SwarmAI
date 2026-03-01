@@ -1,6 +1,6 @@
 import { useRef, useCallback } from 'react';
 import type { OpenTab } from '../types';
-import type { TabStatus } from '../../../hooks/useChatStreamingLifecycle';
+import type { TabStatus } from '../../../hooks/useUnifiedTabState';
 import { SessionTab } from './SessionTab';
 
 interface SessionTabBarProps {
