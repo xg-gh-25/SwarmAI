@@ -1,7 +1,7 @@
 import { forwardRef } from 'react';
 import clsx from 'clsx';
 import type { OpenTab } from '../types';
-import type { TabStatus } from '../../../hooks/useChatStreamingLifecycle';
+import type { TabStatus } from '../../../hooks/useUnifiedTabState';
 import { TabStatusIndicator } from './TabStatusIndicator';
 
 interface SessionTabProps {

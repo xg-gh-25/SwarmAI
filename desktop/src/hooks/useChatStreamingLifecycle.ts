@@ -6,74 +6,51 @@
  *
  * - **State**: ``messages``, ``sessionId``, ``pendingQuestion``, ``isStreaming``,
  *   ``_pendingStream``, ``streamingSessions``
- * - **Refs**: ``abortRef``, ``messagesEndRef``, ``sessionIdRef``, ``messagesRef``,
- *   ``pendingQuestionRef``, ``tabStateRef``, ``activeTabIdRef``
+ * - **Refs**: ``abortRef``, ``messagesEndRef``, ``sessionIdRef``, ``messagesRef``
  * - **Factories**: ``createStreamHandler``, ``createCompleteHandler``,
  *   ``createErrorHandler``
  * - **Pure function**: ``deriveStreamingActivity`` (exported standalone for
  *   testability)
  * - **Pure function**: ``updateMessages`` (exported for testability)
  * - **Derived**: ``isStreaming`` derivation, ``streamingActivity`` memo
- * - **Tab management**: ``saveTabState``, ``restoreTabState``, ``initTabState``,
- *   ``cleanupTabState`` — per-tab state isolation (Fix 6)
+ *
+ * Tab state management (per-tab map, activeTabIdRef, tab statuses, lifecycle
+ * methods) has been migrated to ``useUnifiedTabState``. This hook now receives
+ * unified tab state methods via ``ChatStreamingLifecycleDeps`` and uses them
+ * in stream handlers for tab-aware updates.
  *
  * ``ChatPage`` consumes this hook and focuses on rendering + user interactions.
  *
  * **Fix 1**: Stream generation counter prevents stale complete handlers.
- * **Fix 6**: Per-tab state map isolates messages, sessionId, pendingQuestion,
- *   abortController, and pendingStream across tabs. The ``tabStateRef`` map is
- *   the authoritative source of truth; ``useState`` mirrors the active tab.
- *   Background streaming updates the per-tab map but NOT foreground useState.
+ * **Fix 6**: Per-tab state isolation — stream handlers read/write the unified
+ *   Tab_Map via injected deps (``tabMapRef``, ``activeTabIdRef``).
  *
  * @module useChatStreamingLifecycle
  */
 
-import { useState, useRef, useCallback, useMemo, useEffect } from 'react';
+import React, { useState, useRef, useCallback, useMemo, useEffect } from 'react';
 import type {
   Message,
   ContentBlock,
   StreamEvent,
 } from '../types';
 import type { PendingQuestion } from '../pages/chat/types';
+import type { UnifiedTab } from './useUnifiedTabState';
+import { type TabStatus } from './useUnifiedTabState';
 
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
 
-/**
- * Tab lifecycle status for header indicators.
- *
- * State machine transitions:
- *   idle → streaming → {waiting_input | permission_needed | error | complete_unread} → idle
- */
-export type TabStatus =
-  | 'idle'
-  | 'streaming'
-  | 'waiting_input'
-  | 'permission_needed'
-  | 'error'
-  | 'complete_unread';
+// TabStatus is now imported from useUnifiedTabState and re-exported for
+// backward compatibility with existing consumers.
+export type { TabStatus } from './useUnifiedTabState';
 
-/**
- * Per-tab state stored in the backing ``tabStateRef`` map.
- *
- * Each open chat tab has its own isolated copy of messages, sessionId,
- * pendingQuestion, abortController, and streaming flags. The active
- * (foreground) tab's state is mirrored into React ``useState`` for rendering;
- * background tabs live only in this map until switched to.
- */
-export interface TabState {
-  messages: Message[];
-  sessionId: string | undefined;
-  pendingQuestion: PendingQuestion | null;
-  abortController: AbortController | null;
-  pendingStream: boolean;
-  streamGen: number;
-  status: TabStatus;
-}
+// TabState has been replaced by UnifiedTab from useUnifiedTabState.
+// The unified Tab_Map (injected via deps.tabMapRef) now holds UnifiedTab entries.
 
-/** Maximum number of concurrent open tabs. Bounds the per-tab state map. */
-export const MAX_OPEN_TABS = 6;
+/** Maximum number of concurrent open tabs — re-exported from useUnifiedTabState for backward compat. */
+export { MAX_OPEN_TABS } from './useUnifiedTabState';
 
 /**
  * Threshold in milliseconds before the elapsed time counter is shown.
@@ -596,24 +573,6 @@ export interface ChatStreamingLifecycle {
   /** Reset user-scrolled-up flag so auto-scroll resumes (e.g. on new user message). */
   resetUserScroll: () => void;
 
-  // Fix 6: Per-tab state isolation
-  tabStateRef: React.MutableRefObject<Map<string, TabState>>;
-  activeTabIdRef: React.MutableRefObject<string | null>;
-  /** Save current foreground tab state into the per-tab map. */
-  saveTabState: () => void;
-  /** Restore a tab's state from the per-tab map into useState. Returns false if tab not found. */
-  restoreTabState: (tabId: string) => boolean;
-  /** Initialize a new tab entry in the per-tab map with defaults. */
-  initTabState: (tabId: string, initialMessages?: Message[]) => void;
-  /** Clean up a tab: remove from map, abort controller if active. */
-  cleanupTabState: (tabId: string) => void;
-
-  // Fix 8: Tab status indicators
-  /** Per-tab status for header indicators. Keyed by tabId. */
-  tabStatuses: Record<string, TabStatus>;
-  /** Update a tab's status in both the per-tab map and the tabStatuses useState. */
-  updateTabStatus: (tabId: string, status: TabStatus) => void;
-
   // Factories — tab-aware (Fix 6)
   createStreamHandler: (assistantMessageId: string, tabId?: string) => (event: StreamEvent) => void;
   createCompleteHandler: (tabId?: string) => () => void;
@@ -638,6 +597,18 @@ export interface ChatStreamingLifecycleDeps {
   tsccTriggerAutoExpand: (reason: string) => void;
   /** Session lookup for stale entry cleanup (Fix 5). Returns null/throws on 404. */
   getSession?: (sessionId: string) => Promise<{ id: string } | null>;
+
+  // --- Unified tab state methods (injected from useUnifiedTabState) ---
+  /** Read a tab's full state from the unified Tab_Map. */
+  getTabState: (tabId: string) => UnifiedTab | undefined;
+  /** Patch a tab's state in the unified Tab_Map. */
+  updateTabState: (tabId: string, patch: Partial<Omit<UnifiedTab, 'id'>>) => void;
+  /** Update a tab's lifecycle status in the unified Tab_Map. */
+  updateTabStatus: (tabId: string, status: TabStatus) => void;
+  /** Direct ref to the unified Tab_Map for synchronous reads in stream handlers. */
+  tabMapRef: React.RefObject<Map<string, UnifiedTab>>;
+  /** Direct ref to the active tab ID for synchronous reads in stream handlers. */
+  activeTabIdRef: React.RefObject<string | null>;
 }
 
 // ---------------------------------------------------------------------------
@@ -647,7 +618,15 @@ export interface ChatStreamingLifecycleDeps {
 export function useChatStreamingLifecycle(
   deps: ChatStreamingLifecycleDeps,
 ): ChatStreamingLifecycle {
-  const { queryClient, applyTelemetryEvent, tsccTriggerAutoExpand, getSession } = deps;
+  const {
+    queryClient,
+    applyTelemetryEvent,
+    tsccTriggerAutoExpand,
+    getSession,
+    updateTabStatus,
+    tabMapRef,
+    activeTabIdRef,
+  } = deps;
 
   // --- Core chat state ---
   const [messages, setMessages] = useState<Message[]>([]);
@@ -664,15 +643,13 @@ export function useChatStreamingLifecycle(
     ? streamingSessions.has(sessionId) || _pendingStream
     : _pendingStream;
 
-  // --- Refs: streaming lifecycle & per-tab state isolation ---
-  // These refs are used by stream handlers, tab switch logic, and scroll detection.
-  // They are intentionally refs (not state) to avoid stale closures and unnecessary re-renders.
-  const tabStateRef = useRef<Map<string, TabState>>(new Map());
-  const activeTabIdRef = useRef<string | null>(null);
+  // --- Refs: streaming lifecycle ---
+  // These refs are used by stream handlers, scroll detection, etc.
+  // Tab state refs (tabMapRef, activeTabIdRef) are now injected via deps
+  // from the unified hook — see ChatStreamingLifecycleDeps.
   const streamGenRef = useRef<number>(0);
   const sessionIdRef = useRef<string | undefined>(sessionId);
   const messagesRef = useRef<Message[]>(messages);
-  const pendingQuestionRef = useRef<PendingQuestion | null>(null);
   const userScrolledUpRef = useRef<boolean>(false); // Fix 2: auto-scroll detection
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<(() => void) | null>(null);
@@ -686,29 +663,13 @@ export function useChatStreamingLifecycle(
   const [elapsedSeconds, setElapsedSeconds] = useState<number>(0);
 
   // --- Fix 8: Tab status indicators ---
-  // Mirror of TabState.status for each tab, stored as useState to trigger
-  // re-renders in the tab header when status changes. Bounded by MAX_OPEN_TABS.
-  const [tabStatuses, setTabStatuses] = useState<Record<string, TabStatus>>({});
-
-  /**
-   * Update a tab's lifecycle status in both the per-tab map (authoritative)
-   * and the ``tabStatuses`` useState (for rendering). Guarded to avoid
-   * unnecessary re-renders when the status hasn't actually changed.
-   */
-  const updateTabStatus = useCallback((tabId: string, newStatus: TabStatus) => {
-    const tabState = tabStateRef.current.get(tabId);
-    if (tabState && tabState.status === newStatus) return; // no change — skip re-render
-    if (tabState) {
-      tabState.status = newStatus;
-    }
-    setTabStatuses(prev => ({ ...prev, [tabId]: newStatus }));
-  }, []);
+  // Tab statuses are now managed by the unified hook (useUnifiedTabState)
+  // and injected via deps.updateTabStatus. No local state needed.
 
   // --- Consolidated ref sync (single useEffect for performance) ---
   useEffect(() => {
     messagesRef.current = messages;
     sessionIdRef.current = sessionId;
-    pendingQuestionRef.current = pendingQuestion;
   }, [messages, sessionId, pendingQuestion]);
 
   /**
@@ -745,7 +706,7 @@ export function useChatStreamingLifecycle(
     // Also update per-tab map if active tab exists
     const tabId = activeTabIdRef.current;
     if (tabId) {
-      const tabState = tabStateRef.current.get(tabId);
+      const tabState = tabMapRef.current.get(tabId);
       if (tabState) {
         tabState.streamGen = streamGenRef.current;
       }
@@ -863,7 +824,7 @@ export function useChatStreamingLifecycle(
       // Also update the per-tab map if an active tab exists
       const tabId = activeTabIdRef.current;
       if (tabId) {
-        const tabState = tabStateRef.current.get(tabId);
+        const tabState = tabMapRef.current.get(tabId);
         if (tabState) {
           tabState.messages = restored.messages;
           tabState.pendingQuestion = restored.pendingQuestion;
@@ -888,75 +849,10 @@ export function useChatStreamingLifecycle(
     return () => clearTimeout(timerId);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps — mount-only
 
-  // --- Fix 6: Per-tab state management functions ---
-
-  /**
-   * Save current foreground tab state into the per-tab map.
-   * Reads from the per-tab map (authoritative) for streaming fields,
-   * and syncs non-streaming fields from refs.
-   */
-  const saveTabState = useCallback(() => {
-    const currentTabId = activeTabIdRef.current;
-    if (!currentTabId) return;
-
-    const existing = tabStateRef.current.get(currentTabId);
-    if (existing) {
-      // Per-tab map is authoritative for messages (stream handlers update it directly).
-      // Sync non-streaming fields that only change via useState:
-      existing.pendingQuestion = pendingQuestionRef.current;
-      existing.pendingStream = _pendingStream;
-    } else {
-      // First save for this tab — initialize from current useState
-      tabStateRef.current.set(currentTabId, {
-        messages: messagesRef.current,
-        sessionId: sessionIdRef.current,
-        pendingQuestion: pendingQuestionRef.current,
-        abortController: null, // abort controller is set by stream start, not by save
-        pendingStream: _pendingStream,
-        streamGen: streamGenRef.current,
-        status: 'idle',
-      });
-    }
-  }, [_pendingStream]);
-
-  /**
-   * Restore a tab's state from the per-tab map into useState.
-   * Returns false if tab not found in the map.
-   */
-  const restoreTabState = useCallback((tabId: string): boolean => {
-    activeTabIdRef.current = tabId;
-    const targetState = tabStateRef.current.get(tabId);
-    if (!targetState) return false;
-
-    setMessages(targetState.messages);
-    setSessionId(targetState.sessionId);
-    setPendingQuestion(targetState.pendingQuestion);
-    abortRef.current = targetState.abortController
-      ? () => targetState.abortController?.abort()
-      : null;
-    _setPendingStream(targetState.pendingStream);
-    streamGenRef.current = targetState.streamGen;
-    return true;
-  }, []);
-
-  /**
-   * Initialize a new tab entry in the per-tab map with defaults.
-   * Sets the new tab as the active tab.
-   */
-  const initTabState = useCallback((tabId: string, initialMessages?: Message[]) => {
-    tabStateRef.current.set(tabId, {
-      messages: initialMessages ?? [],
-      sessionId: undefined,
-      pendingQuestion: null,
-      abortController: null,
-      pendingStream: false,
-      streamGen: streamGenRef.current, // Inherit current generation to avoid stale-guard mismatch
-      status: 'idle',
-    });
-    activeTabIdRef.current = tabId;
-    // Fix 8: Initialize tab status in the useState mirror
-    setTabStatuses(prev => ({ ...prev, [tabId]: 'idle' }));
-  }, []);
+  // --- Fix 6: Per-tab state management ---
+  // Tab lifecycle methods (saveTabState, restoreTabState, initTabState,
+  // cleanupTabState) are now owned by the unified hook (useUnifiedTabState).
+  // Stream handlers access tab state via deps.tabMapRef and deps.activeTabIdRef.
 
   /**
    * Reset the user-scrolled-up flag so auto-scroll resumes.
@@ -965,21 +861,6 @@ export function useChatStreamingLifecycle(
    */
   const resetUserScroll = useCallback(() => {
     userScrolledUpRef.current = false;
-  }, []);
-
-  /**
-   * Clean up a tab: remove from map, abort controller if active.
-   */
-  const cleanupTabState = useCallback((tabId: string) => {
-    const tabState = tabStateRef.current.get(tabId);
-    if (tabState?.abortController) {
-      tabState.abortController.abort();
-    }
-    tabStateRef.current.delete(tabId);
-    // Fix 8: Remove tab status entry
-    setTabStatuses(prev =>
-      Object.fromEntries(Object.entries(prev).filter(([k]) => k !== tabId)),
-    );
   }, []);
 
   // --- Stream handler factories (tab-aware — Fix 6) ---
@@ -993,7 +874,7 @@ export function useChatStreamingLifecycle(
       return (event: StreamEvent) => {
         // Guard: if tab was closed while stream was running, no-op
         const tabState = capturedTabId
-          ? tabStateRef.current.get(capturedTabId)
+          ? tabMapRef.current.get(capturedTabId)
           : undefined;
 
         // When capturedTabId is null (initial tab before registration), treat as active.
@@ -1007,7 +888,7 @@ export function useChatStreamingLifecycle(
             activeTabId: activeTabIdRef.current,
             isActiveTab,
             hasTabState: !!tabState,
-            tabMapSize: tabStateRef.current.size,
+            tabMapSize: tabMapRef.current.size,
             msgCount: messagesRef.current.length,
             assistantMessageId,
           });
@@ -1017,7 +898,7 @@ export function useChatStreamingLifecycle(
           // Update per-tab map
           if (tabState) {
             tabState.sessionId = event.sessionId;
-            tabState.pendingStream = false;
+            tabState.isStreaming = false;
           }
           // Only update useState if this is the active foreground tab
           if (isActiveTab) {
@@ -1255,7 +1136,7 @@ export function useChatStreamingLifecycle(
       return (error: Error) => {
         console.error('Stream error:', error);
         const tabState = capturedTabId
-          ? tabStateRef.current.get(capturedTabId)
+          ? tabMapRef.current.get(capturedTabId)
           : undefined;
         const isActiveTab = capturedTabId === null || capturedTabId === activeTabIdRef.current;
 
@@ -1316,9 +1197,9 @@ export function useChatStreamingLifecycle(
     return () => {
       // Check per-tab generation if available
       if (capturedTabId) {
-        const tabState = tabStateRef.current.get(capturedTabId);
+        const tabState = tabMapRef.current.get(capturedTabId);
         if (!tabState || tabState.streamGen !== capturedGen) return; // stale or closed tab
-        tabState.pendingStream = false;
+        tabState.isStreaming = false;
       }
 
       if (streamGenRef.current !== capturedGen) return; // stale — no-op
@@ -1349,14 +1230,6 @@ export function useChatStreamingLifecycle(
     incrementStreamGen,
     userScrolledUpRef,
     resetUserScroll,
-    tabStateRef,
-    activeTabIdRef,
-    saveTabState,
-    restoreTabState,
-    initTabState,
-    cleanupTabState,
-    tabStatuses,
-    updateTabStatus,
     createStreamHandler,
     createCompleteHandler,
     createErrorHandler,

@@ -1,7 +1,7 @@
 import { useTranslation } from 'react-i18next';
 import clsx from 'clsx';
 import type { OpenTab } from '../types';
-import type { TabStatus } from '../../../hooks/useChatStreamingLifecycle';
+import type { TabStatus } from '../../../hooks/useUnifiedTabState';
 import { SessionTabBar } from './SessionTabBar';
 import type { RightSidebarId } from '../constants';
 

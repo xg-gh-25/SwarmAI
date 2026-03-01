@@ -108,8 +108,8 @@ Unique files touched across history: 838
 API client layer with `toCamelCase()` field mapping (backend snake_case → frontend camelCase)
 
 ### Key Hooks (`desktop/src/hooks/`)
-- `useChatStreamingLifecycle` — Streaming lifecycle state machine (messages, sessionId, isStreaming, per-tab state isolation, stream generation counter, auto-scroll, debounced activity labels, sessionStorage persistence, tab status indicators). Extracted from ChatPage.tsx in the streaming-ux-lifecycle bugfix spec.
-- `useTabState` — Tab open/close/select management
+- `useUnifiedTabState` — Single source of truth for all tab state (CRUD, metadata, runtime state, lifecycle, localStorage persistence, tab status indicators). Replaces the former `useTabState`, `tabStateRef`, and `tabStatuses` stores.
+- `useChatStreamingLifecycle` — Streaming lifecycle state machine (messages, sessionId, isStreaming, stream generation counter, auto-scroll, debounced activity labels, sessionStorage persistence). Receives unified tab state methods via deps for tab-aware stream handlers.
 - `useFileAttachment` — File attachment processing
 - `useTSCCState` — TSCC panel state
 - `useRightSidebarGroup` — Mutual-exclusion sidebar management
