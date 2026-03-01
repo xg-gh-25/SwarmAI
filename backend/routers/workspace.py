@@ -19,6 +19,8 @@ from schemas.workspace import (
     WorkspaceListResponse,
     WorkspaceUploadRequest,
     WorkspaceUploadResponse,
+    WorkspaceWriteRequest,
+    WorkspaceWriteResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -572,4 +574,67 @@ async def upload_file(agent_id: str, request: WorkspaceUploadRequest):
         path=str(relative_path),
         filename=target_path.name,
         size=len(file_bytes)
+    )
+
+
+@router.put("/{agent_id}/write", response_model=WorkspaceWriteResponse)
+async def write_file(
+    agent_id: str,
+    request: WorkspaceWriteRequest,
+    base_path: str | None = Query(None, description="Custom base path for file browser")
+):
+    """Write content to a file.
+
+    This endpoint writes UTF-8 text content to a file, creating it if it doesn't exist
+    or overwriting if it does. Used by the File Editor Modal.
+
+    Args:
+        agent_id: The agent ID
+        request: The write request containing path and content
+        base_path: Optional custom base path (e.g., from "work in a folder" selection)
+
+    Returns:
+        WorkspaceWriteResponse with the file path and size
+    """
+    workspace_root = get_workspace_root(agent_id, base_path)
+
+    # Ensure workspace exists (auto-create if needed)
+    await ensure_workspace_exists(agent_id, workspace_root, base_path)
+
+    # Validate and resolve the path
+    file_path = validate_path(workspace_root, request.path)
+
+    # Check content size (use same limit as text files)
+    content_bytes = request.content.encode('utf-8')
+    if len(content_bytes) > MAX_TEXT_FILE_SIZE:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Content too large. Max size: {MAX_TEXT_FILE_SIZE // 1024}KB"
+        )
+
+    # Ensure parent directory exists
+    parent_dir = file_path.parent
+    if not parent_dir.exists():
+        try:
+            parent_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            raise HTTPException(status_code=500, detail=f"Failed to create directory: {e}")
+
+    # Write file
+    try:
+        file_path.write_text(request.content, encoding='utf-8')
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="Permission denied")
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"Error writing file: {e}")
+
+    # Calculate relative path from workspace root
+    try:
+        relative_path = file_path.relative_to(workspace_root)
+    except ValueError:
+        relative_path = file_path.resolve().relative_to(workspace_root.resolve())
+
+    return WorkspaceWriteResponse(
+        path=str(relative_path),
+        size=len(content_bytes)
     )

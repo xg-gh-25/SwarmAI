@@ -11,7 +11,9 @@
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
     "build:backend": "bash scripts/build-backend.sh",
-    "build:all": "bash scripts/build.sh",
+    "generate-seed-db": "cd ../backend && python scripts/generate_seed_db.py",
+    "prebuild": "npm run generate-seed-db",
+    "build:all": "npm run prebuild && bash scripts/build.sh",
     "lint": "eslint .",
     "test": "vitest",
     "test:run": "vitest run"

@@ -21,30 +21,17 @@ const isDev = import.meta.env.DEV;
 // Detect platform
 function getPlatformInfo(): { platform: string; dataDir: string; skillsDir: string; logsDir: string } {
   const userAgent = navigator.userAgent.toLowerCase();
-
-  if (userAgent.includes('win')) {
-    return {
-      platform: 'Windows',
-      dataDir: '%LOCALAPPDATA%\\SwarmAI\\',
-      skillsDir: '%LOCALAPPDATA%\\SwarmAI\\skills\\',
-      logsDir: '%LOCALAPPDATA%\\SwarmAI\\logs\\'
-    };
-  } else if (userAgent.includes('mac')) {
-    return {
-      platform: 'macOS',
-      dataDir: '~/Library/Application Support/SwarmAI/',
-      skillsDir: '~/Library/Application Support/SwarmAI/skills/',
-      logsDir: '~/Library/Application Support/SwarmAI/logs/'
-    };
-  } else {
-    // Linux and other Unix-like systems
-    return {
-      platform: 'Linux',
-      dataDir: '~/.local/share/SwarmAI/',
-      skillsDir: '~/.local/share/SwarmAI/skills/',
-      logsDir: '~/.local/share/SwarmAI/logs/'
-    };
-  }
+  
+  // All platforms use the same path now
+  const platform = userAgent.includes('win') ? 'Windows' : 
+                   userAgent.includes('mac') ? 'macOS' : 'Linux';
+  
+  return {
+    platform,
+    dataDir: '~/.swarm-ai/',
+    skillsDir: '~/.swarm-ai/skills/',
+    logsDir: '~/.swarm-ai/logs/'
+  };
 }
 
 const platformInfo = getPlatformInfo();

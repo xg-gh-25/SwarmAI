@@ -5,16 +5,25 @@ from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
+import asyncio
 import logging
+import shutil
+import sys
 from pathlib import Path
 
 from config import settings, get_app_data_dir
-from core.agent_manager import agent_manager, ensure_default_agent
-from routers import agents_router, skills_router, mcp_router, chat_router, auth_router, workspace_router, settings_router, plugins_router, tasks_router, channels_router, system_router
+from core.agent_manager import agent_manager
+from core.swarm_workspace_manager import swarm_workspace_manager
+from utils.bundle_paths import get_resource_file
+from routers import agents_router, skills_router, mcp_router, chat_router, auth_router, workspace_router, settings_router, plugins_router, tasks_router, channels_router, system_router, swarm_workspaces_router
 from channels.gateway import channel_gateway
 from middleware.error_handler import setup_error_handlers
 from middleware.rate_limit import limiter
 from database import initialize_database
+
+# Runtime flag to track if lifespan startup has completed
+# This is different from initialization_complete in DB which persists across restarts
+_startup_complete = False
 
 
 def get_log_file_path() -> Path:
@@ -52,32 +61,120 @@ logger.info(f"Log file: {log_file}")
 logging.getLogger("urllib3").setLevel(logging.WARNING)
 
 
+def _get_seed_database_path() -> Path | None:
+    """Get the path to the bundled seed database.
+    
+    Returns:
+        Path to seed.db or None if not found
+        
+    See utils.bundle_paths for Tauri bundle structure documentation.
+    """
+    backend_dir = Path(__file__).resolve().parent
+    dev_seed_path = backend_dir.parent / "desktop" / "resources" / "seed.db"
+    return get_resource_file("seed.db", dev_seed_path)
+
+
+def _ensure_database_initialized() -> None:
+    """Ensure the user database exists, copying from seed if needed.
+    
+    This function checks if a user database already exists. If not, it attempts
+    to copy the bundled seed database to the user data directory. If the seed
+    database is not found, the application will fall back to runtime initialization.
+    
+    Validates: Requirements 3.1, 3.2, 3.4
+    """
+    user_db_path = get_app_data_dir() / "data.db"
+    
+    # Ensure the app data directory exists
+    user_db_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    if user_db_path.exists():
+        logger.info(f"Using existing user database at {user_db_path}")
+        return
+    
+    # Try to copy seed database
+    seed_db_path = _get_seed_database_path()
+    
+    if seed_db_path and seed_db_path.exists():
+        try:
+            shutil.copy2(seed_db_path, user_db_path)
+            logger.info(f"Copied seed database from {seed_db_path} to {user_db_path}")
+        except Exception as e:
+            logger.error(f"Failed to copy seed database: {e}")
+            logger.warning("Will fall back to runtime initialization")
+    else:
+        logger.warning("Seed database not found, will use runtime initialization")
+
+
+async def _ensure_workspace_folders() -> None:
+    """Ensure workspace folders exist (fire and forget task).
+    
+    This is called as a non-blocking background task after database initialization
+    to create filesystem folders for pre-seeded workspace records.
+    
+    Validates: Requirements 4.1, 4.2, 4.5
+    """
+    try:
+        from database import get_database
+        db = get_database()
+        await swarm_workspace_manager.ensure_workspace_folders_exist(db)
+        logger.info("Workspace folder initialization complete")
+    except Exception as e:
+        # Log warning but don't fail - folder creation is non-critical
+        logger.warning(f"Failed to ensure workspace folders exist: {e}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan handler."""
+    global _startup_complete
+    from core.initialization_manager import initialization_manager
+    
     # Startup
     logger.info(f"Starting {settings.app_name} v{settings.app_version}")
     logger.info(f"Debug mode: {settings.debug}")
     logger.info(f"Database type: {settings.database_type}")
     logger.info(f"Rate limit: {settings.rate_limit_per_minute}/minute")
 
+    # Ensure database exists (copy seed DB if needed)
+    # Validates: Requirements 3.1, 3.2, 3.4
+    _ensure_database_initialized()
+
     # Initialize database
     await initialize_database()
     logger.info("Database initialized")
 
-    # Ensure default agent exists
-    try:
-        await ensure_default_agent()
-        logger.info("Default agent ensured")
-    except Exception as e:
-        logger.error(f"Failed to ensure default agent: {e}")
+    # Ensure workspace folders exist (non-blocking)
+    # Validates: Requirements 4.1, 4.2, 4.5
+    asyncio.create_task(_ensure_workspace_folders())
+
+    # Check initialization state and run appropriate flow
+    # Validates: Requirements 2.1, 3.1, 3.6
+    if await initialization_manager.is_initialization_complete():
+        # Quick validation path - fast startup for returning users
+        logger.info("Initialization complete flag is set, running quick validation...")
+        if not await initialization_manager.run_quick_validation():
+            # Resources missing, fall back to full init
+            logger.warning("Quick validation failed, falling back to full initialization...")
+            await initialization_manager.run_full_initialization()
+        else:
+            logger.info("Quick validation passed - fast startup complete")
+    else:
+        # First-time initialization
+        logger.info("First-time startup, running full initialization...")
+        await initialization_manager.run_full_initialization()
 
     # Start channel gateway (auto-starts active channels)
     await channel_gateway.startup()
     logger.info("Channel gateway started")
+    
+    # Mark startup as complete - health check will now return healthy
+    _startup_complete = True
+    logger.info("Startup complete - ready to serve requests")
 
     yield
     # Shutdown
+    _startup_complete = False
     logger.info("Shutting down...")
     await channel_gateway.shutdown()
     logger.info("Channel gateway stopped")
@@ -148,11 +245,25 @@ app.include_router(plugins_router, prefix="/api/plugins", tags=["plugins"])
 app.include_router(tasks_router, prefix="/api/tasks", tags=["tasks"])
 app.include_router(channels_router, prefix="/api/channels", tags=["channels"])
 app.include_router(system_router, prefix="/api/system", tags=["system"])
+app.include_router(swarm_workspaces_router, prefix="/api", tags=["swarm-workspaces"])
 
 
 @app.get("/health")
 async def health_check():
-    """Health check endpoint."""
+    """Health check endpoint.
+    
+    Returns healthy only after the lifespan startup has completed.
+    This prevents race conditions where the frontend tries to load
+    resources before they're ready.
+    """
+    # Check runtime flag - this is set after lifespan startup completes
+    if not _startup_complete:
+        return {
+            "status": "initializing",
+            "version": settings.app_version,
+            "sdk": "claude-agent-sdk",
+        }
+    
     return {
         "status": "healthy",
         "version": settings.app_version,

@@ -262,54 +262,24 @@ Select HTTP, enter URL: https://knowledge-mcp.global.api.aws
 
 ## Data Storage Locations
 
-SwarmAI data storage locations vary by operating system:
+SwarmAI stores data in `~/.swarm-ai/` on all platforms.
 
-### macOS
+### Data Locations
 
 | Type | Path |
 |------|------|
-| Data Directory | `~/Library/Application Support/SwarmAI/` |
-| Database | `~/Library/Application Support/SwarmAI/data.db` |
-| Skills Directory | `~/Library/Application Support/SwarmAI/skills/` |
-| Logs Directory | `~/Library/Application Support/SwarmAI/logs/` |
+| Data Directory | `~/.swarm-ai/` |
+| Database | `~/.swarm-ai/data.db` |
+| Skills Directory | `~/.swarm-ai/skills/` |
+| Logs Directory | `~/.swarm-ai/logs/` |
 
 **View logs:**
 ```bash
-cat ~/Library/Application\ Support/SwarmAI/logs/backend.log
-```
+# macOS/Linux
+cat ~/.swarm-ai/logs/backend.log
 
-### Windows
-
-| Type | Path |
-|------|------|
-| Data Directory | `%LOCALAPPDATA%\SwarmAI\` |
-| Database | `%LOCALAPPDATA%\SwarmAI\data.db` |
-| Skills Directory | `%LOCALAPPDATA%\SwarmAI\skills\` |
-| Logs Directory | `%LOCALAPPDATA%\SwarmAI\logs\` |
-
-Usually corresponds to: `C:\Users\YourUsername\AppData\Local\SwarmAI\`
-
-**View logs:**
-```powershell
-# PowerShell
-Get-Content $env:LOCALAPPDATA\SwarmAI\logs\backend.log
-
-# Or open with Notepad
-notepad $env:LOCALAPPDATA\SwarmAI\logs\backend.log
-```
-
-### Linux
-
-| Type | Path |
-|------|------|
-| Data Directory | `~/.local/share/SwarmAI/` |
-| Database | `~/.local/share/SwarmAI/data.db` |
-| Skills Directory | `~/.local/share/SwarmAI/skills/` |
-| Logs Directory | `~/.local/share/SwarmAI/logs/` |
-
-**View logs:**
-```bash
-cat ~/.local/share/SwarmAI/logs/backend.log
+# Windows (PowerShell)
+Get-Content $HOME\.swarm-ai\logs\backend.log
 ```
 
 ---
@@ -322,7 +292,7 @@ cat ~/.local/share/SwarmAI/logs/backend.log
 
 1. Check log files:
    ```bash
-   cat ~/Library/Application\ Support/SwarmAI/logs/backend.log
+   cat ~/.swarm-ai/logs/backend.log
    ```
 2. Try restarting the application
 
@@ -358,14 +328,20 @@ claude --version
 
 ### Q: How to completely uninstall SwarmAI?
 
-**A (macOS):**
+**A (macOS/Linux):**
 
 ```bash
-# 1. Delete application
+# 1. Delete application (macOS)
 rm -rf /Applications/SwarmAI.app
 
+# 1. Delete application (Linux - DEB)
+sudo apt remove swarmai
+
+# 1. Delete application (Linux - AppImage)
+rm swarmai_*.AppImage
+
 # 2. Delete data directory (optional, will delete all data)
-rm -rf ~/Library/Application\ Support/SwarmAI/
+rm -rf ~/.swarm-ai/
 
 # 3. Delete Claude Code CLI (optional)
 npm uninstall -g @anthropic-ai/claude-code
@@ -381,24 +357,7 @@ npm uninstall -g @anthropic-ai/claude-code
 # Control Panel → Programs and Features → SwarmAI → Uninstall
 
 # 2. Delete data directory (optional, will delete all data)
-Remove-Item -Recurse -Force $env:LOCALAPPDATA\SwarmAI
-
-# 3. Delete Claude Code CLI (optional)
-npm uninstall -g @anthropic-ai/claude-code
-```
-
-**A (Linux):**
-
-```bash
-# 1. Uninstall application
-# DEB install:
-sudo apt remove swarmai
-
-# AppImage: directly delete file
-rm swarmai_*.AppImage
-
-# 2. Delete data directory (optional, will delete all data)
-rm -rf ~/.local/share/SwarmAI/
+Remove-Item -Recurse -Force $HOME\.swarm-ai
 
 # 3. Delete Claude Code CLI (optional)
 npm uninstall -g @anthropic-ai/claude-code

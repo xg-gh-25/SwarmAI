@@ -102,4 +102,29 @@ export const workspaceService = {
       size: response.data.size as number,
     };
   },
+
+  /**
+   * Write content to a file
+   * Used by the File Editor Modal to save changes
+   * @param agentId The agent ID
+   * @param path Relative path to the file
+   * @param content UTF-8 text content to write
+   * @param basePath Optional custom base path
+   */
+  async writeFile(
+    agentId: string,
+    path: string,
+    content: string,
+    basePath?: string
+  ): Promise<{ path: string; size: number }> {
+    const response = await api.put<Record<string, unknown>>(
+      `/workspace/${agentId}/write`,
+      { path, content },
+      { params: basePath ? { base_path: basePath } : undefined }
+    );
+    return {
+      path: response.data.path as string,
+      size: response.data.size as number,
+    };
+  },
 };

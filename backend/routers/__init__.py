@@ -10,6 +10,7 @@ from .plugins import router as plugins_router
 from .tasks import router as tasks_router
 from .channels import router as channels_router
 from .system import router as system_router
+from .swarm_workspaces import router as swarm_workspaces_router
 
 __all__ = [
     "agents_router",
@@ -23,4 +24,5 @@ __all__ = [
     "tasks_router",
     "channels_router",
     "system_router",
+    "swarm_workspaces_router",
 ]

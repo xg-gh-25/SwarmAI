@@ -151,6 +151,8 @@ async def chat_stream(request: Request):
                 enable_skills=chat_request.enable_skills,
                 enable_mcp=chat_request.enable_mcp,
                 add_dirs=chat_request.add_dirs,
+                workspace_id=chat_request.workspace_id,
+                workspace_context=chat_request.workspace_context,
             ):
                 logger.debug(f"Yielding message: {msg.get('type')}")
                 yield msg
