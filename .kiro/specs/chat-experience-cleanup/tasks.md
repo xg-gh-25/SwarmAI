@@ -153,7 +153,7 @@ Test directory: `desktop/src/__tests__/chat-experience-cleanup/`
 - [x] 6. Checkpoint — Phase C complete
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 7. Phase D — Architectural Refactors (optional, higher-risk)
+- [ ] 7. Phase D — Architectural Refactors (DEFERRED — see notes below)
   - [ ]* 7.1 Decompose streaming lifecycle hook into grouped sub-interfaces
     - Define `MessageState`, `StreamingControl`, `ScrollControl`, `TabLifecycle` interfaces in `desktop/src/hooks/useChatStreamingLifecycle.ts`
     - Refactor the hook return value to group fields into these sub-interfaces under a single `ChatStreamingLifecycle` object
@@ -215,3 +215,17 @@ Test directory: `desktop/src/__tests__/chat-experience-cleanup/`
 - Checkpoints ensure incremental validation between phases
 - Property tests use `fast-check` library with minimum 100 iterations per property
 - All test files go in `desktop/src/__tests__/chat-experience-cleanup/`
+
+## Spec Closure — Phase D Deferral (2026-03-01)
+
+Phases A–C are complete. Phase D was evaluated against the current codebase and deferred:
+
+| Task | Decision | Rationale |
+|------|----------|-----------|
+| 7.1 Sub-interfaces | Skip | Comment-based grouping is sufficient; only one consumer (ChatPage) |
+| 7.2 Consolidate effects | Skip | Current separation is clearer; `prevActiveTabIdRef` guard handles coordination |
+| 7.3 Decouple TSCC | Already done | `useTSCCState` doesn't import from streaming hook; ChatPage mediates via refs |
+| 7.4/7.5 Unified tab state | Deferred | High value but high risk — deserves its own spec with focused property tests |
+| 7.6/7.7 Tab property tests | Blocked | Depends on 7.4/7.5 |
+
+See: `.kiro/specs/unified-tab-state/` for the follow-up spec (when created).
