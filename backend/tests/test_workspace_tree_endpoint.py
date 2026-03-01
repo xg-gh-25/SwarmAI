@@ -392,3 +392,59 @@ class TestTreeEndpointStructure:
                     f"Directory '{node['name']}' at depth=1 should have "
                     f"children=None (depth limit reached)"
                 )
+
+
+class TestHiddenDirsFilter:
+    """Unit tests for _HIDDEN_DIRS filtering in _should_include.
+
+    Verifies that internal runtime directories (e.g. ``chats/``) are
+    excluded from the workspace tree API response even though they are
+    not dotfiles.
+    """
+
+    def test_chats_directory_excluded_by_should_include(self):
+        """The 'chats' directory name is rejected by _should_include."""
+        assert _should_include("chats") is False
+
+    def test_chats_directory_excluded_from_build_tree(self, tmp_path):
+        """A 'chats/' directory on disk does not appear in _build_tree output."""
+        workspace = tmp_path / "ws"
+        workspace.mkdir()
+        (workspace / "chats").mkdir()
+        (workspace / "chats" / "thread-1").mkdir()
+        (workspace / "Knowledge").mkdir()
+        (workspace / "visible.md").write_text("hello")
+
+        result = _build_tree(workspace, workspace, depth=3)
+        names = [n["name"] for n in result]
+
+        assert "chats" not in names
+        assert "Knowledge" in names
+        assert "visible.md" in names
+
+    def test_chats_inside_project_also_excluded(self, tmp_path):
+        """chats/ inside Projects/{name}/ is also filtered out."""
+        workspace = tmp_path / "ws"
+        workspace.mkdir()
+        project = workspace / "Projects" / "MyProject"
+        project.mkdir(parents=True)
+        (project / "chats").mkdir()
+        (project / "instructions.md").write_text("hello")
+
+        result = _build_tree(workspace, workspace, depth=4)
+        # Find the project node
+        projects_node = next(n for n in result if n["name"] == "Projects")
+        project_node = next(
+            n for n in projects_node["children"] if n["name"] == "MyProject"
+        )
+        child_names = [c["name"] for c in project_node["children"]]
+
+        assert "chats" not in child_names
+        assert "instructions.md" in child_names
+
+    def test_visible_dirs_not_affected(self):
+        """Normal directory names are still included."""
+        assert _should_include("Knowledge") is True
+        assert _should_include("Projects") is True
+        assert _should_include("reports") is True
+        assert _should_include("research") is True

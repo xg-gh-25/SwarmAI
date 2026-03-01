@@ -1,12 +1,15 @@
 import { forwardRef } from 'react';
 import clsx from 'clsx';
 import type { OpenTab } from '../types';
+import type { TabStatus } from '../../../hooks/useChatStreamingLifecycle';
+import { TabStatusIndicator } from './TabStatusIndicator';
 
 interface SessionTabProps {
   tab: OpenTab;
   isActive: boolean;
   onSelect: (tabId: string) => void;
   onClose: (tabId: string) => void;
+  status?: TabStatus;
   maxTitleLength?: number;
   onKeyDown?: (e: React.KeyboardEvent) => void;
 }
@@ -37,6 +40,7 @@ export const SessionTab = forwardRef<HTMLDivElement, SessionTabProps>(function S
     isActive,
     onSelect,
     onClose,
+    status,
     maxTitleLength = 25,
     onKeyDown,
   },
@@ -84,6 +88,9 @@ export const SessionTab = forwardRef<HTMLDivElement, SessionTabProps>(function S
       <span className="material-symbols-outlined text-[18px] flex-shrink-0">
         chat_bubble
       </span>
+
+      {/* Fix 8: Tab status indicator */}
+      {status && <TabStatusIndicator status={status} />}
 
       {/* Truncated title */}
       <span className="truncate text-sm font-medium" title={tab.title}>

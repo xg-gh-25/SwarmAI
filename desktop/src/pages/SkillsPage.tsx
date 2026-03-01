@@ -572,8 +572,8 @@ function GenerateSkillForm({
     queryKey: ['apiConfig'],
     queryFn: settingsService.getAPIConfiguration,
   });
-  const availableModels = useMemo(() => apiConfig?.available_models ?? [], [apiConfig?.available_models]);
-  const defaultModelFromSettings = apiConfig?.default_model ?? '';
+  const availableModels = useMemo(() => apiConfig?.availableModels ?? [], [apiConfig?.availableModels]);
+  const defaultModelFromSettings = apiConfig?.defaultModel ?? '';
   const modelOptions = useMemo(() => availableModels.map(modelIdToOption), [availableModels]);
 
   // Phase 1: Input form

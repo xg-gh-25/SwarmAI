@@ -16,8 +16,6 @@ import hashlib
 import logging
 from typing import Any, Optional
 
-from database import db
-
 logger = logging.getLogger(__name__)
 
 
@@ -35,6 +33,8 @@ class PermissionManager:
         self._permission_events: dict[str, asyncio.Event] = {}
         self._permission_results: dict[str, str] = {}
         self._permission_request_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        # In-memory store for pending permission requests (replaces DB table)
+        self._pending_requests: dict[str, dict[str, Any]] = {}
 
     def hash_command(self, command: str) -> str:
         """Create a hash of the command for approval tracking."""
@@ -59,6 +59,23 @@ class PermissionManager:
         """Clear all approved commands for a session."""
         self._approved_commands.pop(session_id, None)
 
+    def store_pending_request(self, request_data: dict[str, Any]) -> None:
+        """Store a pending permission request in memory (replaces DB storage)."""
+        self._pending_requests[request_data["id"]] = request_data
+
+    def get_pending_request(self, request_id: str) -> Optional[dict[str, Any]]:
+        """Retrieve a pending permission request by ID."""
+        return self._pending_requests.get(request_id)
+
+    def update_pending_request(self, request_id: str, updates: dict[str, Any]) -> None:
+        """Update fields on a pending permission request."""
+        if request_id in self._pending_requests:
+            self._pending_requests[request_id].update(updates)
+
+    def remove_pending_request(self, request_id: str) -> None:
+        """Remove a pending permission request after it's been resolved."""
+        self._pending_requests.pop(request_id, None)
+
     async def wait_for_permission_decision(self, request_id: str, timeout: int = 300) -> str:
         """Wait for user permission decision.
 
@@ -76,8 +93,8 @@ class PermissionManager:
             await asyncio.wait_for(event.wait(), timeout=timeout)
             return self._permission_results.get(request_id, "deny")
         except asyncio.TimeoutError:
-            # Update database with expired status
-            await db.permission_requests.update(request_id, {"status": "expired"})
+            # Update in-memory pending request with expired status
+            self.update_pending_request(request_id, {"status": "expired"})
             return "deny"
         finally:
             self._permission_events.pop(request_id, None)

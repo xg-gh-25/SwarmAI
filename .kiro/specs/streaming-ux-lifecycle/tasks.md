@@ -1,0 +1,347 @@
+# Implementation Plan
+
+- [x] 1. Write bug condition exploration tests (BEFORE implementing any fixes)
+  - **Property 1: Fault Condition** — Streaming State Continuity During sessionId Transition
+  - **CRITICAL**: This test MUST FAIL on unfixed code — failure confirms the bug exists
+  - **DO NOT attempt to fix the test or the code when it fails**
+  - **NOTE**: This test encodes the expected behavior — it will validate the fix when it passes after implementation
+  - **GOAL**: Surface counterexamples that demonstrate all 8 bugs exist
+  - **Scoped PBT Approach**: Each sub-property targets a specific bug condition from `isBugCondition(input)` in the design
+  - Test file: `desktop/src/__tests__/streaming-lifecycle-exploration.test.ts`
+  - Use fast-check for property-based generation of streaming event sequences
+  - **Sub-properties to test (all should FAIL on unfixed code):**
+  - Property 1 (Streaming Continuity): Generate random sequences of `session_start`, `assistant`, `ask_user_question`, `cmd_permission_request`, `result` events. Assert `isStreaming` is `true` continuously between stream start and the first pausing/completing event, with no false dips during sessionId transition
+  - Property 2 (Single Clear): Generate event sequences ending with `ask_user_question` or `cmd_permission_request`. Assert `setIsStreaming(false)` is called exactly once per pause — not double-cleared by `createCompleteHandler`
+  - Property 3 (Stream Generation Isolation): Generate sequences with overlapping streams (old complete handler firing after new stream starts via `cmd_permission_request` approve). Assert the new stream's `isStreaming` is never cleared by the old handler
+  - Property 4 (Auto-Scroll): Generate random sequences of content block appends during streaming. Assert the latest block is in the viewport when user has not scrolled up
+  - Property 5 (Error Stops Streaming): Generate streaming sessions with an error event at a random point. Assert `isStreaming` becomes `false` after the error and error content is visible
+  - Property 6 (Activity Label Stability): Generate rapid tool_use sequences (< 2s intervals). Assert each displayed label persists for at least `MIN_ACTIVITY_DISPLAY_MS` (1500ms)
+  - Property 7 (Operational Context Extraction): Generate random tool inputs with various key combinations (command, path, query, none). Assert extracted context matches expected key or is null
+  - Property 8 (State Persistence Round-Trip): Generate random message arrays and pending questions. Assert serializing to sessionStorage and deserializing produces identical state
+  - Property 9 (Storage Graceful Degradation): Generate corrupted JSON strings, schema-mismatched objects, simulate quota-exceeded errors. Assert restore path never throws and falls back to default initialization
+  - Property 11 (Per-Tab State Isolation): Generate random sequences of tab switches interleaved with stream events across 2-5 tabs. Assert restoring a tab produces the exact state saved when switching away. Assert no tab's messages contain message IDs from another tab's session
+  - Property 12 (Per-Tab Abort Controller Isolation): Generate multi-tab scenarios with concurrent streams. Assert aborting active tab's controller does not affect background tabs. Assert each tab's abort controller is a distinct instance
+  - Property 13 (Tab Limit Enforcement): Generate random sequences of tab open/close with counts 0-9. Assert `handleNewSession` creates a tab iff count < `MAX_OPEN_TABS` (6). Assert toast shown when blocked. Assert closing at limit re-enables creation
+  - Property 14 (Tab Status Indicator Correctness): Generate random stream events across 1-6 tabs with random active/background states. Assert tab status matches expected value from state machine after each event
+  - Property 15 (Tab Status State Machine Transitions): Generate random tab status transition sequences. Assert only valid transitions occur per the defined state machine
+  - Run tests on UNFIXED code
+  - **EXPECTED OUTCOME**: Tests FAIL (this is correct — it proves the bugs exist)
+  - Document counterexamples found to understand root causes
+  - Mark task complete when tests are written, run, and failures are documented
+  - _Requirements: 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 1.10, 1.11, 1.12, 1.13, 1.14, 1.15, 1.16, 1.17_
+
+- [x] 2. Write preservation property tests (BEFORE implementing any fixes)
+  - **Property 2: Preservation** — Normal Streaming Lifecycle Unchanged
+  - **IMPORTANT**: Follow observation-first methodology
+  - **IMPORTANT**: Write these tests BEFORE implementing any fixes
+  - Test file: `desktop/src/__tests__/streaming-lifecycle-preservation.test.ts`
+  - Use fast-check for property-based generation of non-buggy inputs
+  - **Observation Phase (run on UNFIXED code first):**
+  - Observe: Simple single-turn query renders response in single message bubble (Req 3.2)
+  - Observe: `ask_user_question` pauses streaming and displays question form (Req 3.3)
+  - Observe: `cmd_permission_request` pauses streaming and displays permission modal (Req 3.4)
+  - Observe: `result` event finalizes conversation, stops streaming, invalidates caches (Req 3.5)
+  - Observe: Stop button aborts stream and displays stop confirmation (Req 3.6)
+  - Observe: `ContentBlockRenderer` renders text, tool_use, tool_result blocks inside message bubble (Req 3.7)
+  - Observe: `ToolUseBlock` shows tool name and collapsible input (Req 3.8)
+  - Observe: `getSessionMessages` returns all persisted messages for completed sessions (Req 3.9)
+  - Observe: Error events rendered as text content in message history (Req 3.10)
+  - Observe: Single-tab usage behaves identically to current behavior (Req 3.11)
+  - Observe: Tab close cleans up resources (Req 3.12)
+  - Observe: Below 6 tabs, "+" button creates new tabs normally (Req 3.13)
+  - Observe: Idle tabs show no status indicator (Req 3.14)
+  - **Property-Based Tests (assert observed behavior is preserved):**
+  - Property 10 (Preservation): For all non-buggy inputs (simple queries, completed sessions, non-streaming interactions), assert `deriveStreamingActivity` output is identical between original and fixed code. Assert spinner labels, message rendering, session loading, and all existing UI interactions are unchanged
+  - Verify all preservation tests PASS on UNFIXED code
+  - **EXPECTED OUTCOME**: Tests PASS (this confirms baseline behavior to preserve)
+  - Mark task complete when tests are written, run, and passing on unfixed code
+  - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7, 3.8, 3.9, 3.10, 3.11, 3.12, 3.13, 3.14_
+
+- [x] 3. Phase 0 — Extract `useChatStreamingLifecycle` hook (prerequisite for all fixes)
+
+  - [x] 3.1 Create `desktop/src/hooks/useChatStreamingLifecycle.ts` with extracted streaming lifecycle logic
+    - Extract all streaming state: `messages`, `sessionId`, `pendingQuestion`, `isStreaming`, `_pendingStream`, `streamingSessions`
+    - Extract all refs: `abortRef`, `messagesEndRef`, `sessionIdRef`, `messagesRef`, `pendingQuestionRef`
+    - Extract factories: `createStreamHandler`, `createCompleteHandler`, `createErrorHandler`
+    - Extract `deriveStreamingActivity` (keep as pure exported function for testability)
+    - Extract `isStreaming` derivation logic
+    - Define `TabState` interface and `TabStatus` type in the hook file
+    - Define `ChatStreamingLifecycle` return type interface
+    - Include module-level docstring describing the hook's purpose
+    - This is a pure refactor — no behavioral changes
+    - _Bug_Condition: N/A — structural prerequisite_
+    - _Expected_Behavior: ChatPage renders identically after extraction_
+    - _Preservation: All existing behavior unchanged — Req 3.1-3.14_
+    - _Requirements: 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7, 2.8, 2.9, 2.10, 2.11, 2.12, 2.13, 2.14, 2.15, 2.16, 2.17, 2.18, 2.19, 2.20, 2.21, 2.22, 2.23_
+
+  - [x] 3.2 Update `desktop/src/pages/ChatPage.tsx` to consume the hook
+    - Replace extracted state/refs/factories with hook consumption
+    - ChatPage focuses on JSX rendering, user interaction handlers, query hooks, TSCC panel, plugin commands
+    - Target ~500 lines after extraction
+    - Verify all existing functionality works identically
+    - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7, 3.8, 3.9, 3.10, 3.11_
+
+  - [x] 3.3 Write unit tests for the extracted hook
+    - Test file: `desktop/src/__tests__/useChatStreamingLifecycle.test.ts`
+    - Use `renderHook` from `@testing-library/react`
+    - Verify hook returns all expected state, refs, and factories
+    - Verify `deriveStreamingActivity` works identically as a standalone export
+    - _Requirements: 3.1, 3.2, 3.11_
+
+- [x] 4. Phase 1 — Stability (Fix 1 + Fix 6)
+
+  - [x] 4.1 Implement Fix 1: Stream generation counter and robust isStreaming (Bug 1)
+    - Add `streamGenRef` as `useRef<number>(0)` — per-tab via `TabState.streamGen`
+    - Increment `streamGenRef` each time a new stream starts (`handleSendMessage`, `handleAnswerQuestion`, `handlePermissionDecision`)
+    - `createCompleteHandler` captures generation at creation time, only calls `setIsStreaming(false)` if generation matches via `streamGenRef.current` (ref access, not closure)
+    - Keep `_pendingStream` set until sessionId is registered in `streamingSessions`, then clear — ensures clean handoff
+    - In `session_start` handler: set `tabState.sessionId`, add to `streamingSessions`, clear `_pendingStream`
+    - Event-driven streaming clear: `ask_user_question` and `cmd_permission_request` handlers increment `streamGenRef` so pending `createCompleteHandler` becomes no-op
+    - Error events in `createStreamHandler` also increment `streamGenRef`
+    - Refactor `setIsStreaming` to read `sessionId` from `sessionIdRef` (not stale closure)
+    - Add `sessionIdRef = useRef(sessionId)` kept in sync via consolidated `useEffect`
+    - _Bug_Condition: isBugCondition where sessionId_before=undefined AND sessionId_after!=undefined AND streamActive=true, OR eventType IN {ask_user_question, cmd_permission_request} AND sseReaderCompleteHandlerPending=true, OR newStreamStartedBeforeOldComplete=true_
+    - _Expected_Behavior: isStreaming remains true continuously during sessionId transition; setIsStreaming(false) called exactly once per pause; stale complete handlers are no-ops_
+    - _Preservation: Normal streaming start/complete cycles produce identical behavior — Req 3.1, 3.3, 3.4, 3.5, 3.6_
+    - _Requirements: 2.1, 2.2, 2.3_
+
+  - [x] 4.2 Implement Fix 6: Per-tab state map for cross-session isolation (Bug 6)
+    - Add `tabStateRef = useRef<Map<string, TabState>>(new Map())`
+    - Add `activeTabIdRef = useRef<string | null>(null)`
+    - Group all refs together with comment block as specified in design
+    - Add `messagesRef`, `pendingQuestionRef` refs synced via single consolidated `useEffect`
+    - Save current tab state on tab switch away — read from per-tab map (authoritative), not useState
+    - Restore target tab state on tab switch to — with async guard: `activeTabIdRef.current === targetTabId` check on async load resolve
+    - Modify `createStreamHandler` to be tab-aware: capture `tabId`, write to per-tab map always, update useState only if `activeTabIdRef.current === tabId`
+    - Extract `updateMessages` as pure function called once — result stored in both map and (if active) useState
+    - Per-tab abort controller: store in `TabState`, `abortRef.current` always points to active tab's controller
+    - Per-tab `_pendingStream`: saved/restored as part of `TabState`
+    - Per-tab `pendingQuestion`: saved/restored as part of `TabState`
+    - Clean up on tab close: remove entry from `tabStateRef`, abort controller if active
+    - Initialize new tab entry in `tabStateRef` on creation with `streamGen: 0`, `status: 'idle'`, defaults
+    - Map bounded by `MAX_OPEN_TABS` (Fix 7)
+    - _Bug_Condition: isBugCondition where openTabCount > 1 AND (tabSwitchOccurred=true OR concurrentStreamsActive=true)_
+    - _Expected_Behavior: Per-tab state isolation — each tab has own messages, sessionId, pendingQuestion, abortController, pendingStream. Background streaming updates per-tab map without corrupting foreground useState. Stop button aborts only active tab's stream_
+    - _Preservation: Single-tab usage produces identical behavior — Req 3.11, 3.12_
+    - _Requirements: 2.11, 2.12, 2.13, 2.14, 2.15_
+
+  - [x] 4.3 Write unit tests for Fix 1 and Fix 6
+    - Test stream generation counter: increment on new stream, complete handler no-op when generation mismatches
+    - Test per-tab state map: save state on tab switch, restore on switch back, verify isolation
+    - Test tab-aware `createStreamHandler`: background tab updates map but not foreground useState
+    - Test per-tab abort controller: stop aborts only active tab's controller
+    - Test per-tab `_pendingStream`: switching tabs does not leak from source to target
+    - Test per-tab `pendingQuestion`: switching tabs does not show source tab's question in target
+    - Test tab close cleanup: removes entry from `tabStateRef`, aborts controller
+    - _Requirements: 2.1, 2.2, 2.3, 2.11, 2.12, 2.13, 2.14, 2.15_
+
+  - [x] 4.4 Verify bug condition exploration tests now pass for Properties 1-3, 11-12
+    - **Property 1: Expected Behavior** — Streaming State Continuity
+    - **IMPORTANT**: Re-run the SAME tests from task 1 — do NOT write new tests
+    - Run Properties 1, 2, 3 (streaming continuity, single clear, stream generation isolation)
+    - Run Properties 11, 12 (per-tab state isolation, per-tab abort controller isolation)
+    - **EXPECTED OUTCOME**: Tests PASS (confirms Fix 1 and Fix 6 resolve the bugs)
+    - _Requirements: 2.1, 2.2, 2.3, 2.11, 2.12, 2.13, 2.14, 2.15_
+
+  - [x] 4.5 Verify preservation tests still pass
+    - **Property 2: Preservation** — Normal Streaming Lifecycle
+    - **IMPORTANT**: Re-run the SAME tests from task 2 — do NOT write new tests
+    - Run Property 10 (preservation) tests
+    - **EXPECTED OUTCOME**: Tests PASS (confirms no regressions from Fix 1 and Fix 6)
+    - Confirm all preservation tests still pass after fix
+    - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7, 3.8, 3.9, 3.10, 3.11, 3.12_
+
+- [x] 5. Phase 2 — Visibility (Fix 2 + Fix 3 + Fix 9)
+
+  - [x] 5.1 Implement Fix 2: Auto-scroll with user scroll detection (Bug 2)
+    - Add `userScrolledUpRef = useRef<boolean>(false)`
+    - Add `onScroll` handler on `div.overflow-y-auto` messages container
+    - Detect user scroll up: `scrollTop + clientHeight < scrollHeight - 100` sets `userScrolledUpRef.current = true`
+    - Detect user scroll back to bottom: reset to `false`
+    - Conditional auto-scroll: only scroll if `userScrolledUpRef.current === false`
+    - Reset `userScrolledUpRef.current = false` when user sends a new message (auto-scroll resumes)
+    - _Bug_Condition: isBugCondition where isStreaming=true AND newContentBlockAppended=true AND userHasNotScrolledUp=true AND latestContentBlockInViewport=false_
+    - _Expected_Behavior: Auto-scroll keeps latest content block visible during streaming; respects manual scroll-up_
+    - _Preservation: Manual scroll position respected when user scrolls up — Req 3.7, 3.8_
+    - _Requirements: 2.4_
+
+  - [x] 5.2 Implement Fix 3: Error visibility and streaming stop (Bug 3)
+    - In `createStreamHandler`, when `event.type === 'error'`: call `setIsStreaming(false)` AND increment `streamGenRef` (stale complete handler becomes no-op via Fix 1)
+    - Force scroll to error: reset `userScrolledUpRef.current = false` and trigger scroll to bottom
+    - Add `isError?: boolean` optional field to `Message` interface in `desktop/src/types/index.ts`
+    - Set `isError: true` on message in error handler (not text prefix detection)
+    - `MessageBubble` checks `isError` flag and applies red/warning border style
+    - _Bug_Condition: isBugCondition where isStreaming=true AND errorEventReceived=true AND errorContentInViewport=false_
+    - _Expected_Behavior: Error is visible (auto-scrolled into view), visually distinguished (red border), spinner stops_
+    - _Preservation: Error capture and text rendering in createStreamHandler unchanged — Req 3.10_
+    - _Requirements: 2.5_
+
+  - [x] 5.3 Implement Fix 9: Elapsed time counter during initial wait
+    - Add `streamStartTimeRef = useRef<number | null>(null)` — records `Date.now()` when `setIsStreaming(true)` called
+    - Add `elapsedSeconds` useState — updates every second while `isStreaming=true` and no content received
+    - Use `setInterval` inside `useEffect` depending on `isStreaming` and `streamingActivity`
+    - Clean up interval on unmount or when content arrives
+    - Show elapsed counter only after `ELAPSED_DISPLAY_THRESHOLD_MS = 10000` (10 seconds)
+    - Format: "Thinking... (15s)", "Thinking... (1m 5s)"
+    - Add `formatElapsed(seconds: number): string` helper function
+    - Clear on first content: when `streamingActivity` transitions from null to non-null, reset `elapsedSeconds` to 0
+    - Add i18n key: `"thinkingWithElapsed": "Thinking... ({{elapsed}})"`
+    - _Bug_Condition: isStreaming=true AND streamingActivity=null AND elapsed > ELAPSED_DISPLAY_THRESHOLD_MS_
+    - _Expected_Behavior: User sees elapsed time after 10s of initial wait, providing feedback that system is not stuck_
+    - _Preservation: "Thinking..." spinner displays unchanged for waits under 10s — Req 3.1_
+    - _Requirements: 2.7_
+
+  - [x] 5.4 Write unit tests for Fix 2, Fix 3, and Fix 9
+    - Test auto-scroll: scroll when user at bottom, no scroll when user scrolled up, reset on new user message
+    - Test error handling: `setIsStreaming(false)` called on error event, error content visible, `isError` flag set
+    - Test elapsed time: counter starts after threshold, clears on first content, formats correctly
+    - Test `formatElapsed` helper with various second values
+    - _Requirements: 2.4, 2.5, 2.7_
+
+  - [x] 5.5 Verify bug condition exploration tests now pass for Properties 4-5
+    - **Property 1: Expected Behavior** — Auto-Scroll and Error Visibility
+    - **IMPORTANT**: Re-run the SAME tests from task 1 — do NOT write new tests
+    - Run Property 4 (auto-scroll) and Property 5 (error stops streaming)
+    - **EXPECTED OUTCOME**: Tests PASS (confirms Fix 2 and Fix 3 resolve the bugs)
+    - _Requirements: 2.4, 2.5_
+
+  - [x] 5.6 Verify preservation tests still pass
+    - **Property 2: Preservation** — Normal Streaming Lifecycle
+    - **IMPORTANT**: Re-run the SAME tests from task 2 — do NOT write new tests
+    - **EXPECTED OUTCOME**: Tests PASS (confirms no regressions from Phase 2 fixes)
+    - _Requirements: 3.1, 3.7, 3.8, 3.10_
+
+- [x] 6. Phase 3 — Context (Fix 4 + Fix 5)
+
+  - [x] 6.1 Implement Fix 4: Enhanced `deriveStreamingActivity` with operational context (Bug 4)
+    - Extend return type to `{ hasContent: boolean; toolName: string | null; toolContext: string | null; toolCount: number }`
+    - Extract operational context from last `tool_use` block's `input`:
+      - `input.command`: first 60 chars, sanitized (strip after `--password`, `--token`, `--key`, env var `KEY=value` assignments; placeholder `[command]` if entirely sensitive)
+      - `input.path` or `input.file_path`: use file path directly (not sensitive — visible in ToolUseBlock)
+      - `input.query` or `input.search` or `input.pattern`: first 60 chars
+      - Otherwise: `null`
+    - Count all `tool_use` blocks in last assistant message content array, return as `toolCount`
+    - `deriveStreamingActivity` remains a pure exported function for testability
+    - Add debounce state separately: `useRef` for `lastActivityChangeTime`, `useState` for `displayedActivity`
+    - Only update `displayedActivity` if at least `MIN_ACTIVITY_DISPLAY_MS = 1500` elapsed since last change, or if streaming stopped (final activity)
+    - Clean up debounce `setTimeout` on unmount — store timer ID in ref, clear in useEffect cleanup
+    - Update spinner label JSX with i18n keys: `runningToolWithContext`, `runningToolWithCount`
+    - Use `vi.useFakeTimers()` in tests to control debounce timing
+    - _Bug_Condition: isBugCondition where isStreaming=true AND currentToolUse!=null AND currentToolUse.input!=null_
+    - _Expected_Behavior: Activity indicator shows tool name + operational context (command/path/query), truncated to max length. Labels stable with minimum display duration. Cumulative tool count shown_
+    - _Preservation: deriveStreamingActivity base tool name behavior unchanged for sessions without tool input context — Req 3.7, 3.8_
+    - _Requirements: 2.6, 2.7_
+
+  - [x] 6.2 Implement Fix 5: Persist pending state to sessionStorage (Bug 5)
+    - Storage key format: `swarm_chat_pending_{sessionId}`
+    - On `ask_user_question` event: write `{ messages, pendingQuestion, sessionId }` to sessionStorage
+    - On mount: check sessionStorage for pending state matching current sessionId, restore if found
+    - On `result` event or successful answer submission: remove sessionStorage entry
+    - Guard: check `typeof window !== 'undefined' && typeof window.sessionStorage !== 'undefined'` before operations
+    - Wrap `setItem` in try/catch — if quota exceeded, log warning and continue (graceful degradation)
+    - Wrap `getItem` + `JSON.parse` in try/catch — if corrupted/schema mismatch, discard entry and fall back
+    - For large sessions (80+ tools): truncate `tool_result` content blocks to first 200 chars before serializing
+    - Stale entry cleanup on mount: scan `swarm_chat_pending_*` keys, process at most 5 entries, check session status via `chatService.getSession()`, remove completed/404 entries. Defer via `setTimeout(cleanup, 2000)`
+    - Interaction with Fix 6: persistence writes from per-tab map (not useState) when `ask_user_question` arrives
+    - _Bug_Condition: isBugCondition where pendingQuestion!=null AND sseStreamEnded=true AND resultMessageReceived=false_
+    - _Expected_Behavior: Messages and pending question survive component re-mount. Question form re-displayed on return. Graceful degradation on storage failure_
+    - _Preservation: Completed sessions load from API as before — Req 3.9_
+    - _Requirements: 2.8, 2.9, 2.10_
+
+  - [x] 6.3 Write unit tests for Fix 4 and Fix 5
+    - Test `deriveStreamingActivity` with: no messages, text only, tool_use with command input, tool_use with path input, tool_use with query input, multiple tool_use blocks (count), no input (null context)
+    - Test command sanitization: strip `--password`, `--token`, `--key`, env var assignments
+    - Test debounce: label persists for MIN_ACTIVITY_DISPLAY_MS, final activity updates immediately
+    - Test sessionStorage persistence: write on `ask_user_question`, restore on mount, clean up on `result`
+    - Test graceful degradation: quota exceeded, corrupted JSON, schema mismatch, sessionStorage unavailable
+    - Test stale entry cleanup: completed sessions removed, bounded to 5 entries per mount
+    - _Requirements: 2.6, 2.7, 2.8, 2.9, 2.10_
+
+  - [x] 6.4 Verify bug condition exploration tests now pass for Properties 6-9
+    - **Property 1: Expected Behavior** — Activity Context and State Persistence
+    - **IMPORTANT**: Re-run the SAME tests from task 1 — do NOT write new tests
+    - Run Properties 6, 7 (activity label stability, operational context extraction)
+    - Run Properties 8, 9 (state persistence round-trip, storage graceful degradation)
+    - **EXPECTED OUTCOME**: Tests PASS (confirms Fix 4 and Fix 5 resolve the bugs)
+    - _Requirements: 2.6, 2.7, 2.8, 2.9, 2.10_
+
+  - [x] 6.5 Verify preservation tests still pass
+    - **Property 2: Preservation** — Normal Streaming Lifecycle
+    - **IMPORTANT**: Re-run the SAME tests from task 2 — do NOT write new tests
+    - **EXPECTED OUTCOME**: Tests PASS (confirms no regressions from Phase 3 fixes)
+    - _Requirements: 3.7, 3.8, 3.9_
+
+- [x] 7. Phase 4 — Polish (Fix 7 + Fix 8)
+
+  - [x] 7.1 Implement Fix 7: Tab limit enforcement (Bug 7)
+    - Add `const MAX_OPEN_TABS = 6` as named constant at module scope
+    - Guard in `handleNewSession`: check `tabStateRef.current.size >= MAX_OPEN_TABS` before creating tab
+    - If limit reached: show `toast.info('Maximum tabs reached. Close a tab to open a new one.')` and return early
+    - No UI disabling of "+" button — guard is in handler, toast provides feedback
+    - Tab count derived from `tabStateRef.current.size` (authoritative, synced by Fix 6)
+    - Add i18n key: `"maxTabsReached": "Maximum tabs reached. Close a tab to open a new one."`
+    - _Bug_Condition: isBugCondition where openTabCount >= MAX_OPEN_TABS AND createTabRequested=true_
+    - _Expected_Behavior: No new tab created, toast notification shown. Tab creation re-enabled after closing a tab_
+    - _Preservation: Below limit (< 6 tabs), "+" button creates tabs as today — Req 3.13_
+    - _Requirements: 2.16, 2.17_
+
+  - [x] 7.2 Implement Fix 8: Tab status indicators (Bug 8)
+    - Add `tabStatuses` useState: `useState<Record<string, TabStatus>>({})`
+    - Add `updateTabStatus` helper: updates both `tabStateRef` entry `.status` and `tabStatuses` useState
+    - Guard with `if (tabState.status !== newStatus)` to avoid unnecessary re-renders
+    - Update status in stream handlers:
+      - `createStreamHandler` on first `assistant` event: `updateTabStatus(tabId, 'streaming')`
+      - `ask_user_question` handler: `updateTabStatus(tabId, 'waiting_input')`
+      - `cmd_permission_request` handler: `updateTabStatus(tabId, 'permission_needed')`
+      - Error handler in `createStreamHandler`: `updateTabStatus(tabId, 'error')`
+      - `result` handler: if background tab → `'complete_unread'`, if foreground → `'idle'`
+      - Answer/approve handlers (restarting stream): `updateTabStatus(tabId, 'streaming')`
+      - `handleSendMessage` on tab with `error` status: `updateTabStatus(tabId, 'streaming')`
+    - Clear unread on tab switch: in `handleTabSelect`, if target tab is `'complete_unread'` → set `'idle'`
+    - Create `TabStatusIndicator` component:
+      - `streaming`: `<span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" aria-label="Streaming" />`
+      - `waiting_input`: `<span className="text-orange-500 text-xs font-bold" aria-label="Waiting for input">?</span>`
+      - `permission_needed`: `<span className="text-yellow-500 text-xs" aria-label="Permission needed">⚠</span>`
+      - `error`: `<span className="text-red-500 text-xs font-bold" aria-label="Error">!</span>`
+      - `complete_unread`: `<span className="w-2 h-2 rounded-full bg-green-500" aria-label="New content" />`
+      - `idle`: return `null`
+    - Pass `tabStatuses` to tab header component as prop
+    - Clean up on tab close: remove entry from `tabStatuses` useState
+    - Initialize status to `'idle'` on tab creation
+    - Accessibility: `aria-label` on each indicator, `animate-pulse` respects `prefers-reduced-motion`
+    - _Bug_Condition: isBugCondition where tab has meaningful status (streaming, pending question, permission, error, background complete) AND tabHeaderIndicator=none_
+    - _Expected_Behavior: Tab headers show correct status indicators per state machine. Switching to unread tab clears indicator_
+    - _Preservation: Idle tabs show no indicator — Req 3.14_
+    - _Requirements: 2.18, 2.19, 2.20, 2.21, 2.22, 2.23_
+
+  - [x] 7.3 Write unit tests for Fix 7 and Fix 8
+    - Test `MAX_OPEN_TABS` guard: `handleNewSession` returns early and shows toast when at limit
+    - Test tab creation re-enabled after close: closing at limit allows new tab
+    - Test `updateTabStatus`: updates both `tabStateRef` entry and `tabStatuses` useState in sync
+    - Test tab status transitions: `idle → streaming`, `streaming → waiting_input`, `streaming → error`, `streaming → complete_unread` (background), `complete_unread → idle` (tab switch)
+    - Test `TabStatusIndicator` component: renders correct icon/color for each status, renders null for `idle`
+    - Test accessibility: verify `aria-label` attributes on each indicator
+    - _Requirements: 2.16, 2.17, 2.18, 2.19, 2.20, 2.21, 2.22, 2.23_
+
+  - [x] 7.4 Verify bug condition exploration tests now pass for Properties 13-15
+    - **Property 1: Expected Behavior** — Tab Limit and Status Indicators
+    - **IMPORTANT**: Re-run the SAME tests from task 1 — do NOT write new tests
+    - Run Property 13 (tab limit enforcement)
+    - Run Properties 14, 15 (tab status indicator correctness, state machine transitions)
+    - **EXPECTED OUTCOME**: Tests PASS (confirms Fix 7 and Fix 8 resolve the bugs)
+    - _Requirements: 2.16, 2.17, 2.18, 2.19, 2.20, 2.21, 2.22, 2.23_
+
+  - [x] 7.5 Verify preservation tests still pass
+    - **Property 2: Preservation** — Normal Streaming Lifecycle
+    - **IMPORTANT**: Re-run the SAME tests from task 2 — do NOT write new tests
+    - **EXPECTED OUTCOME**: Tests PASS (confirms no regressions from Phase 4 fixes)
+    - _Requirements: 3.13, 3.14_
+
+- [x] 8. Checkpoint — Ensure all tests pass
+  - Run full test suite: `cd desktop && npm test -- --run`
+  - Verify ALL 15 property-based exploration tests pass (Properties 1-15)
+  - Verify ALL preservation tests pass (Property 10)
+  - Verify ALL unit tests pass for each fix
+  - Verify integration tests pass for full streaming flows
+  - Ensure no regressions in existing test suite
+  - Ask the user if questions arise

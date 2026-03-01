@@ -6,6 +6,7 @@ to five focused modules for specific concerns:
 
 - ``security_hooks.py``      — 4-layer defense hook factories and dangerous command detection
 - ``permission_manager.py``  — PermissionManager singleton for command approval / HITL decisions
+- ``cmd_permission_manager.py`` — CmdPermissionManager for filesystem-backed command approvals
 - ``agent_defaults.py``      — Default agent bootstrap, skill/MCP registration
 - ``claude_environment.py``  — Claude SDK environment configuration and client wrapper
 - ``content_accumulator.py`` — O(1) content block deduplication (pure utility)
@@ -35,7 +36,6 @@ import logging
 import os
 import json
 import re
-import hashlib
 import asyncio
 import platform
 import sys
@@ -93,6 +93,15 @@ _permission_request_queue = _pm.get_permission_queue()
 clear_session_approvals = _pm.clear_session_approvals
 _hash_command = _pm.hash_command
 
+# CmdPermissionManager — filesystem-backed, shared across all sessions.
+from .cmd_permission_manager import CmdPermissionManager
+
+# CredentialValidator — pre-flight STS check for Bedrock credentials.
+from .credential_validator import CredentialValidator
+
+# AppConfigManager — file-based config with in-memory cache.
+from .app_config_manager import AppConfigManager
+
 
 # ContentBlockAccumulator extracted to content_accumulator.py — re-exported for backward compatibility
 from .content_accumulator import ContentBlockAccumulator  # noqa: F401
@@ -125,8 +134,86 @@ def set_tscc_snapshot_manager(mgr: _TSCCSnapshotManagerType) -> None:
     global _tscc_snapshot_manager
     _tscc_snapshot_manager = mgr
 
+
+def _build_error_event(
+    code: str,
+    message: str,
+    *,
+    detail: str | None = None,
+    suggested_action: str | None = None,
+) -> dict:
+    """Build a sanitized SSE error event dict.
+
+    When ``settings.debug`` is True the full *detail* string (typically a
+    Python traceback) is included verbatim.  In production mode the detail
+    is stripped of tracebacks, file paths with line numbers, and library
+    version strings so that internal implementation details are never
+    leaked to the frontend.
+
+    Requirements 9.1, 9.2.
+    """
+    event: dict = {"type": "error", "code": code, "error": message}
+    if suggested_action:
+        event["suggested_action"] = suggested_action
+    if detail:
+        if settings.debug:
+            event["detail"] = detail
+        else:
+            # Sanitize: drop lines that expose internal implementation details.
+            sanitized_lines: list[str] = []
+            for line in detail.splitlines():
+                stripped = line.strip()
+                # Skip traceback header / footer
+                if stripped.startswith("Traceback (most recent call last)"):
+                    continue
+                # Skip file-path / line-number references
+                if stripped.startswith("File \"") and ".py\", line" in stripped:
+                    continue
+                # Skip caret lines that follow file references (e.g. "    ^^^")
+                if stripped and all(c in "^~ " for c in stripped):
+                    continue
+                sanitized_lines.append(line)
+            sanitized = "\n".join(sanitized_lines).strip()
+            if sanitized:
+                event["detail"] = sanitized
+    return event
+
+
 # Auth error patterns used by _run_query_on_client to classify SDK error messages.
-_AUTH_PATTERNS = ["not logged in", "please run /login", "invalid api key", "authentication"]
+# Expanded to cover AWS-specific auth failures (expired tokens, invalid
+# credentials, STS signature mismatches) in addition to the original
+# Anthropic API patterns.  Requirements 3.5, 3.6.
+_AUTH_PATTERNS = [
+    "not logged in", "please run /login", "invalid api key",
+    "authentication", "unauthorized", "access denied", "forbidden",
+    "expired", "credential", "security token", "signaturedoesnotmatch",
+    "invalidclienttokenid", "expiredtokenexception",
+]
+
+# Comprehensive credential setup guidance shown when AWS credentials are
+# missing, expired, or invalid.  Used by the CREDENTIALS_EXPIRED SSE error
+# and the auth-error fallback path.
+_CREDENTIAL_SETUP_GUIDE = (
+    "**To configure AWS credentials, choose one of these options:**\n\n"
+    "**Option 1 — ADA CLI** (Amazon internal):\n"
+    "```bash\n"
+    "ada credentials update --account=ACCOUNT_ID --role=ROLE_NAME --provider=isengard\n"
+    "```\n\n"
+    "**Option 2 — AWS CLI:**\n"
+    "```bash\n"
+    "aws configure\n"
+    "```\n\n"
+    "**Option 3 — Environment variables:**\n"
+    "```bash\n"
+    "export AWS_ACCESS_KEY_ID=your-key-id\n"
+    "export AWS_SECRET_ACCESS_KEY=your-secret-key\n"
+    "export AWS_DEFAULT_REGION=us-east-1\n"
+    "```\n\n"
+    "**Option 4 — Shared credentials file:**\n"
+    "Edit `~/.aws/credentials` with your `[default]` profile\n\n"
+    "---\n"
+    "After configuring credentials, **retry your message** — no restart needed."
+)
 
 
 # System prompt template for the Skill Creator Agent.
@@ -163,12 +250,39 @@ class AgentManager:
     # TTL for idle sessions before automatic cleanup (12 hours)
     SESSION_TTL_SECONDS = 12 * 60 * 60
 
-    def __init__(self):
+    def __init__(
+        self,
+        config_manager: AppConfigManager | None = None,
+        cmd_permission_manager: CmdPermissionManager | None = None,
+        credential_validator: CredentialValidator | None = None,
+    ):
         self._clients: dict[str, ClaudeSDKClient] = {}
         # Long-lived client storage for session reuse across HTTP requests.
-        # Key: session_id, Value: {"client": ClaudeSDKClient, "wrapper": _ClaudeClientWrapper, "created_at": float}
+        # Key: session_id, Value: {"client": ClaudeSDKClient, "wrapper": _ClaudeClientWrapper, "created_at": float, "last_used": float}
         self._active_sessions: dict[str, dict] = {}
         self._cleanup_task: asyncio.Task | None = None
+        # Injected components (set at startup via main.py)
+        self._config: AppConfigManager | None = config_manager
+        self._cmd_pm: CmdPermissionManager | None = cmd_permission_manager
+        self._credential_validator: CredentialValidator | None = credential_validator
+
+    def configure(
+        self,
+        config_manager: AppConfigManager,
+        cmd_permission_manager: CmdPermissionManager,
+        credential_validator: CredentialValidator,
+    ) -> None:
+        """Wire injected components after construction.
+
+        Called from ``main.py`` lifespan after all components are
+        initialized and loaded.  This avoids circular-import issues
+        that would arise if the components were required at import time
+        (the module-level ``agent_manager`` singleton is created during
+        import).
+        """
+        self._config = config_manager
+        self._cmd_pm = cmd_permission_manager
+        self._credential_validator = credential_validator
 
     def _start_cleanup_loop(self):
         """Start background task to clean up stale sessions."""
@@ -358,7 +472,7 @@ class AgentManager:
         # Add human approval hook for dangerous commands
         # Use resume_session_id for resumed sessions, or agent_id for new sessions
         # The session_key is used for tracking approved commands - must match what's
-        # stored in the permission_request and used in continue_with_permission
+        # stored in the permission_request and used in continue_with_cmd_permission
         agent_id = agent_config.get("id", 'default')
         session_key = resume_session_id or agent_id or "unknown"
 
@@ -369,7 +483,7 @@ class AgentManager:
                 hooks["PreToolUse"] = []
             # Use provided session_context or create a temporary one
             hook_session_context = session_context if session_context is not None else {"sdk_session_id": resume_session_id or agent_id}
-            human_approval = create_human_approval_hook(hook_session_context, session_key, enable_human_approval, _pm)
+            human_approval = create_human_approval_hook(hook_session_context, session_key, enable_human_approval, _pm, self._cmd_pm)
             hooks["PreToolUse"].append(
                 HookMatcher(matcher="Bash", hooks=[human_approval])
             )
@@ -506,23 +620,37 @@ class AgentManager:
 
 
     def _resolve_model(self, agent_config: dict) -> Optional[str]:
-        """Resolve the model identifier, converting to Bedrock format if needed.
+        """Resolve the model identifier from config.json (single source of truth).
 
-        Reads the ``model`` key from agent config and checks the runtime
-        ``CLAUDE_CODE_USE_BEDROCK`` environment variable (set by
-        ``_configure_claude_environment``) to decide whether to convert the
-        model name to a Bedrock model ID.
+        The model is ALWAYS read from ``config.json`` via ``AppConfigManager``,
+        never from the agent's DB record.  The agent_config ``model`` field is
+        ignored — config.json ``default_model`` is the sole authority.
 
-        Args:
-            agent_config: Agent configuration dictionary.
+        When Bedrock is enabled, the Anthropic model ID is translated to a
+        Bedrock inference profile ID via ``bedrock_model_map`` (config.json)
+        with a hardcoded fallback in ``config.py``.
 
         Returns:
             The resolved model string, or ``None`` if not configured.
         """
-        model = agent_config.get("model")
-        use_bedrock = os.environ.get("CLAUDE_CODE_USE_BEDROCK", "").lower() == "true"
+        # Single source of truth: config.json default_model
+        model = (
+            self._config.get("default_model")
+            if self._config is not None
+            else agent_config.get("model")  # fallback only if config not wired
+        )
+        use_bedrock = (
+            self._config.get("use_bedrock", False)
+            if self._config is not None
+            else os.environ.get("CLAUDE_CODE_USE_BEDROCK", "").lower() == "true"
+        )
         if model and use_bedrock:
-            model = get_bedrock_model_id(model)
+            config_map = (
+                self._config.get("bedrock_model_map")
+                if self._config is not None
+                else None
+            )
+            model = get_bedrock_model_id(model, config_map=config_map)
             logger.info(f"Using Bedrock model: {model}")
         return model
 
@@ -930,13 +1058,26 @@ class AgentManager:
         """
         # Configure Claude environment variables
         try:
-            await _configure_claude_environment()
+            _configure_claude_environment(self._config)
         except AuthenticationNotConfiguredError:
-            yield {
-                "type": "error",
-                "error": "No API key configured. Please add your Anthropic API key in Settings or enable Bedrock authentication.",
-            }
+            logger.warning("No authentication configured — neither ANTHROPIC_API_KEY nor Bedrock enabled")
+            yield _build_error_event(
+                code="AUTH_NOT_CONFIGURED",
+                message="No API key configured. Please add your Anthropic API key in Settings or enable Bedrock authentication.",
+            )
             return
+
+        # Pre-flight credential validation for Bedrock (Requirements 3.1, 3.2)
+        # Catches expired/missing AWS credentials before the SDK call, providing
+        # an immediate clear error instead of a cryptic SDK failure.
+        if self._config.get("use_bedrock"):
+            if not await self._credential_validator.is_valid(self._config.get("aws_region", "us-east-1")):
+                yield _build_error_event(
+                    code="CREDENTIALS_EXPIRED",
+                    message="AWS credentials are missing or expired.",
+                    suggested_action=_CREDENTIAL_SETUP_GUIDE,
+                )
+                return
 
         # Track the actual SDK session_id (captured from init message)
         # Use a dict so forwarder task can see updates (mutable container)
@@ -1052,11 +1193,11 @@ class AgentManager:
             sid = session_context.get("sdk_session_id")
             if sid and sid in self._active_sessions:
                 await self._cleanup_session(sid)
-            yield {
-                "type": "error",
-                "error": str(e),
-                "detail": error_traceback,
-            }
+            yield _build_error_event(
+                code="CONVERSATION_ERROR",
+                message=str(e),
+                detail=error_traceback,
+            )
 
     async def _run_query_on_client(
         self,
@@ -1180,7 +1321,7 @@ class AgentManager:
                 if item["source"] == "permission":
                     request = item["request"]
                     logger.info(f"Emitting permission request: {request.get('requestId')}")
-                    yield {"type": "permission_request", **request}
+                    yield {"type": "cmd_permission_request", **request}
                     continue
 
                 if item["source"] == "error":
@@ -1219,10 +1360,10 @@ class AgentManager:
                             if sid and sid in self._active_sessions:
                                 await self._cleanup_session(sid)
                                 logger.info(f"Removed broken session {sid} from active sessions pool")
-                            yield {
-                                "type": "error",
-                                "error": error_text,
-                            }
+                            yield _build_error_event(
+                                code="ERROR_DURING_EXECUTION",
+                                message=error_text,
+                            )
 
                         elif message.is_error:
                             # is_error=True but subtype is NOT 'error_during_execution':
@@ -1233,8 +1374,23 @@ class AgentManager:
                             is_auth_error = any(p in error_lower for p in _AUTH_PATTERNS)
 
                             if is_auth_error:
-                                error_msg = "Authentication failed. Please configure your API key in Settings or run /login."
+                                error_msg = f"Authentication failed.\n\n{_CREDENTIAL_SETUP_GUIDE}"
                                 logger.warning(f"Auth error detected from SDK: {raw_error}")
+                                # Invalidate credential cache so the next request
+                                # re-validates via STS instead of trusting a stale
+                                # cached True (Requirement 3.5).
+                                if self._credential_validator is not None:
+                                    self._credential_validator.invalidate()
+                            elif os.environ.get("CLAUDE_CODE_USE_BEDROCK", "").lower() == "true":
+                                # Defensive fallback (Requirement 3.6): unclassified
+                                # error while Bedrock is active — hint at credentials
+                                # since expired AWS tokens are the most common cause.
+                                error_msg = (
+                                    f"{raw_error}\n\n"
+                                    "If this persists, your AWS credentials may have expired.\n\n"
+                                    f"{_CREDENTIAL_SETUP_GUIDE}"
+                                )
+                                logger.warning(f"SDK is_error ResultMessage (Bedrock active, unclassified): {raw_error}")
                             else:
                                 error_msg = raw_error
                                 logger.warning(f"SDK is_error ResultMessage: {raw_error}")
@@ -1247,11 +1403,10 @@ class AgentManager:
                                     await _tscc_state_manager.set_lifecycle_state(sid, "failed")
                             except Exception:
                                 logger.debug("TSCC telemetry: failed lifecycle failed", exc_info=True)
-                            yield {
-                                "type": "error",
-                                "error": error_msg,
-                            }
-                            # Do NOT persist error text as assistant content or yield as assistant
+                            yield _build_error_event(
+                                code="SDK_ERROR",
+                                message=error_msg,
+                            )
 
                         else:
                             result_text = message.result
@@ -1310,7 +1465,17 @@ class AgentManager:
                                     content=user_content
                                 )
 
-                        # SystemMessages are internal metadata — never forwarded as SSE events
+                        # Forward task_started events so the frontend can show
+                        # sub-agent activity (e.g. "Sub-agent: Explore frontend codebase")
+                        if message.subtype == 'task_started':
+                            yield {
+                                "type": "agent_activity",
+                                "description": message.data.get('description', 'Running sub-task'),
+                                "taskType": message.data.get('task_type', 'unknown'),
+                                "taskId": message.data.get('task_id'),
+                            }
+
+                        # Other SystemMessages are internal metadata — not forwarded
                         continue
 
                     # --- Format and dispatch non-system messages ---
@@ -1356,7 +1521,7 @@ class AgentManager:
 
                         yield formatted
 
-                        # Early-return events: ask_user_question and permission_request both
+                        # Early-return events: ask_user_question and cmd_permission_request both
                         # pause the conversation to wait for external input. We persist any
                         # accumulated assistant content before returning so the partial
                         # response isn't lost if the user takes a long time to respond.
@@ -1385,9 +1550,9 @@ class AgentManager:
                                 )
                             return
 
-                        if formatted.get('type') == 'permission_request':
+                        if formatted.get('type') == 'cmd_permission_request':
                             request_id = formatted.get('requestId')
-                            logger.info(f"Permission request detected from message: {request_id}, stopping to wait for user decision")
+                            logger.info(f"Command permission request detected from message: {request_id}, stopping to wait for user decision")
                             sdk_session = session_context.get("sdk_session_id")
                             if assistant_content and sdk_session:
                                 await self._save_message(
@@ -1437,7 +1602,7 @@ class AgentManager:
 
                         # Persist the full deduplicated assistant response to the DB.
                         # This is the single write point for normal conversation completion;
-                        # early-return paths (ask_user_question, permission_request) have
+                        # early-return paths (ask_user_question, cmd_permission_request) have
                         # their own persistence above.
                         if assistant_content and session_context["sdk_session_id"]:
                             await self._save_message(
@@ -1609,7 +1774,7 @@ class AgentManager:
         ):
             yield event
 
-    async def continue_with_permission(
+    async def continue_with_cmd_permission(
         self,
         agent_id: str,
         session_id: str,
@@ -1642,8 +1807,8 @@ class AgentManager:
             }
             return
 
-        # Get permission request details
-        permission_request = await db.permission_requests.get(request_id)
+        # Get permission request details from in-memory store
+        permission_request = _pm.get_pending_request(request_id)
         if not permission_request:
             yield {
                 "type": "error",
@@ -1651,8 +1816,8 @@ class AgentManager:
             }
             return
 
-        # Update permission request status
-        await db.permission_requests.update(request_id, {
+        # Update permission request status in memory
+        _pm.update_pending_request(request_id, {
             "status": decision,
             "decided_at": datetime.now().isoformat(),
             "user_feedback": feedback,
@@ -1675,8 +1840,15 @@ class AgentManager:
         # Format decision as a user message
         if decision == "approve":
             decision_message = f"User APPROVED the command. Please proceed with executing: {command}"
-            # Store this approval for the hook to check - use the session_id from permission_request
-            _pm.approve_command(perm_session_id, command)
+            # Store approval in CmdPermissionManager (shared, persistent, filesystem-backed)
+            # Falls back to legacy per-session PermissionManager if CmdPermissionManager
+            # rejects the pattern as overly broad.
+            try:
+                self._cmd_pm.approve(command)
+                logger.info(f"Command approved via CmdPermissionManager: {command[:50]}...")
+            except ValueError as exc:
+                logger.warning(f"CmdPermissionManager rejected pattern: {exc}, falling back to per-session approval")
+                _pm.approve_command(perm_session_id, command)
         else:
             reason = feedback if feedback else "User denied the command"
             decision_message = f"User DENIED the command '{command}'. Reason: {reason}. Please acknowledge this and continue without executing that command."
@@ -1832,7 +2004,12 @@ Create the skill in the `.claude/skills/` directory within the current workspace
             await session_manager.store_session(session_id, "skill-creator", title)
 
         # Configure Claude environment variables
-        await _configure_claude_environment()
+        # TODO(task-9.2): Replace with self._config once AppConfigManager is
+        # wired into AgentManager constructor.
+        from core.app_config_manager import AppConfigManager as _ACM
+        _cfg = _ACM()
+        _cfg.load()
+        _configure_claude_environment(_cfg)
 
         # Track the actual SDK session_id
         session_context = {"sdk_session_id": session_id}  # Will be updated for new sessions
@@ -1919,11 +2096,11 @@ Create the skill in the `.claude/skills/` directory within the current workspace
             sid = session_context.get("sdk_session_id")
             if sid and sid in self._active_sessions:
                 await self._cleanup_session(sid)
-            yield {
-                "type": "error",
-                "error": str(e),
-                "detail": error_traceback,
-            }
+            yield _build_error_event(
+                code="SKILL_CREATION_ERROR",
+                message=str(e),
+                detail=error_traceback,
+            )
 
 
 # Global instance

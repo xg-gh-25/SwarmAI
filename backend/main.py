@@ -102,8 +102,13 @@ def _ensure_database_initialized() -> bool:
 
     # --- Returning user: preserve existing data.db, skip init pipeline ---
     if user_db_path.exists():
-        logger.info(f"Using existing user database at {user_db_path}")
-        return True
+        # Guard against 0-byte corrupt DB (e.g. from a failed previous startup)
+        if user_db_path.stat().st_size == 0:
+            logger.warning(f"Empty database at {user_db_path} — removing and re-seeding")
+            user_db_path.unlink()
+        else:
+            logger.info(f"Using existing user database at {user_db_path}")
+            return True
 
     # --- First launch: attempt atomic seed copy ---
     seed_db_path = _get_seed_database_path()
@@ -207,7 +212,56 @@ async def lifespan(app: FastAPI):
     # Start channel gateway (auto-starts active channels)
     await channel_gateway.startup()
     logger.info("Channel gateway started")
-    
+
+    # --- Initialize file-based config and permission components ---
+    # These replace the module-level singletons that were previously
+    # created at import time in agent_manager.py.
+    # Requirements: 1.2, 4.7, 4.8, 9.3
+    from core.app_config_manager import AppConfigManager
+    from core.cmd_permission_manager import CmdPermissionManager
+    from core.credential_validator import CredentialValidator
+    from routers.settings import set_config_manager
+
+    app_config = AppConfigManager()
+    app_config.load()
+    logger.info("AppConfigManager loaded (config.json)")
+
+    cmd_perm = CmdPermissionManager()
+    cmd_perm.load()
+    logger.info("CmdPermissionManager loaded (cmd_permissions/)")
+
+    cred_validator = CredentialValidator()
+    logger.info("CredentialValidator initialized")
+
+    # Pre-warm boto3 import so the first STS call doesn't pay the ~8s
+    # PyInstaller import cost on the hot path.  This runs in a background
+    # thread to avoid blocking startup.
+    import asyncio
+    async def _prewarm_boto3():
+        try:
+            await asyncio.to_thread(lambda: __import__("boto3"))
+            logger.info("boto3 pre-warmed for credential validation")
+        except Exception:
+            logger.debug("boto3 pre-warm failed (non-critical)", exc_info=True)
+    asyncio.create_task(_prewarm_boto3())
+
+    # Wire into AgentManager (replaces module-level singletons)
+    agent_manager.configure(
+        config_manager=app_config,
+        cmd_permission_manager=cmd_perm,
+        credential_validator=cred_validator,
+    )
+    logger.info("AgentManager configured with injected components")
+
+    # Wire AppConfigManager into Settings router (DI).
+    # Skip if already configured (e.g. test fixtures may pre-set).
+    from routers import settings as _settings_mod
+    if _settings_mod._config_manager is None:
+        set_config_manager(app_config)
+        logger.info("Settings router configured with AppConfigManager")
+    else:
+        logger.debug("Settings router already configured (skipping overwrite)")
+
     # Wire up TSCC managers for the tscc router
     from core.agent_manager import _tscc_state_manager, set_tscc_snapshot_manager
     from core.tscc_snapshot_manager import TSCCSnapshotManager

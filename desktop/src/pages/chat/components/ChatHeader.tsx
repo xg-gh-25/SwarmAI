@@ -1,6 +1,7 @@
 import { useTranslation } from 'react-i18next';
 import clsx from 'clsx';
 import type { OpenTab } from '../types';
+import type { TabStatus } from '../../../hooks/useChatStreamingLifecycle';
 import { SessionTabBar } from './SessionTabBar';
 import type { RightSidebarId } from '../constants';
 
@@ -11,6 +12,9 @@ interface ChatHeaderProps {
   onTabSelect: (tabId: string) => void;
   onTabClose: (tabId: string) => void;
   onNewSession: () => void;
+
+  // Fix 8: Tab status indicators
+  tabStatuses?: Record<string, TabStatus>;
 
   // Sidebar controls (mutual exclusion - only one sidebar visible at a time)
   activeSidebar: RightSidebarId;
@@ -34,6 +38,7 @@ export function ChatHeader({
   onTabSelect,
   onTabClose,
   onNewSession,
+  tabStatuses,
   activeSidebar,
   onOpenSidebar,
 }: ChatHeaderProps) {
@@ -47,6 +52,7 @@ export function ChatHeader({
         activeTabId={activeTabId}
         onTabSelect={onTabSelect}
         onTabClose={onTabClose}
+        tabStatuses={tabStatuses}
       />
 
       {/* Right Section: Header Actions */}

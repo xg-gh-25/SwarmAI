@@ -53,7 +53,6 @@ def seed_db_path(tmp_path):
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS app_settings (
             id TEXT PRIMARY KEY,
-            anthropic_api_key TEXT,
             initialization_complete INTEGER DEFAULT 0,
             created_at TEXT,
             updated_at TEXT
@@ -61,9 +60,9 @@ def seed_db_path(tmp_path):
     """)
     cursor.execute("""
         INSERT INTO app_settings
-            (id, anthropic_api_key, initialization_complete,
+            (id, initialization_complete,
              created_at, updated_at)
-        VALUES ('default', '', 1, datetime('now'), datetime('now'))
+        VALUES ('default', 1, datetime('now'), datetime('now'))
     """)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS agents (

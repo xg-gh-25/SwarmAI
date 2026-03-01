@@ -1,8 +1,7 @@
 {
   "id": "default",
   "name": "SwarmAI",
-  "description": "SwarmAI — Your AI Team, 24/7",
-  "model": "claude-opus-4-5-20250514",
+  "description": "SwarmAI \u2014 Your AI Team, 24/7",
   "permission_mode": "bypassPermissions",
   "max_turns": 100,
   "is_default": true,

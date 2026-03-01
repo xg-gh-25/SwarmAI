@@ -170,17 +170,6 @@ class TestTaskDataMigration:
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS app_settings (
                 id TEXT PRIMARY KEY DEFAULT 'default',
-                anthropic_api_key TEXT DEFAULT '',
-                anthropic_base_url TEXT,
-                use_bedrock INTEGER DEFAULT 0,
-                bedrock_auth_type TEXT DEFAULT 'credentials',
-                aws_access_key_id TEXT DEFAULT '',
-                aws_secret_access_key TEXT DEFAULT '',
-                aws_session_token TEXT,
-                aws_bearer_token TEXT DEFAULT '',
-                aws_region TEXT DEFAULT 'us-east-1',
-                available_models TEXT DEFAULT '[]',
-                default_model TEXT DEFAULT 'claude-sonnet-4-5-20250929',
                 initialization_complete INTEGER DEFAULT 0,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL

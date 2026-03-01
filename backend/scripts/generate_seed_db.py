@@ -146,7 +146,7 @@ class SeedDatabaseGenerator:
             "id": agent_config.get("id", "default"),
             "name": agent_config.get("name", "SwarmAI"),
             "description": agent_config.get("description", "SwarmAI — Your AI Team, 24/7"),
-            "model": agent_config.get("model", "claude-opus-4-5-20250514"),
+            "model": None,  # Model resolved at runtime from config.json
             "permission_mode": agent_config.get("permission_mode", "bypassPermissions"),
             "max_turns": agent_config.get("max_turns", 100),
             "system_prompt": agent_config.get("system_prompt", ""),
@@ -289,20 +289,14 @@ class SeedDatabaseGenerator:
         logger.info("Inserted workspace_config singleton (id=swarmws)")
     
     async def _insert_app_settings(self) -> None:
-        """Insert app_settings with initialization_complete=true."""
+        """Insert app_settings with initialization_complete=true.
+        
+        Only id, initialization_complete, created_at, updated_at are stored.
+        All other config moved to ~/.swarm-ai/config.json (AppConfigManager).
+        Credentials delegated to AWS credential chain.
+        """
         settings = {
             "id": "default",
-            "anthropic_api_key": "",
-            "anthropic_base_url": None,
-            "use_bedrock": 0,
-            "bedrock_auth_type": "credentials",
-            "aws_access_key_id": "",
-            "aws_secret_access_key": "",
-            "aws_session_token": None,
-            "aws_bearer_token": "",
-            "aws_region": "us-east-1",
-            "available_models": json.dumps([]),
-            "default_model": "claude-sonnet-4-5-20250929",
             "initialization_complete": 1,  # KEY: Set to true
             "created_at": self._now,
             "updated_at": self._now,

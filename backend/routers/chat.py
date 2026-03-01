@@ -23,7 +23,7 @@ from schemas.chat_thread import ChatThreadResponse
 from schemas.context import ThreadBindRequest, ThreadBindResponse
 from schemas.permission import PermissionResponseRequest, PermissionRequestResponse
 from database import db
-from core.agent_manager import agent_manager, approve_command, set_permission_decision
+from core.agent_manager import agent_manager, set_permission_decision
 from core.chat_thread_manager import chat_thread_manager
 from core.session_manager import session_manager
 from core.exceptions import (
@@ -401,18 +401,19 @@ async def delete_session(session_id: str):
         )
 
 
-@router.post("/permission-response", response_model=PermissionRequestResponse)
-async def handle_permission_response(request: PermissionResponseRequest):
+@router.post("/cmd-permission-response", response_model=PermissionRequestResponse)
+async def handle_cmd_permission_response(request: PermissionResponseRequest):
     """Handle user's decision on a permission request (non-streaming).
 
     This endpoint is called when the user approves or denies a dangerous command
-    that was flagged by the human approval hook. Use /permission-continue for
+    that was flagged by the human approval hook. Use /cmd-permission-continue for
     streaming response.
     """
     logger.info(f"Received permission response for request {request.request_id}: {request.decision}")
 
-    # Get the permission request from database
-    permission_request = await db.permission_requests.get(request.request_id)
+    # Get the permission request from in-memory store
+    from core.permission_manager import permission_manager as _pm
+    permission_request = _pm.get_pending_request(request.request_id)
     if not permission_request:
         raise ValidationException(
             message="Permission request not found",
@@ -426,8 +427,8 @@ async def handle_permission_response(request: PermissionResponseRequest):
             detail="The session ID does not match the permission request"
         )
 
-    # Update the permission request in database
-    await db.permission_requests.update(
+    # Update the permission request in memory
+    _pm.update_pending_request(
         request.request_id,
         {
             "status": request.decision + "d",  # "approved" or "denied"
@@ -436,7 +437,7 @@ async def handle_permission_response(request: PermissionResponseRequest):
         }
     )
 
-    # If approved, add the command to the approved list for this session
+    # If approved, persist the command via CmdPermissionManager (filesystem-backed)
     if request.decision == "approve":
         tool_input = permission_request.get("tool_input", {})
         # Handle both dict and JSON string (SQLite may have parsed it already)
@@ -444,8 +445,14 @@ async def handle_permission_response(request: PermissionResponseRequest):
             tool_input = json.loads(tool_input)
         command = tool_input.get("command", "") if isinstance(tool_input, dict) else ""
         if command:
-            approve_command(request.session_id, command)
-            logger.info(f"Command approved for session {request.session_id}: {command[:50]}...")
+            try:
+                agent_manager._cmd_pm.approve(command)
+                logger.info(f"Command approved via CmdPermissionManager: {command[:50]}...")
+            except (ValueError, AttributeError) as exc:
+                # Fallback: overly-broad pattern rejected or CmdPermissionManager not wired yet
+                logger.warning(f"CmdPermissionManager approval failed ({exc}), using per-session fallback")
+                from core.agent_manager import approve_command as _legacy_approve
+                _legacy_approve(request.session_id, command)
 
     # Signal any waiting tasks
     set_permission_decision(request.request_id, request.decision)
@@ -456,9 +463,9 @@ async def handle_permission_response(request: PermissionResponseRequest):
     )
 
 
-@router.post("/permission-continue")
-async def permission_continue(request: Request):
-    """Continue chat after user makes a permission decision via SSE.
+@router.post("/cmd-permission-continue")
+async def cmd_permission_continue(request: Request):
+    """Continue chat after user makes a command permission decision via SSE.
 
     This endpoint is used when the user approves or denies a dangerous command.
     It records the decision and continues the conversation stream.
@@ -478,7 +485,8 @@ async def permission_continue(request: Request):
         )
 
     # Verify permission request exists
-    perm_req = await db.permission_requests.get(permission_request.request_id)
+    from core.permission_manager import permission_manager as _pm
+    perm_req = _pm.get_pending_request(permission_request.request_id)
     if not perm_req:
         raise ValidationException(
             message="Permission request not found",
@@ -507,7 +515,7 @@ async def permission_continue(request: Request):
         """Generate messages from the permission continuation."""
         try:
             logger.info(f"Processing permission decision for request {permission_request.request_id}: {permission_request.decision}")
-            async for msg in agent_manager.continue_with_permission(
+            async for msg in agent_manager.continue_with_cmd_permission(
                 agent_id=agent_id,
                 session_id=permission_request.session_id,
                 request_id=permission_request.request_id,
@@ -530,7 +538,7 @@ async def permission_continue(request: Request):
             import traceback
             error_traceback = traceback.format_exc()
             error_message = str(e)
-            logger.error(f"Error in permission-continue stream: {error_message}")
+            logger.error(f"Error in cmd-permission-continue stream: {error_message}")
             logger.error(f"Full traceback:\n{error_traceback}")
             yield {
                 "type": "error",

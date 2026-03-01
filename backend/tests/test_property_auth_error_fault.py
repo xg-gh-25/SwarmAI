@@ -310,7 +310,7 @@ class TestErrorSessionNotStored:
 
         # We need to test through _execute_on_session to check _active_sessions storage.
         # Mock the environment config and client creation.
-        with patch("core.agent_manager._configure_claude_environment", new_callable=AsyncMock):
+        with patch("core.agent_manager._configure_claude_environment", new_callable=MagicMock):
             # Mock _build_options
             mock_options = MagicMock()
             mock_options.allowed_tools = []

@@ -303,19 +303,7 @@ class TestBedrockAuthPreservation:
         **Validates: Requirements 3.4**
         """
         from core.claude_environment import _configure_claude_environment
-
-        # Mock get_api_settings to return Bedrock config with no API key
-        mock_settings = {
-            "anthropic_api_key": "",
-            "anthropic_base_url": None,
-            "use_bedrock": True,
-            "bedrock_auth_type": "credentials",
-            "aws_access_key_id": "AKIAIOSFODNN7EXAMPLE",
-            "aws_secret_access_key": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
-            "aws_session_token": None,
-            "aws_bearer_token": "",
-            "aws_region": "us-east-1",
-        }
+        from core.app_config_manager import AppConfigManager
 
         # Save and clear any existing env vars
         saved_env = {}
@@ -324,15 +312,23 @@ class TestBedrockAuthPreservation:
             os.environ.pop(key, None)
 
         try:
-            with patch("routers.settings.get_api_settings", new_callable=AsyncMock, return_value=mock_settings):
-                # Should NOT raise any exception
-                await _configure_claude_environment()
+            # Create an AppConfigManager with Bedrock enabled, no API key
+            config = AppConfigManager.__new__(AppConfigManager)
+            config._cache = {
+                "use_bedrock": True,
+                "aws_region": "us-east-1",
+                "anthropic_base_url": None,
+                "claude_code_disable_experimental_betas": True,
+            }
 
-                # Verify Bedrock env var is set
-                assert os.environ.get("CLAUDE_CODE_USE_BEDROCK") == "true", (
-                    "Expected CLAUDE_CODE_USE_BEDROCK to be set to 'true' when "
-                    "use_bedrock=True in settings"
-                )
+            # Should NOT raise any exception
+            _configure_claude_environment(config)
+
+            # Verify Bedrock env var is set
+            assert os.environ.get("CLAUDE_CODE_USE_BEDROCK") == "true", (
+                "Expected CLAUDE_CODE_USE_BEDROCK to be set to 'true' when "
+                "use_bedrock=True in settings"
+            )
         finally:
             # Restore original env vars
             for key, val in saved_env.items():
@@ -368,7 +364,7 @@ class TestSuccessfulSessionStoragePreservation:
         )
 
         # Run through _execute_on_session to test full session storage path
-        with patch("core.agent_manager._configure_claude_environment", new_callable=AsyncMock):
+        with patch("core.agent_manager._configure_claude_environment", new_callable=MagicMock):
             mock_options = MagicMock()
             mock_options.allowed_tools = []
             mock_options.permission_mode = "default"

@@ -7,4 +7,5 @@ export { MessageBubble } from './MessageBubble';
 export { SessionTab } from './SessionTab';
 export { SessionTabBar } from './SessionTabBar';
 export { SwarmRadar } from './radar/SwarmRadar';
+export { TabStatusIndicator } from './TabStatusIndicator';
 export { ToolUseBlock } from './ToolUseBlock';
