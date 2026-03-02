@@ -1,9 +1,8 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import clsx from 'clsx';
-import type { FileAttachment, Skill, MCPServer, Plugin } from '../../../types';
+import type { FileAttachment } from '../../../types';
 import { FileAttachmentButton, FileAttachmentPreview, AttachedFileChips } from '../../../components/chat';
-import { ReadOnlyChips } from '../../../components/common';
 import { SLASH_COMMANDS } from '../constants';
 import type { FileTreeItem } from '../../../components/workspace-explorer/FileTreeNode';
 
@@ -20,18 +19,13 @@ interface ChatInputProps {
   isProcessingFiles: boolean;
   fileError: string | null;
   canAddMore: boolean;
-  agentSkills: Skill[];
-  agentMCPs: MCPServer[];
-  agentPlugins: Plugin[];
-  isLoadingSkills: boolean;
-  isLoadingMCPs: boolean;
-  isLoadingPlugins: boolean;
-  allowAllSkills?: boolean;
   /** Files attached from Workspace Explorer (context files) */
   attachedContextFiles?: FileTreeItem[];
   /** Callback to remove a context file */
   onRemoveContextFile?: (file: FileTreeItem) => void;
 }
+
+const MAX_ROWS = 20;
 
 /**
  * Chat Input Component with file attachments and slash commands
@@ -49,13 +43,6 @@ export function ChatInput({
   isProcessingFiles,
   fileError,
   canAddMore,
-  agentSkills,
-  agentMCPs,
-  agentPlugins,
-  isLoadingSkills,
-  isLoadingMCPs,
-  isLoadingPlugins,
-  allowAllSkills,
   attachedContextFiles,
   onRemoveContextFile,
 }: ChatInputProps) {
@@ -63,6 +50,32 @@ export function ChatInput({
   const [showCommandSuggestions, setShowCommandSuggestions] = useState(false);
   const [selectedCommandIndex, setSelectedCommandIndex] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
+
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const maxHeightRef = useRef<number>(400); // fallback: 20 * 20px
+
+  // Compute maxHeight once from actual computed line-height at mount
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    const lineHeight = parseFloat(getComputedStyle(el).lineHeight) || 20;
+    maxHeightRef.current = MAX_ROWS * lineHeight;
+  }, []);
+
+  const adjustHeight = useCallback(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    const maxHeight = maxHeightRef.current;
+    el.style.height = 'auto';
+    const next = Math.min(el.scrollHeight, maxHeight);
+    el.style.height = `${next}px`;
+    el.style.overflowY = el.scrollHeight > maxHeight ? 'auto' : 'hidden';
+  }, []);
+
+  // Call adjustHeight whenever inputValue changes (handles programmatic clears after send)
+  useEffect(() => {
+    adjustHeight();
+  }, [inputValue, adjustHeight]);
 
   // Filter commands based on input
   const filteredCommands = SLASH_COMMANDS.filter((cmd) =>
@@ -165,9 +178,19 @@ export function ChatInput({
     // Normal enter to send
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      onSend();
+      handleSend();
     }
   };
+
+  // Wrap onSend to reset textarea height after sending
+  const handleSend = useCallback(() => {
+    onSend();
+    const el = textareaRef.current;
+    if (el) {
+      el.style.height = '';       // clear inline style, rows={2} reasserts minimum
+      el.style.overflowY = 'hidden';
+    }
+  }, [onSend]);
 
   const hasAttachments = attachments.some((a) => a.base64);
   const canSend = (inputValue.trim() || hasAttachments) && selectedAgentId;
@@ -264,12 +287,13 @@ export function ChatInput({
 
             {/* Text Input — disabled during streaming to prevent concurrent sessions */}
             <textarea
+              ref={textareaRef}
               value={inputValue}
               onChange={handleInputChange}
               onKeyDown={handleKeyDown}
               onPaste={handlePaste}
               placeholder={isStreaming ? t('chat.streamingPlaceholder', 'Waiting for response...') : t('chat.placeholder')}
-              rows={1}
+              rows={2}
               disabled={isStreaming}
               className={clsx(
                 'flex-1 bg-transparent text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] resize-none focus:outline-none py-2',
@@ -279,7 +303,7 @@ export function ChatInput({
 
             {/* Send Button */}
             <button
-              onClick={isStreaming ? onStop : onSend}
+              onClick={isStreaming ? onStop : handleSend}
               disabled={!isStreaming && !canSend}
               className={clsx(
                 'w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 transition-colors',
@@ -304,57 +328,15 @@ export function ChatInput({
             </button>
           </div>
 
-          {/* Bottom Row - Skills & Commands hint */}
-          <div className="flex items-center justify-between mt-3 pt-3 border-t border-[var(--color-border)]/50">
-            <div className="flex items-center gap-4">
-              <ReadOnlyChips
-                label="Plugins"
-                icon="extension"
-                items={agentPlugins.map((p) => ({
-                  id: p.id,
-                  name: p.name,
-                  description: p.description,
-                }))}
-                emptyText=""
-                loading={isLoadingPlugins}
-              />
-
-              <ReadOnlyChips
-                label="Skills"
-                icon="auto_fix_high"
-                items={agentSkills.map((s) => ({
-                  id: s.id,
-                  name: s.name,
-                  description: s.description,
-                }))}
-                emptyText=""
-                loading={isLoadingSkills}
-                badgeOverride={allowAllSkills ? 'All' : undefined}
-              />
-
-              <ReadOnlyChips
-                label="MCPs"
-                icon="widgets"
-                items={agentMCPs.map((m) => ({
-                  id: m.id,
-                  name: m.name,
-                  description: m.description,
-                }))}
-                emptyText=""
-                loading={isLoadingMCPs}
-              />
-            </div>
-
+          {/* Bottom Row - Commands hint */}
+          <div className="flex items-center justify-end mt-3 pt-3 border-t border-[var(--color-border)]/50">
             <span className="text-xs text-[var(--color-text-muted)]">
               Type <kbd className="px-1.5 py-0.5 bg-[var(--color-hover)] rounded text-xs mx-1">/</kbd> for commands
             </span>
           </div>
         </div>
 
-        {/* Footer */}
-        <p className="text-center text-xs text-[var(--color-text-muted)]/60 mt-4 uppercase tracking-wider">
-          {'Immersive Workspace • Powered by Claude Code'}
-        </p>
+
       </div>
     </div>
   );

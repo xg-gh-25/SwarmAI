@@ -19,7 +19,7 @@ import * as fc from 'fast-check';
 import { render, cleanup } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ChatInput } from './ChatInput';
-import type { FileAttachment, Skill, MCPServer, Plugin } from '../../../types';
+import type { FileAttachment } from '../../../types';
 import { chatService } from '../../../services/chat';
 
 // Mock react-i18next
@@ -100,12 +100,6 @@ function buildProps(random: {
     isProcessingFiles: false,
     fileError: null as string | null,
     canAddMore: true,
-    agentSkills: [] as Skill[],
-    agentMCPs: [] as MCPServer[],
-    agentPlugins: [] as Plugin[],
-    isLoadingSkills: false,
-    isLoadingMCPs: false,
-    isLoadingPlugins: false,
   };
 }
 

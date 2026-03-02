@@ -95,17 +95,17 @@ export default function ChatPage() {
     queryFn: agentsService.list,
   });
 
-  const { data: skills = [], isLoading: isLoadingSkills } = useQuery({
+  const { data: skills = [] } = useQuery({
     queryKey: ['skills'],
     queryFn: skillsService.list,
   });
 
-  const { data: mcpServers = [], isLoading: isLoadingMCPs } = useQuery({
+  const { data: mcpServers = [] } = useQuery({
     queryKey: ['mcpServers'],
     queryFn: mcpService.list,
   });
 
-  const { data: plugins = [], isLoading: isLoadingPlugins } = useQuery({
+  const { data: plugins = [] } = useQuery({
     queryKey: ['plugins'],
     queryFn: pluginsService.listPlugins,
   });
@@ -1173,13 +1173,6 @@ export default function ChatPage() {
                 isProcessingFiles={isProcessingFiles}
                 fileError={fileError}
                 canAddMore={canAddMore}
-                agentSkills={agentSkills}
-                agentMCPs={agentMCPs}
-                agentPlugins={agentPlugins}
-                isLoadingSkills={isLoadingSkills}
-                isLoadingMCPs={isLoadingMCPs}
-                isLoadingPlugins={isLoadingPlugins}
-                allowAllSkills={selectedAgent?.allowAllSkills}
                 attachedContextFiles={attachedFiles}
                 onRemoveContextFile={removeAttachedFile}
               />

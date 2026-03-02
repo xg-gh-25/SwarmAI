@@ -24,7 +24,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { LayoutProvider, useLayout } from '../contexts/LayoutContext';
 import { ChatInput } from './chat/components/ChatInput';
 import type { FileTreeItem } from '../components/workspace-explorer/FileTreeNode';
-import type { FileAttachment, Skill, MCPServer, Plugin } from '../types';
+import type { FileAttachment } from '../types';
 
 // ============== Mocks ==============
 
@@ -86,13 +86,6 @@ function createDefaultChatInputProps(overrides: Partial<Parameters<typeof ChatIn
     isProcessingFiles: false,
     fileError: null as string | null,
     canAddMore: true,
-    agentSkills: [] as Skill[],
-    agentMCPs: [] as MCPServer[],
-    agentPlugins: [] as Plugin[],
-    isLoadingSkills: false,
-    isLoadingMCPs: false,
-    isLoadingPlugins: false,
-    allowAllSkills: false,
     ...overrides,
   };
 }
