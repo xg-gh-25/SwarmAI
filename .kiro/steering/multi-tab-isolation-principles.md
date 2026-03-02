@@ -141,6 +141,21 @@ Tab switching follows a strict 3-step protocol:
 | Close streaming Tab A | Tab A's abort controller fires, state cleaned up; adjacent tab selected | `cleanupTabState(tabId)` aborts + removes from map; `closeTab` selects adjacent |
 | Ask-user-question on Tab C while A and B stream | Tab C shows question form; A and B continue | `setIsStreaming(false, capturedTabId)` only clears Tab C; `pendingQuestion` set only if `isActiveTab` |
 
+### Principle 8: Session ID Stability Across Restarts
+
+A tab's session ID is the conversation's identity. It is the key that maps to all stored messages and provides critical context continuity for the model. Once assigned, a session ID MUST NEVER be replaced.
+
+- One tab = one session ID for the lifetime of that conversation
+- When the backend restarts and loses its in-memory SDK client, it MUST create a fresh SDK client but continue using the ORIGINAL session ID for all persistence and frontend communication
+- The SDK's internal session ID is an implementation detail — it MUST NOT leak into the app's session model
+- All messages (user + assistant) MUST be saved under the original session ID
+- The `session_start` SSE event MUST always carry the original session ID
+- The frontend tab's localStorage entry MUST NOT be overwritten with a different session ID
+
+**Anti-pattern**: Backend falls back to a fresh SDK session and emits `session_start` with the NEW SDK session ID, causing the tab to silently switch IDs and orphan all previous messages.
+
+**Correct pattern**: Backend detects resume failure → creates fresh SDK client → maps the SDK's internal session ID to the app's original session ID → saves all messages under the original ID → emits `session_start` with the original ID.
+
 ## Regression Prevention Checklist
 
 When modifying chat tab code, verify:
