@@ -290,6 +290,15 @@ export default function ChatPage() {
       setMessages(formattedMessages);
       setSessionId(sid);
       setPendingQuestion(null);
+      // Sync loaded messages back into the tab map so subsequent tab switches
+      // don't see empty messages and re-fetch unnecessarily.
+      const currentTabId = activeTabIdRef.current;
+      if (currentTabId) {
+        const tab = tabMapRef.current.get(currentTabId);
+        if (tab && tab.sessionId === sid) {
+          tab.messages = formattedMessages;
+        }
+      }
     } catch (error) {
       console.error('Failed to load session messages:', error);
     } finally {
@@ -361,6 +370,20 @@ export default function ChatPage() {
       // Restore React state from the unified tab map
       const tabState = getTabState(tabId);
       if (tabState) {
+        // If the tab has a sessionId but empty messages (e.g. after app restart,
+        // hydrateTab sets messages=[]), load messages from the backend API
+        // instead of displaying the empty array.
+        if (tabState.sessionId && tabState.messages.length === 0) {
+          setSessionId(tabState.sessionId);
+          setPendingQuestion(null);
+          bumpStreamingDerivation();
+          setPendingPermission(null);
+          if (tabStatuses[tabId] === 'complete_unread') {
+            updateTabStatus(tabId, 'idle');
+          }
+          loadSessionMessages(tabState.sessionId);
+          return;
+        }
         setMessages(tabState.messages);
         setSessionId(tabState.sessionId);
         setPendingQuestion(tabState.pendingQuestion);
