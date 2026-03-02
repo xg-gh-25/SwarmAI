@@ -9,3 +9,8 @@ export { SessionTabBar } from './SessionTabBar';
 export { SwarmRadar } from './radar/SwarmRadar';
 export { TabStatusIndicator } from './TabStatusIndicator';
 export { ToolUseBlock } from './ToolUseBlock';
+export { ToolResultBlock } from './ToolResultBlock';
+export { UserMessageView } from './UserMessageView';
+export { AssistantMessageView } from './AssistantMessageView';
+export { AssistantHeader } from './AssistantHeader';
+export { WelcomeScreen } from './WelcomeScreen';

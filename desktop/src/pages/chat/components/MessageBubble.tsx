@@ -1,78 +1,46 @@
-import clsx from 'clsx';
-import type { Message } from '../../../types';
-import { ContentBlockRenderer } from './ContentBlockRenderer';
+/**
+ * MessageBubble — thin dispatcher that routes rendering by message role.
+ *
+ * Branches on `message.role`:
+ * - `'user'`      → delegates to UserMessageView (minimal text bubble)
+ * - `'assistant'`  → delegates to AssistantMessageView (branded SwarmAI layout)
+ *
+ * All layout, avatar, header, and content rendering logic lives in the
+ * sub-components. This file only owns the props interface and the role switch.
+ *
+ * @exports MessageBubble      — The dispatcher component
+ * @exports MessageBubbleProps  — Props interface (unchanged for backward compat)
+ *
+ * Validates: Requirements 1.1, 1.2, 2.1, 3.1, 3.2, 6.1, 6.2
+ */
 
-interface MessageBubbleProps {
+import type { Message } from '../../../types';
+import { UserMessageView } from './UserMessageView';
+import { AssistantMessageView } from './AssistantMessageView';
+
+export interface MessageBubbleProps {
   message: Message;
   onAnswerQuestion?: (toolUseId: string, answers: Record<string, string>) => void;
   pendingToolUseId?: string;
   isStreaming?: boolean;
 }
 
-/**
- * Message Bubble Component for displaying chat messages
- */
 export function MessageBubble({
   message,
   onAnswerQuestion,
   pendingToolUseId,
   isStreaming,
 }: MessageBubbleProps) {
-  const isUser = message.role === 'user';
+  if (message.role === 'user') {
+    return <UserMessageView message={message} />;
+  }
 
   return (
-    <div className={clsx('flex gap-4', isUser && 'flex-row-reverse')}>
-      <div
-        className={clsx(
-          'w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0',
-          isUser ? 'bg-orange-500/20' : 'bg-[var(--color-card)]'
-        )}
-      >
-        <span className={clsx('material-symbols-outlined', isUser ? 'text-orange-400' : 'text-primary')}>
-          {isUser ? 'person' : 'smart_toy'}
-        </span>
-      </div>
-
-      <div className={clsx('flex-1 max-w-3xl', isUser && 'text-right')}>
-        <div className={clsx('flex items-center gap-2 mb-1', isUser && 'justify-end')}>
-          <span className="font-medium text-[var(--color-text)]">{isUser ? 'User' : 'AI Agent'}</span>
-          <span className="text-xs text-[var(--color-text-muted)]">
-            {new Date(message.timestamp).toLocaleTimeString([], {
-              hour: '2-digit',
-              minute: '2-digit',
-            })}
-          </span>
-        </div>
-
-        <div className={clsx('space-y-3', isUser && 'inline-block text-left')}>
-          {message.isError && (
-            <div
-              className="border border-red-500/60 bg-red-500/10 rounded-lg p-3"
-              role="alert"
-              aria-label="Error message"
-            >
-              {message.content.map((block, index) => (
-                <ContentBlockRenderer
-                  key={index}
-                  block={block}
-                  onAnswerQuestion={onAnswerQuestion}
-                  pendingToolUseId={pendingToolUseId}
-                  isStreaming={isStreaming}
-                />
-              ))}
-            </div>
-          )}
-          {!message.isError && message.content.map((block, index) => (
-            <ContentBlockRenderer
-              key={index}
-              block={block}
-              onAnswerQuestion={onAnswerQuestion}
-              pendingToolUseId={pendingToolUseId}
-              isStreaming={isStreaming}
-            />
-          ))}
-        </div>
-      </div>
-    </div>
+    <AssistantMessageView
+      message={message}
+      onAnswerQuestion={onAnswerQuestion}
+      pendingToolUseId={pendingToolUseId}
+      isStreaming={isStreaming}
+    />
   );
 }

@@ -1,6 +1,7 @@
 import type { ContentBlock, TodoItem } from '../../../types';
 import { MarkdownRenderer, AskUserQuestion, TodoWriteWidget } from '../../../components/common';
 import { ToolUseBlock } from './ToolUseBlock';
+import { ToolResultBlock } from './ToolResultBlock';
 
 interface ContentBlockRendererProps {
   block: ContentBlock;
@@ -36,17 +37,7 @@ export function ContentBlockRenderer({
   }
 
   if (block.type === 'tool_result') {
-    return (
-      <div className="bg-[var(--color-card)] border border-[var(--color-border)] rounded-lg p-4">
-        <div className="flex items-center gap-2 mb-2">
-          <span className="material-symbols-outlined text-status-online text-sm">check_circle</span>
-          <span className="text-sm font-medium text-[var(--color-text)]">Tool Result</span>
-        </div>
-        <pre className="text-sm text-[var(--color-text-muted)] overflow-x-auto whitespace-pre-wrap break-words">
-          <code>{block.content}</code>
-        </pre>
-      </div>
-    );
+    return <ToolResultBlock content={block.content} isError={block.isError} />;
   }
 
   if (block.type === 'ask_user_question') {

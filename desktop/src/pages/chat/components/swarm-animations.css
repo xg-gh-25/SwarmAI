@@ -1,0 +1,21 @@
+/**
+ * SwarmAI chat animation styles.
+ *
+ * Defines the pulse animation applied to the 🐝 icon in AssistantHeader
+ * while an assistant message is actively streaming. The animation gently
+ * scales and fades the icon to convey "thinking" activity, then stops
+ * once streaming completes.
+ *
+ * Used by: AssistantHeader component (via `.swarm-icon-streaming` class)
+ * Validates: Requirements 2.3, 2.4
+ */
+
+@keyframes swarm-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(1.2); }
+}
+
+.swarm-icon-streaming {
+  display: inline-block;
+  animation: swarm-pulse 1.2s ease-in-out infinite;
+}

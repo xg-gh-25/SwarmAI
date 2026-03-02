@@ -39,10 +39,10 @@ import { useFileAttachment, useRightSidebarGroup } from '../hooks';
 import { useTSCCState } from '../hooks/useTSCCState';
 import { useUnifiedTabState, MAX_OPEN_TABS } from '../hooks/useUnifiedTabState';
 import { useChatStreamingLifecycle, formatElapsed, ELAPSED_DISPLAY_THRESHOLD_MS } from '../hooks/useChatStreamingLifecycle';
-import { ChatHeader, ChatInput, ChatHistorySidebar, FileBrowserSidebar, MessageBubble, SwarmRadar } from './chat/components';
+import { ChatHeader, ChatInput, ChatHistorySidebar, FileBrowserSidebar, MessageBubble, SwarmRadar, WelcomeScreen } from './chat/components';
 
 import { groupSessionsByTime } from './chat/utils';
-import { createWelcomeMessage, RIGHT_SIDEBAR_WIDTH_CONFIGS } from './chat/constants';
+import { RIGHT_SIDEBAR_WIDTH_CONFIGS } from './chat/constants';
 import { useLayout } from '../contexts/LayoutContext';
 
 /**
@@ -273,7 +273,7 @@ export default function ChatPage() {
 
   // Handle new chat
   const handleNewChat = useCallback(() => {
-    setMessages([createWelcomeMessage()]);
+    setMessages([]);
     setSessionId(undefined);
     setPendingQuestion(null);
     // Note: Sidebar visibility is now managed by toggle buttons, no need to collapse
@@ -302,9 +302,8 @@ export default function ChatPage() {
       });
     }
     const newTab = addTab(selectedAgentId);
-    const welcomeMessages = [createWelcomeMessage()];
-    initTabState(newTab!.id, welcomeMessages);
-    setMessages(welcomeMessages);
+    initTabState(newTab!.id, []);
+    setMessages([]);
     setSessionId(undefined);
     setPendingQuestion(null);
     setIsStreaming(false, newTab!.id); // New tab is not streaming
@@ -401,11 +400,10 @@ export default function ChatPage() {
       setPendingQuestion(null);
     } else {
       // Brand new tab — initialize empty
-      const welcomeMessages = [createWelcomeMessage()];
-      setMessages(welcomeMessages);
+      setMessages([]);
       setSessionId(undefined);
       setPendingQuestion(null);
-      initTabState(tabId, welcomeMessages);
+      initTabState(tabId, []);
     }
   }, [openTabs, selectTab, restoreTab, getTabState, initTabState, updateTabState, activeTabIdRef, tabMapRef, tabStatuses, updateTabStatus, pendingQuestion]);
 
@@ -488,7 +486,7 @@ export default function ChatPage() {
   // per-tab features (message tracking, abort isolation, status) are broken.
   useEffect(() => {
     if (activeTabId && !tabMapRef.current.has(activeTabId)) {
-      initTabState(activeTabId, messages.length > 0 ? messages : [createWelcomeMessage()]);
+      initTabState(activeTabId, messages.length > 0 ? messages : []);
     }
   }, [activeTabId]); // eslint-disable-line react-hooks/exhaustive-deps — mount-only for initial tab
 
@@ -531,9 +529,6 @@ export default function ChatPage() {
     if (selectedAgentId) {
       const existingAgent = agents.find((a) => a.id === selectedAgentId);
       if (existingAgent) {
-        if (messages.length === 0) {
-          setMessages([createWelcomeMessage()]);
-        }
         return;
       }
     }
@@ -544,7 +539,7 @@ export default function ChatPage() {
       setSelectedAgentId(defaultAgent.id);
       // Only set welcome message if not currently streaming (avoid wiping in-progress chat)
       if (!messages.some((m: Message) => m.role === 'user')) {
-        setMessages([createWelcomeMessage()]);
+        setMessages([]);
       }
     }).catch(error => {
       console.error('Failed to fetch default agent:', error);
@@ -607,7 +602,7 @@ export default function ChatPage() {
       loadSessionMessages(activeTabState.sessionId);
     } else if (!activeTabState.sessionId && !isStreaming && sessionId) {
       // Tab has no session and we're not streaming — reset to welcome
-      setMessages([createWelcomeMessage()]);
+      setMessages([]);
       setSessionId(undefined);
       setPendingQuestion(null);
     }
@@ -1061,8 +1056,11 @@ export default function ChatPage() {
           ) : (
             <>
               {/* Messages */}
-              <div ref={messagesContainerRef} onScroll={handleMessagesScroll} className="flex-1 overflow-y-auto p-6 space-y-6">
-                {messages.map((msg) => (
+              <div ref={messagesContainerRef} onScroll={handleMessagesScroll} className="flex-1 overflow-y-auto p-4 space-y-4">
+                {messages.length === 0 ? (
+                  <WelcomeScreen />
+                ) : (
+                  messages.map((msg) => (
                       <MessageBubble
                         key={msg.id}
                         message={msg}
@@ -1070,7 +1068,8 @@ export default function ChatPage() {
                         pendingToolUseId={pendingQuestion?.toolUseId}
                         isStreaming={isStreaming}
                       />
-                  ))}
+                  ))
+                )}
                 {isStreaming && (
                   <div className="flex items-center gap-2 text-[var(--color-text-muted)]">
                     <Spinner size="sm" />
