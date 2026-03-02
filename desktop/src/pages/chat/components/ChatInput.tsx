@@ -1,8 +1,9 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import clsx from 'clsx';
-import type { FileAttachment } from '../../../types';
+import type { FileAttachment, TSCCState } from '../../../types';
 import { FileAttachmentButton, FileAttachmentPreview, AttachedFileChips } from '../../../components/chat';
+import { TSCCPopoverButton } from './TSCCPopoverButton';
 import { SLASH_COMMANDS } from '../constants';
 import type { FileTreeItem } from '../../../components/workspace-explorer/FileTreeNode';
 
@@ -23,6 +24,8 @@ interface ChatInputProps {
   attachedContextFiles?: FileTreeItem[];
   /** Callback to remove a context file */
   onRemoveContextFile?: (file: FileTreeItem) => void;
+  /** TSCC state for the popover button */
+  tsccState?: TSCCState | null;
 }
 
 const MAX_ROWS = 20;
@@ -45,6 +48,7 @@ export function ChatInput({
   canAddMore,
   attachedContextFiles,
   onRemoveContextFile,
+  tsccState,
 }: ChatInputProps) {
   const { t } = useTranslation();
   const [showCommandSuggestions, setShowCommandSuggestions] = useState(false);
@@ -326,9 +330,12 @@ export function ChatInput({
             </button>
           </div>
 
-          {/* Bottom Row - Attachment button + Commands hint */}
+          {/* Bottom Row - Attachment button + TSCC button + Commands hint */}
           <div className="flex items-center justify-between mt-3 pt-3 border-t border-[var(--color-border)]/50">
-            <FileAttachmentButton onFilesSelected={onAddFiles} disabled={isProcessingFiles || isStreaming} canAddMore={canAddMore} />
+            <div className="flex items-center gap-2">
+              <FileAttachmentButton onFilesSelected={onAddFiles} disabled={isProcessingFiles || isStreaming} canAddMore={canAddMore} />
+              <TSCCPopoverButton tsccState={tsccState ?? null} />
+            </div>
             <span className="text-xs text-[var(--color-text-muted)]">
               Type <kbd className="px-1.5 py-0.5 bg-[var(--color-hover)] rounded text-xs mx-1">/</kbd> for commands
             </span>
