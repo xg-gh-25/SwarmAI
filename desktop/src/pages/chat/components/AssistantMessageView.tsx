@@ -38,15 +38,22 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
   pendingToolUseId,
   isStreaming,
 }) => {
-  const contentBlocks = message.content.map((block, index) => (
-    <ContentBlockRenderer
-      key={index}
-      block={block}
-      onAnswerQuestion={onAnswerQuestion}
-      pendingToolUseId={pendingToolUseId}
-      isStreaming={isStreaming}
-    />
-  ));
+  const contentBlocks = message.content.map((block, index) => {
+    // Use block-specific IDs for stable keys to prevent state mix-ups
+    // when multiple tool blocks are rendered consecutively
+    const key = block.type === 'tool_use' ? `tu-${block.id || index}`
+      : block.type === 'tool_result' ? `tr-${block.toolUseId || index}`
+      : `cb-${index}`;
+    return (
+      <ContentBlockRenderer
+        key={key}
+        block={block}
+        onAnswerQuestion={onAnswerQuestion}
+        pendingToolUseId={pendingToolUseId}
+        isStreaming={isStreaming}
+      />
+    );
+  });
 
   return (
     <div className="max-w-3xl">
