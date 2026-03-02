@@ -24,7 +24,7 @@ import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
-import type { Message, ContentBlock, StreamEvent, PermissionRequest, Agent, AgentCreateRequest, ChatSession, TSCCSnapshot } from '../types';
+import type { Message, ContentBlock, StreamEvent, PermissionRequest, Agent, AgentCreateRequest, ChatSession } from '../types';
 import { chatService } from '../services/chat';
 import { agentsService } from '../services/agents';
 import { skillsService } from '../services/skills';
@@ -40,9 +40,7 @@ import { useTSCCState } from '../hooks/useTSCCState';
 import { useUnifiedTabState, MAX_OPEN_TABS } from '../hooks/useUnifiedTabState';
 import { useChatStreamingLifecycle, formatElapsed, ELAPSED_DISPLAY_THRESHOLD_MS } from '../hooks/useChatStreamingLifecycle';
 import { ChatHeader, ChatInput, ChatHistorySidebar, FileBrowserSidebar, MessageBubble, SwarmRadar } from './chat/components';
-import { TSCCPanel } from './chat/components/TSCCPanel';
-import { TSCCSnapshotCard } from './chat/components/TSCCSnapshotCard';
-import { listSnapshots } from '../services/tscc';
+
 import { groupSessionsByTime } from './chat/utils';
 import { createWelcomeMessage, RIGHT_SIDEBAR_WIDTH_CONFIGS } from './chat/constants';
 import { useLayout } from '../contexts/LayoutContext';
@@ -197,10 +195,6 @@ export default function ChatPage() {
   // TSCC state management — called after the streaming hook so sessionId is available
   const {
     tsccState,
-    isExpanded: tsccExpanded,
-    isPinned: tsccPinned,
-    toggleExpand: tsccToggleExpand,
-    togglePin: tsccTogglePin,
     applyTelemetryEvent,
     triggerAutoExpand: tsccTriggerAutoExpand,
   } = useTSCCState(sessionId ?? null);
@@ -227,33 +221,7 @@ export default function ChatPage() {
   const sessionIdRef = useRef(sessionId);
   sessionIdRef.current = sessionId;
 
-  // TSCC snapshots for inline thread history
-  const [threadSnapshots, setThreadSnapshots] = useState<TSCCSnapshot[]>([]);
 
-  // Memoized timeline: merge messages + TSCC snapshots into a single sorted list (Req 8.1, 8.2)
-  type TimelineItem =
-    | { kind: 'message'; data: Message }
-    | { kind: 'snapshot'; data: TSCCSnapshot };
-
-  const timeline = useMemo(() => {
-    const items: TimelineItem[] = [
-      ...messages.map((m): TimelineItem => ({ kind: 'message', data: m })),
-      ...threadSnapshots.map((s): TimelineItem => ({ kind: 'snapshot', data: s })),
-    ];
-
-    items.sort((a, b) => {
-      // Both Message and TSCCSnapshot share a `timestamp` field
-      const tsA = a.data.timestamp;
-      const tsB = b.data.timestamp;
-      const diff = new Date(tsA || 0).getTime() - new Date(tsB || 0).getTime();
-      // Stable sort tiebreaker: messages before snapshots, then by id/snapshotId
-      if (diff !== 0) return diff;
-      if (a.kind !== b.kind) return a.kind === 'message' ? -1 : 1;
-      return 0;
-    });
-
-    return items;
-  }, [messages, threadSnapshots]);
 
   const agentSkills = selectedAgent?.allowAllSkills
     ? skills
@@ -645,18 +613,7 @@ export default function ChatPage() {
     }
   }, [activeTabId, sessionId, isStreaming, loadSessionMessages, tabMapRef]);
 
-  // Fetch TSCC snapshots when session changes
-  useEffect(() => {
-    if (!sessionId) {
-      setThreadSnapshots([]);
-      return;
-    }
-    let cancelled = false;
-    listSnapshots(sessionId)
-      .then((snaps) => { if (!cancelled) setThreadSnapshots(snaps); })
-      .catch(() => { if (!cancelled) setThreadSnapshots([]); });
-    return () => { cancelled = true; };
-  }, [sessionId]);
+
 
   // Update tab's sessionId when a new session is created
   useEffect(() => {
@@ -1103,24 +1060,17 @@ export default function ChatPage() {
             </div>
           ) : (
             <>
-              {/* Messages — interleaved with TSCC snapshot cards */}
+              {/* Messages */}
               <div ref={messagesContainerRef} onScroll={handleMessagesScroll} className="flex-1 overflow-y-auto p-6 space-y-6">
-                {timeline.map((item) =>
-                    item.kind === 'message' ? (
+                {messages.map((msg) => (
                       <MessageBubble
-                        key={item.data.id}
-                        message={item.data}
+                        key={msg.id}
+                        message={msg}
                         onAnswerQuestion={handleAnswerQuestion}
                         pendingToolUseId={pendingQuestion?.toolUseId}
                         isStreaming={isStreaming}
                       />
-                    ) : (
-                      <TSCCSnapshotCard
-                        key={`snap-${item.data.snapshotId}`}
-                        snapshot={item.data}
-                      />
-                    ),
-                  )}
+                  ))}
                 {isStreaming && (
                   <div className="flex items-center gap-2 text-[var(--color-text-muted)]">
                     <Spinner size="sm" />
@@ -1149,16 +1099,6 @@ export default function ChatPage() {
                 <div ref={messagesEndRef} />
               </div>
 
-              {/* TSCC Panel — between messages and input */}
-              <TSCCPanel
-                threadId={sessionId ?? null}
-                tsccState={tsccState}
-                isExpanded={tsccExpanded}
-                isPinned={tsccPinned}
-                onToggleExpand={tsccToggleExpand}
-                onTogglePin={tsccTogglePin}
-              />
-
               {/* Input Area */}
               <ChatInput
                 inputValue={inputValue}
@@ -1175,6 +1115,7 @@ export default function ChatPage() {
                 canAddMore={canAddMore}
                 attachedContextFiles={attachedFiles}
                 onRemoveContextFile={removeAttachedFile}
+                tsccState={tsccState}
               />
             </>
           )}
