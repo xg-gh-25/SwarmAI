@@ -90,11 +90,6 @@ export const chatService = {
       requestBody.message = request.message;
     }
 
-    // Add workspace context if provided
-    if (request.workspaceContext) {
-      requestBody.workspace_context = request.workspaceContext;
-    }
-
     fetch(`http://localhost:${port}/api/chat/stream`, {
       method: 'POST',
       headers: {
