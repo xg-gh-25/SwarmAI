@@ -45,7 +45,7 @@ export function ChatHeader({
   const { t } = useTranslation();
 
   return (
-    <div className="h-12 px-4 flex items-center justify-between border-b border-[var(--color-border)] flex-shrink-0 gap-4">
+    <div className="h-12 px-4 flex items-center justify-between border-b border-[var(--color-border)] flex-shrink-0 gap-4 relative z-10 bg-[var(--color-bg)]">
       {/* Left Section: Session Tab Bar */}
       <SessionTabBar
         tabs={openTabs}
