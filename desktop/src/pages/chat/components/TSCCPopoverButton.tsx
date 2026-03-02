@@ -92,15 +92,15 @@ export function TSCCPopoverButton({ tsccState }: TSCCPopoverButtonProps) {
         disabled={isDisabled}
         onClick={isDisabled ? undefined : handleToggle}
         className={`
-          flex items-center justify-center w-8 h-8 rounded-lg
+          w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0
           transition-colors
           ${isDisabled
-            ? 'opacity-40 cursor-not-allowed'
-            : 'hover:bg-[var(--color-hover)] cursor-pointer text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
+            ? 'bg-[var(--color-hover)]/50 text-[var(--color-text-muted)]/50 cursor-not-allowed'
+            : 'bg-[var(--color-hover)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-border)] cursor-pointer'
           }
         `}
       >
-        <span className="material-symbols-outlined text-lg">
+        <span className="material-symbols-outlined">
           psychology
         </span>
       </button>
@@ -111,7 +111,7 @@ export function TSCCPopoverButton({ tsccState }: TSCCPopoverButtonProps) {
           className="
             absolute bottom-full left-0 mb-2
             w-72 max-h-[320px] overflow-y-auto
-            bg-[var(--color-surface)] border border-[var(--color-border)]
+            bg-[var(--color-card)] border border-[var(--color-border)]
             rounded-lg shadow-lg
             p-3 space-y-3
             z-50
