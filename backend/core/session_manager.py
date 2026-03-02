@@ -127,8 +127,19 @@ class SessionManager:
         self,
         agent_id: Optional[str] = None,
         user_id: Optional[str] = None,
+        limit: Optional[int] = None,
     ) -> list[SessionInfo]:
-        """List all sessions, optionally filtered by agent_id or user_id."""
+        """List sessions, optionally filtered by agent_id or user_id.
+
+        Args:
+            agent_id: Filter sessions by agent ID (applied in-memory).
+            user_id: Filter sessions by user ID (pushed to SQL layer).
+            limit: Maximum number of sessions to return. Applied after
+                   in-memory agent_id filtering and sorting.
+
+        Returns:
+            Sessions sorted by last_accessed DESC, created_at DESC.
+        """
         # Fetch from database with user_id filter if provided
         sessions_data = await db.sessions.list(user_id=user_id)
 
@@ -139,8 +150,18 @@ class SessionManager:
         if agent_id:
             sessions = [s for s in sessions if s.agent_id == agent_id]
 
-        # Sort by last_accessed descending
-        return sorted(sessions, key=lambda s: s.last_accessed, reverse=True)
+        # Sort by last_accessed DESC, then created_at DESC for deterministic ordering
+        sessions = sorted(
+            sessions,
+            key=lambda s: (s.last_accessed, s.created_at),
+            reverse=True,
+        )
+
+        # Apply limit after sorting and agent_id filtering
+        if limit is not None:
+            sessions = sessions[:limit]
+
+        return sessions
 
     async def update_title(self, session_id: str, title: str) -> bool:
         """Update session title."""

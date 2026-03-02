@@ -108,7 +108,7 @@ Unique files touched across history: 838
 API client layer with `toCamelCase()` field mapping (backend snake_case → frontend camelCase)
 
 ### Key Hooks (`desktop/src/hooks/`)
-- `useUnifiedTabState` — Single source of truth for all tab state (CRUD, metadata, runtime state, lifecycle, localStorage persistence, tab status indicators). Replaces the former `useTabState`, `tabStateRef`, and `tabStatuses` stores.
+- `useUnifiedTabState` — Single source of truth for all tab state (CRUD, metadata, runtime state, lifecycle, tab status indicators). Persists open tabs to `~/.swarm-ai/open_tabs.json` via backend API (replaces unreliable localStorage on macOS Tauri WebKit). Exposes `restoreFromFile()` for async tab restoration on startup. Replaces the former `useTabState`, `tabStateRef`, and `tabStatuses` stores.
 - `useChatStreamingLifecycle` — Streaming lifecycle state machine (messages, sessionId, isStreaming, stream generation counter, auto-scroll, debounced activity labels, sessionStorage persistence). Receives unified tab state methods via deps for tab-aware stream handlers.
 - `useFileAttachment` — File attachment processing
 - `useTSCCState` — TSCC panel state

@@ -176,8 +176,14 @@ export const chatService = {
   },
 
   // List chat sessions
-  async listSessions(agentId?: string): Promise<ChatSession[]> {
-    const params = agentId ? { agent_id: agentId } : {};
+  async listSessions(agentId?: string, limit?: number): Promise<ChatSession[]> {
+    const params: Record<string, string | number> = {};
+    if (agentId) {
+      params.agent_id = agentId;
+    }
+    if (limit !== undefined) {
+      params.limit = limit;
+    }
     const response = await api.get<Record<string, unknown>[]>('/chat/sessions', { params });
     return response.data.map(toSessionCamelCase);
   },
