@@ -115,7 +115,7 @@ All data stays local in `~/.swarm-ai/`:
 |------|------|
 | Database | `~/.swarm-ai/data.db` |
 | Configuration | `~/.swarm-ai/config.json` |
-| Workspaces | `~/.swarm-ai/swarm-workspaces/` |
+| Workspaces | `~/.swarm-ai/SwarmWS/` |
 | Skills | `~/.swarm-ai/skills/` |
 | Logs | `~/.swarm-ai/logs/` |
 

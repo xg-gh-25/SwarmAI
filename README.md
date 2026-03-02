@@ -168,7 +168,7 @@ All data is stored locally in `~/.swarm-ai/`:
 |------|------|
 | Database | `~/.swarm-ai/data.db` |
 | Configuration | `~/.swarm-ai/config.json` |
-| Workspaces | `~/.swarm-ai/swarm-workspaces/` |
+| Workspaces | `~/.swarm-ai/SwarmWS/` |
 | Skills | `~/.swarm-ai/skills/` |
 | Logs | `~/.swarm-ai/logs/` |
 | Tab State | `~/.swarm-ai/open_tabs.json` |
