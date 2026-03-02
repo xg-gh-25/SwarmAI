@@ -312,7 +312,7 @@ describe('ChatInput with AttachedFileChips Integration', () => {
       expect(screen.getByTestId('attached-file-chips')).toBeInTheDocument();
 
       // Other ChatInput elements should also be present
-      expect(screen.getByPlaceholderText('chat.placeholder')).toBeInTheDocument();
+      expect(screen.getByPlaceholderText('Ask anything')).toBeInTheDocument();
     });
 
     it('AttachedFileChips does not interfere with text input', () => {
@@ -326,7 +326,7 @@ describe('ChatInput with AttachedFileChips Integration', () => {
 
       renderWithProviders(<ChatInput {...props} />);
 
-      const textarea = screen.getByPlaceholderText('chat.placeholder');
+      const textarea = screen.getByPlaceholderText('Ask anything');
       fireEvent.change(textarea, { target: { value: 'test message' } });
 
       expect(onInputChange).toHaveBeenCalled();
@@ -344,7 +344,7 @@ describe('ChatInput with AttachedFileChips Integration', () => {
 
       renderWithProviders(<ChatInput {...props} />);
 
-      const textarea = screen.getByPlaceholderText('chat.placeholder');
+      const textarea = screen.getByPlaceholderText('Ask anything');
       fireEvent.keyDown(textarea, { key: 'Enter', shiftKey: false });
 
       expect(onSend).toHaveBeenCalled();
