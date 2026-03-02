@@ -1,7 +1,5 @@
 <div align="center">
 
-<img src="./assets/swarmai-logo-final.png" alt="SwarmAI Logo" width="120" />
-
 # SwarmAI
 
 ### Your AI Team, 24/7
@@ -53,7 +51,6 @@ SwarmAI follows a three-column layout with embedded cognitive context:
 |------|------|
 | **Left — SwarmWS Explorer** | Persistent workspace memory, knowledge, and project context |
 | **Center — Chat Threads** | Command and execution surface with multi-tab support |
-| **Above Input — TSCC** | Live thread-scoped cognitive context (what AI is doing now) |
 | **Right — Swarm Radar** | Unified attention and action control panel |
 
 ![SwarmAI Chat Interface](./assets/swarmai-chat-mockup.png)
