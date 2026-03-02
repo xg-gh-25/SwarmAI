@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import clsx from 'clsx';
-import type { FileAttachment, WorkspaceConfig, Skill, MCPServer, Plugin } from '../../../types';
+import type { FileAttachment, Skill, MCPServer, Plugin } from '../../../types';
 import { FileAttachmentButton, FileAttachmentPreview, AttachedFileChips } from '../../../components/chat';
 import { ReadOnlyChips } from '../../../components/common';
 import { SLASH_COMMANDS } from '../constants';
@@ -14,7 +14,6 @@ interface ChatInputProps {
   onStop: () => void;
   isStreaming: boolean;
   selectedAgentId: string | null;
-  selectedWorkspace: WorkspaceConfig | null;
   attachments: FileAttachment[];
   onAddFiles: (files: File[]) => void;
   onRemoveFile: (id: string) => void;
@@ -35,7 +34,7 @@ interface ChatInputProps {
 }
 
 /**
- * Chat Input Component with file attachments, workspace selector, and slash commands
+ * Chat Input Component with file attachments and slash commands
  */
 export function ChatInput({
   inputValue,
@@ -44,7 +43,6 @@ export function ChatInput({
   onStop,
   isStreaming,
   selectedAgentId,
-  selectedWorkspace,
   attachments,
   onAddFiles,
   onRemoveFile,
@@ -212,19 +210,6 @@ export function ChatInput({
           {/* Attached Context Files (from Workspace Explorer) */}
           {attachedContextFiles && attachedContextFiles.length > 0 && onRemoveContextFile && (
             <AttachedFileChips files={attachedContextFiles} onRemoveFile={onRemoveContextFile} />
-          )}
-
-          {/* Workspace Indicator */}
-          {selectedWorkspace && (
-            <div className="mb-3 px-3 py-2 bg-primary/10 border border-primary/30 rounded-lg flex items-center justify-between">
-              <div className="flex items-center gap-2 text-sm">
-                <span className="text-lg">{selectedWorkspace.icon || '📁'}</span>
-                <span className="text-primary font-medium">{selectedWorkspace.name}</span>
-                <span className="text-[var(--color-text-muted)] truncate max-w-[300px]">
-                  {selectedWorkspace.filePath}
-                </span>
-              </div>
-            </div>
           )}
 
           {/* Input Row */}

@@ -24,7 +24,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { LayoutProvider, useLayout } from '../contexts/LayoutContext';
 import { ChatInput } from './chat/components/ChatInput';
 import type { FileTreeItem } from '../components/workspace-explorer/FileTreeNode';
-import type { FileAttachment, SwarmWorkspace, Skill, MCPServer, Plugin } from '../types';
+import type { FileAttachment, Skill, MCPServer, Plugin } from '../types';
 
 // ============== Mocks ==============
 
@@ -80,7 +80,6 @@ function createDefaultChatInputProps(overrides: Partial<Parameters<typeof ChatIn
     onStop: vi.fn(),
     isStreaming: false,
     selectedAgentId: 'agent-1',
-    selectedWorkspace: null as SwarmWorkspace | null,
     attachments: [] as FileAttachment[],
     onAddFiles: vi.fn(),
     onRemoveFile: vi.fn(),

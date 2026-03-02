@@ -45,7 +45,6 @@ import { TSCCSnapshotCard } from './chat/components/TSCCSnapshotCard';
 import { listSnapshots } from '../services/tscc';
 import { groupSessionsByTime } from './chat/utils';
 import { createWelcomeMessage, RIGHT_SIDEBAR_WIDTH_CONFIGS } from './chat/constants';
-import { useWorkspaceSelection } from '../hooks/useWorkspaceSelection';
 import { useLayout } from '../contexts/LayoutContext';
 
 /**
@@ -86,8 +85,6 @@ export default function ChatPage() {
     defaultActive: 'todoRadar',
     widthConfigs: RIGHT_SIDEBAR_WIDTH_CONFIGS,
   });
-
-  const { selectedWorkspace, workDir } = useWorkspaceSelection();
 
   // Get attached files from LayoutContext for ChatInput
   const { attachedFiles, removeAttachedFile } = useLayout();
@@ -134,7 +131,7 @@ export default function ChatPage() {
 
   // Derived state
   const groupedSessions = useMemo(() => groupSessionsByTime(sessions), [sessions]);
-  const effectiveBasePath = workDir || agentWorkDir?.path;
+  const effectiveBasePath = agentWorkDir?.path;
   const selectedAgent = agents.find((a) => a.id === selectedAgentId);
 
   // Tab state management — unified hook (single source of truth)
@@ -910,7 +907,6 @@ export default function ChatPage() {
         sessionId: sessionIdRef.current,
         enableSkills,
         enableMCP,
-        workspaceContext: selectedWorkspace?.context,
       },
       wrappedCreateStreamHandler(assistantMessageId),
       createErrorHandler(assistantMessageId, activeTabIdRef.current ?? undefined),
@@ -924,7 +920,7 @@ export default function ChatPage() {
         abortController: { abort: () => { abort(); }, signal: { aborted: false } } as unknown as AbortController,
       });
     }
-  }, [selectedAgentId, enableSkills, enableMCP, selectedWorkspace, handlePluginCommand, buildContentArray, clearAttachments, resetUserScroll, incrementStreamGen, setIsStreaming, setMessages, setInputValue, updateTabStatus, updateTabTitle, setTabIsNew, initTabState, wrappedCreateStreamHandler, createErrorHandler, createCompleteHandler, activeTabIdRef, tabMapRef, pendingStreamTabs, queryClient, t]);
+  }, [selectedAgentId, enableSkills, enableMCP, handlePluginCommand, buildContentArray, clearAttachments, resetUserScroll, incrementStreamGen, setIsStreaming, setMessages, setInputValue, updateTabStatus, updateTabTitle, setTabIsNew, initTabState, wrappedCreateStreamHandler, createErrorHandler, createCompleteHandler, activeTabIdRef, tabMapRef, pendingStreamTabs, queryClient, t]);
 
   // Handle answering AskUserQuestion
   const handleAnswerQuestion = (toolUseId: string, answers: Record<string, string>) => {
@@ -1171,7 +1167,6 @@ export default function ChatPage() {
                 onStop={handleStop}
                 isStreaming={isStreaming}
                 selectedAgentId={selectedAgentId}
-                selectedWorkspace={selectedWorkspace}
                 attachments={attachments}
                 onAddFiles={addFiles}
                 onRemoveFile={removeFile}

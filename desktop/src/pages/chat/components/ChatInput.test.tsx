@@ -13,7 +13,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, fireEvent, cleanup } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ChatInput } from './ChatInput';
-import type { FileAttachment, WorkspaceConfig, Skill, MCPServer, Plugin } from '../../../types';
+import type { FileAttachment, Skill, MCPServer, Plugin } from '../../../types';
 import type { FileTreeItem } from '../../../components/workspace-explorer/FileTreeNode';
 
 // Mock react-i18next
@@ -64,7 +64,6 @@ function createDefaultChatInputProps(overrides: Partial<Parameters<typeof ChatIn
     onStop: vi.fn(),
     isStreaming: false,
     selectedAgentId: 'agent-1',
-    selectedWorkspace: null as WorkspaceConfig | null,
     attachments: [] as FileAttachment[],
     onAddFiles: vi.fn(),
     onRemoveFile: vi.fn(),
