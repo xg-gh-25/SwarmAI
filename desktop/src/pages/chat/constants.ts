@@ -1,10 +1,19 @@
+/**
+ * Chat page constants and message factory utilities.
+ *
+ * - ``USER_MESSAGE_MAX_LINES``        — Line clamp threshold for user message truncation
+ * - ``DEFAULT_SIDEBAR_WIDTH`` etc.    — Sidebar dimension constraints
+ * - ``SLASH_COMMANDS``                — Available slash command definitions
+ * - ``createWelcomeMessage``          — Factory for the default welcome assistant message
+ * - ``createWorkspaceChangeMessage``  — Factory for workspace-change notification messages
+ */
 import type { Message } from '../../types';
 
 // Time constants
 export const MS_PER_DAY = 86400000;
 
 // UI constants
-export const TOOL_INPUT_COLLAPSE_LENGTH = 200;
+export const USER_MESSAGE_MAX_LINES = 5;
 export const DEFAULT_SIDEBAR_WIDTH = 256;
 export const DEFAULT_RIGHT_SIDEBAR_WIDTH = 320;
 export const MIN_SIDEBAR_WIDTH = 200;
@@ -80,7 +89,7 @@ export const createWelcomeMessage = (customText?: string): Message => ({
   content: [
     {
       type: 'text',
-      text: customText ?? `# Welcome to SwarmAI! 🤖
+      text: customText ?? `# Welcome to SwarmAI! 🐝
 
 **Your AI Team, 24/7 — Work smarter, move faster, and enjoy the journey.**
 `,
@@ -99,7 +108,7 @@ export const createWorkspaceChangeMessage = (workspaceName?: string, workspacePa
 
 ---
 
-# Welcome to SwarmAI! 🤖
+# Welcome to SwarmAI! 🐝
 
 **Your AI Team, 24/7 — Work smarter, move faster, and enjoy the journey.**`);
 };
