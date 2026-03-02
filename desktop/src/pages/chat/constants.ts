@@ -3,10 +3,6 @@ import type { Message } from '../../types';
 // Time constants
 export const MS_PER_DAY = 86400000;
 
-// Tab persistence localStorage keys
-export const OPEN_TABS_STORAGE_KEY = 'swarmAI_openTabs';
-export const ACTIVE_TAB_STORAGE_KEY = 'swarmAI_activeTabId';
-
 // UI constants
 export const TOOL_INPUT_COLLAPSE_LENGTH = 200;
 export const DEFAULT_SIDEBAR_WIDTH = 256;

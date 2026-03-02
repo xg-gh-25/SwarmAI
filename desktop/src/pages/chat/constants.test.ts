@@ -17,8 +17,6 @@ import {
   MS_PER_DAY,
   SLASH_COMMANDS,
   TIME_GROUP_LABEL_KEYS,
-  OPEN_TABS_STORAGE_KEY,
-  ACTIVE_TAB_STORAGE_KEY,
 } from './constants';
 
 // ============== Property-Based Tests ==============
@@ -296,15 +294,5 @@ describe('Chat Constants - Property-Based Tests', () => {
       );
     });
 
-    it('should have correct tab persistence localStorage keys', () => {
-      fc.assert(
-        fc.property(fc.constant(null), () => {
-          // Property: Tab persistence keys SHALL have correct values
-          expect(OPEN_TABS_STORAGE_KEY).toBe('swarmAI_openTabs');
-          expect(ACTIVE_TAB_STORAGE_KEY).toBe('swarmAI_activeTabId');
-        }),
-        { numRuns: 1 }
-      );
-    });
   });
 });

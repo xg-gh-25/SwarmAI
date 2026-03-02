@@ -15,12 +15,16 @@ Public symbols:
 - ``set_config_manager``    — Replaces the module-level instance (for testing / DI).
 - ``_probe_aws_credentials`` — Check if AWS credentials are available via the credential chain.
 - ``_probe_anthropic_api_key`` — Check if ``ANTHROPIC_API_KEY`` env var is set.
+- ``get_open_tabs``         — GET handler returning open tab state from ``~/.swarm-ai/open_tabs.json``.
+- ``save_open_tabs``        — PUT handler writing open tab state to ``~/.swarm-ai/open_tabs.json``.
 """
 
+import json
 import logging
 import os
 from fastapi import APIRouter, HTTPException
 
+from config import get_app_data_dir
 from schemas.settings import AppConfigRequest, AppConfigResponse
 from core.app_config_manager import AppConfigManager, DEFAULT_CONFIG
 
@@ -202,3 +206,62 @@ async def update_app_configuration(request: AppConfigRequest):
     )
 
     return _build_response(cfg)
+
+
+# ---------------------------------------------------------------------------
+# Open Tabs persistence (filesystem-first: ~/.swarm-ai/open_tabs.json)
+# ---------------------------------------------------------------------------
+
+_OPEN_TABS_FILE = "open_tabs.json"
+
+
+def _get_open_tabs_path():
+    """Return the path to ``~/.swarm-ai/open_tabs.json``."""
+    return get_app_data_dir() / _OPEN_TABS_FILE
+
+
+@router.get("/open-tabs")
+async def get_open_tabs():
+    """Read persisted open-tab state from the filesystem.
+
+    Returns the contents of ``~/.swarm-ai/open_tabs.json`` as-is.
+    If the file does not exist or is unreadable, returns ``null``
+    so the frontend can fall back to a fresh default tab.
+    """
+    path = _get_open_tabs_path()
+    try:
+        if not path.exists():
+            return None
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data
+    except Exception as exc:
+        logger.warning("Failed to read open_tabs.json: %s", exc)
+        return None
+
+
+@router.put("/open-tabs")
+async def save_open_tabs(request: dict):
+    """Write open-tab state to the filesystem.
+
+    Accepts a JSON object with ``tabs`` (array of serializable tab
+    objects) and ``activeTabId`` (string or null).  Writes to
+    ``~/.swarm-ai/open_tabs.json``.
+    """
+    # Basic shape validation
+    if "tabs" not in request or not isinstance(request.get("tabs"), list):
+        raise HTTPException(status_code=422, detail="'tabs' array is required")
+
+    path = _get_open_tabs_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(request, indent=2),
+            encoding="utf-8",
+        )
+        return {"status": "ok"}
+    except Exception as exc:
+        logger.error("Failed to write open_tabs.json: %s", exc)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to persist open tabs: {exc}",
+        )

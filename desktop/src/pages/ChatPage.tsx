@@ -23,7 +23,7 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useSearchParams, useNavigate } from 'react-router-dom';
+import { useSearchParams } from 'react-router-dom';
 import type { Message, ContentBlock, StreamEvent, PermissionRequest, Agent, AgentCreateRequest, ChatSession, TSCCSnapshot } from '../types';
 import { chatService } from '../services/chat';
 import { agentsService } from '../services/agents';
@@ -31,8 +31,8 @@ import { skillsService } from '../services/skills';
 import { mcpService } from '../services/mcp';
 import { pluginsService } from '../services/plugins';
 import { workspaceService } from '../services/workspace';
-import { tasksService, PolicyViolationError } from '../services/tasks';
-import { Spinner, ConfirmDialog, AgentFormModal, PolicyViolationToast, Toast } from '../components/common';
+import { tasksService } from '../services/tasks';
+import { Spinner, ConfirmDialog, AgentFormModal, Toast } from '../components/common';
 import { PermissionRequestModal } from '../components/chat';
 import { FilePreviewModal } from '../components/workspace/FilePreviewModal';
 import { useFileAttachment, useRightSidebarGroup } from '../hooks';
@@ -59,7 +59,6 @@ export { MAX_OPEN_TABS } from '../hooks/useUnifiedTabState';
 export default function ChatPage() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
-  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
 
   // Core chat state — streaming lifecycle delegated to extracted hook
@@ -68,12 +67,6 @@ export default function ChatPage() {
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const [agentLoadError, setAgentLoadError] = useState<string | null>(null);
-
-  // Background task mode
-  const [runAsTask, setRunAsTask] = useState(() => searchParams.get('taskMode') === 'true');
-
-  // Policy violation toast state
-  const [policyViolation, setPolicyViolation] = useState<{ message: string; violations: Array<{ entityType: string; entityId: string; message: string; suggestedAction: string }> } | null>(null);
 
   // Pending states (permission is ChatPage-only; question is in the hook)
   const [pendingPermission, setPendingPermission] = useState<PermissionRequest | null>(null);
@@ -164,6 +157,7 @@ export default function ChatPage() {
     restoreTab,
     initTabState,
     cleanupTabState,
+    restoreFromFile,
   } = useUnifiedTabState(selectedAgentId || 'default');
 
   // Streaming lifecycle hook — owns messages, sessionId, pendingQuestion,
@@ -229,8 +223,6 @@ export default function ChatPage() {
   inputValueRef.current = inputValue;
   const attachmentsRef = useRef(attachments);
   attachmentsRef.current = attachments;
-  const runAsTaskRef = useRef(runAsTask);
-  runAsTaskRef.current = runAsTask;
   const messagesRef = useRef(messages);
   messagesRef.current = messages;
   const openTabsRef = useRef(openTabs);
@@ -512,6 +504,39 @@ export default function ChatPage() {
     }
   }, [activeTabId]); // eslint-disable-line react-hooks/exhaustive-deps — mount-only for initial tab
 
+  /**
+   * File-based tab restore: load tab state from ~/.swarm-ai/open_tabs.json
+   * via the backend API. Replaces the old localStorage/DB fallback approach.
+   *
+   * On success, the exact tabs the user had open are restored with their
+   * sessionIds. The sync-active-tab effect then loads messages from the DB.
+   *
+   * On failure (file missing = fresh install), keeps the default tab.
+   */
+  useEffect(() => {
+    let mounted = true;
+
+    const doRestore = async () => {
+      setIsLoadingHistory(true);
+      try {
+        const restored = await restoreFromFile();
+        if (!mounted) return;
+        if (restored) {
+          console.log('[ChatPage] Tabs restored from open_tabs.json');
+        } else {
+          console.log('[ChatPage] No saved tabs found, using default tab');
+        }
+      } catch (err) {
+        console.warn('[ChatPage] File tab restore failed:', err);
+      } finally {
+        if (mounted) setIsLoadingHistory(false);
+      }
+    };
+
+    doRestore();
+    return () => { mounted = false; };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps — mount-only
+
   // Initialize with default agent - always use the default SwarmAgent
   useEffect(() => {
     // Skip if already have a valid agent
@@ -538,12 +563,6 @@ export default function ChatPage() {
       setAgentLoadError(t('chat.defaultAgentError', 'Failed to load the default agent. Please restart the application or check the backend service.'));
     });
   }, [agents, selectedAgentId, messages.length, t]);
-
-  // Sync taskMode URL parameter
-  useEffect(() => {
-    const taskMode = searchParams.get('taskMode') === 'true';
-    setRunAsTask(taskMode);
-  }, [searchParams]);
 
   // Clear agentId URL parameter
   useEffect(() => {
@@ -821,35 +840,6 @@ export default function ChatPage() {
     const content = await buildContentArray(messageText, currentAttachments);
     if (content.length === 0) return;
 
-    if (runAsTaskRef.current) {
-      try {
-        await tasksService.create({
-          agentId: selectedAgentId,
-          message: hasAttachments ? undefined : messageText,
-          content: hasAttachments ? content : undefined,
-          enableSkills,
-          enableMcp: enableMCP,
-        });
-        setInputValue('');
-        clearAttachments();
-        setRunAsTask(false);
-        queryClient.invalidateQueries({ queryKey: ['tasks'] });
-        queryClient.invalidateQueries({ queryKey: ['runningTaskCount'] });
-        navigate('/tasks');
-      } catch (error) {
-        if (error instanceof PolicyViolationError) {
-          setPolicyViolation({
-            message: error.message,
-            violations: error.violations,
-          });
-        } else {
-          console.error('Failed to create task:', error);
-          alert(t('chat.taskCreateFailed'));
-        }
-      }
-      return;
-    }
-
     const displayText = hasText ? messageText : '[Attachments]';
     const userMessageContent: ContentBlock[] = [{ type: 'text', text: displayText }];
     if (hasAttachments && hasText) {
@@ -911,7 +901,7 @@ export default function ChatPage() {
         abortController: { abort: () => { abort(); }, signal: { aborted: false } } as unknown as AbortController,
       });
     }
-  }, [selectedAgentId, enableSkills, enableMCP, selectedWorkspace, handlePluginCommand, buildContentArray, clearAttachments, resetUserScroll, incrementStreamGen, setIsStreaming, setMessages, setInputValue, updateTabStatus, updateTabTitle, setTabIsNew, initTabState, wrappedCreateStreamHandler, createErrorHandler, createCompleteHandler, activeTabIdRef, tabMapRef, pendingStreamTabs, queryClient, navigate, t, setPolicyViolation, setRunAsTask]);
+  }, [selectedAgentId, enableSkills, enableMCP, selectedWorkspace, handlePluginCommand, buildContentArray, clearAttachments, resetUserScroll, incrementStreamGen, setIsStreaming, setMessages, setInputValue, updateTabStatus, updateTabTitle, setTabIsNew, initTabState, wrappedCreateStreamHandler, createErrorHandler, createCompleteHandler, activeTabIdRef, tabMapRef, pendingStreamTabs, queryClient, t]);
 
   // Handle answering AskUserQuestion
   const handleAnswerQuestion = (toolUseId: string, answers: Record<string, string>) => {
@@ -1157,8 +1147,6 @@ export default function ChatPage() {
                 onSend={handleSendMessage}
                 onStop={handleStop}
                 isStreaming={isStreaming}
-                runAsTask={runAsTask}
-                onToggleRunAsTask={() => setRunAsTask(!runAsTask)}
                 selectedAgentId={selectedAgentId}
                 selectedWorkspace={selectedWorkspace}
                 attachments={attachments}
@@ -1226,23 +1214,6 @@ export default function ChatPage() {
       <FilePreviewModal isOpen={!!previewFile} onClose={() => setPreviewFile(null)} agentId={selectedAgentId || ''} file={previewFile} basePath={effectiveBasePath} />
       {pendingPermission && <PermissionRequestModal request={pendingPermission} onDecision={handlePermissionDecision} isLoading={isPermissionLoading} />}
       <AgentFormModal isOpen={isEditAgentOpen} onClose={() => setIsEditAgentOpen(false)} onSave={handleSaveAgent} agent={selectedAgent} />
-
-      {/* Policy Violation Toast - Req 34.4, 34.5 */}
-      {policyViolation && (
-        <PolicyViolationToast
-          message={policyViolation.message}
-          violations={policyViolation.violations}
-          onResolve={() => {
-            const wsId = selectedWorkspace?.id;
-            if (wsId) {
-              navigate(`/workspaces/${wsId}/settings`);
-            } else {
-              navigate('/settings');
-            }
-          }}
-          onDismiss={() => setPolicyViolation(null)}
-        />
-      )}
 
       {/* Tab Limit Toast - Fix 7 (Req 2.16) */}
       {tabLimitToast && (

@@ -9,7 +9,7 @@
  * Key exports:
  * - `TabStatus`                 — Tab lifecycle status union type
  * - `UnifiedTab`                — Combined metadata + runtime state for a single tab
- * - `SerializableTab`           — Fields persisted to localStorage
+ * - `SerializableTab`           — Fields persisted to open_tabs.json
  * - `UseUnifiedTabStateReturn`  — Hook return interface
  * - `useUnifiedTabState`        — The hook itself
  */
@@ -18,9 +18,10 @@ import { useState, useRef, useMemo, useCallback, useEffect } from 'react';
 import type { Message } from '../types/index';
 import type { PendingQuestion, OpenTab } from '../pages/chat/types';
 import {
-  OPEN_TABS_STORAGE_KEY,
-  ACTIVE_TAB_STORAGE_KEY,
-} from '../pages/chat/constants';
+  tabPersistenceService,
+  type OpenTabsFileData,
+  type PersistedTab,
+} from '../services/tabPersistence';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -44,7 +45,7 @@ export type TabStatus =
 
 /** Combined metadata + runtime state for a single tab. */
 export interface UnifiedTab {
-  // --- Metadata (persisted to localStorage) ---
+  // --- Metadata (persisted to open_tabs.json) ---
   id: string;
   title: string;
   agentId: string;
@@ -60,11 +61,8 @@ export interface UnifiedTab {
   status: TabStatus;
 }
 
-/** Fields persisted to localStorage. */
-export type SerializableTab = Pick<
-  UnifiedTab,
-  'id' | 'title' | 'agentId' | 'isNew' | 'sessionId'
->;
+/** Fields persisted to ~/.swarm-ai/open_tabs.json (re-exported from tabPersistence service). */
+export type SerializableTab = PersistedTab;
 
 /** Hook return interface. */
 export interface UseUnifiedTabStateReturn {
@@ -102,6 +100,10 @@ export interface UseUnifiedTabStateReturn {
   // --- Cleanup ---
   removeInvalidTabs: (validSessionIds: Set<string>) => void;
 
+  // --- File-based tab restore ---
+  /** Loads tab state from ~/.swarm-ai/open_tabs.json. Returns true if tabs were restored. */
+  restoreFromFile: () => Promise<boolean>;
+
   // --- Direct ref access (for synchronous reads in stream handlers) ---
   tabMapRef: React.RefObject<Map<string, UnifiedTab>>;
   activeTabIdRef: React.RefObject<string | null>;
@@ -129,7 +131,7 @@ function createDefaultTab(agentId: string): UnifiedTab {
 }
 
 /** Extracts the serializable subset from a UnifiedTab. */
-function toSerializable(tab: UnifiedTab): SerializableTab {
+function toSerializable(tab: UnifiedTab): PersistedTab {
   return {
     id: tab.id,
     title: tab.title,
@@ -139,8 +141,8 @@ function toSerializable(tab: UnifiedTab): SerializableTab {
   };
 }
 
-/** Hydrates a SerializableTab into a full UnifiedTab with default runtime state. */
-function hydrateTab(s: SerializableTab): UnifiedTab {
+/** Hydrates a PersistedTab into a full UnifiedTab with default runtime state. */
+function hydrateTab(s: PersistedTab): UnifiedTab {
   return {
     ...s,
     messages: [],
@@ -150,28 +152,6 @@ function hydrateTab(s: SerializableTab): UnifiedTab {
     streamGen: 0,
     status: 'idle',
   };
-}
-
-/** Safely reads and parses tabs from localStorage. Returns null on failure. */
-function loadTabsFromStorage(): SerializableTab[] | null {
-  try {
-    const raw = localStorage.getItem(OPEN_TABS_STORAGE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed) || parsed.length === 0) return null;
-    return parsed as SerializableTab[];
-  } catch {
-    return null;
-  }
-}
-
-/** Safely reads activeTabId from localStorage. */
-function loadActiveTabIdFromStorage(): string | null {
-  try {
-    return localStorage.getItem(ACTIVE_TAB_STORAGE_KEY);
-  } catch {
-    return null;
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -198,32 +178,23 @@ export function useUnifiedTabState(
     setActiveTabId(id);
   }, []);
 
-  // ---- localStorage initialization (runs once via useRef guard) -----------
+  // ---- Initialization (always starts with a default tab) ------------------
+  // The actual tab state is loaded asynchronously from open_tabs.json via
+  // restoreFromFile(), called by ChatPage on mount after the backend is ready.
   const initialized = useRef(false);
+  // fileRestoreDone serves two purposes:
+  // 1. Gates restoreFromFile() to run only once (idempotency guard)
+  // 2. Gates the save effect — prevents overwriting open_tabs.json with
+  //    the temporary default tab before the real tabs are restored
+  const fileRestoreDone = useRef(false);
   if (!initialized.current) {
     initialized.current = true;
     const map = tabMapRef.current;
-
-    const savedTabs = loadTabsFromStorage();
-    if (savedTabs && savedTabs.length > 0) {
-      for (const s of savedTabs) {
-        map.set(s.id, hydrateTab(s));
-      }
-    } else {
-      const defaultTab = createDefaultTab(defaultAgentId);
-      map.set(defaultTab.id, defaultTab);
-    }
-
-    // Restore activeTabId — validate it exists in the map
-    const savedActiveId = loadActiveTabIdFromStorage();
-    const firstTabId = map.keys().next().value as string;
-    if (savedActiveId && map.has(savedActiveId)) {
-      activeTabIdRef.current = savedActiveId;
-    } else {
-      activeTabIdRef.current = firstTabId;
-    }
-    // Sync useState (will be picked up on first render)
-    setActiveTabId(activeTabIdRef.current);
+    const defaultTab = createDefaultTab(defaultAgentId);
+    map.set(defaultTab.id, defaultTab);
+    activeTabIdRef.current = defaultTab.id;
+    setActiveTabId(defaultTab.id);
+    console.log('[useUnifiedTabState] Init with default tab, awaiting file restore');
   }
 
   // ---- Derived views via useMemo (keyed on renderCounter) -----------------
@@ -459,6 +430,57 @@ export function useUnifiedTabState(
     [bump],
   );
 
+  // ---- File-based tab restore -----------------------------------------------
+
+  /**
+   * Loads tab state from ``~/.swarm-ai/open_tabs.json`` via the backend API.
+   * Called once by ChatPage after the backend is ready.
+   *
+   * If the file exists and contains valid tabs, replaces the default tab
+   * with the persisted tabs. If the file is missing or empty, keeps the
+   * default tab (fresh start).
+   */
+  const restoreFromFile = useCallback(
+    async (): Promise<boolean> => {
+      if (fileRestoreDone.current) return false;
+      fileRestoreDone.current = true;
+
+      const data = await tabPersistenceService.load();
+      if (!data || !data.tabs || data.tabs.length === 0) {
+        console.log('[useUnifiedTabState] No open_tabs.json found, keeping default tab');
+        return false;
+      }
+
+      const map = tabMapRef.current;
+
+      // Race condition guard: if user already started a conversation
+      const tabs = [...map.values()];
+      if (tabs.length === 1 && tabs[0].sessionId !== undefined) {
+        console.log('[useUnifiedTabState] File restore skipped: user already started a conversation');
+        return false;
+      }
+
+      // Clear default tab and hydrate from file
+      map.clear();
+      for (const saved of data.tabs.slice(0, MAX_OPEN_TABS)) {
+        map.set(saved.id, hydrateTab(saved));
+      }
+
+      // Restore activeTabId — validate it exists in the map
+      const firstTabId = map.keys().next().value as string;
+      if (data.activeTabId && map.has(data.activeTabId)) {
+        setActiveTabIdBoth(data.activeTabId);
+      } else {
+        setActiveTabIdBoth(firstTabId);
+      }
+
+      bump();
+      console.log(`[useUnifiedTabState] Restored ${data.tabs.length} tabs from open_tabs.json`);
+      return true;
+    },
+    [bump, setActiveTabIdBoth],
+  );
+
   // ---- Cleanup ------------------------------------------------------------
 
   const removeInvalidTabs = useCallback(
@@ -480,36 +502,35 @@ export function useUnifiedTabState(
     [bump],
   );
 
-  // ---- localStorage persistence effect ------------------------------------
-  // Persists only the serializable subset on metadata-changing mutations.
-  // Runtime state mutations (updateTabState, updateTabStatus) also bump the
-  // counter, but the serializable subset is unchanged so the write is
-  // effectively idempotent and cheap (JSON.stringify of small array).
+  // ---- Filesystem persistence effect (debounced) ---------------------------
+  // Persists the serializable tab subset to ~/.swarm-ai/open_tabs.json
+  // via the backend API. Debounced to avoid excessive writes during rapid
+  // tab operations (streaming bumps the counter frequently).
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    const map = tabMapRef.current;
-    const serialized: SerializableTab[] = [];
-    for (const tab of map.values()) {
-      serialized.push(toSerializable(tab));
-    }
-    try {
-      localStorage.setItem(
-        OPEN_TABS_STORAGE_KEY,
-        JSON.stringify(serialized),
-      );
-    } catch {
-      // Quota exceeded or other error — continue with in-memory state
-    }
-    try {
-      if (activeTabIdRef.current) {
-        localStorage.setItem(
-          ACTIVE_TAB_STORAGE_KEY,
-          activeTabIdRef.current,
-        );
+    // Skip saving until file restore is complete (avoid overwriting
+    // the persisted state with the temporary default tab)
+    if (!fileRestoreDone.current) return;
+
+    // Debounce: wait 500ms after last change before writing
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => {
+      const map = tabMapRef.current;
+      const tabs: PersistedTab[] = [];
+      for (const tab of map.values()) {
+        tabs.push(toSerializable(tab));
       }
-    } catch {
-      // Quota exceeded or other error — continue with in-memory state
-    }
+      const data: OpenTabsFileData = {
+        tabs,
+        activeTabId: activeTabIdRef.current,
+      };
+      tabPersistenceService.save(data);
+    }, 500);
+
+    return () => {
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [renderCounter, activeTabId]);
 
@@ -545,6 +566,9 @@ export function useUnifiedTabState(
 
     // Cleanup
     removeInvalidTabs,
+
+    // File-based tab restore
+    restoreFromFile,
 
     // Direct ref access
     tabMapRef,
