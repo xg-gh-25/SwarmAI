@@ -1,156 +1,99 @@
 # AGENT.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for AI coding agents working with the SwarmAI codebase.
 
 ## Project Overview
 
-This is an AI Agent Platform that enables users to create, manage, and chat with customizable AI agents powered by **Claude Agent SDK**. It is a desktop application built with Tauri 2.0 + React + Python FastAPI, using SQLite for storage and local filesystem + Git for skill management.
+SwarmAI is a persistent agentic operating system for knowledge work — a desktop application (Tauri 2.0 + React 19 + Python FastAPI sidecar) where supervised AI agents plan, execute, and follow through on real work inside a persistent workspace.
 
-The **desktop version** (`desktop/` directory) is the primary development target and supports **Windows, macOS, and Linux**.
+- **Frontend**: React 19 + TypeScript 5.x + Tailwind CSS 4.x
+- **Backend**: FastAPI + Claude Agent SDK + SQLite
+- **Desktop**: Tauri 2.0 (Rust sidecar management)
+- **AI Providers**: AWS Bedrock (default) or Anthropic API
+- **Data**: `~/.swarm-ai/` (config.json, data.db, open_tabs.json, workspaces, skills, logs)
 
 ## Development Commands
 
-### Desktop Development (Primary)
-
-**Prerequisites:**
-- Node.js 18+
-- Python 3.11+
-- Rust (install from https://rustup.rs/)
-- uv (Python package manager): `curl -LsSf https://astral.sh/uv/install.sh | sh`
-
 ```bash
-cd desktop
+# Desktop dev (frontend + Tauri shell)
+cd desktop && npm run tauri:dev
 
-# Install dependencies
-npm install
+# Backend dev (standalone, port 8000)
+cd backend && uv sync && source .venv/bin/activate && python main.py
 
-# Configure environment (required: set ANTHROPIC_API_KEY)
-cp backend.env.example ../backend/.env
-# Edit ../backend/.env and add your API key
+# Frontend tests
+cd desktop && npm test -- --run
 
-# Development mode (hot reload)
-npm run tauri:dev
+# Backend tests
+cd backend && pytest
 
-# Debug mode (Front-end and backend)
-Terminal 1: cd desktop && npm run tauri:dev (frontend)
-Terminal 2: cd backend && source .venv/bin/activate && python main.py (backend)
-
-# Build production
-npm run build:all      # Full build: backend + frontend + Tauri
-
-npm run build:backend  # Only Python backend (PyInstaller)
-
-npm run tauri:build    # Only Tauri app (requires backend built first)
-
-# Testing
-npm run test           # Watch mode
-npm run test:run       # Single run
-npm run test -- src/components/Button.test.tsx  # Run specific test file
-npm run lint
+# Full production build
+cd desktop && npm run build:all
 ```
 
-### Backend Development
+## Architecture
 
-```bash
-cd backend
-
-# Setup (using uv - recommended)
-uv sync                          # Creates venv and installs deps from pyproject.toml
-source .venv/bin/activate
-
-# Run development server
-python main.py
-# or: uvicorn main:app --reload --port 8000
-
-# Testing
-pytest                                    # Run all tests
-pytest tests/test_agent_manager.py -v     # Run specific test file
-pytest tests/test_agent_manager.py::test_function_name -v  # Run single test
+### Data Flow
+```
+User Input → React Frontend → FastAPI Backend → AgentManager → ClaudeSDKClient → SSE Streaming → UI
 ```
 
-### Development Ports
-
-| Service | Port | Notes |
-|---------|------|-------|
-| Vite (desktop dev) | 1420 | HMR on 1421 |
-| Python backend | 8000 | Dynamic in production |
-| Vite (web dev) | 5173 | If running web version |
-
-## Architecture Overview
-
-### High-Level Data Flow
-
-```
-User Input → React Frontend → FastAPI Backend → AgentManager
-                                                     ↓
-                                            ClaudeSDKClient
-                                                     ↓
-                                            Claude Code CLI
-                                                     ↓
-                                            SSE Streaming → UI
-```
-
-### Desktop-Specific Architecture
-
+### Desktop Architecture
 ```
 Tauri App
 ├── React Frontend (Vite bundle)
-├── Rust Core (lib.rs)
-│   ├── Sidecar lifecycle management
-│   ├── Dynamic port assignment
-│   └── IPC bridge (Tauri commands)
+├── Rust Core (lib.rs) — sidecar lifecycle, dynamic port, IPC bridge
 └── Python Backend (PyInstaller sidecar)
-    ├── FastAPI server
-    ├── SQLite database
-    └── ClaudeSDKClient
+    ├── FastAPI server (main.py)
+    ├── SQLite database (pre-seeded for fast startup)
+    └── ClaudeSDKClient (agent_manager.py)
 ```
 
-**Key Desktop Concepts:**
+### Key Concepts
 - Python backend runs as a **sidecar process** managed by Tauri
 - Port is dynamically assigned via `portpicker` in Rust
-- Frontend uses `getBackendPort()` from `services/tauri.ts` to get the port
-- Data stored in: `~/.swarm-ai/` (all platforms)
+- Frontend uses `getBackendPort()` from `services/tauri.ts` to discover the port
+- Config source of truth: `~/.swarm-ai/config.json` (no DB for settings)
+- Credential delegation: AWS credential chain only — app never stores credentials
+- Pre-seeded database: `desktop/resources/seed.db` copied on first launch for fast startup
 
 ### Backend Structure
-
 ```
 backend/
-├── main.py                   # FastAPI entry point
-├── config.py                 # Settings
-├── routers/                  # API endpoints (agents, skills, mcp, chat, plugins)
+├── main.py                        # FastAPI entry (fast startup + full init paths)
+├── config.py                      # Settings from config.json
 ├── core/
-│   ├── agent_manager.py     # ClaudeSDKClient wrapper, hooks, security
-│   ├── session_manager.py   # Conversation session storage
-│   └── agent_sandbox_manager.py # Per-agent isolated workspaces
+│   ├── agent_manager.py           # ClaudeSDKClient wrapper, session ID mapping, hooks
+│   ├── session_manager.py         # Conversation session storage
+│   ├── initialization_manager.py  # Startup orchestration
+│   ├── swarm_workspace_manager.py # SwarmWS filesystem management
+│   └── agent_sandbox_manager.py   # Per-agent isolated workspaces
+├── routers/                       # API endpoints (agents, chat, skills, mcp, settings, etc.)
 ├── database/
-│   └── sqlite.py            # SQLite implementation
-└── schemas/                  # Pydantic models
+│   └── sqlite.py                  # SQLite with migrations
+└── schemas/                       # Pydantic models
 ```
 
-### Frontend Structure (Desktop)
-
+### Frontend Structure
 ```
-desktop/
-├── src/
-│   ├── services/
-│   │   ├── api.ts           # Axios client with dynamic port
-│   │   ├── tauri.ts         # Tauri IPC bridge
-│   │   └── *.ts             # Service modules with toCamelCase()
-│   ├── pages/               # Route components
-│   ├── components/          # UI components
-│   └── types/               # TypeScript interfaces
-├── src-tauri/
-│   ├── src/lib.rs          # Rust: sidecar management, CLI detection
-│   ├── binaries/           # PyInstaller output goes here
-│   └── tauri.conf.json     # Tauri configuration
-└── scripts/
-    ├── build.sh            # Full build script
-    └── build-backend.sh    # PyInstaller packaging
+desktop/src/
+├── pages/
+│   ├── ChatPage.tsx               # Main chat interface (multi-tab, streaming, TSCC)
+│   ├── TasksPage.tsx              # Task management
+│   └── SettingsPage.tsx           # API & app configuration
+├── hooks/
+│   ├── useUnifiedTabState.ts      # Single source of truth for all tab state
+│   ├── useChatStreamingLifecycle.ts # SSE streaming, messages, session management
+│   ├── useTSCCState.ts            # Thread-scoped cognitive context
+│   └── useWorkspaceSelection.ts   # Workspace picker
+├── services/                      # API layer with snake_case ↔ camelCase conversion
+├── components/                    # UI components (chat, workspace, modals, common)
+└── contexts/                      # React contexts (Layout, Explorer, Theme)
 ```
 
-## API Data Naming Convention (CRITICAL)
+## API Naming Convention (CRITICAL)
 
-**Backend uses `snake_case`, Frontend uses `camelCase`.**
+Backend uses `snake_case` (Python/Pydantic). Frontend uses `camelCase` (TypeScript).
 
 Transformation functions in `desktop/src/services/*.ts` handle conversion:
 
@@ -160,196 +103,77 @@ Transformation functions in `desktop/src/services/*.ts` handle conversion:
 | Skills | `skills.ts` | `toCamelCase()` |
 | MCP | `mcp.ts` | `toCamelCase()` |
 | Chat | `chat.ts` | `toSessionCamelCase()`, `toMessageCamelCase()` |
+| Workspace | `workspace.ts` | `projectToCamelCase()`, `projectUpdateToSnakeCase()` |
 
-**When adding new fields:**
+When adding new fields: add to backend Pydantic model (snake_case), frontend TypeScript interface (camelCase), AND update the corresponding `toCamelCase()` function.
 
-1. Add to backend Pydantic model (`backend/schemas/*.py`) - `snake_case`
-2. Add to frontend TypeScript interface (`desktop/src/types/index.ts`) - `camelCase`
-3. **Update the corresponding `toCamelCase()` function** - this is commonly forgotten!
+## Tab State Architecture
 
-## Claude Agent SDK Usage
+Tab state uses a single `useUnifiedTabState` hook with `useRef<Map<string, UnifiedTab>>` + render counter pattern:
 
-```python
-from claude_agent_sdk import ClaudeSDKClient, ClaudeAgentOptions, HookMatcher
+- `tabMapRef`: Authoritative store (mutations don't re-render)
+- `renderCounter`: Bumped to trigger `useMemo` re-derivation of `openTabs`, `tabStatuses`, `activeTab`
+- `restoreFromFile()`: Loads tabs from `~/.swarm-ai/open_tabs.json` on startup
+- Debounced save effect persists tab state to file every 500ms
 
-options = ClaudeAgentOptions(
-    system_prompt="...",
-    model="claude-sonnet-4-20250514",
-    permission_mode="bypassPermissions",  # or "default", "acceptEdits", "plan"
-    cwd="/path/to/workspace",
-    setting_sources=['project', 'user'],  # For global user mode
-    allowed_tools=["Bash", "Read", "Write", "Edit", "Glob", "Grep", "Skill"],
-    mcp_servers={"server": {"type": "stdio", "command": "...", "args": [...]}},
-    hooks={"PreToolUse": [HookMatcher(matcher='Bash', hooks=[hook_fn])]}
-)
+Messages are loaded lazily from the backend API when a tab becomes active (not pre-loaded for all tabs).
 
-async with ClaudeSDKClient(options=options) as client:
-    await client.query("Hello!")
-    async for message in client.receive_response():
-        # Process streaming messages
+## Session ID Model
+
+One chat tab has exactly one stable App Session ID. The backend may create multiple Claude SDK clients (e.g. after restarts), each with its own SDK Session ID. The app layer maps all SDK session IDs back to the single app session ID for persistence and frontend communication.
+
+Key fields in `session_context`: `app_session_id` (stable, from frontend) and `sdk_session_id` (internal, from SDK init).
+
+## SSE Streaming Events
+
+```json
+{"type": "session_start", "sessionId": "..."}
+{"type": "assistant", "content": [...], "model": "..."}
+{"type": "tool_use", "content": [...]}
+{"type": "tool_result", "content": [...]}
+{"type": "ask_user_question", "toolUseId": "...", "questions": [...]}
+{"type": "cmd_permission_request", "requestId": "...", "toolName": "...", "reason": "..."}
+{"type": "result", "sessionId": "...", "durationMs": ..., "totalCostUsd": ...}
+{"type": "error", "error": "..."}
 ```
-
-**Built-in Tools:** `Bash`, `Read`, `Write`, `Edit`, `Glob`, `Grep`, `WebFetch`, `Skill`, `TodoWrite`, `NotebookEdit`
 
 ## Security Architecture
 
-Four-layer defense-in-depth model (see `SECURITY.md` for details):
+Four-layer defense-in-depth:
 
 1. **Workspace Isolation**: Per-agent directories in `<app_data_dir>/workspaces/{agent_id}/`
 2. **Skill Access Control**: PreToolUse hook validates authorized skills
 3. **File Tool Access Control**: Permission handler validates file paths
 4. **Bash Command Protection**: Regex parsing blocks absolute paths outside workspace
 
-**Agent Modes:**
-- `globalUserMode: false` (default): Restricted to agent workspace
-- `globalUserMode: true`: Full file access, uses `~/` as working directory
-- `enableHumanApproval: true`: Dangerous commands prompt user confirmation
-
 ## Environment Variables
 
 ```env
-# Required
+# Config source of truth is ~/.swarm-ai/config.json, but these env vars work too:
 ANTHROPIC_API_KEY=sk-ant-xxx
-
-# Database
-DATABASE_TYPE=sqlite
-
-# Optional
-DEFAULT_MODEL=claude-sonnet-4-5-20250929
-CLAUDE_CODE_USE_BEDROCK=false
+CLAUDE_CODE_USE_BEDROCK=true
+DEFAULT_MODEL=claude-opus-4-6
 DEBUG=true
 HOST=127.0.0.1
 PORT=8000
-RATE_LIMIT_PER_MINUTE=1000
 ```
-
-## Key Patterns
-
-### Adding a New Agent Field
-
-1. Backend schema: `backend/schemas/agent.py`
-2. Database: `backend/database/sqlite.py` (add column)
-3. Agent manager: `backend/core/agent_manager.py` (use in `_build_options()`)
-4. Frontend types: `desktop/src/types/index.ts`
-5. Frontend service: `desktop/src/services/agents.ts` (both `toSnakeCase` and `toCamelCase`)
-6. Frontend UI: `desktop/src/pages/AgentsPage.tsx`
-
-### SSE Streaming Events
-
-```json
-{"type": "assistant", "content": [...], "model": "..."}
-{"type": "tool_use", "content": [...]}
-{"type": "tool_result", "content": [...]}
-{"type": "ask_user_question", "toolUseId": "...", "questions": [...]}
-{"type": "permission_request", "requestId": "...", "toolName": "...", "reason": "..."}
-{"type": "result", "sessionId": "...", "durationMs": ..., "totalCostUsd": ...}
-{"type": "error", "error": "..."}
-```
-
-### Debugging
-- debug tauri app
-```shell
-open -n /Applications/SwarmAI.app --env SWARMAI_DEBUG=1
-```
-
-```bat
-set SWARMAI_DEBUG=1                                                                                                   
-"C:\Users\Administrator\AppData\Local\SwarmAI\swarmai.exe"
-```
-
-```bash
-# Backend logs
-tail -f logs/backend.log | grep -E "(PRE-TOOL|BLOCKED|ERROR)"
-
-# Security events
-tail -f logs/backend.log | grep "FILE ACCESS DENIED\|BASH FILE ACCESS\|BLOCKED.*Skill"
-
-# SSE stream
-# Browser DevTools → Network → Filter: stream
-```
-
-## Internationalization (i18n)
-
-The desktop app supports multiple languages using `i18next`:
-
-- **Locales**: `desktop/src/i18n/locales/{en,zh}.json`
-- **Config**: `desktop/src/i18n/index.ts`
-
-**When adding new UI text:**
-1. Add the key to both `en.json` and `zh.json`
-2. Use `useTranslation()` hook: `const { t } = useTranslation(); t('key.path')`
-3. Use nested keys: `"agents": { "create": "Create Agent" }` → `t('agents.create')`
 
 ## Design System
 
 - **Font**: Space Grotesk
 - **Icons**: Material Symbols Outlined
-- **Styling**: Tailwind CSS 4.x with CSS custom properties for theming
+- **Themes**: light, dark, system (CSS custom properties in index.css)
+- **Colors**: Always use `bg-[var(--color-*)]`, never hardcoded dark theme colors
+- **i18n**: `i18next` with locales in `desktop/src/i18n/locales/{en,zh}.json`
 
-### Theme System
+## Debugging
 
-The app supports **light**, **dark**, and **system** (follows OS preference) themes.
+```bash
+# Debug mode (macOS)
+open -n /Applications/SwarmAI.app --env SWARMAI_DEBUG=1
 
-**Key Files:**
-- `desktop/src/index.css` - CSS custom properties (`:root` for light, `:root.dark` for dark)
-- `desktop/src/contexts/ThemeContext.tsx` - React context for theme state management
-- `desktop/src/index.html` - FOUC prevention script (applies theme before React loads)
-- `desktop/src/pages/SettingsPage.tsx` - Theme selector UI
+# Backend logs
+tail -f ~/.swarm-ai/logs/backend.log
 
-**Color Variables (defined in index.css):**
-```css
---color-bg          /* Page background */
---color-card        /* Card/panel backgrounds */
---color-hover       /* Hover states */
---color-border      /* Borders */
---color-text        /* Primary text */
---color-text-muted  /* Secondary/muted text */
---color-input-bg    /* Form input backgrounds */
+# Frontend: Browser DevTools → Network → Filter: stream (for SSE)
 ```
-
-**Usage Pattern:**
-```tsx
-// ✅ Correct - use CSS variables
-className="bg-[var(--color-card)] text-[var(--color-text)] border-[var(--color-border)]"
-
-// ❌ Wrong - hardcoded dark theme colors
-className="bg-dark-card text-white border-dark-border"
-```
-
-**Default Theme:** `system` (stored in localStorage as `theme`)
-
-**When adding new components:**
-1. Never use hardcoded colors like `bg-dark-*`, `text-white`, `text-muted`, `border-dark-*`
-2. Always use CSS variables: `bg-[var(--color-*)]`, `text-[var(--color-*)]`, `border-[var(--color-*)]`
-3. Exception: `text-white` on `bg-primary` buttons is intentional (white on blue)
-
-## Build Outputs
-
-
-**Desktop (macOS):**
-```
-desktop/src-tauri/target/release/bundle/
-├── dmg/SwarmAI_*.dmg
-└── macos/SwarmAI.app
-```
-
-**Desktop (Windows):**
-```
-desktop/src-tauri/target/release/bundle/
-├── msi/SwarmAI_*_x64.msi
-└── nsis/SwarmAI_*_x64-setup.exe
-```
-
-**Desktop (Linux):**
-```
-desktop/src-tauri/target/release/bundle/
-├── deb/swarmai_*.deb
-└── appimage/swarmai_*.AppImage
-```
-
-## Related Documentation
-
-- [SECURITY.md](./.kiro/specs/SECURITY.md) - Complete security architecture
-- [SKILLS_GUIDE.md](./.kiro/specs/SKILLS_GUIDE.md) - Creating and using skills
-- [ARCHITECTURE.md](./.kiro/specs/ARCHITECTURE.md) - Cloud deployment architecture
-- [desktop/BUILD_GUIDE.md](./.kiro/specs/DESKTOP_BUILD_GUIDE.md) - Desktop build instructions (Chinese)
