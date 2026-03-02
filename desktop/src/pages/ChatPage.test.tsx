@@ -173,7 +173,7 @@ describe('ChatPage File Attachment Flow Integration', () => {
 
       // Wait for component to render
       await waitFor(() => {
-        expect(screen.getByPlaceholderText('chat.placeholder')).toBeInTheDocument();
+        expect(screen.getByPlaceholderText('Ask anything')).toBeInTheDocument();
       });
 
       // Simulate attaching a file via LayoutContext (as would happen from drag-drop)
@@ -209,7 +209,7 @@ describe('ChatPage File Attachment Flow Integration', () => {
       );
 
       await waitFor(() => {
-        expect(screen.getByPlaceholderText('chat.placeholder')).toBeInTheDocument();
+        expect(screen.getByPlaceholderText('Ask anything')).toBeInTheDocument();
       });
 
       // Attach multiple files
@@ -245,7 +245,7 @@ describe('ChatPage File Attachment Flow Integration', () => {
       );
 
       await waitFor(() => {
-        expect(screen.getByPlaceholderText('chat.placeholder')).toBeInTheDocument();
+        expect(screen.getByPlaceholderText('Ask anything')).toBeInTheDocument();
       });
 
       const testFile = createMockFileTreeItem({
@@ -289,7 +289,7 @@ describe('ChatPage File Attachment Flow Integration', () => {
       );
 
       await waitFor(() => {
-        expect(screen.getByPlaceholderText('chat.placeholder')).toBeInTheDocument();
+        expect(screen.getByPlaceholderText('Ask anything')).toBeInTheDocument();
       });
 
       // Attach a file
@@ -336,7 +336,7 @@ describe('ChatPage File Attachment Flow Integration', () => {
       );
 
       await waitFor(() => {
-        expect(screen.getByPlaceholderText('chat.placeholder')).toBeInTheDocument();
+        expect(screen.getByPlaceholderText('Ask anything')).toBeInTheDocument();
       });
 
       // Attach files
@@ -381,7 +381,7 @@ describe('ChatPage File Attachment Flow Integration', () => {
       );
 
       await waitFor(() => {
-        expect(screen.getByPlaceholderText('chat.placeholder')).toBeInTheDocument();
+        expect(screen.getByPlaceholderText('Ask anything')).toBeInTheDocument();
       });
 
       // Attach multiple files
@@ -429,7 +429,7 @@ describe('ChatPage File Attachment Flow Integration', () => {
       );
 
       await waitFor(() => {
-        expect(screen.getByPlaceholderText('chat.placeholder')).toBeInTheDocument();
+        expect(screen.getByPlaceholderText('Ask anything')).toBeInTheDocument();
       });
 
       // Attach multiple files
@@ -484,7 +484,7 @@ describe('ChatPage File Attachment Flow Integration', () => {
       );
 
       await waitFor(() => {
-        expect(screen.getByPlaceholderText('chat.placeholder')).toBeInTheDocument();
+        expect(screen.getByPlaceholderText('Ask anything')).toBeInTheDocument();
       });
 
       // Attach files from different workspaces
@@ -530,7 +530,7 @@ describe('ChatPage File Attachment Flow Integration', () => {
       );
 
       await waitFor(() => {
-        expect(screen.getByPlaceholderText('chat.placeholder')).toBeInTheDocument();
+        expect(screen.getByPlaceholderText('Ask anything')).toBeInTheDocument();
       });
 
       // Attach a file
@@ -548,7 +548,7 @@ describe('ChatPage File Attachment Flow Integration', () => {
       });
 
       // Type in the input (simulating user interaction)
-      const textarea = screen.getByPlaceholderText('chat.placeholder');
+      const textarea = screen.getByPlaceholderText('Ask anything');
       fireEvent.change(textarea, { target: { value: 'test message' } });
 
       // File chip should still be present
@@ -564,7 +564,7 @@ describe('ChatPage File Attachment Flow Integration', () => {
       );
 
       await waitFor(() => {
-        expect(screen.getByPlaceholderText('chat.placeholder')).toBeInTheDocument();
+        expect(screen.getByPlaceholderText('Ask anything')).toBeInTheDocument();
       });
 
       // No chips container should be present

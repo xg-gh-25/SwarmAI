@@ -237,8 +237,6 @@ export function ChatInput({
 
           {/* Input Row */}
           <div className="relative flex items-center gap-3">
-            {/* File Attachment Button */}
-            <FileAttachmentButton onFilesSelected={onAddFiles} disabled={isProcessingFiles || isStreaming} canAddMore={canAddMore} />
 
             {/* Slash Command Suggestions */}
             {showCommandSuggestions && filteredCommands.length > 0 && (
@@ -292,7 +290,7 @@ export function ChatInput({
               onChange={handleInputChange}
               onKeyDown={handleKeyDown}
               onPaste={handlePaste}
-              placeholder={isStreaming ? t('chat.streamingPlaceholder', 'Waiting for response...') : t('chat.placeholder')}
+              placeholder={isStreaming ? t('chat.streamingPlaceholder', 'Waiting for response...') : 'Ask anything'}
               rows={2}
               disabled={isStreaming}
               className={clsx(
@@ -328,8 +326,9 @@ export function ChatInput({
             </button>
           </div>
 
-          {/* Bottom Row - Commands hint */}
-          <div className="flex items-center justify-end mt-3 pt-3 border-t border-[var(--color-border)]/50">
+          {/* Bottom Row - Attachment button + Commands hint */}
+          <div className="flex items-center justify-between mt-3 pt-3 border-t border-[var(--color-border)]/50">
+            <FileAttachmentButton onFilesSelected={onAddFiles} disabled={isProcessingFiles || isStreaming} canAddMore={canAddMore} />
             <span className="text-xs text-[var(--color-text-muted)]">
               Type <kbd className="px-1.5 py-0.5 bg-[var(--color-hover)] rounded text-xs mx-1">/</kbd> for commands
             </span>
