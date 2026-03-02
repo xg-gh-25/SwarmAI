@@ -103,6 +103,137 @@ Three-column layout with embedded cognitive context:
 - Debounced save effect persists to file every 500ms
 - Messages loaded lazily from backend API when a tab becomes active
 
+### Multi-Tab Chat — End-to-End Flow
+
+The multi-tab system is a critical user experience. Here's the complete lifecycle:
+
+#### 1. App Startup — Tab Restoration
+
+```
+App Launch
+    │
+    ▼
+useUnifiedTabState initializes with temporary default tab
+    │
+    ▼
+ChatPage mount effect calls restoreFromFile()
+    │
+    ├── open_tabs.json exists?
+    │   ├── YES → Clear default tab, hydrate all saved tabs (messages=[])
+    │   │         Set activeTabId to saved activeTabId
+    │   │         Sync-active-tab effect fires → loadSessionMessages() for active tab
+    │   │         Other tabs remain with messages=[] until user clicks them
+    │   │
+    │   └── NO  → Keep default tab (fresh start)
+    │
+    ▼
+Active tab displays messages; inactive tabs load on-demand when selected
+```
+
+#### 2. Tab Switching — Lazy Message Loading
+
+```
+User clicks Tab B (currently on Tab A)
+    │
+    ▼
+handleTabSelect(tabB.id)
+    │
+    ├── Save Tab A's React state (messages, sessionId) into tabMapRef
+    │
+    ├── selectTab(tabB.id) → updates activeTabId
+    │
+    ├── restoreTab(tabB.id) → reads from tabMapRef
+    │   │
+    │   ├── Tab B has sessionId + non-empty messages?
+    │   │   └── Restore from map (cached) → setMessages, setSessionId
+    │   │
+    │   ├── Tab B has sessionId + empty messages? (post-restart)
+    │   │   └── Call loadSessionMessages(sessionId) → fetch from backend API
+    │   │       └── On success: sync messages back into tabMapRef for caching
+    │   │
+    │   └── Tab B has no sessionId? (new tab)
+    │       └── Show welcome message
+    │
+    ▼
+Tab B is now active with its messages displayed
+```
+
+#### 3. Sending a Message — Streaming Lifecycle
+
+```
+User types message in active Tab A and hits Send
+    │
+    ▼
+handleSendMessage()
+    │
+    ├── Append user message to React state + tabMapRef
+    ├── Create empty assistant message placeholder
+    ├── setIsStreaming(true, tabA.id)
+    ├── updateTabStatus(tabA.id, 'streaming')
+    │
+    ▼
+chatService.streamConversation() → SSE connection opens
+    │
+    ├── session_start event → setSessionId, updateTabSessionId
+    ├── assistant events → update message content (functional updater)
+    ├── tool_use / tool_result → append to message content
+    ├── ask_user_question → setPendingQuestion, show form
+    ├── cmd_permission_request → setPendingPermission, show modal
+    ├── result event → setIsStreaming(false), updateTabStatus('idle')
+    │
+    ▼
+Tab A shows complete response; tab indicator returns to idle
+```
+
+#### 4. Parallel Streaming — Tab Isolation
+
+```
+Tab A is streaming (isStreaming=true for Tab A)
+User opens Tab B and sends a message
+    │
+    ▼
+Tab B starts its own SSE stream independently
+    │
+    ├── Each tab has its own: messages[], sessionId, isStreaming, abortController
+    ├── Stream handlers check isActiveTab before updating React state
+    ├── Inactive tab's messages update only in tabMapRef (no re-renders)
+    ├── Tab status indicators show streaming/idle per tab
+    │
+    ▼
+Both tabs stream independently; switching tabs shows correct state
+```
+
+#### 5. Tab Persistence — Surviving Restarts
+
+```
+Any tab mutation (add, close, switch, session change, title update)
+    │
+    ▼
+renderCounter bumps → debounced save effect (500ms)
+    │
+    ▼
+tabPersistenceService.save({
+    tabs: [{ id, title, agentId, isNew, sessionId }, ...],
+    activeTabId: "currently-focused-tab-id"
+})
+    │
+    ▼
+Backend writes to ~/.swarm-ai/open_tabs.json
+    │
+    ▼
+On next app launch: restoreFromFile() reads this file
+    → Tabs restored with sessionIds (messages loaded lazily)
+    → activeTabId restored to user's last focused tab
+```
+
+#### Key Invariants
+
+- One `UnifiedTab` entry per open tab in `tabMapRef` (max 6 tabs)
+- Each tab has exactly one `sessionId` (assigned on first message, never replaced)
+- Messages are the source of truth in `tabMapRef`; React state mirrors the active tab only
+- `loadSessionMessages()` syncs fetched messages back into `tabMapRef` to avoid re-fetching
+- Tab persistence saves metadata only (not messages) — messages live in the database
+
 ### Frontend File Structure
 
 ```
