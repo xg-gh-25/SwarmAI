@@ -16,7 +16,7 @@
  * Validates: Requirements 2.1, 3.1, 3.2, 3.3, 6.1, 6.2
  */
 
-import React from 'react';
+import React, { useState, useCallback } from 'react';
 import type { Message } from '../../../types';
 import { ContentBlockRenderer } from './ContentBlockRenderer';
 import { AssistantHeader } from './AssistantHeader';
@@ -38,6 +38,22 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
   pendingToolUseId,
   isStreaming,
 }) => {
+  const [copied, setCopied] = useState(false);
+
+  /** Extract plain text from all content blocks for clipboard copy. */
+  const extractMessageText = useCallback((): string => {
+    return message.content
+      .filter((b): b is { type: 'text'; text: string } => b.type === 'text')
+      .map((b) => b.text)
+      .join('\n');
+  }, [message.content]);
+
+  const handleCopy = useCallback(() => {
+    navigator.clipboard.writeText(extractMessageText());
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  }, [extractMessageText]);
+
   const contentBlocks = message.content.map((block, index) => {
     // Use block-specific IDs for stable keys to prevent state mix-ups
     // when multiple tool blocks are rendered consecutively
@@ -56,7 +72,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
   });
 
   return (
-    <div className="max-w-3xl">
+    <div className="group/msg max-w-3xl relative">
       <AssistantHeader
         timestamp={message.timestamp}
         isStreaming={isStreaming}
@@ -71,7 +87,30 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
           <div className="space-y-3">{contentBlocks}</div>
         </div>
       ) : (
-        <div className="space-y-3">{contentBlocks}</div>
+        <div className="space-y-3">
+          {contentBlocks}
+          {/* Streaming cursor — blinking caret at end of streaming content */}
+          {isStreaming && (
+            <span className="inline-block w-2 h-4 bg-primary/70 rounded-sm animate-pulse align-text-bottom" aria-hidden="true" />
+          )}
+        </div>
+      )}
+
+      {/* Copy message button — appears on hover, hidden while streaming */}
+      {!isStreaming && extractMessageText().length > 0 && (
+        <button
+          type="button"
+          onClick={handleCopy}
+          className="absolute top-0 right-0 opacity-0 group-hover/msg:opacity-100 transition-opacity
+                     flex items-center gap-1 px-2 py-1 text-xs text-[var(--color-text-muted)]
+                     hover:text-[var(--color-text)] bg-[var(--color-hover)] rounded"
+          title={copied ? 'Copied!' : 'Copy message'}
+        >
+          <span className="material-symbols-outlined text-sm">
+            {copied ? 'check' : 'content_copy'}
+          </span>
+          {copied ? 'Copied!' : 'Copy'}
+        </button>
       )}
     </div>
   );

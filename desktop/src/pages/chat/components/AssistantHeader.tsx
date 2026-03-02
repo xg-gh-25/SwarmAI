@@ -34,7 +34,7 @@ function formatTimestamp(timestamp: string): string {
   const date = new Date(timestamp);
   return isNaN(date.getTime())
     ? ''
-    : date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    : date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
 }
 
 export const AssistantHeader: React.FC<AssistantHeaderProps> = ({
@@ -46,13 +46,13 @@ export const AssistantHeader: React.FC<AssistantHeaderProps> = ({
   return (
     <div className="flex items-center gap-2 text-sm text-[var(--color-text-secondary)] mb-1">
       <span
-        className={`text-lg${isStreaming ? ' swarm-icon-streaming' : ''}`}
+        className={`text-xl${isStreaming ? ' swarm-icon-streaming' : ''}`}
         role="img"
         aria-label="SwarmAI icon"
       >
         🐝
       </span>
-      <span className="font-semibold text-[var(--color-text-primary)]">
+      <span className="text-base font-bold text-[var(--color-text-primary)]">
         SwarmAI
       </span>
       {formattedTime && (

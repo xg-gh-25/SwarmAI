@@ -2,6 +2,9 @@ import { useEffect, useRef, useState, memo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkBreaks from 'remark-breaks';
+import remarkMath from 'remark-math';
+import rehypeKatex from 'rehype-katex';
+import 'katex/dist/katex.min.css';
 import mermaid from 'mermaid';
 import hljs from 'highlight.js';
 import { useTheme } from '../../contexts/ThemeContext';
@@ -562,28 +565,28 @@ const InlineCode = memo(function InlineCode({ children }: { children: React.Reac
 const markdownComponents: Record<string, React.ComponentType<any>> = {
   // Headers
   h1: ({ children }) => (
-    <h1 className="text-2xl font-bold text-[var(--color-text)] mt-6 mb-4 pb-2 border-b border-[var(--color-border)]">
+    <h1 className="text-2xl font-bold text-[var(--color-text)] mt-4 mb-2 pb-1.5 border-b border-[var(--color-border)]">
       {children}
     </h1>
   ),
   h2: ({ children }) => (
-    <h2 className="text-xl font-bold text-[var(--color-text)] mt-5 mb-3">{children}</h2>
+    <h2 className="text-xl font-bold text-[var(--color-text)] mt-3 mb-2">{children}</h2>
   ),
   h3: ({ children }) => (
-    <h3 className="text-lg font-semibold text-[var(--color-text)] mt-4 mb-2">{children}</h3>
+    <h3 className="text-lg font-semibold text-[var(--color-text)] mt-3 mb-1.5">{children}</h3>
   ),
   h4: ({ children }) => (
-    <h4 className="text-base font-semibold text-[var(--color-text)] mt-3 mb-2">{children}</h4>
+    <h4 className="text-base font-semibold text-[var(--color-text)] mt-2 mb-1">{children}</h4>
   ),
   h5: ({ children }) => (
     <h5 className="text-sm font-semibold text-[var(--color-text)] mt-2 mb-1">{children}</h5>
   ),
   h6: ({ children }) => (
-    <h6 className="text-sm font-medium text-[var(--color-text-muted)] mt-2 mb-1">{children}</h6>
+    <h6 className="text-sm font-medium text-[var(--color-text-muted)] mt-1.5 mb-1">{children}</h6>
   ),
 
   // Paragraphs
-  p: ({ children }) => <p className="text-[var(--color-text)] mb-4 leading-relaxed">{children}</p>,
+  p: ({ children }) => <p className="text-[var(--color-text)] mb-2 leading-normal">{children}</p>,
 
   // Links
   a: ({ href, children }) => (
@@ -597,18 +600,18 @@ const markdownComponents: Record<string, React.ComponentType<any>> = {
     </a>
   ),
 
-  // Lists
+  // Lists — use list-outside with pl-5 so wrapped text aligns under content, not the marker
   ul: ({ children }) => (
-    <ul className="list-disc list-inside mb-4 space-y-1 text-[var(--color-text)]">{children}</ul>
+    <ul className="list-disc list-outside pl-5 mb-2 space-y-0.5 text-[var(--color-text)]">{children}</ul>
   ),
   ol: ({ children }) => (
-    <ol className="list-decimal list-inside mb-4 space-y-1 text-[var(--color-text)]">{children}</ol>
+    <ol className="list-decimal list-outside pl-5 mb-2 space-y-0.5 text-[var(--color-text)]">{children}</ol>
   ),
-  li: ({ children }) => <li className="text-[var(--color-text)] leading-relaxed">{children}</li>,
+  li: ({ children }) => <li className="text-[var(--color-text)] leading-normal pl-0.5">{children}</li>,
 
   // Blockquote
   blockquote: ({ children }) => (
-    <blockquote className="border-l-4 border-primary pl-4 my-4 text-[var(--color-text-muted)] italic">
+    <blockquote className="border-l-4 border-primary pl-4 my-2 text-[var(--color-text-muted)] italic">
       {children}
     </blockquote>
   ),
@@ -631,7 +634,7 @@ const markdownComponents: Record<string, React.ComponentType<any>> = {
 
   // Tables
   table: ({ children }) => (
-    <div className="overflow-x-auto my-4">
+    <div className="overflow-x-auto my-2">
       <table className="min-w-full border border-[var(--color-border)] rounded-lg overflow-hidden">
         {children}
       </table>
@@ -648,7 +651,7 @@ const markdownComponents: Record<string, React.ComponentType<any>> = {
   td: ({ children }) => <td className="px-4 py-3 text-sm text-[var(--color-text-muted)]">{children}</td>,
 
   // Horizontal rule
-  hr: () => <hr className="my-6 border-[var(--color-border)]" />,
+  hr: () => <hr className="my-3 border-[var(--color-border)]" />,
 
   // Images
   img: ({ src, alt }) => (
@@ -660,7 +663,7 @@ const markdownComponents: Record<string, React.ComponentType<any>> = {
   ),
 
   // Strong/Bold
-  strong: ({ children }) => <strong className="font-semibold text-[var(--color-text)]">{children}</strong>,
+  strong: ({ children }) => <strong className="font-bold text-[var(--color-text)]">{children}</strong>,
 
   // Emphasis/Italic
   em: ({ children }) => <em className="italic">{children}</em>,
@@ -681,7 +684,12 @@ const markdownComponents: Record<string, React.ComponentType<any>> = {
 
 // remarkPlugins array - stable reference
 // remarkBreaks converts single line breaks to <br>, preserving newlines in output
-const remarkPlugins = [remarkGfm, remarkBreaks];
+// remarkMath parses $inline$ and $$block$$ math expressions
+const remarkPlugins = [remarkGfm, remarkBreaks, remarkMath];
+
+// rehypePlugins array - stable reference
+// rehypeKatex renders parsed math expressions using KaTeX
+const rehypePlugins = [rehypeKatex];
 
 const MarkdownRenderer = memo(function MarkdownRenderer({
   content,
@@ -689,7 +697,7 @@ const MarkdownRenderer = memo(function MarkdownRenderer({
 }: MarkdownRendererProps) {
   return (
     <div className={`markdown-content ${className}`}>
-      <ReactMarkdown remarkPlugins={remarkPlugins} components={markdownComponents}>
+      <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} components={markdownComponents}>
         {content}
       </ReactMarkdown>
     </div>
