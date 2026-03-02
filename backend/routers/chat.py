@@ -303,12 +303,29 @@ async def answer_question(request: Request):
 
 
 @router.get("/sessions", response_model=list[ChatSessionResponse])
-async def list_sessions(agent_id: str | None = None):
+async def list_sessions(
+    agent_id: str | None = None,
+    limit: int | None = None,
+):
     """List chat sessions, optionally filtered by agent_id.
 
-    Returns sessions sorted by last_accessed descending.
+    Returns sessions sorted by last_accessed DESC, created_at DESC.
+
+    Args:
+        agent_id: Optional agent ID filter.
+        limit: Optional max number of sessions to return (1–100).
+               Values <= 0 are rejected with 422. Values > 100 are
+               silently capped at 100.
     """
-    sessions = await session_manager.list_sessions(agent_id=agent_id)
+    if limit is not None:
+        if limit <= 0:
+            raise HTTPException(
+                status_code=422,
+                detail="limit must be a positive integer",
+            )
+        limit = min(limit, 100)
+
+    sessions = await session_manager.list_sessions(agent_id=agent_id, limit=limit)
     return [
         ChatSessionResponse(
             id=s.session_id,

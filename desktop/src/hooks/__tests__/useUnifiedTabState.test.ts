@@ -21,10 +21,6 @@ import {
   MAX_OPEN_TABS,
 } from '../useUnifiedTabState';
 import type { UnifiedTab, TabStatus, SerializableTab } from '../useUnifiedTabState';
-import {
-  OPEN_TABS_STORAGE_KEY,
-  ACTIVE_TAB_STORAGE_KEY,
-} from '../../pages/chat/constants';
 
 // ---------------------------------------------------------------------------
 // localStorage mock
@@ -391,9 +387,12 @@ describe('Property-Based Tests', () => {
     );
   });
 
-  // Feature: unified-tab-state, Property 6: localStorage Persistence Round-Trip
+  // Feature: unified-tab-state, Property 6: File Persistence
   // Validates: Requirements 6.1, 6.2, 6.4, 6.6
-  it('Property 6: localStorage Persistence Round-Trip — serializable subset persists correctly', () => {
+  // NOTE: File persistence is async (debounced 500ms via backend API).
+  // The toSerializable helper is tested indirectly via restoreFromFile.
+  // This test verifies the serializable shape is correct in-memory.
+  it('Property 6: Serializable subset excludes runtime fields', () => {
     fc.assert(
       fc.property(
         fc.array(
@@ -424,31 +423,20 @@ describe('Property-Based Tests', () => {
             });
           }
 
-          // Read back from localStorage
-          const raw = mockStorage.getItem(OPEN_TABS_STORAGE_KEY);
-          expect(raw).toBeTruthy();
-          const parsed: SerializableTab[] = JSON.parse(raw!);
-
-          // Verify it's an array of serializable tabs
-          expect(Array.isArray(parsed)).toBe(true);
-          for (const entry of parsed) {
-            // Must have serializable fields
-            expect(typeof entry.id).toBe('string');
-            expect(typeof entry.title).toBe('string');
-            expect(typeof entry.agentId).toBe('string');
-            expect(typeof entry.isNew).toBe('boolean');
+          // Verify openTabs (the serializable view) has correct shape
+          for (const tab of result.current.openTabs) {
+            expect(typeof tab.id).toBe('string');
+            expect(typeof tab.title).toBe('string');
+            expect(typeof tab.agentId).toBe('string');
+            expect(typeof tab.isNew).toBe('boolean');
             // Must NOT have runtime fields
-            expect((entry as Record<string, unknown>).messages).toBeUndefined();
-            expect((entry as Record<string, unknown>).pendingQuestion).toBeUndefined();
-            expect((entry as Record<string, unknown>).isStreaming).toBeUndefined();
-            expect((entry as Record<string, unknown>).abortController).toBeUndefined();
-            expect((entry as Record<string, unknown>).streamGen).toBeUndefined();
-            expect((entry as Record<string, unknown>).status).toBeUndefined();
+            expect((tab as Record<string, unknown>).messages).toBeUndefined();
+            expect((tab as Record<string, unknown>).pendingQuestion).toBeUndefined();
+            expect((tab as Record<string, unknown>).isStreaming).toBeUndefined();
+            expect((tab as Record<string, unknown>).abortController).toBeUndefined();
+            expect((tab as Record<string, unknown>).streamGen).toBeUndefined();
+            expect((tab as Record<string, unknown>).status).toBeUndefined();
           }
-
-          // activeTabId persisted
-          const activeRaw = mockStorage.getItem(ACTIVE_TAB_STORAGE_KEY);
-          expect(activeRaw).toBe(result.current.activeTabId);
         },
       ),
       { numRuns: 100 },
@@ -564,20 +552,15 @@ describe('Unit Tests — Edge Cases', () => {
   });
 
   // Validates: Requirement 6.5
-  it('Initialization with stale activeTabId falls back to first tab', () => {
-    // Pre-populate localStorage with tabs but a stale activeTabId
-    const tabs = [
-      { id: 'tab-1', title: 'Tab 1', agentId: 'a1', isNew: false, sessionId: 's1' },
-      { id: 'tab-2', title: 'Tab 2', agentId: 'a2', isNew: true },
-    ];
-    mockStorage.setItem(OPEN_TABS_STORAGE_KEY, JSON.stringify(tabs));
-    mockStorage.setItem(ACTIVE_TAB_STORAGE_KEY, 'nonexistent-tab-id');
-
+  // NOTE: With file-based persistence, init always creates a default tab.
+  // The stale activeTabId scenario is handled by restoreFromFile, not sync init.
+  it('Initialization always creates a single default tab', () => {
     const { result } = renderHook(() => useUnifiedTabState(DEFAULT_AGENT));
 
-    expect(result.current.openTabs.length).toBe(2);
-    // Should fall back to first tab
-    expect(result.current.activeTabId).toBe('tab-1');
+    // Always starts with exactly 1 default tab
+    expect(result.current.openTabs.length).toBe(1);
+    expect(result.current.openTabs[0].title).toBe('New Session');
+    expect(result.current.activeTabId).toBe(result.current.openTabs[0].id);
   });
 
   // Validates: Requirement 4.4
@@ -654,7 +637,9 @@ describe('Unit Tests — Edge Cases', () => {
   });
 
   // Validates: Requirement 6.6
-  it('Persistence excludes runtime fields from localStorage', () => {
+  // NOTE: With file-based persistence, runtime fields are excluded from
+  // the openTabs derived view (which is the serializable shape).
+  it('openTabs view excludes runtime fields', () => {
     const { result } = renderHook(() => useUnifiedTabState(DEFAULT_AGENT));
 
     const tabId = result.current.openTabs[0].id;
@@ -668,17 +653,15 @@ describe('Unit Tests — Edge Cases', () => {
       });
     });
 
-    const raw = mockStorage.getItem(OPEN_TABS_STORAGE_KEY);
-    expect(raw).toBeTruthy();
-    const parsed = JSON.parse(raw!);
-
-    for (const entry of parsed) {
-      expect(entry.messages).toBeUndefined();
-      expect(entry.pendingQuestion).toBeUndefined();
-      expect(entry.isStreaming).toBeUndefined();
-      expect(entry.abortController).toBeUndefined();
-      expect(entry.streamGen).toBeUndefined();
-      expect(entry.status).toBeUndefined();
+    // openTabs should only have serializable fields
+    for (const tab of result.current.openTabs) {
+      const raw = tab as Record<string, unknown>;
+      expect(raw.messages).toBeUndefined();
+      expect(raw.pendingQuestion).toBeUndefined();
+      expect(raw.isStreaming).toBeUndefined();
+      expect(raw.abortController).toBeUndefined();
+      expect(raw.streamGen).toBeUndefined();
+      expect(raw.status).toBeUndefined();
     }
   });
 }); // end Unit Tests
