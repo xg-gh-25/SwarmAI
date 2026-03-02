@@ -79,8 +79,6 @@ function createDefaultChatInputProps(overrides: Partial<Parameters<typeof ChatIn
     onSend: vi.fn(),
     onStop: vi.fn(),
     isStreaming: false,
-    runAsTask: false,
-    onToggleRunAsTask: vi.fn(),
     selectedAgentId: 'agent-1',
     selectedWorkspace: null as SwarmWorkspace | null,
     attachments: [] as FileAttachment[],

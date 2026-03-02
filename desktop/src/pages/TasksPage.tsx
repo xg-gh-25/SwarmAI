@@ -102,7 +102,7 @@ export default function TasksPage() {
 
   // Handle actions
   const handleViewChat = (task: Task) => {
-    navigate(`/chat?taskId=${task.id}&taskMode=true`);
+    navigate(`/chat?taskId=${task.id}`);
   };
 
   const handleCancel = async () => {
@@ -164,7 +164,7 @@ export default function TasksPage() {
           <p className="text-[var(--color-text-muted)] mt-1">{t('tasks.subtitle')}</p>
         </div>
         <button
-          onClick={() => navigate('/chat?taskMode=true')}
+          onClick={() => navigate('/chat')}
           className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg hover:bg-primary/90 transition-colors"
         >
           <span className="material-symbols-outlined text-xl">add</span>

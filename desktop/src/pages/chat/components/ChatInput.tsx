@@ -13,8 +13,6 @@ interface ChatInputProps {
   onSend: () => void;
   onStop: () => void;
   isStreaming: boolean;
-  runAsTask: boolean;
-  onToggleRunAsTask: () => void;
   selectedAgentId: string | null;
   selectedWorkspace: WorkspaceConfig | null;
   attachments: FileAttachment[];
@@ -45,8 +43,6 @@ export function ChatInput({
   onSend,
   onStop,
   isStreaming,
-  runAsTask,
-  onToggleRunAsTask,
   selectedAgentId,
   selectedWorkspace,
   attachments,
@@ -181,58 +177,13 @@ export function ChatInput({
   return (
     <div className="p-6">
       <div className="max-w-3xl mx-auto">
-        {/* Background Task Mode Toggle */}
-        <div
-          onClick={() => !isStreaming && onToggleRunAsTask()}
-          className={clsx(
-            'mb-3 flex items-center justify-between px-4 py-2.5 rounded-xl cursor-pointer transition-all',
-            runAsTask
-              ? 'bg-gradient-to-r from-green-500/20 to-emerald-500/20 border border-green-500/50 shadow-[0_0_15px_rgba(34,197,94,0.15)]'
-              : 'bg-[var(--color-hover)]/50 border border-[var(--color-border)] hover:border-[var(--color-text-muted)]/50',
-            isStreaming && 'opacity-50 cursor-not-allowed'
-          )}
-        >
-          <div className="flex items-center gap-3">
-            <span
-              className={clsx(
-                'material-symbols-outlined text-xl',
-                runAsTask ? 'text-green-500' : 'text-[var(--color-text-muted)]'
-              )}
-            >
-              {runAsTask ? 'rocket_launch' : 'task_alt'}
-            </span>
-            <div>
-              <p className={clsx('text-sm font-medium', runAsTask ? 'text-green-500' : 'text-[var(--color-text)]')}>
-                {t('chat.runAsTask')}
-              </p>
-              <p className="text-xs text-[var(--color-text-muted)]">{t('chat.runAsTaskDescription')}</p>
-            </div>
-          </div>
-          {/* Toggle Switch */}
-          <div
-            className={clsx(
-              'relative w-11 h-6 rounded-full transition-colors flex-shrink-0',
-              runAsTask ? 'bg-green-500' : 'bg-[var(--color-border)]'
-            )}
-          >
-            <span
-              className={clsx(
-                'absolute top-1 left-1 w-4 h-4 rounded-full bg-white shadow-sm transition-transform duration-200',
-                runAsTask && 'translate-x-5'
-              )}
-            />
-          </div>
-        </div>
-
         {/* Input Container with drag-and-drop */}
         <div
           className={clsx(
             'bg-[var(--color-card)] border rounded-2xl p-3 relative transition-all',
             isDragging
               ? 'border-primary bg-primary/5'
-              : runAsTask
-                ? 'border-green-500/50 shadow-[0_0_20px_rgba(34,197,94,0.1)]'
-                : 'border-[var(--color-border)]'
+              : 'border-[var(--color-border)]'
           )}
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}
@@ -349,25 +300,19 @@ export function ChatInput({
                 'w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 transition-colors',
                 isStreaming
                   ? 'bg-red-500 hover:bg-red-600'
-                  : runAsTask
-                    ? 'bg-green-500 hover:bg-green-600'
-                    : 'bg-primary hover:bg-primary-hover',
+                  : 'bg-primary hover:bg-primary-hover',
                 !isStreaming && !canSend && 'opacity-50 cursor-not-allowed'
               )}
               title={
                 isStreaming
                   ? 'Stop generation'
-                  : runAsTask
-                    ? t('chat.runAsTask')
-                    : attachments.length > 0
+                  : attachments.length > 0
                       ? 'Send with attachments'
                       : 'Send message'
               }
             >
               {isStreaming ? (
                 <span className="material-symbols-outlined text-white text-xl">stop</span>
-              ) : runAsTask ? (
-                <span className="material-symbols-outlined text-white text-xl">rocket_launch</span>
               ) : (
                 <span className="material-symbols-outlined text-white text-xl">arrow_upward</span>
               )}
