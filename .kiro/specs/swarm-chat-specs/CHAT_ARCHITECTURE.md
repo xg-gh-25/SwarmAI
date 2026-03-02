@@ -1,3 +1,9 @@
+<!-- STALE REFERENCES: This spec references code that has since been refactored or removed:
+- ContextPreviewPanel → REMOVED (was planned for future project detail view, never rendered in production)
+- useTabState / tabStateRef / saveTabState → SUPERSEDED by useUnifiedTabState hook
+- saveCurrentTab → REMOVED (was a no-op in useUnifiedTabState)
+This spec is preserved as a historical record of the design decisions made at the time. -->
+
 # Chat Page Architecture
 
 This document describes the architecture and file structure of the SwarmAI Chat feature after the refactoring from a monolithic 2341-line component to a modular, maintainable structure.

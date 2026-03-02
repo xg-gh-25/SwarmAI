@@ -1,3 +1,9 @@
+<!-- STALE REFERENCES: This spec references code that has since been refactored or removed:
+- ContextPreviewPanel → REMOVED (was planned for future project detail view, never rendered in production)
+- useTabState / tabStateRef / saveTabState → SUPERSEDED by useUnifiedTabState hook
+- saveCurrentTab → REMOVED (was a no-op in useUnifiedTabState)
+This spec is preserved as a historical record of the design decisions made at the time. -->
+
 # Design Document — Swarm Radar ToDos (Sub-Spec 2 of 5)
 
 ## Overview
