@@ -1,320 +1,228 @@
-# Claude Agent SDK Skills Guide
+# SwarmAI Skills Guide
 
-This document provides comprehensive guidance on how to use Skills with the Claude Agent SDK.
+Skills extend your AI agents with specialized capabilities — packaged as `SKILL.md` files that Claude discovers and invokes automatically based on your request.
 
-## What are Skills?
+---
 
-Skills are modular capabilities that extend Claude's functionality by packaging expertise into discoverable, reusable components.
+## How Skills Work
 
-**Key characteristics:**
-- **Model-invoked (automatic)**: Claude autonomously decides when to use them based on your request
-- **Packaged as `SKILL.md` files**: Each Skill is a directory containing a `SKILL.md` file with YAML frontmatter and Markdown instructions
-- **Three sources**: Personal Skills (`~/.claude/skills/`), Project Skills (`.claude/skills/` in your repo), and Plugin Skills
-- **Discovery-based**: Claude finds Skills based on their descriptions matching your request context
+1. Skills are directories containing a `SKILL.md` file with YAML frontmatter + Markdown instructions
+2. When you enable a skill for an agent, it becomes available as a tool
+3. Claude reads the skill's description and autonomously decides when to use it
+4. The skill's instructions guide Claude on how to complete the task
+
+```
+User sends message → Claude matches skill by description → Invokes skill tool → Follows instructions → Returns result
+```
+
+---
 
 ## Skill Structure
 
-### Simple Skill (single file)
+### Minimal Skill (single file)
 
 ```
-.claude/c/pdf-processor/
+my-skill/
 └── SKILL.md
 ```
 
 ### Multi-file Skill
 
 ```
-.claude/skills/pdf-processor/
-├── SKILL.md           # Required - main skill definition
-├── REFERENCE.md       # Optional supporting documentation
-├── FORMS.md           # Optional additional instructions
+pdf-processor/
+├── SKILL.md           # Required — main skill definition
+├── REFERENCE.md       # Optional supporting docs
 └── scripts/
-    ├── fill_form.py   # Optional helper scripts
-    └── validate.py
+    └── fill_form.py   # Optional helper scripts
 ```
+
+---
 
 ## SKILL.md Format
 
-The `SKILL.md` file uses YAML frontmatter followed by Markdown content:
+YAML frontmatter followed by Markdown instructions:
 
 ```yaml
 ---
 name: pdf-processor
-description: Extract text, fill forms, merge PDFs. Use when working with PDF files, forms, or document extraction.
+description: >
+  Extract text, fill forms, merge PDFs.
+  Use when working with PDF files, forms, or document extraction.
 ---
 
 # PDF Processing
 
 ## Instructions
-1. Use Read to open PDF files
+1. Use Read tool to open PDF files
 2. Extract text using pdfplumber
-3. Provide structured output
+3. Return structured output
 
 ## Requirements
-Requires: pypdf, pdfplumber
+- pypdf
+- pdfplumber
 ```
 
-### Required Frontmatter Fields
+### Frontmatter Fields
 
-| Field | Description | Constraints |
-|-------|-------------|-------------|
-| `name` | Skill identifier | Lowercase, letters/numbers/hyphens only, max 64 chars |
-| `description` | What the skill does and when to use it | Critical for discovery, max 1024 chars |
+| Field | Required | Description |
+|-------|----------|-------------|
+| `name` | Yes | Unique skill identifier (kebab-case) |
+| `description` | Yes | What the skill does — Claude uses this to decide when to invoke it |
 
-### Optional Frontmatter Fields (Claude Code CLI only)
+The description is critical — it's how Claude discovers your skill. Be specific about when it should be used.
 
-| Field | Description | Note |
-|-------|-------------|------|
-| `allowed-tools` | List of tools the Skill can use | Only works in Claude Code CLI, NOT in Agent SDK |
+---
 
-## Enabling Skills in Claude Agent SDK
+## Skill Sources
 
-### Python
+Skills can come from three places:
 
-```python
-from claude_agent_sdk import query, ClaudeAgentOptions
+| Source | Location | How Added |
+|--------|----------|-----------|
+| System Skills | Bundled with app | Pre-installed, `is_system=true` |
+| Plugin Skills | `~/.swarm-ai/skills/` | Installed via Plugin Manager |
+| User Skills | `~/.swarm-ai/skills/` | Uploaded via ZIP or created with AI |
 
-options = ClaudeAgentOptions(
-    cwd="/path/to/project",  # Project with .claude/skills/
-    setting_sources=["user", "project"],  # REQUIRED: Load Skills from filesystem
-    allowed_tools=["Skill", "Read", "Write", "Bash"]  # Enable Skill tool
-)
-
-async for message in query(
-    prompt="Help me process this PDF document",
-    options=options
-):
-    print(message)
-```
-
-### TypeScript
-
-```typescript
-for await (const message of query({
-  prompt: "Help me process this PDF document",
-  options: {
-    cwd: "/path/to/project",  // Project with .claude/skills/
-    settingSources: ["user", "project"],  // REQUIRED: Load Skills from filesystem
-    allowedTools: ["Skill", "Read", "Write", "Bash"]  // Enable Skill tool
-  }
-})) {
-  console.log(message);
-}
-```
-
-### Key Requirements
-
-1. **Add `"Skill"` to `allowed_tools`** - The Skill tool must be explicitly enabled
-2. **Set `setting_sources`** - Must include `["user", "project"]` to load skills from filesystem
-3. **Set correct `cwd`** - Must point to directory containing `.claude/skills/`
-
-**Important**: By default, the SDK does NOT load filesystem settings. You MUST explicitly configure `setting_sources`/`settingSources` for Skills to be available.
-
-## How Skills Work at Runtime
-
-1. **Initialization**: SDK loads Skills from filesystem directories specified in `setting_sources`
-2. **Discovery**: Skill metadata (name, description) is discovered at startup
-3. **Context Matching**: When you submit a prompt, Claude analyzes whether available Skills match your request
-4. **Autonomous Invocation**: Claude autonomously invokes the `Skill` tool if it determines a Skill is relevant
-5. **Content Loading**: Full Skill content (SKILL.md + supporting files) is loaded only when triggered
-6. **Execution**: Claude follows Skill instructions and uses allowed tools to complete the task
-7. **Progressive Disclosure**: Supporting files are loaded on-demand to manage context efficiently
-
-### Key Behaviors
-
-- Skills are NOT explicitly called by users - Claude decides autonomously
-- The quality of the `description` field directly impacts whether Claude discovers and uses your Skill
-- Multiple Skills can compose for complex tasks
-- Claude respects tool permissions defined in `allowed_tools` when using Skills
-
-## Skill Storage Locations
-
-| Location | Path | Scope |
-|----------|------|-------|
-| Personal Skills | `~/.claude/skills/` | Available across all projects |
-| Project Skills | `.claude/skills/` | Available only in that project |
-| Plugin Skills | From installed plugins | Varies by plugin |
-
-## Platform Integration
-
-### Backend Implementation
-
-In the platform's `AgentManager`, skills are enabled conditionally:
-
-```python
-# backend/core/agent_manager.py
-if enable_skills:
-    if "Skill" not in allowed_tools:
-        allowed_tools.append("Skill")
-```
-
-### Agent Configuration
-
-Agents can be configured with skill associations:
-
-```python
-agent_config = {
-    "id": "agent-1",
-    "name": "Customer Service Bot",
-    "skill_ids": ["skill-1", "skill-3"],  # References to skill IDs
-    "allowed_tools": ["Bash", "Read", "Write"]
-}
-```
-
-### API Endpoints
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/skills` | GET | List all available skills |
-| `/api/skills/system` | GET | List only system-provided skills |
-| `/api/skills/upload` | POST | Upload a skill as a ZIP package |
-| `/api/skills/generate` | POST | AI-generate a new skill |
-| `/api/skills/{id}` | DELETE | Delete custom skills (not system skills) |
-
-### Chat Request Flow
+All skills are symlinked into the workspace at `.claude/skills/` so Claude can discover them:
 
 ```
-Frontend ChatRequest
-  ├─ enableSkills: boolean (default: false)
-  └─ enableMCP: boolean (default: false)
-         ↓
-POST /api/chat/stream
-    ├─ agent_id: string
-    ├─ message: string
-    ├─ enable_skills: boolean ← Passed to agent_manager
-    └─ enable_mcp: boolean
-         ↓
-AgentManager.run_conversation()
-    └─ _build_options(agent_config, enable_skills=True, enable_mcp=...)
-        └─ if enable_skills:
-             └─ allowed_tools.append("Skill")
-         ↓
-ClaudeAgentOptions
-    └─ allowed_tools: ["Bash", "Read", "Write", "Skill", ...]
-         ↓
-ClaudeSDKClient(options=options)
-    └─ Claude can now use the Skill tool
+~/.swarm-ai/SwarmWS/
+└── .claude/
+    └── skills/
+        ├── pdf-processor -> ~/.swarm-ai/skills/pdf-processor
+        ├── code-review -> ~/.swarm-ai/skills/code-review
+        └── ...
 ```
+
+---
+
+## Managing Skills
+
+### Upload a Skill (ZIP)
+
+1. Go to the Skills management page
+2. Click "Upload ZIP"
+3. Select a ZIP file containing a skill directory with `SKILL.md`
+4. The skill is extracted, registered in the database, and symlinked
+
+### Create with AI
+
+1. Click "Create with Agent"
+2. Describe what you want the skill to do
+3. The AI generates a `SKILL.md` with appropriate instructions
+
+### Enable Skills for an Agent
+
+1. Go to Agent configuration
+2. Check the skills you want to enable (or toggle "Allow All Skills")
+3. Only enabled skills are available during chat — others are ignored
+
+### Delete a Skill
+
+1. Click the delete icon on the skill row
+2. The skill files are removed from disk and the database record is deleted
+3. Workspace symlinks are re-synced automatically
+
+---
 
 ## Writing Effective Skills
 
-### Best Practices for Descriptions
+### Description Tips
 
-The `description` field is critical for skill discovery. Include:
+The `description` field determines when Claude uses your skill. Good descriptions:
 
-- **What the skill does**: Clear explanation of capabilities
-- **When to use it**: Trigger phrases and use cases
-- **Keywords**: Terms users might mention that should trigger this skill
-
-**Good example:**
 ```yaml
-description: Extract text, fill forms, merge PDFs. Use when working with PDF files, forms, or document extraction. Handles invoice processing, form filling, and PDF manipulation.
+# ✅ Good — specific trigger conditions
+description: >
+  Generate PowerPoint presentations from outlines or data.
+  Use when the user asks to create slides, presentations, or .pptx files.
+
+# ❌ Bad — too vague
+description: Help with documents
 ```
 
-**Bad example:**
+### Instruction Tips
+
+- Be specific about which tools to use (Read, Write, Bash, etc.)
+- Include step-by-step procedures
+- Specify output formats and file paths
+- Add safety rules for destructive operations
+- Reference helper scripts if included
+
+### Example: Code Review Skill
+
 ```yaml
-description: PDF helper
+---
+name: code-review
+description: >
+  Review code for bugs, security issues, and best practices.
+  Use when the user asks for a code review or wants feedback on their code.
+---
+
+# Code Review
+
+## Instructions
+1. Use Read tool to examine the specified files
+2. Analyze for:
+   - Logic errors and edge cases
+   - Security vulnerabilities
+   - Performance issues
+   - Code style and readability
+3. Provide structured feedback with severity levels
+4. Suggest specific fixes with code examples
+
+## Output Format
+- Group findings by severity (Critical, Warning, Info)
+- Include file path and line number for each finding
+- Provide a summary at the end
 ```
 
-### Skill Content Guidelines
+### Example: Report Generator Skill
 
-1. **Be specific**: Provide clear, step-by-step instructions
-2. **Include examples**: Show expected inputs and outputs
-3. **Document dependencies**: List required tools and packages
-4. **Handle edge cases**: Address common failure scenarios
+```yaml
+---
+name: weekly-report
+description: >
+  Generate weekly status reports from project data.
+  Use when the user asks for a weekly report, status update, or progress summary.
+---
+
+# Weekly Report Generator
+
+## Instructions
+1. Gather data from the current project context
+2. Identify completed tasks, in-progress work, and blockers
+3. Generate a structured report with:
+   - Executive summary (2-3 sentences)
+   - Completed items
+   - In-progress items with status
+   - Blockers and risks
+   - Next week priorities
+
+## Safety Rules
+- Never include sensitive credentials or API keys in reports
+- Summarize rather than copy raw data
+```
+
+---
+
+## Security
+
+Skills run within the agent's security sandbox:
+
+- **PreToolUse hooks** validate that the skill is in the agent's allowed list before invocation
+- **Workspace isolation** restricts file access to the agent's sandbox directory
+- **Bash command protection** blocks operations outside the workspace boundary
+
+If a skill is not enabled for the current agent, Claude cannot invoke it even if it matches the request.
+
+---
 
 ## Troubleshooting
 
-### Skills Not Found
-
-- Verify `setting_sources=["user", "project"]` is configured
-- Check `cwd` points to directory containing `.claude/skills/`
-- Ensure SKILL.md exists at correct path
-- Verify directory structure is correct
-
-### Skill Not Being Used
-
-- Check `"Skill"` is in `allowedTools`
-- Make description specific with keywords and triggers
-- Verify YAML syntax is valid (proper indentation, no tabs)
-- Test with explicit trigger phrases from description
-
-### Tool Restrictions Not Working in SDK
-
-- `allowed-tools` in SKILL.md only works with Claude Code CLI
-- In SDK, use main `allowedTools` option to restrict all Skills
-- Control tool access at the agent level, not skill level
-
-## Example Skills
-
-### Read-Only File Analyzer
-
-```yaml
----
-name: safe-file-reader
-description: Read files without making changes. Use for read-only file access, code review, or file analysis.
----
-
-# Safe File Reader
-
-## Instructions
-1. Use Read tool to access file contents
-2. Use Grep to search for patterns
-3. Use Glob to find files by pattern
-4. NEVER modify any files
-
-## Capabilities
-- Read and analyze source code
-- Search for patterns across files
-- Generate reports about file contents
-```
-
-### Database Query Helper
-
-```yaml
----
-name: query-database
-description: Execute SQL queries on the customer database. Use when users need to query data, generate reports, or analyze database contents.
----
-
-# Database Query Helper
-
-## Instructions
-1. Parse user request to understand data needs
-2. Generate appropriate SQL query
-3. Execute query safely (SELECT only)
-4. Format and present results
-
-## Safety Rules
-- Only execute SELECT queries
-- Never modify or delete data
-- Limit results to 1000 rows
-```
-
-### Report Generator
-
-```yaml
----
-name: generate-report
-description: Create PDF reports from data sources. Use when users need formatted reports, summaries, or documentation.
----
-
-# Report Generator
-
-## Instructions
-1. Gather data from specified sources
-2. Apply appropriate formatting
-3. Generate PDF using reportlab
-4. Save to specified location
-
-## Output Formats
-- PDF (default)
-- Markdown
-- HTML
-```
-
-## References
-
-- [Claude Code Skills Documentation](https://docs.anthropic.com/en/docs/claude-code/skills)
-- [Claude Agent SDK Documentation](https://docs.anthropic.com/en/docs/claude-agent-sdk)
-- [Agent Skills Best Practices](https://docs.anthropic.com/en/docs/agents-and-tools/agent-skills)
+| Issue | Solution |
+|-------|----------|
+| Skill not appearing in agent config | Check that `SKILL.md` exists and has valid YAML frontmatter |
+| Skill not being invoked | Improve the `description` — Claude matches on this text |
+| Skill invocation blocked | Verify the skill is enabled for the agent |
+| Symlinks missing after upload | Skills are re-synced on CRUD operations; restart app if needed |
