@@ -72,7 +72,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
   });
 
   return (
-    <div className="group/msg max-w-3xl relative">
+    <div className="group/msg max-w-3xl">
       <AssistantHeader
         timestamp={message.timestamp}
         isStreaming={isStreaming}
@@ -96,21 +96,22 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
         </div>
       )}
 
-      {/* Copy message button — appears on hover, hidden while streaming */}
+      {/* Copy message button — appears on hover below content, hidden while streaming */}
       {!isStreaming && extractMessageText().length > 0 && (
-        <button
-          type="button"
-          onClick={handleCopy}
-          className="absolute top-0 right-0 opacity-0 group-hover/msg:opacity-100 transition-opacity
-                     flex items-center gap-1 px-2 py-1 text-xs text-[var(--color-text-muted)]
-                     hover:text-[var(--color-text)] bg-[var(--color-hover)] rounded"
-          title={copied ? 'Copied!' : 'Copy message'}
-        >
-          <span className="material-symbols-outlined text-sm">
-            {copied ? 'check' : 'content_copy'}
-          </span>
-          {copied ? 'Copied!' : 'Copy'}
-        </button>
+        <div className="opacity-0 group-hover/msg:opacity-100 transition-opacity mt-1">
+          <button
+            type="button"
+            onClick={handleCopy}
+            className="flex items-center gap-1 px-2 py-0.5 text-xs text-[var(--color-text-muted)]
+                       hover:text-[var(--color-text)] rounded transition-colors"
+            title={copied ? 'Copied!' : 'Copy message'}
+          >
+            <span className="material-symbols-outlined text-sm">
+              {copied ? 'check' : 'content_copy'}
+            </span>
+            {copied ? 'Copied!' : 'Copy'}
+          </button>
+        </div>
       )}
     </div>
   );
