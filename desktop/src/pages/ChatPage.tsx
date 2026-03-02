@@ -1060,15 +1060,21 @@ export default function ChatPage() {
                 {messages.length === 0 ? (
                   <WelcomeScreen />
                 ) : (
-                  messages.map((msg) => (
+                  messages.map((msg, idx) => {
+                    // Only pass isStreaming to the last assistant message
+                    const isLastAssistant = isStreaming
+                      && msg.role === 'assistant'
+                      && idx === messages.length - 1;
+                    return (
                       <MessageBubble
                         key={msg.id}
                         message={msg}
                         onAnswerQuestion={handleAnswerQuestion}
                         pendingToolUseId={pendingQuestion?.toolUseId}
-                        isStreaming={isStreaming}
+                        isStreaming={isLastAssistant}
                       />
-                  ))
+                    );
+                  })
                 )}
                 {isStreaming && (
                   <div className="flex items-center gap-2 text-[var(--color-text-muted)]">
