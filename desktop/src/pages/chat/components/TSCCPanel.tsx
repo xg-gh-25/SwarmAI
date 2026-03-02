@@ -104,7 +104,7 @@ function CollapsedBar({
         }
       }}
       className="flex items-center gap-3 px-3 py-2 cursor-pointer rounded-lg
-        bg-[var(--color-surface)] border border-[var(--color-border)]
+        bg-[var(--color-card)] border border-[var(--color-border)]
         hover:bg-[var(--color-hover)] transition-colors text-sm select-none"
     >
       <span className="material-symbols-outlined text-base text-[var(--color-text-muted)]">
@@ -200,7 +200,7 @@ function ActiveAgentsModule({ tsccState }: { tsccState: TSCCState }) {
       ) : (
         <div className="flex flex-wrap gap-1 mb-1">
           {ls.activeAgents.map((a) => (
-            <span key={a} className="px-2 py-0.5 text-xs rounded-full bg-[var(--color-surface-alt)] text-[var(--color-text)]">
+            <span key={a} className="px-2 py-0.5 text-xs rounded-full bg-[var(--color-hover)] text-[var(--color-text)]">
               {a}
             </span>
           ))}
@@ -270,7 +270,7 @@ function ActiveSourcesModule({ tsccState }: { tsccState: TSCCState }) {
           {sources.map((s, i) => (
             <li key={i} className="flex items-center gap-2">
               <span className="text-[var(--color-text)]">{s.path}</span>
-              <span className="px-1.5 py-0 text-[10px] rounded bg-[var(--color-surface-alt)] text-[var(--color-text-muted)]">
+              <span className="px-1.5 py-0 text-[10px] rounded bg-[var(--color-hover)] text-[var(--color-text-muted)]">
                 {s.origin}
               </span>
             </li>
@@ -323,7 +323,7 @@ function ExpandedView({
       role="region"
       aria-label="Thread cognitive context"
       aria-expanded={true}
-      className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] overflow-hidden"
+      className="rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] overflow-hidden"
     >
       {/* Header bar */}
       <div

@@ -99,7 +99,7 @@ export function ActiveAgentsModule({ tsccState }: { tsccState: TSCCState }) {
       ) : (
         <div className="flex flex-wrap gap-1 mb-1">
           {ls.activeAgents.map((a) => (
-            <span key={a} className="px-2 py-0.5 text-xs rounded-full bg-[var(--color-surface-alt)] text-[var(--color-text)]">
+            <span key={a} className="px-2 py-0.5 text-xs rounded-full bg-[var(--color-hover)] text-[var(--color-text)]">
               {a}
             </span>
           ))}
@@ -168,7 +168,7 @@ export function ActiveSourcesModule({ tsccState }: { tsccState: TSCCState }) {
           {sources.map((s, i) => (
             <li key={i} className="flex items-center gap-2">
               <span className="text-[var(--color-text)]">{s.path}</span>
-              <span className="px-1.5 py-0 text-[10px] rounded bg-[var(--color-surface-alt)] text-[var(--color-text-muted)]">
+              <span className="px-1.5 py-0 text-[10px] rounded bg-[var(--color-hover)] text-[var(--color-text-muted)]">
                 {s.origin}
               </span>
             </li>
