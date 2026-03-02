@@ -84,7 +84,7 @@ This implementation creates a build-time database generation system that pre-pop
   - Verify app starts quickly (< 2 seconds)
   - Ensure all tests pass, ask the user if questions arise.
 
-- [~] 5. Integrate with build process
+- [x] 5. Integrate with build process
   - [x] 5.1 Update `desktop/package.json` with seed generation scripts
     - Add "generate-seed-db" script that runs the Python generator
     - Add "prebuild" script that calls generate-seed-db
@@ -101,7 +101,7 @@ This implementation creates a build-time database generation system that pre-pop
     - Test that seed.db is created in correct location
     - _Requirements: 6.3_
 
-- [~] 6. Add backward compatibility handling
+- [x] 6. Add backward compatibility handling
   - [x] 6.1 Ensure migrations run on copied seed database
     - Verify _run_migrations() is called after copying seed DB
     - Test with seed DB that has older schema version
