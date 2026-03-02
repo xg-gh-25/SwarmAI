@@ -92,7 +92,6 @@ export interface UseUnifiedTabStateReturn {
   updateTabStatus: (tabId: string, status: TabStatus) => void;
 
   // --- Lifecycle ---
-  saveCurrentTab: () => void;
   restoreTab: (tabId: string) => boolean;
   initTabState: (tabId: string, initialMessages?: Message[]) => void;
   cleanupTabState: (tabId: string) => void;
@@ -360,22 +359,6 @@ export function useUnifiedTabState(
 
   // ---- Lifecycle ----------------------------------------------------------
 
-  /**
-   * Writes the current foreground React state into the active tab entry.
-   * Callers pass the live React state values; the hook merges them into
-   * the Tab_Map entry for the active tab.
-   */
-  const saveCurrentTab = useCallback(() => {
-    const tabId = activeTabIdRef.current;
-    if (!tabId) return;
-    const tab = tabMapRef.current.get(tabId);
-    if (!tab) return;
-    // No-op: In the unified hook, the tab map IS the source of truth.
-    // Stream handlers write directly to the map via updateTabState.
-    // This method exists for API compatibility — callers that need to
-    // sync React state into the map should call updateTabState directly.
-  }, []);
-
   const restoreTab = useCallback((tabId: string): boolean => {
     return tabMapRef.current.has(tabId);
   }, []);
@@ -559,7 +542,6 @@ export function useUnifiedTabState(
     updateTabStatus,
 
     // Lifecycle
-    saveCurrentTab,
     restoreTab,
     initTabState,
     cleanupTabState,
