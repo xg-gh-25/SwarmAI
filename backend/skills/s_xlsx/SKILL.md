@@ -61,6 +61,15 @@ Unless otherwise stated by the user or existing template
 
 # XLSX creation, editing, and analysis
 
+## Output Location
+
+**All generated .xlsx files should be saved to:**
+```
+~/.swarm-ai/SwarmWS/Knowledge/Notes/
+```
+
+This is the designated location for draft spreadsheets. Once finalized, spreadsheets can be moved to `Knowledge/Knowledge Base/`.
+
 ## Overview
 
 A user may ask you to create, edit, or analyze the contents of an .xlsx file. You have different tools and workflows available for different tasks.

@@ -13,6 +13,15 @@ Structured narrative writing drives decision-making, innovation, and customer fo
 
 **Core principle:** Write clear, data-driven documents that enable decisions and action.
 
+## Output Location
+
+**All generated documents should be saved to:**
+```
+~/.swarm-ai/SwarmWS/Knowledge/Notes/
+```
+
+This is the designated location for draft documents. Once finalized and approved, documents can be moved to `Knowledge/Knowledge Base/`.
+
 ## Usage
 
 Use this skill when:

@@ -9,6 +9,15 @@ description: "Comprehensive document creation, editing, and analysis with suppor
 
 A user may ask you to create, edit, or analyze the contents of a .docx file. A .docx file is essentially a ZIP archive containing XML files and other resources that you can read or edit. You have different tools and workflows available for different tasks.
 
+## Output Location
+
+**All generated .docx files should be saved to:**
+```
+~/.swarm-ai/SwarmWS/Knowledge/Notes/
+```
+
+This is the designated location for draft documents. Once finalized, documents can be moved to `Knowledge/Knowledge Base/`.
+
 ## Workflow Decision Tree
 
 ### Reading/Analyzing Content
@@ -16,6 +25,7 @@ Use "Text extraction" or "Raw XML access" sections below
 
 ### Creating New Document
 Use "Creating a new Word document" workflow
+**Save output to:** `~/.swarm-ai/SwarmWS/Knowledge/Notes/<filename>.docx`
 
 ### Editing Existing Document
 - **Your own document + simple changes**
