@@ -95,9 +95,9 @@ async def get_system_status() -> SystemStatusResponse:
             agent_ready = True
             agent_name = agent.get("name")
             # Count bound skills and MCP servers
-            skill_ids = agent.get("skill_ids", [])
+            skill_names = agent.get("allowed_skills", [])
             mcp_ids = agent.get("mcp_ids", [])
-            skills_count = len(skill_ids) if skill_ids else 0
+            skills_count = len(skill_names) if skill_names else 0
             mcp_servers_count = len(mcp_ids) if mcp_ids else 0
     except Exception as e:
         logger.error(f"Failed to get default agent: {e}")

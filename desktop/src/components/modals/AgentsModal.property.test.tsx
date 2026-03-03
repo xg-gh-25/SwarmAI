@@ -34,7 +34,7 @@ function createAgentFromRequest(request: AgentCreateRequest): Agent {
     systemPrompt: request.systemPrompt,
     allowedTools: request.allowedTools ?? [],
     pluginIds: request.pluginIds ?? [],
-    skillIds: request.skillIds ?? [],
+    allowedSkills: request.allowedSkills ?? [],
     allowAllSkills: request.allowAllSkills ?? false,
     mcpIds: request.mcpIds ?? [],
     workingDirectory: undefined,
@@ -71,7 +71,7 @@ function updateAgent(agent: Agent, updates: AgentUpdateRequest): Agent {
     systemPrompt: updates.systemPrompt ?? agent.systemPrompt,
     allowedTools: updates.allowedTools ?? agent.allowedTools,
     pluginIds: updates.pluginIds ?? agent.pluginIds,
-    skillIds: updates.skillIds ?? agent.skillIds,
+    allowedSkills: updates.allowedSkills ?? agent.allowedSkills,
     allowAllSkills: updates.allowAllSkills ?? agent.allowAllSkills,
     mcpIds: updates.mcpIds ?? agent.mcpIds,
     enableBashTool: updates.enableBashTool ?? agent.enableBashTool,
@@ -140,8 +140,8 @@ function getSkillDisplayNames(
   skills: Array<{ id: string; name: string }>
 ): string {
   if (agent.allowAllSkills) return 'All Skills';
-  if (!agent.skillIds || agent.skillIds.length === 0) return '-';
-  const names = agent.skillIds
+  if (!agent.allowedSkills || agent.allowedSkills.length === 0) return '-';
+  const names = agent.allowedSkills
     .map((id) => skills.find((s) => s.id === id)?.name)
     .filter(Boolean);
   return names.length > 0 ? names.join(', ') : '-';
@@ -207,7 +207,7 @@ const agentCreateRequestArb: fc.Arbitrary<AgentCreateRequest> = fc.record({
   ),
   systemPrompt: fc.option(fc.string({ minLength: 0, maxLength: 500 }), { nil: undefined }),
   pluginIds: fc.option(fc.array(fc.uuid(), { maxLength: 3 }), { nil: undefined }),
-  skillIds: fc.option(fc.array(fc.uuid(), { maxLength: 5 }), { nil: undefined }),
+  allowedSkills: fc.option(fc.array(fc.uuid(), { maxLength: 5 }), { nil: undefined }),
   allowAllSkills: fc.option(fc.boolean(), { nil: undefined }),
   mcpIds: fc.option(fc.array(fc.uuid(), { maxLength: 3 }), { nil: undefined }),
   allowedTools: fc.option(fc.array(fc.string(), { maxLength: 5 }), { nil: undefined }),
@@ -226,7 +226,7 @@ const agentUpdateRequestArb: fc.Arbitrary<AgentUpdateRequest> = fc.record({
   name: fc.option(agentNameArb, { nil: undefined }),
   description: fc.option(fc.string({ minLength: 0, maxLength: 200 }), { nil: undefined }),
   model: fc.option(modelArb, { nil: undefined }),
-  skillIds: fc.option(fc.array(fc.uuid(), { maxLength: 5 }), { nil: undefined }),
+  allowedSkills: fc.option(fc.array(fc.uuid(), { maxLength: 5 }), { nil: undefined }),
   mcpIds: fc.option(fc.array(fc.uuid(), { maxLength: 3 }), { nil: undefined }),
 });
 
@@ -468,16 +468,16 @@ describe('Agent Management - Property-Based Tests', () => {
       fc.assert(
         fc.property(agentArb(0), (agent) => {
           // Update with new skills and MCPs
-          const newSkillIds = ['skill-1', 'skill-2'];
+          const newAllowedSkills = ['skill-1', 'skill-2'];
           const newMcpIds = ['mcp-1', 'mcp-2'];
 
           const updatedAgent = updateAgent(agent, {
-            skillIds: newSkillIds,
+            allowedSkills: newAllowedSkills,
             mcpIds: newMcpIds,
           });
 
           // Property: Updated agent SHALL have new skill IDs
-          expect(updatedAgent.skillIds).toEqual(newSkillIds);
+          expect(updatedAgent.allowedSkills).toEqual(newAllowedSkills);
 
           // Property: Updated agent SHALL have new MCP IDs
           expect(updatedAgent.mcpIds).toEqual(newMcpIds);
@@ -541,14 +541,14 @@ describe('Agent Management - Property-Based Tests', () => {
             // Assign some skill IDs to the agent
             const agentWithSkills = {
               ...agent,
-              skillIds: skills.slice(0, 2).map((s) => s.id),
+              allowedSkills: skills.slice(0, 2).map((s) => s.id),
               allowAllSkills: false,
             };
 
             const displayNames = getSkillDisplayNames(agentWithSkills, skills);
 
             // Property: Display SHALL show skill names or '-'
-            if (agentWithSkills.skillIds.length > 0) {
+            if (agentWithSkills.allowedSkills.length > 0) {
               expect(displayNames).not.toBe('-');
             }
           }

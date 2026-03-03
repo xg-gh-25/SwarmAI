@@ -255,7 +255,7 @@ class TestSwarmAgentProtections:
                 "permission_mode": "default",
                 "is_default": False,
                 "is_system_agent": True,
-                "skill_ids": [],
+                "allowed_skills": [],
                 "mcp_ids": [],
                 "created_at": now,
                 "updated_at": now,
@@ -269,27 +269,25 @@ class TestSwarmAgentProtections:
     def user_skill_id(self, client: TestClient) -> str:
         """Create a user skill for testing.
 
-        Returns the skill ID of the created user skill.
+        Returns the skill folder name of the created user skill.
         """
-        import asyncio
-        from database import db
-        from datetime import datetime
+        import os
+        from pathlib import Path
 
-        async def create_user_skill():
-            now = datetime.now().isoformat()
-            skill_data = {
-                "id": "user-skill-test",
-                "name": "UserTestSkill",
-                "description": "A user skill for testing",
-                "version": "1.0.0",
-                "is_system": False,
-                "created_at": now,
-                "updated_at": now,
-            }
-            await db.skills.put(skill_data)
-            return skill_data["id"]
-
-        return asyncio.get_event_loop().run_until_complete(create_user_skill())
+        # Use a skill folder name that exists in the filesystem
+        # For testing, we'll use a known user skill folder name
+        skill_folder = "user-test-skill"
+        
+        # Create the skill directory if it doesn't exist (for testing)
+        skills_dir = Path.home() / ".swarm-ai" / "skills"
+        skill_path = skills_dir / skill_folder
+        skill_path.mkdir(parents=True, exist_ok=True)
+        
+        # Create a minimal SKILL.md file
+        skill_md = skill_path / "SKILL.md"
+        skill_md.write_text("# User Test Skill\n\nA user skill for testing.")
+        
+        return skill_folder
 
     @pytest.fixture
     def user_mcp_id(self, client: TestClient) -> str:
@@ -322,7 +320,7 @@ class TestSwarmAgentProtections:
     def swarm_agent_with_system_resources(self, client: TestClient) -> dict:
         """Create a SwarmAgent with system skill and MCP bound.
 
-        Returns a dict with agent_id, system_skill_id, and system_mcp_id.
+        Returns a dict with agent_id, system_skill_folder, and system_mcp_id.
         The system resources are created first, then the agent is created with them bound.
         """
         import asyncio
@@ -332,17 +330,8 @@ class TestSwarmAgentProtections:
         async def setup():
             now = datetime.now().isoformat()
 
-            # Create system skill
-            skill_data = {
-                "id": "system-skill-for-agent",
-                "name": "SystemSkillForAgent",
-                "description": "A system skill for testing",
-                "version": "1.0.0",
-                "is_system": True,
-                "created_at": now,
-                "updated_at": now,
-            }
-            await db.skills.put(skill_data)
+            # Use a known system skill folder name (these exist in the filesystem)
+            system_skill_folder = "code-simplifier"  # A known system skill
 
             # Create system MCP
             mcp_data = {
@@ -366,7 +355,7 @@ class TestSwarmAgentProtections:
                 "permission_mode": "default",
                 "is_default": False,
                 "is_system_agent": True,
-                "skill_ids": [skill_data["id"]],
+                "allowed_skills": [system_skill_folder],
                 "mcp_ids": [mcp_data["id"]],
                 "created_at": now,
                 "updated_at": now,
@@ -375,7 +364,7 @@ class TestSwarmAgentProtections:
 
             return {
                 "agent_id": agent_data["id"],
-                "system_skill_id": skill_data["id"],
+                "system_skill_folder": system_skill_folder,
                 "system_mcp_id": mcp_data["id"],
             }
 
@@ -444,10 +433,10 @@ class TestSwarmAgentProtections:
         **Validates: Requirements 4.1**
         """
         agent_id = swarm_agent_with_system_resources["agent_id"]
-        # Try to update with empty skill_ids (removing the system skill)
+        # Try to update with empty allowed_skills (removing the system skill)
         response = client.put(
             f"/api/agents/{agent_id}",
-            json={"skill_ids": []}
+            json={"allowed_skills": []}
         )
         assert response.status_code == 400
         data = response.json()
@@ -463,30 +452,30 @@ class TestSwarmAgentProtections:
         **Validates: Requirements 4.1**
         """
         import asyncio
-        from database import db
+        from core.skill_manager import skill_manager
 
         agent_id = swarm_agent_with_system_resources["agent_id"]
 
-        # Get ALL system skills from database
-        async def get_all_system_skills():
-            return await db.skills.list_by_system()
+        # Get ALL built-in (system) skills from SkillManager
+        async def get_all_builtin_skills():
+            cache = await skill_manager.get_cache()
+            return [folder for folder, info in cache.items() if info.source_tier == "built-in"]
 
-        all_system_skills = asyncio.get_event_loop().run_until_complete(get_all_system_skills())
-        all_system_skill_ids = [s["id"] for s in all_system_skills]
+        all_builtin_skill_folders = asyncio.get_event_loop().run_until_complete(get_all_builtin_skills())
 
-        # First add a user skill while keeping ALL system skills
+        # First add a user skill while keeping ALL built-in skills
         response = client.put(
             f"/api/agents/{agent_id}",
-            json={"skill_ids": all_system_skill_ids + [user_skill_id]}
+            json={"allowed_skills": all_builtin_skill_folders + [user_skill_id]}
         )
         assert response.status_code == 200
 
-        # Now try to remove one system skill (keeping user skill and other system skills)
-        # This should fail because we're removing a system skill
-        remaining_skill_ids = all_system_skill_ids[1:] + [user_skill_id]  # Remove first system skill
+        # Now try to remove one built-in skill (keeping user skill and other built-in skills)
+        # This should fail because we're removing a built-in skill
+        remaining_allowed_skills = all_builtin_skill_folders[1:] + [user_skill_id]  # Remove first built-in skill
         response = client.put(
             f"/api/agents/{agent_id}",
-            json={"skill_ids": remaining_skill_ids}
+            json={"allowed_skills": remaining_allowed_skills}
         )
         assert response.status_code == 400
         data = response.json()
@@ -565,29 +554,29 @@ class TestSwarmAgentProtections:
         **Validates: Requirements 5.1**
         """
         import asyncio
-        from database import db
+        from core.skill_manager import skill_manager
 
         agent_id = swarm_agent_with_system_resources["agent_id"]
 
-        # Get ALL system skills from database
-        async def get_all_system_skills():
-            return await db.skills.list_by_system()
+        # Get ALL built-in (system) skills from SkillManager
+        async def get_all_builtin_skills():
+            cache = await skill_manager.get_cache()
+            return [folder for folder, info in cache.items() if info.source_tier == "built-in"]
 
-        all_system_skills = asyncio.get_event_loop().run_until_complete(get_all_system_skills())
-        all_system_skill_ids = [s["id"] for s in all_system_skills]
+        all_builtin_skill_folders = asyncio.get_event_loop().run_until_complete(get_all_builtin_skills())
 
-        # Add user skill while keeping ALL system skills
+        # Add user skill while keeping ALL built-in skills
         response = client.put(
             f"/api/agents/{agent_id}",
-            json={"skill_ids": all_system_skill_ids + [user_skill_id]}
+            json={"allowed_skills": all_builtin_skill_folders + [user_skill_id]}
         )
         assert response.status_code == 200
         data = response.json()
-        # Verify all system skills are still bound
-        for skill_id in all_system_skill_ids:
-            assert skill_id in data["skill_ids"]
+        # Verify all built-in skills are still bound
+        for skill_folder in all_builtin_skill_folders:
+            assert skill_folder in data["allowed_skills"]
         # Verify user skill is now bound
-        assert user_skill_id in data["skill_ids"]
+        assert user_skill_id in data["allowed_skills"]
 
     def test_user_skill_unbind_from_swarm_agent_success(
         self, client: TestClient, swarm_agent_with_system_resources: dict,
@@ -598,36 +587,36 @@ class TestSwarmAgentProtections:
         **Validates: Requirements 5.2**
         """
         import asyncio
-        from database import db
+        from core.skill_manager import skill_manager
 
         agent_id = swarm_agent_with_system_resources["agent_id"]
 
-        # Get ALL system skills from database
-        async def get_all_system_skills():
-            return await db.skills.list_by_system()
+        # Get ALL built-in (system) skills from SkillManager
+        async def get_all_builtin_skills():
+            cache = await skill_manager.get_cache()
+            return [folder for folder, info in cache.items() if info.source_tier == "built-in"]
 
-        all_system_skills = asyncio.get_event_loop().run_until_complete(get_all_system_skills())
-        all_system_skill_ids = [s["id"] for s in all_system_skills]
+        all_builtin_skill_folders = asyncio.get_event_loop().run_until_complete(get_all_builtin_skills())
 
-        # First add user skill while keeping ALL system skills
+        # First add user skill while keeping ALL built-in skills
         response = client.put(
             f"/api/agents/{agent_id}",
-            json={"skill_ids": all_system_skill_ids + [user_skill_id]}
+            json={"allowed_skills": all_builtin_skill_folders + [user_skill_id]}
         )
         assert response.status_code == 200
 
-        # Now remove only the user skill (keeping ALL system skills)
+        # Now remove only the user skill (keeping ALL built-in skills)
         response = client.put(
             f"/api/agents/{agent_id}",
-            json={"skill_ids": all_system_skill_ids}
+            json={"allowed_skills": all_builtin_skill_folders}
         )
         assert response.status_code == 200
         data = response.json()
-        # Verify all system skills are still bound
-        for skill_id in all_system_skill_ids:
-            assert skill_id in data["skill_ids"]
+        # Verify all built-in skills are still bound
+        for skill_folder in all_builtin_skill_folders:
+            assert skill_folder in data["allowed_skills"]
         # Verify user skill is no longer bound
-        assert user_skill_id not in data["skill_ids"]
+        assert user_skill_id not in data["allowed_skills"]
 
     # -------------------------------------------------------------------------
     # User MCP Bind/Unbind Success Tests

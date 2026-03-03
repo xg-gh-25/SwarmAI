@@ -1,14 +1,14 @@
 """Generate pre-seeded database for SwarmAI distribution.
 
 This script creates a seed database at build time containing:
+
 - Default SwarmAgent with system configuration
-- System skills (DOCUMENT, RESEARCH)
 - System MCP servers (Filesystem)
 - Default SwarmWorkspace record
 - App settings with initialization_complete=true
 
-The seed database is bundled with the app and copied to the user's
-data directory on first launch, eliminating runtime initialization delays.
+Skills are no longer seeded into the database.  Built-in skills live in
+``backend/skills/`` and are discovered at runtime by ``SkillManager``.
 
 The output DB uses DELETE journal mode (not WAL) so it is a single
 portable file suitable for bundling — no ``-wal`` / ``-shm`` sidecars.
@@ -33,40 +33,6 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
-
-
-def parse_skill_frontmatter(content: str) -> dict:
-    """Parse YAML frontmatter from a skill markdown file.
-    
-    Args:
-        content: The full content of the skill markdown file
-        
-    Returns:
-        Dictionary with parsed frontmatter fields (name, description, version)
-    """
-    result = {"name": "", "description": "", "version": "1.0.0"}
-    
-    if not content.startswith("---"):
-        return result
-    
-    # Find the closing ---
-    end_idx = content.find("---", 3)
-    if end_idx == -1:
-        return result
-    
-    frontmatter = content[3:end_idx].strip()
-    
-    # Simple YAML parsing for key: value pairs
-    for line in frontmatter.split("\n"):
-        line = line.strip()
-        if ":" in line:
-            key, value = line.split(":", 1)
-            key = key.strip().lower()
-            value = value.strip().strip('"').strip("'")
-            if key in result:
-                result[key] = value
-    
-    return result
 
 
 class SeedDatabaseGenerator:
@@ -103,13 +69,12 @@ class SeedDatabaseGenerator:
         
         # Insert all default records
         await self._insert_default_agent()
-        skill_ids = await self._insert_system_skills()
         mcp_ids = await self._insert_system_mcps()
         await self._insert_default_workspace()
         await self._insert_app_settings()
         
-        # Update agent with skill and MCP IDs
-        await self._update_agent_references(skill_ids, mcp_ids)
+        # Update agent with MCP IDs
+        await self._update_agent_references(mcp_ids)
         
         # Validate the generated database
         if not await self._validate():
@@ -152,7 +117,7 @@ class SeedDatabaseGenerator:
             "system_prompt": agent_config.get("system_prompt", ""),
             "allowed_tools": json.dumps(agent_config.get("allowed_tools", [])),
             "plugin_ids": json.dumps(agent_config.get("plugin_ids", [])),
-            "skill_ids": json.dumps([]),  # Will be updated after skills are inserted
+            "allowed_skills": json.dumps([]),  # Built-in skills always available without explicit listing
             "allow_all_skills": 1 if agent_config.get("allow_all_skills", True) else 0,
             "mcp_ids": json.dumps([]),  # Will be updated after MCPs are inserted
             "working_directory": agent_config.get("working_directory"),
@@ -177,55 +142,6 @@ class SeedDatabaseGenerator:
         
         await self.db.agents.put(agent)
         logger.info(f"Inserted default agent: {agent['name']} (id={agent['id']})")
-    
-    async def _insert_system_skills(self) -> list[str]:
-        """Insert system skill records from default-skills/*.md.
-        
-        Returns:
-            List of inserted skill IDs
-        """
-        skills_dir = self.resources_dir / "default-skills"
-        skill_ids = []
-        
-        if not skills_dir.exists():
-            logger.warning(f"default-skills directory not found at {skills_dir}")
-            return skill_ids
-        
-        for skill_file in skills_dir.glob("*.md"):
-            content = skill_file.read_text()
-            frontmatter = parse_skill_frontmatter(content)
-            
-            # Generate skill ID from filename
-            skill_name = skill_file.stem.lower()
-            skill_id = f"default-{skill_name}"
-            
-            skill = {
-                "id": skill_id,
-                "name": frontmatter.get("name", skill_file.stem),
-                "description": frontmatter.get("description", ""),
-                "folder_name": skill_name,
-                "local_path": None,  # Will be set at runtime
-                "source_type": "system",
-                "source_plugin_id": None,
-                "source_marketplace_id": None,
-                "git_url": None,
-                "git_branch": "main",
-                "git_commit": None,
-                "created_by": None,
-                "version": frontmatter.get("version", "1.0.0"),
-                "is_system": 1,
-                "current_version": 0,
-                "has_draft": 0,
-                "user_id": None,
-                "created_at": self._now,
-                "updated_at": self._now,
-            }
-            
-            await self.db.skills.put(skill)
-            skill_ids.append(skill_id)
-            logger.info(f"Inserted system skill: {skill['name']} (id={skill_id})")
-        
-        return skill_ids
     
     async def _insert_system_mcps(self) -> list[str]:
         """Insert system MCP server records from default-mcp-servers.json.
@@ -305,19 +221,17 @@ class SeedDatabaseGenerator:
         await self.db.app_settings.put(settings)
         logger.info("Inserted app_settings with initialization_complete=true")
     
-    async def _update_agent_references(self, skill_ids: list[str], mcp_ids: list[str]) -> None:
-        """Update the default agent with skill and MCP references.
+    async def _update_agent_references(self, mcp_ids: list[str]) -> None:
+        """Update the default agent with MCP references.
         
         Args:
-            skill_ids: List of inserted skill IDs
             mcp_ids: List of inserted MCP server IDs
         """
         await self.db.agents.update("default", {
-            "skill_ids": json.dumps(skill_ids),
             "mcp_ids": json.dumps(mcp_ids),
             "updated_at": self._now,
         })
-        logger.info(f"Updated agent with skill_ids={skill_ids}, mcp_ids={mcp_ids}")
+        logger.info(f"Updated agent with mcp_ids={mcp_ids}")
     
     async def _validate(self) -> bool:
         """Validate that all required records exist.
@@ -338,18 +252,6 @@ class SeedDatabaseGenerator:
             valid = False
         else:
             logger.info("✓ SwarmAgent validated")
-        
-        # Validate system skills exist
-        skills = await self.db.skills.list_by_system()
-        if not skills:
-            logger.error("Validation failed: No system skills found")
-            valid = False
-        else:
-            for skill in skills:
-                if not skill.get("is_system"):
-                    logger.error(f"Validation failed: Skill {skill['id']} is_system is not true")
-                    valid = False
-            logger.info(f"✓ {len(skills)} system skills validated")
         
         # Validate system MCPs exist
         mcps = await self.db.mcp_servers.list_by_system()

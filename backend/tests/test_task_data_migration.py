@@ -82,7 +82,7 @@ class TestTaskDataMigration:
                 system_prompt TEXT,
                 allowed_tools TEXT DEFAULT '[]',
                 plugin_ids TEXT DEFAULT '[]',
-                skill_ids TEXT DEFAULT '[]',
+                allowed_skills TEXT DEFAULT '[]',
                 allow_all_skills INTEGER DEFAULT 0,
                 mcp_ids TEXT DEFAULT '[]',
                 working_directory TEXT,

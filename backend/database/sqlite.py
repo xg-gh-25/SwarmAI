@@ -214,67 +214,6 @@ class SQLiteMessagesTable(SQLiteTable[T], Generic[T]):
             return cursor.rowcount
 
 
-class SQLiteSkillVersionsTable(SQLiteTable[T], Generic[T]):
-    """Specialized SQLite table for skill versions with skill_id querying support."""
-
-    async def list_by_skill(self, skill_id: str) -> list[T]:
-        """List all versions for a skill, ordered by version number descending."""
-        async with self._get_connection() as conn:
-            conn.row_factory = aiosqlite.Row
-            async with conn.execute(
-                f"SELECT * FROM {self.table_name} WHERE skill_id = ? ORDER BY version DESC",
-                (skill_id,)
-            ) as cursor:
-                rows = await cursor.fetchall()
-                return [self._row_to_dict(row) for row in rows]
-
-    async def get_by_skill_and_version(self, skill_id: str, version: int) -> Optional[T]:
-        """Get a specific version of a skill."""
-        async with self._get_connection() as conn:
-            conn.row_factory = aiosqlite.Row
-            async with conn.execute(
-                f"SELECT * FROM {self.table_name} WHERE skill_id = ? AND version = ?",
-                (skill_id, version)
-            ) as cursor:
-                row = await cursor.fetchone()
-                return self._row_to_dict(row) if row else None
-
-    async def delete_by_skill(self, skill_id: str) -> int:
-        """Delete all versions for a skill. Returns count of deleted items."""
-        async with self._get_connection() as conn:
-            cursor = await conn.execute(
-                f"DELETE FROM {self.table_name} WHERE skill_id = ?",
-                (skill_id,)
-            )
-            await conn.commit()
-            return cursor.rowcount
-
-
-class SQLiteSkillsTable(SQLiteTable[T], Generic[T]):
-    """Specialized SQLite table for skills with source_plugin_id querying support."""
-
-    async def list_by_source_plugin(self, plugin_id: str) -> list[T]:
-        """List all skills installed by a specific plugin."""
-        async with self._get_connection() as conn:
-            conn.row_factory = aiosqlite.Row
-            async with conn.execute(
-                f"SELECT * FROM {self.table_name} WHERE source_plugin_id = ?",
-                (plugin_id,)
-            ) as cursor:
-                rows = await cursor.fetchall()
-                return [self._row_to_dict(row) for row in rows]
-
-    async def list_by_system(self) -> list[T]:
-        """List all skills where is_system=True."""
-        async with self._get_connection() as conn:
-            conn.row_factory = aiosqlite.Row
-            async with conn.execute(
-                f"SELECT * FROM {self.table_name} WHERE is_system = 1 ORDER BY created_at DESC"
-            ) as cursor:
-                rows = await cursor.fetchall()
-                return [self._row_to_dict(row) for row in rows]
-
-
 class SQLiteMCPServersTable(SQLiteTable[T], Generic[T]):
     """Specialized SQLite table for MCP servers with system resource querying support."""
 
@@ -605,42 +544,6 @@ class SQLiteToDosTable(WorkspaceScopedTable[T], Generic[T]):
     async def count_by_workspace_and_status(self, workspace_id: str, status: str) -> int:
         """Count ToDos by workspace and status."""
         return await self.count_by_workspace_and_filter(workspace_id, status)
-
-
-class SQLiteWorkspaceSkillsTable(SQLiteTable[T], Generic[T]):
-    """Specialized SQLite table for Workspace Skills configuration."""
-
-    async def list_by_workspace(self, workspace_id: str) -> list[T]:
-        """List all skill configurations for a workspace."""
-        async with self._get_connection() as conn:
-            conn.row_factory = aiosqlite.Row
-            async with conn.execute(
-                f"SELECT * FROM {self.table_name} WHERE workspace_id = ? ORDER BY created_at ASC",
-                (workspace_id,)
-            ) as cursor:
-                rows = await cursor.fetchall()
-                return [self._row_to_dict(row) for row in rows]
-
-    async def get_by_workspace_and_skill(self, workspace_id: str, skill_id: str) -> Optional[T]:
-        """Get a specific skill configuration for a workspace."""
-        async with self._get_connection() as conn:
-            conn.row_factory = aiosqlite.Row
-            async with conn.execute(
-                f"SELECT * FROM {self.table_name} WHERE workspace_id = ? AND skill_id = ?",
-                (workspace_id, skill_id)
-            ) as cursor:
-                row = await cursor.fetchone()
-                return self._row_to_dict(row) if row else None
-
-    async def delete_by_workspace(self, workspace_id: str) -> int:
-        """Delete all skill configurations for a workspace."""
-        async with self._get_connection() as conn:
-            cursor = await conn.execute(
-                f"DELETE FROM {self.table_name} WHERE workspace_id = ?",
-                (workspace_id,)
-            )
-            await conn.commit()
-            return cursor.rowcount
 
 
 class SQLiteWorkspaceMcpsTable(SQLiteTable[T], Generic[T]):
@@ -1041,7 +944,7 @@ class SQLiteDatabase(BaseDatabase):
         system_prompt TEXT,
         allowed_tools TEXT DEFAULT '[]',
         plugin_ids TEXT DEFAULT '[]',
-        skill_ids TEXT DEFAULT '[]',
+        allowed_skills TEXT DEFAULT '[]',
         allow_all_skills INTEGER DEFAULT 0,
         mcp_ids TEXT DEFAULT '[]',
         working_directory TEXT,
@@ -1064,53 +967,6 @@ class SQLiteDatabase(BaseDatabase):
         updated_at TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_agents_user_id ON agents(user_id);
-
-    -- Skills table
-    -- Validates: Requirements 19.2
-    CREATE TABLE IF NOT EXISTS skills (
-        id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        description TEXT,
-        folder_name TEXT UNIQUE,
-        local_path TEXT,
-        -- Source tracking
-        source_type TEXT DEFAULT 'user',
-        source_plugin_id TEXT,
-        source_marketplace_id TEXT,
-        -- Git tracking
-        git_url TEXT,
-        git_branch TEXT DEFAULT 'main',
-        git_commit TEXT,
-        -- Metadata
-        created_by TEXT,
-        version TEXT DEFAULT '1.0.0',
-        is_system INTEGER DEFAULT 0,
-        is_privileged INTEGER DEFAULT 0,
-        current_version INTEGER DEFAULT 0,
-        has_draft INTEGER DEFAULT 0,
-        user_id TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        FOREIGN KEY (source_plugin_id) REFERENCES plugins(id) ON DELETE SET NULL,
-        FOREIGN KEY (source_marketplace_id) REFERENCES marketplaces(id) ON DELETE SET NULL
-    );
-    CREATE INDEX IF NOT EXISTS idx_skills_user_id ON skills(user_id);
-    CREATE INDEX IF NOT EXISTS idx_skills_folder_name ON skills(folder_name);
-    CREATE INDEX IF NOT EXISTS idx_skills_source_plugin ON skills(source_plugin_id);
-    CREATE INDEX IF NOT EXISTS idx_skills_source_marketplace ON skills(source_marketplace_id);
-
-    -- Skill versions table
-    CREATE TABLE IF NOT EXISTS skill_versions (
-        id TEXT PRIMARY KEY,
-        skill_id TEXT NOT NULL,
-        version INTEGER NOT NULL,
-        git_commit TEXT,
-        local_path TEXT,
-        change_summary TEXT,
-        created_at TEXT NOT NULL,
-        FOREIGN KEY (skill_id) REFERENCES skills(id) ON DELETE CASCADE
-    );
-    CREATE INDEX IF NOT EXISTS idx_skill_versions_skill_id ON skill_versions(skill_id);
 
     -- MCP servers table
     -- Validates: Requirements 19.4
@@ -1359,20 +1215,6 @@ class SQLiteDatabase(BaseDatabase):
     CREATE INDEX IF NOT EXISTS idx_todos_due_date ON todos(due_date);
     CREATE INDEX IF NOT EXISTS idx_todos_workspace_status ON todos(workspace_id, status);
 
-    -- Workspace Skills junction table (Skills configuration per workspace)
-    -- Validates: Requirements 19.1
-    CREATE TABLE IF NOT EXISTS workspace_skills (
-        id TEXT PRIMARY KEY,
-        workspace_id TEXT NOT NULL,
-        skill_id TEXT NOT NULL,
-        enabled INTEGER DEFAULT 1,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        FOREIGN KEY (workspace_id) REFERENCES swarm_workspaces(id) ON DELETE CASCADE,
-        UNIQUE(workspace_id, skill_id)
-    );
-    CREATE INDEX IF NOT EXISTS idx_workspace_skills_workspace_id ON workspace_skills(workspace_id);
-
     -- Workspace MCPs junction table (MCP server configuration per workspace)
     -- Validates: Requirements 19.3
     CREATE TABLE IF NOT EXISTS workspace_mcps (
@@ -1493,12 +1335,10 @@ class SQLiteDatabase(BaseDatabase):
 
         # Initialize tables
         self._agents = SQLiteTable[dict]("agents", self.db_path)
-        self._skills = SQLiteSkillsTable[dict]("skills", self.db_path)
         self._mcp_servers = SQLiteMCPServersTable[dict]("mcp_servers", self.db_path)
         self._sessions = SQLiteTable[dict]("sessions", self.db_path)
         self._messages = SQLiteMessagesTable[dict]("messages", self.db_path)
         self._users = SQLiteTable[dict]("users", self.db_path)
-        self._skill_versions = SQLiteSkillVersionsTable[dict]("skill_versions", self.db_path)
         self._app_settings = SQLiteTable[dict]("app_settings", self.db_path)
         self._marketplaces = SQLiteTable[dict]("marketplaces", self.db_path)
         self._plugins = SQLitePluginsTable[dict]("plugins", self.db_path)
@@ -1510,7 +1350,6 @@ class SQLiteDatabase(BaseDatabase):
         # Daily Work Operating Loop tables
         self._todos = SQLiteToDosTable[dict]("todos", self.db_path)
         # Workspace configuration tables
-        self._workspace_skills = SQLiteWorkspaceSkillsTable[dict]("workspace_skills", self.db_path)
         self._workspace_mcps = SQLiteWorkspaceMcpsTable[dict]("workspace_mcps", self.db_path)
         self._workspace_knowledgebases = SQLiteWorkspaceKnowledgebasesTable[dict]("workspace_knowledgebases", self.db_path)
         self._workspace_audit_log = SQLiteWorkspaceAuditLogTable[dict]("workspace_audit_log", self.db_path)
@@ -1734,17 +1573,22 @@ class SQLiteDatabase(BaseDatabase):
         except Exception:
             pass  # Index may already exist
 
-        # Migration: Add is_privileged column to skills table
+        # Migration: Add is_privileged column to skills table (if table exists)
         # Validates: Requirements 19.2
-        cursor = await conn.execute("PRAGMA table_info(skills)")
-        skills_columns = await cursor.fetchall()
-        skills_column_names = [col[1] for col in skills_columns]
+        # Note: Skills table may not exist if using filesystem-only skills
+        cursor = await conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='skills'")
+        skills_table_exists = await cursor.fetchone() is not None
+        
+        if skills_table_exists:
+            cursor = await conn.execute("PRAGMA table_info(skills)")
+            skills_columns = await cursor.fetchall()
+            skills_column_names = [col[1] for col in skills_columns]
 
-        if "is_privileged" not in skills_column_names:
-            logger.info("Running migration: Adding is_privileged column to skills table")
-            await conn.execute("ALTER TABLE skills ADD COLUMN is_privileged INTEGER DEFAULT 0")
-            await conn.commit()
-            logger.info("Migration complete: is_privileged column added to skills")
+            if "is_privileged" not in skills_column_names:
+                logger.info("Running migration: Adding is_privileged column to skills table")
+                await conn.execute("ALTER TABLE skills ADD COLUMN is_privileged INTEGER DEFAULT 0")
+                await conn.commit()
+                logger.info("Migration complete: is_privileged column added to skills")
 
         # Migration: Add is_privileged column to mcp_servers table
         # Validates: Requirements 19.4
@@ -2062,11 +1906,6 @@ class SQLiteDatabase(BaseDatabase):
         return self._agents
 
     @property
-    def skills(self) -> SQLiteSkillsTable:
-        """Get the skills table."""
-        return self._skills
-
-    @property
     def mcp_servers(self) -> SQLiteMCPServersTable:
         """Get the MCP servers table."""
         return self._mcp_servers
@@ -2085,11 +1924,6 @@ class SQLiteDatabase(BaseDatabase):
     def users(self) -> SQLiteTable:
         """Get the users table."""
         return self._users
-
-    @property
-    def skill_versions(self) -> SQLiteSkillVersionsTable:
-        """Get the skill versions table."""
-        return self._skill_versions
 
     @property
     def app_settings(self) -> SQLiteTable:
@@ -2135,11 +1969,6 @@ class SQLiteDatabase(BaseDatabase):
     def todos(self) -> SQLiteToDosTable:
         """Get the todos table."""
         return self._todos
-
-    @property
-    def workspace_skills(self) -> SQLiteWorkspaceSkillsTable:
-        """Get the workspace skills table."""
-        return self._workspace_skills
 
     @property
     def workspace_mcps(self) -> SQLiteWorkspaceMcpsTable:

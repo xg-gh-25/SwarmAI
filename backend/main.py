@@ -204,6 +204,18 @@ async def lifespan(app: FastAPI):
                 await initialization_manager.run_full_initialization()
             else:
                 logger.info("Quick validation passed - fast startup complete")
+                
+                # Ensure skill symlinks exist (idempotent projection)
+                # Even on quick validation path, we need symlinks for Claude SDK
+                try:
+                    from core.projection_layer import ProjectionLayer
+                    from core.skill_manager import skill_manager as _sm
+                    workspace_path = initialization_manager.get_cached_workspace_path()
+                    _projection = ProjectionLayer(_sm)
+                    await _projection.project_skills(Path(workspace_path), allow_all=True)
+                    logger.info("Skill symlinks verified/created during quick validation")
+                except Exception as e:
+                    logger.error("Failed to project skills during quick validation: %s", e)
         else:
             # First-time initialization
             logger.info("First-time startup, running full initialization...")

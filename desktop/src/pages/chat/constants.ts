@@ -17,14 +17,14 @@ export const USER_MESSAGE_MAX_LINES = 5;
 export const DEFAULT_SIDEBAR_WIDTH = 256;
 export const DEFAULT_RIGHT_SIDEBAR_WIDTH = 320;
 export const MIN_SIDEBAR_WIDTH = 200;
-export const MAX_SIDEBAR_WIDTH = 600;
+export const MAX_SIDEBAR_WIDTH = 1000;
 export const MIN_RIGHT_SIDEBAR_WIDTH = 240;
 export const MAX_RIGHT_SIDEBAR_WIDTH = 600;
 
 // ToDo Radar sidebar constants
 export const DEFAULT_TODO_RADAR_WIDTH = 300;
 export const MIN_TODO_RADAR_WIDTH = 200;
-export const MAX_TODO_RADAR_WIDTH = 500;
+export const MAX_TODO_RADAR_WIDTH = 1000;
 
 // Right sidebar group types and constants
 export const RIGHT_SIDEBAR_IDS = ['todoRadar', 'chatHistory', 'fileBrowser'] as const;

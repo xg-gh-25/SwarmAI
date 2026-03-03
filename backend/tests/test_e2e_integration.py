@@ -24,35 +24,8 @@ from tests.helpers import (
 # ---------------------------------------------------------------------------
 # Shared seed helpers
 # ---------------------------------------------------------------------------
-
-async def _seed_skill(name: str, is_privileged: bool = False) -> str:
-    """Insert a skill row and return its ID."""
-    now = now_iso()
-    sid = str(uuid4())
-    await db.skills.put({
-        "id": sid,
-        "name": name,
-        "description": f"Desc {name}",
-        "version": "1.0.0",
-        "is_system": False,
-        "is_privileged": 1 if is_privileged else 0,
-        "created_at": now,
-        "updated_at": now,
-    })
-    return sid
-
-
-async def _enable_skill(workspace_id: str, skill_id: str, enabled: bool = True) -> None:
-    """Create a workspace_skills junction row."""
-    now = now_iso()
-    await db.workspace_skills.put({
-        "id": str(uuid4()),
-        "workspace_id": workspace_id,
-        "skill_id": skill_id,
-        "enabled": 1 if enabled else 0,
-        "created_at": now,
-        "updated_at": now,
-    })
+# Note: Skill fixtures are no longer needed in the filesystem model.
+# Skills are referenced by folder name in agent.allowed_skills.
 
 
 # =========================================================================
@@ -151,62 +124,88 @@ class TestToDoLifecycle:
 
 
 class TestWorkspaceConfigInheritance:
-    """End-to-end test for workspace configuration inheritance."""
+    """End-to-end test for workspace configuration inheritance.
+    
+    Note: In the filesystem-based skill model, skills are no longer managed
+    via workspace_skills junction tables. Instead, agents directly reference
+    skill folder names in their allowed_skills field. These tests verify
+    that agents can be configured with allowed_skills correctly.
+    """
 
     async def test_skills_intersection_model(self, client: TestClient):
-        """Configure workspace skills → Verify all enabled skills returned.
+        """Configure agent skills → Verify allowed_skills are stored correctly.
 
-        In the single-workspace model, the endpoint returns all skills
-        enabled for the workspace directly (no intersection model).
+        In the filesystem model, agents directly reference skill folder names.
+        This test verifies that the allowed_skills field is persisted correctly.
         """
         swarmws_id = await ensure_default_workspace()
-        custom_ws_id = await create_custom_workspace(name="ProjectAlpha")
 
-        # Seed three skills
-        skill_a = await _seed_skill("SkillA")
-        skill_b = await _seed_skill("SkillB")
-        skill_c = await _seed_skill("SkillC")
+        # Create an agent with specific skills enabled
+        # Note: We use skill folder names directly (no DB validation at creation time)
+        # global_user_mode must be False to use allowed_skills restrictions
+        agent_resp = client.post("/api/agents", json={
+            "name": "Test Agent with Skills",
+            "description": "Agent for testing skill configuration",
+            "allowed_skills": ["skilla", "skillc"],
+            "global_user_mode": False,
+        })
+        assert agent_resp.status_code == 201, agent_resp.text
+        agent = agent_resp.json()
 
-        # Enable A and C in custom workspace
-        await _enable_skill(custom_ws_id, skill_a, enabled=True)
-        await _enable_skill(custom_ws_id, skill_c, enabled=True)
-
-        # Fetch effective skills for custom workspace
-        resp = client.get(f"/api/workspaces/{custom_ws_id}/skills")
-        assert resp.status_code == 200, resp.text
-        effective = resp.json()
-        effective_ids = {s["skill_id"] for s in effective if s["enabled"]}
-
-        # Both A and C are enabled in the workspace → both should appear
-        assert skill_a in effective_ids
-        assert skill_c in effective_ids
-        # B is not enabled in the workspace → should not appear
-        assert skill_b not in effective_ids
+        # Verify the agent has the correct allowed_skills
+        assert set(agent["allowed_skills"]) == {"skilla", "skillc"}
+        
+        # Verify skillb is not in the list
+        assert "skillb" not in agent["allowed_skills"]
 
     async def test_swarmws_sees_own_enabled_skills(self, client: TestClient):
-        """SwarmWS effective skills = its own enabled skills (no intersection)."""
+        """Agent allowed_skills are persisted and retrieved correctly."""
         swarmws_id = await ensure_default_workspace()
 
-        skill_x = await _seed_skill("SkillX")
-        await _enable_skill(swarmws_id, skill_x, enabled=True)
-
-        resp = client.get(f"/api/workspaces/{swarmws_id}/skills")
-        assert resp.status_code == 200
-        effective = resp.json()
-        effective_ids = {s["skill_id"] for s in effective if s["enabled"]}
-        assert skill_x in effective_ids
+        # Create an agent with a specific skill enabled
+        # global_user_mode must be False to use allowed_skills restrictions
+        agent_resp = client.post("/api/agents", json={
+            "name": "Agent with SkillX",
+            "description": "Test agent",
+            "allowed_skills": ["skillx"],
+            "global_user_mode": False,
+        })
+        assert agent_resp.status_code == 201
+        agent = agent_resp.json()
+        agent_id = agent["id"]
+        
+        # Verify skill is in allowed_skills
+        assert "skillx" in agent["allowed_skills"]
+        
+        # Fetch the agent again to verify persistence
+        get_resp = client.get(f"/api/agents/{agent_id}")
+        assert get_resp.status_code == 200
+        fetched_agent = get_resp.json()
+        assert "skillx" in fetched_agent["allowed_skills"]
 
     async def test_privileged_skill_not_auto_enabled(self, client: TestClient):
-        """Privileged skills require explicit enablement."""
+        """Skills are not automatically enabled without explicit configuration.
+        
+        In the filesystem model, skills must be explicitly added to an agent's
+        allowed_skills list. This test verifies that agents start with an
+        empty allowed_skills list by default.
+        """
         swarmws_id = await ensure_default_workspace()
 
-        priv_skill = await _seed_skill("DangerousSkill", is_privileged=True)
-
-        # Not explicitly enabled → should not appear as effective
-        resp = client.get(f"/api/workspaces/{swarmws_id}/skills")
-        assert resp.status_code == 200
-        effective_ids = {s["skill_id"] for s in resp.json() if s["enabled"]}
-        assert priv_skill not in effective_ids
+        # Create an agent without any skills enabled
+        agent_resp = client.post("/api/agents", json={
+            "name": "Agent without skills",
+            "description": "Test agent",
+            "allowed_skills": [],  # Explicitly empty
+        })
+        assert agent_resp.status_code == 201
+        agent = agent_resp.json()
+        
+        # Verify the allowed_skills list is empty
+        assert agent["allowed_skills"] == []
+        
+        # Verify a specific skill is not in the list
+        assert "dangerous-skill" not in agent["allowed_skills"]
 
 
 

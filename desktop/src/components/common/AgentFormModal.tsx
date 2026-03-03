@@ -50,7 +50,7 @@ export default function AgentFormModal({
   const [systemPrompt, setSystemPrompt] = useState('');
   const [model, setModel] = useState<string>('');
   const [pluginIds, setPluginIds] = useState<string[]>([]);
-  const [skillIds, setSkillIds] = useState<string[]>([]);
+  const [allowedSkills, setAllowedSkills] = useState<string[]>([]);
   const [allowAllSkills, setAllowAllSkills] = useState(false);
   const [mcpIds, setMcpIds] = useState<string[]>([]);
   const [allowedTools, setAllowedTools] = useState<string[]>(getDefaultEnabledTools());
@@ -110,7 +110,7 @@ export default function AgentFormModal({
         setSystemPrompt(agent.systemPrompt || '');
         setModel(agent.model || '');
         setPluginIds(agent.pluginIds || []);
-        setSkillIds(agent.skillIds || []);
+        setAllowedSkills(agent.allowedSkills || []);
         setAllowAllSkills(agent.allowAllSkills || false);
         setMcpIds(agent.mcpIds || []);
         setAllowedTools(agent.allowedTools || getDefaultEnabledTools());
@@ -124,7 +124,7 @@ export default function AgentFormModal({
         setSystemPrompt('');
         setModel(''); // Will be set by the second useEffect when models load
         setPluginIds([]);
-        setSkillIds([]);
+        setAllowedSkills([]);
         setAllowAllSkills(false);
         setMcpIds([]);
         setAllowedTools(getDefaultEnabledTools());
@@ -149,7 +149,7 @@ export default function AgentFormModal({
   useEffect(() => {
     if (globalUserMode) {
       setAllowAllSkills(true);
-      setSkillIds([]); // Clear selected skills since all are allowed
+      setAllowedSkills([]); // Clear selected skills since all are allowed
     }
   }, [globalUserMode]);
 
@@ -167,7 +167,7 @@ export default function AgentFormModal({
           systemPrompt: systemPrompt || undefined,
           model,
           pluginIds,
-          skillIds: allowAllSkills ? [] : skillIds,
+          allowedSkills: allowAllSkills ? [] : allowedSkills,
           allowAllSkills,
           mcpIds,
           allowedTools,
@@ -185,7 +185,7 @@ export default function AgentFormModal({
           permissionMode: 'bypassPermissions',
           systemPrompt: systemPrompt || undefined,
           pluginIds,
-          skillIds: allowAllSkills ? [] : skillIds,
+          allowedSkills: allowAllSkills ? [] : allowedSkills,
           allowAllSkills,
           mcpIds,
           allowedTools,
@@ -403,13 +403,13 @@ export default function AgentFormModal({
                 : t('agents.form.selectSkills')
           }
           options={skills.map((skill) => ({
-            id: skill.id,
+            id: skill.folderName,
             name: skill.name,
             description: skill.description,
-            isSystem: skill.isSystem,
+            isSystem: skill.readOnly,
           }))}
-          selectedIds={allowAllSkills ? [] : skillIds}
-          onChange={setSkillIds}
+          selectedIds={allowAllSkills ? [] : allowedSkills}
+          onChange={setAllowedSkills}
           loading={loadingSkills}
           disabled={allowAllSkills || globalUserMode}
           protectSystemItems={agent?.isSystemAgent}

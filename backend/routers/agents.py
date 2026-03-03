@@ -99,12 +99,12 @@ async def create_agent(request: AgentCreateRequest):
     # Global User Mode requires allow_all_skills=True (skill restrictions not supported)
     global_user_mode = request.global_user_mode
     allow_all_skills = request.allow_all_skills
-    skill_ids = request.skill_ids
+    allowed_skills = request.allowed_skills
 
     if global_user_mode:
         allow_all_skills = True
-        skill_ids = []  # Clear skill_ids since all skills are allowed
-        logger.info("Global User Mode enabled - setting allow_all_skills=True, clearing skill_ids")
+        allowed_skills = []  # Clear allowed_skills since all skills are allowed
+        logger.info("Global User Mode enabled - setting allow_all_skills=True, clearing allowed_skills")
 
     agent_data = {
         "name": request.name,
@@ -115,7 +115,7 @@ async def create_agent(request: AgentCreateRequest):
         "system_prompt": request.system_prompt,
         "allowed_tools": request.allowed_tools,
         "plugin_ids": request.plugin_ids,
-        "skill_ids": skill_ids,
+        "allowed_skills": allowed_skills,
         "allow_all_skills": allow_all_skills,
         "mcp_ids": request.mcp_ids,
         "working_directory": None,  # Uses cached SwarmWorkspace path via initialization_manager
@@ -157,21 +157,24 @@ async def update_agent(agent_id: str, request: AgentUpdateRequest):
 
     # Protect system resources from being unbound from SwarmAgent
     if existing.get("is_system_agent"):
-        # Get all system skills and MCPs
-        system_skills = await db.skills.list_by_system()
-        system_mcps = await db.mcp_servers.list_by_system()
-        system_skill_ids = {s["id"] for s in system_skills}
-        system_mcp_ids = {m["id"] for m in system_mcps}
-
-        # Check if skill_ids update would remove system skills
-        if request.skill_ids is not None:
-            new_skill_ids = set(request.skill_ids)
-            if not system_skill_ids.issubset(new_skill_ids):
+        # Get all built-in (system) skills from SkillManager
+        from core.skill_manager import skill_manager
+        cache = await skill_manager.get_cache()
+        builtin_skill_folders = {folder for folder, info in cache.items() if info.source_tier == "built-in"}
+        
+        # Check if allowed_skills update would remove built-in skills
+        if request.allowed_skills is not None:
+            new_skill_folders = set(request.allowed_skills)
+            if not builtin_skill_folders.issubset(new_skill_folders):
                 raise ValidationException(
                     message="Cannot unbind system skills from SwarmAgent",
-                    detail="System skills are permanently bound to the system agent",
-                    suggested_action="You can add your own skills, but system skills cannot be removed"
+                    detail="Built-in skills are permanently bound to the system agent",
+                    suggested_action="You can add your own skills, but built-in skills cannot be removed"
                 )
+        
+        # Get all system MCPs
+        system_mcps = await db.mcp_servers.list_by_system()
+        system_mcp_ids = {m["id"] for m in system_mcps}
 
         # Check if mcp_ids update would remove system MCPs
         if request.mcp_ids is not None:
@@ -191,8 +194,8 @@ async def update_agent(agent_id: str, request: AgentUpdateRequest):
 
     if global_user_mode:
         updates["allow_all_skills"] = True
-        updates["skill_ids"] = []  # Clear skill_ids since all skills are allowed
-        logger.info(f"Global User Mode enabled for agent {agent_id} - setting allow_all_skills=True, clearing skill_ids")
+        updates["allowed_skills"] = []  # Clear allowed_skills since all skills are allowed
+        logger.info(f"Global User Mode enabled for agent {agent_id} - setting allow_all_skills=True, clearing allowed_skills")
 
     agent = await db.agents.update(agent_id, updates)
 

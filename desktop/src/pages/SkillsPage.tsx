@@ -1,8 +1,18 @@
+/**
+ * Skills management page for the SwarmAI desktop app.
+ *
+ * Displays the three-tier filesystem-based skill list with source tier badges,
+ * supports rescan, AI-powered skill generation, and delete for user skills.
+ *
+ * Key exports:
+ * - ``SkillsPage``          — Main page component
+ * - ``GenerateSkillForm``   — AI skill generation chat form
+ */
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery } from '@tanstack/react-query';
 import { SearchBar, Button, Modal, SkeletonTable, ResizableTable, ResizableTableCell, ConfirmDialog, AskUserQuestion, Dropdown, MarkdownRenderer, Breadcrumb } from '../components/common';
-import type { Skill, SyncResult, StreamEvent, ContentBlock, AskUserQuestion as AskUserQuestionType } from '../types';
+import type { Skill, StreamEvent, ContentBlock, AskUserQuestion as AskUserQuestionType } from '../types';
 import { skillsService } from '../services/skills';
 import { chatService } from '../services/chat';
 import { settingsService } from '../services/settings';
@@ -18,56 +28,36 @@ const modelIdToOption = (id: string) => ({
   description: id,
 });
 
-// Format timestamp to readable date time
-function formatDateTime(dateString: string): string {
-  if (!dateString) return '-';
-  const date = new Date(dateString);
-  return date.toLocaleString();
-}
-
 // Table column configuration - will be translated via hook
 const getSkillColumns = (t: (key: string) => string) => [
-  { key: 'name', header: t('skills.table.name'), initialWidth: 180, minWidth: 120 },
-  { key: 'description', header: t('skills.table.description'), initialWidth: 220, minWidth: 150 },
+  { key: 'name', header: t('skills.table.name'), initialWidth: 200, minWidth: 120 },
+  { key: 'description', header: t('skills.table.description'), initialWidth: 280, minWidth: 150 },
   { key: 'source', header: t('skills.table.source'), initialWidth: 180, minWidth: 120 },
   { key: 'version', header: t('skills.table.version'), initialWidth: 120, minWidth: 80 },
-  { key: 'updatedAt', header: t('common.label.updated'), initialWidth: 160, minWidth: 120 },
   { key: 'actions', header: t('skills.table.actions'), initialWidth: 120, minWidth: 100, align: 'right' as const },
 ];
 
-// Get source display for a skill
+// Get source display for a skill based on filesystem tier
 function getSourceDisplay(skill: Skill): { label: string; icon: string; color: string } {
-  switch (skill.sourceType) {
-    case 'system':
+  switch (skill.sourceTier) {
+    case 'built-in':
       return {
-        label: 'System',
+        label: 'Built-in',
         icon: 'verified',
         color: 'text-cyan-400',
       };
     case 'plugin':
       return {
-        label: skill.sourcePluginName || 'Plugin',
+        label: 'Plugin',
         icon: 'extension',
         color: 'text-purple-400',
-      };
-    case 'marketplace':
-      return {
-        label: skill.sourceMarketplaceName || 'Marketplace',
-        icon: 'store',
-        color: 'text-blue-400',
-      };
-    case 'local':
-      return {
-        label: 'Local',
-        icon: 'folder',
-        color: 'text-green-400',
       };
     case 'user':
     default:
       return {
-        label: skill.createdBy === 'ai-agent' ? 'AI Generated' : 'User Created',
-        icon: skill.createdBy === 'ai-agent' ? 'auto_awesome' : 'person',
-        color: skill.createdBy === 'ai-agent' ? 'text-orange-400' : 'text-[var(--color-text-muted)]',
+        label: 'User',
+        icon: 'person',
+        color: 'text-[var(--color-text-muted)]',
       };
   }
 }
@@ -76,12 +66,9 @@ export default function SkillsPage() {
   const { t } = useTranslation();
   const [skills, setSkills] = useState<Skill[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
-  const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
   const [isGenerateModalOpen, setIsGenerateModalOpen] = useState(false);
-  const [isSyncResultModalOpen, setIsSyncResultModalOpen] = useState(false);
   const [isInitialLoading, setIsInitialLoading] = useState(true);
-  const [isRefreshing, setIsRefreshing] = useState(false);
-  const [syncResult, setSyncResult] = useState<SyncResult | null>(null);
+  const [isRescanning, setIsRescanning] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Skill | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
@@ -115,8 +102,8 @@ export default function SkillsPage() {
     if (!deleteTarget) return;
     setIsDeleting(true);
     try {
-      await skillsService.delete(deleteTarget.id);
-      setSkills((prev) => prev.filter((skill) => skill.id !== deleteTarget.id));
+      await skillsService.delete(deleteTarget.folderName);
+      setSkills((prev) => prev.filter((skill) => skill.folderName !== deleteTarget.folderName));
       setDeleteTarget(null);
     } catch (error) {
       console.error('Failed to delete skill:', error);
@@ -125,58 +112,30 @@ export default function SkillsPage() {
     }
   };
 
-  const handleUpload = async (file: File, name?: string) => {
-    try {
-      const skill = await skillsService.upload(file, name || file.name.replace('.zip', ''));
-      // Check if skill already exists (by ID) and update, otherwise add
-      setSkills((prev) => {
-        const existingIndex = prev.findIndex((s) => s.id === skill.id);
-        if (existingIndex >= 0) {
-          // Update existing skill
-          const updated = [...prev];
-          updated[existingIndex] = skill;
-          return updated;
-        }
-        // Add new skill
-        return [...prev, skill];
-      });
-      setIsUploadModalOpen(false);
-    } catch (error) {
-      console.error('Failed to upload skill:', error);
-    }
-  };
-
   const handleGenerate = async (skill: Skill) => {
     // Skill is already created and saved by the GenerateSkillForm component
-    // Check if skill already exists (by ID) and update, otherwise add
+    // Check if skill already exists (by folderName) and update, otherwise add
     setSkills((prev) => {
-      const existingIndex = prev.findIndex((s) => s.id === skill.id);
+      const existingIndex = prev.findIndex((s) => s.folderName === skill.folderName);
       if (existingIndex >= 0) {
-        // Update existing skill
         const updated = [...prev];
         updated[existingIndex] = skill;
         return updated;
       }
-      // Add new skill
       return [...prev, skill];
     });
     setIsGenerateModalOpen(false);
   };
 
-  const handleRefresh = async () => {
-    setIsRefreshing(true);
+  const handleRescan = async () => {
+    setIsRescanning(true);
     try {
-      const result = await skillsService.refresh();
-      setSyncResult(result);
-      setIsSyncResultModalOpen(true);
-
-      // Reload skills list after sync
-      const data = await skillsService.list();
+      const data = await skillsService.rescan();
       setSkills(data);
     } catch (error) {
-      console.error('Failed to refresh skills:', error);
+      console.error('Failed to rescan skills:', error);
     } finally {
-      setIsRefreshing(false);
+      setIsRescanning(false);
     }
   };
 
@@ -201,15 +160,12 @@ export default function SkillsPage() {
         <div className="flex gap-3">
           <Button
             variant="secondary"
-            icon="sync"
-            onClick={handleRefresh}
-            isLoading={isRefreshing}
-            disabled={isRefreshing}
+            icon="refresh"
+            onClick={handleRescan}
+            isLoading={isRescanning}
+            disabled={isRescanning}
           >
-            {isRefreshing ? t('common.status.loading') : t('skills.refreshSkills')}
-          </Button>
-          <Button variant="secondary" icon="upload" onClick={() => setIsUploadModalOpen(true)}>
-            {t('skills.uploadSkill')}
+            {isRescanning ? t('common.status.loading') : t('skills.rescan')}
           </Button>
           <Button icon="auto_awesome" onClick={() => setIsGenerateModalOpen(true)}>
             {t('skills.createSkill')}
@@ -225,7 +181,7 @@ export default function SkillsPage() {
           <ResizableTable columns={SKILL_COLUMNS}>
             {filteredSkills.map((skill) => (
               <tr
-                key={skill.id}
+                key={skill.folderName}
                 className="border-b border-[var(--color-border)] hover:bg-[var(--color-hover)] transition-colors"
               >
                 <ResizableTableCell>
@@ -254,15 +210,10 @@ export default function SkillsPage() {
                     v{skill.version || '1.0.0'}
                   </span>
                 </ResizableTableCell>
-                <ResizableTableCell>
-                  <span className="text-[var(--color-text-muted)] text-sm">
-                    {formatDateTime(skill.updatedAt)}
-                  </span>
-                </ResizableTableCell>
                 <ResizableTableCell align="right">
                   <div className="flex items-center justify-end gap-1">
-                    {/* Only show edit actions for user-created or local skills */}
-                    {(skill.sourceType === 'user' || skill.sourceType === 'local') && (
+                    {/* Only show delete for user skills (not readOnly) */}
+                    {!skill.readOnly && (
                       <button
                         onClick={() => handleDeleteClick(skill)}
                         className="p-1.5 rounded-lg text-[var(--color-text-muted)] hover:text-status-error hover:bg-status-error/10 transition-colors"
@@ -271,10 +222,10 @@ export default function SkillsPage() {
                         <span className="material-symbols-outlined text-lg">delete</span>
                       </button>
                     )}
-                    {/* For plugin skills, show info that they are managed by plugin */}
-                    {skill.sourceType === 'plugin' && (
-                      <span className="text-xs text-[var(--color-text-muted)]" title={t('skills.source.pluginManaged')}>
-                        {t('skills.source.plugin')}
+                    {/* For read-only skills, show tier info */}
+                    {skill.readOnly && (
+                      <span className="text-xs text-[var(--color-text-muted)]">
+                        {skill.sourceTier === 'built-in' ? t('skills.source.builtIn') : t('skills.source.plugin')}
                       </span>
                     )}
                   </div>
@@ -296,19 +247,6 @@ export default function SkillsPage() {
         )}
       </div>
 
-      {/* Upload Modal */}
-      <Modal
-        isOpen={isUploadModalOpen}
-        onClose={() => setIsUploadModalOpen(false)}
-        title={t('skills.upload.title')}
-        size="md"
-      >
-        <UploadSkillForm
-          onClose={() => setIsUploadModalOpen(false)}
-          onUpload={handleUpload}
-        />
-      </Modal>
-
       {/* Generate Modal */}
       <Modal
         isOpen={isGenerateModalOpen}
@@ -319,19 +257,6 @@ export default function SkillsPage() {
         <GenerateSkillForm
           onClose={() => setIsGenerateModalOpen(false)}
           onGenerate={handleGenerate}
-        />
-      </Modal>
-
-      {/* Sync Result Modal */}
-      <Modal
-        isOpen={isSyncResultModalOpen}
-        onClose={() => setIsSyncResultModalOpen(false)}
-        title={t('skills.refreshSkills')}
-        size="md"
-      >
-        <SyncResultDisplay
-          result={syncResult}
-          onClose={() => setIsSyncResultModalOpen(false)}
         />
       </Modal>
 
@@ -356,204 +281,6 @@ export default function SkillsPage() {
       />
 
     </div>
-  );
-}
-
-// Sync Result Display Component
-function SyncResultDisplay({
-  result,
-  onClose,
-}: {
-  result: SyncResult | null;
-  onClose: () => void;
-}) {
-  const { t } = useTranslation();
-  if (!result) return null;
-
-  const hasChanges = result.added.length > 0 || result.updated.length > 0 || result.removed.length > 0;
-  const hasErrors = result.errors.length > 0;
-
-  return (
-    <div className="space-y-4">
-      {/* Summary Stats */}
-      <div className="grid grid-cols-3 gap-4">
-        <div className="bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg p-4 text-center">
-          <p className="text-2xl font-bold text-[var(--color-text)]">{result.totalLocal}</p>
-          <p className="text-sm text-[var(--color-text-muted)]">{t('skills.sync.local')}</p>
-        </div>
-        <div className="bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg p-4 text-center">
-          <p className="text-2xl font-bold text-[var(--color-text)]">{result.totalPlugins}</p>
-          <p className="text-sm text-[var(--color-text-muted)]">{t('skills.sync.fromPlugins')}</p>
-        </div>
-        <div className="bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg p-4 text-center">
-          <p className="text-2xl font-bold text-[var(--color-text)]">{result.totalDb}</p>
-          <p className="text-sm text-[var(--color-text-muted)]">{t('skills.sync.database')}</p>
-        </div>
-      </div>
-
-      {/* Changes */}
-      {hasChanges ? (
-        <div className="space-y-3">
-          {result.added.length > 0 && (
-            <div className="bg-status-success/10 border border-status-success/30 rounded-lg p-3">
-              <div className="flex items-center gap-2 mb-2">
-                <span className="material-symbols-outlined text-status-success">add_circle</span>
-                <span className="text-status-success font-medium">{t('skills.sync.added')} ({result.added.length})</span>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                {result.added.map((name) => (
-                  <span key={name} className="px-2 py-1 bg-status-success/20 text-status-success text-sm rounded">
-                    {name}
-                  </span>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {result.updated.length > 0 && (
-            <div className="bg-primary/10 border border-primary/30 rounded-lg p-3">
-              <div className="flex items-center gap-2 mb-2">
-                <span className="material-symbols-outlined text-primary">sync</span>
-                <span className="text-primary font-medium">{t('skills.sync.updated')} ({result.updated.length})</span>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                {result.updated.map((name) => (
-                  <span key={name} className="px-2 py-1 bg-primary/20 text-primary text-sm rounded">
-                    {name}
-                  </span>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {result.removed.length > 0 && (
-            <div className="bg-status-warning/10 border border-status-warning/30 rounded-lg p-3">
-              <div className="flex items-center gap-2 mb-2">
-                <span className="material-symbols-outlined text-status-warning">warning</span>
-                <span className="text-status-warning font-medium">{t('skills.sync.orphanedRecords')} ({result.removed.length})</span>
-              </div>
-              <p className="text-sm text-[var(--color-text-muted)] mb-2">{t('skills.sync.orphanedDesc')}</p>
-              <div className="flex flex-wrap gap-2">
-                {result.removed.map((name) => (
-                  <span key={name} className="px-2 py-1 bg-status-warning/20 text-status-warning text-sm rounded">
-                    {name}
-                  </span>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-      ) : (
-        <div className="bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg p-4 text-center">
-          <span className="material-symbols-outlined text-3xl text-status-success mb-2">check_circle</span>
-          <p className="text-[var(--color-text)]">{t('skills.sync.allInSync')}</p>
-        </div>
-      )}
-
-      {/* Errors */}
-      {hasErrors && (
-        <div className="bg-status-error/10 border border-status-error/30 rounded-lg p-3">
-          <div className="flex items-center gap-2 mb-2">
-            <span className="material-symbols-outlined text-status-error">error</span>
-            <span className="text-status-error font-medium">{t('skills.sync.errors')} ({result.errors.length})</span>
-          </div>
-          <div className="space-y-2">
-            {result.errors.map((err, idx) => (
-              <div key={idx} className="text-sm">
-                <span className="text-[var(--color-text)]">{err.skill}:</span>{' '}
-                <span className="text-status-error">{err.error}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      <div className="flex justify-end pt-4">
-        <Button onClick={onClose}>{t('common.button.close')}</Button>
-      </div>
-    </div>
-  );
-}
-
-// Upload Skill Form Component
-function UploadSkillForm({
-  onClose,
-  onUpload,
-}: {
-  onClose: () => void;
-  onUpload: (file: File, name?: string) => void;
-}) {
-  const { t } = useTranslation();
-  const [name, setName] = useState('');
-  const [file, setFile] = useState<File | null>(null);
-  const [isUploading, setIsUploading] = useState(false);
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!file) return;
-
-    setIsUploading(true);
-    try {
-      await onUpload(file, name || undefined);
-    } finally {
-      setIsUploading(false);
-    }
-  };
-
-  return (
-    <form onSubmit={handleSubmit} className="space-y-4">
-      <div>
-        <label className="block text-sm font-medium text-[var(--color-text-muted)] mb-2">{t('skills.upload.skillName')}</label>
-        <input
-          type="text"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder={t('skills.upload.skillNamePlaceholder')}
-          className="w-full px-4 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-primary"
-        />
-      </div>
-
-      <div>
-        <label className="block text-sm font-medium text-[var(--color-text-muted)] mb-2">{t('skills.upload.zipFile')}</label>
-        <div className="relative">
-          <input
-            type="file"
-            accept=".zip"
-            onChange={(e) => setFile(e.target.files?.[0] || null)}
-            required
-            className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-          />
-          <div className="px-4 py-8 bg-[var(--color-bg)] border border-dashed border-[var(--color-border)] rounded-lg text-center">
-            <span className="material-symbols-outlined text-3xl text-[var(--color-text-muted)] mb-2">upload_file</span>
-            <p className="text-[var(--color-text)]">
-              {file ? file.name : t('skills.upload.dropzone')}
-            </p>
-            <p className="text-sm text-[var(--color-text-muted)] mt-1">{t('skills.upload.zipOnly')}</p>
-          </div>
-        </div>
-      </div>
-
-      <div className="bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg p-4">
-        <div className="flex items-start gap-3">
-          <span className="material-symbols-outlined text-primary">info</span>
-          <div>
-            <p className="text-sm text-[var(--color-text)] font-medium">{t('skills.upload.uploadProcess')}</p>
-            <p className="text-sm text-[var(--color-text-muted)] mt-1">
-              {t('skills.upload.uploadProcessDesc')}
-            </p>
-          </div>
-        </div>
-      </div>
-
-      <div className="flex gap-3 pt-4">
-        <Button type="button" variant="secondary" className="flex-1" onClick={onClose}>
-          {t('common.button.cancel')}
-        </Button>
-        <Button type="submit" className="flex-1" disabled={!file || isUploading} isLoading={isUploading}>
-          {isUploading ? t('skills.upload.uploading') : t('common.button.upload')}
-        </Button>
-      </div>
-    </form>
   );
 }
 
@@ -867,8 +594,8 @@ function GenerateSkillForm({
     setIsFinalizing(true);
     setError(null);
     try {
-      // Pass sanitized name for folder lookup, original name for display
-      const skill = await skillsService.finalize(skillNameToFinalize, name);
+      // Fetch the generated skill by folder name
+      const skill = await skillsService.get(skillNameToFinalize);
       onGenerate(skill);
     } catch (err) {
       console.error('Failed to finalize skill:', err);

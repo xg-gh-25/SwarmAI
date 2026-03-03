@@ -37,7 +37,7 @@ export interface Agent {
   systemPrompt?: string;
   allowedTools: string[];
   pluginIds: string[];
-  skillIds: string[];
+  allowedSkills: string[];
   allowAllSkills: boolean;
   mcpIds: string[];
   workingDirectory?: string;
@@ -64,7 +64,7 @@ export interface AgentCreateRequest {
   permissionMode?: 'default' | 'acceptEdits' | 'plan' | 'bypassPermissions';
   systemPrompt?: string;
   pluginIds?: string[];
-  skillIds?: string[];
+  allowedSkills?: string[];
   allowAllSkills?: boolean;
   mcpIds?: string[];
   allowedTools?: string[];
@@ -79,71 +79,25 @@ export interface AgentCreateRequest {
 
 export interface AgentUpdateRequest extends Partial<AgentCreateRequest> {}
 
-// Skill Types
+// Skill Types — filesystem-based model (no DB UUIDs)
 export interface Skill {
-  id: string;
+  folderName: string;       // primary identifier (kebab-case directory name)
   name: string;
   description: string;
-  folderName?: string;
-  localPath?: string;
-  // Source tracking
-  sourceType: 'user' | 'plugin' | 'marketplace' | 'local' | 'system';
-  sourcePluginId?: string;
-  sourceMarketplaceId?: string;
-  sourcePluginName?: string;
-  sourceMarketplaceName?: string;
-  // Git tracking
-  gitUrl?: string;
-  gitBranch?: string;
-  gitCommit?: string;
-  // Metadata
-  createdBy?: string;
-  createdAt: string;
-  updatedAt: string;
   version: string;
-  isSystem: boolean;
-  // Version control fields
-  currentVersion: number;
-  hasDraft: boolean;
+  sourceTier: 'built-in' | 'user' | 'plugin';
+  readOnly: boolean;        // true for built-in and plugin
+  content?: string;         // only present in detail endpoint
 }
 
 export interface SkillCreateRequest {
+  folderName: string;
   name: string;
   description: string;
+  content: string;
 }
 
-export interface SkillVersion {
-  id: string;
-  skillId: string;
-  version: number;
-  gitCommit?: string;
-  localPath?: string;
-  createdAt: string;
-  changeSummary?: string;
-}
 
-export interface SkillVersionList {
-  skillId: string;
-  skillName: string;
-  currentVersion: number;
-  hasDraft: boolean;
-  versions: SkillVersion[];
-}
-
-export interface SyncError {
-  skill: string;
-  error: string;
-}
-
-export interface SyncResult {
-  added: string[];
-  updated: string[];
-  removed: string[];
-  errors: SyncError[];
-  totalLocal: number;
-  totalPlugins: number;
-  totalDb: number;
-}
 
 // MCP Server Types
 export interface MCPServer {

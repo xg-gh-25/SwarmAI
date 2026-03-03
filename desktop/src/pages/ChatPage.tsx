@@ -225,8 +225,8 @@ export default function ChatPage() {
 
   const agentSkills = selectedAgent?.allowAllSkills
     ? skills
-    : selectedAgent?.skillIds
-      ? skills.filter((s) => selectedAgent.skillIds.includes(s.id))
+    : selectedAgent?.allowedSkills
+      ? skills.filter((s) => selectedAgent.allowedSkills.includes(s.folderName))
       : [];
 
   const agentMCPs = selectedAgent?.mcpIds

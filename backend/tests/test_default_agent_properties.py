@@ -39,7 +39,7 @@ id_strategy = st.text(
     max_size=50
 ).filter(lambda x: x and not x.startswith('-') and not x.startswith('_'))
 
-skill_ids_strategy = st.lists(id_strategy, min_size=0, max_size=5, unique=True)
+allowed_skills_strategy = st.lists(id_strategy, min_size=0, max_size=5, unique=True)
 mcp_ids_strategy = st.lists(id_strategy, min_size=0, max_size=3, unique=True)
 
 
@@ -49,7 +49,7 @@ class TestDefaultAgentUpdatePreservation:
     **Validates: Requirements 2.2**
 
     For any valid update to the default agent's editable properties
-    (name, description, system_prompt, skill_ids, mcp_ids), the update
+    (name, description, system_prompt, allowed_skills, mcp_ids), the update
     SHALL be applied and the `is_default` flag SHALL remain `true`.
     """
 

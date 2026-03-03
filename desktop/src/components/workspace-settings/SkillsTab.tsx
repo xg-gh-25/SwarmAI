@@ -1,3 +1,13 @@
+/**
+ * Workspace skills configuration tab.
+ *
+ * Allows enabling/disabling skills for a specific workspace. Skills are
+ * identified by folder name (filesystem-based) rather than database UUIDs.
+ * Built-in and plugin skills are marked as readOnly.
+ *
+ * Key exports:
+ * - ``SkillsTab`` — Workspace settings tab component
+ */
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -41,13 +51,14 @@ export default function SkillsTab({ workspaceId }: SkillsTabProps) {
   });
 
   const getSkillName = (skillId: string): string => {
-    const skill = allSkills.find((s: Skill) => s.id === skillId);
+    const skill = allSkills.find((s: Skill) => s.folderName === skillId);
     return skill?.name ?? skillId;
   };
 
   const isPrivileged = (skillId: string): boolean => {
-    const skill = allSkills.find((s: Skill) => s.id === skillId);
-    return Boolean((skill as unknown as Record<string, unknown>)?.isPrivileged);
+    const skill = allSkills.find((s: Skill) => s.folderName === skillId);
+    // In the filesystem model, built-in and plugin skills are readOnly
+    return skill?.readOnly ?? false;
   };
 
   const handleToggle = (config: WorkspaceSkillConfig) => {

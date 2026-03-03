@@ -65,24 +65,39 @@ async def _ensure_default_workspace() -> str:
 
 
 async def _seed_skill(name: str = "TestSkill", is_privileged: bool = False) -> str:
-    """Insert a skill directly into the DB and return its ID."""
-    now = now_iso()
-    skill_id = str(uuid4())
-    await db.skills.put({
-        "id": skill_id,
-        "name": name,
-        "description": f"Test skill: {name}",
-        "folder_name": f"skill-{skill_id[:8]}",
-        "local_path": f"/tmp/skills/{skill_id[:8]}",
-        "version": "1.0.0",
-        "is_system": 0,
-        "is_privileged": 1 if is_privileged else 0,
-        "current_version": 0,
-        "has_draft": 0,
-        "created_at": now,
-        "updated_at": now,
-    })
-    return skill_id
+    """Create a filesystem-based skill and return its folder name."""
+    from pathlib import Path
+    
+    # Create folder name from skill name (kebab-case)
+    folder_name = name.lower().replace(" ", "-")
+    
+    # Determine skill directory based on privilege level
+    if is_privileged:
+        # Privileged skills go in built-in directory
+        skills_dir = Path.home() / ".swarm-ai" / "built-in-skills"
+    else:
+        # Regular skills go in user skills directory
+        skills_dir = Path.home() / ".swarm-ai" / "skills"
+    
+    skill_path = skills_dir / folder_name
+    skill_path.mkdir(parents=True, exist_ok=True)
+    
+    # Create SKILL.md with frontmatter
+    skill_md_content = f"""---
+name: {name}
+description: Test skill: {name}
+version: 1.0.0
+---
+
+# {name}
+
+A test skill for workspace config tests.
+"""
+    
+    skill_md = skill_path / "SKILL.md"
+    skill_md.write_text(skill_md_content)
+    
+    return folder_name
 
 
 async def _seed_mcp(name: str = "TestMCP", is_privileged: bool = False) -> str:

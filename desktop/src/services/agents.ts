@@ -48,7 +48,7 @@ const toSnakeCase = (data: AgentCreateRequest | AgentUpdateRequest) => {
   if (data.permissionMode !== undefined) result.permission_mode = data.permissionMode;
   if (data.systemPrompt !== undefined) result.system_prompt = data.systemPrompt;
   if (data.pluginIds !== undefined) result.plugin_ids = data.pluginIds;
-  if (data.skillIds !== undefined) result.skill_ids = data.skillIds;
+  if (data.allowedSkills !== undefined) result.allowed_skills = data.allowedSkills;
   if (data.allowAllSkills !== undefined) result.allow_all_skills = data.allowAllSkills;
   if (data.mcpIds !== undefined) result.mcp_ids = data.mcpIds;
   if (data.allowedTools !== undefined) result.allowed_tools = data.allowedTools;
@@ -79,7 +79,7 @@ const toCamelCase = (data: Record<string, unknown>): Agent => {
     systemPrompt: data.system_prompt as string | undefined,
     allowedTools: (data.allowed_tools as string[]) || [],
     pluginIds: (data.plugin_ids as string[]) || [],
-    skillIds: (data.skill_ids as string[]) || [],
+    allowedSkills: (data.allowed_skills as string[]) || [],
     allowAllSkills: (data.allow_all_skills as boolean) ?? false,
     mcpIds: (data.mcp_ids as string[]) || [],
     workingDirectory: data.working_directory as string | undefined,
