@@ -29,9 +29,6 @@ Ask the user questions to refine the skill. Keep it conversational, do not over-
 **Round 2: More details**
 - Present the high-level steps you identified as a numbered list. Tell the user you will dig into the detail in the next round.
 - If the skill requires arguments, suggest them based on what you observed.
-- Ask where the skill should be saved:
-  - **This project** (`.swarm-ai/skills/<name>/SKILL.md`) for project-specific workflows
-  - **Personal/global** (`~/.swarm-ai/skills/<name>/SKILL.md`) for cross-project workflows
 
 **Round 3: Breaking down each step**
 For each major step, if not glaringly obvious, ask:
@@ -53,7 +50,12 @@ Stop interviewing once you have enough information.
 
 ## Step 3: Write the SKILL.md
 
-Create the skill directory and SKILL.md file at the location chosen in Round 2.
+Create the skill directory and SKILL.md file at:
+```
+~/.swarm-ai/skills/<skill-name>/SKILL.md
+```
+
+This is the standard location for user-created skills in the three-tier model (Built-in, User, Plugin).
 
 Use this format:
 
@@ -108,8 +110,11 @@ Before writing the file, output the complete SKILL.md content in a markdown code
 
 After writing, tell the user:
 - Where the skill was saved
+- **Important:** The skill will be available in your **next chat session**. To use it now, you need to start a new chat session (the current session's Claude SDK client has already scanned for skills and won't detect new ones until restarted).
 - How it will activate (automatically when SwarmAI matches the description to a user request)
 - That they can edit the SKILL.md directly to refine it
+
+**Why the delay?** The Claude SDK client scans for skills once when a chat session starts. It reuses the same client throughout the session for performance. New skills created during the session are saved to disk and will be discovered when the next session starts.
 
 ## References
 

@@ -140,18 +140,14 @@ Ask: "What are the 2-3 hardest judgment calls in this domain?"
 >
 > **Read TEMPLATES.md** for starter templates.
 
-### Step 3: Choose Location
+### Step 3: Determine Output Location
 
-Ask the user: "Should this be a global skill or a local (workspace) skill?"
+All user-created skills are saved to:
+```
+~/.swarm-ai/skills/<name>/SKILL.md
+```
 
-| Scope | Path | When to use |
-|-------|------|-------------|
-| Global | `~/.swarm-ai/skills/<name>/SKILL.md` | Available in all projects and sessions |
-| Local | `.swarm-ai/skills/<name>/SKILL.md` (relative to workspace root) | Specific to the current project |
-
-If the user doesn't specify, default to global (`~/.swarm-ai/skills/`).
-
-Never create skills inside `~/.swarm-ai/plugins/`. That directory is managed by AIM and gets overwritten on reinstall.
+This is the standard location for user-created skills in the three-tier model (Built-in, User, Plugin).
 
 ### Step 4: Write the SKILL.md
 
@@ -165,11 +161,21 @@ Use templates from TEMPLATES.md. Ensure:
 > [!TIP]
 > Description is critical for discovery. Include multiple trigger keywords.
 
+### Step 5: Save and Notify User
+
+After creating the skill file, inform the user:
+
+**Skill saved to:** `~/.swarm-ai/skills/<name>/SKILL.md`
+
+**⚠️ Important:** The new skill will be available in your **next chat session**. To use it now, start a new chat session.
+
+**Why?** The Claude SDK client scans for skills once when a chat session starts, then reuses the same client throughout the session for performance. New skills created during the session are saved to disk and symlinked to `.claude/skills/`, but the current client won't detect them until it restarts. Starting a new chat session creates a new client that will discover the new skill.
+
 ---
 
 ## Mode 2: Evaluate an Existing Skill
 
-### Step 4: Score the Skill
+### Step 6: Score the Skill
 
 > [!CRITICAL]
 > **Read SCORING.md completely** before scoring. It contains both rubrics and scoring worksheets.
@@ -183,13 +189,13 @@ Use templates from TEMPLATES.md. Ensure:
 
 **Present results using the format in SCORING.md.**
 
-If either score < 90, proceed to **Step 5**.
+If either score < 90, proceed to **Step 7**.
 
 ---
 
 ## Mode 3: Improve to 100/100
 
-### Step 5: Plan Improvements
+### Step 7: Plan Improvements
 
 Based on evaluation, prioritize:
 
@@ -199,7 +205,7 @@ Based on evaluation, prioritize:
 | **P2 Important** | Missing triggers, no examples, no progressive disclosure | Required for 95+ |
 | **P3 Polish** | Missing troubleshooting, no quick start, terminology issues | Required for 100 |
 
-### Step 6: Execute Improvements
+### Step 8: Execute Improvements
 
 > [!CAUTION]
 > **Get user approval before making changes.** Present the plan and wait for confirmation.
@@ -211,7 +217,7 @@ Work systematically:
 4. Create supporting files as needed
 5. Add quality sections (Troubleshooting, Quick Start)
 
-### Step 7: Verify Final Score
+### Step 9: Verify Final Score
 
 1. Re-read all skill files
 2. Re-score against both rubrics

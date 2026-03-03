@@ -20,11 +20,14 @@ I can help you with PowerPoint presentations in three ways:
 2. **Edit Existing Presentations** - Modify slides, update text, change layouts, add comments/notes using Office Open XML (OOXML) editing
 3. **Analyze Presentations** - Extract text content, examine slide layouts, review design elements, and generate visual thumbnails
 
+**Output Location:** All generated presentations will be saved to `~/.swarm-ai/SwarmWS/Knowledge/Notes/`
+
 **What I'll do:**
 - Read relevant documentation files completely (html2pptx.md, ooxml.md) before starting
 - Follow structured workflows for each task type
 - Validate changes and generate visual previews
 - Ensure professional design with proper typography, colors, and layouts
+- Save all outputs to Knowledge/Notes/ for easy review and organization
 
 **Example requests:**
 - "Create a 5-slide presentation about cloud computing with a modern blue theme"
@@ -34,6 +37,17 @@ I can help you with PowerPoint presentations in three ways:
 - "Generate thumbnail previews of all slides in deck.pptx"
 
 Let me know what you'd like to do with your presentation!
+
+---
+
+## Output Location
+
+**All generated .pptx files, thumbnails, and working files should be saved to:**
+```
+~/.swarm-ai/SwarmWS/Knowledge/Notes/
+```
+
+This is the designated location for draft presentations. Once finalized, presentations can be moved to `Knowledge/Knowledge Base/`.
 
 ---
 
