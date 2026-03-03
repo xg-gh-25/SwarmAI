@@ -72,7 +72,7 @@ from .agent_defaults import (  # noqa: F401
     SWARM_AGENT_NAME,
     ensure_default_agent,
     get_default_agent,
-    expand_skill_ids_with_plugins,
+    expand_allowed_skills_with_plugins,
 )
 
 
@@ -226,7 +226,7 @@ Your task is to help users create high-quality skills that extend Claude's capab
 IMPORTANT GUIDELINES:
 1. Always use the skill-creator skill (invoke /skill-creator) to get guidance on skill creation best practices
 2. Follow the skill creation workflow from the skill-creator skill
-3. Create skills in the `.claude/skills/` directory
+3. Create skills in the ~/.swarm-ai/skills/ directory (the user skills directory)
 4. Ensure SKILL.md has proper YAML frontmatter with name and description
 5. Keep skills concise and focused - only include what Claude needs
 6. Test any scripts you create before completing
@@ -360,7 +360,7 @@ class AgentManager:
         # Note: Skill tool is now user-controllable via the Advanced Tools section
         # If user wants to use skills, they need to enable the Skill tool explicitly
 
-        # Note: Plugin skills are provided via workspace symlinks (expand_skill_ids_with_plugins),
+        # Note: Plugin skills are provided via workspace symlinks (expand_allowed_skills_with_plugins),
         # not via the SDK plugins config. Passing plugin paths to the SDK would cause
         # over-inclusion when a repo contains multiple plugins (e.g., anthropics/skills
         # contains both document-skills and example-skills). The workspace approach gives
@@ -453,7 +453,8 @@ class AgentManager:
             session_context: Optional session context dict for hook tracking.
 
         Returns:
-            A tuple of (hooks_config_dict, effective_skill_ids, allow_all_skills).
+            A tuple of (hooks_config_dict, effective_allowed_skills, allow_all_skills).
+            The effective_allowed_skills list contains folder names (not UUIDs).
         """
         hooks: dict = {}
 
@@ -490,7 +491,7 @@ class AgentManager:
             logger.info(f"Human approval hook added for session_key: {session_key}")
 
         # Skill access control - get allowed skill names for this agent
-        skill_ids = agent_config.get("skill_ids", [])
+        allowed_skills = agent_config.get("allowed_skills", [])
         allow_all_skills = agent_config.get("allow_all_skills", False)
         plugin_ids = agent_config.get("plugin_ids", [])
         global_user_mode = agent_config.get("global_user_mode", True)
@@ -498,35 +499,45 @@ class AgentManager:
         # Global User Mode requires allow_all_skills=True (skill restrictions not supported)
         if global_user_mode:
             allow_all_skills = True
-            skill_ids = []  # Ignore skill_ids in global mode
+            allowed_skills = []  # Ignore allowed_skills in global mode
             plugin_ids = []  # Not needed when all skills allowed
-            logger.info("Global User Mode: forcing allow_all_skills=True, ignoring skill_ids")
+            logger.info("Global User Mode: forcing allow_all_skills=True, ignoring allowed_skills")
 
-        # Expand skill_ids with skills from selected plugins
-        effective_skill_ids = await expand_skill_ids_with_plugins(
-            skill_ids, plugin_ids, allow_all_skills
+        # Expand allowed_skills with skills from selected plugins
+        effective_allowed_skills = await expand_allowed_skills_with_plugins(
+            allowed_skills, plugin_ids, allow_all_skills
         )
 
-        # Get allowed skill names for hook-based access control
-        allowed_skill_names = await agent_sandbox_manager.get_allowed_skill_names(
-            skill_ids=effective_skill_ids,
-            allow_all_skills=allow_all_skills
-        )
-        logger.info(f"Agent skill access: allow_all={allow_all_skills}, {len(effective_skill_ids)} skills ({len(skill_ids)} explicit + {len(plugin_ids)} plugins)")
-        logger.debug(f"Skill details: skill_ids={skill_ids}, plugin_ids={plugin_ids}, effective_skill_ids={effective_skill_ids}, allowed_names={allowed_skill_names}")
+        # In the filesystem-based architecture, allowed_skills are already folder names
+        # so they can be passed directly to the security hook (no UUID resolution needed)
+        allowed_skill_names = list(effective_allowed_skills)
+        logger.info(f"Agent skill access: allow_all={allow_all_skills}, {len(effective_allowed_skills)} skills ({len(allowed_skills)} explicit + {len(plugin_ids)} plugins)")
+        logger.debug(f"Skill details: allowed_skills={allowed_skills}, plugin_ids={plugin_ids}, effective_allowed_skills={effective_allowed_skills}")
 
         # Add skill access checker hook (double protection with per-agent workspace)
         # Skip adding the hook when allow_all_skills is True (no restrictions needed)
         if enable_skills and not allow_all_skills:
             if "PreToolUse" not in hooks:
                 hooks["PreToolUse"] = []
-            skill_checker = create_skill_access_checker(allowed_skill_names)
+
+            # Get built-in skill names so the hook always allows them
+            from core.skill_manager import skill_manager
+            cache = await skill_manager.get_cache()
+            builtin_names = [
+                name for name, info in cache.items()
+                if info.source_tier == "built-in"
+            ]
+
+            skill_checker = create_skill_access_checker(
+                allowed_skill_names,
+                builtin_skill_names=builtin_names,
+            )
             hooks["PreToolUse"].append(
                 HookMatcher(matcher="Skill", hooks=[skill_checker])
             )
-            logger.info(f"Skill access checker hook added for skills: {allowed_skill_names}")
+            logger.info(f"Skill access checker hook added for skills: {allowed_skill_names} (built-in: {builtin_names})")
 
-        return hooks, effective_skill_ids, allow_all_skills
+        return hooks, effective_allowed_skills, allow_all_skills
 
 
     def _build_sandbox_config(self, agent_config: dict) -> Optional[dict]:
@@ -831,7 +842,7 @@ class AgentManager:
         mcp_servers = await self._build_mcp_config(agent_config, enable_mcp)
 
         # 3. Build hooks
-        hooks, effective_skill_ids, allow_all_skills = await self._build_hooks(
+        hooks, effective_allowed_skills, allow_all_skills = await self._build_hooks(
             agent_config, enable_skills, enable_mcp,
             resume_session_id, session_context,
         )

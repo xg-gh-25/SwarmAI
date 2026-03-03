@@ -51,8 +51,8 @@ class AgentConfig(BaseModel):
     system_prompt: str | None = None
     allowed_tools: list[str] = Field(default_factory=list)
     plugin_ids: list[str] = Field(default_factory=list, description="List of installed plugin IDs to enable for this agent")
-    skill_ids: list[str] = Field(default_factory=list)
-    allow_all_skills: bool = Field(default=False, description="If True, agent can access all available skills regardless of skill_ids")
+    allowed_skills: list[str] = Field(default_factory=list, description="List of skill folder names this agent can access")
+    allow_all_skills: bool = Field(default=False, description="If True, agent can access all available skills regardless of allowed_skills")
     mcp_ids: list[str] = Field(default_factory=list)
     working_directory: str | None = Field(default=None, description="Working directory for the agent (defaults to cached SwarmWorkspace path)")
     enable_bash_tool: bool = True
@@ -80,7 +80,7 @@ class AgentConfig(BaseModel):
                 "model": "sonnet",
                 "permission_mode": "acceptEdits",
                 "max_turns": 20,
-                "skill_ids": ["xlsx-skill", "docx-skill"],
+                "allowed_skills": ["s_xlsx", "s_docx"],
                 "mcp_ids": ["postgres-mcp"],
                 "enable_web_tools": True,
             }
@@ -116,7 +116,7 @@ class AgentCreateRequest(BaseModel):
     system_prompt: str | None = None
     allowed_tools: list[str] = Field(default_factory=list)
     plugin_ids: list[str] = Field(default_factory=list)
-    skill_ids: list[str] = Field(default_factory=list)
+    allowed_skills: list[str] = Field(default_factory=list, description="List of skill folder names this agent can access")
     allow_all_skills: bool = False
     mcp_ids: list[str] = Field(default_factory=list)
     enable_bash_tool: bool = True
@@ -141,7 +141,7 @@ class AgentUpdateRequest(BaseModel):
     system_prompt: str | None = None
     allowed_tools: list[str] | None = None
     plugin_ids: list[str] | None = None
-    skill_ids: list[str] | None = None
+    allowed_skills: list[str] | None = None
     allow_all_skills: bool | None = None
     mcp_ids: list[str] | None = None
     enable_bash_tool: bool | None = None
@@ -197,7 +197,7 @@ class AgentResponse(BaseModel):
     system_prompt: str | None = None
     allowed_tools: list[str] = Field(default_factory=list)
     plugin_ids: list[str] = Field(default_factory=list)
-    skill_ids: list[str] = Field(default_factory=list)
+    allowed_skills: list[str] = Field(default_factory=list, description="List of skill folder names this agent can access")
     allow_all_skills: bool = False
     mcp_ids: list[str] = Field(default_factory=list)
     working_directory: str | None = None

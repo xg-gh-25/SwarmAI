@@ -30,6 +30,7 @@ from schemas.workspace_config import (
 )
 from core.context_manager import context_manager
 from core.audit_manager import audit_manager
+from core.skill_manager import skill_manager
 from database import db
 
 logger = logging.getLogger(__name__)
@@ -90,21 +91,21 @@ async def get_effective_skills(workspace_id: str):
     Requirement 19.6: GET /api/workspaces/{id}/skills.
     """
     try:
-        all_skills = await db.skills.list()
-        skills_by_id = {s["id"]: s for s in all_skills}
-
+        # Get all skills from filesystem cache
+        all_skills = await skill_manager.get_cache()
+        
         ws_configs = await db.workspace_skills.list_by_workspace(workspace_id)
         enabled_ids = {c["skill_id"] for c in ws_configs if c.get("enabled", 1)}
 
         configs = []
         for skill_id in enabled_ids:
-            skill = skills_by_id.get(skill_id)
-            if skill:
+            skill_info = all_skills.get(skill_id)
+            if skill_info:
                 configs.append(WorkspaceSkillConfig(
-                    skill_id=skill["id"],
-                    skill_name=skill.get("name", ""),
+                    skill_id=skill_info.folder_name,
+                    skill_name=skill_info.name,
                     enabled=True,
-                    is_privileged=bool(skill.get("is_privileged", 0)),
+                    is_privileged=False,  # Filesystem skills don't have privileged flag
                 ))
         return configs
     except ValueError as e:

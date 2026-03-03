@@ -40,7 +40,7 @@ REQUIRED_SYMBOLS = [
     "AgentManager",
     "DANGEROUS_PATTERNS",
     "check_dangerous_command",
-    "expand_skill_ids_with_plugins",
+    "expand_allowed_skills_with_plugins",
     "ContentBlockAccumulator",
 ]
 
@@ -127,35 +127,6 @@ def test_extracted_module_has_docstring(module_name: str):
         f"Module '{module_name}' has an empty docstring"
     )
 
-
-WORKSPACE_MANAGER_SKILL_METHODS = [
-    "get_skill_name_by_id",
-    "_get_skill_by_name",
-    "_get_skill_source_path",
-    "get_all_skill_names",
-    "get_allowed_skill_names",
-    "setup_workspace_skills",
-]
-
-
-@pytest.mark.parametrize("method_name", WORKSPACE_MANAGER_SKILL_METHODS)
-def test_workspace_manager_skill_method_has_docstring(method_name: str):
-    """**Validates: Requirements 8.1, 10.1**
-
-    Each skill-related method on AgentSandboxManager must have a non-empty __doc__.
-    """
-    from core.agent_sandbox_manager import AgentSandboxManager
-
-    method = getattr(AgentSandboxManager, method_name, None)
-    assert method is not None, (
-        f"AgentSandboxManager.{method_name} does not exist"
-    )
-    assert method.__doc__ is not None, (
-        f"AgentSandboxManager.{method_name} has no __doc__ attribute"
-    )
-    assert method.__doc__.strip(), (
-        f"AgentSandboxManager.{method_name} has an empty docstring"
-    )
 
 
 # ---------------------------------------------------------------------------

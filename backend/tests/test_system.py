@@ -144,7 +144,7 @@ class TestDatabaseErrorHandling:
 
         # Mock agent as ready
         async def mock_get_default_agent():
-            return {"name": "SwarmAgent", "skill_ids": [], "mcp_ids": []}
+            return {"name": "SwarmAgent", "allowed_skills": [], "mcp_ids": []}
 
         # Mock gateway as running
         mock_gateway = MagicMock()
@@ -298,7 +298,7 @@ class TestAgentResourceCounts:
         async def mock_get_default_agent():
             return {
                 "name": "SwarmAgent",
-                "skill_ids": ["skill-1", "skill-2", "skill-3"],
+                "allowed_skills": ["skill-1", "skill-2", "skill-3"],
                 "mcp_ids": []
             }
 
@@ -314,7 +314,7 @@ class TestAgentResourceCounts:
         async def mock_get_default_agent():
             return {
                 "name": "SwarmAgent",
-                "skill_ids": [],
+                "allowed_skills": [],
                 "mcp_ids": ["mcp-1", "mcp-2"]
             }
 
@@ -325,12 +325,12 @@ class TestAgentResourceCounts:
             data = response.json()
             assert data["agent"]["mcp_servers_count"] == 2
 
-    def test_agent_with_null_skill_ids_reports_zero(self, client: TestClient):
-        """Test that agent with null skill_ids reports zero count."""
+    def test_agent_with_null_allowed_skills_reports_zero(self, client: TestClient):
+        """Test that agent with null allowed_skills reports zero count."""
         async def mock_get_default_agent():
             return {
                 "name": "SwarmAgent",
-                "skill_ids": None,
+                "allowed_skills": None,
                 "mcp_ids": None
             }
 
@@ -359,7 +359,7 @@ class TestAllComponentsReady:
         async def mock_get_default_agent():
             return {
                 "name": "SwarmAgent",
-                "skill_ids": ["skill-1"],
+                "allowed_skills": ["skill-1"],
                 "mcp_ids": ["mcp-1"]
             }
 

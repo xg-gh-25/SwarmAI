@@ -24,7 +24,7 @@ interface Agent {
   systemPrompt?: string;
   allowedTools: string[];
   pluginIds: string[];
-  skillIds: string[];
+  allowedSkills: string[];
   allowAllSkills: boolean;
   mcpIds: string[];
   workingDirectory?: string;
@@ -76,7 +76,7 @@ const toCamelCase = (data: Record<string, unknown>): Agent => {
     systemPrompt: data.system_prompt as string | undefined,
     allowedTools: (data.allowed_tools as string[]) || [],
     pluginIds: (data.plugin_ids as string[]) || [],
-    skillIds: (data.skill_ids as string[]) || [],
+    allowedSkills: (data.allowed_skills as string[]) || [],
     allowAllSkills: (data.allow_all_skills as boolean) ?? false,
     mcpIds: (data.mcp_ids as string[]) || [],
     workingDirectory: data.working_directory as string | undefined,
