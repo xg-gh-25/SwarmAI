@@ -72,7 +72,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
   });
 
   return (
-    <div className="group/msg max-w-3xl">
+    <div className="group/msg max-w-full">
       <AssistantHeader
         timestamp={message.timestamp}
         isStreaming={isStreaming}
