@@ -849,6 +849,18 @@ class AgentManager:
 
         # 4. Resolve working directory and file access (inlined, no _resolve_workspace_mode)
         working_directory = initialization_manager.get_cached_workspace_path()
+        
+        # setting_sources tells Claude SDK where to discover skills/config.
+        # "project" means: look in {cwd}/.claude/ subdirectory for skills.
+        # Despite the name, this has NO relation to SwarmAI's Projects/ folder.
+        # It's just Claude SDK's naming convention for "project-local config".
+        #
+        # Skill discovery flow:
+        # 1. User creates skill → writes to ~/.swarm-ai/skills/my-skill/
+        # 2. ProjectionLayer creates symlink: SwarmWS/.claude/skills/my-skill
+        # 3. Claude SDK reads setting_sources=["project"]
+        # 4. SDK scans {working_directory}/.claude/skills/
+        # 5. SDK discovers my-skill symlink → skill is available
         setting_sources = ["project"]
         global_user_mode = agent_config.get("global_user_mode", True)
 
