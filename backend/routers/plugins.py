@@ -15,6 +15,7 @@ from schemas.marketplace import (
 )
 from database import db
 from core.plugin_manager import plugin_manager
+from core.skill_manager import skill_manager
 from core.exceptions import (
     NotFoundException,
     ValidationException,
@@ -375,87 +376,43 @@ async def _sync_plugin_skills_to_db(
     installed_skills: list[str],
     skills_dir,
 ) -> None:
-    """Sync installed skills from a plugin to the skills database.
+    """Invalidate skill cache after plugin installation.
 
-    This creates skill records in the skills table for skills installed from plugins,
-    allowing them to appear in the Skills Management page.
+    Plugin skills are now managed purely via filesystem in ~/.swarm-ai/plugin-skills/.
+    The SkillManager will discover them automatically on next cache rebuild.
+    This function just invalidates the cache to trigger a rescan.
     """
-    from pathlib import Path
-
-    for skill_name in installed_skills:
-        skill_path = skills_dir / skill_name
-        if not skill_path.exists():
-            logger.warning(f"Skill directory not found: {skill_path}")
-            continue
-
-        # Try to read skill description from markdown file
-        description = f"Skill installed from plugin"
-        for md_file in skill_path.glob("*.md"):
-            try:
-                content = md_file.read_text(encoding="utf-8")
-                # Get first non-header line as description
-                for line in content.split("\n"):
-                    line = line.strip()
-                    if line and not line.startswith("#") and not line.startswith("```"):
-                        description = line[:500]
-                        break
-                break
-            except Exception:
-                pass
-
-        # Check if skill already exists (by folder_name)
-        existing_skills = await db.skills.list()
-        existing = None
-        for s in existing_skills:
-            if s.get("folder_name") == skill_name:
-                existing = s
-                break
-
-        if existing:
-            # Update existing skill
-            await db.skills.update(existing["id"], {
-                "source_type": "plugin",
-                "source_plugin_id": plugin_id,
-                "source_marketplace_id": marketplace_id,
-                "local_path": str(skill_path),
-                "description": description,
-            })
-            logger.info(f"Updated skill '{skill_name}' from plugin")
-        else:
-            # Create new skill record
-            skill_data = {
-                "name": skill_name,
-                "description": description,
-                "folder_name": skill_name,
-                "local_path": str(skill_path),
-                "source_type": "plugin",
-                "source_plugin_id": plugin_id,
-                "source_marketplace_id": marketplace_id,
-                "version": "1.0.0",
-                "is_system": 0,
-                "current_version": 0,
-                "has_draft": 0,
-                "created_by": "plugin",
-            }
-            await db.skills.put(skill_data)
-            logger.info(f"Created skill '{skill_name}' from plugin")
+    # Invalidate the skill cache so the newly installed plugin skills are discovered
+    skill_manager.invalidate_cache()
+    logger.info(f"Invalidated skill cache after installing {len(installed_skills)} plugin skills")
 
 
 async def _remove_plugin_skills_from_db(plugin_id: str) -> list[str]:
-    """Remove skills associated with a plugin from the database.
+    """Invalidate skill cache after plugin uninstallation.
 
-    Returns list of removed skill names.
+    Plugin skills are now managed purely via filesystem. When a plugin is uninstalled,
+    the plugin_manager removes the skill directories from ~/.swarm-ai/plugin-skills/.
+    This function just invalidates the cache so they disappear from the skill list.
+
+    Returns list of skill names that were removed (extracted from plugin record).
     """
-    removed = []
-    all_skills = await db.skills.list()
+    # Get the plugin record to extract skill names for the return value
+    plugin = await db.plugins.get(plugin_id)
+    if not plugin:
+        return []
 
-    for skill in all_skills:
-        if skill.get("source_plugin_id") == plugin_id:
-            await db.skills.delete(skill["id"])
-            removed.append(skill["name"])
-            logger.info(f"Removed skill '{skill['name']}' (plugin uninstalled)")
+    installed_skills = plugin.get("installed_skills", [])
+    if isinstance(installed_skills, str):
+        try:
+            installed_skills = json.loads(installed_skills)
+        except Exception:
+            installed_skills = []
 
-    return removed
+    # Invalidate the skill cache so the removed plugin skills disappear
+    skill_manager.invalidate_cache()
+    logger.info(f"Invalidated skill cache after removing {len(installed_skills)} plugin skills")
+
+    return installed_skills
 
 
 async def _remove_plugin_from_agents(plugin_id: str) -> int:

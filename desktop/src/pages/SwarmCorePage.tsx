@@ -96,8 +96,8 @@ export default function SwarmCorePage() {
         ]);
 
         const activeAgents = agents.filter((a: Agent) => a.status === 'active').length;
-        const systemSkills = skills.filter((s: Skill) => s.isSystem).length;
-        const customSkills = skills.filter((s: Skill) => !s.isSystem).length;
+        const systemSkills = skills.filter((s: Skill) => s.readOnly).length;
+        const customSkills = skills.filter((s: Skill) => !s.readOnly).length;
         const installedPlugins = plugins.filter((p) => p.status === 'installed').length;
 
         // Get 3 most recent agents

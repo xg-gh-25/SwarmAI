@@ -1,28 +1,31 @@
-"""Property-based tests for skill symlink management.
+"""Property-based tests for skill symlink management — DEPRECATED.
 
-**Feature: unified-swarm-workspace-cwd, Property 4: Skill symlink set equals all available skills**
+These tests validated ``AgentSandboxManager.setup_workspace_skills()`` which
+was removed during the filesystem-skills re-architecture.  Skill symlink
+projection is now handled by ``ProjectionLayer`` (see
+``backend/core/projection_layer.py``).  Equivalent property tests will be
+written as tasks 5.2 and 5.3 of the re-architecture spec.
 
-Uses Hypothesis to verify that ``AgentSandboxManager.setup_workspace_skills()``
-creates symlinks that exactly match the set of all available skill names.
-
-**Validates: Requirements 3.2, 3.4**
+All tests in this module are skipped until they are replaced by
+ProjectionLayer property tests.
 """
-import asyncio
-from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
-from uuid import uuid4
-
 import pytest
-from hypothesis import given, strategies as st, settings, HealthCheck, assume
+from pathlib import Path
+from uuid import uuid4
+from hypothesis import given, assume, strategies as st
 
-from core.agent_sandbox_manager import AgentSandboxManager
-
-
-PROPERTY_SETTINGS = settings(
-    max_examples=50,
-    deadline=None,
-    suppress_health_check=[HealthCheck.function_scoped_fixture],
+pytestmark = pytest.mark.skip(
+    reason="AgentSandboxManager skill methods removed; "
+    "ProjectionLayer property tests (tasks 5.2/5.3) replace these"
 )
+
+# Property test settings placeholder
+PROPERTY_SETTINGS = pytest.mark.asyncio
+
+# Stub class to prevent NameError during test collection
+class AgentSandboxManager:
+    """Deprecated stub - original class removed during skills migration."""
+    pass
 
 # ---------------------------------------------------------------------------
 # Strategies

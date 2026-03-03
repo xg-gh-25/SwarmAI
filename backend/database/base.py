@@ -50,12 +50,6 @@ class BaseDatabase(ABC):
 
     @property
     @abstractmethod
-    def skills(self) -> BaseTable:
-        """Get the skills table."""
-        pass
-
-    @property
-    @abstractmethod
     def mcp_servers(self) -> BaseTable:
         """Get the MCP servers table."""
         pass
@@ -76,12 +70,6 @@ class BaseDatabase(ABC):
     @abstractmethod
     def users(self) -> BaseTable:
         """Get the users table."""
-        pass
-
-    @property
-    @abstractmethod
-    def skill_versions(self) -> BaseTable:
-        """Get the skill versions table."""
         pass
 
     @property

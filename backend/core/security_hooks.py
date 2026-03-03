@@ -346,15 +346,28 @@ def create_file_access_permission_handler(allowed_directories: list[str]) -> Cal
     return file_access_permission_handler
 
 
-def create_skill_access_checker(allowed_skill_names: list[str]) -> Callable[..., Any]:
+def create_skill_access_checker(
+    allowed_skill_names: list[str],
+    builtin_skill_names: list[str] | None = None,
+) -> Callable[..., Any]:
     """Create a skill access checker hook with the allowed skill names bound.
 
+    Built-in skills are always allowed regardless of the ``allowed_skill_names``
+    list.  Pass ``builtin_skill_names`` so the hook can grant unconditional
+    access to them.
+
     Args:
-        allowed_skill_names: List of skill folder names that are allowed
+        allowed_skill_names: List of skill folder names that are allowed.
+        builtin_skill_names: Optional list of built-in skill folder names
+            that are always permitted.  When ``None``, no implicit allow
+            is applied (backward-compatible behaviour).
 
     Returns:
-        Async hook function that checks skill access
+        Async hook function that checks skill access.
     """
+    _builtin_set: set[str] = set(builtin_skill_names) if builtin_skill_names else set()
+    _allowed_set: set[str] = set(allowed_skill_names) if allowed_skill_names else set()
+
     async def skill_access_checker(
         input_data: dict[str, Any],
         tool_use_id: str | None,
@@ -365,8 +378,13 @@ def create_skill_access_checker(allowed_skill_names: list[str]) -> Callable[...,
             tool_input = input_data.get('tool_input', {})
             requested_skill = tool_input.get('skill', '')
 
-            # Empty allowed list means no skills are allowed
-            if not allowed_skill_names:
+            # Built-in skills are always allowed
+            if requested_skill in _builtin_set:
+                logger.debug(f"[ALLOWED] Built-in skill access granted: {requested_skill}")
+                return {}
+
+            # Empty allowed list means no non-built-in skills are allowed
+            if not _allowed_set:
                 logger.warning(f"[BLOCKED] Skill access denied (no skills allowed): {requested_skill}")
                 return {
                     'hookSpecificOutput': {
@@ -376,8 +394,8 @@ def create_skill_access_checker(allowed_skill_names: list[str]) -> Callable[...,
                     }
                 }
 
-            # Check if requested skill is in allowed list
-            if requested_skill not in allowed_skill_names:
+            # Check if requested skill is in allowed set (O(1) lookup)
+            if requested_skill not in _allowed_set:
                 logger.warning(f"[BLOCKED] Skill access denied: {requested_skill} not in {allowed_skill_names}")
                 return {
                     'hookSpecificOutput': {

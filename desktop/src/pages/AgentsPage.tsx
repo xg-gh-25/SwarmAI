@@ -68,9 +68,9 @@ export default function AgentsPage() {
   // Helper functions to get names from IDs
   const getSkillNames = (agent: Agent) => {
     if (agent.allowAllSkills) return t('agents.allSkills');
-    if (!agent.skillIds || agent.skillIds.length === 0) return '-';
-    const names = agent.skillIds
-      .map((id) => skills.find((s) => s.id === id)?.name)
+    if (!agent.allowedSkills || agent.allowedSkills.length === 0) return '-';
+    const names = agent.allowedSkills
+      .map((folderName) => skills.find((s) => s.folderName === folderName)?.name)
       .filter(Boolean);
     return names.length > 0 ? names.join(', ') : '-';
   };

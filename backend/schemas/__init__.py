@@ -6,10 +6,10 @@ from .agent import (
     AgentResponse,
 )
 from .skill import (
-    SkillMetadata,
     SkillCreateRequest,
-    SkillGenerateRequest,
+    SkillUpdateRequest,
     SkillResponse,
+    SkillGenerateWithAgentRequest,
 )
 from .mcp import (
     MCPConfig,
@@ -82,10 +82,10 @@ __all__ = [
     "AgentCreateRequest",
     "AgentUpdateRequest",
     "AgentResponse",
-    "SkillMetadata",
     "SkillCreateRequest",
-    "SkillGenerateRequest",
+    "SkillUpdateRequest",
     "SkillResponse",
+    "SkillGenerateWithAgentRequest",
     "MCPConfig",
     "MCPCreateRequest",
     "MCPUpdateRequest",

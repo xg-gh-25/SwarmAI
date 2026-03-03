@@ -3,8 +3,10 @@ import pytest
 import asyncio
 import tempfile
 import os
+import shutil
 from pathlib import Path
 from typing import Generator, AsyncGenerator
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 from httpx import AsyncClient, ASGITransport
@@ -39,12 +41,9 @@ _TABLES_TO_CLEAR = [
     "tasks",
     "messages",
     "sessions",
-    "skill_versions",
-    "workspace_skills",
     "workspace_mcps",
     "workspace_knowledgebases",
     "workspace_audit_log",
-    "skills",
     "mcp_servers",
     "agents",
     "plugins",
@@ -124,7 +123,26 @@ async def reset_database():
 
     yield
 
-    # No teardown needed — next test will clear tables again.
+    # Cleanup: Remove any test skills created in ~/.swarm-ai/skills/
+    # This prevents test pollution of the user's real skills directory
+    skills_dir = Path.home() / ".swarm-ai" / "skills"
+    if skills_dir.exists():
+        for item in skills_dir.iterdir():
+            if item.is_dir():
+                try:
+                    shutil.rmtree(item)
+                except Exception:
+                    pass  # Best effort cleanup
+    
+    # Cleanup: Remove any test skills created in ~/.swarm-ai/built-in-skills/
+    builtin_dir = Path.home() / ".swarm-ai" / "built-in-skills"
+    if builtin_dir.exists():
+        for item in builtin_dir.iterdir():
+            if item.is_dir():
+                try:
+                    shutil.rmtree(item)
+                except Exception:
+                    pass  # Best effort cleanup
 
 
 # ---------------------------------------------------------------------------
@@ -141,7 +159,7 @@ def sample_agent_data():
         "permission_mode": "default",
         "max_turns": 10,
         "system_prompt": "You are a helpful test agent.",
-        "skill_ids": [],
+        "allowed_skills": [],
         "mcp_ids": [],
         "enable_bash_tool": False,
         "enable_file_tools": True,

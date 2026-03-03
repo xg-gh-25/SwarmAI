@@ -70,7 +70,7 @@ class TestInitializedFieldConsistency:
             if agent_ready:
                 return {
                     "name": "SwarmAgent",
-                    "skill_ids": ["skill-1", "skill-2"],
+                    "allowed_skills": ["skill-1", "skill-2"],
                     "mcp_ids": ["mcp-1"]
                 }
             return None
@@ -147,7 +147,7 @@ class TestInitializedFieldConsistency:
             if agent_ready:
                 return {
                     "name": "SwarmAgent",
-                    "skill_ids": [],
+                    "allowed_skills": [],
                     "mcp_ids": []
                 }
             return None
@@ -229,7 +229,7 @@ class TestInitializedFieldConsistency:
 
             async def mock_get_default_agent(ready=agent_ready):
                 if ready:
-                    return {"name": "SwarmAgent", "skill_ids": [], "mcp_ids": []}
+                    return {"name": "SwarmAgent", "allowed_skills": [], "mcp_ids": []}
                 return None
 
             mock_gateway = MagicMock()
@@ -285,7 +285,7 @@ class TestInitializedFieldConsistency:
         async def mock_get_default_agent():
             return {
                 "name": "SwarmAgent",
-                "skill_ids": [f"skill-{i}" for i in range(skills_count)],
+                "allowed_skills": [f"skill-{i}" for i in range(skills_count)],
                 "mcp_ids": [f"mcp-{i}" for i in range(mcp_count)]
             }
 

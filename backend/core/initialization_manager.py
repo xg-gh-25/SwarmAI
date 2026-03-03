@@ -257,6 +257,25 @@ class InitializationManager:
         logger.info("Running full initialization...")
         
         try:
+            # Run skill_ids → allowed_skills migration BEFORE SkillManager is used.
+            # This is idempotent and safe to call on every startup.
+            try:
+                from core.skill_migration import migrate_skill_ids_to_allowed_skills
+                await migrate_skill_ids_to_allowed_skills(db)
+                logger.info("Skill migration check completed")
+            except Exception as e:
+                logger.error("Skill migration failed (non-fatal): %s", e)
+                # Non-critical — continue initialization; the migration will
+                # retry on next startup since it is idempotent.
+
+            # Initialize SkillManager singleton and trigger initial scan
+            try:
+                from core.skill_manager import skill_manager as _sm
+                await _sm.scan_all()
+                logger.info("SkillManager initial scan completed")
+            except Exception as e:
+                logger.error("SkillManager initial scan failed (non-fatal): %s", e)
+
             # Create/update default agent (includes skill and MCP registration)
             # This is a critical step - failure means we don't set initialization_complete
             try:
@@ -280,12 +299,16 @@ class InitializationManager:
             # Expand workspace path and run workspace setup
             workspace_path = swarm_workspace_manager.expand_path(workspace["file_path"])
             
-            # Setup skill symlinks (all skills, shared across agents)
+            # Project skill symlinks (all skills, shared across agents)
+            # Uses ProjectionLayer which replaced AgentSandboxManager's skill methods
             try:
-                await agent_sandbox_manager.setup_workspace_skills(Path(workspace_path))
-                logger.info("Workspace skills set up during full initialization")
+                from core.projection_layer import ProjectionLayer
+                from core.skill_manager import skill_manager as _sm
+                _projection = ProjectionLayer(_sm)
+                await _projection.project_skills(Path(workspace_path), allow_all=True)
+                logger.info("Workspace skills projected during full initialization")
             except Exception as e:
-                logger.error("Failed to setup workspace skills: %s", e)
+                logger.error("Failed to project workspace skills: %s", e)
                 # Non-critical - continue initialization
             
             # Ensure templates in workspace

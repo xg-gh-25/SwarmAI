@@ -40,19 +40,39 @@ capability_name_strategy = st.text(
 # ---------------------------------------------------------------------------
 
 async def _create_skill(name: str, is_privileged: bool = False) -> str:
-    """Insert a global skill and return its ID."""
-    now = datetime.now(timezone.utc).isoformat()
-    skill_id = str(uuid4())
-    await db.skills.put({
-        "id": skill_id,
-        "name": name,
-        "description": f"Test skill {name}",
-        "is_privileged": 1 if is_privileged else 0,
-        "is_system": 0,
-        "created_at": now,
-        "updated_at": now,
-    })
-    return skill_id
+    """Create a filesystem-based skill and return its folder name."""
+    from pathlib import Path
+    
+    # Create folder name from skill name (kebab-case)
+    folder_name = name.lower().replace(" ", "-")
+    
+    # Determine skill directory based on privilege level
+    if is_privileged:
+        # Privileged skills go in built-in directory
+        skills_dir = Path.home() / ".swarm-ai" / "built-in-skills"
+    else:
+        # Regular skills go in user skills directory
+        skills_dir = Path.home() / ".swarm-ai" / "skills"
+    
+    skill_path = skills_dir / folder_name
+    skill_path.mkdir(parents=True, exist_ok=True)
+    
+    # Create SKILL.md with frontmatter
+    skill_md_content = f"""---
+name: {name}
+description: Test skill {name}
+version: 1.0.0
+---
+
+# {name}
+
+A test skill for property-based policy enforcement tests.
+"""
+    
+    skill_md = skill_path / "SKILL.md"
+    skill_md.write_text(skill_md_content)
+    
+    return folder_name
 
 
 async def _create_mcp_server(name: str, is_privileged: bool = False) -> str:
@@ -75,7 +95,10 @@ async def _create_mcp_server(name: str, is_privileged: bool = False) -> str:
 
 
 async def _set_workspace_skill(workspace_id: str, skill_id: str, enabled: bool) -> None:
-    """Create or update a workspace_skills junction row."""
+    """Create or update a workspace_skills junction row.
+    
+    Note: skill_id is now a folder name (e.g., 'code-review'), not a UUID.
+    """
     now = datetime.now(timezone.utc).isoformat()
     existing = await db.workspace_skills.get_by_workspace_and_skill(workspace_id, skill_id)
     if existing:
@@ -84,7 +107,7 @@ async def _set_workspace_skill(workspace_id: str, skill_id: str, enabled: bool) 
         await db.workspace_skills.put({
             "id": str(uuid4()),
             "workspace_id": workspace_id,
-            "skill_id": skill_id,
+            "skill_id": skill_id,  # Now a folder name
             "enabled": 1 if enabled else 0,
             "created_at": now,
             "updated_at": now,

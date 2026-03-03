@@ -19,6 +19,7 @@ from typing import Optional
 
 import anyio
 
+from core.skill_manager import skill_manager
 from database import db
 
 logger = logging.getLogger(__name__)
@@ -267,10 +268,10 @@ class ContextManager:
         parts = []
 
         try:
-            all_skills = await db.skills.list()
+            all_skills = await skill_manager.get_cache()
             ws_configs = await db.workspace_skills.list_by_workspace(workspace_id)
             enabled_ids = {c["skill_id"] for c in ws_configs if c.get("enabled", 1)}
-            skill_names = [s["id"] for s in all_skills if s["id"] in enabled_ids]
+            skill_names = [skill_id for skill_id in all_skills.keys() if skill_id in enabled_ids]
             if skill_names:
                 parts.append(f"Enabled Skills: {', '.join(skill_names)}")
         except Exception as e:

@@ -1,17 +1,25 @@
-"""Default agent bootstrap: creation, skill registration, MCP server registration.
+"""Default agent bootstrap: creation and MCP server registration.
 
 This module handles the lifecycle of the default SwarmAgent — the system agent
 that is automatically created on first launch and updated on subsequent startups.
 
 Bootstrap flow:
 1. ``ensure_default_agent`` is called by ``initialization_manager`` at startup.
-2. Default skills are registered from ``desktop/resources/default-skills/``.
-3. Default MCP servers are registered from ``desktop/resources/default-mcp-servers.json``.
-4. All system skills/MCPs are bound to the default agent record in the database.
-5. If the agent already exists, new system resources are merged (user additions preserved).
+2. Default MCP servers are registered from ``desktop/resources/default-mcp-servers.json``.
+3. All system MCPs are bound to the default agent record in the database.
+4. If the agent already exists, new MCP resources are merged (user additions preserved).
 
-Helper ``expand_skill_ids_with_plugins`` is used at runtime to combine explicit
-skill IDs with skills contributed by selected plugins.
+Skills are now filesystem-based (see ``skill_manager.py``). Built-in skills live
+in ``backend/skills/`` and are always available without explicit listing. The
+``allowed_skills`` field on agent records is a list of folder names (not DB UUIDs).
+
+Key public symbols:
+
+- ``DEFAULT_AGENT_ID``                    — Constant ID for the default agent
+- ``SWARM_AGENT_NAME``                    — Hardcoded system agent display name
+- ``ensure_default_agent``                — Idempotent agent creation / update
+- ``get_default_agent``                   — Fetch default agent from DB
+- ``expand_allowed_skills_with_plugins``  — Combine allowed_skills with plugin folder names
 """
 
 from datetime import datetime
@@ -75,15 +83,6 @@ async def ensure_default_agent(skip_registration: bool = False) -> dict:
     resources_dir = _get_resources_dir()
     
     if not skip_registration:
-        # Register default skills (only during full initialization)
-        skills_dir = resources_dir / "default-skills"
-        if skills_dir.exists():
-            skill_ids = await _register_default_skills(skills_dir)
-            if skill_ids:
-                logger.info(f"Ensured {len(skill_ids)} default skills are registered")
-        else:
-            logger.warning(f"Default skills directory not found: {skills_dir}")
-        
         # Register default MCP servers (only during full initialization)
         mcp_config_path = resources_dir / "default-mcp-servers.json"
         if mcp_config_path.exists():
@@ -93,34 +92,24 @@ async def ensure_default_agent(skip_registration: bool = False) -> dict:
         else:
             logger.warning(f"Default MCP servers config not found: {mcp_config_path}")
     
-    # Query ALL system resources from database (not just the ones we registered above)
-    # This ensures that if a new system skill/MCP is added to the resources folder,
-    # it gets bound on restart without requiring code changes
-    all_system_skills = await db.skills.list_by_system()
+    # Query system MCP servers from database
     all_system_mcps = await db.mcp_servers.list_by_system()
-    
-    # Extract IDs from system resources
-    skill_ids = [skill["id"] for skill in all_system_skills]
     mcp_ids = [mcp["id"] for mcp in all_system_mcps]
     
-    logger.info(f"Found {len(skill_ids)} system skills and {len(mcp_ids)} system MCPs to bind to SwarmAgent")
+    logger.info(f"Found {len(mcp_ids)} system MCPs to bind to SwarmAgent")
     
     # Check if default agent already exists
     existing = await db.agents.get(DEFAULT_AGENT_ID)
     if existing:
-        # Update existing agent with any new default skills/MCPs
-        existing_skill_ids = set(existing.get("skill_ids", []))
+        # Update existing agent with any new default MCPs
         existing_mcp_ids = set(existing.get("mcp_ids", []))
-        new_skill_ids = set(skill_ids)
         new_mcp_ids = set(mcp_ids)
         
-        # Merge new defaults into existing (preserve user additions)
-        updated_skill_ids = list(existing_skill_ids | new_skill_ids)
+        # Merge new default MCPs into existing (preserve user additions)
         updated_mcp_ids = list(existing_mcp_ids | new_mcp_ids)
         
-        # Check if we need to update skills/MCPs or system agent properties
+        # Check if we need to update MCPs or system agent properties
         needs_update = (
-            set(updated_skill_ids) != existing_skill_ids or
             set(updated_mcp_ids) != existing_mcp_ids or
             existing.get("name") != SWARM_AGENT_NAME or
             not existing.get("is_system_agent")
@@ -128,12 +117,11 @@ async def ensure_default_agent(skip_registration: bool = False) -> dict:
         
         if needs_update:
             await db.agents.update(DEFAULT_AGENT_ID, {
-                "skill_ids": updated_skill_ids,
                 "mcp_ids": updated_mcp_ids,
                 "name": SWARM_AGENT_NAME,  # Ensure hardcoded name
                 "is_system_agent": True,  # Ensure system agent flag
             })
-            logger.info(f"Updated default agent with new skills/MCPs: skills={len(updated_skill_ids)}, mcps={len(updated_mcp_ids)}")
+            logger.info(f"Updated default agent with new MCPs: mcps={len(updated_mcp_ids)}")
             # Refresh the existing agent data
             existing = await db.agents.get(DEFAULT_AGENT_ID)
         else:
@@ -171,7 +159,7 @@ async def ensure_default_agent(skip_registration: bool = False) -> dict:
     else:
         logger.warning(f"SWARMAI.md template not found: {template_path}")
     
-    # Create the default agent (skill_ids and mcp_ids already collected above)
+    # Create the default agent (mcp_ids already collected above)
     now = datetime.now().isoformat()
     agent_data = {
         "id": DEFAULT_AGENT_ID,
@@ -183,7 +171,7 @@ async def ensure_default_agent(skip_registration: bool = False) -> dict:
         "system_prompt": system_prompt,
         "is_default": True,
         "is_system_agent": True,  # Mark as protected system agent
-        "skill_ids": skill_ids,
+        "allowed_skills": [],  # Built-in skills always available without explicit listing
         "allow_all_skills": agent_config.get("allow_all_skills", True),
         "mcp_ids": mcp_ids,
         "enable_bash_tool": agent_config.get("enable_bash_tool", True),
@@ -202,67 +190,6 @@ async def ensure_default_agent(skip_registration: bool = False) -> dict:
     logger.info(f"Default agent created: {agent_data['name']}")
     
     return agent_data
-
-
-async def _register_default_skills(skills_dir: Path) -> list[str]:
-    """Register default skills from the skills directory.
-    
-    Args:
-        skills_dir: Path to directory containing SKILL.md files
-        
-    Returns:
-        List of registered skill IDs
-    """
-    skill_ids = []
-    
-    for skill_file in skills_dir.glob("*.md"):
-        try:
-            content = skill_file.read_text(encoding="utf-8")
-            
-            # Parse YAML frontmatter
-            metadata = {}
-            if content.startswith("---"):
-                parts = content.split("---", 2)
-                if len(parts) >= 3:
-                    import yaml
-                    metadata = yaml.safe_load(parts[1]) or {}
-            
-            skill_name = metadata.get("name", skill_file.stem)
-            skill_id = f"default-{skill_name.lower().replace(' ', '-')}"
-            
-            # Check if skill already exists
-            existing = await db.skills.get(skill_id)
-            if existing:
-                # Update existing record to ensure is_system=True (Requirement 7.4)
-                if not existing.get("is_system"):
-                    await db.skills.update(skill_id, {"is_system": True})
-                    logger.debug(f"Updated existing skill with is_system=True: {skill_id}")
-                skill_ids.append(skill_id)
-                continue
-            
-            # Create skill record
-            now = datetime.now().isoformat()
-            skill_data = {
-                "id": skill_id,
-                "name": skill_name,
-                "description": metadata.get("description", ""),
-                "folder_name": skill_file.stem.lower(),
-                "local_path": str(skill_file),
-                "source_type": "system",
-                "version": metadata.get("version", "1.0.0"),
-                "is_system": True,
-                "created_at": now,
-                "updated_at": now,
-            }
-            
-            await db.skills.put(skill_data)
-            skill_ids.append(skill_id)
-            logger.debug(f"Registered default skill: {skill_name}")
-            
-        except Exception as e:
-            logger.error(f"Failed to register skill {skill_file}: {e}")
-    
-    return skill_ids
 
 
 async def _register_default_mcp_servers(config_path: Path) -> list[str]:
@@ -318,26 +245,37 @@ async def _register_default_mcp_servers(config_path: Path) -> list[str]:
     return mcp_ids
 
 
-async def expand_skill_ids_with_plugins(
-    skill_ids: list[str],
+async def expand_allowed_skills_with_plugins(
+    allowed_skills: list[str],
     plugin_ids: list[str],
     allow_all_skills: bool = False,
 ) -> list[str]:
-    """Combine explicit skill_ids with skills from selected plugins.
+    """Combine explicit allowed_skills with plugin skill folder names.
 
-    Returns a deduplicated list preserving order: explicit skills first,
-    then plugin skills. Skips expansion when allow_all_skills is True.
+    Plugin skills are discovered from ~/.swarm-ai/plugin-skills/ via
+    the SkillManager. No database lookups.
+
+    Args:
+        allowed_skills: Explicit list of skill folder names from agent config.
+        plugin_ids: List of plugin IDs whose skills should be included.
+        allow_all_skills: If True, skip expansion (all skills already allowed).
+
+    Returns:
+        A deduplicated list: explicit skills first, then plugin skills.
     """
     if allow_all_skills or not plugin_ids:
-        return list(skill_ids)
+        return list(allowed_skills)
 
-    seen = set(skill_ids)
-    effective = list(skill_ids)
-    for plugin_id in plugin_ids:
-        plugin_skills = await db.skills.list_by_source_plugin(plugin_id)
-        for skill in plugin_skills:
-            sid = skill.get("id")
-            if sid and sid not in seen:
-                seen.add(sid)
-                effective.append(sid)
+    seen = set(allowed_skills)
+    effective = list(allowed_skills)
+
+    # Import here to avoid circular imports
+    from core.skill_manager import skill_manager
+    cache = await skill_manager.get_cache()
+
+    for folder_name, info in cache.items():
+        if info.source_tier == "plugin" and folder_name not in seen:
+            seen.add(folder_name)
+            effective.append(folder_name)
+
     return effective

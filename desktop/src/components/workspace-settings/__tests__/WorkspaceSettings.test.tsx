@@ -86,8 +86,8 @@ const mockSkillConfigs = [
 ];
 
 const mockSkills = [
-  { id: 'skill-1', name: 'Code Analysis', description: 'Analyzes code', isSystem: false, version: '1.0', createdAt: '2025-01-01', updatedAt: '2025-01-01', sourceType: 'user', currentVersion: 1, hasDraft: false },
-  { id: 'skill-2', name: 'File Access', description: 'Privileged file access', isSystem: false, version: '1.0', createdAt: '2025-01-01', updatedAt: '2025-01-01', sourceType: 'user', currentVersion: 1, hasDraft: false, isPrivileged: true },
+  { id: 'skill-1', folderName: 'skill-1', name: 'Code Analysis', description: 'Analyzes code', isSystem: false, version: '1.0', createdAt: '2025-01-01', updatedAt: '2025-01-01', sourceType: 'user', currentVersion: 1, hasDraft: false, readOnly: false },
+  { id: 'skill-2', folderName: 'skill-2', name: 'File Access', description: 'Privileged file access', isSystem: false, version: '1.0', createdAt: '2025-01-01', updatedAt: '2025-01-01', sourceType: 'user', currentVersion: 1, hasDraft: false, readOnly: true },
 ];
 
 const mockMcpConfigs = [
