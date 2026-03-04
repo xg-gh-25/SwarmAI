@@ -28,7 +28,6 @@ function makeNode(overrides?: Partial<TreeNode>): TreeNode {
     name: 'test-node',
     path: 'test/path',
     type: 'directory',
-    isSystemManaged: false,
     ...overrides,
   };
 }
@@ -63,7 +62,6 @@ describe('Property 12: Depth-Based Visual Properties', () => {
               isExpanded={false}
               isSelected={false}
               isMatched={false}
-              isSystemManaged={false}
               onToggle={noop}
               onSelect={noop}
               onContextMenu={noopMouse}

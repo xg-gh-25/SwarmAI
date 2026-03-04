@@ -1,12 +1,15 @@
 """Property-based tests for workspace folder creation.
 
-**Feature: workspace-refactor, Property 4: Workspace creation creates required folders**
+**Feature: swarmws-restructure-git-init, Property 4: Workspace creation creates required folders**
 
-Uses Hypothesis to verify that create_folder_structure() creates exactly
-the required filesystem folders (Artifacts/, ContextFiles/, Transcripts/)
-and does NOT create folders for DB-canonical entities (Tasks, ToDos, etc.).
+Uses Hypothesis to verify that ``create_folder_structure()`` creates exactly
+the required filesystem folders (``Knowledge/``, ``Projects/``) and does NOT
+create folders for DB-canonical entities (Tasks, ToDos, etc.).
 
-**Validates: Requirements 2.3, 2.7, 4.9, 5.8, 35.1-35.6**
+Updated during SwarmWS restructure to reflect the simplified folder structure:
+only ``Knowledge/`` and ``Projects/`` are created (no subfolders).
+
+**Validates: Requirements 1.1, 1.7, 1.8**
 """
 import os
 import shutil
@@ -30,9 +33,6 @@ PROPERTY_SETTINGS = settings(
 
 REQUIRED_FOLDERS = [
     "Knowledge",
-    "Knowledge/Knowledge Base",
-    "Knowledge/Notes",
-    "Knowledge/Memory",
     "Projects",
 ]
 
@@ -64,7 +64,7 @@ workspace_name_strategy = st.text(
 class TestWorkspaceFolderCreation:
     """Property 4: Workspace creation creates required folders.
 
-    Validates: Requirements 2.3, 2.7, 4.9, 5.8, 35.1-35.6
+    Validates: Requirements 1.1, 1.7, 1.8
     """
 
     @given(name=workspace_name_strategy)
@@ -73,7 +73,7 @@ class TestWorkspaceFolderCreation:
     async def test_all_required_folders_exist(self, name: str):
         """All required folders exist after create_folder_structure.
 
-        **Validates: Requirements 2.3, 35.1-35.6**
+        **Validates: Requirements 1.7**
         """
         tmp_dir = tempfile.mkdtemp()
         try:

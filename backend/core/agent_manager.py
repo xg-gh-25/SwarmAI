@@ -10,8 +10,7 @@ to five focused modules for specific concerns:
 - ``agent_defaults.py``      — Default agent bootstrap, skill/MCP registration
 - ``claude_environment.py``  — Claude SDK environment configuration and client wrapper
 - ``content_accumulator.py`` — O(1) content block deduplication (pure utility)
-- ``context_assembler.py``   — 8-layer context assembly engine for agent runtime
-- ``context_snapshot_cache.py`` — Version-based caching for assembled context snapshots
+- ``context_directory_loader.py`` — Centralized context directory loader
 
 All public symbols from those modules are re-exported here for backward compatibility,
 so existing callers require zero import changes.
@@ -19,8 +18,7 @@ so existing callers require zero import changes.
 Key responsibilities retained in this module:
 - ``_build_options``          — Orchestrates 6 helpers to assemble ``ClaudeAgentOptions``
 - ``_build_system_prompt``    — Assembles system prompt via ContextDirectoryLoader
-                                (global context) + ContextAssembler (project context)
-                                + SystemPromptBuilder (non-file sections)
+                                (global context) + SystemPromptBuilder (non-file sections)
 - ``_resolve_project_id``     — Resolves project UUID from agent config or channel context
 - ``_execute_on_session``     — Shared session setup / query / streaming (used by
                                 ``run_conversation`` and ``continue_with_answer``)
@@ -38,6 +36,7 @@ import json
 import re
 import asyncio
 import platform
+import subprocess
 import sys
 import time
 import traceback
@@ -58,8 +57,7 @@ from database import db
 from config import settings, get_bedrock_model_id, get_app_data_dir
 from .session_manager import session_manager
 from .system_prompt import SystemPromptBuilder
-from .context_assembler import ContextAssembler, DEFAULT_TOKEN_BUDGET
-from .context_snapshot_cache import context_cache
+from .context_directory_loader import DEFAULT_TOKEN_BUDGET
 from .initialization_manager import initialization_manager
 
 logger = logging.getLogger(__name__)
@@ -118,19 +116,13 @@ from .security_hooks import (  # noqa: F401
     create_skill_access_checker,
 )
 
-# Telemetry integration — best-effort, never interrupts the agent SSE stream
-from .telemetry_emitter import TelemetryEmitter
 from .tscc_state_manager import TSCCStateManager
-from .tscc_snapshot_manager import TSCCSnapshotManager as _TSCCSnapshotManagerType
 
 _tscc_state_manager = TSCCStateManager()
-_tscc_snapshot_manager: _TSCCSnapshotManagerType | None = None
 
-
-def set_tscc_snapshot_manager(mgr: _TSCCSnapshotManagerType) -> None:
-    """Wire the snapshot manager at app startup (called from main.py)."""
-    global _tscc_snapshot_manager
-    _tscc_snapshot_manager = mgr
+# Per-session system prompt metadata, keyed by session_id.
+# Populated by _build_system_prompt() and read by the TSCC API endpoint.
+_system_prompt_metadata: dict[str, dict] = {}
 
 
 def _build_error_event(
@@ -719,26 +711,53 @@ class AgentManager:
             base = base[:-3]
         return self._MODEL_CONTEXT_WINDOWS.get(base, self._DEFAULT_CONTEXT_WINDOW)
 
+    async def _auto_commit_workspace(self, title: str) -> None:
+        """Auto-commit workspace changes at session end. Runs in background thread."""
+        ws_path = initialization_manager.get_cached_workspace_path()
+        def _commit():
+            try:
+                r = subprocess.run(
+                    ["git", "status", "--porcelain"], cwd=ws_path,
+                    capture_output=True, text=True,
+                )
+                if not r.stdout.strip():
+                    return  # Nothing changed (tracked + untracked)
+                subprocess.run(["git", "add", "-A"], cwd=ws_path, capture_output=True)
+                subprocess.run(
+                    ["git", "commit", "-m", f"Session: {title[:50]}"],
+                    cwd=ws_path, capture_output=True,
+                )
+                logger.info("Auto-committed workspace changes: %s", title[:50])
+            except Exception as exc:
+                logger.warning("Auto-commit failed: %s", exc)
+        await asyncio.to_thread(_commit)
+
     async def _build_system_prompt(
         self,
         agent_config: dict,
         working_directory: str,
         channel_context: Optional[dict],
     ) -> Any:
-        """Build the system prompt with centralized context directory + project context.
+        """Build the system prompt with centralized context directory.
 
         Assembly order:
-        1. ContextDirectoryLoader — global context from ~/.swarm-ai/.context/
-        2. ContextAssembler — project-scoped context (only when project_id exists)
-        3. SystemPromptBuilder — non-file sections (safety, datetime, runtime)
+        1. ContextDirectoryLoader — global context from SwarmWS/.context/
+        2. SystemPromptBuilder — non-file sections (safety, datetime, runtime)
+
+        After loading context files, metadata (file list, token counts,
+        truncation status, full prompt text) is stored on ``agent_config``
+        under the ``_system_prompt_metadata`` key.  The metadata is later
+        copied to the module-level ``_system_prompt_metadata`` dict keyed
+        by session_id once the session is established.
 
         The entire assembly is wrapped in try/except so agent execution is
         never blocked by context assembly failures.
         """
         # ── 1. Centralized context directory (global context) ──────────
+        prompt_metadata: dict = {"files": [], "total_tokens": 0, "full_text": ""}
         try:
-            from .context_directory_loader import ContextDirectoryLoader
-            context_dir = get_app_data_dir() / ".context"
+            from .context_directory_loader import ContextDirectoryLoader, CONTEXT_FILES
+            context_dir = Path(working_directory) / ".context"
             loader = ContextDirectoryLoader(
                 context_dir=context_dir,
                 token_budget=agent_config.get("context_token_budget", DEFAULT_TOKEN_BUDGET),
@@ -760,57 +779,43 @@ class AgentManager:
                     len(context_text),
                     ContextDirectoryLoader.estimate_tokens(context_text),
                 )
+
+            # ── Collect per-file metadata for TSCC system prompt viewer ──
+            for spec in CONTEXT_FILES:
+                filepath = context_dir / spec.filename
+                try:
+                    if not filepath.exists():
+                        continue
+                    file_content = filepath.read_text(encoding="utf-8").strip()
+                    if not file_content:
+                        continue
+                    tokens = ContextDirectoryLoader.estimate_tokens(file_content)
+                    # Per-file truncation: check if this specific section
+                    # has a [Truncated:] marker in the assembled text
+                    truncated = bool(
+                        context_text
+                        and spec.section_name
+                        and f"[Truncated: {spec.section_name}]" in context_text
+                    )
+                    prompt_metadata["files"].append({
+                        "filename": spec.filename,
+                        "tokens": tokens,
+                        "truncated": truncated,
+                    })
+                except (OSError, UnicodeDecodeError):
+                    continue
+
+            total_tokens = sum(f["tokens"] for f in prompt_metadata["files"])
+            prompt_metadata["total_tokens"] = total_tokens
+            prompt_metadata["full_text"] = agent_config.get("system_prompt", "") or ""
+
         except Exception as e:
             logger.warning("ContextDirectoryLoader failed: %s", e)
 
-        # ── 2. Project-scoped context (ContextAssembler) ───────────────
-        try:
-            ws_config = await db.workspace_config.get_config()
-            if ws_config:
-                workspace_path = ws_config.get("file_path", "")
-                if not workspace_path:
-                    workspace_path = str(get_app_data_dir() / "SwarmWS")
+        # Store metadata on agent_config for later retrieval by session init
+        agent_config["_system_prompt_metadata"] = prompt_metadata
 
-                project_id = self._resolve_project_id(agent_config, channel_context)
-                thread_id = agent_config.get("thread_id")
-
-                if project_id:
-                    token_budget = agent_config.get(
-                        "context_token_budget", DEFAULT_TOKEN_BUDGET
-                    )
-                    assembler = ContextAssembler(
-                        workspace_path=workspace_path,
-                        token_budget=token_budget,
-                    )
-                    result = await context_cache.get_or_assemble(
-                        assembler, project_id, thread_id, token_budget,
-                    )
-
-                    context_parts = [
-                        f"## {layer.name}\n{layer.content}"
-                        for layer in result.layers
-                        if layer.content.strip()
-                    ]
-                    if result.truncation_summary:
-                        context_parts.append(result.truncation_summary)
-
-                    context_text = "\n\n".join(context_parts)
-                    if context_text:
-                        existing = agent_config.get("system_prompt", "") or ""
-                        agent_config["system_prompt"] = (
-                            existing + "\n\n" + context_text
-                            if existing
-                            else context_text
-                        )
-                        logger.info(
-                            "Injected project context: %d layers, %d tokens",
-                            len(result.layers),
-                            result.total_token_count,
-                        )
-        except Exception as e:
-            logger.warning("Failed to assemble project context: %s", e)
-
-        # ── 3. SystemPromptBuilder (non-file sections only) ────────────
+        # ── 2. SystemPromptBuilder (non-file sections only) ────────────
         sdk_add_dirs = agent_config.get("add_dirs", [])
         prompt_builder = SystemPromptBuilder(
             working_directory=working_directory,
@@ -1308,9 +1313,8 @@ class AgentManager:
         This is the shared message-processing loop used by both new and resumed sessions.
         The client is NOT disconnected after the response completes (caller manages lifecycle).
         """
-        # --- TSCC telemetry (best-effort, never interrupts SSE stream) ---
+        # --- TSCC state tracking (best-effort) ---
         thread_id = session_context.get("sdk_session_id") or agent_id
-        telemetry = TelemetryEmitter(thread_id)
 
         # Two concurrent tasks feed a single combined_queue: one reads SDK messages,
         # the other forwards permission requests for this session. This fan-in pattern
@@ -1445,7 +1449,7 @@ class AgentManager:
                                 if sid:
                                     await _tscc_state_manager.set_lifecycle_state(sid, "failed")
                             except Exception:
-                                logger.debug("TSCC telemetry: failed lifecycle failed", exc_info=True)
+                                logger.debug("TSCC: failed lifecycle update failed", exc_info=True)
                             # Remove broken session from reuse pool
                             # Use effective_session_id so we find the entry
                             # even after resume-fallback remapping.
@@ -1499,7 +1503,7 @@ class AgentManager:
                                 if sid:
                                     await _tscc_state_manager.set_lifecycle_state(sid, "failed")
                             except Exception:
-                                logger.debug("TSCC telemetry: failed lifecycle failed", exc_info=True)
+                                logger.debug("TSCC: failed lifecycle update failed", exc_info=True)
                             yield _build_error_event(
                                 code="SDK_ERROR",
                                 message=error_msg,
@@ -1530,18 +1534,20 @@ class AgentManager:
                             session_context["sdk_session_id"] = message.data.get('session_id')
                             logger.info(f"Captured SDK session_id from init: {session_context['sdk_session_id']}")
 
-                            # Update telemetry thread_id now that we have the real session ID
-                            telemetry = TelemetryEmitter(session_context["sdk_session_id"])
+                            # Update thread_id now that we have the real session ID
                             try:
                                 await _tscc_state_manager.get_or_create_state(
                                     session_context["sdk_session_id"], None, display_text[:50] if display_text else "Chat"
                                 )
                                 await _tscc_state_manager.set_lifecycle_state(session_context["sdk_session_id"], "active")
-                                evt = telemetry.agent_activity("SwarmAgent", "Starting conversation")
-                                await _tscc_state_manager.apply_event(session_context["sdk_session_id"], evt)
-                                yield evt
                             except Exception:
-                                logger.debug("TSCC telemetry: lifecycle init failed", exc_info=True)
+                                logger.debug("TSCC: lifecycle init failed", exc_info=True)
+
+                            # Store system prompt metadata keyed by session_id
+                            # so the /system-prompt endpoint can retrieve it.
+                            _meta = agent_config.get("_system_prompt_metadata")
+                            if _meta and session_context["sdk_session_id"]:
+                                _system_prompt_metadata[session_context["sdk_session_id"]] = _meta
 
                             if session_context.get("app_session_id") is not None:
                                 # Resume-fallback: the app session ID overrides
@@ -1596,31 +1602,6 @@ class AgentManager:
                     if formatted:
                         logger.debug(f"Formatted message type: {formatted.get('type')}")
 
-                        # --- TSCC telemetry for assistant messages (best-effort) ---
-                        try:
-                            sid = session_context.get("sdk_session_id")
-                            if sid and formatted.get('type') == 'assistant':
-                                for block in (formatted.get('content') or []):
-                                    if block.get('type') == 'tool_use':
-                                        tool_name = block.get('name', 'unknown')
-                                        evt = telemetry.tool_invocation(tool_name, f"Using {tool_name}")
-                                        await _tscc_state_manager.apply_event(sid, evt)
-                                        yield evt
-                                        # Detect source file references from tool input
-                                        tool_input = block.get('input', {})
-                                        file_path = tool_input.get('file_path') or tool_input.get('path') or tool_input.get('filename')
-                                        if file_path and isinstance(file_path, str):
-                                            src_evt = telemetry.sources_updated(file_path, "Project")
-                                            await _tscc_state_manager.apply_event(sid, src_evt)
-                                            yield src_evt
-                                    elif block.get('type') == 'text' and block.get('text'):
-                                        text_preview = block['text'][:80]
-                                        evt = telemetry.agent_activity("SwarmAgent", text_preview)
-                                        await _tscc_state_manager.apply_event(sid, evt)
-                                        yield evt
-                        except Exception:
-                            logger.debug("TSCC telemetry: assistant event emission failed", exc_info=True)
-
                         # Accumulate assistant content blocks for later DB persistence.
                         # The accumulator deduplicates by block key (text content, tool_use id,
                         # tool_result tool_use_id) so repeated blocks from streaming don't
@@ -1641,15 +1622,8 @@ class AgentManager:
                                 sid = session_context.get("sdk_session_id")
                                 if sid:
                                     await _tscc_state_manager.set_lifecycle_state(sid, "paused")
-                                    # Snapshot when pausing for user input
-                                    if _tscc_snapshot_manager:
-                                        state = await _tscc_state_manager.get_state(sid)
-                                        if state:
-                                            _tscc_snapshot_manager.create_snapshot(
-                                                sid, state, "Waiting for user input"
-                                            )
                             except Exception:
-                                logger.debug("TSCC telemetry: paused lifecycle/snapshot failed", exc_info=True)
+                                logger.debug("TSCC: paused lifecycle failed", exc_info=True)
                             sdk_session = session_context.get("sdk_session_id")
                             # Use effective_session_id for persistence so
                             # assistant content is saved under the app session
@@ -1693,20 +1667,13 @@ class AgentManager:
                     if isinstance(message, ResultMessage):
                         logger.info(f"Conversation complete. Total messages: {message_count}")
 
-                        # --- TSCC telemetry: conversation complete (best-effort) ---
+                        # --- TSCC: conversation complete (best-effort) ---
                         try:
                             sid = session_context.get("sdk_session_id")
                             if sid and not session_context.get("had_error"):
                                 await _tscc_state_manager.set_lifecycle_state(sid, "idle")
-                                # Create snapshot at conversation completion
-                                if _tscc_snapshot_manager:
-                                    state = await _tscc_state_manager.get_state(sid)
-                                    if state:
-                                        _tscc_snapshot_manager.create_snapshot(
-                                            sid, state, "Conversation turn completed"
-                                        )
                         except Exception:
-                            logger.debug("TSCC telemetry: idle lifecycle / snapshot failed", exc_info=True)
+                            logger.debug("TSCC: idle lifecycle failed", exc_info=True)
 
                         # Slash commands (e.g. /help) may produce no assistant content if the
                         # SDK handles them silently. Synthesize a default response so the
@@ -1753,6 +1720,12 @@ class AgentManager:
                             "total_cost_usd": getattr(message, 'total_cost_usd', None),
                             "num_turns": getattr(message, 'num_turns', 1),
                         }
+
+                        # Auto-commit workspace changes (non-blocking background thread)
+                        try:
+                            await self._auto_commit_workspace(display_text or "Chat")
+                        except Exception:
+                            logger.debug("Auto-commit failed (non-critical)", exc_info=True)
         finally:
             # Cleanup: cancel both background tasks regardless of how we exited the loop
             # (normal completion, error, or early return). The await-after-cancel pattern

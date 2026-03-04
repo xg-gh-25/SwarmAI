@@ -1,9 +1,7 @@
 """Thread-Scoped Cognitive Context (TSCC) Pydantic schemas.
 
-This module defines the data models for the TSCC feature — a thread-owned,
-collapsible cognitive context panel that provides live, thread-specific
-cognitive state via SSE telemetry events, with filesystem-based snapshot
-archival.
+This module defines the data models for the TSCC feature — a thread-owned
+cognitive context panel that displays system prompt metadata.
 
 Key public models:
 
@@ -12,13 +10,12 @@ Key public models:
 - ``TSCCSource``               — A referenced source with workspace-relative path
 - ``TSCCLiveState``            — Live cognitive state for a single thread
 - ``TSCCState``                — Full TSCC state including thread metadata
-- ``TSCCSnapshot``             — Point-in-time capture of TSCC state
-- ``TelemetryEvent``           — A single SSE telemetry event
-- ``SnapshotCreateRequest``    — Request body for snapshot creation
+- ``SystemPromptFileInfo``     — Metadata for a single context file
+- ``SystemPromptMetadata``     — System prompt metadata (files, tokens, full text)
 
 All field names use snake_case per backend convention.
 
-Requirements: 18.1, 18.2, 18.3, 18.4
+Requirements: 6.1, 6.2, 6.7
 """
 from typing import Optional
 
@@ -72,30 +69,32 @@ class TSCCSource(BaseModel):
 class TSCCLiveState(BaseModel):
     """Live cognitive state for a single thread.
 
-    Contains data for all five cognitive modules: context, active agents,
-    active capabilities, what AI is doing, active sources, and key summary.
+    After TSCC simplification (Req 6.3-6.4), only ``context`` is actively
+    populated.  The remaining fields are retained for API backward
+    compatibility but are always empty/default.
     """
 
     context: TSCCContext = Field(..., description="Scope and thread metadata")
+    # ── Deprecated fields (always empty after TSCC simplification) ──
     active_agents: list[str] = Field(
-        default_factory=list, description="Subagents currently engaged in the thread"
+        default_factory=list, description="[Deprecated] Always empty"
     )
     active_capabilities: TSCCActiveCapabilities = Field(
         default_factory=TSCCActiveCapabilities,
-        description="Grouped capabilities (skills, MCPs, tools)",
+        description="[Deprecated] Always empty",
     )
     what_ai_doing: list[str] = Field(
         default_factory=list,
         max_length=4,
-        description="Current agent activity in human-readable language (max 4 items)",
+        description="[Deprecated] Always empty",
     )
     active_sources: list[TSCCSource] = Field(
-        default_factory=list, description="Sources referenced during execution"
+        default_factory=list, description="[Deprecated] Always empty"
     )
     key_summary: list[str] = Field(
         default_factory=list,
         max_length=5,
-        description="Working conclusion bullet points (max 5 items)",
+        description="[Deprecated] Always empty",
     )
 
 
@@ -124,61 +123,19 @@ class TSCCState(BaseModel):
     live_state: TSCCLiveState = Field(..., description="Live cognitive state")
 
 
-class TSCCSnapshot(BaseModel):
-    """Point-in-time capture of TSCC state, stored as a JSON file.
+class SystemPromptFileInfo(BaseModel):
+    """Metadata for a single context file loaded into the system prompt."""
 
-    Snapshots are created at key decision points (plan decomposition,
-    decision recorded, multi-step phase completed) and archived in the
-    thread's snapshot directory.
-    """
+    filename: str = Field(..., description="Context file name (e.g. SWARMAI.md)")
+    tokens: int = Field(..., description="Estimated token count for this file")
+    truncated: bool = Field(False, description="Whether this file was truncated to fit budget")
 
-    snapshot_id: str = Field(..., description="Unique snapshot identifier (UUID)")
-    thread_id: str = Field(..., description="Chat thread this snapshot belongs to")
-    timestamp: str = Field(..., description="ISO 8601 timestamp of snapshot creation")
-    reason: str = Field(..., description="Snapshot trigger reason")
-    lifecycle_state: str = Field(
-        ..., description="Thread lifecycle state at snapshot time"
+
+class SystemPromptMetadata(BaseModel):
+    """System prompt metadata returned by the system-prompt endpoint."""
+
+    files: list[SystemPromptFileInfo] = Field(
+        default_factory=list, description="Context files loaded into the prompt"
     )
-    active_agents: list[str] = Field(
-        default_factory=list, description="Agents active at snapshot time"
-    )
-    active_capabilities: TSCCActiveCapabilities = Field(
-        default_factory=TSCCActiveCapabilities,
-        description="Capabilities active at snapshot time",
-    )
-    what_ai_doing: list[str] = Field(
-        default_factory=list, description="Agent activity at snapshot time"
-    )
-    active_sources: list[TSCCSource] = Field(
-        default_factory=list, description="Sources referenced at snapshot time"
-    )
-    key_summary: list[str] = Field(
-        default_factory=list, description="Working conclusion at snapshot time"
-    )
-
-
-class TelemetryEvent(BaseModel):
-    """A single TSCC telemetry event emitted via SSE.
-
-    Five event types: agent_activity, tool_invocation, capability_activated,
-    sources_updated, summary_updated.
-    """
-
-    type: str = Field(
-        ...,
-        description=(
-            "Event type: agent_activity, tool_invocation, "
-            "capability_activated, sources_updated, or summary_updated"
-        ),
-    )
-    thread_id: str = Field(..., description="Thread this event belongs to")
-    timestamp: str = Field(..., description="ISO 8601 timestamp of event emission")
-    data: dict = Field(
-        ..., description="Event-specific payload with snake_case field names"
-    )
-
-
-class SnapshotCreateRequest(BaseModel):
-    """Request body for creating a TSCC snapshot."""
-
-    reason: str = Field(..., description="Trigger reason for the snapshot")
+    total_tokens: int = Field(0, description="Total estimated tokens across all files")
+    full_text: str = Field("", description="Complete assembled system prompt text")

@@ -46,7 +46,6 @@ const arbChildFiles = (parentPath: string): fc.Arbitrary<TreeNode[]> =>
       name: `${name}${i}`,
       path: `${parentPath}/${name}${i}`,
       type: 'file' as const,
-      isSystemManaged: false,
     })),
   );
 
@@ -56,20 +55,17 @@ const arbKnowledgeNode: fc.Arbitrary<TreeNode> = arbChildFiles('Knowledge').map(
     name: 'Knowledge',
     path: 'Knowledge',
     type: 'directory',
-    isSystemManaged: true,
     children: [
       {
         name: 'Knowledge Base',
         path: 'Knowledge/Knowledge Base',
         type: 'directory',
-        isSystemManaged: true,
         children: [],
       },
       {
         name: 'Notes',
         path: 'Knowledge/Notes',
         type: 'directory',
-        isSystemManaged: true,
         children: [],
       },
       ...children,
@@ -85,12 +81,10 @@ const arbProjectsNode: fc.Arbitrary<TreeNode> = fc
       name: 'Projects',
       path: 'Projects',
       type: 'directory',
-      isSystemManaged: true,
       children: projectNames.map((name, i) => ({
         name: `${name}${i}`,
         path: `Projects/${name}${i}`,
         type: 'directory',
-        isSystemManaged: false,
         children: [],
       })),
     }),
@@ -109,13 +103,11 @@ const arbRootFiles: fc.Arbitrary<TreeNode[]> = fc
       name,
       path: name,
       type: 'file' as const,
-      isSystemManaged: true,
     }));
     const extra: TreeNode[] = extraNames.map((name, i) => ({
       name: `extra-${name}${i}.md`,
       path: `extra-${name}${i}.md`,
       type: 'file' as const,
-      isSystemManaged: false,
     }));
     return [...known, ...extra];
   });
@@ -320,14 +312,12 @@ function makeDirectoryWithFiles(
       name: `file-${i}.md`,
       path: `${dirPath}/file-${i}.md`,
       type: 'file',
-      isSystemManaged: false,
     });
   }
   return {
     name,
     path: dirPath,
     type: 'directory',
-    isSystemManaged: false,
     children,
   };
 }
@@ -355,14 +345,12 @@ const arbLargeWorkspaceTree: fc.Arbitrary<{
         name: `note-${i}.md`,
         path: `Knowledge/note-${i}.md`,
         type: 'file',
-        isSystemManaged: false,
       });
     }
     const knowledge: TreeNode = {
       name: 'Knowledge',
       path: 'Knowledge',
       type: 'directory',
-      isSystemManaged: true,
       children: knowledgeChildren,
     };
 
@@ -377,7 +365,6 @@ const arbLargeWorkspaceTree: fc.Arbitrary<{
       name: 'Projects',
       path: 'Projects',
       type: 'directory',
-      isSystemManaged: true,
       children: projectChildren,
     };
 
@@ -386,7 +373,6 @@ const arbLargeWorkspaceTree: fc.Arbitrary<{
       name,
       path: name,
       type: 'file' as const,
-      isSystemManaged: true,
     }));
 
     const tree: TreeNode[] = [...rootFiles, knowledge, projects];

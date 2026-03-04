@@ -3,7 +3,7 @@
 
 ## Overview
 
-Strip SwarmWS to a minimal git-backed workspace. All context injection is handled by `ContextDirectoryLoader` from `~/.swarm-ai/.context/`. SwarmWS is just the agent's working directory with `Knowledge/`, `Projects/`, and user files.
+Strip SwarmWS to a minimal git-backed workspace. All context injection is handled by `ContextDirectoryLoader` from `SwarmWS/.context/`. SwarmWS is the agent's working directory with `.context/`, `Knowledge/`, `Projects/`, and user files — all git-tracked.
 
 ## New Structure
 
@@ -11,6 +11,18 @@ Strip SwarmWS to a minimal git-backed workspace. All context injection is handle
 ~/.swarm-ai/SwarmWS/
 ├── .git/                    ← Auto-initialized
 ├── .gitignore
+├── .context/                ← System prompt context (git-tracked)
+│   ├── SWARMAI.md
+│   ├── IDENTITY.md
+│   ├── SOUL.md
+│   ├── AGENT.md
+│   ├── USER.md
+│   ├── STEERING.md
+│   ├── MEMORY.md
+│   ├── KNOWLEDGE.md
+│   ├── PROJECTS.md
+│   ├── L0_SYSTEM_PROMPTS.md
+│   └── L1_SYSTEM_PROMPTS.md
 ├── .claude/skills/          ← SDK skill discovery (unchanged)
 ├── Projects/
 │   └── {name}/.project.json
@@ -33,8 +45,10 @@ PROJECT_SYSTEM_FOLDERS = set()
 ```
 
 Delete: `CONTEXT_L0_TEMPLATE`, `CONTEXT_L1_TEMPLATE`, `SYSTEM_PROMPTS_TEMPLATE`,
-`KNOWLEDGE_SECTIONS`, `_populate_sample_data()`, all `_write_file_if_missing()`
-calls for deleted system files.
+`KNOWLEDGE_SECTIONS`, `_populate_sample_data()`, `is_system_managed()` method,
+all `_write_file_if_missing()` calls for deleted system files.
+
+Remove `is_system_managed` field from workspace tree endpoint response in `workspace_api.py` — no lock badges.
 
 Simplify `create_folder_structure()`:
 ```python
@@ -43,7 +57,8 @@ async def create_folder_structure(self, workspace_path: str) -> None:
     root.mkdir(parents=True, exist_ok=True)
     for folder in FOLDER_STRUCTURE:
         (root / folder).mkdir(parents=True, exist_ok=True)
-    # Write .gitignore
+    # .context/ is created by ContextDirectoryLoader.ensure_directory()
+    # .gitignore
     gitignore = root / ".gitignore"
     if not gitignore.exists():
         gitignore.write_text(GITIGNORE_CONTENT, encoding="utf-8")
@@ -71,6 +86,10 @@ def _ensure_git_repo(self, workspace_path: str) -> bool:
     if (Path(workspace_path) / ".git").exists():
         return True
     try:
+        # Write .gitignore BEFORE git init to prevent committing sensitive files
+        gitignore = Path(workspace_path) / ".gitignore"
+        if not gitignore.exists():
+            gitignore.write_text(GITIGNORE_CONTENT, encoding="utf-8")
         subprocess.run(["git", "init"], cwd=workspace_path, capture_output=True, check=True)
         subprocess.run(["git", "add", "-A"], cwd=workspace_path, capture_output=True)
         subprocess.run(["git", "commit", "-m", "Initial SwarmWS state", "--allow-empty"],
@@ -103,24 +122,49 @@ async def _auto_commit_workspace(self, title: str) -> None:
 
 Called after ResultMessage in `_run_query_on_client()`.
 
-### 4. Context Refresh (Background L1 Cache Invalidation)
+### 4. Context Refresh (L1 Cache via Git)
 
-Context refresh does NOT touch running sessions. It only keeps the L1 cache fresh so new sessions get updated context.
+Since `.context/` is now inside SwarmWS (git-tracked), L1 freshness can use `git diff --quiet .context/` instead of mtime comparison. This is atomic and eliminates the TOCTOU race in the current `_is_l1_fresh()`.
 
 ```python
-# In ContextDirectoryLoader — already implemented:
-# load_all() checks L1 freshness via _is_l1_fresh() (mtime comparison)
-# If stale, re-assembles from source files and writes new L1
-# This happens naturally at every new session creation — no background process needed
+# ContextDirectoryLoader._is_l1_fresh() — git-first with mtime fallback:
+def _is_l1_fresh(self) -> bool:
+    """Check if L1 cache is fresh.
 
-# The flow:
-# 1. User edits ~/.swarm-ai/.context/MEMORY.md
-# 2. MEMORY.md mtime > L1 mtime → L1 is stale
-# 3. Next NEW session calls load_all() → detects stale L1 → re-assembles → writes fresh L1
-# 4. Running sessions are untouched — they keep their frozen prompt
+    Primary: ``git status --porcelain`` (atomic, catches tracked + untracked).
+    Fallback: mtime comparison (only when git unavailable).
+    Both paths share the same contract: return True if L1 is up-to-date.
+    """
+    l1_path = self.context_dir / L1_CACHE_FILENAME
+    if not l1_path.exists():
+        return False
+
+    # Try git first (preferred — atomic, no TOCTOU)
+    try:
+        result = subprocess.run(
+            ["git", "status", "--porcelain", "--", str(self.context_dir)],
+            cwd=self.context_dir.parent,
+            capture_output=True, text=True, timeout=5,
+        )
+        return not result.stdout.strip()
+    except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        pass
+
+    # Mtime fallback (git unavailable)
+    try:
+        l1_mtime = l1_path.stat().st_mtime
+        for spec in CONTEXT_FILES:
+            src = self.context_dir / spec.filename
+            if src.exists() and src.stat().st_mtime > l1_mtime:
+                return False
+        return True
+    except OSError:
+        return False
 ```
 
-No background watcher needed. No session interruption. The existing `_is_l1_fresh()` mtime check in `ContextDirectoryLoader.load_all()` already handles this — it re-assembles when any source file is newer than L1. This runs at session creation time, not during an active session.
+Single method, no separate `_is_l1_fresh_mtime()` helper. The mtime logic is inlined in the except block — 5 lines, not worth extracting.
+
+Running sessions are NOT affected. Context refresh only happens when a NEW session calls `load_all()` — the L1 check runs at that point and re-assembles if stale.
 
 **Multi-tab safety**: Each tab's session has its own frozen system prompt from when it was created. Editing `.context/MEMORY.md` while 3 tabs are streaming does nothing to those tabs. Only the next new tab/session picks up the change.
 
@@ -161,9 +205,14 @@ Replace the 5-module TSCC popover with a single system prompt viewer.
 
 ```python
 async def _build_system_prompt(self, agent_config, working_directory, channel_context):
-    # 1. ContextDirectoryLoader (global context from ~/.swarm-ai/.context/)
+    # 1. ContextDirectoryLoader (global context from SwarmWS/.context/)
     try:
-        loader = ContextDirectoryLoader(...)
+        context_dir = Path(working_directory) / ".context"
+        loader = ContextDirectoryLoader(
+            context_dir=context_dir,
+            token_budget=agent_config.get("context_token_budget", DEFAULT_TOKEN_BUDGET),
+            templates_dir=Path(__file__).resolve().parent.parent / "context",
+        )
         loader.ensure_directory()
         context_text = loader.load_all(model_context_window=...)
         if context_text:

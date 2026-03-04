@@ -45,7 +45,6 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 
 from core.swarm_workspace_manager import swarm_workspace_manager
-from core.context_snapshot_cache import context_cache
 from database import db
 from schemas.workspace_config import (
     TreeNodeResponse,
@@ -177,20 +176,16 @@ async def update_workspace(request: WorkspaceConfigUpdate):
 
 # Internal directories that exist on disk but should not appear in the
 # workspace explorer tree.  These are runtime/system data, not user content.
-_HIDDEN_DIRS = frozenset({"chats"})
+# .git is excluded because its internals are not useful to browse.
+_HIDDEN_DIRS = frozenset({"chats", ".git"})
 
 
 def _should_include(name: str) -> bool:
     """Return True if a file/directory name should appear in the tree.
 
-    Excludes hidden entries (starting with ``'.'``) except ``.project.json``
-    which carries project metadata.  Also excludes internal runtime
-    directories listed in ``_HIDDEN_DIRS``.
+    Shows all files and directories including dot-files (like Kiro IDE).
+    Only excludes internal runtime directories listed in ``_HIDDEN_DIRS``.
     """
-    if name == ".project.json":
-        return True
-    if name.startswith("."):
-        return False
     if name in _HIDDEN_DIRS:
         return False
     return True
@@ -280,7 +275,6 @@ def _build_tree(
             "name": d.name,
             "path": rel_path,
             "type": "directory",
-            "is_system_managed": swarm_workspace_manager.is_system_managed(rel_path),
             "children": children,
         })
 
@@ -290,7 +284,6 @@ def _build_tree(
             "name": f.name,
             "path": rel_path,
             "type": "file",
-            "is_system_managed": swarm_workspace_manager.is_system_managed(rel_path),
             "children": None,
         })
 
@@ -313,11 +306,10 @@ async def get_workspace_tree(
     - name: str (display name)
     - path: str (relative to workspace root)
     - type: ``"file"`` | ``"directory"``
-    - is_system_managed: bool
     - children: list[node] (for directories, if expanded)
 
-    System-managed items are annotated so the frontend can show
-    lock badges and suppress delete/rename actions.
+    All files are user-manageable — no lock badges or system-managed
+    restrictions.
 
     Requirements: 10.1, 11.5, 15.1
     """
@@ -378,7 +370,6 @@ async def create_folder(request: FolderCreateRequest):
     target.mkdir(parents=True, exist_ok=True)
 
     # Increment project_files_version for context cache invalidation (Req 34.2)
-    context_cache.increment_project_files_version()
 
     logger.info("Created folder: %s", request.path)
     return {"path": request.path}
@@ -396,11 +387,6 @@ async def delete_folder(request: FolderDeleteRequest):
     expanded_path = await _get_workspace_path()
     target = _validate_relative_path(request.path, expanded_path)
 
-    if swarm_workspace_manager.is_system_managed(request.path):
-        raise HTTPException(
-            status_code=403, detail="Cannot delete system-managed item"
-        )
-
     if not target.exists():
         raise HTTPException(status_code=404, detail="Path not found")
 
@@ -410,10 +396,9 @@ async def delete_folder(request: FolderDeleteRequest):
         target.unlink()
 
     # Increment version counters for context cache invalidation (Req 34.2)
-    context_cache.increment_project_files_version()
     normalized = request.path.replace("\\", "/")
     if "Knowledge/Memory" in normalized or "Knowledge/Memory" in normalized.replace("\\", "/"):
-        context_cache.increment_memory_version()
+        pass
 
     logger.info("Deleted: %s", request.path)
     return Response(status_code=204)
@@ -431,16 +416,6 @@ async def rename_item(request: FolderRenameRequest):
     old_target = _validate_relative_path(request.old_path, expanded_path)
     new_target = _validate_relative_path(request.new_path, expanded_path)
 
-    if swarm_workspace_manager.is_system_managed(request.old_path):
-        raise HTTPException(
-            status_code=403, detail="Cannot rename system-managed item"
-        )
-
-    if swarm_workspace_manager.is_system_managed(request.new_path):
-        raise HTTPException(
-            status_code=403, detail="Cannot overwrite system-managed item"
-        )
-
     if not old_target.exists():
         raise HTTPException(status_code=404, detail="Source path not found")
 
@@ -454,7 +429,6 @@ async def rename_item(request: FolderRenameRequest):
     old_target.rename(new_target)
 
     # Increment project_files_version for context cache invalidation (Req 34.2)
-    context_cache.increment_project_files_version()
 
     logger.info("Renamed '%s' → '%s'", request.old_path, request.new_path)
     return {"old_path": request.old_path, "new_path": request.new_path}

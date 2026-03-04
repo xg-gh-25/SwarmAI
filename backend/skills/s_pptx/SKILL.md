@@ -1,7 +1,8 @@
 ---
-name: PPTX Operator
+name: s-pptx
 description: "Presentation creation, editing, and analysis. Use when working with presentations (.pptx files) for: (1) Creating new presentations, (2) Modifying or editing content, (3) Working with layouts, (4) Adding comments or speaker notes, or any other presentation tasks"
 tags: [skill, PPT, PPTX, PPT-create, PPT-edit, PPT-read, PPT-update]
+owners: gawan@, GCR-AIDLC
 ---
 
 # PPTX creation, editing, and analysis
@@ -18,36 +19,24 @@ I can help you with PowerPoint presentations in three ways:
 
 1. **Create New Presentations** - Build presentations from scratch using HTML-to-PPTX workflow with custom designs, or use existing templates
 2. **Edit Existing Presentations** - Modify slides, update text, change layouts, add comments/notes using Office Open XML (OOXML) editing
-3. **Analyze Presentations** - Extract text content, examine slide layouts, review design elements, and generate visual thumbnails
-
-**Output Location:** All generated presentations will be saved to `~/.swarm-ai/SwarmWS/Knowledge/Notes/`
+3. **Restyle Slides** - Match a newly added slide to the existing deck's style (colors, fonts, layout, backgrounds)
+4. **Analyze Presentations** - Extract text content, examine slide layouts, review design elements, and generate visual thumbnails
 
 **What I'll do:**
 - Read relevant documentation files completely (html2pptx.md, ooxml.md) before starting
 - Follow structured workflows for each task type
 - Validate changes and generate visual previews
 - Ensure professional design with proper typography, colors, and layouts
-- Save all outputs to Knowledge/Notes/ for easy review and organization
 
 **Example requests:**
 - "Create a 5-slide presentation about cloud computing with a modern blue theme"
 - "Use template.pptx to create a new presentation about Q4 results"
 - "Edit slide 3 in presentation.pptx to change the title to 'Key Findings'"
+- "Restyle the last slide I added to match the rest of the deck"
 - "Extract all text from quarterly-report.pptx"
 - "Generate thumbnail previews of all slides in deck.pptx"
 
 Let me know what you'd like to do with your presentation!
-
----
-
-## Output Location
-
-**All generated .pptx files, thumbnails, and working files should be saved to:**
-```
-~/.swarm-ai/SwarmWS/Knowledge/Notes/
-```
-
-This is the designated location for draft presentations. Once finalized, presentations can be moved to `Knowledge/Knowledge Base/`.
 
 ---
 
@@ -213,9 +202,64 @@ When creating a new PowerPoint presentation from scratch, use the **html2pptx** 
    - If issues found, adjust HTML margins/spacing/colors and regenerate the presentation
    - Repeat until all slides are visually correct
 
+## Extracting Style from an Existing Presentation
+
+Before editing or restyling slides, extract the presentation's style conventions using the style extraction tool:
+
+```bash
+python scripts/style-extract.py presentation.pptx style-summary.json
+```
+
+This outputs a JSON summary containing:
+- **color_palette**: All colors used across slides, ranked by frequency
+- **font_stack**: Typefaces and their usage counts
+- **font_sizes**: Size distribution across the deck
+- **background_images**: Full-slide background images per slide
+- **header_bars**: Detected header bar shapes (position, fill color, alpha, height)
+- **footer_elements**: Detected footer text elements
+
+To analyze a single slide:
+```bash
+python scripts/style-extract.py presentation.pptx --slide 3
+```
+
+Use this output to understand the deck's visual language before making any edits. The style summary tells you exactly which colors, fonts, and layout patterns to match.
+
+## Restyling an Existing Slide to Match Sibling Slides
+
+When a user has added a new slide (e.g., via PowerPoint) and wants it restyled to match the rest of the deck, follow this workflow:
+
+### Workflow
+1. **Extract style summary**: Run `python scripts/style-extract.py <pptx_file>` to get the deck's color palette, fonts, layout patterns, and background images
+2. **Extract text content**: Run `python -m markitdown <pptx_file>` to identify the new slide's content and position
+3. **MANDATORY - READ ENTIRE FILE**: Read [`ooxml.md`](ooxml.md) completely from start to finish before editing XML
+4. **Unpack**: `python ooxml/scripts/unpack.py <pptx_file> <output_dir>`
+5. **Analyze sibling slides**: Read 1-2 existing content slide XMLs (e.g., slide3.xml, slide4.xml) and their `.rels` files to understand:
+   - Background image reference (which rId and media file)
+   - Header bar shape (position, size, fill color with alpha)
+   - Text formatting patterns (font, size, color per element type)
+   - Footer text (position, font, color)
+   - Slide layout reference (which slideLayout)
+6. **Update the target slide's `.rels` file**: Add the background image relationship and set the correct slideLayout reference to match sibling slides
+7. **Rewrite the target slide XML** with:
+   - Background image as first element (full-slide `<p:pic>`)
+   - Header bar shape (`<p:sp>` with solid fill matching siblings)
+   - Title text in the header bar (matching font, size, color)
+   - Body content using the deck's font stack and color palette
+   - Footer text at the bottom
+   - All fonts set to the deck's primary typeface (from style summary)
+8. **Validate**: `python ooxml/scripts/validate.py <output_dir> --original <pptx_file>`
+9. **Pack**: `python ooxml/scripts/pack.py <output_dir> <pptx_file>`
+
+### Key Principles for Restyling
+- **Match the slide layout reference** — use the same `slideLayout` as sibling content slides
+- **Use the exact same background image** — reference the same media file via the same rId pattern
+- **Preserve the original content** — only change styling, not the text or images the user added
+- **Follow the color hierarchy** from the style summary: primary text color, secondary text color, accent color, footer color
+
 ## Editing an existing PowerPoint presentation
 
-When edit slides in an existing PowerPoint presentation, you need to work with the raw Office Open XML (OOXML) format. This involves unpacking the .pptx file, editing the XML content, and repacking it.
+When editing slides in an existing PowerPoint presentation, you need to work with the raw Office Open XML (OOXML) format. This involves unpacking the .pptx file, editing the XML content, and repacking it.
 
 ### Workflow
 1. **MANDATORY - READ ENTIRE FILE**: Read [`ooxml.md`](ooxml.md) (~500 lines) completely from start to finish.  **NEVER set any range limits when reading this file.**  Read the full file content for detailed guidance on OOXML structure and editing workflows before any presentation editing.

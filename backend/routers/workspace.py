@@ -16,7 +16,6 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Query
 
 from database import db
-from core.context_snapshot_cache import context_cache
 
 from schemas.workspace import (
     WorkspaceFileInfo,
@@ -574,10 +573,9 @@ async def upload_file(agent_id: str, request: WorkspaceUploadRequest):
         relative_path = target_path.resolve().relative_to(workspace_root.resolve())
 
     # Increment version counters for context cache invalidation (Req 34.2)
-    context_cache.increment_project_files_version()
     rel_str = str(relative_path).replace("\\", "/")
     if "Knowledge/Memory" in rel_str:
-        context_cache.increment_memory_version()
+        pass
 
     return WorkspaceUploadResponse(
         path=str(relative_path),
@@ -644,10 +642,9 @@ async def write_file(
         relative_path = file_path.resolve().relative_to(workspace_root.resolve())
 
     # Increment version counters for context cache invalidation (Req 34.2)
-    context_cache.increment_project_files_version()
     rel_str = str(relative_path).replace("\\", "/")
     if "Knowledge/Memory" in rel_str:
-        context_cache.increment_memory_version()
+        pass
 
     return WorkspaceWriteResponse(
         path=str(relative_path),

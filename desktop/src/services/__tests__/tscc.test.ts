@@ -3,11 +3,8 @@
  *
  * Tests the TSCC service layer including:
  * - ``toCamelCase`` snake_case → camelCase conversion for TSCCState
- * - ``snapshotToCamelCase`` conversion for TSCCSnapshot
  * - ``getTSCCState`` URL construction and response mapping
- * - ``createSnapshot`` request body and response mapping
- * - ``listSnapshots`` URL construction and array mapping
- * - ``getSnapshot`` URL construction with snapshot_id
+ * - ``getSystemPromptMetadata`` URL construction and response mapping
  *
  * Testing methodology: unit tests with mocked axios API layer.
  */
@@ -24,11 +21,8 @@ vi.mock('../api', () => ({
 
 import {
   toCamelCase,
-  snapshotToCamelCase,
   getTSCCState,
-  createSnapshot,
-  listSnapshots,
-  getSnapshot,
+  getSystemPromptMetadata,
 } from '../tscc';
 import api from '../api';
 
@@ -60,17 +54,14 @@ const sampleBackendState = {
   },
 };
 
-const sampleBackendSnapshot = {
-  snapshot_id: 'snap-001',
-  thread_id: 'thread-abc',
-  timestamp: '2026-02-26T10:05:00Z',
-  reason: 'plan decomposition',
-  lifecycle_state: 'active',
-  active_agents: ['SwarmAgent'],
-  active_capabilities: { skills: [], mcps: [], tools: [] },
-  what_ai_doing: ['Reviewing changes'],
-  active_sources: [{ path: 'src/app.py', origin: 'Project' }],
-  key_summary: ['Changes look good'],
+const sampleSystemPromptMetadata = {
+  files: [
+    { filename: 'SWARMAI.md', tokens: 500, truncated: false },
+    { filename: 'IDENTITY.md', tokens: 200, truncated: false },
+    { filename: 'KNOWLEDGE.md', tokens: 1200, truncated: true },
+  ],
+  total_tokens: 1900,
+  full_text: '# System Prompt\nHello world',
 };
 
 describe('TSCC Service - Unit Tests', () => {
@@ -135,51 +126,17 @@ describe('TSCC Service - Unit Tests', () => {
   });
 
   // ---------------------------------------------------------------
-  // snapshotToCamelCase
-  // ---------------------------------------------------------------
-  describe('snapshotToCamelCase', () => {
-    it('should convert all snapshot fields to camelCase', () => {
-      const result = snapshotToCamelCase(sampleBackendSnapshot);
-      expect(result.snapshotId).toBe('snap-001');
-      expect(result.threadId).toBe('thread-abc');
-      expect(result.timestamp).toBe('2026-02-26T10:05:00Z');
-      expect(result.reason).toBe('plan decomposition');
-      expect(result.lifecycleState).toBe('active');
-      expect(result.activeAgents).toEqual(['SwarmAgent']);
-      expect(result.whatAiDoing).toEqual(['Reviewing changes']);
-      expect(result.keySummary).toEqual(['Changes look good']);
-    });
-
-    it('should convert nested active_sources in snapshot', () => {
-      const result = snapshotToCamelCase(sampleBackendSnapshot);
-      expect(result.activeSources).toEqual([
-        { path: 'src/app.py', origin: 'Project' },
-      ]);
-    });
-
-    it('should convert nested active_capabilities in snapshot', () => {
-      const result = snapshotToCamelCase(sampleBackendSnapshot);
-      expect(result.activeCapabilities.skills).toEqual([]);
-      expect(result.activeCapabilities.mcps).toEqual([]);
-      expect(result.activeCapabilities.tools).toEqual([]);
-    });
-  });
-
-  // ---------------------------------------------------------------
   // getTSCCState
   // ---------------------------------------------------------------
   describe('getTSCCState', () => {
     it('should call GET with correct URL', async () => {
       vi.mocked(api.get).mockResolvedValue({ data: sampleBackendState });
-
       await getTSCCState('thread-xyz');
-
       expect(api.get).toHaveBeenCalledWith('/chat_threads/thread-xyz/tscc');
     });
 
     it('should return camelCase TSCCState', async () => {
       vi.mocked(api.get).mockResolvedValue({ data: sampleBackendState });
-
       const result = await getTSCCState('thread-abc');
       expect(result.threadId).toBe('thread-abc');
       expect(result.liveState.context.scopeLabel).toBe(
@@ -189,87 +146,40 @@ describe('TSCC Service - Unit Tests', () => {
   });
 
   // ---------------------------------------------------------------
-  // createSnapshot
+  // getSystemPromptMetadata
   // ---------------------------------------------------------------
-  describe('createSnapshot', () => {
-    it('should call POST with correct URL and body', async () => {
-      vi.mocked(api.post).mockResolvedValue({ data: sampleBackendSnapshot });
-
-      await createSnapshot('thread-xyz', 'plan decomposition');
-
-      expect(api.post).toHaveBeenCalledWith(
-        '/chat_threads/thread-xyz/snapshots',
-        { reason: 'plan decomposition' },
-      );
-    });
-
-    it('should return camelCase TSCCSnapshot', async () => {
-      vi.mocked(api.post).mockResolvedValue({ data: sampleBackendSnapshot });
-
-      const result = await createSnapshot('thread-abc', 'plan decomposition');
-      expect(result.snapshotId).toBe('snap-001');
-      expect(result.threadId).toBe('thread-abc');
-      expect(result.reason).toBe('plan decomposition');
-      expect(result.lifecycleState).toBe('active');
-    });
-  });
-
-  // ---------------------------------------------------------------
-  // listSnapshots
-  // ---------------------------------------------------------------
-  describe('listSnapshots', () => {
+  describe('getSystemPromptMetadata', () => {
     it('should call GET with correct URL', async () => {
-      vi.mocked(api.get).mockResolvedValue({ data: [sampleBackendSnapshot] });
-
-      await listSnapshots('thread-xyz');
-
-      expect(api.get).toHaveBeenCalledWith(
-        '/chat_threads/thread-xyz/snapshots',
-      );
+      vi.mocked(api.get).mockResolvedValue({ data: sampleSystemPromptMetadata });
+      await getSystemPromptMetadata('session-123');
+      expect(api.get).toHaveBeenCalledWith('/chat/session-123/system-prompt');
     });
 
-    it('should return array of camelCase TSCCSnapshots', async () => {
-      vi.mocked(api.get).mockResolvedValue({
-        data: [sampleBackendSnapshot, sampleBackendSnapshot],
+    it('should convert snake_case to camelCase', async () => {
+      vi.mocked(api.get).mockResolvedValue({ data: sampleSystemPromptMetadata });
+      const result = await getSystemPromptMetadata('session-123');
+      expect(result.totalTokens).toBe(1900);
+      expect(result.fullText).toBe('# System Prompt\nHello world');
+      expect(result.files).toHaveLength(3);
+    });
+
+    it('should map file metadata correctly', async () => {
+      vi.mocked(api.get).mockResolvedValue({ data: sampleSystemPromptMetadata });
+      const result = await getSystemPromptMetadata('session-123');
+      expect(result.files[0]).toEqual({
+        filename: 'SWARMAI.md', tokens: 500, truncated: false,
       });
-
-      const result = await listSnapshots('thread-abc');
-      expect(result).toHaveLength(2);
-      expect(result[0].snapshotId).toBe('snap-001');
-      expect(result[1].snapshotId).toBe('snap-001');
+      expect(result.files[2].truncated).toBe(true);
     });
 
-    it('should return empty array when no snapshots', async () => {
-      vi.mocked(api.get).mockResolvedValue({ data: [] });
-
-      const result = await listSnapshots('thread-abc');
-      expect(result).toEqual([]);
-    });
-  });
-
-  // ---------------------------------------------------------------
-  // getSnapshot
-  // ---------------------------------------------------------------
-  describe('getSnapshot', () => {
-    it('should call GET with correct URL including snapshot_id', async () => {
-      vi.mocked(api.get).mockResolvedValue({ data: sampleBackendSnapshot });
-
-      await getSnapshot('thread-xyz', 'snap-001');
-
-      expect(api.get).toHaveBeenCalledWith(
-        '/chat_threads/thread-xyz/snapshots/snap-001',
-      );
-    });
-
-    it('should return camelCase TSCCSnapshot', async () => {
-      vi.mocked(api.get).mockResolvedValue({ data: sampleBackendSnapshot });
-
-      const result = await getSnapshot('thread-abc', 'snap-001');
-      expect(result.snapshotId).toBe('snap-001');
-      expect(result.threadId).toBe('thread-abc');
-      expect(result.activeSources).toEqual([
-        { path: 'src/app.py', origin: 'Project' },
-      ]);
+    it('should handle empty files array', async () => {
+      vi.mocked(api.get).mockResolvedValue({
+        data: { files: [], total_tokens: 0, full_text: '' },
+      });
+      const result = await getSystemPromptMetadata('session-empty');
+      expect(result.files).toEqual([]);
+      expect(result.totalTokens).toBe(0);
+      expect(result.fullText).toBe('');
     });
   });
 });
