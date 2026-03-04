@@ -104,12 +104,12 @@ class TestFirstLaunchCreatesFullStructure:
             ".git/ directory should exist after first launch"
         )
 
-        # No sample data — workspace is minimal
-        assert not os.path.exists(os.path.join(root, "Knowledge", "Knowledge Base")), (
-            "Legacy Knowledge Base subdirectory should not exist"
+        # Default Knowledge subdirectories exist
+        assert os.path.isdir(os.path.join(root, "Knowledge", "Knowledge Base")), (
+            "Knowledge Base subdirectory should exist"
         )
-        assert not os.path.exists(os.path.join(root, "Knowledge", "Notes")), (
-            "Legacy Notes subdirectory should not exist"
+        assert os.path.isdir(os.path.join(root, "Knowledge", "Notes")), (
+            "Notes subdirectory should exist"
         )
 
 

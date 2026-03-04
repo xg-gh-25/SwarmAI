@@ -38,6 +38,9 @@ logger = logging.getLogger(__name__)
 # Simplified folder structure — only user-facing directories
 FOLDER_STRUCTURE = ["Knowledge", "Projects"]
 
+# Default Knowledge subdirectories
+KNOWLEDGE_SUBDIRS = ["Knowledge Base", "Notes"]
+
 SYSTEM_MANAGED_FOLDERS = {"Knowledge", "Projects"}
 
 SYSTEM_MANAGED_ROOT_FILES: set[str] = set()
@@ -260,6 +263,13 @@ class SwarmWorkspaceManager:
                 lambda fp=folder_path: fp.mkdir(parents=True, exist_ok=True)
             )
 
+        # Create default Knowledge subdirectories
+        for subdir in KNOWLEDGE_SUBDIRS:
+            subdir_path = root / "Knowledge" / subdir
+            await anyio.to_thread.run_sync(
+                lambda sp=subdir_path: sp.mkdir(parents=True, exist_ok=True)
+            )
+
         # Write .gitignore
         gitignore = root / ".gitignore"
         if not gitignore.exists():
@@ -436,8 +446,8 @@ class SwarmWorkspaceManager:
         """
         root = Path(workspace_path)
 
-        # Legacy Knowledge subdirectories
-        legacy_knowledge_dirs = ["Knowledge Base", "Memory", "Notes"]
+        # Legacy Knowledge subdirectories (Memory was legacy, KB and Notes are kept)
+        legacy_knowledge_dirs = ["Memory"]
         for dirname in legacy_knowledge_dirs:
             legacy_dir = root / "Knowledge" / dirname
             if legacy_dir.exists():
@@ -502,7 +512,7 @@ class SwarmWorkspaceManager:
                 logger.info("Removed legacy directory: %s", dirname)
 
     async def verify_integrity(self, workspace_path: str) -> bool:
-        """Verify Knowledge/ and Projects/ exist, recreating if missing.
+        """Verify Knowledge/, Projects/, and Knowledge subdirs exist, recreating if missing.
 
         Returns True if any folder was recreated.
         """
@@ -516,6 +526,14 @@ class SwarmWorkspaceManager:
                 )
                 recreated = True
                 logger.info("Recreated missing folder: %s", folder)
+        for subdir in KNOWLEDGE_SUBDIRS:
+            p = root / "Knowledge" / subdir
+            if not p.exists():
+                await anyio.to_thread.run_sync(
+                    lambda fp=p: fp.mkdir(parents=True, exist_ok=True)
+                )
+                recreated = True
+                logger.info("Recreated missing folder: Knowledge/%s", subdir)
         return recreated
 
     def _resolve_workspace_path(self, workspace_path: Optional[str]) -> str:
