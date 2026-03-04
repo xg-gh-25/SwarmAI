@@ -51,11 +51,6 @@ def _get_resources_dir() -> Path:
     return get_resources_dir(dev_resources)
 
 
-def _get_templates_dir() -> Path:
-    """Get the templates directory path."""
-    return Path(__file__).resolve().parent.parent / "templates"
-
-
 async def get_default_agent() -> dict | None:
     """Get the default agent from the database.
     
@@ -130,7 +125,6 @@ async def ensure_default_agent(skip_registration: bool = False) -> dict:
         return existing
     
     logger.info("Creating default agent...")
-    templates_dir = _get_templates_dir()
     
     # Load default agent configuration
     config_path = resources_dir / "default-agent.json"
@@ -141,23 +135,8 @@ async def ensure_default_agent(skip_registration: bool = False) -> dict:
     with open(config_path, "r", encoding="utf-8") as f:
         agent_config = json.load(f)
     
-    # Load system prompt from SWARMAI.md template
-    template_path = templates_dir / "SWARMAI.md"
-    system_prompt = ""
-    if template_path.exists():
-        content = template_path.read_text(encoding="utf-8")
-        # Skip YAML frontmatter if present
-        if content.startswith("---"):
-            parts = content.split("---", 2)
-            if len(parts) >= 3:
-                system_prompt = parts[2].strip()
-            else:
-                system_prompt = content
-        else:
-            system_prompt = content
-        logger.info("Loaded SWARMAI.md system prompt template")
-    else:
-        logger.warning(f"SWARMAI.md template not found: {template_path}")
+    # System prompt is now loaded from ~/.swarm-ai/.context/SWARMAI.md
+    # at session start by ContextDirectoryLoader — not stored in DB.
     
     # Create the default agent (mcp_ids already collected above)
     now = datetime.now().isoformat()
@@ -168,7 +147,7 @@ async def ensure_default_agent(skip_registration: bool = False) -> dict:
         "model": None,  # Model resolved at runtime from config.json, not stored in DB
         "permission_mode": agent_config.get("permission_mode", "default"),
         "max_turns": agent_config.get("max_turns", 100),
-        "system_prompt": system_prompt,
+        "system_prompt": "",  # Loaded from .context/SWARMAI.md at session start
         "is_default": True,
         "is_system_agent": True,  # Mark as protected system agent
         "allowed_skills": [],  # Built-in skills always available without explicit listing

@@ -61,7 +61,7 @@ export default function ChatPage() {
   // Core chat state — streaming lifecycle delegated to extracted hook
   const [inputValue, setInputValue] = useState('');
 
-  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+  const [selectedAgentId, setSelectedAgentId] = useState<string | null>('default');
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const [agentLoadError, setAgentLoadError] = useState<string | null>(null);
 
@@ -151,7 +151,6 @@ export default function ChatPage() {
     activeTabIdRef,
     restoreTab,
     initTabState,
-    cleanupTabState,
     restoreFromFile,
   } = useUnifiedTabState(selectedAgentId || 'default');
 
@@ -419,21 +418,31 @@ export default function ChatPage() {
     // Clean up pendingStreamTabs entry for this tab (prevents stale entries)
     clearPendingStreamTab(tabId);
 
-    // Clean up per-tab state: remove from map, abort controller if active
-    cleanupTabState(tabId);
+    // Let closeTab handle map deletion + auto-create of last tab.
+    // Do NOT call cleanupTabState before closeTab — it deletes the tab
+    // from the map, causing closeTab to early-return and skip the
+    // "auto-create new tab when last one is closed" logic.
     closeTab(tabId);
 
     // Fire-and-forget backend stop for tabs that were actively streaming.
-    // The abort controller (handled by cleanupTabState) severs the SSE
-    // connection client-side; this call tells the backend to stop the agent.
     if (wasStreaming && tabSessionId) {
       chatService.stopSession(tabSessionId).catch((err) => {
         console.warn('[handleTabClose] Failed to stop backend session:', err);
       });
     }
-    // If closing active tab, closeTab handles switching to adjacent tab.
-    // The activeTabId change triggers the sync useEffect to load content.
-  }, [activeTabId, closeTab, cleanupTabState, clearPendingStreamTab, pendingStreamTabs, tabMapRef]);
+
+    // If closing the last tab, closeTab auto-creates a fresh one.
+    // Reset React state so the welcome screen shows instead of stale messages.
+    const newActiveId = activeTabIdRef.current;
+    if (newActiveId && newActiveId !== tabId) {
+      const newTab = tabMapRef.current.get(newActiveId);
+      if (newTab && !newTab.sessionId && newTab.messages.length === 0) {
+        setMessages([]);
+        setSessionId(undefined);
+        setPendingQuestion(null);
+      }
+    }
+  }, [closeTab, clearPendingStreamTab, pendingStreamTabs, tabMapRef, activeTabIdRef, setMessages, setSessionId, setPendingQuestion]);
 
   // Handle session selection
   const handleSelectSession = useCallback(async (session: ChatSession) => {
@@ -509,43 +518,65 @@ export default function ChatPage() {
         if (!mounted) return;
         if (restored) {
           console.log('[ChatPage] Tabs restored from open_tabs.json');
+          // Directly load messages for the active tab instead of relying
+          // on the sync-active-tab effect, which can miss due to timing.
+          const activeId = activeTabIdRef.current;
+          const activeState = activeId ? tabMapRef.current.get(activeId) : null;
+          if (activeState?.sessionId) {
+            try {
+              await loadSessionMessages(activeState.sessionId);
+            } catch {
+              // Session may no longer exist — reset to fresh tab
+              if (mounted) {
+                setMessages([]);
+                setSessionId(undefined);
+                setIsLoadingHistory(false);
+              }
+            }
+          } else {
+            // No session to load — show welcome screen
+            if (mounted) {
+              setMessages([]);
+              setSessionId(undefined);
+              setIsLoadingHistory(false);
+            }
+          }
+          return;
         } else {
           console.log('[ChatPage] No saved tabs found, using default tab');
         }
       } catch (err) {
         console.warn('[ChatPage] File tab restore failed:', err);
-      } finally {
-        if (mounted) setIsLoadingHistory(false);
       }
+      // Only clear loading for non-restore cases (fresh install, error)
+      if (mounted) setIsLoadingHistory(false);
     };
 
     doRestore();
     return () => { mounted = false; };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps — mount-only
 
-  // Initialize with default agent - always use the default SwarmAgent
+  // Initialize with default agent — validate the selected agent exists in the DB.
+  // Since selectedAgentId defaults to 'default' (the built-in SwarmAgent),
+  // this effect only needs to handle the edge case where the agent was deleted.
   useEffect(() => {
-    // Skip if already have a valid agent
-    if (selectedAgentId) {
+    if (!selectedAgentId) return;
+    // If agents list is loaded and our selected agent exists, nothing to do
+    if (agents.length > 0) {
       const existingAgent = agents.find((a) => a.id === selectedAgentId);
-      if (existingAgent) {
-        return;
-      }
+      if (existingAgent) return;
     }
-    
-    // Load the default agent
+    // Agents not loaded yet or selected agent not found — fetch default
     setAgentLoadError(null);
     agentsService.getDefault().then(defaultAgent => {
-      setSelectedAgentId(defaultAgent.id);
-      // Only set welcome message if not currently streaming (avoid wiping in-progress chat)
-      if (!messages.some((m: Message) => m.role === 'user')) {
-        setMessages([]);
+      if (defaultAgent.id !== selectedAgentId) {
+        setSelectedAgentId(defaultAgent.id);
       }
     }).catch(error => {
       console.error('Failed to fetch default agent:', error);
       setAgentLoadError(t('chat.defaultAgentError', 'Failed to load the default agent. Please restart the application or check the backend service.'));
     });
-  }, [agents, selectedAgentId, messages.length, t]);
+  }, [agents, selectedAgentId, t]);
 
   // Clear agentId URL parameter
   useEffect(() => {
@@ -600,8 +631,10 @@ export default function ChatPage() {
     // Only load if the tab has a persisted session we haven't loaded yet
     if (activeTabState.sessionId && activeTabState.sessionId !== sessionId) {
       loadSessionMessages(activeTabState.sessionId);
-    } else if (!activeTabState.sessionId && !isStreaming && sessionId) {
-      // Tab has no session and we're not streaming — reset to welcome
+    } else if (!activeTabState.sessionId && !isStreaming) {
+      // Tab has no session and we're not streaming — reset to welcome.
+      // This covers both: switching to a fresh tab while another tab had
+      // a session, AND the auto-created tab after closing the last one.
       setMessages([]);
       setSessionId(undefined);
       setPendingQuestion(null);
@@ -997,7 +1030,7 @@ export default function ChatPage() {
 
   // Render
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex-1 flex flex-col min-h-0">
       <ChatHeader
         openTabs={openTabs}
         activeTabId={activeTabId}
@@ -1060,8 +1093,8 @@ export default function ChatPage() {
                 ref={messagesContainerRef}
                 onScroll={handleMessagesScroll}
                 className={messages.length === 0
-                  ? 'flex-1 overflow-hidden'
-                  : 'flex-1 overflow-y-auto p-4 space-y-4'
+                  ? 'flex-1 overflow-hidden flex flex-col'
+                  : 'flex-1 overflow-y-auto p-4 space-y-4 min-w-0'
                 }
               >
                 {messages.length === 0 ? (

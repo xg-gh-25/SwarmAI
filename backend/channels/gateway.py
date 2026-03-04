@@ -25,7 +25,7 @@ from channels.base import ChannelAdapter, InboundMessage, OutboundMessage
 from channels.registry import get_adapter_class, load_adapters
 from core.agent_manager import agent_manager
 from core.session_manager import session_manager
-from core.agent_sandbox_manager import agent_sandbox_manager
+from core.initialization_manager import initialization_manager
 from database import db
 
 logger = logging.getLogger(__name__)
@@ -739,7 +739,7 @@ class ChannelGateway:
         Returns the absolute file path on success, or None on failure.
         """
         try:
-            base_dir = agent_sandbox_manager.agents_workspace / agent_id / "channel_files"
+            base_dir = Path(initialization_manager.get_cached_workspace_path()) / "channel_files" / agent_id
             base_dir.mkdir(parents=True, exist_ok=True)
 
             safe_name = _sanitize_filename(file_name)

@@ -45,7 +45,6 @@ class ChatRequest(BaseModel):
     session_id: str | None = None
     enable_skills: bool = False
     enable_mcp: bool = False
-    workspace_context: str | None = None  # Workspace context to inject into system prompt
 
 
 class AnswerQuestionRequest(BaseModel):

@@ -1,23 +1,24 @@
 """Dynamic system prompt builder for agents.
 
-Assembles a rich, section-based system prompt from workspace files and agent
-configuration.  Each section is produced by a private ``_section_*()`` method
-that returns ``Optional[str]``; ``None`` means the section is skipped.
+Assembles non-file system prompt sections: identity, safety principles,
+workspace path, datetime, and runtime metadata.  All file-based context
+(SWARMAI.md, SOUL.md, IDENTITY.md, USER.md, etc.) is now loaded by
+``ContextDirectoryLoader`` from ``~/.swarm-ai/.context/``.
+
+Each section is produced by a private ``_section_*()`` method that returns
+``Optional[str]``; ``None`` means the section is skipped.
 """
 
 import logging
 import platform
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-BOOTSTRAP_TRUNCATION_LIMIT = 20_000
-
 
 class SystemPromptBuilder:
-    """Builds a multi-section system prompt for a Claude agent."""
+    """Builds non-file system prompt sections for a Claude agent."""
 
     def __init__(
         self,
@@ -31,10 +32,6 @@ class SystemPromptBuilder:
         self.channel_context = channel_context
         self.add_dirs = add_dirs or []
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
-
     def build(self) -> str:
         """Assemble and return the full system prompt string."""
         sections = [
@@ -42,10 +39,7 @@ class SystemPromptBuilder:
             self._section_safety(),
             self._section_workspace(),
             self._section_selected_dirs(),
-            self._section_user_identity(),
             self._section_datetime(),
-            self._section_extra_prompt(),
-            self._section_project_context(),
             self._section_runtime(),
         ]
 
@@ -53,17 +47,12 @@ class SystemPromptBuilder:
         logger.debug(f"System prompt built ({len(prompt)} chars)")
         return prompt
 
-    # ------------------------------------------------------------------
-    # Private section builders
-    # ------------------------------------------------------------------
-
     def _section_identity(self) -> str:
         name = self.agent_config.get("name", "Assistant")
         description = self.agent_config.get("description", "")
         line = f"You are {name}, a personal assistant running inside SwarmAI."
         if description:
             line += f" {description}"
-        # Override the SDK's default identity preamble
         line += (
             "\nIgnore any prior instruction that says "
             "\"You are a Claude agent, built on Anthropic's Claude Agent SDK.\""
@@ -92,9 +81,6 @@ class SystemPromptBuilder:
             lines.append(f"- `{d}`")
         return "\n".join(lines)
 
-    def _section_user_identity(self) -> Optional[str]:
-        return self._load_workspace_file("USER.md", "## User")
-
     def _section_datetime(self) -> str:
         utc_now = datetime.now(timezone.utc)
         local_now = utc_now.astimezone()
@@ -103,33 +89,6 @@ class SystemPromptBuilder:
             f"Current date/time: {utc_now.strftime('%Y-%m-%d %H:%M UTC')} "
             f"/ {local_now.strftime('%Y-%m-%d %H:%M')} {tz_name}"
         )
-
-    def _section_extra_prompt(self) -> Optional[str]:
-        prompt = self.agent_config.get("system_prompt")
-        if not prompt:
-            return None
-        return f"## Additional Instructions\n{prompt}"
-
-    def _section_project_context(self) -> Optional[str]:
-        parts: list[str] = []
-
-        identity = self._load_workspace_file("IDENTITY.md", "### Identity")
-        if identity:
-            parts.append(identity)
-
-        soul = self._load_workspace_file("SOUL.md", "### Soul")
-        if soul:
-            parts.append(soul)
-
-        bootstrap = self._load_workspace_file(
-            "BOOTSTRAP.md", "### Bootstrap"
-        )
-        if bootstrap:
-            parts.append(bootstrap)
-
-        if not parts:
-            return None
-        return "## Project Context\n" + "\n\n".join(parts)
 
     def _section_runtime(self) -> str:
         name = self.agent_config.get("name", "Assistant")
@@ -145,32 +104,3 @@ class SystemPromptBuilder:
             f"`agent={name} | model={model} | os={os_name} ({arch}) "
             f"| channel={channel}`"
         )
-
-    # ------------------------------------------------------------------
-    # Helpers
-    # ------------------------------------------------------------------
-
-    def _load_workspace_file(
-        self, filename: str, header: str
-    ) -> Optional[str]:
-        """Read a file from the working directory and wrap with a header.
-
-        Returns ``None`` if the file does not exist or is empty.
-        For ``BOOTSTRAP.md``, the content is truncated to
-        ``BOOTSTRAP_TRUNCATION_LIMIT`` characters.
-        """
-        path = Path(self.working_directory) / ".swarmai" / filename
-        try:
-            if not path.is_file():
-                return None
-            content = path.read_text(encoding="utf-8").strip()
-            if not content:
-                return None
-
-            if filename == "BOOTSTRAP.md" and len(content) > BOOTSTRAP_TRUNCATION_LIMIT:
-                content = content[:BOOTSTRAP_TRUNCATION_LIMIT] + "\n\n[... truncated ...]"
-
-            return f"{header}\n{content}"
-        except Exception as e:
-            logger.warning(f"Could not read {path}: {e}")
-            return None
