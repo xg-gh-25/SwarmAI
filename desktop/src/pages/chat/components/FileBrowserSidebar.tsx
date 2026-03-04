@@ -29,7 +29,7 @@ export function FileBrowserSidebar({
 
   return (
     <div
-      className="flex flex-col bg-[var(--color-card)] border-l border-[var(--color-border)] relative"
+      className="flex flex-col bg-[var(--color-card)] border-l border-[var(--color-border)] relative flex-shrink-0"
       style={{ width }}
     >
       {/* Resize Handle (on the left side) */}

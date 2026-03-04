@@ -200,8 +200,7 @@ export function ChatInput({
   const canSend = (inputValue.trim() || hasAttachments) && selectedAgentId;
 
   return (
-    <div className="p-6">
-      <div className="max-w-3xl mx-auto">
+    <div className="px-4 pb-4 pt-2">
         {/* Input Container with drag-and-drop */}
         <div
           className={clsx(
@@ -341,9 +340,6 @@ export function ChatInput({
             </span>
           </div>
         </div>
-
-
-      </div>
     </div>
   );
 }

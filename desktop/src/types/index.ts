@@ -210,7 +210,6 @@ export interface ChatRequest {
   sessionId?: string;
   enableSkills?: boolean;
   enableMCP?: boolean;
-  workspaceContext?: string;  // Workspace context to inject into system prompt
 }
 
 // File Attachment Types
