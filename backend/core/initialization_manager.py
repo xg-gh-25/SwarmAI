@@ -251,7 +251,6 @@ class InitializationManager:
         from pathlib import Path
         from core.agent_manager import ensure_default_agent
         from core.swarm_workspace_manager import swarm_workspace_manager
-        from core.agent_sandbox_manager import agent_sandbox_manager
         
         self._mode = "first_run"
         logger.info("Running full initialization...")
@@ -311,12 +310,17 @@ class InitializationManager:
                 logger.error("Failed to project workspace skills: %s", e)
                 # Non-critical - continue initialization
             
-            # Ensure templates in workspace
+            # Ensure context directory is initialized
             try:
-                agent_sandbox_manager.ensure_templates_in_directory(Path(workspace_path))
-                logger.info("Templates ensured in workspace during full initialization")
+                from core.context_directory_loader import ContextDirectoryLoader
+                loader = ContextDirectoryLoader(
+                    context_dir=Path(workspace_path).parent / ".context",
+                    templates_dir=Path(__file__).resolve().parent.parent / "context",
+                )
+                loader.ensure_directory()
+                logger.info("Context directory ensured during full initialization")
             except Exception as e:
-                logger.error("Failed to ensure templates: %s", e)
+                logger.error("Failed to ensure context directory: %s", e)
                 # Non-critical - continue initialization
             
             # Cache the expanded path for per-session use

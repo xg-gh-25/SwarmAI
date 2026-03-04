@@ -5,7 +5,7 @@
  * - Branded header via AssistantHeader (🐝 SwarmAI · timestamp)
  * - Left-aligned content blocks with no avatar indentation
  * - Red border error wrapper when message.isError is true
- * - max-w-3xl readability constraint on content
+ * - min-w-0 overflow constraint on content (prevents flex overflow)
  *
  * Key layout change: content starts at the left margin directly below the
  * header line — no avatar column or indentation gap.
@@ -72,7 +72,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
   });
 
   return (
-    <div className="group/msg max-w-full">
+    <div className="group/msg min-w-0">
       <AssistantHeader
         timestamp={message.timestamp}
         isStreaming={isStreaming}

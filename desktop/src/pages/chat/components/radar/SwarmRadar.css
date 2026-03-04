@@ -12,6 +12,7 @@
   background: var(--color-card);
   border-left: 1px solid var(--color-border);
   position: relative;
+  flex-shrink: 0;
 }
 
 /* Fixed header */

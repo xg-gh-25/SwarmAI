@@ -18,9 +18,9 @@ so existing callers require zero import changes.
 
 Key responsibilities retained in this module:
 - ``_build_options``          — Orchestrates 6 helpers to assemble ``ClaudeAgentOptions``
-- ``_build_system_prompt``    — Assembles system prompt with 8-layer context via
-                                ``ContextSnapshotCache`` (falls back to legacy
-                                ``ContextManager`` on failure)
+- ``_build_system_prompt``    — Assembles system prompt via ContextDirectoryLoader
+                                (global context) + ContextAssembler (project context)
+                                + SystemPromptBuilder (non-file sections)
 - ``_resolve_project_id``     — Resolves project UUID from agent config or channel context
 - ``_execute_on_session``     — Shared session setup / query / streaming (used by
                                 ``run_conversation`` and ``continue_with_answer``)
@@ -58,8 +58,6 @@ from database import db
 from config import settings, get_bedrock_model_id, get_app_data_dir
 from .session_manager import session_manager
 from .system_prompt import SystemPromptBuilder
-from .agent_sandbox_manager import agent_sandbox_manager
-from .context_manager import ContextManager
 from .context_assembler import ContextAssembler, DEFAULT_TOKEN_BUDGET
 from .context_snapshot_cache import context_cache
 from .initialization_manager import initialization_manager
@@ -700,43 +698,78 @@ class AgentManager:
 
         return None
 
+    # Model context window sizes (tokens) for L0/L1 selection
+    _MODEL_CONTEXT_WINDOWS: dict[str, int] = {
+        "claude-opus-4-6": 200_000,
+        "claude-sonnet-4-6": 200_000,
+        "claude-sonnet-4-5-20250929": 200_000,
+        "claude-opus-4-5-20251101": 200_000,
+    }
+    _DEFAULT_CONTEXT_WINDOW: int = 200_000
+
+    def _get_model_context_window(self, model: Optional[str]) -> int:
+        """Return the context window size for a model ID.
+
+        Strips Bedrock prefix/suffix for lookup.  Defaults to 200K.
+        """
+        if not model:
+            return self._DEFAULT_CONTEXT_WINDOW
+        base = model.replace("us.anthropic.", "").rstrip(":0")
+        if base.endswith("-v1"):
+            base = base[:-3]
+        return self._MODEL_CONTEXT_WINDOWS.get(base, self._DEFAULT_CONTEXT_WINDOW)
+
     async def _build_system_prompt(
         self,
         agent_config: dict,
         working_directory: str,
         channel_context: Optional[dict],
     ) -> Any:
-        """Build the system prompt with 8-layer context assembly.
+        """Build the system prompt with centralized context directory + project context.
 
-        Uses ``ContextAssembler`` via ``ContextSnapshotCache`` for structured,
-        priority-ordered context injection with caching.  Falls back to the
-        legacy ``ContextManager.inject_context()`` if the new assembler is
-        unavailable or fails.
+        Assembly order:
+        1. ContextDirectoryLoader — global context from ~/.swarm-ai/.context/
+        2. ContextAssembler — project-scoped context (only when project_id exists)
+        3. SystemPromptBuilder — non-file sections (safety, datetime, runtime)
 
         The entire assembly is wrapped in try/except so agent execution is
         never blocked by context assembly failures.
-
-        Args:
-            agent_config: Agent configuration dictionary (may be mutated to
-                append workspace context to ``system_prompt``).
-            working_directory: Resolved working directory for the agent.
-            channel_context: Optional channel context for channel-based execution.
-
-        Returns:
-            The assembled system prompt configuration object.
-
-        Validates: Requirements 16.1, 16.3, 16.4, 16.7, 34.3
         """
-        # ── 8-layer context assembly via ContextSnapshotCache ──────────
+        # ── 1. Centralized context directory (global context) ──────────
+        try:
+            from .context_directory_loader import ContextDirectoryLoader
+            context_dir = get_app_data_dir() / ".context"
+            loader = ContextDirectoryLoader(
+                context_dir=context_dir,
+                token_budget=agent_config.get("context_token_budget", DEFAULT_TOKEN_BUDGET),
+                templates_dir=Path(__file__).resolve().parent.parent / "context",
+            )
+            loader.ensure_directory()
+
+            model = self._resolve_model(agent_config)
+            model_context_window = self._get_model_context_window(model)
+            context_text = loader.load_all(model_context_window=model_context_window)
+
+            if context_text:
+                existing = agent_config.get("system_prompt", "") or ""
+                agent_config["system_prompt"] = (
+                    existing + "\n\n" + context_text if existing else context_text
+                )
+                logger.info(
+                    "Injected centralized context: %d chars, ~%d tokens",
+                    len(context_text),
+                    ContextDirectoryLoader.estimate_tokens(context_text),
+                )
+        except Exception as e:
+            logger.warning("ContextDirectoryLoader failed: %s", e)
+
+        # ── 2. Project-scoped context (ContextAssembler) ───────────────
         try:
             ws_config = await db.workspace_config.get_config()
             if ws_config:
                 workspace_path = ws_config.get("file_path", "")
                 if not workspace_path:
-                    # Fallback to default SwarmWS path
-                    workspace_path = str(
-                        get_app_data_dir() / "swarm-workspaces" / "SwarmWS"
-                    )
+                    workspace_path = str(get_app_data_dir() / "SwarmWS")
 
                 project_id = self._resolve_project_id(agent_config, channel_context)
                 thread_id = agent_config.get("thread_id")
@@ -753,13 +786,11 @@ class AgentManager:
                         assembler, project_id, thread_id, token_budget,
                     )
 
-                    # Build context text from assembled layers
                     context_parts = [
                         f"## {layer.name}\n{layer.content}"
                         for layer in result.layers
                         if layer.content.strip()
                     ]
-                    # Inject truncation summary if any layers were truncated
                     if result.truncation_summary:
                         context_parts.append(result.truncation_summary)
 
@@ -772,34 +803,14 @@ class AgentManager:
                             else context_text
                         )
                         logger.info(
-                            "Injected assembled context: %d layers, %d total tokens",
+                            "Injected project context: %d layers, %d tokens",
                             len(result.layers),
                             result.total_token_count,
                         )
-                else:
-                    # No project_id — fall back to legacy ContextManager
-                    context_mgr = ContextManager()
-                    injected_context = await context_mgr.inject_context(
-                        ws_config["id"]
-                    )
-                    if injected_context:
-                        existing_prompt = (
-                            agent_config.get("system_prompt", "") or ""
-                        )
-                        agent_config["system_prompt"] = (
-                            existing_prompt
-                            + "\n\n## Workspace Context\n"
-                            + injected_context
-                            if existing_prompt
-                            else "## Workspace Context\n" + injected_context
-                        )
-                        logger.info(
-                            "Injected legacy workspace context (%d chars)",
-                            len(injected_context),
-                        )
         except Exception as e:
-            logger.warning("Failed to assemble context: %s", e)
+            logger.warning("Failed to assemble project context: %s", e)
 
+        # ── 3. SystemPromptBuilder (non-file sections only) ────────────
         sdk_add_dirs = agent_config.get("add_dirs", [])
         prompt_builder = SystemPromptBuilder(
             working_directory=working_directory,
@@ -958,7 +969,6 @@ class AgentManager:
         enable_skills: bool = False,
         enable_mcp: bool = False,
         channel_context: Optional[dict] = None,
-        workspace_context: Optional[str] = None,
     ) -> AsyncIterator[dict]:
         """Run conversation with agent and stream responses.
 
@@ -978,7 +988,7 @@ class AgentManager:
             session_id: Optional session ID for resuming conversations
             enable_skills: Whether to enable skills
             enable_mcp: Whether to enable MCP servers
-            workspace_context: Optional workspace context to inject into system prompt
+            channel_context: Optional channel context for channel-based execution
         """
         # Check if this is a new session or resuming an existing one
         is_resuming = session_id is not None
