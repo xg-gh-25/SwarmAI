@@ -733,10 +733,10 @@ export interface ProjectUpdateRequest {
 /** A node in the workspace filesystem tree.
  *
  * Returned by `GET /api/workspace/tree` and used by the VirtualizedTree
- * component to render the semantically-zoned workspace explorer.
+ * component to render the workspace explorer.
  *
  * - `path` is relative to the workspace root (e.g. "Knowledge/Notes/README.md").
- * - `isSystemManaged` controls whether delete/rename actions are suppressed.
+ * - All files are user-manageable — no lock badges or system-managed restrictions.
  * - `children` is present only for directory nodes that have been expanded
  *   within the requested depth.
  */
@@ -744,7 +744,6 @@ export interface TreeNode {
   name: string;
   path: string;
   type: 'file' | 'directory';
-  isSystemManaged: boolean;
   children?: TreeNode[];
 }
 
@@ -857,6 +856,22 @@ export interface TSCCSnapshot {
   whatAiDoing: string[];
   activeSources: TSCCSource[];
   keySummary: string[];
+}
+
+// ============== System Prompt Metadata Types ==============
+
+/** Metadata for a single context file loaded into the system prompt. */
+export interface SystemPromptFileInfo {
+  filename: string;
+  tokens: number;
+  truncated: boolean;
+}
+
+/** System prompt metadata returned by the system-prompt endpoint. */
+export interface SystemPromptMetadata {
+  files: SystemPromptFileInfo[];
+  totalTokens: number;
+  fullText: string;
 }
 
 // ============== Radar Types (Swarm Radar Redesign) ==============

@@ -16,7 +16,6 @@ from .search import router as search_router
 from .workspace_config import router as workspace_config_router
 from .workspace_api import router as workspace_api_router
 from .projects import router as projects_router
-from .context import router as context_router
 from .tscc import tscc_router as tscc_router
 
 __all__ = [
@@ -37,6 +36,5 @@ __all__ = [
     "workspace_config_router",
     "workspace_api_router",
     "projects_router",
-    "context_router",
     "tscc_router",
 ]

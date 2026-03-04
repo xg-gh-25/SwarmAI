@@ -20,15 +20,15 @@ centralized directory.  It is responsible for:
                                   ensure_directory(), and estimate_tokens()
 
 The existing ``SystemPromptBuilder`` continues to handle non-file sections
-(safety principles, datetime, runtime metadata).  The existing
-``ContextAssembler`` continues to handle project-scoped context.  This
-module sits between them — providing global identity/personality/memory
-context from the single ``~/.swarm-ai/.context/`` directory.
+(safety principles, datetime, runtime metadata).  This module provides
+global identity/personality/memory context from the SwarmWS ``.context/``
+directory.
 """
 
 from pathlib import Path
 from typing import NamedTuple, Optional
 import logging
+import subprocess
 
 logger = logging.getLogger(__name__)
 
@@ -124,8 +124,7 @@ class ContextDirectoryLoader:
     def estimate_tokens(text: str) -> int:
         """Estimate token count using word-based heuristic.
 
-        Uses the same formula as ``ContextAssembler.estimate_tokens()``
-        for consistency::
+        Formula::
 
             tokens = max(1, int(word_count * 4 / 3))
 
@@ -392,30 +391,36 @@ class ContextDirectoryLoader:
     # ── L1 Cache ───────────────────────────────────────────────────────
 
     def _is_l1_fresh(self) -> bool:
-        """Check if L1 cache mtime >= all source file mtimes.
+        """Check if L1 cache is fresh. Git-first with mtime fallback.
 
-        Returns ``True`` only when the L1 cache file exists and its
-        modification time is newer than or equal to every source file's
-        mtime.  Returns ``False`` if L1 is missing or any source is newer.
-
-        Validates: Requirements 4.2, 4.3
+        Primary: ``git status --porcelain`` (atomic, catches tracked + untracked).
+        Fallback: mtime comparison (only when git unavailable).
         """
         l1_path = self.context_dir / L1_CACHE_FILENAME
         if not l1_path.exists():
             return False
+
+        # Try git first (preferred — atomic, no TOCTOU)
+        try:
+            result = subprocess.run(
+                ["git", "status", "--porcelain", "--", str(self.context_dir)],
+                cwd=self.context_dir.parent,
+                capture_output=True, text=True, timeout=5,
+            )
+            return not result.stdout.strip()
+        except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            pass
+
+        # Mtime fallback (git unavailable)
         try:
             l1_mtime = l1_path.stat().st_mtime
-        except OSError:
-            return False
-
-        for spec in CONTEXT_FILES:
-            src = self.context_dir / spec.filename
-            try:
+            for spec in CONTEXT_FILES:
+                src = self.context_dir / spec.filename
                 if src.exists() and src.stat().st_mtime > l1_mtime:
                     return False
-            except OSError:
-                continue
-        return True
+            return True
+        except OSError:
+            return False
 
     def _write_l1_cache(self, content: str) -> None:
         """Write assembled content to L1 cache file.
@@ -431,26 +436,14 @@ class ContextDirectoryLoader:
             logger.warning("Failed to write L1 cache %s: %s", l1_path, exc)
 
     def _load_l1_if_fresh(self) -> Optional[str]:
-        """Load L1 cache if fresh, with TOCTOU mitigation.
-
-        Reads L1 content, then re-checks mtime freshness after the read.
-        If any source file changed during the read, discards the cached
-        content and returns ``None`` so the caller re-assembles.
-
-        Validates: Requirements 4.3, 4.4, 14.1, 14.2
-        """
+        """Load L1 cache if fresh. Git-based check is atomic, no TOCTOU."""
         if not self._is_l1_fresh():
             return None
         l1_path = self.context_dir / L1_CACHE_FILENAME
         try:
-            content = l1_path.read_text(encoding="utf-8")
+            return l1_path.read_text(encoding="utf-8")
         except OSError:
             return None
-        # Re-check after read to mitigate TOCTOU
-        if not self._is_l1_fresh():
-            logger.debug("L1 cache invalidated during read (TOCTOU)")
-            return None
-        return content
 
     # ── L0 Cache ───────────────────────────────────────────────────────
 

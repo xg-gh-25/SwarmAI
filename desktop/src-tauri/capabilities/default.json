@@ -37,8 +37,21 @@
     },
     "shell:allow-kill",
     "fs:default",
-    "fs:allow-read",
-    "fs:allow-write",
+    {
+      "identifier": "fs:allow-read",
+      "allow": [
+        { "path": "$HOME/.swarm-ai/**" },
+        { "path": "$APPDATA/**" },
+        { "path": "$RESOURCE/**" }
+      ]
+    },
+    {
+      "identifier": "fs:allow-write",
+      "allow": [
+        { "path": "$HOME/.swarm-ai/**" },
+        { "path": "$APPDATA/**" }
+      ]
+    },
     "dialog:default",
     "notification:default",
     "updater:default",

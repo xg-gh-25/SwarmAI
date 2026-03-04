@@ -1,25 +1,23 @@
-"""TSCC API router for thread cognitive context and snapshots.
+"""TSCC API router for thread cognitive context and system prompt viewer.
 
 This module provides the ``tscc_router`` mounted at ``/api`` with endpoints
-for retrieving live TSCC state and managing filesystem-based snapshots.
+for retrieving live TSCC state and system prompt metadata.
 
 Key endpoints:
 
-- ``GET  /api/chat_threads/{thread_id}/tscc``                    — current state
-- ``POST /api/chat_threads/{thread_id}/snapshots``               — create snapshot
-- ``GET  /api/chat_threads/{thread_id}/snapshots``               — list snapshots
-- ``GET  /api/chat_threads/{thread_id}/snapshots/{snapshot_id}`` — get snapshot
+- ``GET  /api/chat_threads/{thread_id}/tscc``          — current state
+- ``GET  /api/chat/{session_id}/system-prompt``        — system prompt metadata
 
 All responses use snake_case field names per backend convention.
 
-Requirements: 15.1, 15.2, 15.3, 15.4, 15.5, 11.4, 11.5
+Requirements: 6.1, 6.2, 6.7
 """
 
 import logging
 
 from fastapi import APIRouter, HTTPException
 
-from schemas.tscc import SnapshotCreateRequest, TSCCSnapshot, TSCCState
+from schemas.tscc import SystemPromptMetadata, TSCCState
 
 logger = logging.getLogger(__name__)
 
@@ -28,17 +26,12 @@ tscc_router = APIRouter()
 
 # Late-bound references — set by register_tscc_dependencies() at app startup
 _state_manager = None
-_snapshot_manager = None
 
 
-def register_tscc_dependencies(state_manager, snapshot_manager) -> None:
-    """Wire up the TSCC managers at app startup.
-
-    Called from ``main.py`` after the managers are instantiated.
-    """
-    global _state_manager, _snapshot_manager
+def register_tscc_dependencies(state_manager) -> None:
+    """Wire up the TSCC state manager at app startup."""
+    global _state_manager
     _state_manager = state_manager
-    _snapshot_manager = snapshot_manager
 
 
 @tscc_router.get(
@@ -56,48 +49,21 @@ async def get_tscc_state(thread_id: str):
     return state
 
 
-@tscc_router.post(
-    "/chat_threads/{thread_id}/snapshots",
-    response_model=TSCCSnapshot,
-)
-async def create_snapshot(thread_id: str, body: SnapshotCreateRequest):
-    """Create a point-in-time snapshot of the thread's TSCC state.
-
-    Returns 404 if no state exists for the thread.
-    Returns 409 if a duplicate snapshot (same reason within 30s) was skipped.
-    """
-    state = await _state_manager.get_state(thread_id)
-    if state is None:
-        raise HTTPException(status_code=404, detail="Thread not found")
-
-    snapshot = _snapshot_manager.create_snapshot(thread_id, state, body.reason)
-    if snapshot is None:
-        raise HTTPException(
-            status_code=409,
-            detail="Duplicate snapshot within dedup window",
-        )
-    return snapshot
-
-
 @tscc_router.get(
-    "/chat_threads/{thread_id}/snapshots",
-    response_model=list[TSCCSnapshot],
+    "/chat/{session_id}/system-prompt",
+    response_model=SystemPromptMetadata,
 )
-async def list_snapshots(thread_id: str):
-    """Return all snapshots for a thread in chronological order."""
-    return _snapshot_manager.list_snapshots(thread_id)
+async def get_system_prompt(session_id: str):
+    """Return the assembled system prompt metadata for a session.
 
+    Returns the list of context files loaded, their token counts,
+    truncation status, and the full assembled prompt text.
 
-@tscc_router.get(
-    "/chat_threads/{thread_id}/snapshots/{snapshot_id}",
-    response_model=TSCCSnapshot,
-)
-async def get_snapshot(thread_id: str, snapshot_id: str):
-    """Return a single snapshot by ID.
-
-    Returns 404 if the snapshot is not found.
+    Returns 404 if no metadata exists for the given session_id.
     """
-    snapshot = _snapshot_manager.get_snapshot(thread_id, snapshot_id)
-    if snapshot is None:
-        raise HTTPException(status_code=404, detail="Snapshot not found")
-    return snapshot
+    from core.agent_manager import _system_prompt_metadata
+
+    metadata = _system_prompt_metadata.get(session_id)
+    if metadata is None:
+        raise HTTPException(status_code=404, detail="No system prompt metadata for session")
+    return SystemPromptMetadata(**metadata)

@@ -67,14 +67,13 @@ const mockUseLayout = useLayout as ReturnType<typeof vi.fn>;
 const mockUseTreeData = useTreeData as ReturnType<typeof vi.fn>;
 
 const SAMPLE_TREE: TreeNode[] = [
-  { name: 'system-prompts.md', path: 'system-prompts.md', type: 'file', isSystemManaged: true },
+  { name: 'system-prompts.md', path: 'system-prompts.md', type: 'file' },
   {
     name: 'Knowledge',
     path: 'Knowledge',
     type: 'directory',
-    isSystemManaged: true,
     children: [
-      { name: 'Notes', path: 'Knowledge/Notes', type: 'directory', isSystemManaged: true },
+      { name: 'Notes', path: 'Knowledge/Notes', type: 'directory' },
     ],
   },
 ];

@@ -17,7 +17,6 @@ from typing import Optional
 from uuid import uuid4
 
 from database import db
-from core.context_snapshot_cache import context_cache
 from schemas.todo import (
     ToDoCreate,
     ToDoUpdate,
@@ -121,7 +120,6 @@ class ToDoManager:
         logger.info(f"Created ToDo {todo_id} in workspace {workspace_id}")
 
         # Increment todo_version for context cache invalidation (Req 34.2)
-        context_cache.increment_todo_version()
 
         return self._dict_to_response(result)
 
@@ -231,7 +229,6 @@ class ToDoManager:
             return None
 
         # Increment todo_version for context cache invalidation (Req 34.2)
-        context_cache.increment_todo_version()
 
         logger.info(f"Updated ToDo {todo_id}")
         return self._dict_to_response(result)
@@ -255,7 +252,6 @@ class ToDoManager:
         logger.info(f"Soft-deleted ToDo {todo_id}")
 
         # Increment todo_version for context cache invalidation (Req 34.2)
-        context_cache.increment_todo_version()
 
         return True
 

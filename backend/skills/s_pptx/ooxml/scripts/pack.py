@@ -111,7 +111,7 @@ def validate_document(doc_path):
                     str(doc_path),
                 ],
                 capture_output=True,
-                timeout=10,
+                timeout=30,
                 text=True,
             )
             if not (Path(temp_dir) / f"{doc_path.stem}.html").exists():

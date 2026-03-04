@@ -40,7 +40,7 @@ export const SEMANTIC_ZONES = [
 ] as const;
 
 /** Root-level files displayed above the first zone separator. */
-export const ROOT_FILES = ['system-prompts.md', 'context-L0.md', 'context-L1.md'];
+export const ROOT_FILES: string[] = [];
 
 const ROW_HEIGHT = 32;
 
@@ -159,6 +159,27 @@ export function flattenTree(
     }
   }
 
+  // 2b. Dot-directories (e.g. .claude, .context) — shown before zones
+  for (const node of treeData) {
+    if (
+      node.type === 'directory' &&
+      node.name.startsWith('.') &&
+      !zoneFolderNames.has(node.name)
+    ) {
+      const isExpanded = expandedPaths.has(node.path);
+      rows.push({
+        kind: 'node',
+        node,
+        depth: 0,
+        isMatched: matchedPaths.has(node.path),
+        isExpanded,
+      });
+      if (isExpanded && node.children) {
+        flattenChildren(node.children, 1, expandedPaths, matchedPaths, rows);
+      }
+    }
+  }
+
   // 3. Semantic zones
   for (const zone of SEMANTIC_ZONES) {
     rows.push({ kind: 'zone-separator', zoneLabel: zone.label });
@@ -181,9 +202,13 @@ export function flattenTree(
     }
   }
 
-  // 4. Remaining top-level directories not assigned to a zone
+  // 4. Remaining top-level directories not assigned to a zone or dot-dirs
   for (const node of treeData) {
-    if (node.type === 'directory' && !zoneFolderNames.has(node.name)) {
+    if (
+      node.type === 'directory' &&
+      !zoneFolderNames.has(node.name) &&
+      !node.name.startsWith('.')
+    ) {
       const isExpanded = expandedPaths.has(node.path);
       rows.push({
         kind: 'node',
@@ -242,7 +267,6 @@ function RowRenderer(props: {
       isExpanded={isExpanded}
       isSelected={selectedPath === node.path}
       isMatched={isMatched}
-      isSystemManaged={node.isSystemManaged}
       onToggle={() => toggleExpand(node.path)}
       onSelect={() => setSelectedPath(node.path)}
       onContextMenu={() => {}}

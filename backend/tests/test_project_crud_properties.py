@@ -51,8 +51,8 @@ valid_project_names = st.from_regex(
 # Expected template items
 # ---------------------------------------------------------------------------
 
-EXPECTED_FILES = {"context-L0.md", "context-L1.md", "instructions.md", ".project.json"}
-EXPECTED_DIRS = {"chats", "research", "reports"}
+EXPECTED_FILES = {".project.json"}
+EXPECTED_DIRS: set[str] = set()
 
 REQUIRED_METADATA_FIELDS = {
     "id", "name", "description", "created_at", "updated_at",

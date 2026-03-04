@@ -1,10 +1,12 @@
-"""Property-based tests for template idempotence.
+"""Property-based tests for template idempotence — DEPRECATED.
 
 **Feature: unified-swarm-workspace-cwd, Property 6: Template idempotence**
 
-Uses Hypothesis to verify that ``AgentSandboxManager.ensure_templates_in_directory()``
-preserves existing modified template files and creates only missing ones.
-Calling the method again does not change the filesystem.
+These tests validated ``AgentSandboxManager.ensure_templates_in_directory()``
+which was removed during the SwarmWS restructure.  ``AgentSandboxManager``
+no longer exists as a module.
+
+All tests in this module are skipped.
 
 **Validates: Requirements 4.1, 4.2**
 """
@@ -15,7 +17,10 @@ from uuid import uuid4
 import pytest
 from hypothesis import given, strategies as st, settings, HealthCheck, assume
 
-from core.agent_sandbox_manager import AgentSandboxManager
+pytestmark = pytest.mark.skip(
+    reason="AgentSandboxManager removed during SwarmWS restructure; "
+    "ensure_templates_in_directory() no longer exists"
+)
 
 
 PROPERTY_SETTINGS = settings(
@@ -24,8 +29,8 @@ PROPERTY_SETTINGS = settings(
     suppress_health_check=[HealthCheck.function_scoped_fixture],
 )
 
-# The canonical list of template files from AgentSandboxManager
-TEMPLATE_FILES = AgentSandboxManager.TEMPLATE_FILES
+# Stub — AgentSandboxManager was removed during SwarmWS restructure
+TEMPLATE_FILES: list[str] = []
 
 # ---------------------------------------------------------------------------
 # Strategies
@@ -57,7 +62,7 @@ def create_fake_templates_source(source_dir: Path) -> None:
         (source_dir / filename).write_text(f"# Original {filename}\nDefault content.")
 
 
-def make_manager_with_templates_dir(templates_dir: Path) -> AgentSandboxManager:
+def make_manager_with_templates_dir(templates_dir: Path):
     """Create an AgentSandboxManager with _templates_dir pointing to our fake source."""
     manager = AgentSandboxManager.__new__(AgentSandboxManager)
     manager._templates_dir = templates_dir

@@ -314,7 +314,7 @@ class InitializationManager:
             try:
                 from core.context_directory_loader import ContextDirectoryLoader
                 loader = ContextDirectoryLoader(
-                    context_dir=Path(workspace_path).parent / ".context",
+                    context_dir=Path(workspace_path) / ".context",
                     templates_dir=Path(__file__).resolve().parent.parent / "context",
                 )
                 loader.ensure_directory()

@@ -36,8 +36,6 @@ export const testActiveTabIdRef = { current: null as string | null };
 export function createMockDeps(): ChatStreamingLifecycleDeps {
   return {
     queryClient: { invalidateQueries: vi.fn() },
-    applyTelemetryEvent: vi.fn(),
-    tsccTriggerAutoExpand: vi.fn(),
     getTabState: (tabId: string) => testTabMap.get(tabId),
     updateTabState: vi.fn((tabId: string, patch: Partial<Omit<UnifiedTab, 'id'>>) => {
       const tab = testTabMap.get(tabId);

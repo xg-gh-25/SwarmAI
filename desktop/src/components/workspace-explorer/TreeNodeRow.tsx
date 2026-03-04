@@ -36,7 +36,6 @@ export interface TreeNodeRowProps {
   isExpanded: boolean;
   isSelected: boolean;
   isMatched: boolean;
-  isSystemManaged: boolean;
   onToggle: () => void;
   onSelect: () => void;
   onContextMenu: (e: React.MouseEvent) => void;
@@ -93,7 +92,6 @@ const TreeNodeRow: React.FC<TreeNodeRowProps> = React.memo(function TreeNodeRow(
   isExpanded,
   isSelected,
   isMatched,
-  isSystemManaged,
   onToggle,
   onSelect,
   onContextMenu,
@@ -152,9 +150,7 @@ const TreeNodeRow: React.FC<TreeNodeRowProps> = React.memo(function TreeNodeRow(
     backgroundColor = 'var(--color-explorer-search-highlight)';
   }
 
-  const textColor = isSystemManaged
-    ? 'var(--color-text-muted)'
-    : 'var(--color-text)';
+  const textColor = 'var(--color-text)';
 
   /* ---- render ---- */
 
@@ -237,7 +233,7 @@ const TreeNodeRow: React.FC<TreeNodeRowProps> = React.memo(function TreeNodeRow(
         style={{
           fontSize: '16px',
           flexShrink: 0,
-          color: isSystemManaged ? 'var(--color-text-muted)' : undefined,
+          color: undefined,
         }}
       >
         {isDirectory ? (isExpanded ? 'folder_open' : 'folder') : fileIcon(node.name)}
@@ -256,25 +252,8 @@ const TreeNodeRow: React.FC<TreeNodeRowProps> = React.memo(function TreeNodeRow(
         {node.name}
       </span>
 
-      {/* System-managed lock badge */}
-      {isSystemManaged && (
-        <span
-          className="material-symbols-outlined"
-          data-testid="lock-badge"
-          aria-label="System managed"
-          style={{
-            fontSize: '14px',
-            flexShrink: 0,
-            color: 'var(--color-explorer-system-badge)',
-          }}
-        >
-          lock
-        </span>
-      )}
-
-      {/* User-managed CRUD action icons — visible on hover only */}
-      {!isSystemManaged && (
-        <span
+      {/* CRUD action icons — visible on hover only */}
+      <span
           className="tree-node-actions"
           data-testid="crud-actions"
           aria-label="Actions"
@@ -310,7 +289,6 @@ const TreeNodeRow: React.FC<TreeNodeRowProps> = React.memo(function TreeNodeRow(
             more_horiz
           </span>
         </span>
-      )}
     </div>
   );
 });

@@ -7,7 +7,6 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 from database import db
-from core.context_manager import ContextManager
 from tests.helpers import now_iso, create_workspace_with_path
 
 
@@ -94,52 +93,6 @@ async def _make_ws(is_default=False):
     }
     await db.workspace_config.put(ws)
     return ws
-
-
-# --- Context injection integration tests (Req 14.8) ---
-
-
-async def test_inject_context_includes_enabled_skills(tmp_path):
-    """Context injection output includes capabilities summary with skills."""
-    ws = await create_workspace_with_path(tmp_path, name="SkillWS", is_default=True)
-    ctx_dir = Path(ws["file_path"]) / "ContextFiles"
-    ctx_dir.mkdir(parents=True, exist_ok=True)
-    (ctx_dir / "context.md").write_text("Project context", encoding="utf-8")
-
-    sid = await _seed_skill("CodeReview")
-    await _enable_cap(ws["id"], sid, "skill")
-
-    result = await ContextManager().inject_context(ws["id"])
-    assert "Current Workspace: SkillWS" in result
-    assert "Project context" in result
-    assert "Effective Configuration" in result
-    assert "Enabled Skills" in result
-
-
-async def test_inject_context_includes_enabled_mcps(tmp_path):
-    """Context injection output includes capabilities summary with MCPs."""
-    ws = await create_workspace_with_path(tmp_path, name="McpWS", is_default=True)
-    ctx_dir = Path(ws["file_path"]) / "ContextFiles"
-    ctx_dir.mkdir(parents=True, exist_ok=True)
-    (ctx_dir / "context.md").write_text("MCP workspace", encoding="utf-8")
-
-    mid = await _seed_mcp("GitHubMCP")
-    await _enable_cap(ws["id"], mid, "mcp")
-
-    result = await ContextManager().inject_context(ws["id"])
-    assert "Enabled MCPs" in result
-
-
-async def test_inject_context_no_caps_omits_section(tmp_path):
-    """When no capabilities configured, Effective Configuration is omitted."""
-    ws = await create_workspace_with_path(tmp_path, name="EmptyWS")
-    ctx_dir = Path(ws["file_path"]) / "ContextFiles"
-    ctx_dir.mkdir(parents=True, exist_ok=True)
-    (ctx_dir / "context.md").write_text("Just context", encoding="utf-8")
-
-    result = await ContextManager().inject_context(ws["id"])
-    assert "Just context" in result
-    assert "Effective Configuration" not in result
 
 
 # --- Policy enforcement integration tests via HTTP (Req 26, 34) ---

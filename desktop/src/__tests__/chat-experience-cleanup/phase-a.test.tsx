@@ -202,14 +202,11 @@ describe('TSCCPanel rendering after dead code removal (Req 11.2)', () => {
     expect(screen.getByText('Updated just now')).toBeInTheDocument();
   });
 
-  it('renders all five cognitive modules in expanded view', () => {
+  it('renders SystemPromptModule in expanded view', () => {
     render(<TSCCPanel {...baseProps} isExpanded={true} />);
 
-    expect(screen.getByText('Context')).toBeInTheDocument();
-    expect(screen.getByText('Active Agents')).toBeInTheDocument();
-    expect(screen.getByText('What AI is Doing')).toBeInTheDocument();
-    expect(screen.getByText('Active Sources')).toBeInTheDocument();
-    expect(screen.getByText('Key Summary')).toBeInTheDocument();
+    // The panel now shows a single SystemPromptModule instead of five modules
+    expect(screen.getAllByText('System Prompt').length).toBeGreaterThanOrEqual(1);
   });
 
   it('renders correctly when tsccState is null (uses default)', () => {
