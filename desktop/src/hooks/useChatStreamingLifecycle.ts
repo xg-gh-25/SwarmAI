@@ -598,9 +598,6 @@ export interface ChatStreamingLifecycleDeps {
   queryClient: {
     invalidateQueries: (opts: { queryKey: string[] }) => void;
   };
-  /** TSCC telemetry integration */
-  applyTelemetryEvent: (event: unknown) => void;
-  tsccTriggerAutoExpand: (reason: string) => void;
   /** Session lookup for stale entry cleanup (Fix 5). Returns null/throws on 404. */
   getSession?: (sessionId: string) => Promise<{ id: string } | null>;
 
@@ -626,8 +623,6 @@ export function useChatStreamingLifecycle(
 ): ChatStreamingLifecycle {
   const {
     queryClient,
-    applyTelemetryEvent,
-    tsccTriggerAutoExpand,
     getSession,
     updateTabStatus,
     tabMapRef,
@@ -1017,8 +1012,6 @@ export function useChatStreamingLifecycle(
           if (persistSessionId && tabState) {
             persistPendingState(persistSessionId, tabState.messages, pq);
           }
-          // Auto-expand TSCC for blocking issue requiring user input
-          tsccTriggerAutoExpand('blocking_issue');
         } else if (event.type === 'cmd_permission_request') {
           const raw = event as unknown as Record<string, unknown>;
           const sid = event.sessionId || (raw.session_id as string);
@@ -1140,24 +1133,12 @@ export function useChatStreamingLifecycle(
           if (capturedTabId) {
             updateTabStatus(capturedTabId, 'error');
           }
-        } else if (
-          event.type === 'agent_activity' ||
-          event.type === 'tool_invocation' ||
-          event.type === 'capability_activated' ||
-          event.type === 'sources_updated' ||
-          event.type === 'summary_updated'
-        ) {
-          applyTelemetryEvent(event as unknown);
-          if (
-            event.type === 'summary_updated' &&
-            event.description?.toLowerCase().includes('plan')
-          ) {
-            tsccTriggerAutoExpand('first_plan');
-          }
         }
+        // Telemetry events (agent_activity, tool_invocation, etc.) are no
+        // longer processed — TSCC fetches metadata from the endpoint instead.
       };
     },
-    [queryClient, applyTelemetryEvent, tsccTriggerAutoExpand, setIsStreaming, incrementStreamGen, updateTabStatus],
+    [queryClient, setIsStreaming, incrementStreamGen, updateTabStatus],
   );
 
   const createErrorHandler = useCallback(

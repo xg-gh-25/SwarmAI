@@ -1,43 +1,31 @@
 /**
  * React hook for managing Thread-Scoped Cognitive Context (TSCC) state.
  *
- * Fetches initial TSCC state from the backend, applies incremental telemetry
- * events, and manages per-thread expand/collapse and pin preferences.
+ * Fetches system prompt metadata from the backend endpoint on session change.
+ * Manages per-thread expand/collapse and pin preferences.
  *
  * Key exports:
- * - ``useTSCCState``  — The main hook accepting a threadId
+ * - ``useTSCCState``  — The main hook accepting a sessionId
  *
  * Return value includes:
  * - ``tsccState``           — Current TSCCState or null
+ * - ``promptMetadata``      — System prompt metadata (files, tokens)
  * - ``isExpanded``          — Whether the panel is expanded
  * - ``isPinned``            — Whether the panel is pinned open
  * - ``lifecycleState``      — Current thread lifecycle state
  * - ``toggleExpand``        — Toggle expand/collapse
  * - ``togglePin``           — Toggle pin state
- * - ``applyTelemetryEvent`` — Apply an incremental SSE telemetry event
- * - ``setAutoExpand``       — Programmatically set expand state
- * - ``triggerAutoExpand``   — Auto-expand for high-signal events only
  *
- * Auto-expand rules (Requirement 16):
- * - Panel does NOT auto-expand during normal chat message streaming
- * - Auto-expands ONLY for: first plan creation, blocking issue, explicit request
- * - Normal telemetry events update collapsed bar silently
+ * Requirements: 6.1, 6.4, 6.8
  */
 
 import { useState, useCallback, useEffect, useRef } from 'react';
 import type {
   TSCCState,
-  TSCCLiveState,
-  TSCCSource,
   ThreadLifecycleState,
-  StreamEvent,
+  SystemPromptMetadata,
 } from '../types';
-import { getTSCCState } from '../services/tscc';
-
-// ---------------------------------------------------------------------------
-// Auto-expand reason type (Requirement 16.2)
-// ---------------------------------------------------------------------------
-export type AutoExpandReason = 'first_plan' | 'blocking_issue' | 'explicit_request';
+import { getTSCCState, getSystemPromptMetadata } from '../services/tscc';
 
 // ---------------------------------------------------------------------------
 // Per-thread preference maps (module-level, survive re-renders)
@@ -45,8 +33,20 @@ export type AutoExpandReason = 'first_plan' | 'blocking_issue' | 'explicit_reque
 const expandPrefs = new Map<string, boolean>();
 const pinPrefs = new Map<string, boolean>();
 
-/** Tracks whether the first plan has already been created per thread. */
-const firstPlanSeen = new Map<string, boolean>();
+/** Cap module-level Maps to prevent unbounded growth in long-running sessions. */
+const PREFS_MAP_CAP = 200;
+
+function _capMap<K, V>(map: Map<K, V>): void {
+  if (map.size > PREFS_MAP_CAP) {
+    // Delete oldest entries (first inserted)
+    const excess = map.size - PREFS_MAP_CAP;
+    const iter = map.keys();
+    for (let i = 0; i < excess; i++) {
+      const key = iter.next().value;
+      if (key !== undefined) map.delete(key);
+    }
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Default empty state factory
@@ -78,214 +78,103 @@ function makeDefaultState(threadId: string): TSCCState {
 // ---------------------------------------------------------------------------
 export interface UseTSCCStateReturn {
   tsccState: TSCCState | null;
+  promptMetadata: SystemPromptMetadata | null;
   isExpanded: boolean;
   isPinned: boolean;
   lifecycleState: ThreadLifecycleState | null;
   toggleExpand: () => void;
   togglePin: () => void;
-  applyTelemetryEvent: (event: StreamEvent) => void;
-  setAutoExpand: (expanded: boolean) => void;
-  triggerAutoExpand: (reason: AutoExpandReason) => void;
-}
-
-// ---------------------------------------------------------------------------
-// Helper: apply a single telemetry event to a live state (pure function)
-// ---------------------------------------------------------------------------
-function applyEventToLiveState(
-  live: TSCCLiveState,
-  event: StreamEvent,
-): TSCCLiveState {
-  switch (event.type) {
-    case 'agent_activity': {
-      const name = event.agentName ?? '';
-      const agents = live.activeAgents.includes(name)
-        ? live.activeAgents
-        : [...live.activeAgents, name];
-      const desc = event.description ?? '';
-      const doing = [...live.whatAiDoing, desc].slice(-4);
-      return { ...live, activeAgents: agents, whatAiDoing: doing };
-    }
-
-    case 'tool_invocation': {
-      const desc = event.description ?? event.toolName ?? '';
-      const doing = [...live.whatAiDoing, desc].slice(-4);
-      return { ...live, whatAiDoing: doing };
-    }
-
-    case 'capability_activated': {
-      const capType = event.capabilityType as
-        | 'skill'
-        | 'mcp'
-        | 'tool'
-        | undefined;
-      const capName = event.capabilityName ?? '';
-      if (!capType) return live;
-      const key =
-        capType === 'skill'
-          ? 'skills'
-          : capType === 'mcp'
-            ? 'mcps'
-            : 'tools';
-      const list = live.activeCapabilities[key];
-      if (list.includes(capName)) return live;
-      return {
-        ...live,
-        activeCapabilities: {
-          ...live.activeCapabilities,
-          [key]: [...list, capName],
-        },
-      };
-    }
-
-    case 'sources_updated': {
-      const newSource: TSCCSource = {
-        path: event.sourcePath ?? '',
-        origin: event.origin ?? '',
-      };
-      const exists = live.activeSources.some(
-        (s) => s.path === newSource.path,
-      );
-      if (exists) return live;
-      return {
-        ...live,
-        activeSources: [...live.activeSources, newSource],
-      };
-    }
-
-    case 'summary_updated': {
-      const summary = (event.keySummary ?? []).slice(0, 5);
-      return { ...live, keySummary: summary };
-    }
-
-    default:
-      return live;
-  }
 }
 
 // ---------------------------------------------------------------------------
 // Main hook
 // ---------------------------------------------------------------------------
 export function useTSCCState(
-  threadId: string | null,
+  sessionId: string | null,
 ): UseTSCCStateReturn {
   const [tsccState, setTsccState] = useState<TSCCState | null>(null);
+  const [promptMetadata, setPromptMetadata] = useState<SystemPromptMetadata | null>(null);
   const [isExpanded, setIsExpanded] = useState(false);
   const [isPinned, setIsPinned] = useState(false);
 
-  // Track current threadId to avoid stale async updates
-  const currentThreadRef = useRef<string | null>(threadId);
+  // Track current sessionId to avoid stale async updates
+  const currentSessionRef = useRef<string | null>(sessionId);
 
-  // ---- Fetch initial state when threadId changes ----
+  // ---- Fetch TSCC state and system prompt metadata when sessionId changes ----
   useEffect(() => {
-    currentThreadRef.current = threadId;
+    currentSessionRef.current = sessionId;
 
-    if (!threadId) {
+    if (!sessionId) {
       setTsccState(null);
+      setPromptMetadata(null);
       return;
     }
 
     // Restore per-thread prefs
-    setIsExpanded(expandPrefs.get(threadId) ?? false);
-    setIsPinned(pinPrefs.get(threadId) ?? false);
+    setIsExpanded(expandPrefs.get(sessionId) ?? false);
+    setIsPinned(pinPrefs.get(sessionId) ?? false);
+
+    // Evict stale entries to prevent unbounded growth
+    _capMap(expandPrefs);
+    _capMap(pinPrefs);
 
     let cancelled = false;
-    getTSCCState(threadId)
+
+    // Fetch TSCC state (for lifecycle label / freshness)
+    getTSCCState(sessionId)
       .then((state) => {
-        if (!cancelled && currentThreadRef.current === threadId) {
+        if (!cancelled && currentSessionRef.current === sessionId) {
           setTsccState(state);
         }
       })
       .catch(() => {
-        if (!cancelled && currentThreadRef.current === threadId) {
-          setTsccState(makeDefaultState(threadId));
+        if (!cancelled && currentSessionRef.current === sessionId) {
+          setTsccState(makeDefaultState(sessionId));
         }
       });
 
-    return () => {
-      cancelled = true;
-    };
-  }, [threadId]);
+    // Fetch system prompt metadata
+    getSystemPromptMetadata(sessionId)
+      .then((meta) => {
+        if (!cancelled && currentSessionRef.current === sessionId) {
+          setPromptMetadata(meta);
+        }
+      })
+      .catch(() => {
+        // 404 is expected for sessions without metadata yet
+        if (!cancelled && currentSessionRef.current === sessionId) {
+          setPromptMetadata(null);
+        }
+      });
 
-  // ---- Toggle expand (persists per-thread) ----
+    return () => { cancelled = true; };
+  }, [sessionId]);
+
+  // ---- Toggle expand (persists per-session) ----
   const toggleExpand = useCallback(() => {
     setIsExpanded((prev) => {
       const next = !prev;
-      if (threadId) expandPrefs.set(threadId, next);
+      if (sessionId) expandPrefs.set(sessionId, next);
       return next;
     });
-  }, [threadId]);
+  }, [sessionId]);
 
-  // ---- Toggle pin (persists per-thread) ----
+  // ---- Toggle pin (persists per-session) ----
   const togglePin = useCallback(() => {
     setIsPinned((prev) => {
       const next = !prev;
-      if (threadId) pinPrefs.set(threadId, next);
+      if (sessionId) pinPrefs.set(sessionId, next);
       return next;
     });
-  }, [threadId]);
-
-  // ---- Programmatic expand control ----
-  const setAutoExpand = useCallback(
-    (expanded: boolean) => {
-      setIsExpanded(expanded);
-      if (threadId) expandPrefs.set(threadId, expanded);
-    },
-    [threadId],
-  );
-
-  // ---- Auto-expand for high-signal events only (Req 16.1, 16.2) ----
-  const triggerAutoExpand = useCallback(
-    (reason: AutoExpandReason) => {
-      if (!threadId) return;
-
-      switch (reason) {
-        case 'first_plan': {
-          // Only auto-expand for the FIRST plan creation in this thread
-          if (firstPlanSeen.get(threadId)) return;
-          firstPlanSeen.set(threadId, true);
-          setIsExpanded(true);
-          expandPrefs.set(threadId, true);
-          break;
-        }
-        case 'blocking_issue':
-        case 'explicit_request': {
-          setIsExpanded(true);
-          expandPrefs.set(threadId, true);
-          break;
-        }
-        default:
-          break;
-      }
-    },
-    [threadId],
-  );
-
-  // ---- Apply incremental telemetry event ----
-  const applyTelemetryEvent = useCallback(
-    (event: StreamEvent) => {
-      setTsccState((prev) => {
-        if (!prev) return prev;
-        const newLive = applyEventToLiveState(prev.liveState, event);
-        if (newLive === prev.liveState) return prev;
-        return {
-          ...prev,
-          liveState: newLive,
-          lastUpdatedAt: new Date().toISOString(),
-        };
-      });
-    },
-    [],
-  );
+  }, [sessionId]);
 
   return {
     tsccState,
+    promptMetadata,
     isExpanded,
     isPinned,
     lifecycleState: tsccState?.lifecycleState ?? null,
     toggleExpand,
     togglePin,
-    applyTelemetryEvent,
-    setAutoExpand,
-    triggerAutoExpand,
   };
 }

@@ -13,7 +13,6 @@ from uuid import uuid4
 
 from database import db
 from .agent_manager import agent_manager
-from .context_snapshot_cache import context_cache
 
 logger = logging.getLogger(__name__)
 
@@ -190,7 +189,6 @@ class TaskManager:
         self._running_tasks[task_id] = asyncio_task
 
         # Increment task_version for context cache invalidation (Req 34.2)
-        context_cache.increment_task_version()
 
         logger.info(f"Created task {task_id} for agent {agent_id}")
         return task
@@ -215,7 +213,6 @@ class TaskManager:
                 "status": "wip",
                 "started_at": datetime.now(timezone.utc).isoformat(),
             })
-            context_cache.increment_task_version()
             await self._emit_event(task_id, {"type": "status", "status": "wip"})
 
             # Run agent conversation
@@ -247,7 +244,6 @@ class TaskManager:
                             "completed_at": datetime.now(timezone.utc).isoformat(),
                             "error": error_msg,
                         })
-                        context_cache.increment_task_version()
                         return
 
                     # Check for completion
@@ -256,7 +252,6 @@ class TaskManager:
                             "status": "completed",
                             "completed_at": datetime.now(timezone.utc).isoformat(),
                         })
-                        context_cache.increment_task_version()
                         return
 
                     # Check for ask_user_question - task pauses, waiting for message
@@ -271,7 +266,6 @@ class TaskManager:
                 "status": "cancelled",
                 "completed_at": datetime.now(timezone.utc).isoformat(),
             })
-            context_cache.increment_task_version()
             await self._emit_event(task_id, {"type": "status", "status": "cancelled"})
         except Exception as e:
             logger.error(f"Task {task_id} failed: {e}")
@@ -282,7 +276,6 @@ class TaskManager:
                 "completed_at": datetime.now(timezone.utc).isoformat(),
                 "error": error_msg,
             })
-            context_cache.increment_task_version()
             await self._emit_event(task_id, {"type": "error", "error": error_msg})
         finally:
             # Cleanup running task reference
@@ -532,7 +525,7 @@ class TaskManager:
 
         if result:
             # Increment task_version for context cache invalidation (Req 34.2)
-            context_cache.increment_task_version()
+            pass
 
         return result
 

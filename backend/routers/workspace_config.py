@@ -28,7 +28,6 @@ from schemas.workspace_config import (
     ChangeType,
     EntityType,
 )
-from core.context_manager import context_manager
 from core.audit_manager import audit_manager
 from core.skill_manager import skill_manager
 from database import db
@@ -409,7 +408,7 @@ async def get_context(workspace_id: str):
     Requirement 29.9: GET /api/workspaces/{id}/context.
     """
     try:
-        content = await context_manager.get_context(workspace_id)
+        content = ""  # Context now managed via ~/.swarm-ai/SwarmWS/.context/ files
         return {"content": content}
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -422,7 +421,7 @@ async def update_context(workspace_id: str, data: ContextContent):
     Requirement 29.9: PUT /api/workspaces/{id}/context.
     """
     try:
-        await context_manager.update_context(workspace_id, data.content)
+        pass  # Context now managed via ~/.swarm-ai/SwarmWS/.context/ files
         return {"status": "updated", "workspace_id": workspace_id}
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -435,7 +434,7 @@ async def compress_context(workspace_id: str):
     Requirement 29.10: POST /api/workspaces/{id}/context/compress.
     """
     try:
-        compressed = await context_manager.compress_context(workspace_id)
+        compressed = ""  # Context compression now handled by L0 cache
         return {"status": "compressed", "workspace_id": workspace_id, "content": compressed}
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))

@@ -150,19 +150,16 @@ describe('ExplorerContext - Property-Based Tests', () => {
           name: 'README.md',
           path: `${parentPath}/README.md`,
           type: 'file',
-          isSystemManaged: false,
         }),
         fc.constant<TreeNode>({
           name: 'context-files',
           path: `${parentPath}/context-files`,
           type: 'directory',
-          isSystemManaged: false,
           children: [
             {
               name: 'notes.md',
               path: `${parentPath}/context-files/notes.md`,
               type: 'file',
-              isSystemManaged: false,
             },
           ],
         }),
@@ -170,7 +167,6 @@ describe('ExplorerContext - Property-Based Tests', () => {
           name: 'research',
           path: `${parentPath}/research`,
           type: 'directory',
-          isSystemManaged: false,
           children: [],
         }),
       );
@@ -183,7 +179,6 @@ describe('ExplorerContext - Property-Based Tests', () => {
           name,
           path: projectPath,
           type: 'directory',
-          isSystemManaged: false,
           children,
         }),
       );
@@ -205,20 +200,17 @@ describe('ExplorerContext - Property-Based Tests', () => {
           name: 'Knowledge',
           path: 'Knowledge',
           type: 'directory',
-          isSystemManaged: true,
           children: [
             {
               name: 'Knowledge Base',
               path: 'Knowledge/Knowledge Base',
               type: 'directory',
-              isSystemManaged: true,
               children: [],
             },
             {
               name: 'Notes',
               path: 'Knowledge/Notes',
               type: 'directory',
-              isSystemManaged: true,
               children: [],
             },
           ],
@@ -228,7 +220,6 @@ describe('ExplorerContext - Property-Based Tests', () => {
           name: 'Projects',
           path: 'Projects',
           type: 'directory',
-          isSystemManaged: true,
           children: projectNodes as TreeNode[],
         };
 
@@ -342,7 +333,6 @@ describe('ExplorerContext - Property-Based Tests', () => {
         name,
         path: parentPath ? `${parentPath}/${name}` : name,
         type: 'file',
-        isSystemManaged: false,
       }));
 
     /** Generates a directory TreeNode with 0–3 file children (depth 1). */
@@ -357,7 +347,6 @@ describe('ExplorerContext - Property-Based Tests', () => {
           name,
           path: dirPath,
           type: 'directory',
-          isSystemManaged: false,
           children: fixedChildren,
         };
       });
@@ -377,7 +366,6 @@ describe('ExplorerContext - Property-Based Tests', () => {
           name,
           path: dirPath,
           type: 'directory',
-          isSystemManaged: false,
           children: fixedChildren,
         };
       });

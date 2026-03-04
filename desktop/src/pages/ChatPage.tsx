@@ -182,8 +182,6 @@ export default function ChatPage() {
     createErrorHandler,
   } = useChatStreamingLifecycle({
     queryClient,
-    applyTelemetryEvent: (event: unknown) => applyTelemetryEventRef.current(event as never),
-    tsccTriggerAutoExpand: (reason: string) => tsccTriggerAutoExpandRef.current(reason as never),
     getTabState,
     updateTabState,
     updateTabStatus,
@@ -193,18 +191,8 @@ export default function ChatPage() {
 
   // TSCC state management — called after the streaming hook so sessionId is available
   const {
-    tsccState,
-    applyTelemetryEvent,
-    triggerAutoExpand: tsccTriggerAutoExpand,
+    promptMetadata,
   } = useTSCCState(sessionId ?? null);
-
-  // Stable refs to break the circular dependency between the streaming hook
-  // (which needs TSCC callbacks) and useTSCCState (which needs sessionId).
-  // The hook captures these refs via closures; the refs are updated each render.
-  const applyTelemetryEventRef = useRef(applyTelemetryEvent);
-  applyTelemetryEventRef.current = applyTelemetryEvent;
-  const tsccTriggerAutoExpandRef = useRef(tsccTriggerAutoExpand);
-  tsccTriggerAutoExpandRef.current = tsccTriggerAutoExpand;
 
   // Refs for frequently-changing values — stabilizes useCallback identity for
   // handleSendMessage (Req 7.1, 7.3). Without these, the callback would need
@@ -1160,7 +1148,8 @@ export default function ChatPage() {
                 canAddMore={canAddMore}
                 attachedContextFiles={attachedFiles}
                 onRemoveContextFile={removeAttachedFile}
-                tsccState={tsccState}
+                sessionId={sessionId}
+                promptMetadata={promptMetadata}
               />
             </>
           )}

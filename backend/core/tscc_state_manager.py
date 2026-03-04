@@ -1,10 +1,16 @@
-"""TSCC in-memory per-thread state manager.
+"""TSCC in-memory per-thread state manager (simplified).
 
 This module provides the ``TSCCStateManager`` class, which maintains live
 cognitive state for all active chat threads in an LRU-evicting
 ``OrderedDict``.  Each thread's state is guarded by a per-thread
-``asyncio.Lock`` to prevent concurrent mutation from the SSE emission
-path and the API router.
+``asyncio.Lock`` to prevent concurrent mutation from the API router
+and the agent execution path.
+
+Simplified from the original version: removed ``apply_event()`` and all
+telemetry event handling (agent_activity, tool_invocation, sources_updated,
+capability_activated, summary_updated).  TSCC now only tracks lifecycle
+state and thread metadata — system prompt metadata is stored separately
+in ``agent_manager._system_prompt_metadata``.
 
 Key public symbols:
 
@@ -12,10 +18,7 @@ Key public symbols:
 - ``VALID_TRANSITIONS``      — Allowed lifecycle state transitions
 - ``InvalidTransitionError`` — Raised on illegal lifecycle transitions
 
-The manager is instantiated once at app startup and shared across the
-TSCC router and the agent execution path.
-
-Requirements: 18.1, 18.2, 9.1-9.7, 4.3, 4.5, 5.1, 5.4, 6.3, 7.1, 12.1, 12.3
+Requirements: 6.4
 """
 
 import asyncio
@@ -27,7 +30,6 @@ from schemas.tscc import (
     TSCCActiveCapabilities,
     TSCCContext,
     TSCCLiveState,
-    TSCCSource,
     TSCCState,
 )
 
@@ -61,7 +63,7 @@ class TSCCStateManager:
     the least-recently-used entry is evicted.
 
     All mutating operations are guarded by a per-thread ``asyncio.Lock``
-    to prevent data races between the SSE emission path and the REST API.
+    to prevent data races between the API router and the agent execution path.
 
     Parameters
     ----------
@@ -129,11 +131,6 @@ class TSCCStateManager:
                         scope_label=scope_label,
                         thread_title=thread_title,
                     ),
-                    active_agents=[],
-                    active_capabilities=TSCCActiveCapabilities(),
-                    what_ai_doing=[],
-                    active_sources=[],
-                    key_summary=[],
                 ),
             )
 
@@ -144,74 +141,6 @@ class TSCCStateManager:
 
             self._states[thread_id] = state
             return state
-
-    async def apply_event(self, thread_id: str, event: dict) -> None:
-        """Route a telemetry event to update the correct live_state fields.
-
-        Silently ignores events for unknown threads so that telemetry
-        emission never interrupts the agent SSE stream.
-
-        Parameters
-        ----------
-        thread_id:
-            The thread whose state should be updated.
-        event:
-            A telemetry event dict with ``type`` and ``data`` keys.
-        """
-        async with self._get_lock(thread_id):
-            if thread_id not in self._states:
-                return  # graceful no-op — don't interrupt SSE stream
-
-            state = self._states[thread_id]
-            self._states.move_to_end(thread_id)
-            live = state.live_state
-            event_type = event.get("type", "")
-            data = event.get("data", {})
-
-            if event_type == "agent_activity":
-                agent_name = data.get("agent_name", "")
-                description = data.get("description", "")
-                # Deduplicated append to active_agents
-                if agent_name and agent_name not in live.active_agents:
-                    live.active_agents.append(agent_name)
-                # FIFO update to what_ai_doing (max 4)
-                if description:
-                    live.what_ai_doing.append(description)
-                    if len(live.what_ai_doing) > 4:
-                        live.what_ai_doing = live.what_ai_doing[-4:]
-
-            elif event_type == "tool_invocation":
-                description = data.get("description", "")
-                if description:
-                    live.what_ai_doing.append(description)
-                    if len(live.what_ai_doing) > 4:
-                        live.what_ai_doing = live.what_ai_doing[-4:]
-
-            elif event_type == "capability_activated":
-                cap_type = data.get("cap_type", "")
-                cap_name = data.get("cap_name", "")
-                if cap_type == "skill" and cap_name not in live.active_capabilities.skills:
-                    live.active_capabilities.skills.append(cap_name)
-                elif cap_type == "mcp" and cap_name not in live.active_capabilities.mcps:
-                    live.active_capabilities.mcps.append(cap_name)
-                elif cap_type == "tool" and cap_name not in live.active_capabilities.tools:
-                    live.active_capabilities.tools.append(cap_name)
-
-            elif event_type == "sources_updated":
-                source_path = data.get("source_path", "")
-                origin = data.get("origin", "")
-                # Deduplicate by (path, origin) tuple
-                existing = {(s.path, s.origin) for s in live.active_sources}
-                if (source_path, origin) not in existing:
-                    live.active_sources.append(
-                        TSCCSource(path=source_path, origin=origin)
-                    )
-
-            elif event_type == "summary_updated":
-                key_summary = data.get("key_summary", [])
-                live.key_summary = key_summary[:5]
-
-            state.last_updated_at = _iso_now()
 
     async def set_lifecycle_state(self, thread_id: str, new_state: str) -> None:
         """Transition the lifecycle state, validating against the state machine.

@@ -2,8 +2,8 @@
  * Compact TSCC icon button with popover for the ChatInput bottom row.
  *
  * Renders a ``psychology`` Material Symbol button that toggles a popover
- * containing the five TSCC cognitive modules. Popover state is managed
- * locally via ``useState`` so it always starts closed on mount.
+ * containing the ``SystemPromptModule`` — a single module showing context
+ * file metadata, token counts, and a "View Full Prompt" action.
  *
  * Key exports:
  * - ``TSCCPopoverButton`` — The button + popover component
@@ -11,42 +11,36 @@
  *
  * Click-outside / Escape dismissal is handled via document-level
  * ``mousedown`` and ``keydown`` listeners scoped to ``isOpen``.
- * Tab-switch auto-close watches ``tsccState?.threadId`` via a ref
- * and closes the popover when the threadId changes or becomes undefined.
+ * Tab-switch auto-close watches ``sessionId`` via a ref
+ * and closes the popover when the sessionId changes or becomes undefined.
  */
 
 import { useState, useRef, useEffect } from 'react';
-import type { TSCCState } from '../../../types';
-import {
-  CurrentContextModule,
-  ActiveAgentsModule,
-  WhatAIDoingModule,
-  ActiveSourcesModule,
-  KeySummaryModule,
-} from './TSCCModules';
+import type { SystemPromptMetadata } from '../../../types';
+import { SystemPromptModule } from './TSCCModules';
 
 export interface TSCCPopoverButtonProps {
-  tsccState: TSCCState | null;
+  sessionId: string | null;
+  metadata: SystemPromptMetadata | null;
 }
 
-export function TSCCPopoverButton({ tsccState }: TSCCPopoverButtonProps) {
+export function TSCCPopoverButton({ sessionId, metadata }: TSCCPopoverButtonProps) {
   const [isOpen, setIsOpen] = useState<boolean>(false);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
 
-  const isDisabled = tsccState === null;
+  const isDisabled = sessionId === null;
 
-  // Track previous threadId for tab-switch auto-close
-  const prevThreadIdRef = useRef<string | undefined>(tsccState?.threadId);
+  // Track previous sessionId for tab-switch auto-close
+  const prevSessionIdRef = useRef<string | null>(sessionId);
 
-  // Auto-close popover when threadId changes (tab switch) or tsccState becomes null
+  // Auto-close popover when sessionId changes (tab switch) or becomes null
   useEffect(() => {
-    const currentThreadId = tsccState?.threadId;
-    if (prevThreadIdRef.current !== currentThreadId) {
+    if (prevSessionIdRef.current !== sessionId) {
       setIsOpen(false);
     }
-    prevThreadIdRef.current = currentThreadId;
-  }, [tsccState?.threadId]);
+    prevSessionIdRef.current = sessionId;
+  }, [sessionId]);
 
   // Click-outside and Escape dismissal — listeners attached only when open
   useEffect(() => {
@@ -105,7 +99,7 @@ export function TSCCPopoverButton({ tsccState }: TSCCPopoverButtonProps) {
         </span>
       </button>
 
-      {isOpen && tsccState && (
+      {isOpen && sessionId && (
         <div
           ref={popoverRef}
           className="
@@ -117,11 +111,7 @@ export function TSCCPopoverButton({ tsccState }: TSCCPopoverButtonProps) {
             z-50
           "
         >
-          <CurrentContextModule tsccState={tsccState} />
-          <ActiveAgentsModule tsccState={tsccState} />
-          <WhatAIDoingModule tsccState={tsccState} />
-          <ActiveSourcesModule tsccState={tsccState} />
-          <KeySummaryModule tsccState={tsccState} />
+          <SystemPromptModule sessionId={sessionId} metadata={metadata} />
         </div>
       )}
     </div>

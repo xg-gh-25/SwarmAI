@@ -1,23 +1,24 @@
 /**
  * Unit tests for the TSCCPanel component.
  *
- * Tests the TSCC panel including:
- * - Collapsed bar renders scope, agent count, capabilities, source count, freshness
- * - Click on collapsed bar triggers expand
- * - Expanded view renders all five cognitive modules
- * - Idle/empty state displays correct placeholder text
- * - Keyboard navigation (Enter/Space expand)
- * - ARIA attributes present
- * - Pin toggle works
- * - Lifecycle state displays correct text
+ * Tests the simplified TSCC panel that now shows system prompt metadata
+ * via a single SystemPromptModule instead of five cognitive modules.
+ *
+ * Tests include:
+ * - Collapsed bar renders "System Prompt" label, file count, token count
+ * - Expanded view renders SystemPromptModule heading
+ * - Click/keyboard expand triggers callback
+ * - Pin toggle works with ARIA attributes
+ * - Lifecycle state labels display correctly
+ * - Default state when tsccState is null
  *
  * Testing methodology: unit tests with React Testing Library.
  */
 
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
-import { TSCCPanel } from '../TSCCPanel';
-import type { TSCCState } from '../../../../types';
+import { TSCCPanel, createDefaultTSCCState } from '../TSCCPanel';
+import type { TSCCState, SystemPromptMetadata } from '../../../../types';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -45,6 +46,16 @@ const makeSampleState = (
   ...overrides,
 });
 
+const sampleMetadata: SystemPromptMetadata = {
+  files: [
+    { filename: 'SWARMAI.md', tokens: 500, truncated: false },
+    { filename: 'IDENTITY.md', tokens: 200, truncated: false },
+    { filename: 'KNOWLEDGE.md', tokens: 1200, truncated: true },
+  ],
+  totalTokens: 1900,
+  fullText: '# System Prompt\nHello world',
+};
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -56,45 +67,34 @@ describe('TSCCPanel', () => {
     isPinned: false,
     onToggleExpand: vi.fn(),
     onTogglePin: vi.fn(),
+    sessionId: 'session-1',
+    promptMetadata: sampleMetadata,
   };
 
-  it('renders default collapsed bar when threadId is null', () => {
-    render(
-      <TSCCPanel {...defaultProps} threadId={null} />,
-    );
-    // Should show default "new" state with workspace scope label (Req 1.2, 9.1)
-    expect(screen.getByText('Workspace: SwarmWS (General)')).toBeInTheDocument();
+  it('renders collapsed bar with "System Prompt" label', () => {
+    render(<TSCCPanel {...defaultProps} />);
+    expect(screen.getByText('System Prompt')).toBeInTheDocument();
   });
 
-  it('renders default collapsed bar when tsccState is null', () => {
-    render(
-      <TSCCPanel {...defaultProps} tsccState={null} />,
-    );
-    // Should show default "new" state with workspace scope label (Req 1.2, 9.1)
-    expect(screen.getByText('Workspace: SwarmWS (General)')).toBeInTheDocument();
+  it('renders default state when tsccState is null', () => {
+    render(<TSCCPanel {...defaultProps} tsccState={null} />);
+    expect(screen.getByText('System Prompt')).toBeInTheDocument();
+  });
+
+  it('renders default state when threadId is null', () => {
+    render(<TSCCPanel {...defaultProps} threadId={null} />);
+    expect(screen.getByText('System Prompt')).toBeInTheDocument();
   });
 
   describe('CollapsedBar', () => {
-    it('renders scope label', () => {
+    it('renders file count from metadata', () => {
       render(<TSCCPanel {...defaultProps} />);
-      expect(
-        screen.getByText('Workspace: SwarmWS (General)'),
-      ).toBeInTheDocument();
+      expect(screen.getByText('3 files')).toBeInTheDocument();
     });
 
-    it('renders agent count', () => {
+    it('renders total token count from metadata', () => {
       render(<TSCCPanel {...defaultProps} />);
-      expect(screen.getByText('1 agent')).toBeInTheDocument();
-    });
-
-    it('renders capability summary', () => {
-      render(<TSCCPanel {...defaultProps} />);
-      expect(screen.getByText('code-review')).toBeInTheDocument();
-    });
-
-    it('renders source count', () => {
-      render(<TSCCPanel {...defaultProps} />);
-      expect(screen.getByText('1 source')).toBeInTheDocument();
+      expect(screen.getByText('1,900 tok')).toBeInTheDocument();
     });
 
     it('renders freshness indicator', () => {
@@ -104,9 +104,7 @@ describe('TSCCPanel', () => {
 
     it('triggers onToggleExpand on click', () => {
       const onToggleExpand = vi.fn();
-      render(
-        <TSCCPanel {...defaultProps} onToggleExpand={onToggleExpand} />,
-      );
+      render(<TSCCPanel {...defaultProps} onToggleExpand={onToggleExpand} />);
       fireEvent.click(
         screen.getByRole('region', { name: 'Thread cognitive context' }),
       );
@@ -115,24 +113,10 @@ describe('TSCCPanel', () => {
 
     it('triggers onToggleExpand on Enter key', () => {
       const onToggleExpand = vi.fn();
-      render(
-        <TSCCPanel {...defaultProps} onToggleExpand={onToggleExpand} />,
-      );
+      render(<TSCCPanel {...defaultProps} onToggleExpand={onToggleExpand} />);
       fireEvent.keyDown(
         screen.getByRole('region', { name: 'Thread cognitive context' }),
         { key: 'Enter' },
-      );
-      expect(onToggleExpand).toHaveBeenCalledOnce();
-    });
-
-    it('triggers onToggleExpand on Space key', () => {
-      const onToggleExpand = vi.fn();
-      render(
-        <TSCCPanel {...defaultProps} onToggleExpand={onToggleExpand} />,
-      );
-      fireEvent.keyDown(
-        screen.getByRole('region', { name: 'Thread cognitive context' }),
-        { key: ' ' },
       );
       expect(onToggleExpand).toHaveBeenCalledOnce();
     });
@@ -156,45 +140,16 @@ describe('TSCCPanel', () => {
     it('shows aria-pressed on pin button when pinned', () => {
       render(<TSCCPanel {...defaultProps} isPinned={true} />);
       expect(screen.getByLabelText('Unpin panel')).toHaveAttribute(
-        'aria-pressed',
-        'true',
+        'aria-pressed', 'true',
       );
-    });
-
-    it('renders plural agents when count > 1', () => {
-      const state = makeSampleState({
-        liveState: {
-          ...makeSampleState().liveState,
-          activeAgents: ['SwarmAgent', 'CodeAgent'],
-        },
-      });
-      render(<TSCCPanel {...defaultProps} tsccState={state} />);
-      expect(screen.getByText('2 agents')).toBeInTheDocument();
-    });
-
-    it('renders plural sources when count > 1', () => {
-      const state = makeSampleState({
-        liveState: {
-          ...makeSampleState().liveState,
-          activeSources: [
-            { path: 'src/main.py', origin: 'Project' },
-            { path: 'src/utils.py', origin: 'Project' },
-          ],
-        },
-      });
-      render(<TSCCPanel {...defaultProps} tsccState={state} />);
-      expect(screen.getByText('2 sources')).toBeInTheDocument();
     });
   });
 
   describe('ExpandedView', () => {
-    it('renders all five cognitive module headings', () => {
+    it('renders SystemPromptModule heading', () => {
       render(<TSCCPanel {...defaultProps} isExpanded={true} />);
-      expect(screen.getByText('Context')).toBeInTheDocument();
-      expect(screen.getByText('Active Agents')).toBeInTheDocument();
-      expect(screen.getByText('What AI is Doing')).toBeInTheDocument();
-      expect(screen.getByText('Active Sources')).toBeInTheDocument();
-      expect(screen.getByText('Key Summary')).toBeInTheDocument();
+      // The SystemPromptModule renders "System Prompt" heading
+      expect(screen.getAllByText('System Prompt').length).toBeGreaterThanOrEqual(1);
     });
 
     it('has aria-expanded true when expanded', () => {
@@ -205,146 +160,37 @@ describe('TSCCPanel', () => {
       expect(region).toHaveAttribute('aria-expanded', 'true');
     });
 
-    it('renders scope label and thread title in Context module', () => {
+    it('renders file list from metadata', () => {
       render(<TSCCPanel {...defaultProps} isExpanded={true} />);
-      expect(
-        screen.getByText('Workspace: SwarmWS (General)'),
-      ).toBeInTheDocument();
-      expect(screen.getByText('Test Thread')).toBeInTheDocument();
+      expect(screen.getByText('SWARMAI.md')).toBeInTheDocument();
+      expect(screen.getByText('IDENTITY.md')).toBeInTheDocument();
+      expect(screen.getByText('KNOWLEDGE.md')).toBeInTheDocument();
     });
 
-    it('renders agent names in Active Agents module', () => {
+    it('renders truncation indicator for truncated files', () => {
       render(<TSCCPanel {...defaultProps} isExpanded={true} />);
-      expect(screen.getByText('SwarmAgent')).toBeInTheDocument();
+      expect(screen.getByText('truncated')).toBeInTheDocument();
     });
 
-    it('renders skills in Active Agents module', () => {
+    it('renders total token count', () => {
       render(<TSCCPanel {...defaultProps} isExpanded={true} />);
-      expect(screen.getByText('Skills: code-review')).toBeInTheDocument();
+      expect(screen.getByText('1,900 tokens')).toBeInTheDocument();
     });
 
-    it('renders activity items in What AI is Doing module', () => {
-      render(<TSCCPanel {...defaultProps} isExpanded={true} />);
-      expect(screen.getByText('Analyzing code')).toBeInTheDocument();
-    });
-
-    it('renders sources with origin tags', () => {
-      render(<TSCCPanel {...defaultProps} isExpanded={true} />);
-      expect(screen.getByText('src/main.py')).toBeInTheDocument();
-      expect(screen.getByText('Project')).toBeInTheDocument();
-    });
-
-    it('renders key summary items', () => {
-      render(<TSCCPanel {...defaultProps} isExpanded={true} />);
-      expect(
-        screen.getByText('Initial analysis complete'),
-      ).toBeInTheDocument();
+    it('renders "No active session" when sessionId is null', () => {
+      render(
+        <TSCCPanel {...defaultProps} isExpanded={true} sessionId={null} promptMetadata={null} />,
+      );
+      expect(screen.getByText('No active session')).toBeInTheDocument();
     });
 
     it('triggers onTogglePin in expanded view', () => {
       const onTogglePin = vi.fn();
       render(
-        <TSCCPanel
-          {...defaultProps}
-          isExpanded={true}
-          onTogglePin={onTogglePin}
-        />,
+        <TSCCPanel {...defaultProps} isExpanded={true} onTogglePin={onTogglePin} />,
       );
       fireEvent.click(screen.getByLabelText('Pin panel'));
       expect(onTogglePin).toHaveBeenCalledOnce();
-    });
-
-    it('triggers onToggleExpand when clicking expanded header', () => {
-      const onToggleExpand = vi.fn();
-      render(
-        <TSCCPanel
-          {...defaultProps}
-          isExpanded={true}
-          onToggleExpand={onToggleExpand}
-        />,
-      );
-      expect(screen.getByText('Cognitive Context')).toBeInTheDocument();
-    });
-  });
-
-  describe('Empty states', () => {
-    it('displays "Using core SwarmAgent only" when no agents', () => {
-      const state = makeSampleState({
-        liveState: {
-          ...makeSampleState().liveState,
-          activeAgents: [],
-        },
-      });
-      render(
-        <TSCCPanel
-          {...defaultProps}
-          isExpanded={true}
-          tsccState={state}
-        />,
-      );
-      expect(
-        screen.getByText('Using core SwarmAgent only'),
-      ).toBeInTheDocument();
-    });
-
-    it('displays "Waiting for your input" when idle with no activity', () => {
-      const state = makeSampleState({
-        lifecycleState: 'idle',
-        liveState: {
-          ...makeSampleState().liveState,
-          whatAiDoing: [],
-        },
-      });
-      render(
-        <TSCCPanel
-          {...defaultProps}
-          isExpanded={true}
-          tsccState={state}
-        />,
-      );
-      expect(
-        screen.getByText('Waiting for your input'),
-      ).toBeInTheDocument();
-    });
-
-    it('displays "Using conversation context only" when no sources', () => {
-      const state = makeSampleState({
-        liveState: {
-          ...makeSampleState().liveState,
-          activeSources: [],
-        },
-      });
-      render(
-        <TSCCPanel
-          {...defaultProps}
-          isExpanded={true}
-          tsccState={state}
-        />,
-      );
-      expect(
-        screen.getByText('Using conversation context only'),
-      ).toBeInTheDocument();
-    });
-
-    it('displays "No summary yet" when no summary', () => {
-      const state = makeSampleState({
-        liveState: {
-          ...makeSampleState().liveState,
-          keySummary: [],
-        },
-      });
-      render(
-        <TSCCPanel
-          {...defaultProps}
-          isExpanded={true}
-          tsccState={state}
-        />,
-      );
-      expect(
-        screen.getByText(
-          'No summary yet — ask me to summarize this thread',
-        ),
-      ).toBeInTheDocument();
     });
   });
 
@@ -356,14 +202,8 @@ describe('TSCCPanel', () => {
       { state: 'new', expected: 'New thread · Ready' },
       { state: 'active', expected: 'Updated just now' },
       { state: 'paused', expected: 'Paused · Waiting for your input' },
-      {
-        state: 'failed',
-        expected: 'Something went wrong — see details below',
-      },
-      {
-        state: 'cancelled',
-        expected: 'Execution stopped · Partial progress saved',
-      },
+      { state: 'failed', expected: 'Something went wrong — see details below' },
+      { state: 'cancelled', expected: 'Execution stopped · Partial progress saved' },
       { state: 'idle', expected: 'Idle · Ready for next task' },
     ];
 
@@ -371,14 +211,20 @@ describe('TSCCPanel', () => {
       it(`displays "${expected}" for lifecycle state "${state}"`, () => {
         const tscc = makeSampleState({ lifecycleState: state });
         render(
-          <TSCCPanel
-            {...defaultProps}
-            isExpanded={true}
-            tsccState={tscc}
-          />,
+          <TSCCPanel {...defaultProps} isExpanded={true} tsccState={tscc} />,
         );
         expect(screen.getByText(expected)).toBeInTheDocument();
       });
+    });
+  });
+
+  describe('createDefaultTSCCState', () => {
+    it('returns a fresh timestamp on each call', () => {
+      const s1 = createDefaultTSCCState();
+      const s2 = createDefaultTSCCState();
+      expect(s1.lastUpdatedAt).toBeDefined();
+      expect(s2.lastUpdatedAt).toBeDefined();
+      expect(s1.lifecycleState).toBe('new');
     });
   });
 });

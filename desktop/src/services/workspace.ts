@@ -155,19 +155,14 @@ let _cachedTree: TreeNode[] | null = null;
 
 /** Convert a snake_case tree node from the backend to a camelCase TreeNode (recursive).
  *
- * The backend returns `is_system_managed` while the frontend uses `isSystemManaged`.
  * Children are recursively converted so the entire tree is camelCase on the frontend.
- *
- * Note: For trees with 1000+ nodes, consider deferring conversion to
- * render time or using a streaming approach. The current eager conversion
- * is acceptable for trees bounded by depth guardrails (max ~500 nodes).
+ * All files are user-manageable — no system-managed restrictions.
  */
 export function treeNodeToCamelCase(data: Record<string, unknown>): TreeNode {
   return {
     name: data.name as string,
     path: data.path as string,
     type: data.type as 'file' | 'directory',
-    isSystemManaged: data.is_system_managed as boolean,
     children: data.children
       ? (data.children as Record<string, unknown>[]).map(treeNodeToCamelCase)
       : undefined,

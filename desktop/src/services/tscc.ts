@@ -1,25 +1,21 @@
 /**
  * TSCC (Thread-Scoped Cognitive Context) API service.
  *
- * Provides methods to fetch live TSCC state and manage filesystem-based
- * snapshots. Handles snake_case → camelCase conversion per the API naming
- * convention.
+ * Provides methods to fetch live TSCC state and system prompt metadata.
+ * Handles snake_case → camelCase conversion per the API naming convention.
  *
  * Key exports:
- * - ``toCamelCase``          — Convert snake_case TSCCState to camelCase
- * - ``snapshotToCamelCase``  — Convert snake_case TSCCSnapshot to camelCase
- * - ``getTSCCState``         — Fetch current TSCC state for a thread
- * - ``createSnapshot``       — Create a point-in-time snapshot
- * - ``listSnapshots``        — List all snapshots for a thread
- * - ``getSnapshot``          — Fetch a single snapshot by ID
+ * - ``toCamelCase``                — Convert snake_case TSCCState to camelCase
+ * - ``getTSCCState``               — Fetch current TSCC state for a thread
+ * - ``getSystemPromptMetadata``    — Fetch system prompt metadata for a session
  */
 
 import type {
   TSCCActiveCapabilities,
   TSCCLiveState,
-  TSCCSnapshot,
   TSCCSource,
   TSCCState,
+  SystemPromptMetadata,
 } from '../types';
 import api from './api';
 
@@ -85,30 +81,6 @@ export function toCamelCase(data: Record<string, unknown>): TSCCState {
   };
 }
 
-/**
- * Convert a snake_case TSCCSnapshot API response to camelCase.
- */
-export function snapshotToCamelCase(
-  data: Record<string, unknown>,
-): TSCCSnapshot {
-  return {
-    snapshotId: data.snapshot_id as string,
-    threadId: data.thread_id as string,
-    timestamp: data.timestamp as string,
-    reason: data.reason as string,
-    lifecycleState: data.lifecycle_state as TSCCSnapshot['lifecycleState'],
-    activeAgents: (data.active_agents as string[]) ?? [],
-    activeCapabilities: capabilitiesToCamelCase(
-      (data.active_capabilities as Record<string, unknown>) ?? {},
-    ),
-    whatAiDoing: (data.what_ai_doing as string[]) ?? [],
-    activeSources: (
-      (data.active_sources as Record<string, unknown>[]) ?? []
-    ).map(sourceToCamelCase),
-    keySummary: (data.key_summary as string[]) ?? [],
-  };
-}
-
 // ---------------------------------------------------------------------------
 // API methods
 // ---------------------------------------------------------------------------
@@ -119,32 +91,20 @@ export async function getTSCCState(threadId: string): Promise<TSCCState> {
   return toCamelCase(response.data as Record<string, unknown>);
 }
 
-/** Create a point-in-time snapshot of the thread's TSCC state. */
-export async function createSnapshot(
-  threadId: string,
-  reason: string,
-): Promise<TSCCSnapshot> {
-  const response = await api.post(`/chat_threads/${threadId}/snapshots`, {
-    reason,
-  });
-  return snapshotToCamelCase(response.data as Record<string, unknown>);
-}
-
-/** List all snapshots for a thread in chronological order. */
-export async function listSnapshots(
-  threadId: string,
-): Promise<TSCCSnapshot[]> {
-  const response = await api.get(`/chat_threads/${threadId}/snapshots`);
-  return (response.data as Record<string, unknown>[]).map(snapshotToCamelCase);
-}
-
-/** Fetch a single snapshot by ID. */
-export async function getSnapshot(
-  threadId: string,
-  snapshotId: string,
-): Promise<TSCCSnapshot> {
-  const response = await api.get(
-    `/chat_threads/${threadId}/snapshots/${snapshotId}`,
-  );
-  return snapshotToCamelCase(response.data as Record<string, unknown>);
+/** Fetch system prompt metadata for a session (snake_case → camelCase). */
+export async function getSystemPromptMetadata(
+  sessionId: string,
+): Promise<SystemPromptMetadata> {
+  const response = await api.get(`/chat/${sessionId}/system-prompt`);
+  const data = response.data as Record<string, unknown>;
+  const files = (data.files as Record<string, unknown>[]) ?? [];
+  return {
+    files: files.map((f) => ({
+      filename: f.filename as string,
+      tokens: f.tokens as number,
+      truncated: f.truncated as boolean,
+    })),
+    totalTokens: (data.total_tokens as number) ?? 0,
+    fullText: (data.full_text as string) ?? '',
+  };
 }

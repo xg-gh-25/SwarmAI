@@ -1,18 +1,17 @@
 """Property-based tests for the workspace tree endpoint structure.
 
 **Feature: swarmws-explorer-ux, Property: Tree endpoint returns valid nested
-JSON with correct system-managed annotations**
+JSON structure**
 
 Uses Hypothesis with ``tmp_path`` to generate random filesystem structures on
 disk, then calls the ``_build_tree`` helper directly to verify the response
 shape.  Key invariants checked:
 
-- Every node has the required fields (name, path, type, is_system_managed,
-  children).
+- Every node has the required fields (name, path, type, children).
 - Directories always have a ``children`` list; files have ``children = None``.
-- Hidden files (starting with ``'.'``) are excluded except ``.project.json``.
+- Hidden files (starting with ``'.'``) are excluded except ``.project.json``
+  and ``.context``.
 - Nodes are sorted: directories first, then files, both alphabetically.
-- ``is_system_managed`` annotations match the workspace manager's registry.
 
 **Validates: Requirements 10.1, 15.1**
 """
@@ -24,7 +23,6 @@ import pytest
 from hypothesis import given, strategies as st, settings, HealthCheck
 
 from routers.workspace_api import _build_tree, _should_include
-from core.swarm_workspace_manager import SwarmWorkspaceManager
 
 
 PROPERTY_SETTINGS = settings(
@@ -161,8 +159,7 @@ def collect_all_nodes(tree: list[dict]) -> list[dict]:
 
 
 class TestTreeEndpointStructure:
-    """Property: Tree endpoint returns valid nested JSON with correct
-    system-managed annotations.
+    """Property: Tree endpoint returns valid nested JSON structure.
 
     **Feature: swarmws-explorer-ux**
 
@@ -176,7 +173,7 @@ class TestTreeEndpointStructure:
         tmp_path: Path,
         tree: list[dict],
     ):
-        """Every node in the response has name, path, type, is_system_managed,
+        """Every node in the response has name, path, type,
         and children fields.
 
         **Validates: Requirements 10.1, 15.1**
@@ -192,7 +189,6 @@ class TestTreeEndpointStructure:
             assert "name" in node, f"Node missing 'name': {node}"
             assert "path" in node, f"Node missing 'path': {node}"
             assert "type" in node, f"Node missing 'type': {node}"
-            assert "is_system_managed" in node, f"Node missing 'is_system_managed': {node}"
             assert "children" in node, f"Node missing 'children': {node}"
             assert node["type"] in ("file", "directory"), (
                 f"Invalid type '{node['type']}' for node {node['name']}"
@@ -231,13 +227,13 @@ class TestTreeEndpointStructure:
 
     @given(tree=_filesystem_tree())
     @PROPERTY_SETTINGS
-    def test_hidden_files_excluded_except_project_json(
+    def test_hidden_dirs_excluded_but_dotfiles_shown(
         self,
         tmp_path: Path,
         tree: list[dict],
     ):
-        """Hidden files/dirs (starting with '.') are excluded from the tree,
-        except .project.json which is included.
+        """All dot-files and dot-directories are shown in the tree (like Kiro IDE),
+        except entries in _HIDDEN_DIRS (.git, chats) which are excluded.
 
         **Validates: Requirements 10.1**
         """
@@ -248,13 +244,12 @@ class TestTreeEndpointStructure:
         result = _build_tree(workspace, workspace, depth=3)
         all_nodes = collect_all_nodes(result)
 
+        hidden_dirs = {"chats", ".git"}
         for node in all_nodes:
             name = node["name"]
-            if name.startswith("."):
-                assert name == ".project.json", (
-                    f"Hidden entry '{name}' should be excluded "
-                    f"(only .project.json is allowed)"
-                )
+            assert name not in hidden_dirs, (
+                f"Hidden dir '{name}' should be excluded from the tree"
+            )
 
     @given(tree=_filesystem_tree())
     @PROPERTY_SETTINGS
@@ -305,33 +300,6 @@ class TestTreeEndpointStructure:
         for d in dirs:
             if d.get("children"):
                 self._assert_sorted(d["children"])
-
-    @given(tree=_filesystem_tree())
-    @PROPERTY_SETTINGS
-    def test_is_system_managed_matches_workspace_manager(
-        self,
-        tmp_path: Path,
-        tree: list[dict],
-    ):
-        """The is_system_managed flag on each node matches what
-        SwarmWorkspaceManager.is_system_managed() returns for that path.
-
-        **Validates: Requirements 10.1**
-        """
-        workspace = tmp_path / str(uuid4())
-        workspace.mkdir()
-        materialize_tree(workspace, tree)
-
-        manager = SwarmWorkspaceManager()
-        result = _build_tree(workspace, workspace, depth=3)
-        all_nodes = collect_all_nodes(result)
-
-        for node in all_nodes:
-            expected = manager.is_system_managed(node["path"])
-            assert node["is_system_managed"] == expected, (
-                f"Node '{node['path']}' has is_system_managed={node['is_system_managed']}, "
-                f"expected {expected}"
-            )
 
     @given(tree=_filesystem_tree())
     @PROPERTY_SETTINGS
@@ -448,3 +416,15 @@ class TestHiddenDirsFilter:
         assert _should_include("Projects") is True
         assert _should_include("reports") is True
         assert _should_include("research") is True
+
+    def test_git_directory_excluded(self):
+        """The '.git' directory is excluded from the tree."""
+        assert _should_include(".git") is False
+
+    def test_dotfiles_are_visible(self):
+        """Dot-files and dot-directories are shown (like Kiro IDE)."""
+        assert _should_include(".context") is True
+        assert _should_include(".gitignore") is True
+        assert _should_include(".project.json") is True
+        assert _should_include(".claude") is True
+        assert _should_include(".env") is True

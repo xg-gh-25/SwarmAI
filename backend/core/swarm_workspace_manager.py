@@ -4,11 +4,10 @@ This module was refactored from a multi-workspace model to a single-workspace
 + projects model centred on the ``SwarmWS`` workspace.  It is responsible for:
 
 - ``SwarmWorkspaceManager``          — Main class managing workspace filesystem
-- ``FOLDER_STRUCTURE``               — Hierarchical folder layout (Knowledge, Projects)
+- ``FOLDER_STRUCTURE``               — Minimal folder layout (Knowledge, Projects)
 - ``SYSTEM_MANAGED_*`` constants     — Sets of paths that cannot be deleted/renamed
-- ``DEPTH_LIMITS``                   — Per-section folder-depth guardrails
-- ``CONTEXT_L0_TEMPLATE`` / ``CONTEXT_L1_TEMPLATE`` — Layered context templates
-- ``SYSTEM_PROMPTS_TEMPLATE``        — Default agent instruction template
+- ``PROJECT_SYSTEM_FILES``           — Per-project system files (.project.json)
+- ``GITIGNORE_CONTENT``              — Default .gitignore for git-backed workspace
 - Project CRUD methods               — create / delete / get / list projects
 
 The global singleton ``swarm_workspace_manager`` is created at module level.
@@ -26,6 +25,7 @@ from typing import Optional
 from uuid import uuid4
 
 import anyio
+import subprocess
 
 from core.project_schema_migrations import CURRENT_SCHEMA_VERSION, migrate_if_needed
 
@@ -35,50 +35,22 @@ logger = logging.getLogger(__name__)
 # Module-level constants
 # ─────────────────────────────────────────────────────────────────────────────
 
-# New hierarchical folder structure
-FOLDER_STRUCTURE = [
-    "Knowledge",
-    "Knowledge/Knowledge Base",
-    "Knowledge/Notes",
-    "Knowledge/Memory",
-    "Projects",
-]
+# Simplified folder structure — only user-facing directories
+FOLDER_STRUCTURE = ["Knowledge", "Projects"]
 
-SYSTEM_MANAGED_FOLDERS = {
-    "Knowledge", "Knowledge/Knowledge Base", "Knowledge/Notes",
-    "Knowledge/Memory", "Projects",
-}
+SYSTEM_MANAGED_FOLDERS = {"Knowledge", "Projects"}
 
-SYSTEM_MANAGED_ROOT_FILES = {
-    "system-prompts.md", "context-L0.md", "context-L1.md",
-}
+SYSTEM_MANAGED_ROOT_FILES: set[str] = set()
 
-SYSTEM_MANAGED_SECTION_FILES = {
-    "Knowledge/context-L0.md", "Knowledge/context-L1.md",
-    "Knowledge/index.md", "Knowledge/knowledge-map.md",
-    "Projects/context-L0.md", "Projects/context-L1.md",
-}
+SYSTEM_MANAGED_SECTION_FILES: set[str] = set()
 
-PROJECT_SYSTEM_FILES = {
-    ".project.json", "context-L0.md", "context-L1.md", "instructions.md",
-}
+PROJECT_SYSTEM_FILES = {".project.json"}
 
-PROJECT_SYSTEM_FOLDERS = {
-    "chats", "research", "reports",
-}
+PROJECT_SYSTEM_FOLDERS: set[str] = set()
 
 DEPTH_LIMITS = {
-    "knowledge": 3,
-    "project_system": 2,
     "project_user": 3,
 }
-
-KNOWLEDGE_SECTIONS = {"Knowledge", "Knowledge/Knowledge Base", "Knowledge/Notes", "Knowledge/Memory"}
-
-# Section type keys for DEPTH_LIMITS (avoids string-key typos)
-SECTION_KNOWLEDGE = "knowledge"
-SECTION_PROJECT_SYSTEM = "project_system"
-SECTION_PROJECT_USER = "project_user"
 
 DEFAULT_WORKSPACE_CONFIG = {
     "name": "SwarmWS",
@@ -96,214 +68,19 @@ _RESERVED_NAMES = frozenset({
     *(f"LPT{i}" for i in range(1, 10)),
 })
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Context file templates
-# ─────────────────────────────────────────────────────────────────────────────
-
-CONTEXT_L0_TEMPLATE = """# Context L0 — {section_name}
-
-<!-- Ultra-concise semantic abstract (~1000 tokens). Used by agents for fast relevance detection. -->
-
-## Purpose
-[One-sentence description of what this section/project contains]
-
-## Key Topics
-- [Topic 1]
-- [Topic 2]
-
-## Current Status
-[Brief status summary]
-"""
-
-CONTEXT_L1_TEMPLATE = """# Context L1 — {section_name}
-
-<!-- Structured overview (~4k tokens). Used by agents for deeper understanding. -->
-
-## Scope
-[What is in scope for this section/project]
-
-## Goals
-- [Goal 1]
-- [Goal 2]
-
-## Key Knowledge
-[Important facts, decisions, and context]
-
-## Relationships
-[How this relates to other sections/projects]
-
-## Recent Activity
-[Summary of recent changes]
-"""
-
-SYSTEM_PROMPTS_TEMPLATE = """# SwarmWS System Prompts
-
-<!-- Default system prompt template for agent customization. -->
-<!-- Edit this file to customize how agents interact with your workspace. -->
-
-## Agent Instructions
-You are working within the SwarmWS workspace. This workspace is organized into:
-
-- **Knowledge/** — Shared knowledge domain
-  - **Knowledge Base/** — Durable, reusable knowledge assets
-  - **Notes/** — Ongoing research notes and working documents
-  - **Memory/** — Persistent semantic memory distilled from interactions
-- **Projects/** — Active project containers with their own context
-
-## Guidelines
-- Always check context files (context-L0.md, context-L1.md) before starting work
-- Store durable knowledge outputs in Knowledge/Knowledge Base/
-- Store working notes in Knowledge/Notes/
-- Update context files when significant changes occur
+# .gitignore content for git-backed workspace
+GITIGNORE_CONTENT = """\
+*.db
+*.db-wal
+*.db-shm
+__pycache__/
+.venv/
+node_modules/
+*.pyc
+.DS_Store
 """
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Sample data content constants
-# ─────────────────────────────────────────────────────────────────────────────
-
-SAMPLE_SECTION_READMES = {
-    "Signals": "# Signals\n\nIncoming tasks, requests, and triggers that need attention.\n\nDrop new signals here for triage and processing.\n",
-    "Plan": "# Plan\n\nPrioritized work items and sprint planning.\n\nOrganize your upcoming work and set priorities here.\n",
-    "Execute": "# Execute\n\nActive task execution and progress tracking.\n\nTrack ongoing work and execution status here.\n",
-    "Communicate": "# Communicate\n\nStatus updates and team coordination.\n\nDraft communications, updates, and coordination notes here.\n",
-    "Reflection": "# Reflection\n\nRetrospectives and learning capture.\n\nCapture lessons learned, retrospectives, and insights here.\n",
-}
-
-SAMPLE_KNOWLEDGE_BASE_CONTENT = """# API Design Guidelines
-
-## Purpose
-Standard guidelines for designing REST APIs across all SwarmAI projects.
-
-## Conventions
-- Use snake_case for JSON field names in API responses
-- Use camelCase in frontend TypeScript interfaces
-- Always version APIs with a /v1/ prefix for breaking changes
-- Return 201 for resource creation, 200 for updates, 204 for deletes
-
-## Error Response Format
-All errors follow a consistent structure:
-```json
-{
-  "detail": "Human-readable error message",
-  "code": "MACHINE_READABLE_CODE"
-}
-```
-
-## Status
-Active — last reviewed 2025-01
-"""
-
-SAMPLE_NOTES_CONTENT = """# Meeting Notes — Weekly Planning
-
-## Date
-2025-01-20
-
-## Attendees
-- Product lead, Engineering lead, Design lead
-
-## Key Decisions
-- Prioritize workspace redesign for Q1 release
-- Defer multi-agent orchestration to Q2
-- Knowledge Base structure approved as proposed
-
-## Action Items
-- [ ] Draft project brief for workspace redesign
-- [ ] Set up research folder with competitor analysis
-- [ ] Schedule design review for next Thursday
-
-## Open Questions
-- How should we handle migration from the old folder structure?
-- What's the right depth limit for Knowledge subfolders?
-"""
-
-SAMPLE_PROJECT_INSTRUCTIONS = """# Website Redesign
-
-## Overview
-Redesign the company marketing website to improve conversion rates and
-align with the updated brand guidelines released in Q4 2024.
-
-## Goals
-- Increase landing page conversion rate from 2.1% to 3.5%
-- Reduce page load time to under 2 seconds on mobile
-- Implement new brand color palette and typography
-
-## Instructions for Agents
-- Check context-L0.md for a quick overview of project scope
-- Check context-L1.md for detailed context and constraints
-- Store competitor analysis and user research in research/
-- Store deliverables (mockups, reports, copy drafts) in reports/
-- Chat transcripts are saved automatically in chats/
-
-## Key Constraints
-- Must maintain SEO rankings during migration
-- Budget: 40 engineering hours for frontend, 20 for backend
-- Launch target: end of Q1 2025
-"""
-
-SAMPLE_RESEARCH_CONTENT = """# Competitor Analysis — Landing Pages
-
-## Competitors Reviewed
-1. **Notion** — Clean, minimal hero with single CTA
-2. **Linear** — Dark theme, animated product demo above fold
-3. **Figma** — Community-driven social proof, interactive examples
-
-## Key Takeaways
-- All top performers use a single primary CTA above the fold
-- Social proof (logos, testimonials) appears within first viewport
-- Page load times are consistently under 1.5s on mobile
-- Video/animation is used sparingly — only when it demonstrates the product
-
-## Recommendations
-- Simplify our hero to one headline + one CTA
-- Add customer logos bar below the fold
-- Replace stock imagery with actual product screenshots
-"""
-
-SAMPLE_REPORT_CONTENT = """# Performance Audit — Current Website
-
-## Summary
-Current marketing site scores 62/100 on Lighthouse mobile performance.
-Main bottlenecks are unoptimized images and render-blocking JavaScript.
-
-## Findings
-| Issue | Impact | Effort |
-|-------|--------|--------|
-| Unoptimized hero image (2.4MB) | High | Low |
-| Render-blocking third-party scripts | High | Medium |
-| No lazy loading on below-fold images | Medium | Low |
-| Missing font-display: swap | Low | Low |
-
-## Next Steps
-- [ ] Convert images to WebP with responsive srcset
-- [ ] Defer non-critical JavaScript
-- [ ] Implement intersection observer for lazy loading
-"""
-
-SAMPLE_MEMORY_CONTENT = """# User Preference — Communication Style
-
-## Memory Type
-User Preference
-
-## Extracted From
-Recurring patterns observed across multiple chat interactions.
-
-## Content
-The user prefers concise, actionable responses over lengthy explanations.
-When presenting options, use numbered lists with brief pros/cons rather than
-detailed paragraphs. Code examples are preferred over abstract descriptions.
-
-## Confidence
-High — observed consistently across 5+ interactions.
-
-## Last Validated
-2025-01-15
-
-## Notes
-This memory item demonstrates how SwarmAI distills persistent semantic memory
-from user interactions. Memory items capture preferences, recurring themes,
-and accumulated insights that help agents provide more personalized assistance.
-"""
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Manager class
@@ -323,12 +100,7 @@ class SwarmWorkspaceManager:
     # Re-export module-level constants as class attributes for backward compat
     FOLDER_STRUCTURE = FOLDER_STRUCTURE
     SYSTEM_MANAGED_FOLDERS = SYSTEM_MANAGED_FOLDERS
-    SYSTEM_MANAGED_ROOT_FILES = SYSTEM_MANAGED_ROOT_FILES
-    SYSTEM_MANAGED_SECTION_FILES = SYSTEM_MANAGED_SECTION_FILES
     PROJECT_SYSTEM_FILES = PROJECT_SYSTEM_FILES
-    PROJECT_SYSTEM_FOLDERS = PROJECT_SYSTEM_FOLDERS
-    DEPTH_LIMITS = DEPTH_LIMITS
-    KNOWLEDGE_SECTIONS = KNOWLEDGE_SECTIONS
     DEFAULT_WORKSPACE_CONFIG = DEFAULT_WORKSPACE_CONFIG
 
     def __init__(self):
@@ -399,50 +171,6 @@ class SwarmWorkspaceManager:
 
     # ── System-managed checks ────────────────────────────────────────────
 
-    def is_system_managed(self, relative_path: str) -> bool:
-        """Check if a path relative to workspace root is system-managed.
-
-        System-managed items cannot be deleted or renamed by users.
-
-        Checks against:
-        - SYSTEM_MANAGED_FOLDERS (top-level section folders)
-        - SYSTEM_MANAGED_ROOT_FILES (root-level system files)
-        - SYSTEM_MANAGED_SECTION_FILES (section-level context files)
-        - PROJECT_SYSTEM_FILES and PROJECT_SYSTEM_FOLDERS (per-project system items)
-
-        Args:
-            relative_path: Path relative to the workspace root directory.
-
-        Returns:
-            True if the path is system-managed, False otherwise.
-        """
-        normalized = relative_path.strip("/").replace("\\", "/")
-        if not normalized:
-            return False
-
-        if normalized in SYSTEM_MANAGED_ROOT_FILES:
-            return True
-
-        # Check against system-managed folders (supports both top-level
-        # like "Projects" and nested like "Knowledge/Memory")
-        if normalized in SYSTEM_MANAGED_FOLDERS:
-            return True
-
-        if normalized in SYSTEM_MANAGED_SECTION_FILES:
-            return True
-
-        # Check project-level system items: Projects/{name}/{item}
-        if normalized.startswith("Projects/"):
-            parts = normalized.split("/")
-            if len(parts) >= 3:
-                item_name = parts[2]
-                if item_name in PROJECT_SYSTEM_FILES:
-                    return True
-                if item_name in PROJECT_SYSTEM_FOLDERS:
-                    return True
-
-        return False
-
     def validate_depth(self, target_path: str) -> tuple[bool, str]:
         """Check whether creating a folder at target_path would exceed depth guardrails.
 
@@ -511,108 +239,69 @@ class SwarmWorkspaceManager:
     # ── Folder structure creation ────────────────────────────────────────
 
     async def create_folder_structure(self, workspace_path: str) -> None:
-        """Create the standard folder structure for the workspace.
+        """Create the minimal folder structure for the workspace.
 
-        Creates the root directory, all section folders from FOLDER_STRUCTURE,
-        root-level system files (system-prompts.md, context-L0.md, context-L1.md),
-        and section-level context/system files for Knowledge/ and Projects/.
-
-        Files are only created if they do not already exist (idempotent).
-
-        Args:
-            workspace_path: Path to the workspace root directory.
-                Can contain ~ or {app_data_dir} placeholders.
-
-        Raises:
-            ValueError: If the path is invalid.
-            OSError: If folder creation fails.
+        Creates Knowledge/ and Projects/ directories plus .gitignore.
+        Context files are managed by ContextDirectoryLoader separately.
         """
         if not self.validate_path(workspace_path):
-            raise ValueError(
-                f"Invalid workspace path: '{workspace_path}'. "
-                "Path must be absolute or start with ~ and cannot contain '..'"
-            )
+            raise ValueError(f"Invalid workspace path: '{workspace_path}'")
 
         expanded_path = self.expand_path(workspace_path)
         root = Path(expanded_path)
 
-        # Create root directory
-        try:
-            await anyio.to_thread.run_sync(
-                lambda: root.mkdir(parents=True, exist_ok=True)
-            )
-            logger.info("Created workspace root directory: %s", root)
-        except OSError as e:
-            logger.error("Failed to create workspace root directory '%s': %s", root, e)
-            raise OSError(f"Failed to create workspace root directory: {e}") from e
+        await anyio.to_thread.run_sync(
+            lambda: root.mkdir(parents=True, exist_ok=True)
+        )
 
-        # Create all section folders
         for folder_name in FOLDER_STRUCTURE:
             folder_path = root / folder_name
-            try:
-                def _ensure_dir(fp=folder_path):
-                    if fp.exists() and not fp.is_dir():
-                        fp.unlink()  # Remove conflicting file; system folders take precedence
-                    fp.mkdir(parents=True, exist_ok=True)
-                await anyio.to_thread.run_sync(_ensure_dir)
-                logger.debug("Created subdirectory: %s", folder_path)
-            except OSError as e:
-                logger.error("Failed to create subdirectory '%s': %s", folder_path, e)
-                raise OSError(
-                    f"Failed to create workspace folder '{folder_name}': {e}"
-                ) from e
-
-        # Create root-level system files
-        await anyio.to_thread.run_sync(
-            lambda: self._write_file_if_missing(
-                root / "system-prompts.md", SYSTEM_PROMPTS_TEMPLATE
-            )
-        )
-        await anyio.to_thread.run_sync(
-            lambda: self._write_file_if_missing(
-                root / "context-L0.md",
-                CONTEXT_L0_TEMPLATE.format(section_name="SwarmWS"),
-            )
-        )
-        await anyio.to_thread.run_sync(
-            lambda: self._write_file_if_missing(
-                root / "context-L1.md",
-                CONTEXT_L1_TEMPLATE.format(section_name="SwarmWS"),
-            )
-        )
-
-        # Create section-level context and system files for Knowledge/ and Projects/
-        for section in ("Knowledge", "Projects"):
             await anyio.to_thread.run_sync(
-                lambda s=section: self._write_file_if_missing(
-                    root / s / "context-L0.md",
-                    CONTEXT_L0_TEMPLATE.format(section_name=s),
-                )
+                lambda fp=folder_path: fp.mkdir(parents=True, exist_ok=True)
             )
+
+        # Write .gitignore
+        gitignore = root / ".gitignore"
+        if not gitignore.exists():
             await anyio.to_thread.run_sync(
-                lambda s=section: self._write_file_if_missing(
-                    root / s / "context-L1.md",
-                    CONTEXT_L1_TEMPLATE.format(section_name=s),
-                )
+                lambda: gitignore.write_text(GITIGNORE_CONTENT, encoding="utf-8")
             )
 
-        # Knowledge-specific system files
-        await anyio.to_thread.run_sync(
-            lambda: self._write_file_if_missing(
-                root / "Knowledge" / "index.md",
-                "# Knowledge Index\n\n[Auto-generated index of knowledge assets]\n",
-            )
-        )
-        await anyio.to_thread.run_sync(
-            lambda: self._write_file_if_missing(
-                root / "Knowledge" / "knowledge-map.md",
-                "# Knowledge Map\n\n[Visual map of knowledge relationships]\n",
-            )
-        )
+        logger.info("Created folder structure at %s", expanded_path)
 
-        logger.info(
-            "Successfully created folder structure for workspace at '%s'", expanded_path
-        )
+    # ── Git initialization ─────────────────────────────────────────────
+
+    def _ensure_git_repo(self, workspace_path: str) -> bool:
+        """Initialize git repo in SwarmWS if not already initialized.
+
+        Writes .gitignore BEFORE git add to prevent committing sensitive files.
+        Returns True if git is available, False otherwise.
+        """
+        git_dir = Path(workspace_path) / ".git"
+        if git_dir.exists():
+            return True
+        try:
+            # .gitignore should already exist from create_folder_structure,
+            # but ensure it's there before git add
+            gitignore = Path(workspace_path) / ".gitignore"
+            if not gitignore.exists():
+                gitignore.write_text(GITIGNORE_CONTENT, encoding="utf-8")
+            subprocess.run(
+                ["git", "init"], cwd=workspace_path,
+                capture_output=True, check=True,
+            )
+            subprocess.run(
+                ["git", "add", "-A"], cwd=workspace_path, capture_output=True,
+            )
+            subprocess.run(
+                ["git", "commit", "-m", "Initial SwarmWS state", "--allow-empty"],
+                cwd=workspace_path, capture_output=True,
+            )
+            logger.info("Git repo initialized at %s", workspace_path)
+            return True
+        except (FileNotFoundError, subprocess.CalledProcessError) as exc:
+            logger.warning("Git init failed (non-blocking): %s", exc)
+            return False
 
     # ── Context reading (backward compat) ────────────────────────────────
 
@@ -699,18 +388,8 @@ class SwarmWorkspaceManager:
             logger.info("Default workspace config already exists, verifying integrity")
             file_path = existing.get("file_path", DEFAULT_WORKSPACE_CONFIG["file_path"])
             expanded = self.expand_path(file_path)
-            recreated = await self.verify_integrity(expanded)
-            if recreated:
-                logger.info(
-                    "Integrity check recreated %d items: %s", len(recreated), recreated
-                )
-            # Populate sample data if workspace was freshly scaffolded
-            # (seed DB has config row but filesystem was empty).
-            # _populate_sample_data is idempotent — skips existing files.
-            try:
-                await self._populate_sample_data(file_path)
-            except Exception as e:
-                logger.warning("Failed to populate sample data on integrity path: %s", e)
+            await self._cleanup_legacy_content(expanded)
+            await self.verify_integrity(expanded)
             return existing
 
         logger.info("Creating default workspace for the first time")
@@ -739,268 +418,105 @@ class SwarmWorkspaceManager:
             )
             raise
 
-        # Populate sample data for first-time experience
-        try:
-            await self._populate_sample_data(config["file_path"])
-            logger.info("Populated sample data for default workspace")
-        except Exception as e:
-            logger.warning("Failed to populate sample data: %s", e)
+        # Initialize git repo (non-blocking if git not available)
+        expanded = self.expand_path(config["file_path"])
+        self._ensure_git_repo(expanded)
 
         return config
 
-    async def verify_integrity(self, workspace_path: str) -> list[str]:
-        """Verify all system-managed items exist, recreating missing ones.
+    async def _cleanup_legacy_content(self, workspace_path: str) -> None:
+        """Remove legacy files and folders from pre-restructure SwarmWS.
 
-        Checks folders from FOLDER_STRUCTURE, root-level system files,
-        section-level context files, and per-project system items.
-        Does NOT overwrite existing files.
-
-        Args:
-            workspace_path: Expanded absolute path to the workspace root.
-
-        Returns:
-            List of recreated item paths (relative to workspace root).
+        Runs once per startup on existing workspaces. Idempotent — safe to
+        call repeatedly. Removes:
+        - Legacy Knowledge subdirectories (Knowledge Base, Memory, Notes)
+        - Legacy root files (context-L0.md, context-L1.md, system-prompts.md,
+          index.md, knowledge-map.md)
+        - Legacy per-project context files (context-L0.md, context-L1.md)
         """
         root = Path(workspace_path)
-        recreated: list[str] = []
 
-        # 1. Ensure all section folders exist
-        for folder_name in FOLDER_STRUCTURE:
-            folder_path = root / folder_name
-            if not folder_path.exists():
+        # Legacy Knowledge subdirectories
+        legacy_knowledge_dirs = ["Knowledge Base", "Memory", "Notes"]
+        for dirname in legacy_knowledge_dirs:
+            legacy_dir = root / "Knowledge" / dirname
+            if legacy_dir.exists():
                 await anyio.to_thread.run_sync(
-                    lambda fp=folder_path: fp.mkdir(parents=True, exist_ok=True)
+                    lambda d=legacy_dir: shutil.rmtree(d, ignore_errors=True)
                 )
-                recreated.append(folder_name)
-                logger.info("Recreated missing folder: %s", folder_name)
+                logger.info("Removed legacy directory: Knowledge/%s", dirname)
 
-        # 2. Ensure root-level system files exist
-        root_file_templates = {
-            "system-prompts.md": SYSTEM_PROMPTS_TEMPLATE,
-            "context-L0.md": CONTEXT_L0_TEMPLATE.format(section_name="SwarmWS"),
-            "context-L1.md": CONTEXT_L1_TEMPLATE.format(section_name="SwarmWS"),
-        }
-        for filename, template in root_file_templates.items():
-            written = await anyio.to_thread.run_sync(
-                lambda fp=root / filename, t=template: self._write_file_if_missing(fp, t)
-            )
-            if written:
-                recreated.append(filename)
-                logger.info("Recreated missing root file: %s", filename)
+        # Legacy root-level files
+        legacy_root_files = [
+            "context-L0.md", "context-L1.md", "system-prompts.md",
+            "index.md", "knowledge-map.md", "generate_ppt.py",
+            "SwarmAI_Capabilities.pptx",
+        ]
+        for filename in legacy_root_files:
+            legacy_file = root / filename
+            if legacy_file.exists():
+                await anyio.to_thread.run_sync(
+                    lambda f=legacy_file: f.unlink(missing_ok=True)
+                )
+                logger.info("Removed legacy file: %s", filename)
 
-        # 3. Ensure section-level context files exist
-        section_file_templates = {
-            "Knowledge/context-L0.md": CONTEXT_L0_TEMPLATE.format(section_name="Knowledge"),
-            "Knowledge/context-L1.md": CONTEXT_L1_TEMPLATE.format(section_name="Knowledge"),
-            "Knowledge/index.md": "# Knowledge Index\n\n[Auto-generated index of knowledge assets]\n",
-            "Knowledge/knowledge-map.md": "# Knowledge Map\n\n[Visual map of knowledge relationships]\n",
-            "Projects/context-L0.md": CONTEXT_L0_TEMPLATE.format(section_name="Projects"),
-            "Projects/context-L1.md": CONTEXT_L1_TEMPLATE.format(section_name="Projects"),
-        }
-        for rel_path, content in sorted(section_file_templates.items()):
-            written = await anyio.to_thread.run_sync(
-                lambda fp=root / rel_path, c=content: self._write_file_if_missing(fp, c)
-            )
-            if written:
-                recreated.append(rel_path)
-                logger.info("Recreated missing section file: %s", rel_path)
+        # Legacy Knowledge-level files
+        legacy_knowledge_files = [
+            "context-L0.md", "context-L1.md", "index.md", "knowledge-map.md",
+        ]
+        for filename in legacy_knowledge_files:
+            legacy_file = root / "Knowledge" / filename
+            if legacy_file.exists():
+                await anyio.to_thread.run_sync(
+                    lambda f=legacy_file: f.unlink(missing_ok=True)
+                )
+                logger.info("Removed legacy file: Knowledge/%s", filename)
 
-        # 4. Verify per-project system items
+        # Legacy per-project context files
         projects_dir = root / "Projects"
         if projects_dir.exists():
-
-            def _scan_projects():
-                return [
-                    d
-                    for d in projects_dir.iterdir()
-                    if d.is_dir() and (d / ".project.json").exists()
-                ]
-
-            project_dirs = await anyio.to_thread.run_sync(_scan_projects)
-
-            for project_dir in project_dirs:
-                project_name = project_dir.name
-
-                # Check system files
-                for sys_file in sorted(PROJECT_SYSTEM_FILES):
-                    file_path = project_dir / sys_file
-                    if not file_path.exists():
-                        if sys_file == "context-L0.md":
-                            content = CONTEXT_L0_TEMPLATE.format(
-                                section_name=project_name
-                            )
-                        elif sys_file == "context-L1.md":
-                            content = CONTEXT_L1_TEMPLATE.format(
-                                section_name=project_name
-                            )
-                        elif sys_file == "instructions.md":
-                            content = (
-                                f"# {project_name} Instructions\n\n"
-                                "[Add project instructions here]\n"
-                            )
-                        else:
-                            # .project.json — skip, it must exist (filtered on it)
-                            continue
-                        written = await anyio.to_thread.run_sync(
-                            lambda fp=file_path, c=content: self._write_file_if_missing(
-                                fp, c
-                            )
-                        )
-                        if written:
-                            rel = f"Projects/{project_name}/{sys_file}"
-                            recreated.append(rel)
-                            logger.info("Recreated missing project file: %s", rel)
-
-                # Check system folders
-                for sys_folder in sorted(PROJECT_SYSTEM_FOLDERS):
-                    folder_path = project_dir / sys_folder
-                    if not folder_path.exists():
+            for project_dir in projects_dir.iterdir():
+                if not project_dir.is_dir():
+                    continue
+                for filename in ["context-L0.md", "context-L1.md"]:
+                    legacy_file = project_dir / filename
+                    if legacy_file.exists():
                         await anyio.to_thread.run_sync(
-                            lambda fp=folder_path: fp.mkdir(parents=True, exist_ok=True)
+                            lambda f=legacy_file: f.unlink(missing_ok=True)
                         )
-                        rel = f"Projects/{project_name}/{sys_folder}"
-                        recreated.append(rel)
-                        logger.info("Recreated missing project folder: %s", rel)
+                        logger.info(
+                            "Removed legacy file: Projects/%s/%s",
+                            project_dir.name, filename,
+                        )
 
+        # Legacy root-level directories
+        legacy_root_dirs = [
+            "_tmp_transfer", "ContextFiles", "workspace",
+        ]
+        for dirname in legacy_root_dirs:
+            legacy_dir = root / dirname
+            if legacy_dir.exists():
+                await anyio.to_thread.run_sync(
+                    lambda d=legacy_dir: shutil.rmtree(d, ignore_errors=True)
+                )
+                logger.info("Removed legacy directory: %s", dirname)
+
+    async def verify_integrity(self, workspace_path: str) -> bool:
+        """Verify Knowledge/ and Projects/ exist, recreating if missing.
+
+        Returns True if any folder was recreated.
+        """
+        root = Path(workspace_path)
+        recreated = False
+        for folder in FOLDER_STRUCTURE:
+            p = root / folder
+            if not p.exists():
+                await anyio.to_thread.run_sync(
+                    lambda fp=p: fp.mkdir(parents=True, exist_ok=True)
+                )
+                recreated = True
+                logger.info("Recreated missing folder: %s", folder)
         return recreated
-
-    # ── Sample data population ───────────────────────────────────────────
-
-    async def _populate_sample_data(self, workspace_path: str) -> None:
-        """Populate sample data for first-time workspace initialization.
-
-        Creates sample Knowledge Base asset, Notes file, Memory item,
-        and a sample project with full scaffold.
-
-        Args:
-            workspace_path: Workspace root path (may contain placeholders).
-        """
-        expanded = self.expand_path(workspace_path)
-        root = Path(expanded)
-
-        # 1. Sample Knowledge Base asset
-        await anyio.to_thread.run_sync(
-            lambda: self._write_file_if_missing(
-                root / "Knowledge" / "Knowledge Base" / "sample-knowledge-asset.md",
-                SAMPLE_KNOWLEDGE_BASE_CONTENT,
-            )
-        )
-
-        # 2. Sample Notes file
-        await anyio.to_thread.run_sync(
-            lambda: self._write_file_if_missing(
-                root / "Knowledge" / "Notes" / "sample-note.md",
-                SAMPLE_NOTES_CONTENT,
-            )
-        )
-
-        # 3. Sample memory item
-        await anyio.to_thread.run_sync(
-            lambda: self._write_file_if_missing(
-                root / "Knowledge" / "Memory" / "communication-style.md",
-                SAMPLE_MEMORY_CONTENT,
-            )
-        )
-
-        # 4. Sample project
-        try:
-            await self._create_sample_project(expanded)
-            logger.info("Created sample project")
-        except ValueError:
-            logger.debug("Sample project already exists, skipping")
-        except Exception as e:
-            logger.warning("Failed to create sample project: %s", e)
-
-    async def _create_sample_project(self, workspace_path: str) -> None:
-        """Create the sample project under Projects/.
-
-        Args:
-            workspace_path: Expanded absolute workspace root path.
-        """
-        project_dir = Path(workspace_path) / "Projects" / "Website Redesign"
-
-        def _check_exists():
-            return project_dir.exists()
-
-        if await anyio.to_thread.run_sync(_check_exists):
-            raise ValueError("Sample project already exists")
-
-        now = datetime.now(timezone.utc).isoformat()
-        project_id = str(uuid4())
-        metadata = {
-            "id": project_id,
-            "name": "Website Redesign",
-            "description": "Redesign the marketing website to improve conversion rates and align with updated brand guidelines.",
-            "created_at": now,
-            "updated_at": now,
-            "status": "active",
-            "tags": ["marketing", "frontend", "q1-2025"],
-            "priority": "high",
-            "schema_version": CURRENT_SCHEMA_VERSION,
-            "version": 1,
-            "update_history": [
-                {
-                    "version": 1,
-                    "timestamp": now,
-                    "action": "created",
-                    "changes": {},
-                    "source": "system",
-                }
-            ],
-        }
-
-        # Create project directory
-        await anyio.to_thread.run_sync(
-            lambda: project_dir.mkdir(parents=True, exist_ok=True)
-        )
-
-        # Write .project.json via the shared helper
-        await anyio.to_thread.run_sync(
-            lambda: self._write_project_metadata(project_dir, metadata)
-        )
-
-        # Create context and instruction files
-        await anyio.to_thread.run_sync(
-            lambda: self._write_file_if_missing(
-                project_dir / "context-L0.md",
-                CONTEXT_L0_TEMPLATE.format(section_name="Website Redesign"),
-            )
-        )
-        await anyio.to_thread.run_sync(
-            lambda: self._write_file_if_missing(
-                project_dir / "context-L1.md",
-                CONTEXT_L1_TEMPLATE.format(section_name="Website Redesign"),
-            )
-        )
-        await anyio.to_thread.run_sync(
-            lambda: self._write_file_if_missing(
-                project_dir / "instructions.md", SAMPLE_PROJECT_INSTRUCTIONS
-            )
-        )
-
-        # Create system folders
-        for folder in sorted(PROJECT_SYSTEM_FOLDERS):
-            folder_path = project_dir / folder
-            await anyio.to_thread.run_sync(
-                lambda fp=folder_path: fp.mkdir(parents=True, exist_ok=True)
-            )
-
-        # Populate sample research and report content
-        await anyio.to_thread.run_sync(
-            lambda: self._write_file_if_missing(
-                project_dir / "research" / "competitor-analysis.md",
-                SAMPLE_RESEARCH_CONTENT,
-            )
-        )
-        await anyio.to_thread.run_sync(
-            lambda: self._write_file_if_missing(
-                project_dir / "reports" / "performance-audit.md",
-                SAMPLE_REPORT_CONTENT,
-            )
-        )
-
-        # Update in-memory UUID index
-        self._uuid_index[project_id] = project_dir
 
     def _resolve_workspace_path(self, workspace_path: Optional[str]) -> str:
         """Resolve workspace_path to an expanded absolute path.
@@ -1296,26 +812,6 @@ class SwarmWorkspaceManager:
         # Write .project.json via the shared helper
         await anyio.to_thread.run_sync(
             lambda: self._write_project_metadata(project_dir, metadata)
-        )
-
-        # Create system files
-        await anyio.to_thread.run_sync(
-            lambda: self._write_file_if_missing(
-                project_dir / "context-L0.md",
-                CONTEXT_L0_TEMPLATE.format(section_name=project_name),
-            )
-        )
-        await anyio.to_thread.run_sync(
-            lambda: self._write_file_if_missing(
-                project_dir / "context-L1.md",
-                CONTEXT_L1_TEMPLATE.format(section_name=project_name),
-            )
-        )
-        await anyio.to_thread.run_sync(
-            lambda: self._write_file_if_missing(
-                project_dir / "instructions.md",
-                f"# {project_name} Instructions\n\n[Add project instructions here]\n",
-            )
         )
 
         # Create system folders

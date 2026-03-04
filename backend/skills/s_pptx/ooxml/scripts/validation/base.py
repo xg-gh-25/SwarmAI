@@ -203,6 +203,9 @@ class BaseSchemaValidator:
                 # Now check IDs in the cleaned tree
                 for elem in root.iter():
                     # Get the element name without namespace
+                    # Guard against non-string tags (e.g. lxml Comment/PI nodes)
+                    if not isinstance(elem.tag, str):
+                        continue
                     tag = (
                         elem.tag.split("}")[-1].lower()
                         if "}" in elem.tag

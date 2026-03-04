@@ -6,12 +6,10 @@ This module contains both unit tests and Hypothesis property-based tests for
 Unit tests cover:
 - Constants (FOLDER_STRUCTURE, DEFAULT_WORKSPACE_CONFIG, etc.)
 - ``validate_path()`` and ``expand_path()`` methods
-- ``create_folder_structure()`` method (new hierarchical layout)
+- ``create_folder_structure()`` method (minimal Knowledge/Projects layout)
 - ``read_context_files()`` backward-compat method
 - ``ensure_default_workspace()`` with workspace_config DB interface
-- ``is_system_managed()`` for Knowledge/Memory path recognition
-- ``verify_integrity()`` for Knowledge/Memory recreation
-- Sample memory content creation during first-time init
+- ``verify_integrity()`` for Knowledge/Projects recreation
 
 Property-based tests (Hypothesis):
 - ``TestInitializationIdempotence`` — Property 3: running
@@ -22,9 +20,11 @@ Property-based tests (Hypothesis):
 """
 import os
 import pytest
+import subprocess
 import tempfile
 import shutil
 from pathlib import Path
+from unittest.mock import patch
 from core.swarm_workspace_manager import (
     SwarmWorkspaceManager,
     swarm_workspace_manager,
@@ -33,6 +33,7 @@ from core.swarm_workspace_manager import (
     SYSTEM_MANAGED_SECTION_FILES,
     SYSTEM_MANAGED_FOLDERS,
     DEFAULT_WORKSPACE_CONFIG,
+    GITIGNORE_CONTENT,
 )
 
 
@@ -40,15 +41,12 @@ class TestSwarmWorkspaceManagerConstants:
     """Tests for SwarmWorkspaceManager constants after single-workspace refactor."""
 
     def test_folder_structure_contains_required_directories(self):
-        """Verify FOLDER_STRUCTURE contains all required directories.
+        """Verify FOLDER_STRUCTURE contains only Knowledge and Projects.
 
-        Validates: Requirements 2.1, 2.3
+        Validates: Requirements 1.1
         """
         required_dirs = [
             "Knowledge",
-            "Knowledge/Knowledge Base",
-            "Knowledge/Notes",
-            "Knowledge/Memory",
             "Projects",
         ]
         assert SwarmWorkspaceManager.FOLDER_STRUCTURE == required_dirs
@@ -65,25 +63,17 @@ class TestSwarmWorkspaceManagerConstants:
         assert SYSTEM_MANAGED_FOLDERS == set(FOLDER_STRUCTURE)
 
     def test_system_managed_root_files(self):
-        """Verify SYSTEM_MANAGED_ROOT_FILES has expected files."""
-        expected = {"system-prompts.md", "context-L0.md", "context-L1.md"}
-        assert SYSTEM_MANAGED_ROOT_FILES == expected
+        """Verify SYSTEM_MANAGED_ROOT_FILES is empty (no system-managed root files)."""
+        assert SYSTEM_MANAGED_ROOT_FILES == set()
 
     def test_system_managed_section_files(self):
-        """Verify SYSTEM_MANAGED_SECTION_FILES has context files for Knowledge and Projects."""
-        expected = {
-            "Knowledge/context-L0.md", "Knowledge/context-L1.md",
-            "Knowledge/index.md", "Knowledge/knowledge-map.md",
-            "Projects/context-L0.md", "Projects/context-L1.md",
-        }
-        assert SYSTEM_MANAGED_SECTION_FILES == expected
+        """Verify SYSTEM_MANAGED_SECTION_FILES is empty (no system-managed section files)."""
+        assert SYSTEM_MANAGED_SECTION_FILES == set()
 
-    def test_depth_limits_has_all_sections(self):
-        """Verify DEPTH_LIMITS covers all section types."""
-        limits = SwarmWorkspaceManager.DEPTH_LIMITS
-        assert "knowledge" in limits
-        assert "project_system" in limits
-        assert "project_user" in limits
+    def test_depth_limits_has_project_user(self):
+        """Verify DEPTH_LIMITS has project_user limit."""
+        from core.swarm_workspace_manager import DEPTH_LIMITS
+        assert "project_user" in DEPTH_LIMITS
 
 
 class TestExpandPath:
@@ -166,33 +156,7 @@ class TestGlobalInstance:
         assert isinstance(swarm_workspace_manager, SwarmWorkspaceManager)
 
     def test_global_instance_has_folder_structure(self):
-        assert len(swarm_workspace_manager.FOLDER_STRUCTURE) == 5
-
-
-class TestKnowledgeMemorySystemManaged:
-    """Tests for Knowledge/Memory path recognition in is_system_managed().
-
-    Validates: Requirements 2.4, 3.2, 3.6, 3.7
-    """
-
-    def test_knowledge_memory_is_system_managed(self):
-        """Verify Knowledge/Memory is recognized as system-managed."""
-        manager = SwarmWorkspaceManager()
-        assert manager.is_system_managed("Knowledge/Memory") is True
-
-    def test_knowledge_memory_in_system_managed_folders(self):
-        """Verify Knowledge/Memory is in SYSTEM_MANAGED_FOLDERS set."""
-        assert "Knowledge/Memory" in SYSTEM_MANAGED_FOLDERS
-
-    def test_knowledge_memory_in_folder_structure(self):
-        """Verify Knowledge/Memory is in FOLDER_STRUCTURE list."""
-        assert "Knowledge/Memory" in FOLDER_STRUCTURE
-
-    def test_knowledge_memory_user_files_not_system_managed(self):
-        """Verify user files inside Knowledge/Memory/ are not system-managed."""
-        manager = SwarmWorkspaceManager()
-        assert manager.is_system_managed("Knowledge/Memory/my-notes.md") is False
-        assert manager.is_system_managed("Knowledge/Memory/subfolder") is False
+        assert len(swarm_workspace_manager.FOLDER_STRUCTURE) == 2
 
 
 class TestCreateFolderStructure:
@@ -220,20 +184,6 @@ class TestCreateFolderStructure:
         for folder_name in SwarmWorkspaceManager.FOLDER_STRUCTURE:
             folder_path = os.path.join(workspace_path, folder_name)
             assert os.path.isdir(folder_path), f"Directory {folder_name} should exist"
-
-    @pytest.mark.asyncio
-    async def test_creates_knowledge_memory_directory(self, temp_dir):
-        """Verify Knowledge/Memory/ nested directory is created.
-
-        Validates: Requirements 2.1, 2.4, 3.2
-        """
-        manager = SwarmWorkspaceManager()
-        workspace_path = os.path.join(temp_dir, "test_workspace")
-
-        await manager.create_folder_structure(workspace_path)
-
-        memory_path = os.path.join(workspace_path, "Knowledge", "Memory")
-        assert os.path.isdir(memory_path), "Knowledge/Memory/ directory should exist"
 
     @pytest.mark.asyncio
     async def test_creates_root_directory_if_not_exists(self, temp_dir):
@@ -701,205 +651,6 @@ class TestEnsureDefaultWorkspace:
             swm_mod.DEFAULT_WORKSPACE_CONFIG.update(original)
 
 
-class TestVerifyIntegrityMemory:
-    """Tests for verify_integrity() recreating Knowledge/Memory/ if missing.
-
-    Validates: Requirements 29.1, 29.2, 30.1
-    """
-
-    @pytest.fixture
-    def temp_dir(self):
-        temp_path = tempfile.mkdtemp()
-        yield temp_path
-        if os.path.exists(temp_path):
-            shutil.rmtree(temp_path)
-
-    @pytest.fixture
-    def mock_db(self):
-        """Create a mock database with workspace_config table."""
-        class MockWorkspaceConfigTable:
-            def __init__(self):
-                self.config = None
-
-            async def get_config(self):
-                return self.config
-
-            async def put(self, item):
-                self.config = item
-                return item
-
-        class MockDB:
-            def __init__(self):
-                self._workspace_config = MockWorkspaceConfigTable()
-
-            @property
-            def workspace_config(self):
-                return self._workspace_config
-
-        return MockDB()
-
-    @pytest.mark.asyncio
-    async def test_verify_integrity_recreates_knowledge_memory(self, mock_db, temp_dir):
-        """Verify Knowledge/Memory/ is recreated by verify_integrity() if missing.
-
-        Validates: Requirements 29.1, 29.2
-        """
-        manager = SwarmWorkspaceManager()
-        test_path = os.path.join(temp_dir, "SwarmWS")
-        import core.swarm_workspace_manager as swm_mod
-        original = swm_mod.DEFAULT_WORKSPACE_CONFIG.copy()
-        swm_mod.DEFAULT_WORKSPACE_CONFIG["file_path"] = test_path
-
-        try:
-            # First init — creates full structure
-            await manager.ensure_default_workspace(mock_db)
-            memory_path = os.path.join(test_path, "Knowledge", "Memory")
-            assert os.path.isdir(memory_path), "Knowledge/Memory/ should exist after init"
-
-            # Delete Knowledge/Memory/
-            shutil.rmtree(memory_path)
-            assert not os.path.exists(memory_path)
-
-            # verify_integrity should recreate it
-            recreated = await manager.verify_integrity(test_path)
-            assert os.path.isdir(memory_path), (
-                "Knowledge/Memory/ should be recreated by verify_integrity()"
-            )
-            assert "Knowledge/Memory" in recreated
-        finally:
-            swm_mod.DEFAULT_WORKSPACE_CONFIG.update(original)
-
-    @pytest.mark.asyncio
-    async def test_verify_integrity_does_not_overwrite_memory_content(self, mock_db, temp_dir):
-        """Verify verify_integrity() does not overwrite existing Memory/ content.
-
-        Validates: Requirements 29.2, 30.1
-        """
-        manager = SwarmWorkspaceManager()
-        test_path = os.path.join(temp_dir, "SwarmWS")
-        import core.swarm_workspace_manager as swm_mod
-        original = swm_mod.DEFAULT_WORKSPACE_CONFIG.copy()
-        swm_mod.DEFAULT_WORKSPACE_CONFIG["file_path"] = test_path
-
-        try:
-            await manager.ensure_default_workspace(mock_db)
-
-            # Add a user file inside Knowledge/Memory/
-            user_file = os.path.join(test_path, "Knowledge", "Memory", "my-prefs.md")
-            with open(user_file, "w") as f:
-                f.write("# My Preferences\nCustom content.\n")
-
-            # Re-run verify_integrity
-            await manager.verify_integrity(test_path)
-
-            # User file should be preserved
-            assert os.path.isfile(user_file)
-            with open(user_file, "r") as f:
-                assert f.read() == "# My Preferences\nCustom content.\n"
-        finally:
-            swm_mod.DEFAULT_WORKSPACE_CONFIG.update(original)
-
-
-class TestSampleMemoryContent:
-    """Tests for sample memory content creation during first-time init.
-
-    Validates: Requirements 2.4, 23.4
-    """
-
-    @pytest.fixture
-    def temp_dir(self):
-        temp_path = tempfile.mkdtemp()
-        yield temp_path
-        if os.path.exists(temp_path):
-            shutil.rmtree(temp_path)
-
-    @pytest.fixture
-    def mock_db(self):
-        """Create a mock database with workspace_config table."""
-        class MockWorkspaceConfigTable:
-            def __init__(self):
-                self.config = None
-
-            async def get_config(self):
-                return self.config
-
-            async def put(self, item):
-                self.config = item
-                return item
-
-        class MockDB:
-            def __init__(self):
-                self._workspace_config = MockWorkspaceConfigTable()
-
-            @property
-            def workspace_config(self):
-                return self._workspace_config
-
-        return MockDB()
-
-    @pytest.mark.asyncio
-    async def test_sample_memory_content_created_on_first_init(self, mock_db, temp_dir):
-        """Verify sample memory file is created during first-time initialization.
-
-        Validates: Requirements 23.4
-        """
-        manager = SwarmWorkspaceManager()
-        test_path = os.path.join(temp_dir, "SwarmWS")
-        import core.swarm_workspace_manager as swm_mod
-        original = swm_mod.DEFAULT_WORKSPACE_CONFIG.copy()
-        swm_mod.DEFAULT_WORKSPACE_CONFIG["file_path"] = test_path
-
-        try:
-            await manager.ensure_default_workspace(mock_db)
-
-            sample_memory = os.path.join(
-                test_path, "Knowledge", "Memory", "communication-style.md"
-            )
-            assert os.path.isfile(sample_memory), (
-                "Sample memory file communication-style.md should exist after first init"
-            )
-
-            # Verify it has meaningful content
-            with open(sample_memory, "r") as f:
-                content = f.read()
-            assert "Communication Style" in content
-            assert len(content) > 50
-        finally:
-            swm_mod.DEFAULT_WORKSPACE_CONFIG.update(original)
-
-    @pytest.mark.asyncio
-    async def test_sample_memory_not_overwritten_on_reinit(self, mock_db, temp_dir):
-        """Verify sample memory file is not overwritten on re-initialization.
-
-        Validates: Requirements 30.1
-        """
-        manager = SwarmWorkspaceManager()
-        test_path = os.path.join(temp_dir, "SwarmWS")
-        import core.swarm_workspace_manager as swm_mod
-        original = swm_mod.DEFAULT_WORKSPACE_CONFIG.copy()
-        swm_mod.DEFAULT_WORKSPACE_CONFIG["file_path"] = test_path
-
-        try:
-            await manager.ensure_default_workspace(mock_db)
-
-            # Modify the sample memory file
-            sample_memory = os.path.join(
-                test_path, "Knowledge", "Memory", "communication-style.md"
-            )
-            custom = "# Edited Memory\nUser-edited content.\n"
-            with open(sample_memory, "w") as f:
-                f.write(custom)
-
-            # Re-init
-            await manager.ensure_default_workspace(mock_db)
-
-            # Content should be preserved
-            with open(sample_memory, "r") as f:
-                assert f.read() == custom
-        finally:
-            swm_mod.DEFAULT_WORKSPACE_CONFIG.update(original)
-
-
 class TestExpandPathWithAppDataDir:
     """Tests for expand_path() with {app_data_dir} placeholder."""
 
@@ -994,6 +745,102 @@ _user_file_strategy = st.lists(
     min_size=0,
     max_size=5,
 )
+
+
+class TestEnsureGitRepo:
+    """Tests for _ensure_git_repo() git initialization.
+
+    Validates: Requirements 2.1, 2.2, 2.3, 2.4
+    """
+
+    @pytest.fixture
+    def temp_dir(self):
+        temp_path = tempfile.mkdtemp()
+        yield temp_path
+        if os.path.exists(temp_path):
+            shutil.rmtree(temp_path)
+
+    def test_initializes_git_repo(self, temp_dir):
+        """Verify git init creates .git directory."""
+        ws = os.path.join(temp_dir, "SwarmWS")
+        os.makedirs(ws)
+        manager = SwarmWorkspaceManager()
+        result = manager._ensure_git_repo(ws)
+        assert result is True
+        assert os.path.isdir(os.path.join(ws, ".git"))
+
+    def test_creates_gitignore_if_missing(self, temp_dir):
+        """Verify .gitignore is written before git add."""
+        ws = os.path.join(temp_dir, "SwarmWS")
+        os.makedirs(ws)
+        manager = SwarmWorkspaceManager()
+        manager._ensure_git_repo(ws)
+        gitignore = Path(ws) / ".gitignore"
+        assert gitignore.exists()
+        assert gitignore.read_text(encoding="utf-8") == GITIGNORE_CONTENT
+
+    def test_does_not_overwrite_existing_gitignore(self, temp_dir):
+        """Verify existing .gitignore is preserved."""
+        ws = os.path.join(temp_dir, "SwarmWS")
+        os.makedirs(ws)
+        custom = "# custom\n*.log\n"
+        (Path(ws) / ".gitignore").write_text(custom, encoding="utf-8")
+        manager = SwarmWorkspaceManager()
+        manager._ensure_git_repo(ws)
+        assert (Path(ws) / ".gitignore").read_text(encoding="utf-8") == custom
+
+    def test_creates_initial_commit(self, temp_dir):
+        """Verify initial commit is created with message."""
+        ws = os.path.join(temp_dir, "SwarmWS")
+        os.makedirs(ws)
+        manager = SwarmWorkspaceManager()
+        manager._ensure_git_repo(ws)
+        result = subprocess.run(
+            ["git", "log", "--oneline", "-1"],
+            cwd=ws, capture_output=True, text=True,
+        )
+        assert "Initial SwarmWS state" in result.stdout
+
+    def test_skips_if_git_already_exists(self, temp_dir):
+        """Verify no-op when .git/ already exists."""
+        ws = os.path.join(temp_dir, "SwarmWS")
+        os.makedirs(os.path.join(ws, ".git"))
+        manager = SwarmWorkspaceManager()
+        result = manager._ensure_git_repo(ws)
+        assert result is True
+
+    def test_returns_false_when_git_not_installed(self, temp_dir):
+        """Verify graceful handling when git binary is missing."""
+        ws = os.path.join(temp_dir, "SwarmWS")
+        os.makedirs(ws)
+        manager = SwarmWorkspaceManager()
+        with patch("core.swarm_workspace_manager.subprocess.run",
+                    side_effect=FileNotFoundError("git not found")):
+            result = manager._ensure_git_repo(ws)
+        assert result is False
+
+    def test_returns_false_on_subprocess_error(self, temp_dir):
+        """Verify graceful handling when git command fails."""
+        ws = os.path.join(temp_dir, "SwarmWS")
+        os.makedirs(ws)
+        manager = SwarmWorkspaceManager()
+        with patch("core.swarm_workspace_manager.subprocess.run",
+                    side_effect=subprocess.CalledProcessError(1, "git")):
+            result = manager._ensure_git_repo(ws)
+        assert result is False
+
+    def test_commits_existing_files(self, temp_dir):
+        """Verify existing files are included in initial commit."""
+        ws = os.path.join(temp_dir, "SwarmWS")
+        os.makedirs(os.path.join(ws, "Knowledge"), exist_ok=True)
+        (Path(ws) / "Knowledge" / "notes.md").write_text("hello", encoding="utf-8")
+        manager = SwarmWorkspaceManager()
+        manager._ensure_git_repo(ws)
+        result = subprocess.run(
+            ["git", "show", "--stat", "--oneline", "HEAD"],
+            cwd=ws, capture_output=True, text=True,
+        )
+        assert "Knowledge/notes.md" in result.stdout
 
 
 def _collect_all_files(root: Path) -> dict[str, str]:

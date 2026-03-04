@@ -7,7 +7,6 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 from database import db
-from core.context_manager import ContextManager
 from tests.helpers import now_iso, create_workspace_with_path
 
 

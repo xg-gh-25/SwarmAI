@@ -16,6 +16,8 @@ Simplify SwarmWS to a clean, git-backed user workspace. Remove all legacy system
 6. `PROJECT_SYSTEM_FOLDERS` SHALL be empty
 7. `create_folder_structure()` SHALL only create `Knowledge/` and `Projects/` + `.gitignore`
 8. `verify_integrity()` SHALL only check `Knowledge/` and `Projects/` exist
+9. The workspace tree endpoint `_should_include()` SHALL allow `.context` directory to be visible in the explorer
+10. The `is_system_managed` field SHALL be removed from the workspace tree endpoint — no lock badges, all files are user-manageable
 
 ### Requirement 2: Git Repository
 
@@ -33,10 +35,10 @@ Simplify SwarmWS to a clean, git-backed user workspace. Remove all legacy system
 
 ### Requirement 4: Context Refresh (Background, Non-Disruptive)
 
-1. Context refresh SHALL run in the background and SHALL NOT affect any running chat session
-2. When `.context/` source files change, the L1 cache (`L1_SYSTEM_PROMPTS.md`) SHALL be regenerated
-3. Running sessions SHALL keep their existing SDK client and frozen system prompt — no interruption
-4. Only NEW sessions SHALL pick up refreshed context (via `ContextDirectoryLoader.load_all()` at session creation)
+1. `.context/` SHALL live inside SwarmWS (`~/.swarm-ai/SwarmWS/.context/`) so it is git-tracked
+2. L1 cache freshness SHALL use `git diff --quiet .context/` when git is available, with mtime fallback
+3. Context refresh SHALL only affect NEW sessions — running sessions keep their frozen prompt
+4. Running sessions SHALL NOT be interrupted or restarted when `.context/` files change
 5. The refresh SHALL be invisible to the user — no UI indication, no session restart
 
 ### Requirement 5: Delete All Legacy Context Code

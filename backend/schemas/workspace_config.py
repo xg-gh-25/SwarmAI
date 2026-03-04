@@ -32,9 +32,8 @@ class TreeNodeResponse(BaseModel):
     """A single node in the workspace filesystem tree.
 
     Used by ``GET /api/workspace/tree`` to return the SwarmWS directory
-    structure as nested JSON.  Each node carries a ``is_system_managed``
-    flag so the frontend can show lock badges and suppress delete/rename
-    actions on system-owned items.
+    structure as nested JSON.  All files are user-manageable — no lock
+    badges or system-managed restrictions.
 
     Requirements: 10.1, 15.1
     """
@@ -42,7 +41,6 @@ class TreeNodeResponse(BaseModel):
     name: str
     path: str                          # relative to workspace root
     type: Literal["file", "directory"]
-    is_system_managed: bool
     children: Optional[list["TreeNodeResponse"]] = None
 
 
