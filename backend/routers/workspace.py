@@ -221,13 +221,15 @@ async def browse_filesystem(request: WorkspaceListRequest):
     """
     import os
 
-    # Use home directory as default starting point and security boundary
+    # Use ~/.swarm-ai/ as default starting point to avoid macOS TCC prompts
+    # for protected directories (Desktop, Documents, etc.)
     home_dir = Path.home()
+    default_dir = home_dir / ".swarm-ai"
 
     # Parse the requested path
     requested_path = request.path
     if requested_path == "." or requested_path == "/" or not requested_path:
-        target_path = home_dir
+        target_path = default_dir
     else:
         # Handle paths - could be absolute or relative to home
         if requested_path.startswith("/"):
