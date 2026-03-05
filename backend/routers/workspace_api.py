@@ -193,7 +193,10 @@ def _should_include(name: str) -> bool:
 
 
 def _get_git_status(workspace_root: Path) -> dict[str, str]:
-    """Run ``git status --porcelain`` and return a dict of {relative_path: status}.
+    """Run ``git status --porcelain -z`` and return a dict of {relative_path: status}.
+
+    Uses ``-z`` for NUL-separated output to avoid quoting of paths with spaces
+    or special characters.
 
     Status values match the GitStatus type on the frontend:
     - 'added', 'modified', 'deleted', 'renamed', 'untracked', 'conflicting'
@@ -206,7 +209,7 @@ def _get_git_status(workspace_root: Path) -> dict[str, str]:
 
     try:
         result = subprocess.run(
-            ["git", "status", "--porcelain", "-uall"],
+            ["git", "status", "--porcelain", "-z", "-uall"],
             cwd=str(workspace_root),
             capture_output=True,
             text=True,
@@ -218,18 +221,26 @@ def _get_git_status(workspace_root: Path) -> dict[str, str]:
         return {}
 
     status_map: dict[str, str] = {}
-    for line in result.stdout.splitlines():
-        if len(line) < 4:
+    # -z output: entries separated by NUL, renames have two NUL-separated paths
+    entries = result.stdout.split("\0")
+    i = 0
+    while i < len(entries):
+        entry = entries[i]
+        if len(entry) < 4:
+            i += 1
             continue
-        xy = line[:2]
-        filepath = line[3:]
 
-        # Handle renames: "R  old -> new"
-        if " -> " in filepath:
-            filepath = filepath.split(" -> ", 1)[1]
+        xy = entry[:2]
+        filepath = entry[3:]
+
+        # Renames: the next NUL-separated entry is the destination path
+        if xy[0] == "R" or xy[1] == "R":
+            i += 1
+            if i < len(entries):
+                filepath = entries[i]  # use the destination (new) path
 
         # Normalize path separators
-        filepath = filepath.strip().replace("\\", "/")
+        filepath = filepath.replace("\\", "/")
 
         # Map git status codes to our GitStatus enum
         if "U" in xy or (xy[0] == "A" and xy[1] == "A") or (xy[0] == "D" and xy[1] == "D"):
@@ -246,6 +257,8 @@ def _get_git_status(workspace_root: Path) -> dict[str, str]:
             status_map[filepath] = "added"
         elif "M" in xy or "T" in xy:
             status_map[filepath] = "modified"
+
+        i += 1
 
     return status_map
 
