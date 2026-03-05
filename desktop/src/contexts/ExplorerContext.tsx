@@ -364,7 +364,6 @@ export function ExplorerProvider({ children }: ExplorerProviderProps) {
   }, []);
 
   const refreshTree = useCallback(async () => {
-    setIsLoading(true);
     setError(null);
     try {
       const tree = await workspaceService.refreshTree();
@@ -373,8 +372,6 @@ export function ExplorerProvider({ children }: ExplorerProviderProps) {
       const message =
         err instanceof Error ? err.message : 'Failed to load workspace tree';
       setError(message);
-    } finally {
-      setIsLoading(false);
     }
   }, []);
 
