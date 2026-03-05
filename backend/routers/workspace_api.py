@@ -21,8 +21,8 @@ Public endpoints:
 Helper functions:
 
 - ``_should_include``      — Hidden-file filter (excludes dotfiles except .project.json)
-- ``_compute_max_mtime``   — Recursive max mtime for ETag computation
-- ``_build_tree``          — Recursive tree builder with depth bounding and sorting
+- ``_get_git_status``      — Run ``git status --porcelain`` and return {path: status} dict
+- ``_build_tree``          — Recursive tree builder with depth bounding, sorting, and git status
 
 Helper models (request bodies):
 
@@ -190,44 +190,6 @@ def _should_include(name: str) -> bool:
     if name in _HIDDEN_DIRS:
         return False
     return True
-
-
-def _compute_max_mtime(root: Path, depth: int) -> float:
-    """Recursively compute the maximum mtime across workspace entries.
-
-    Walks the filesystem up to *depth* levels, applying the same hidden-file
-    exclusion rules as the tree builder.  Returns the maximum ``st_mtime``
-    found, or ``0.0`` if the root does not exist.
-    """
-    max_mtime: float = 0.0
-
-    try:
-        stat = root.stat()
-        max_mtime = max(max_mtime, stat.st_mtime)
-    except OSError:
-        return 0.0
-
-    if not root.is_dir() or depth <= 0:
-        return max_mtime
-
-    try:
-        entries = list(root.iterdir())
-    except OSError:
-        return max_mtime
-
-    for entry in entries:
-        if not _should_include(entry.name):
-            continue
-        try:
-            entry_stat = entry.stat()
-            max_mtime = max(max_mtime, entry_stat.st_mtime)
-        except OSError:
-            continue
-        if entry.is_dir() and depth > 1:
-            child_mtime = _compute_max_mtime(entry, depth - 1)
-            max_mtime = max(max_mtime, child_mtime)
-
-    return max_mtime
 
 
 def _get_git_status(workspace_root: Path) -> dict[str, str]:
@@ -399,11 +361,10 @@ async def get_workspace_tree(
             detail="Workspace root directory does not exist",
         )
 
-    # Compute ETag from recursive max mtime + git status hash
-    max_mtime = _compute_max_mtime(workspace_root, depth)
+    # Compute ETag from git status hash (SwarmWS is fully git-managed)
     git_status = _get_git_status(workspace_root)
-    git_hash = hashlib.md5(json.dumps(sorted(git_status.items())).encode()).hexdigest()[:8]
-    etag = hashlib.md5(f"{max_mtime}:{depth}:{git_hash}".encode()).hexdigest()
+    git_hash = hashlib.md5(json.dumps(sorted(git_status.items())).encode()).hexdigest()
+    etag = hashlib.md5(f"{git_hash}:{depth}".encode()).hexdigest()
     etag_value = f'"{etag}"'
 
     # Check conditional request
