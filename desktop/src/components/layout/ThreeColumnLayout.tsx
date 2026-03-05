@@ -1,7 +1,7 @@
-import { ReactNode, useState, useCallback } from 'react';
+import { ReactNode, useState, useCallback, useRef } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { LayoutProvider, useLayout, LAYOUT_CONSTANTS, ModalType } from '../../contexts/LayoutContext';
-import { ExplorerProvider } from '../../contexts/ExplorerContext';
+import { ExplorerProvider, useTreeData } from '../../contexts/ExplorerContext';
 import { WorkspaceExplorer } from '../workspace-explorer';
 import { ChatDropZone } from '../chat';
 import GlobalSearchBar from './GlobalSearchBar';
@@ -197,9 +197,21 @@ function MainChatPanel({ children }: MainChatPanelProps) {
   );
 }
 
+/** Invisible bridge that captures refreshTree from ExplorerContext into a ref
+ *  so that code outside the provider (e.g. FileEditorModal save handler) can
+ *  trigger a tree refresh. */
+function RefreshTreeBridge({ refreshTreeRef }: { refreshTreeRef: React.MutableRefObject<(() => Promise<void>) | null> }) {
+  const { refreshTree } = useTreeData();
+  refreshTreeRef.current = refreshTree;
+  return null;
+}
+
 // Inner layout component that uses the context
 function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
   const { activeModal, closeModal, workspaceSettingsId, attachFile } = useLayout();
+
+  /** Ref to hold the ExplorerContext refreshTree function (set by bridge component inside provider). */
+  const refreshTreeRef = useRef<(() => Promise<void>) | null>(null);
 
   // File editor state - Requirement 9.1
   const [fileEditorState, setFileEditorState] = useState<{
@@ -272,6 +284,8 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
       await api.put('/workspace/file', { content }, {
         params: { path: fileEditorState.filePath },
       });
+      // Refresh tree to update git status after save
+      refreshTreeRef.current?.();
     } catch (error) {
       console.error('Failed to save file:', error);
       throw error; // Re-throw to keep modal open
@@ -286,6 +300,9 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
   return (
     <div className="flex flex-col h-screen bg-[var(--color-bg)]">
       <ExplorerProvider>
+        {/* Bridge: capture refreshTree from ExplorerContext into the ref */}
+        <RefreshTreeBridge refreshTreeRef={refreshTreeRef} />
+
         {/* Top bar with traffic lights area - draggable */}
         <TopBar />
 
