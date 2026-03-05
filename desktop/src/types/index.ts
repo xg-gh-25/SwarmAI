@@ -740,11 +740,33 @@ export interface ProjectUpdateRequest {
  * - `children` is present only for directory nodes that have been expanded
  *   within the requested depth.
  */
+export /**
+ * Git status indicator for file tree nodes.
+ *
+ * - `added`       — newly staged file (green)
+ * - `modified`    — changed since last commit (amber)
+ * - `deleted`     — removed (red)
+ * - `renamed`     — moved or renamed (teal)
+ * - `untracked`   — new file not yet staged (green, dimmer)
+ * - `conflicting` — merge conflict (bright red)
+ * - `ignored`     — git-ignored (gray)
+ */
+type GitStatus =
+  | 'added'
+  | 'modified'
+  | 'deleted'
+  | 'renamed'
+  | 'untracked'
+  | 'conflicting'
+  | 'ignored';
+
 export interface TreeNode {
   name: string;
   path: string;
   type: 'file' | 'directory';
   children?: TreeNode[];
+  /** Git status of this file/folder, if known. */
+  gitStatus?: GitStatus;
 }
 
 
