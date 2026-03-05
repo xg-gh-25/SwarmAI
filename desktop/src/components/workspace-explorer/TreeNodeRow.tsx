@@ -25,6 +25,7 @@
 
 import React, { useCallback } from 'react';
 import type { TreeNode, GitStatus } from '../../types';
+import { fileIcon, fileIconColor, gitStatusColor, gitStatusBadge } from '../../utils/fileUtils';
 
 /* ------------------------------------------------------------------ */
 /*  Props                                                              */
@@ -65,98 +66,7 @@ function isHiddenNode(name: string): boolean {
   return HIDDEN_PATTERNS.some((re) => re.test(name));
 }
 
-/** Map git status to the CSS variable name for text/icon color. */
-function gitStatusColor(status?: GitStatus): string | undefined {
-  if (!status) return undefined;
-  const map: Record<GitStatus, string> = {
-    added: 'var(--color-git-added)',
-    modified: 'var(--color-git-modified)',
-    deleted: 'var(--color-git-deleted)',
-    renamed: 'var(--color-git-renamed)',
-    untracked: 'var(--color-git-untracked)',
-    conflicting: 'var(--color-git-conflicting)',
-    ignored: 'var(--color-git-ignored)',
-  };
-  return map[status];
-}
 
-/** Map git status to a short badge label (like VS Code / Kiro). */
-function gitStatusBadge(status?: GitStatus): { label: string; color: string; bg: string } | null {
-  if (!status) return null;
-  const badges: Record<GitStatus, { label: string; color: string; bg: string }> = {
-    added:       { label: 'A', color: 'var(--color-git-added)',       bg: 'var(--color-git-badge-added-bg)' },
-    modified:    { label: 'M', color: 'var(--color-git-modified)',    bg: 'var(--color-git-badge-modified-bg)' },
-    deleted:     { label: 'D', color: 'var(--color-git-deleted)',     bg: 'var(--color-git-badge-deleted-bg)' },
-    renamed:     { label: 'R', color: 'var(--color-git-renamed)',     bg: 'var(--color-git-badge-renamed-bg)' },
-    untracked:   { label: 'U', color: 'var(--color-git-untracked)',   bg: 'var(--color-git-badge-untracked-bg)' },
-    conflicting: { label: 'C', color: 'var(--color-git-conflicting)', bg: 'var(--color-git-badge-conflicting-bg)' },
-    ignored:     { label: 'I', color: 'var(--color-git-ignored)',     bg: 'var(--color-git-badge-ignored-bg, transparent)' },
-  };
-  return badges[status];
-}
-
-/** Return a Material Symbols icon name based on file extension. */
-function fileIcon(name: string): string {
-  const ext = name.split('.').pop()?.toLowerCase();
-  switch (ext) {
-    case 'md':
-      return 'description';
-    case 'json':
-      return 'data_object';
-    case 'ts':
-    case 'tsx':
-    case 'js':
-    case 'jsx':
-      return 'javascript';
-    case 'py':
-      return 'code';
-    case 'css':
-    case 'scss':
-      return 'style';
-    case 'html':
-      return 'html';
-    case 'svg':
-    case 'png':
-    case 'jpg':
-    case 'jpeg':
-    case 'gif':
-      return 'image';
-    default:
-      return 'draft';
-  }
-}
-
-/** Return a CSS variable for the file-type icon color. */
-function fileIconColor(name: string): string {
-  const ext = name.split('.').pop()?.toLowerCase();
-  switch (ext) {
-    case 'ts':
-    case 'tsx':
-      return 'var(--color-icon-typescript)';
-    case 'js':
-    case 'jsx':
-      return 'var(--color-icon-javascript)';
-    case 'py':
-      return 'var(--color-icon-python)';
-    case 'css':
-    case 'scss':
-      return 'var(--color-icon-css)';
-    case 'html':
-      return 'var(--color-icon-html)';
-    case 'json':
-      return 'var(--color-icon-json)';
-    case 'md':
-      return 'var(--color-icon-markdown)';
-    case 'svg':
-    case 'png':
-    case 'jpg':
-    case 'jpeg':
-    case 'gif':
-      return 'var(--color-icon-image)';
-    default:
-      return 'var(--color-icon-default)';
-  }
-}
 
 /* ------------------------------------------------------------------ */
 /*  Component                                                          */
