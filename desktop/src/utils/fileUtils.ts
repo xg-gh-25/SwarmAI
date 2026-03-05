@@ -78,6 +78,24 @@ export function fileIcon(name: string): string {
     case 'jpeg':
     case 'gif':
       return 'image';
+    case 'pdf':
+      return 'picture_as_pdf';
+    case 'yaml':
+    case 'yml':
+    case 'toml':
+    case 'ini':
+    case 'env':
+      return 'settings';
+    case 'sh':
+    case 'bash':
+    case 'zsh':
+      return 'terminal';
+    case 'lock':
+      return 'lock';
+    case 'log':
+      return 'receipt_long';
+    case 'txt':
+      return 'article';
     default:
       return 'draft';
   }
@@ -110,6 +128,8 @@ export function fileIconColor(name: string): string {
     case 'jpeg':
     case 'gif':
       return 'var(--color-icon-image)';
+    case 'pdf':
+      return 'var(--color-status-error)';
     default:
       return 'var(--color-icon-default)';
   }
