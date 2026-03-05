@@ -490,9 +490,9 @@ export default function FileEditorModal({
     }
   }, [isOpen, initialContent]);
 
-  // Update syntax highlighting when content changes
+  // Update syntax highlighting when content changes or returning from diff view
   useEffect(() => {
-    if (highlightRef.current && isOpen) {
+    if (highlightRef.current && isOpen && !showDiff) {
       const escaped = content
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
@@ -505,7 +505,7 @@ export default function FileEditorModal({
         highlightRef.current.textContent = content + '\n';
       }
     }
-  }, [content, language, isOpen]);
+  }, [content, language, isOpen, showDiff]);
 
   // Handle escape key — close search first, then modal
   useEffect(() => {
@@ -853,14 +853,16 @@ export default function FileEditorModal({
               className={clsx(
                 'flex items-center gap-1 px-2 py-1 rounded transition-colors',
                 showDiff
-                  ? 'bg-[var(--color-primary)] bg-opacity-20 text-[var(--color-primary)]'
+                  ? 'bg-blue-500/20 text-[var(--color-primary)] font-medium'
                   : 'hover:bg-[var(--color-hover)] text-[var(--color-text-muted)]',
                 !isDirty && !showDiff && 'opacity-40 cursor-not-allowed'
               )}
               data-testid="show-changes-toggle"
             >
-              <span className="material-symbols-outlined text-sm">difference</span>
-              {showDiff ? 'Hide Changes' : 'Show Changes'}
+              <span className="material-symbols-outlined text-sm">
+                {showDiff ? 'edit' : 'difference'}
+              </span>
+              {showDiff ? 'Back to Edit' : 'Show Changes'}
             </button>
           </div>
           <div className="flex items-center gap-2">
