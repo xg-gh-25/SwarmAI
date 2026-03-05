@@ -96,6 +96,22 @@ export function fileIcon(name: string): string {
       return 'receipt_long';
     case 'txt':
       return 'article';
+    case 'doc':
+    case 'docx':
+      return 'description';
+    case 'xls':
+    case 'xlsx':
+    case 'csv':
+      return 'table_chart';
+    case 'ppt':
+    case 'pptx':
+      return 'slideshow';
+    case 'zip':
+    case 'tar':
+    case 'gz':
+    case 'rar':
+    case '7z':
+      return 'folder_zip';
     default:
       return 'draft';
   }
@@ -130,6 +146,16 @@ export function fileIconColor(name: string): string {
       return 'var(--color-icon-image)';
     case 'pdf':
       return 'var(--color-status-error)';
+    case 'doc':
+    case 'docx':
+      return 'var(--color-icon-typescript)';
+    case 'xls':
+    case 'xlsx':
+    case 'csv':
+      return 'var(--color-status-success)';
+    case 'ppt':
+    case 'pptx':
+      return 'var(--color-status-warning)';
     default:
       return 'var(--color-icon-default)';
   }
