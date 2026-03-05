@@ -374,10 +374,29 @@ async def get_workspace_tree(
             detail="Workspace root directory does not exist",
         )
 
-    # Compute ETag from git status hash (SwarmWS is fully git-managed)
+    # Compute ETag from git status + filesystem structure
+    # Git status captures modifications; file listing captures adds/deletes
     git_status = _get_git_status(workspace_root)
     git_hash = hashlib.md5(json.dumps(sorted(git_status.items())).encode()).hexdigest()
-    etag = hashlib.md5(f"{git_hash}:{depth}".encode()).hexdigest()
+
+    # Quick filesystem fingerprint: sorted list of all entry names at each level
+    # This changes when files are added, deleted, or renamed
+    def _fs_fingerprint(root: Path, depth: int) -> str:
+        if depth <= 0 or not root.is_dir():
+            return ""
+        try:
+            names = sorted(e.name for e in root.iterdir() if _should_include(e.name))
+        except OSError:
+            return ""
+        parts = [",".join(names)]
+        for name in names:
+            child = root / name
+            if child.is_dir() and depth > 1:
+                parts.append(f"{name}:{_fs_fingerprint(child, depth - 1)}")
+        return "|".join(parts)
+
+    fs_hash = hashlib.md5(_fs_fingerprint(workspace_root, depth).encode()).hexdigest()[:8]
+    etag = hashlib.md5(f"{git_hash}:{fs_hash}:{depth}".encode()).hexdigest()
     etag_value = f'"{etag}"'
 
     # Check conditional request
