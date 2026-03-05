@@ -340,6 +340,81 @@ async def get_workspace_tree(
     )
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Workspace file content endpoint
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@router.get("/workspace/file")
+async def get_workspace_file(
+    path: str = Query(..., description="Relative path within the workspace"),
+):
+    """Read a file's text content by its workspace-relative path.
+
+    Used by the explorer's file editor modal to open files for viewing
+    and editing.  The ``path`` parameter is the same relative path
+    returned by ``GET /workspace/tree``.
+
+    Returns ``{ "content": "<utf-8 text>" }`` on success.
+    Returns 404 if the file does not exist or is outside the workspace.
+    Returns 400 if the path attempts directory traversal.
+    """
+    # Reject obvious traversal attempts
+    if ".." in path.split("/"):
+        raise HTTPException(status_code=400, detail="Path traversal not allowed")
+
+    expanded_path = await _get_workspace_path()
+    workspace_root = Path(expanded_path)
+    target = (workspace_root / path).resolve()
+
+    # Ensure resolved path is still under workspace root
+    if not str(target).startswith(str(workspace_root.resolve())):
+        raise HTTPException(status_code=400, detail="Path outside workspace")
+
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail=f"File not found: {path}")
+
+    try:
+        content = target.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=400, detail="File is not valid UTF-8 text")
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to read file: {exc}")
+
+    return {"content": content, "path": path, "name": target.name}
+
+
+@router.put("/workspace/file")
+async def put_workspace_file(
+    path: str = Query(..., description="Relative path within the workspace"),
+    body: dict = None,
+):
+    """Write text content to a file by its workspace-relative path.
+
+    Used by the explorer's file editor modal to save edited files.
+    Expects ``{ "content": "<utf-8 text>" }`` in the request body.
+    """
+    if body is None or "content" not in body:
+        raise HTTPException(status_code=400, detail="Request body must include 'content'")
+
+    if ".." in path.split("/"):
+        raise HTTPException(status_code=400, detail="Path traversal not allowed")
+
+    expanded_path = await _get_workspace_path()
+    workspace_root = Path(expanded_path)
+    target = (workspace_root / path).resolve()
+
+    if not str(target).startswith(str(workspace_root.resolve())):
+        raise HTTPException(status_code=400, detail="Path outside workspace")
+
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(body["content"], encoding="utf-8")
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to write file: {exc}")
+
+    return {"success": True, "path": path}
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Project endpoints — REMOVED
