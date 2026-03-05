@@ -204,6 +204,29 @@ const TreeNodeRow: React.FC<TreeNodeRowProps> = React.memo(function TreeNodeRow(
     [onContextMenu],
   );
 
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        if (isDirectory) {
+          onToggle();
+        } else {
+          onDoubleClick();
+        }
+      } else if (e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10')) {
+        e.preventDefault();
+        const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+        onContextMenu({
+          clientX: rect.left + rect.width / 2,
+          clientY: rect.top + rect.height / 2,
+          preventDefault: () => {},
+          stopPropagation: () => {},
+        } as unknown as React.MouseEvent);
+      }
+    },
+    [isDirectory, onToggle, onDoubleClick, onContextMenu],
+  );
+
   const handleChevronClick = useCallback(
     (e: React.MouseEvent) => {
       e.stopPropagation();
@@ -274,6 +297,7 @@ const TreeNodeRow: React.FC<TreeNodeRowProps> = React.memo(function TreeNodeRow(
       onClick={handleClick}
       onDoubleClick={handleDoubleClick}
       onContextMenu={handleContextMenu}
+      onKeyDown={handleKeyDown}
     >
       {/* Indent guides — one vertical line per ancestor depth */}
       {Array.from({ length: depth }, (_, i) => (

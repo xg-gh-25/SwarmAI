@@ -23,6 +23,8 @@ interface FileContextMenuProps {
   y: number;
   /** Callback when menu should close */
   onClose: () => void;
+  /** Callback when "Open File" is selected (file nodes only) */
+  onOpenFile?: (item: FileTreeItem) => void;
   /** Callback when "Attach to Chat" is selected */
   onAttachToChat?: (item: FileTreeItem) => void;
   /** Callback when rename is requested */
@@ -31,6 +33,8 @@ interface FileContextMenuProps {
   onDelete?: (item: FileTreeItem) => void;
   /** Callback when file system changes (for refresh) */
   onFileSystemChange?: () => void;
+  /** Ref to the element that should receive focus when the menu closes via Escape (Requirement 10.4) */
+  returnFocusRef?: React.RefObject<HTMLElement | null>;
 }
 
 interface MenuItem {
@@ -48,10 +52,12 @@ export default function FileContextMenu({
   x,
   y,
   onClose,
+  onOpenFile,
   onAttachToChat,
   onRename,
   onDelete,
   onFileSystemChange,
+  returnFocusRef,
 }: FileContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -68,7 +74,27 @@ export default function FileContextMenu({
 
     const handleEscape = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
+        returnFocusRef?.current?.focus();
         onClose();
+        return;
+      }
+
+      const items = menuRef.current?.querySelectorAll('button[role="menuitem"]:not(:disabled)');
+      if (!items?.length) return;
+      const itemsArray = Array.from(items) as HTMLElement[];
+      const currentIndex = itemsArray.indexOf(document.activeElement as HTMLElement);
+
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        const next = currentIndex < itemsArray.length - 1 ? currentIndex + 1 : 0;
+        itemsArray[next].focus();
+      } else if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        const prev = currentIndex > 0 ? currentIndex - 1 : itemsArray.length - 1;
+        itemsArray[prev].focus();
+      } else if (event.key === 'Enter' && currentIndex >= 0) {
+        event.preventDefault();
+        itemsArray[currentIndex].click();
       }
     };
 
@@ -83,7 +109,7 @@ export default function FileContextMenu({
       document.removeEventListener('mousedown', handleClickOutside);
       document.removeEventListener('keydown', handleEscape);
     };
-  }, [onClose]);
+  }, [onClose, returnFocusRef]);
 
   // Adjust menu position to stay within viewport
   useEffect(() => {
@@ -105,6 +131,12 @@ export default function FileContextMenu({
     }
   }, [x, y]);
 
+  // Auto-focus the first menu item when the menu opens (Requirement 10.3)
+  useEffect(() => {
+    const firstItem = menuRef.current?.querySelector('button[role="menuitem"]') as HTMLElement | null;
+    firstItem?.focus();
+  }, []);
+
   // Copy path to clipboard
   const handleCopyPath = useCallback(async () => {
     try {
@@ -114,6 +146,12 @@ export default function FileContextMenu({
       console.error('Failed to copy path:', error);
     }
   }, [item.path, onClose]);
+
+  // Handle open file
+  const handleOpenFile = useCallback(() => {
+    onOpenFile?.(item);
+    onClose();
+  }, [item, onOpenFile, onClose]);
 
   // Handle attach to chat
   const handleAttachToChat = useCallback(() => {
@@ -165,6 +203,16 @@ export default function FileContextMenu({
 
   // Build menu items based on item type
   const menuItems: MenuItem[] = [];
+
+  // Open File — only for files (Requirements 2.1, 2.3)
+  if (item.type === 'file') {
+    menuItems.push({
+      id: 'open',
+      label: 'Open File',
+      icon: 'open_in_new',
+      action: handleOpenFile,
+    });
+  }
 
   // Attach to Chat - only for files (Requirement 6.1)
   if (item.type === 'file') {

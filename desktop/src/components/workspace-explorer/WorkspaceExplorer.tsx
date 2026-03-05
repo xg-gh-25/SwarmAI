@@ -40,9 +40,11 @@ import type { FileTreeItem } from './FileTreeNode';
 export interface WorkspaceExplorerProps {
   /** Callback when a file node is double-clicked (e.g., to open in editor). */
   onFileDoubleClick?: (node: FileTreeItem) => void;
+  /** Callback when "Attach to Chat" is selected from the context menu. */
+  onAttachToChat?: (item: FileTreeItem) => void;
 }
 
-export default function WorkspaceExplorer({ onFileDoubleClick }: WorkspaceExplorerProps) {
+export default function WorkspaceExplorer({ onFileDoubleClick, onAttachToChat }: WorkspaceExplorerProps) {
   const {
     workspaceExplorerCollapsed,
     workspaceExplorerWidth,
@@ -148,7 +150,7 @@ export default function WorkspaceExplorer({ onFileDoubleClick }: WorkspaceExplor
           <AutoSizer
             renderProp={({ height, width }) => {
               if (height === undefined || width === undefined) return null;
-              return <VirtualizedTree height={height} width={width} onFileDoubleClick={onFileDoubleClick} />;
+              return <VirtualizedTree height={height} width={width} onFileDoubleClick={onFileDoubleClick} onAttachToChat={onAttachToChat} />;
             }}
           />
         )}
