@@ -434,6 +434,47 @@ export default function FileEditorModal({
   const isDirty = isDirtyState(content, originalContent);
   const language = detectLanguage(fileName);
 
+  // --- Handlers (defined before useEffects that reference them) ---
+
+  const handleScroll = useCallback(() => {
+    if (textareaRef.current && highlightRef.current) {
+      const top = textareaRef.current.scrollTop;
+      highlightRef.current.scrollTop = top;
+      highlightRef.current.scrollLeft = textareaRef.current.scrollLeft;
+      setScrollTop(top);
+    }
+  }, []);
+
+  const handleCloseAttempt = useCallback(() => {
+    if (isDirty) {
+      setShowUnsavedWarning(true);
+    } else {
+      onClose();
+    }
+  }, [isDirty, onClose]);
+
+  const handleSave = useCallback(async () => {
+    setIsSaving(true);
+    try {
+      await onSave(content);
+      setOriginalContent(content);
+      onClose();
+    } catch (error) {
+      console.error('Failed to save file:', error);
+    } finally {
+      setIsSaving(false);
+    }
+  }, [content, onSave, onClose]);
+
+  const handleSearchClose = useCallback(() => {
+    setShowSearch(false);
+    setSearchQuery('');
+    setCurrentMatchIndex(0);
+    textareaRef.current?.focus();
+  }, []);
+
+  // --- useEffects ---
+
   // Reset state when modal opens with new content
   useEffect(() => {
     if (isOpen) {
@@ -452,7 +493,6 @@ export default function FileEditorModal({
   // Update syntax highlighting when content changes
   useEffect(() => {
     if (highlightRef.current && isOpen) {
-      // Escape HTML entities for display
       const escaped = content
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
@@ -460,9 +500,8 @@ export default function FileEditorModal({
       
       try {
         const highlighted = hljs.highlight(escaped, { language }).value;
-        highlightRef.current.innerHTML = highlighted + '\n'; // Add newline for proper scrolling
+        highlightRef.current.innerHTML = highlighted + '\n';
       } catch {
-        // Fallback to plain text if highlighting fails
         highlightRef.current.textContent = content + '\n';
       }
     }
@@ -489,7 +528,7 @@ export default function FileEditorModal({
       document.removeEventListener('keydown', handleEscape);
       document.body.style.overflow = '';
     };
-  }, [isOpen, isDirty, showSearch]);
+  }, [isOpen, isDirty, showSearch, handleCloseAttempt, handleSearchClose]);
 
   // Handle Ctrl+S / Cmd+S to save (disabled in diff mode)
   useEffect(() => {
@@ -507,39 +546,7 @@ export default function FileEditorModal({
     return () => {
       document.removeEventListener('keydown', handleKeyDown);
     };
-  }, [isOpen, content, showDiff]);
-
-  // Sync scroll between textarea, highlight, and gutter
-  const handleScroll = useCallback(() => {
-    if (textareaRef.current && highlightRef.current) {
-      const top = textareaRef.current.scrollTop;
-      highlightRef.current.scrollTop = top;
-      highlightRef.current.scrollLeft = textareaRef.current.scrollLeft;
-      setScrollTop(top);
-    }
-  }, []);
-
-  const handleCloseAttempt = useCallback(() => {
-    if (isDirty) {
-      setShowUnsavedWarning(true);
-    } else {
-      onClose();
-    }
-  }, [isDirty, onClose]);
-
-  const handleSave = useCallback(async () => {
-    setIsSaving(true);
-    try {
-      await onSave(content);
-      setOriginalContent(content);
-      onClose();
-    } catch (error) {
-      console.error('Failed to save file:', error);
-      // Keep modal open on error
-    } finally {
-      setIsSaving(false);
-    }
-  }, [content, onSave, onClose]);
+  }, [isOpen, showDiff, handleSave]);
 
   const handleCancel = useCallback(() => {
     if (isDirty) {
@@ -623,13 +630,6 @@ export default function FileEditorModal({
     if (searchMatches.length === 0) return;
     setCurrentMatchIndex((prev) => (prev - 1 + searchMatches.length) % searchMatches.length);
   }, [searchMatches.length]);
-
-  const handleSearchClose = useCallback(() => {
-    setShowSearch(false);
-    setSearchQuery('');
-    setCurrentMatchIndex(0);
-    textareaRef.current?.focus();
-  }, []);
 
   // --- Cmd+F / Ctrl+F keyboard shortcut (Task 9.3) ---
 
