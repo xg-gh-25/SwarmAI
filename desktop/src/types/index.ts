@@ -653,20 +653,6 @@ export interface RunningTaskCount {
 
 // ============== Swarm Workspace Types ==============
 
-/** @deprecated Use WorkspaceConfig instead. Kept for backward compat with useChatSession. */
-export interface SwarmWorkspace {
-  id: string;
-  name: string;
-  filePath: string;
-  context: string;
-  icon?: string;
-  isDefault: boolean;
-  isArchived: boolean;
-  archivedAt: string | null;
-  createdAt: string;
-  updatedAt: string;
-}
-
 // ============== Workspace Config Types (Single-Workspace Model) ==============
 
 /** Workspace configuration for the singleton SwarmWS. */
