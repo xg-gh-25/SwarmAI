@@ -24,7 +24,7 @@
  */
 
 import React, { useCallback } from 'react';
-import type { TreeNode, GitStatus } from '../../types';
+import type { TreeNode } from '../../types';
 import { fileIcon, fileIconColor, gitStatusColor, gitStatusBadge } from '../../utils/fileUtils';
 
 /* ------------------------------------------------------------------ */
