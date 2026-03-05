@@ -90,9 +90,39 @@ function backtrackLCS(
  *
  * Line numbers are 1-based.
  */
+/**
+ * Simple sequential diff for large files (>5000 lines).
+ * Compares lines one-by-one — O(n) memory, O(n) time.
+ * Less accurate than LCS but avoids O(m×n) memory allocation.
+ */
+function sequentialDiff(oldLines: string[], newLines: string[]): DiffLine[] {
+  const result: DiffLine[] = [];
+  const maxLen = Math.max(oldLines.length, newLines.length);
+  for (let i = 0; i < maxLen; i++) {
+    const oldLine = i < oldLines.length ? oldLines[i] : undefined;
+    const newLine = i < newLines.length ? newLines[i] : undefined;
+    if (oldLine !== undefined && newLine !== undefined && oldLine === newLine) {
+      result.push({ type: 'unchanged', content: oldLine, oldLineNumber: i + 1, newLineNumber: i + 1 });
+    } else {
+      if (oldLine !== undefined) {
+        result.push({ type: 'removed', content: oldLine, oldLineNumber: i + 1 });
+      }
+      if (newLine !== undefined) {
+        result.push({ type: 'added', content: newLine, newLineNumber: i + 1 });
+      }
+    }
+  }
+  return result;
+}
+
 export function computeLineDiff(oldText: string, newText: string): DiffLine[] {
   const oldLines = oldText.split('\n');
   const newLines = newText.split('\n');
+
+  // For very large files, fall back to sequential comparison to avoid O(m×n) memory
+  if (oldLines.length > 5000 || newLines.length > 5000) {
+    return sequentialDiff(oldLines, newLines);
+  }
 
   const dp = buildLCSTable(oldLines, newLines);
   const lcs = backtrackLCS(dp, oldLines, newLines);
