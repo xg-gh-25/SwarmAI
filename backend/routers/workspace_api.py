@@ -399,16 +399,18 @@ async def get_workspace_tree(
             detail="Workspace root directory does not exist",
         )
 
-    # Compute ETag from recursive max mtime
+    # Compute ETag from recursive max mtime + git status hash
     max_mtime = _compute_max_mtime(workspace_root, depth)
-    etag = hashlib.md5(f"{max_mtime}:{depth}".encode()).hexdigest()
+    git_status = _get_git_status(workspace_root)
+    git_hash = hashlib.md5(json.dumps(sorted(git_status.items())).encode()).hexdigest()[:8]
+    etag = hashlib.md5(f"{max_mtime}:{depth}:{git_hash}".encode()).hexdigest()
     etag_value = f'"{etag}"'
 
     # Check conditional request
     if if_none_match and if_none_match.strip() == etag_value:
         return Response(status_code=304, headers={"ETag": etag_value})
 
-    tree = _build_tree(workspace_root, workspace_root, depth, _get_git_status(workspace_root))
+    tree = _build_tree(workspace_root, workspace_root, depth, git_status)
 
     return Response(
         content=json.dumps(tree),

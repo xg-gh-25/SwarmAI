@@ -295,6 +295,8 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
   // Handle file editor close - Requirement 9.7
   const handleFileEditorClose = useCallback(() => {
     setFileEditorState(null);
+    // Refresh tree to pick up any git status changes from the editing session
+    refreshTreeRef.current?.();
   }, []);
 
   return (
