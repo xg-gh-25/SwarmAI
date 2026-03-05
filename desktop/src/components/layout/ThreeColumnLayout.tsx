@@ -200,7 +200,7 @@ function MainChatPanel({ children }: MainChatPanelProps) {
 /** Invisible bridge that captures refreshTree from ExplorerContext into a ref
  *  so that code outside the provider (e.g. FileEditorModal save handler) can
  *  trigger a tree refresh. */
-function RefreshTreeBridge({ refreshTreeRef }: { refreshTreeRef: React.MutableRefObject<(() => Promise<void>) | null> }) {
+function RefreshTreeBridge({ refreshTreeRef }: { refreshTreeRef: React.MutableRefObject<(() => void) | null> }) {
   const { refreshTree } = useTreeData();
   refreshTreeRef.current = refreshTree;
   return null;
@@ -211,7 +211,7 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
   const { activeModal, closeModal, workspaceSettingsId, attachFile } = useLayout();
 
   /** Ref to hold the ExplorerContext refreshTree function (set by bridge component inside provider). */
-  const refreshTreeRef = useRef<(() => Promise<void>) | null>(null);
+  const refreshTreeRef = useRef<(() => void) | null>(null);
 
   // File editor state - Requirement 9.1
   const [fileEditorState, setFileEditorState] = useState<{
