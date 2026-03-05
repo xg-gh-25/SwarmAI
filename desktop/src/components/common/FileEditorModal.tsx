@@ -426,10 +426,10 @@ export default function FileEditorModal({
   const [currentMatchIndex, setCurrentMatchIndex] = useState(0);
   const [activeLineNumber, setActiveLineNumber] = useState<number | undefined>(undefined);
   const [attachFeedback, setAttachFeedback] = useState(false);
+  const [scrollTop, setScrollTop] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const highlightRef = useRef<HTMLPreElement>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
-  const gutterRef = useRef<HTMLDivElement>(null);
 
   const isDirty = isDirtyState(content, originalContent);
   const language = detectLanguage(fileName);
@@ -574,10 +574,6 @@ export default function FileEditorModal({
     if (!searchQuery) return [];
     return findAllMatches(content, searchQuery);
   }, [content, searchQuery]);
-
-  // --- Scroll sync (updated to include gutter) ---
-
-  const [scrollTop, setScrollTop] = useState(0);
 
   // --- Active line tracking from cursor position ---
 
