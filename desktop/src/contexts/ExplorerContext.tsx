@@ -382,6 +382,22 @@ export function ExplorerProvider({ children }: ExplorerProviderProps) {
     fetchTree();
   }, [fetchTree]);
 
+  // ── Default-expand zone folders on first load (no saved session) ───────
+  useEffect(() => {
+    if (treeData.length === 0) return;
+    // Only seed defaults when there's no saved session (expandedPaths is empty)
+    if (expandedPaths.size > 0) return;
+    const zoneFolders = ['Knowledge', 'Projects'];
+    const defaults = treeData
+      .filter((n) => n.type === 'directory' && zoneFolders.includes(n.name))
+      .map((n) => n.path);
+    if (defaults.length > 0) {
+      setExpandedPaths(new Set(defaults));
+    }
+  // Only run once when treeData first populates
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [treeData]);
+
   // ── Persist session state on change ────────────────────────────────────
   useEffect(() => {
     saveSessionState({
