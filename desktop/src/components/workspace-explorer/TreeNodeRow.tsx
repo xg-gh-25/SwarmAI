@@ -24,7 +24,7 @@
  */
 
 import React, { useCallback } from 'react';
-import type { TreeNode } from '../../types';
+import type { TreeNode, GitStatus } from '../../types';
 
 /* ------------------------------------------------------------------ */
 /*  Props                                                              */
@@ -50,6 +50,50 @@ export interface TreeNodeRowProps {
 
 const INDENT_PX = 16;
 const CHEVRON_TRANSITION = 'transform 150ms ease';
+
+/** Common hidden / generated file patterns that should appear dimmed. */
+const HIDDEN_PATTERNS = [
+  /^\./, // dotfiles: .gitignore, .env, .DS_Store, .eslintrc, etc.
+  /^__/, // __pycache__, __tests__ (convention-based)
+  /\.lock$/, // package-lock.json, yarn.lock, etc.
+  /\.map$/, // source maps
+  /\.d\.ts$/, // type declaration files
+];
+
+/** Returns true if the file/folder name matches a hidden/generated pattern. */
+function isHiddenNode(name: string): boolean {
+  return HIDDEN_PATTERNS.some((re) => re.test(name));
+}
+
+/** Map git status to the CSS variable name for text/icon color. */
+function gitStatusColor(status?: GitStatus): string | undefined {
+  if (!status) return undefined;
+  const map: Record<GitStatus, string> = {
+    added: 'var(--color-git-added)',
+    modified: 'var(--color-git-modified)',
+    deleted: 'var(--color-git-deleted)',
+    renamed: 'var(--color-git-renamed)',
+    untracked: 'var(--color-git-untracked)',
+    conflicting: 'var(--color-git-conflicting)',
+    ignored: 'var(--color-git-ignored)',
+  };
+  return map[status];
+}
+
+/** Map git status to a short badge label (like VS Code / Kiro). */
+function gitStatusBadge(status?: GitStatus): { label: string; color: string; bg: string } | null {
+  if (!status) return null;
+  const badges: Record<GitStatus, { label: string; color: string; bg: string }> = {
+    added:       { label: 'A', color: 'var(--color-git-added)',       bg: 'var(--color-git-badge-added-bg)' },
+    modified:    { label: 'M', color: 'var(--color-git-modified)',    bg: 'var(--color-git-badge-modified-bg)' },
+    deleted:     { label: 'D', color: 'var(--color-git-deleted)',     bg: 'var(--color-git-badge-deleted-bg)' },
+    renamed:     { label: 'R', color: 'var(--color-git-renamed)',     bg: 'var(--color-git-badge-renamed-bg)' },
+    untracked:   { label: 'U', color: 'var(--color-git-untracked)',   bg: 'var(--color-git-badge-untracked-bg)' },
+    conflicting: { label: 'C', color: 'var(--color-git-conflicting)', bg: 'var(--color-git-badge-conflicting-bg)' },
+    ignored:     { label: 'I', color: 'var(--color-git-ignored)',     bg: 'var(--color-git-badge-ignored-bg, transparent)' },
+  };
+  return badges[status];
+}
 
 /** Return a Material Symbols icon name based on file extension. */
 function fileIcon(name: string): string {
@@ -79,6 +123,38 @@ function fileIcon(name: string): string {
       return 'image';
     default:
       return 'draft';
+  }
+}
+
+/** Return a CSS variable for the file-type icon color. */
+function fileIconColor(name: string): string {
+  const ext = name.split('.').pop()?.toLowerCase();
+  switch (ext) {
+    case 'ts':
+    case 'tsx':
+      return 'var(--color-icon-typescript)';
+    case 'js':
+    case 'jsx':
+      return 'var(--color-icon-javascript)';
+    case 'py':
+      return 'var(--color-icon-python)';
+    case 'css':
+    case 'scss':
+      return 'var(--color-icon-css)';
+    case 'html':
+      return 'var(--color-icon-html)';
+    case 'json':
+      return 'var(--color-icon-json)';
+    case 'md':
+      return 'var(--color-icon-markdown)';
+    case 'svg':
+    case 'png':
+    case 'jpg':
+    case 'jpeg':
+    case 'gif':
+      return 'var(--color-icon-image)';
+    default:
+      return 'var(--color-icon-default)';
   }
 }
 
@@ -150,7 +226,21 @@ const TreeNodeRow: React.FC<TreeNodeRowProps> = React.memo(function TreeNodeRow(
     backgroundColor = 'var(--color-explorer-search-highlight)';
   }
 
-  const textColor = 'var(--color-text)';
+  // Git status drives text color; fall back to default
+  const statusColor = gitStatusColor(node.gitStatus);
+  const isHidden = !statusColor && isHiddenNode(node.name);
+  const textColor = statusColor
+    ?? (isHidden ? 'var(--color-hidden-text)' : 'var(--color-text)');
+  const badge = gitStatusBadge(node.gitStatus);
+  const rowOpacity = (node.gitStatus === 'ignored' || isHidden) ? 0.7 : 1;
+
+  // Icon color: git status > hidden dimming > file-type color
+  const iconColor = statusColor
+    ?? (isHidden
+      ? 'var(--color-hidden-icon)'
+      : (isDirectory
+        ? (isExpanded ? 'var(--color-icon-folder-open)' : 'var(--color-icon-folder)')
+        : fileIconColor(node.name)));
 
   /* ---- render ---- */
 
@@ -169,6 +259,7 @@ const TreeNodeRow: React.FC<TreeNodeRowProps> = React.memo(function TreeNodeRow(
         fontWeight,
         backgroundColor,
         color: textColor,
+        opacity: rowOpacity,
         display: 'flex',
         alignItems: 'center',
         gap: '4px',
@@ -233,7 +324,7 @@ const TreeNodeRow: React.FC<TreeNodeRowProps> = React.memo(function TreeNodeRow(
         style={{
           fontSize: '16px',
           flexShrink: 0,
-          color: undefined,
+          color: iconColor,
         }}
       >
         {isDirectory ? (isExpanded ? 'folder_open' : 'folder') : fileIcon(node.name)}
@@ -251,6 +342,28 @@ const TreeNodeRow: React.FC<TreeNodeRowProps> = React.memo(function TreeNodeRow(
       >
         {node.name}
       </span>
+
+      {/* Git status badge (A/M/D/U/R/C) — always visible when status is set */}
+      {badge && (
+        <span
+          data-testid="git-status-badge"
+          title={node.gitStatus}
+          style={{
+            fontSize: '10px',
+            fontWeight: 600,
+            lineHeight: '16px',
+            padding: '0 4px',
+            borderRadius: '3px',
+            color: badge.color,
+            backgroundColor: badge.bg,
+            flexShrink: 0,
+            letterSpacing: '0.02em',
+            fontFamily: 'monospace',
+          }}
+        >
+          {badge.label}
+        </span>
+      )}
 
       {/* CRUD action icons — visible on hover only */}
       <span

@@ -25,6 +25,7 @@
 import React, { useMemo } from 'react';
 import { List } from 'react-window';
 import type { TreeNode } from '../../types';
+import type { FileTreeItem } from './FileTreeNode';
 import { useTreeData, useSelection } from '../../contexts/ExplorerContext';
 import TreeNodeRow from './TreeNodeRow';
 import ZoneSeparator from './ZoneSeparator';
@@ -57,6 +58,8 @@ export interface VirtualizedTreeProps {
   height: number;
   /** Width of the tree container. */
   width: number;
+  /** Callback when a file node is double-clicked (e.g., to open in editor). */
+  onFileDoubleClick?: (node: FileTreeItem) => void;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -236,6 +239,7 @@ interface RowCustomProps {
   selectedPath: string | null;
   toggleExpand: (path: string) => void;
   setSelectedPath: (path: string | null) => void;
+  onFileDoubleClick?: (node: FileTreeItem) => void;
 }
 
 /**
@@ -249,7 +253,7 @@ function RowRenderer(props: {
   index: number;
   style: React.CSSProperties;
 } & RowCustomProps) {
-  const { index, style, rows, selectedPath, toggleExpand, setSelectedPath } = props;
+  const { index, style, rows, selectedPath, toggleExpand, setSelectedPath, onFileDoubleClick } = props;
   const row = rows[index];
 
   if (!row) return null;
@@ -259,6 +263,21 @@ function RowRenderer(props: {
   }
 
   const { node, depth, isMatched, isExpanded } = row;
+
+  /** Bridge TreeNode → FileTreeItem for the file editor modal. */
+  const handleDoubleClick = () => {
+    if (node.type === 'file' && onFileDoubleClick) {
+      const fileItem: FileTreeItem = {
+        id: node.path,
+        name: node.name,
+        type: node.type,
+        path: node.path,
+        workspaceId: '',
+        workspaceName: '',
+      };
+      onFileDoubleClick(fileItem);
+    }
+  };
 
   return (
     <TreeNodeRow
@@ -270,7 +289,7 @@ function RowRenderer(props: {
       onToggle={() => toggleExpand(node.path)}
       onSelect={() => setSelectedPath(node.path)}
       onContextMenu={() => {}}
-      onDoubleClick={() => {}}
+      onDoubleClick={handleDoubleClick}
       style={style}
     />
   );
@@ -280,7 +299,7 @@ function RowRenderer(props: {
 // Component
 // ─────────────────────────────────────────────────────────────────────────────
 
-const VirtualizedTree: React.FC<VirtualizedTreeProps> = ({ height, width }) => {
+const VirtualizedTree: React.FC<VirtualizedTreeProps> = ({ height, width, onFileDoubleClick }) => {
   const { treeData } = useTreeData();
   const { expandedPaths, matchedPaths, selectedPath, toggleExpand, setSelectedPath } =
     useSelection();
@@ -293,8 +312,8 @@ const VirtualizedTree: React.FC<VirtualizedTreeProps> = ({ height, width }) => {
 
   // Stable rowProps object for the row renderer
   const rowProps = useMemo<RowCustomProps>(
-    () => ({ rows, selectedPath, toggleExpand, setSelectedPath }),
-    [rows, selectedPath, toggleExpand, setSelectedPath],
+    () => ({ rows, selectedPath, toggleExpand, setSelectedPath, onFileDoubleClick }),
+    [rows, selectedPath, toggleExpand, setSelectedPath, onFileDoubleClick],
   );
 
   return (

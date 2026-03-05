@@ -28,6 +28,40 @@
   --color-explorer-accent: #2b6cee;
   --color-explorer-system-badge: #d97706;
   --color-explorer-focus-indicator: #2b6cee;
+
+  /* Git status colors — file tree decorations */
+  --color-git-added: #2da44e;
+  --color-git-modified: #bf8700;
+  --color-git-deleted: #cf222e;
+  --color-git-renamed: #1a7f5a;
+  --color-git-untracked: #57ab5a;
+  --color-git-conflicting: #e5534b;
+  --color-git-ignored: #8b949e;
+
+  /* Git status badges (letter labels) */
+  --color-git-badge-added-bg: rgba(45, 164, 78, 0.15);
+  --color-git-badge-modified-bg: rgba(191, 135, 0, 0.15);
+  --color-git-badge-deleted-bg: rgba(207, 34, 46, 0.15);
+  --color-git-badge-untracked-bg: rgba(87, 171, 90, 0.15);
+  --color-git-badge-conflicting-bg: rgba(229, 83, 75, 0.15);
+  --color-git-badge-renamed-bg: rgba(26, 127, 90, 0.15);
+
+  /* File-type icon colors */
+  --color-icon-typescript: #3178c6;
+  --color-icon-javascript: #f0db4f;
+  --color-icon-python: #3572a5;
+  --color-icon-css: #264de4;
+  --color-icon-html: #e34c26;
+  --color-icon-json: #a8a8a8;
+  --color-icon-markdown: #519aba;
+  --color-icon-image: #a97bff;
+  --color-icon-folder: #8b949e;
+  --color-icon-folder-open: #2b6cee;
+  --color-icon-default: #8b949e;
+
+  /* Hidden / dotfile / generated file dimming */
+  --color-hidden-text: #a0a7b4;
+  --color-hidden-icon: #b0b7c3;
 }
 
 /* Dark theme */
@@ -58,6 +92,40 @@
   --color-explorer-accent: #3d7ef0;
   --color-explorer-system-badge: #f59e0b;
   --color-explorer-focus-indicator: #3d7ef0;
+
+  /* Git status colors — dark theme */
+  --color-git-added: #3fb950;
+  --color-git-modified: #d29922;
+  --color-git-deleted: #f85149;
+  --color-git-renamed: #58a6ff;
+  --color-git-untracked: #7ee787;
+  --color-git-conflicting: #ff6b6b;
+  --color-git-ignored: #484f58;
+
+  /* Git status badges — dark theme */
+  --color-git-badge-added-bg: rgba(63, 185, 80, 0.15);
+  --color-git-badge-modified-bg: rgba(210, 153, 34, 0.15);
+  --color-git-badge-deleted-bg: rgba(248, 81, 73, 0.15);
+  --color-git-badge-untracked-bg: rgba(126, 231, 135, 0.15);
+  --color-git-badge-conflicting-bg: rgba(255, 107, 107, 0.15);
+  --color-git-badge-renamed-bg: rgba(88, 166, 255, 0.15);
+
+  /* File-type icon colors — dark theme */
+  --color-icon-typescript: #519aba;
+  --color-icon-javascript: #f0db4f;
+  --color-icon-python: #4584b6;
+  --color-icon-css: #42a5f5;
+  --color-icon-html: #ef6c35;
+  --color-icon-json: #8b949e;
+  --color-icon-markdown: #519aba;
+  --color-icon-image: #c084fc;
+  --color-icon-folder: #6b7280;
+  --color-icon-folder-open: #3d7ef0;
+  --color-icon-default: #6b7280;
+
+  /* Hidden / dotfile / generated file dimming — dark theme */
+  --color-hidden-text: #555d6e;
+  --color-hidden-icon: #4a5264;
 }
 
 @theme {

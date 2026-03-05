@@ -42,9 +42,7 @@ export interface WorkspaceExplorerProps {
   onFileDoubleClick?: (node: FileTreeItem) => void;
 }
 
-// TODO: _onFileDoubleClick is accepted but not yet wired through VirtualizedTree/TreeNodeRow.
-// It will be connected in a future cadence when file editing is integrated with the new explorer.
-export default function WorkspaceExplorer({ onFileDoubleClick: _onFileDoubleClick }: WorkspaceExplorerProps) {
+export default function WorkspaceExplorer({ onFileDoubleClick }: WorkspaceExplorerProps) {
   const {
     workspaceExplorerCollapsed,
     workspaceExplorerWidth,
@@ -150,7 +148,7 @@ export default function WorkspaceExplorer({ onFileDoubleClick: _onFileDoubleClic
           <AutoSizer
             renderProp={({ height, width }) => {
               if (height === undefined || width === undefined) return null;
-              return <VirtualizedTree height={height} width={width} />;
+              return <VirtualizedTree height={height} width={width} onFileDoubleClick={onFileDoubleClick} />;
             }}
           />
         )}
