@@ -36,6 +36,7 @@ import json
 import logging
 import os
 import shutil
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -229,10 +230,69 @@ def _compute_max_mtime(root: Path, depth: int) -> float:
     return max_mtime
 
 
+def _get_git_status(workspace_root: Path) -> dict[str, str]:
+    """Run ``git status --porcelain`` and return a dict of {relative_path: status}.
+
+    Status values match the GitStatus type on the frontend:
+    - 'added', 'modified', 'deleted', 'renamed', 'untracked', 'conflicting'
+
+    Returns an empty dict if the workspace is not a git repo or git fails.
+    """
+    git_dir = workspace_root / ".git"
+    if not git_dir.is_dir():
+        return {}
+
+    try:
+        result = subprocess.run(
+            ["git", "status", "--porcelain", "-uall"],
+            cwd=str(workspace_root),
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode != 0:
+            return {}
+    except (OSError, subprocess.TimeoutExpired):
+        return {}
+
+    status_map: dict[str, str] = {}
+    for line in result.stdout.splitlines():
+        if len(line) < 4:
+            continue
+        xy = line[:2]
+        filepath = line[3:]
+
+        # Handle renames: "R  old -> new"
+        if " -> " in filepath:
+            filepath = filepath.split(" -> ", 1)[1]
+
+        # Normalize path separators
+        filepath = filepath.strip().replace("\\", "/")
+
+        # Map git status codes to our GitStatus enum
+        if "U" in xy or (xy[0] == "A" and xy[1] == "A") or (xy[0] == "D" and xy[1] == "D"):
+            status_map[filepath] = "conflicting"
+        elif xy[0] == "R" or xy[1] == "R":
+            status_map[filepath] = "renamed"
+        elif xy == "??":
+            status_map[filepath] = "untracked"
+        elif xy == "!!":
+            status_map[filepath] = "ignored"
+        elif "D" in xy:
+            status_map[filepath] = "deleted"
+        elif "A" in xy:
+            status_map[filepath] = "added"
+        elif "M" in xy or "T" in xy:
+            status_map[filepath] = "modified"
+
+    return status_map
+
+
 def _build_tree(
     root: Path,
     workspace_root: Path,
     depth: int,
+    git_status: dict[str, str] | None = None,
 ) -> list[dict]:
     """Build a nested tree of workspace entries.
 
@@ -270,22 +330,39 @@ def _build_tree(
 
     for d in dirs:
         rel_path = str(d.relative_to(workspace_root)).replace("\\", "/")
-        children = _build_tree(d, workspace_root, depth - 1) if depth > 1 else None
-        result.append({
+        children = _build_tree(d, workspace_root, depth - 1, git_status) if depth > 1 else None
+
+        # Directory git status: inherit from children (any modified child → modified dir)
+        dir_status = None
+        if git_status:
+            # Check if any file under this directory has a git status
+            prefix = rel_path + "/"
+            for gpath, gstatus in git_status.items():
+                if gpath.startswith(prefix):
+                    dir_status = "modified"
+                    break
+
+        node: dict = {
             "name": d.name,
             "path": rel_path,
             "type": "directory",
             "children": children,
-        })
+        }
+        if dir_status:
+            node["git_status"] = dir_status
+        result.append(node)
 
     for f in files:
         rel_path = str(f.relative_to(workspace_root)).replace("\\", "/")
-        result.append({
+        node: dict = {
             "name": f.name,
             "path": rel_path,
             "type": "file",
             "children": None,
-        })
+        }
+        if git_status and rel_path in git_status:
+            node["git_status"] = git_status[rel_path]
+        result.append(node)
 
     return result
 
@@ -331,7 +408,7 @@ async def get_workspace_tree(
     if if_none_match and if_none_match.strip() == etag_value:
         return Response(status_code=304, headers={"ETag": etag_value})
 
-    tree = _build_tree(workspace_root, workspace_root, depth)
+    tree = _build_tree(workspace_root, workspace_root, depth, _get_git_status(workspace_root))
 
     return Response(
         content=json.dumps(tree),
