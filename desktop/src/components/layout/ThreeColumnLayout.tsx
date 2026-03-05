@@ -15,6 +15,7 @@ import WorkspacesModal from '../modals/WorkspacesModal';
 import SwarmCoreModal from '../modals/SwarmCoreModal';
 import WorkspaceSettingsModal from '../modals/WorkspaceSettingsModal';
 import type { FileTreeItem } from '../workspace-explorer/FileTreeNode';
+import type { GitStatus } from '../../types';
 import api from '../../services/api';
 
 // Left sidebar width constant
@@ -208,7 +209,7 @@ function RefreshTreeBridge({ refreshTreeRef }: { refreshTreeRef: React.MutableRe
 
 // Inner layout component that uses the context
 function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
-  const { activeModal, closeModal, workspaceSettingsId, attachFile } = useLayout();
+  const { activeModal, closeModal, workspaceSettingsId, attachFile, attachedFiles } = useLayout();
 
   /** Ref to hold the ExplorerContext refreshTree function (set by bridge component inside provider). */
   const refreshTreeRef = useRef<(() => void) | null>(null);
@@ -221,6 +222,7 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
     workspaceId: string;
     content: string;
     isSwarmWorkspace: boolean;
+    gitStatus?: GitStatus;
   } | null>(null);
 
   // Swarm workspace warning state - Requirement 4.3
@@ -230,7 +232,7 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
   }>({ isOpen: false, pendingFile: null });
 
   // Open file editor with content — reads via backend API (no Tauri fs scope issues)
-  const openFileEditor = useCallback(async (file: FileTreeItem) => {
+  const openFileEditor = useCallback(async (file: FileTreeItem, gitStatus?: GitStatus) => {
     try {
       const response = await api.get<{ content: string; path: string; name: string }>(
         '/workspace/file',
@@ -244,6 +246,7 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
         workspaceId: file.workspaceId,
         content: response.data.content,
         isSwarmWorkspace: file.isSwarmWorkspace || false,
+        gitStatus,
       });
     } catch (error) {
       console.error('Failed to read file:', error);
@@ -331,6 +334,9 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
           initialContent={fileEditorState.content}
           onSave={handleFileSave}
           onClose={handleFileEditorClose}
+          gitStatus={fileEditorState.gitStatus}
+          onAttachToChat={attachFile}
+          isAttached={attachedFiles.some(f => f.id === fileEditorState.filePath)}
         />
       )}
 
