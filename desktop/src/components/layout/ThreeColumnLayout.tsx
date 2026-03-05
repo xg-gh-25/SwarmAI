@@ -15,6 +15,7 @@ import WorkspacesModal from '../modals/WorkspacesModal';
 import SwarmCoreModal from '../modals/SwarmCoreModal';
 import WorkspaceSettingsModal from '../modals/WorkspaceSettingsModal';
 import type { FileTreeItem } from '../workspace-explorer/FileTreeNode';
+import api from '../../services/api';
 
 // Left sidebar width constant
 const LEFT_SIDEBAR_WIDTH = LAYOUT_CONSTANTS.LEFT_SIDEBAR_WIDTH;
@@ -198,8 +199,8 @@ function MainChatPanel({ children }: MainChatPanelProps) {
 
 // Inner layout component that uses the context
 function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
-  const { activeModal, closeModal, workspaceSettingsId } = useLayout();
-  
+  const { activeModal, closeModal, workspaceSettingsId, attachFile } = useLayout();
+
   // File editor state - Requirement 9.1
   const [fileEditorState, setFileEditorState] = useState<{
     isOpen: boolean;
@@ -216,10 +217,29 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
     pendingFile: FileTreeItem | null;
   }>({ isOpen: false, pendingFile: null });
 
+  // Open file editor with content — reads via backend API (no Tauri fs scope issues)
+  const openFileEditor = useCallback(async (file: FileTreeItem) => {
+    try {
+      const response = await api.get<{ content: string; path: string; name: string }>(
+        '/workspace/file',
+        { params: { path: file.path } },
+      );
+
+      setFileEditorState({
+        isOpen: true,
+        filePath: file.path,
+        fileName: file.name,
+        workspaceId: file.workspaceId,
+        content: response.data.content,
+        isSwarmWorkspace: file.isSwarmWorkspace || false,
+      });
+    } catch (error) {
+      console.error('Failed to read file:', error);
+      // TODO: Show error toast
+    }
+  }, []);
+
   // Handle file double-click - Requirement 9.1
-  // TODO: This callback uses the deprecated FileTreeItem type from the old explorer.
-  // It is not yet wired through the new VirtualizedTree/TreeNodeRow components.
-  // Needs to be adapted to use TreeNode type and connected in a future cadence.
   const handleFileDoubleClick = useCallback(async (file: FileTreeItem) => {
     // Check if this is a Swarm Workspace file - Requirement 4.3
     if (file.isSwarmWorkspace) {
@@ -229,28 +249,7 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
 
     // Open the file editor
     await openFileEditor(file);
-  }, []);
-
-  // Open file editor with content
-  const openFileEditor = useCallback(async (file: FileTreeItem) => {
-    try {
-      // Read file content using Tauri fs plugin for local files
-      const { readTextFile } = await import('@tauri-apps/plugin-fs');
-      const content = await readTextFile(file.path);
-
-      setFileEditorState({
-        isOpen: true,
-        filePath: file.path,
-        fileName: file.name,
-        workspaceId: file.workspaceId,
-        content,
-        isSwarmWorkspace: file.isSwarmWorkspace || false,
-      });
-    } catch (error) {
-      console.error('Failed to read file:', error);
-      // TODO: Show error toast
-    }
-  }, []);
+  }, [openFileEditor]);
 
   // Handle Swarm workspace warning confirmation - Requirement 4.3, 4.5
   const handleSwarmWarningConfirm = useCallback(async () => {
@@ -270,9 +269,9 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
     if (!fileEditorState) return;
 
     try {
-      // Write file content using Tauri fs plugin
-      const { writeTextFile } = await import('@tauri-apps/plugin-fs');
-      await writeTextFile(fileEditorState.filePath, content);
+      await api.put('/workspace/file', { content }, {
+        params: { path: fileEditorState.filePath },
+      });
     } catch (error) {
       console.error('Failed to save file:', error);
       throw error; // Re-throw to keep modal open
@@ -296,7 +295,7 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
           <LeftSidebar />
 
           {/* Workspace Explorer - 280px default, resizable 200-500px, collapsible */}
-          <WorkspaceExplorer onFileDoubleClick={handleFileDoubleClick} />
+          <WorkspaceExplorer onFileDoubleClick={handleFileDoubleClick} onAttachToChat={attachFile} />
 
           {/* Main Chat Panel - flex-1 (remaining space) */}
           <MainChatPanel>{children}</MainChatPanel>

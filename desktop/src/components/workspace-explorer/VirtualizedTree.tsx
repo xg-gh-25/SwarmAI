@@ -22,13 +22,16 @@
  * Requirements: 10.1, 10.2, 10.3, 11.1, 11.4, 15.1, 15.2, 15.3
  */
 
-import React, { useMemo } from 'react';
+import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { List } from 'react-window';
 import type { TreeNode } from '../../types';
 import type { FileTreeItem } from './FileTreeNode';
 import { useTreeData, useSelection } from '../../contexts/ExplorerContext';
+import { toFileTreeItem } from './toFileTreeItem';
 import TreeNodeRow from './TreeNodeRow';
 import ZoneSeparator from './ZoneSeparator';
+import FileContextMenu from './FileContextMenu';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants
@@ -60,6 +63,20 @@ export interface VirtualizedTreeProps {
   width: number;
   /** Callback when a file node is double-clicked (e.g., to open in editor). */
   onFileDoubleClick?: (node: FileTreeItem) => void;
+  /** Callback when "Attach to Chat" is selected from the context menu. */
+  onAttachToChat?: (item: FileTreeItem) => void;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Context menu state
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** State for the right-click context menu rendered via portal. */
+export interface ContextMenuState {
+  isOpen: boolean;
+  x: number;
+  y: number;
+  item: FileTreeItem | null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -240,6 +257,8 @@ interface RowCustomProps {
   toggleExpand: (path: string) => void;
   setSelectedPath: (path: string | null) => void;
   onFileDoubleClick?: (node: FileTreeItem) => void;
+  onContextMenu: (e: React.MouseEvent, node: TreeNode) => void;
+  onAttachToChat?: (item: FileTreeItem) => void;
 }
 
 /**
@@ -253,7 +272,7 @@ function RowRenderer(props: {
   index: number;
   style: React.CSSProperties;
 } & RowCustomProps) {
-  const { index, style, rows, selectedPath, toggleExpand, setSelectedPath, onFileDoubleClick } = props;
+  const { index, style, rows, selectedPath, toggleExpand, setSelectedPath, onFileDoubleClick, onContextMenu } = props;
   const row = rows[index];
 
   if (!row) return null;
@@ -265,19 +284,18 @@ function RowRenderer(props: {
   const { node, depth, isMatched, isExpanded } = row;
 
   /** Bridge TreeNode → FileTreeItem for the file editor modal. */
-  const handleDoubleClick = () => {
+  const handleDoubleClick = useCallback(() => {
     if (node.type === 'file' && onFileDoubleClick) {
-      const fileItem: FileTreeItem = {
-        id: node.path,
-        name: node.name,
-        type: node.type,
-        path: node.path,
-        workspaceId: '',
-        workspaceName: '',
-      };
-      onFileDoubleClick(fileItem);
+      onFileDoubleClick(toFileTreeItem(node));
     }
-  };
+  }, [node, onFileDoubleClick]);
+
+  const handleToggle = useCallback(() => toggleExpand(node.path), [toggleExpand, node.path]);
+  const handleSelect = useCallback(() => setSelectedPath(node.path), [setSelectedPath, node.path]);
+  const handleContextMenu = useCallback(
+    (e: React.MouseEvent) => onContextMenu(e, node),
+    [onContextMenu, node],
+  );
 
   return (
     <TreeNodeRow
@@ -286,9 +304,9 @@ function RowRenderer(props: {
       isExpanded={isExpanded}
       isSelected={selectedPath === node.path}
       isMatched={isMatched}
-      onToggle={() => toggleExpand(node.path)}
-      onSelect={() => setSelectedPath(node.path)}
-      onContextMenu={() => {}}
+      onToggle={handleToggle}
+      onSelect={handleSelect}
+      onContextMenu={handleContextMenu}
       onDoubleClick={handleDoubleClick}
       style={style}
     />
@@ -299,10 +317,50 @@ function RowRenderer(props: {
 // Component
 // ─────────────────────────────────────────────────────────────────────────────
 
-const VirtualizedTree: React.FC<VirtualizedTreeProps> = ({ height, width, onFileDoubleClick }) => {
+const VirtualizedTree: React.FC<VirtualizedTreeProps> = ({ height, width, onFileDoubleClick, onAttachToChat }) => {
   const { treeData } = useTreeData();
   const { expandedPaths, matchedPaths, selectedPath, toggleExpand, setSelectedPath } =
     useSelection();
+
+  // ── Context menu state ──────────────────────────────────────────────────
+  const [contextMenu, setContextMenu] = useState<ContextMenuState>({
+    isOpen: false,
+    x: 0,
+    y: 0,
+    item: null,
+  });
+
+  /** Ref to the element that had focus when the context menu opened. */
+  const returnFocusRef = useRef<HTMLElement | null>(null);
+
+  /** Open the context menu at the cursor position for the given node. */
+  const handleContextMenu = useCallback(
+    (e: React.MouseEvent, node: TreeNode) => {
+      e.preventDefault();
+      e.stopPropagation();
+      returnFocusRef.current = e.currentTarget as HTMLElement;
+      setContextMenu({
+        isOpen: true,
+        x: e.clientX,
+        y: e.clientY,
+        item: toFileTreeItem(node),
+      });
+    },
+    [],
+  );
+
+  /** Close the context menu and reset state. */
+  const closeContextMenu = useCallback(() => {
+    setContextMenu({ isOpen: false, x: 0, y: 0, item: null });
+  }, []);
+
+  // Close context menu on any scroll event (capture phase catches nested scrolls)
+  useEffect(() => {
+    if (!contextMenu.isOpen) return;
+    const handleScroll = () => closeContextMenu();
+    window.addEventListener('scroll', handleScroll, true);
+    return () => window.removeEventListener('scroll', handleScroll, true);
+  }, [contextMenu.isOpen, closeContextMenu]);
 
   // Flatten tree into rows — recomputed when tree data or expand state changes
   const rows = useMemo(
@@ -312,20 +370,34 @@ const VirtualizedTree: React.FC<VirtualizedTreeProps> = ({ height, width, onFile
 
   // Stable rowProps object for the row renderer
   const rowProps = useMemo<RowCustomProps>(
-    () => ({ rows, selectedPath, toggleExpand, setSelectedPath, onFileDoubleClick }),
-    [rows, selectedPath, toggleExpand, setSelectedPath, onFileDoubleClick],
+    () => ({ rows, selectedPath, toggleExpand, setSelectedPath, onFileDoubleClick, onContextMenu: handleContextMenu, onAttachToChat }),
+    [rows, selectedPath, toggleExpand, setSelectedPath, onFileDoubleClick, handleContextMenu, onAttachToChat],
   );
 
   return (
-    <List
-      style={{ height, width, overflow: 'auto' }}
-      rowCount={rows.length}
-      rowHeight={ROW_HEIGHT}
-      rowComponent={RowRenderer}
-      rowProps={rowProps}
-      role="tree"
-      aria-label="Workspace Explorer"
-    />
+    <>
+      <List
+        style={{ height, width, overflow: 'auto' }}
+        rowCount={rows.length}
+        rowHeight={ROW_HEIGHT}
+        rowComponent={RowRenderer}
+        rowProps={rowProps}
+        role="tree"
+        aria-label="Workspace Explorer"
+      />
+      {contextMenu.isOpen && contextMenu.item && createPortal(
+        <FileContextMenu
+          item={contextMenu.item}
+          x={contextMenu.x}
+          y={contextMenu.y}
+          onClose={closeContextMenu}
+          onOpenFile={onFileDoubleClick}
+          onAttachToChat={onAttachToChat}
+          returnFocusRef={returnFocusRef}
+        />,
+        document.body,
+      )}
+    </>
   );
 };
 
