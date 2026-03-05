@@ -663,8 +663,8 @@ export default function FileEditorModal({
     >
       <div
         className={clsx(
-          'w-full h-[80vh] bg-[var(--color-card)] border border-[var(--color-border)] rounded-xl shadow-2xl flex flex-col',
-          showDiff ? 'max-w-6xl' : 'max-w-4xl'
+          'w-full h-[85vh] bg-[var(--color-card)] border border-[var(--color-border)] rounded-xl shadow-2xl flex flex-col',
+          showDiff ? 'max-w-7xl' : 'max-w-5xl'
         )}
         onMouseDown={(e) => e.stopPropagation()}
       >
@@ -700,6 +700,24 @@ export default function FileEditorModal({
             )}
           </div>
           <div className="flex items-center gap-1 shrink-0 ml-2">
+            {/* Show Changes / Back to Edit toggle */}
+            <button
+              onClick={handleToggleDiff}
+              disabled={!isDirty && !showDiff}
+              className={clsx(
+                'flex items-center gap-1 px-2 py-1 rounded-lg text-xs transition-colors',
+                showDiff
+                  ? 'bg-blue-500/20 text-[var(--color-primary)] font-medium'
+                  : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)]',
+                !isDirty && !showDiff && 'opacity-40 cursor-not-allowed'
+              )}
+              data-testid="show-changes-toggle"
+            >
+              <span className="material-symbols-outlined text-sm">
+                {showDiff ? 'edit' : 'difference'}
+              </span>
+              {showDiff ? 'Back to Edit' : 'Show Changes'}
+            </button>
             {/* Attach to Chat button (Task 5.4) */}
             {onAttachToChat && (
               <button
@@ -838,7 +856,7 @@ export default function FileEditorModal({
           )}
         </div>
 
-        {/* Footer — language badge, show changes toggle, cancel, save */}
+        {/* Footer — language badge, cancel, save */}
         <div className="flex items-center justify-between px-4 py-3 border-t border-[var(--color-border)] shrink-0">
           <div className="flex items-center gap-2 text-xs text-[var(--color-text-muted)]">
             {language !== 'plaintext' && (
@@ -846,24 +864,6 @@ export default function FileEditorModal({
                 {language}
               </span>
             )}
-            {/* Show Changes toggle (Task 8.2) */}
-            <button
-              onClick={handleToggleDiff}
-              disabled={!isDirty && !showDiff}
-              className={clsx(
-                'flex items-center gap-1 px-2 py-1 rounded transition-colors',
-                showDiff
-                  ? 'bg-blue-500/20 text-[var(--color-primary)] font-medium'
-                  : 'hover:bg-[var(--color-hover)] text-[var(--color-text-muted)]',
-                !isDirty && !showDiff && 'opacity-40 cursor-not-allowed'
-              )}
-              data-testid="show-changes-toggle"
-            >
-              <span className="material-symbols-outlined text-sm">
-                {showDiff ? 'edit' : 'difference'}
-              </span>
-              {showDiff ? 'Back to Edit' : 'Show Changes'}
-            </button>
           </div>
           <div className="flex items-center gap-2">
             <Button
