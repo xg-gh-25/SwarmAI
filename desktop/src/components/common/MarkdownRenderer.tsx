@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, memo } from 'react';
 import ReactMarkdown from 'react-markdown';
+import type { PluggableList } from 'unified';
 import remarkGfm from 'remark-gfm';
 import remarkBreaks from 'remark-breaks';
 import remarkMath from 'remark-math';
@@ -685,11 +686,12 @@ const markdownComponents: Record<string, React.ComponentType<any>> = {
 // remarkPlugins array - stable reference
 // remarkBreaks converts single line breaks to <br>, preserving newlines in output
 // remarkMath parses $inline$ and $$block$$ math expressions
-const remarkPlugins = [remarkGfm, remarkBreaks, remarkMath];
+const remarkPlugins: PluggableList = [remarkGfm, remarkBreaks, [remarkMath, { singleDollarTextMath: false }]];
 
 // rehypePlugins array - stable reference
 // rehypeKatex renders parsed math expressions using KaTeX
-const rehypePlugins = [rehypeKatex];
+// strict: false suppresses warnings for Unicode text in math mode
+const rehypePlugins: PluggableList = [[rehypeKatex, { strict: false }]];
 
 const MarkdownRenderer = memo(function MarkdownRenderer({
   content,
