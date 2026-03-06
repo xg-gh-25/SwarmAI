@@ -437,6 +437,8 @@ export interface WorkspaceFileContent {
   encoding: 'utf-8' | 'base64';
   size: number;
   mimeType: string;
+  /** True when the file is a system-default context file (user_customized=False). */
+  readonly?: boolean;
 }
 
 // ============== Marketplace Types ==============

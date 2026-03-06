@@ -59,8 +59,12 @@ class TestSwarmWorkspaceManagerConstants:
         assert "icon" in config
 
     def test_system_managed_folders_match_folder_structure(self):
-        """Verify SYSTEM_MANAGED_FOLDERS covers all FOLDER_STRUCTURE entries."""
-        assert SYSTEM_MANAGED_FOLDERS == set(FOLDER_STRUCTURE)
+        """Verify SYSTEM_MANAGED_FOLDERS covers FOLDER_STRUCTURE and Knowledge subdirs."""
+        from core.swarm_workspace_manager import KNOWLEDGE_SUBDIRS
+        expected = set(FOLDER_STRUCTURE) | {
+            f"Knowledge/{sub}" for sub in KNOWLEDGE_SUBDIRS
+        }
+        assert SYSTEM_MANAGED_FOLDERS == expected
 
     def test_system_managed_root_files(self):
         """Verify SYSTEM_MANAGED_ROOT_FILES is empty (no system-managed root files)."""
@@ -732,9 +736,12 @@ _user_file_strategy = st.lists(
         # relative directory inside the workspace (pick from valid user locations)
         st.sampled_from([
             "Knowledge",
-            "Knowledge/Knowledge Base",
             "Knowledge/Notes",
-            "Knowledge/Memory",
+            "Knowledge/Reports",
+            "Knowledge/Meetings",
+            "Knowledge/Library",
+            "Knowledge/Archives",
+            "Knowledge/DailyActivity",
             "Projects",
         ]),
         # filename
@@ -984,3 +991,162 @@ class TestInitializationIdempotence:
 
         finally:
             swm_module.DEFAULT_WORKSPACE_CONFIG.update(original_config)
+
+
+class TestPruneArchives:
+    """Unit tests for SwarmWorkspaceManager.prune_archives().
+
+    Validates Requirement 7.6 (auto-archive older DailyActivity files)
+    and Requirement 15.11 (move processed files to Archives/).
+
+    The method deletes archived DailyActivity files older than 90 days,
+    parsing dates from YYYY-MM-DD.md filenames and skipping non-date
+    filenames gracefully.
+    """
+
+    @pytest.fixture
+    def temp_workspace(self, tmp_path):
+        """Create a temp workspace with Knowledge/Archives/ directory."""
+        archives = tmp_path / "Knowledge" / "Archives"
+        archives.mkdir(parents=True)
+        return tmp_path
+
+    def test_deletes_files_older_than_90_days(self, temp_workspace):
+        """Files with dates > 90 days ago should be deleted."""
+        from datetime import date, timedelta
+
+        archives = temp_workspace / "Knowledge" / "Archives"
+        old_date = date.today() - timedelta(days=91)
+        old_file = archives / f"{old_date.isoformat()}.md"
+        old_file.write_text("old content")
+
+        mgr = SwarmWorkspaceManager()
+        deleted = mgr.prune_archives(str(temp_workspace))
+
+        assert deleted == 1
+        assert not old_file.exists()
+
+    def test_preserves_files_within_90_days(self, temp_workspace):
+        """Files with dates <= 90 days ago should be kept."""
+        from datetime import date, timedelta
+
+        archives = temp_workspace / "Knowledge" / "Archives"
+        recent_date = date.today() - timedelta(days=89)
+        recent_file = archives / f"{recent_date.isoformat()}.md"
+        recent_file.write_text("recent content")
+
+        mgr = SwarmWorkspaceManager()
+        deleted = mgr.prune_archives(str(temp_workspace))
+
+        assert deleted == 0
+        assert recent_file.exists()
+        assert recent_file.read_text() == "recent content"
+
+    def test_preserves_file_exactly_at_90_days(self, temp_workspace):
+        """A file exactly 90 days old should NOT be deleted (cutoff is exclusive)."""
+        from datetime import date, timedelta
+
+        archives = temp_workspace / "Knowledge" / "Archives"
+        boundary_date = date.today() - timedelta(days=90)
+        boundary_file = archives / f"{boundary_date.isoformat()}.md"
+        boundary_file.write_text("boundary content")
+
+        mgr = SwarmWorkspaceManager()
+        deleted = mgr.prune_archives(str(temp_workspace))
+
+        assert deleted == 0
+        assert boundary_file.exists()
+
+    def test_skips_non_date_filenames(self, temp_workspace):
+        """Files without YYYY-MM-DD stems should be left untouched."""
+        archives = temp_workspace / "Knowledge" / "Archives"
+        manual_file = archives / "meeting-notes.md"
+        manual_file.write_text("important notes")
+        readme = archives / "README.md"
+        readme.write_text("archive index")
+
+        mgr = SwarmWorkspaceManager()
+        deleted = mgr.prune_archives(str(temp_workspace))
+
+        assert deleted == 0
+        assert manual_file.exists()
+        assert readme.exists()
+
+    def test_skips_non_md_files(self, temp_workspace):
+        """Non-.md files should be ignored even if they have date names."""
+        from datetime import date, timedelta
+
+        archives = temp_workspace / "Knowledge" / "Archives"
+        old_date = date.today() - timedelta(days=100)
+        txt_file = archives / f"{old_date.isoformat()}.txt"
+        txt_file.write_text("not markdown")
+
+        mgr = SwarmWorkspaceManager()
+        deleted = mgr.prune_archives(str(temp_workspace))
+
+        assert deleted == 0
+        assert txt_file.exists()
+
+    def test_handles_missing_archives_directory(self, tmp_path):
+        """Returns 0 when Knowledge/Archives/ does not exist."""
+        mgr = SwarmWorkspaceManager()
+        deleted = mgr.prune_archives(str(tmp_path))
+        assert deleted == 0
+
+    def test_mixed_old_and_recent_files(self, temp_workspace):
+        """Only old files are deleted; recent and non-date files survive."""
+        from datetime import date, timedelta
+
+        archives = temp_workspace / "Knowledge" / "Archives"
+
+        old_date = date.today() - timedelta(days=120)
+        old_file = archives / f"{old_date.isoformat()}.md"
+        old_file.write_text("old")
+
+        recent_date = date.today() - timedelta(days=30)
+        recent_file = archives / f"{recent_date.isoformat()}.md"
+        recent_file.write_text("recent")
+
+        manual_file = archives / "project-archive.md"
+        manual_file.write_text("manual")
+
+        mgr = SwarmWorkspaceManager()
+        deleted = mgr.prune_archives(str(temp_workspace))
+
+        assert deleted == 1
+        assert not old_file.exists()
+        assert recent_file.exists()
+        assert manual_file.exists()
+
+    def test_custom_max_age_days(self, temp_workspace):
+        """The max_age_days parameter controls the cutoff."""
+        from datetime import date, timedelta
+
+        archives = temp_workspace / "Knowledge" / "Archives"
+        file_date = date.today() - timedelta(days=10)
+        f = archives / f"{file_date.isoformat()}.md"
+        f.write_text("content")
+
+        mgr = SwarmWorkspaceManager()
+        # With default 90 days, file should survive
+        assert mgr.prune_archives(str(temp_workspace)) == 0
+        assert f.exists()
+
+        # With 5-day cutoff, file should be pruned
+        deleted = mgr.prune_archives(str(temp_workspace), max_age_days=5)
+        assert deleted == 1
+        assert not f.exists()
+
+    def test_todays_file_preserved(self, temp_workspace):
+        """Today's file should never be deleted."""
+        from datetime import date
+
+        archives = temp_workspace / "Knowledge" / "Archives"
+        today_file = archives / f"{date.today().isoformat()}.md"
+        today_file.write_text("today's activity")
+
+        mgr = SwarmWorkspaceManager()
+        deleted = mgr.prune_archives(str(temp_workspace))
+
+        assert deleted == 0
+        assert today_file.exists()

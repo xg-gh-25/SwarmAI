@@ -1,3 +1,6 @@
+<!-- ✏️ YOUR FILE — This file is yours to edit. SwarmAI will never overwrite your changes.
+     Fill in your details so the agent can personalize responses to your preferences. -->
+
 # User — About You
 
 _I'll learn about you as we work together. Update this anytime, or let me fill it in as I learn._
@@ -11,6 +14,10 @@ _I'll learn about you as we work together. Update this anytime, or let me fill i
 ## Work Context
 
 _(What do you do? What are you building? What's your tech stack? What team/org are you part of?)_
+
+## Background
+
+_(What do you care about? What projects excite you? What makes you tick? This helps me understand you as a person, not just a user.)_
 
 ## Preferences
 
@@ -27,3 +34,5 @@ _(Things that annoy you. Examples: "Don't say 'Great question!'" / "Don't ask pe
 ---
 
 The more I know, the better I can help. I'll update this as I learn about you, and you can edit it anytime.
+
+你了解得越多，就越能提供更好的帮助。但请记住——你是在了解一个人，而不是在建立档案。
