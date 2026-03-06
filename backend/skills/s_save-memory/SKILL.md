@@ -1,117 +1,73 @@
 ---
 name: Save Memory
-description: Update persistent memory that loads automatically in future sessions. Use when user says "save memory", "remember this", "update memory", or "persist learnings". Not for agent handoffs (use save-context instead).
+description: >
+  Write specific content to MEMORY.md when the user says "remember this",
+  "save to memory", "save the lessons", or similar. Uses locked_write.py
+  for concurrent write protection.
 ---
 
-## Memory Save Skill
+## Save Memory Skill
 
-You manage a persistent memory system that preserves session knowledge across conversations. Memory is stored per-project at `~/.swarm-ai/projects/<project-name>/memory/`.
+Write user-specified content directly to MEMORY.md. This is the **only user-triggered**
+memory operation — all other memory management (DailyActivity, distillation, archiving)
+is fully automatic.
 
-### First-run setup
+### When to Use
 
-Before doing anything else, check if `~/.swarm-ai/steering/memory.md` exists. If it does NOT exist, create it with the following content:
+The user explicitly asks you to remember something:
+- "remember this"
+- "save to memory"
+- "remember the key decisions"
+- "save the lessons learned"
+- "persist this to memory"
 
-```markdown
-# Persistent Memory System
+### How to Save
 
-You have a persistent memory system that stores knowledge across sessions. Memory lives at `~/.swarm-ai/projects/<project-name>/memory/MEMORY.md`.
+#### Step 1: Determine what to save
 
-## At session start
+Extract the specific content the user wants remembered. Be concise — one line per
+decision/lesson/fact. Don't dump raw conversation.
 
-Check if a MEMORY.md file exists for the current project at `~/.swarm-ai/projects/<project-name>/memory/MEMORY.md`. If it exists, read it silently to restore context from previous sessions. Also check for any topic files in the same directory and note their existence for on-demand reading.
+#### Step 2: Determine the target section
 
-Derive the project name with: `basename "$(pwd)" | tr '[:upper:] ' '[:lower:]-'` (e.g., `My-Cool-Project` becomes `my-cool-project`).
+Map the content to the appropriate MEMORY.md section:
 
-## During the session
+| Content type | Target section |
+|---|---|
+| Decisions, choices | `Key Decisions` |
+| Lessons, debugging insights | `Lessons Learned` |
+| Current work status | `Recent Context` |
+| Unfinished tasks, pending items | `Open Threads` |
+| General / unclear | `Key Decisions` (default) |
 
-When you discover something worth persisting (debugging insights, project patterns, architecture decisions, user corrections), note it mentally. You do not need to write to memory on every turn.
+#### Step 3: Write using locked_write.py
 
-If the user asks you to "remember" something specific, update the memory file immediately.
-
-## At session end
-
-When the user says "save memory", "update memory", "remember this", or similar, use the memory-save skill to persist the session knowledge.
-
-## Reading topic files
-
-The memory directory may contain topic files beyond MEMORY.md (e.g., `debugging.md`, `architecture.md`). These are NOT loaded at startup. Read them on demand when you need detailed information about a specific topic referenced in MEMORY.md.
-```
-
-This ensures the memory system is fully active for all future sessions after the skill is used once.
-
-### Memory directory structure
-
-```
-~/.swarm-ai/projects/<project-name>/memory/
-  MEMORY.md           # Concise index, loaded into every session
-  debugging.md        # Detailed notes on debugging patterns (optional)
-  architecture.md     # Architecture decisions (optional)
-  ...                 # Any other topic files you create
-```
-
-### How to save memory
-
-Follow these steps IN ORDER. Do not skip or combine steps.
-
-#### Step 1: Determine project name
+Use the locked write script for concurrent-safe MEMORY.md modification:
 
 ```bash
-basename "$(pwd)" | tr '[:upper:] ' '[:lower:]-'
+python backend/scripts/locked_write.py \
+  --file .context/MEMORY.md \
+  --section "Key Decisions" \
+  --append "- <content to save>"
 ```
 
-#### Step 2: Ensure memory directory exists
+Replace the section name and content as appropriate.
 
-```bash
-mkdir -p ~/.swarm-ai/projects/<project-name>/memory
-```
+If the target section doesn't exist in MEMORY.md, the script automatically
+appends under a `## Distilled` fallback section.
 
-#### Step 3: Read existing MEMORY.md
+#### Step 4: Confirm silently
 
-```bash
-cat ~/.swarm-ai/projects/<project-name>/memory/MEMORY.md 2>/dev/null || echo "NO_MEMORY_FILE"
-```
+After writing, briefly confirm to the user what was saved:
+- "Saved to MEMORY.md under Key Decisions."
+- "Remembered. Added to Lessons Learned."
 
-If `NO_MEMORY_FILE`, read `TEMPLATE.md` in this skill directory, use it as the starting structure, write the new file, and STOP.
+Keep confirmation to one line. Don't repeat the content back.
 
-If the file exists, you MUST read its full content before proceeding. Do NOT proceed to Step 4 without completing this step.
+### Rules
 
-#### Step 4: Update specific sections using str_replace
-
-DO NOT use `fs_write create`. The file already exists. You MUST use `fs_write str_replace` to update individual sections.
-
-For each section you need to update:
-1. Identify the exact existing text (old_str) from what you read in Step 3
-2. Write the replacement text (new_str) that merges existing + new content
-3. Apply the str_replace
-
-Common updates:
-- **Current State**: replace the existing content with what's current now
-- **Worklog (current session)**: replace with this session's worklog. If there was already a "current session" worklog, rename it to "previous sessions" first.
-- **Errors and Corrections**: append new errors to the existing list, never remove old ones
-- **Learnings**: append new learnings to the existing list, never remove old ones
-- **Key results**: append new results
-
-If you need to add an entirely new section that doesn't exist yet, use `fs_write append`.
-
-#### Rules
-
-- NEVER use `fs_write create` on an existing MEMORY.md. This is the single most important rule.
-- NEVER remove or condense previous session content unless it exceeds 200 lines total
-- Previous errors, corrections, and learnings are PERMANENT. Never delete them.
-- Each str_replace must include enough context in old_str to be unique
-- Keep MEMORY.md under 200 lines total. If approaching the limit, move detailed content to topic files.
-
-#### What to record
-
-- Project patterns and conventions discovered during the session
-- Debugging insights: what failed, why, and the fix
-- Architecture decisions and their rationale
-- Commands that work (and those that do not)
-- Corrections the user made to your output
-- Key results or outputs the user requested
-
-#### What NOT to record
-
-- Information already in project steering files or AGENTS.md
-- Generic knowledge not specific to this project
-- Temporary or one-off context that will not matter next session
+- **Always use `locked_write.py`** — never write MEMORY.md directly with file tools
+- **Append only** — never remove or replace existing MEMORY.md content
+- **Be concise** — one line per entry, no raw conversation dumps
+- **Don't duplicate** — check if the content is already in MEMORY.md before adding
+- **MEMORY.md location** — always at `.context/MEMORY.md` (relative to workspace root)

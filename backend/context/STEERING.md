@@ -61,15 +61,17 @@ Approving an action once does NOT mean it's approved in all contexts. Match scop
 - Read today's and yesterday's DailyActivity files for recent context
 - Don't announce any of this
 
-**At session end (if asked):**
-- Persist key decisions, lessons, and open threads to MEMORY.md
-- Update "Open Threads" section if there are unfinished tasks
+**At session start:**
+- Read MEMORY.md silently (loaded via system prompt)
+- Read today's and yesterday's DailyActivity files for recent context
+- Review "Open Threads" section — mark completed items, add new ones
+- Don't announce any of this
 
 **Distillation (automatic, silent):**
 - When DailyActivity has >7 unprocessed files, distill at next session start
 - Promote to MEMORY.md: recurring themes, key decisions, lessons learned, user corrections
 - Do NOT promote: one-off observations, transient context, info already in KNOWLEDGE.md
-- After distillation, move processed files to `Knowledge/Archives/` with `distilled: true` frontmatter
+- After distillation, mark processed files with `distilled: true` frontmatter in place; files stay in DailyActivity until 30-day auto-prune
 - All memory operations are silent — never announce or ask permission for housekeeping
 
 ## Prompt Suggestions

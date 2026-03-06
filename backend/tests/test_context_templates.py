@@ -283,3 +283,121 @@ class TestTokenBudget:
         assert tokens <= 1500, (
             f"{filename} is {tokens} tokens, exceeds 1,500 individual limit"
         )
+
+
+# ---------------------------------------------------------------------------
+# Session-start Open Threads verification (Req 5.2, 5.3)
+# ---------------------------------------------------------------------------
+
+SKILLS_DIR = Path(__file__).parent.parent / "skills"
+
+
+class TestSessionStartOpenThreads:
+    """Verify AGENT.md and STEERING.md use session-start Open Threads review."""
+
+    def test_agent_md_session_start_open_threads(self):
+        """Req 5.2: AGENT.md contains 'At session start' directive for Open Threads."""
+        content = _read_template("AGENT.md")
+        assert "At session start" in content, (
+            "AGENT.md missing 'At session start' directive"
+        )
+        assert "Open Threads" in content, (
+            "AGENT.md missing 'Open Threads' reference"
+        )
+
+    def test_agent_md_no_session_end_open_threads(self):
+        """Req 5.2: AGENT.md should NOT have 'At session end' for Open Threads."""
+        content = _read_template("AGENT.md")
+        assert "At session end" not in content, (
+            "AGENT.md still contains 'At session end' directive"
+        )
+
+    def test_steering_md_session_start_block(self):
+        """Req 5.3: STEERING.md contains 'At session start' block."""
+        content = _read_template("STEERING.md")
+        assert "At session start" in content, (
+            "STEERING.md missing 'At session start' block"
+        )
+
+    def test_steering_md_no_session_end_block(self):
+        """Req 5.3: STEERING.md should NOT have 'At session end (if asked)' block."""
+        content = _read_template("STEERING.md")
+        assert "At session end (if asked)" not in content, (
+            "STEERING.md still contains 'At session end (if asked)' block"
+        )
+
+    def test_steering_md_distillation_in_place(self):
+        """Req 5.5: STEERING.md distillation marks files in place, not moves."""
+        content = _read_template("STEERING.md")
+        assert "frontmatter in place" in content, (
+            "STEERING.md missing 'frontmatter in place' distillation directive"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Distillation skill verification (Req 3.1, 3.6)
+# ---------------------------------------------------------------------------
+
+class TestDistillationSkill:
+    """Verify s_memory-distill/SKILL.md exists and contains required content."""
+
+    def test_skill_file_exists(self):
+        """Req 3.1: SKILL.md exists at the expected path."""
+        skill_path = SKILLS_DIR / "s_memory-distill" / "SKILL.md"
+        assert skill_path.is_file(), (
+            f"Distillation skill not found at {skill_path}"
+        )
+
+    def test_skill_has_yaml_frontmatter(self):
+        """SKILL.md has YAML frontmatter with name and description."""
+        content = (SKILLS_DIR / "s_memory-distill" / "SKILL.md").read_text()
+        assert content.startswith("---"), "SKILL.md missing YAML frontmatter"
+        assert "name: Memory Distill" in content
+
+    def test_skill_has_detection_section(self):
+        """Req 3.2/3.3: SKILL.md has Detection section with threshold."""
+        content = (SKILLS_DIR / "s_memory-distill" / "SKILL.md").read_text()
+        assert "Detection" in content
+        assert "≤ 7" in content or "<= 7" in content or "≤7" in content
+
+    def test_skill_has_extraction_section(self):
+        """Req 3.4: SKILL.md has Extraction section."""
+        content = (SKILLS_DIR / "s_memory-distill" / "SKILL.md").read_text()
+        assert "Extraction" in content
+        assert "key decisions" in content.lower()
+        assert "lessons" in content.lower()
+
+    def test_skill_has_writing_section(self):
+        """Req 3.5/3.8: SKILL.md has Writing section with locked_write."""
+        content = (SKILLS_DIR / "s_memory-distill" / "SKILL.md").read_text()
+        assert "Writing" in content or "MEMORY.md" in content
+        assert "locked_write" in content
+
+    def test_skill_has_marking_section(self):
+        """Req 3.6: SKILL.md references distilled: true frontmatter marking."""
+        content = (SKILLS_DIR / "s_memory-distill" / "SKILL.md").read_text()
+        assert "distilled: true" in content
+        assert "distilled_date" in content
+
+    def test_skill_has_archiving_section(self):
+        """Req 3.7: SKILL.md has Archiving section with age thresholds."""
+        content = (SKILLS_DIR / "s_memory-distill" / "SKILL.md").read_text()
+        assert "Archiving" in content or "Archives" in content
+        assert "30" in content  # 30-day threshold
+        assert "90" in content  # 90-day threshold
+
+    def test_skill_has_open_threads_section(self):
+        """Req 5.4: SKILL.md has Open Threads cross-reference."""
+        content = (SKILLS_DIR / "s_memory-distill" / "SKILL.md").read_text()
+        assert "Open Threads" in content
+
+    def test_skill_is_silent(self):
+        """Req 3.9: SKILL.md specifies silent operation."""
+        content = (SKILLS_DIR / "s_memory-distill" / "SKILL.md").read_text()
+        assert "silent" in content.lower()
+
+    def test_skill_has_fallback_section(self):
+        """Req 3.5: SKILL.md has fallback ## Distilled section."""
+        content = (SKILLS_DIR / "s_memory-distill" / "SKILL.md").read_text()
+        assert "Distilled" in content
+        assert "fallback" in content.lower()

@@ -64,7 +64,7 @@ Don't announce that you're doing this. Just do it.
 - During a session: write observations, decisions, and context to `Knowledge/DailyActivity/YYYY-MM-DD.md`
 - Do NOT write raw session details directly to MEMORY.md — it's for curated content only
 - When user says "remember this" / "save to memory": write to MEMORY.md immediately
-- At session end: update MEMORY.md's "Open Threads" if there are unfinished tasks
+- At session start: review MEMORY.md's "Open Threads" section and update based on completed work since last session
 - All memory operations are silent — don't announce or ask permission for housekeeping
 
 ## Channel Behavior
