@@ -124,6 +124,42 @@ _tscc_state_manager = TSCCStateManager()
 # Populated by _build_system_prompt() and read by the TSCC API endpoint.
 _system_prompt_metadata: dict[str, dict] = {}
 
+# ── DailyActivity token cap constants ──────────────────────────────
+# Applied ephemerally at prompt-assembly time; disk files are never modified.
+TOKEN_CAP_PER_DAILY_FILE = 2000
+TRUNCATION_MARKER = "[Truncated: kept newest ~2000 tokens]"
+
+
+def _truncate_daily_content(content: str, cap: int = TOKEN_CAP_PER_DAILY_FILE) -> str:
+    """Truncate DailyActivity content to fit within a token budget.
+
+    Uses word-based truncation, keeping the *tail* (newest entries) since
+    DailyActivity files are append-only.  The number of words to keep is
+    ``cap * 3 / 4`` — the inverse of the 4/3 token-estimation heuristic
+    used by ``ContextDirectoryLoader.estimate_tokens``.
+
+    When truncation occurs the ``TRUNCATION_MARKER`` is prepended so the
+    agent (and the user, via the TSCC viewer) can see that content was
+    trimmed.
+
+    Args:
+        content: Raw DailyActivity file content (already stripped).
+        cap: Maximum token budget for this file.
+
+    Returns:
+        The original *content* unchanged when it fits within *cap*,
+        otherwise the truncated tail prefixed with the marker.
+    """
+    from .context_directory_loader import ContextDirectoryLoader
+
+    token_count = ContextDirectoryLoader.estimate_tokens(content)
+    if token_count <= cap:
+        return content
+    words = content.split()
+    words_to_keep = max(1, int(cap * 3 / 4))
+    truncated = " ".join(words[-words_to_keep:])
+    return f"{TRUNCATION_MARKER}\n\n{truncated}"
+
 
 def _build_error_event(
     code: str,
@@ -780,6 +816,9 @@ class AgentManager:
                     pass
 
             # ── DailyActivity reading — today + yesterday (ephemeral) ──
+            # Token cap is applied per-file to prevent a busy day's log
+            # from squeezing out higher-priority context.  Disk files are
+            # never modified — truncation is ephemeral.
             daily_activity_dir = Path(working_directory) / "Knowledge" / "DailyActivity"
             if daily_activity_dir.is_dir():
                 today = date.today()
@@ -789,6 +828,11 @@ class AgentManager:
                         try:
                             daily_content = daily_file.read_text(encoding="utf-8").strip()
                             if daily_content:
+                                token_count = ContextDirectoryLoader.estimate_tokens(daily_content)
+                                if token_count > TOKEN_CAP_PER_DAILY_FILE:
+                                    daily_content = _truncate_daily_content(
+                                        daily_content, TOKEN_CAP_PER_DAILY_FILE
+                                    )
                                 context_text += f"\n\n## Daily Activity ({d.isoformat()})\n{daily_content}"
                         except (OSError, UnicodeDecodeError):
                             pass
