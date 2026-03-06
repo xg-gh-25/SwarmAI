@@ -46,17 +46,17 @@ function arbTextBlock(): fc.Arbitrary<ContentBlock> {
   }) as fc.Arbitrary<ContentBlock>;
 }
 
-/** Generator for a tool_use content block with input */
+/** Generator for a tool_use content block with summary */
 function arbToolUseBlock(): fc.Arbitrary<ContentBlock> {
   return fc.record({
     type: fc.constant('tool_use' as const),
     id: fc.uuid(),
     name: fc.constantFrom('Bash', 'Read', 'Write', 'Search', 'ListDir'),
-    input: fc.oneof(
-      fc.record({ command: fc.string({ minLength: 1, maxLength: 80 }) }),
-      fc.record({ path: fc.string({ minLength: 1, maxLength: 80 }) }),
-      fc.record({ query: fc.string({ minLength: 1, maxLength: 80 }) }),
-      fc.constant({})
+    summary: fc.oneof(
+      fc.string({ minLength: 1, maxLength: 80 }).map(s => `Running: ${s}`),
+      fc.string({ minLength: 1, maxLength: 80 }).map(s => `Reading ${s}`),
+      fc.string({ minLength: 1, maxLength: 80 }).map(s => `Searching for ${s}`),
+      fc.constant('Using tool')
     ),
   }) as fc.Arbitrary<ContentBlock>;
 }
@@ -68,6 +68,7 @@ function arbToolResultBlock(): fc.Arbitrary<ContentBlock> {
     toolUseId: fc.uuid(),
     content: fc.string({ minLength: 1, maxLength: 100 }),
     isError: fc.constant(false),
+    truncated: fc.constant(false),
   }) as fc.Arbitrary<ContentBlock>;
 }
 
@@ -278,7 +279,7 @@ describe('Streaming Lifecycle Preservation Tests (Property 10)', () => {
                 type: 'tool_use' as const,
                 id: toolId,
                 name: toolName,
-                input: {},
+                summary: 'Using tool',
               }],
               timestamp: new Date().toISOString(),
             }];

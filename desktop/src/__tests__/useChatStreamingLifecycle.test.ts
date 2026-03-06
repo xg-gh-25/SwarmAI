@@ -68,8 +68,6 @@ import {
   deriveStreamingActivity,
   formatElapsed,
   ELAPSED_DISPLAY_THRESHOLD_MS,
-  sanitizeCommand,
-  extractToolContext,
   MIN_ACTIVITY_DISPLAY_MS,
   persistPendingState,
   restorePendingState,
@@ -1804,13 +1802,13 @@ describe('Fix 4: deriveStreamingActivity with operational context', () => {
             type: 'tool_use' as const,
             id: 'tu-1',
             name: 'Bash',
-            input: { command: 'npm test -- --run' },
+            summary: 'Running: npm test -- --run',
           }],
         }),
       ]);
       expect(result).not.toBeNull();
       expect(result!.toolName).toBe('Bash');
-      expect(result!.toolContext).toBe('npm test -- --run');
+      expect(result!.toolContext).toBe('Running: npm test -- --run');
       expect(result!.toolCount).toBe(1);
     });
 
@@ -1822,11 +1820,11 @@ describe('Fix 4: deriveStreamingActivity with operational context', () => {
             type: 'tool_use' as const,
             id: 'tu-2',
             name: 'Read',
-            input: { path: 'src/components/Chat.tsx' },
+            summary: 'Reading src/components/Chat.tsx',
           }],
         }),
       ]);
-      expect(result!.toolContext).toBe('src/components/Chat.tsx');
+      expect(result!.toolContext).toBe('Reading src/components/Chat.tsx');
     });
 
     it('returns toolContext from query input', () => {
@@ -1837,11 +1835,11 @@ describe('Fix 4: deriveStreamingActivity with operational context', () => {
             type: 'tool_use' as const,
             id: 'tu-3',
             name: 'Search',
-            input: { query: 'error handling pattern' },
+            summary: 'Searching for error handling pattern',
           }],
         }),
       ]);
-      expect(result!.toolContext).toBe('error handling pattern');
+      expect(result!.toolContext).toBe('Searching for error handling pattern');
     });
 
     it('counts multiple tool_use blocks correctly', () => {
@@ -1849,21 +1847,21 @@ describe('Fix 4: deriveStreamingActivity with operational context', () => {
         makeMessage({
           role: 'assistant',
           content: [
-            { type: 'tool_use' as const, id: 'tu-a', name: 'Read', input: { path: 'a.ts' } },
-            { type: 'tool_result' as const, toolUseId: 'tu-a', content: 'ok', isError: false },
-            { type: 'tool_use' as const, id: 'tu-b', name: 'Bash', input: { command: 'ls' } },
-            { type: 'tool_result' as const, toolUseId: 'tu-b', content: 'ok', isError: false },
-            { type: 'tool_use' as const, id: 'tu-c', name: 'Search', input: { query: 'foo' } },
+            { type: 'tool_use' as const, id: 'tu-a', name: 'Read', summary: 'Reading a.ts' },
+            { type: 'tool_result' as const, toolUseId: 'tu-a', content: 'ok', isError: false, truncated: false },
+            { type: 'tool_use' as const, id: 'tu-b', name: 'Bash', summary: 'Running: ls' },
+            { type: 'tool_result' as const, toolUseId: 'tu-b', content: 'ok', isError: false, truncated: false },
+            { type: 'tool_use' as const, id: 'tu-c', name: 'Search', summary: 'Searching for foo' },
           ],
         }),
       ]);
       expect(result!.toolCount).toBe(3);
       // Last tool_use is Search
       expect(result!.toolName).toBe('Search');
-      expect(result!.toolContext).toBe('foo');
+      expect(result!.toolContext).toBe('Searching for foo');
     });
 
-    it('returns toolContext=null when tool_use has no input', () => {
+    it('returns toolContext from summary when tool_use has summary', () => {
       const result = deriveStreamingActivity(true, [
         makeMessage({
           role: 'assistant',
@@ -1871,11 +1869,11 @@ describe('Fix 4: deriveStreamingActivity with operational context', () => {
         }),
       ]);
       expect(result!.toolName).toBe('Bash');
-      expect(result!.toolContext).toBeNull();
+      expect(result!.toolContext).toBe('Using tool');
       expect(result!.toolCount).toBe(1);
     });
 
-    it('returns toolContext=null when tool_use input is empty object', () => {
+    it('returns toolContext from summary when tool_use summary is generic', () => {
       const result = deriveStreamingActivity(true, [
         makeMessage({
           role: 'assistant',
@@ -1883,127 +1881,12 @@ describe('Fix 4: deriveStreamingActivity with operational context', () => {
             type: 'tool_use' as const,
             id: 'tu-empty',
             name: 'Custom',
-            input: {},
+            summary: 'Using tool',
           }],
         }),
       ]);
-      expect(result!.toolContext).toBeNull();
+      expect(result!.toolContext).toBe('Using tool');
     });
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Fix 4: sanitizeCommand tests
-// ---------------------------------------------------------------------------
-
-describe('sanitizeCommand', () => {
-  it('returns command unchanged when no sensitive content', () => {
-    expect(sanitizeCommand('npm test -- --run')).toBe('npm test -- --run');
-  });
-
-  it('strips content after --password flag', () => {
-    expect(sanitizeCommand('mysql -u root --password secret123')).toBe('mysql -u root');
-  });
-
-  it('strips content after --token flag', () => {
-    expect(sanitizeCommand('curl -H --token abc123xyz')).toBe('curl -H');
-  });
-
-  it('strips content after --key flag', () => {
-    expect(sanitizeCommand('aws s3 cp --key AKIAIOSFODNN7')).toBe('aws s3 cp');
-  });
-
-  it('strips environment variable assignments', () => {
-    expect(sanitizeCommand('API_KEY=secret123 node server.js')).toBe('node server.js');
-  });
-
-  it('strips multiple env var assignments', () => {
-    const result = sanitizeCommand('DB_PASS=foo TOKEN=bar node app.js');
-    expect(result).toBe('node app.js');
-  });
-
-  it('returns [command] when entire command is sensitive', () => {
-    expect(sanitizeCommand('SECRET_KEY=abc123')).toBe('[command]');
-  });
-
-  it('returns [command] for empty string after sanitization', () => {
-    expect(sanitizeCommand('--password mysecret')).toBe('[command]');
-  });
-
-  it('truncates to 60 characters', () => {
-    const longCmd = 'npm run build -- --config=production --output-dir=/very/long/path/that/exceeds/sixty/characters/limit';
-    expect(sanitizeCommand(longCmd).length).toBeLessThanOrEqual(60);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Fix 4: extractToolContext tests
-// ---------------------------------------------------------------------------
-
-describe('extractToolContext', () => {
-  it('returns null for null input', () => {
-    expect(extractToolContext(null)).toBeNull();
-  });
-
-  it('returns null for undefined input', () => {
-    expect(extractToolContext(undefined)).toBeNull();
-  });
-
-  it('returns null for empty object', () => {
-    expect(extractToolContext({})).toBeNull();
-  });
-
-  it('prioritizes command over path and query', () => {
-    const result = extractToolContext({
-      command: 'npm test',
-      path: 'src/index.ts',
-      query: 'search term',
-    });
-    expect(result).toBe('npm test');
-  });
-
-  it('prioritizes path over query when no command', () => {
-    const result = extractToolContext({
-      path: 'src/index.ts',
-      query: 'search term',
-    });
-    expect(result).toBe('src/index.ts');
-  });
-
-  it('uses file_path when path is absent', () => {
-    const result = extractToolContext({ file_path: 'lib/utils.ts' });
-    expect(result).toBe('lib/utils.ts');
-  });
-
-  it('uses query when no command or path', () => {
-    const result = extractToolContext({ query: 'error handling' });
-    expect(result).toBe('error handling');
-  });
-
-  it('uses search when no command, path, or query', () => {
-    const result = extractToolContext({ search: 'TODO fixme' });
-    expect(result).toBe('TODO fixme');
-  });
-
-  it('uses pattern when no other keys', () => {
-    const result = extractToolContext({ pattern: '*.test.ts' });
-    expect(result).toBe('*.test.ts');
-  });
-
-  it('returns null for non-string values', () => {
-    expect(extractToolContext({ command: 123 })).toBeNull();
-    expect(extractToolContext({ path: true })).toBeNull();
-  });
-
-  it('returns null for whitespace-only strings', () => {
-    expect(extractToolContext({ command: '   ' })).toBeNull();
-    expect(extractToolContext({ path: '  ' })).toBeNull();
-  });
-
-  it('truncates long values to 60 chars', () => {
-    const longPath = 'a'.repeat(100);
-    const result = extractToolContext({ path: longPath });
-    expect(result!.length).toBeLessThanOrEqual(60);
   });
 });
 
@@ -2039,7 +1922,7 @@ describe('Fix 4: Activity label debounce', () => {
             type: 'tool_use' as const,
             id: 'tu-d1',
             name: 'Bash',
-            input: { command: 'npm test' },
+            summary: 'Running: npm test',
           }],
         }),
       ]);
@@ -2058,8 +1941,8 @@ describe('Fix 4: Activity label debounce', () => {
         makeMessage({
           role: 'assistant',
           content: [
-            { type: 'tool_use' as const, id: 'tu-d1', name: 'Bash', input: { command: 'npm test' } },
-            { type: 'tool_use' as const, id: 'tu-d2', name: 'Read', input: { path: 'src/app.ts' } },
+            { type: 'tool_use' as const, id: 'tu-d1', name: 'Bash', summary: 'Running: npm test' },
+            { type: 'tool_use' as const, id: 'tu-d2', name: 'Read', summary: 'Reading src/app.ts' },
           ],
         }),
       ]);
@@ -2091,7 +1974,7 @@ describe('Fix 4: Activity label debounce', () => {
             type: 'tool_use' as const,
             id: 'tu-final',
             name: 'Bash',
-            input: { command: 'echo done' },
+            summary: 'Running: echo done',
           }],
         }),
       ]);
@@ -2286,7 +2169,7 @@ describe('Fix 5: prepareMessagesForStorage', () => {
         role: 'assistant',
         content: [
           makeToolUse('Bash'),
-          { type: 'tool_result' as const, toolUseId: 'tr-1', content: 'long result text here', isError: false },
+          { type: 'tool_result' as const, toolUseId: 'tr-1', content: 'long result text here', isError: false, truncated: false },
         ],
       }),
     ];
@@ -2303,13 +2186,14 @@ describe('Fix 5: prepareMessagesForStorage', () => {
         type: 'tool_use' as const,
         id: `tu-${i}`,
         name: 'Bash',
-        input: {},
+        summary: 'Using tool',
       });
       content.push({
         type: 'tool_result' as const,
         toolUseId: `tu-${i}`,
         content: 'x'.repeat(500), // 500 chars — should be truncated to 200
         isError: false,
+        truncated: false,
       });
     }
 
@@ -2336,7 +2220,7 @@ describe('Fix 5: prepareMessagesForStorage', () => {
         type: 'tool_use' as const,
         id: `tu-${i}`,
         name: 'Read',
-        input: {},
+        summary: 'Using tool',
       });
     }
     content.push({ type: 'text', text: 'x'.repeat(500) });

@@ -9,15 +9,6 @@ description: "Comprehensive document creation, editing, and analysis with suppor
 
 A user may ask you to create, edit, or analyze the contents of a .docx file. A .docx file is essentially a ZIP archive containing XML files and other resources that you can read or edit. You have different tools and workflows available for different tasks.
 
-## Output Location
-
-**All generated .docx files should be saved to:**
-```
-~/.swarm-ai/SwarmWS/Knowledge/Notes/
-```
-
-This is the designated location for draft documents. Once finalized, documents can be moved to `Knowledge/Knowledge Base/`.
-
 ## Workflow Decision Tree
 
 ### Reading/Analyzing Content
@@ -25,7 +16,6 @@ Use "Text extraction" or "Raw XML access" sections below
 
 ### Creating New Document
 Use "Creating a new Word document" workflow
-**Save output to:** `~/.swarm-ai/SwarmWS/Knowledge/Notes/<filename>.docx`
 
 ### Editing Existing Document
 - **Your own document + simple changes**
@@ -64,10 +54,151 @@ You need raw XML access for: comments, complex formatting, document structure, e
 
 When creating a new Word document from scratch, use **docx-js**, which allows you to create Word documents using JavaScript/TypeScript.
 
+### Design Principles
+
+**CRITICAL**: Before creating any document, analyze the content and choose appropriate design elements:
+
+1. **Consider the subject matter**: What is this document about? What tone does it suggest?
+2. **Check for branding**: If the user mentions a company/organization, consider their brand colors
+3. **Match palette to content**: Select colors that reflect the subject
+4. **State your approach**: Explain your design choices before writing code
+
+**Requirements**:
+- ✅ State your content-informed design approach BEFORE writing code
+- ✅ Use universally supported fonts: Arial (recommended default), Times New Roman, Georgia, Verdana, Courier New
+- ✅ Create clear visual hierarchy through size, weight, and color
+- ✅ Ensure readability: strong contrast, appropriate text sizes, clean alignment
+- ✅ Be consistent: repeat patterns, spacing, and visual language throughout
+
+### Color Palette Selection
+
+Choose colors creatively based on the document's topic, audience, and tone. Build a palette of 3-5 colors (hex values WITHOUT `#` prefix for docx-js):
+
+| Palette | Primary | Header BG | Accent | Light BG | Border |
+|---------|---------|-----------|--------|----------|--------|
+| Corporate Blue | 1C2833 | 2E4053 | 3498DB | F4F6F6 | D5DBDB |
+| AWS Orange | 232F3E | 37475A | FF9900 | F8F9FA | D5DBDB |
+| Warm Professional | 5D1D2E | 951233 | C15937 | FAF7F2 | E8D5D0 |
+| Modern Teal | 277884 | 5EA8A7 | FE4447 | F0FAFA | B8D8D8 |
+| Forest Green | 1E5128 | 4E9F3D | D8E9A8 | F5FAF0 | C5DEB5 |
+| Charcoal & Red | 292929 | 555555 | E33737 | F2F2F2 | CCCCCC |
+
 ### Workflow
 1. **MANDATORY - READ ENTIRE FILE**: Read [`docx-js.md`](docx-js.md) (~500 lines) completely from start to finish. **NEVER set any range limits when reading this file.** Read the full file content for detailed syntax, critical formatting rules, and best practices before proceeding with document creation.
-2. Create a JavaScript/TypeScript file using Document, Paragraph, TextRun components (You can assume all dependencies are installed, but if not, refer to the dependencies section below)
-3. Export as .docx using Packer.toBuffer()
+2. **Analyze content** — Determine document type (report, guide, proposal, letter, etc.)
+3. **Choose design** — Select color palette, fonts, and layout style
+4. **Define custom styles** — Override built-in Heading1/Heading2/Title styles with your palette
+5. **Build reusable helpers** — Create functions for tables, tip boxes, step cards (see patterns below)
+6. **Generate the document** — Create a JavaScript file using Document, Paragraph, TextRun components
+7. **Export** — Save as .docx using `Packer.toBuffer()`
+8. **Validate visually** — Convert to images and inspect for layout issues (see Visual Validation below)
+
+### Reusable Component Patterns
+
+Use these helper patterns to avoid repetitive boilerplate. Adapt colors to your chosen palette.
+
+#### Styled Table with Header and Alternating Rows
+
+```javascript
+const { Table, TableRow, TableCell, Paragraph, TextRun,
+  BorderStyle, WidthType, ShadingType, VerticalAlign, AlignmentType } = require('docx');
+
+const TB = { style: BorderStyle.SINGLE, size: 1, color: "D5DBDB" };
+const CB = { top: TB, bottom: TB, left: TB, right: TB };
+
+function headerCell(text, width) {
+  return new TableCell({
+    borders: CB, width: { size: width, type: WidthType.DXA },
+    shading: { fill: "37475A", type: ShadingType.CLEAR },
+    verticalAlign: VerticalAlign.CENTER,
+    children: [new Paragraph({ children: [
+      new TextRun({ text, bold: true, size: 18, font: "Arial", color: "FFFFFF" })
+    ] })]
+  });
+}
+
+function dataCell(text, width, opts = {}) {
+  return new TableCell({
+    borders: CB, width: { size: width, type: WidthType.DXA },
+    shading: opts.shaded ? { fill: "F8F9FA", type: ShadingType.CLEAR } : undefined,
+    children: [new Paragraph({ children: [
+      new TextRun({ text, size: 18, font: "Arial", bold: opts.bold,
+        color: opts.bold ? "232F3E" : "000000" })
+    ] })]
+  });
+}
+
+// Usage: alternating rows
+rows.map((row, i) => new TableRow({ children: [
+  dataCell(row[0], 3200, { bold: true, shaded: i % 2 === 1 }),
+  dataCell(row[1], 6160, { shaded: i % 2 === 1 }),
+] }));
+```
+
+#### Tip / Callout Box (Orange Left Border)
+
+```javascript
+function tipBox(text, totalWidth) {
+  return new Table({
+    columnWidths: [totalWidth],
+    margins: { top: 60, bottom: 60, left: 120, right: 120 },
+    rows: [new TableRow({ children: [new TableCell({
+      borders: { top: { style: BorderStyle.NONE }, bottom: { style: BorderStyle.NONE },
+        right: { style: BorderStyle.NONE },
+        left: { style: BorderStyle.SINGLE, size: 6, color: "FF9900" } },
+      width: { size: totalWidth, type: WidthType.DXA },
+      shading: { fill: "FFF8E7", type: ShadingType.CLEAR },
+      children: [new Paragraph({ children: [
+        new TextRun({ text: "Tip: ", bold: true, italics: true, size: 18, font: "Arial", color: "6B4C00" }),
+        new TextRun({ text, italics: true, size: 18, font: "Arial", color: "6B4C00" }),
+      ] })]
+    })] })]
+  });
+}
+```
+
+#### Step Card (Numbered Steps with Accent)
+
+```javascript
+function stepParagraphs(num, title, desc, cmd) {
+  const parts = [];
+  parts.push(new Paragraph({ spacing: { before: 160, after: 40 }, children: [
+    new TextRun({ text: `Step ${num}: `, bold: true, size: 22, font: "Arial", color: "FF9900" }),
+    new TextRun({ text: title, bold: true, size: 22, font: "Arial", color: "232F3E" }),
+  ] }));
+  if (desc) parts.push(new Paragraph({ spacing: { after: 40 },
+    children: [new TextRun({ text: desc, size: 18, font: "Arial", color: "555555" })] }));
+  if (cmd) parts.push(new Paragraph({ spacing: { after: 80 },
+    shading: { fill: "EAECEE", type: ShadingType.CLEAR },
+    children: [new TextRun({ text: cmd, size: 18, font: "Courier New", color: "232F3E" })] }));
+  return parts;
+}
+```
+
+### Converting Markdown to DOCX
+
+When converting markdown content to a styled Word document, map markdown elements to docx-js components:
+
+| Markdown Element | docx-js Component |
+|------------------|--------------------|
+| `# Heading 1` | `new Paragraph({ heading: HeadingLevel.HEADING_1, children: [...] })` |
+| `## Heading 2` | `new Paragraph({ heading: HeadingLevel.HEADING_2, children: [...] })` |
+| Body text | `new Paragraph({ children: [new TextRun("text")] })` |
+| `**bold**` | `new TextRun({ text: "bold", bold: true })` |
+| `*italic*` | `new TextRun({ text: "italic", italics: true })` |
+| `` `code` `` | `new TextRun({ text: "code", font: "Courier New", size: 18 })` |
+| Code block | `new Paragraph({ shading: { fill: "EAECEE", type: ShadingType.CLEAR }, children: [new TextRun({ text, font: "Courier New" })] })` |
+| `- list item` | `new Paragraph({ numbering: { reference: "bullet-list", level: 0 }, children: [...] })` |
+| Table | `new Table({ ... })` with headerCell/dataCell helpers |
+| `---` | `new Paragraph({ border: { bottom: { style: BorderStyle.SINGLE, size: 1 } } })` |
+| Page break | `new Paragraph({ children: [new PageBreak()] })` |
+
+**Workflow for markdown conversion:**
+1. Read the markdown source
+2. Parse structure (headings, paragraphs, lists, tables, code blocks)
+3. Map each element to the corresponding docx-js component
+4. Apply consistent styling from your chosen palette
+5. Build and validate
 
 ## Editing an existing Word document
 
@@ -162,9 +293,11 @@ Example - Changing "30 days" to "60 days" in a sentence:
    - Check that no unintended changes were introduced
 
 
-## Converting Documents to Images
+## Visual Validation
 
-To visually analyze Word documents, convert them to images using a two-step process:
+After generating a DOCX, validate the output visually to catch layout issues before delivery.
+
+### Workflow
 
 1. **Convert DOCX to PDF**:
    ```bash
@@ -173,20 +306,35 @@ To visually analyze Word documents, convert them to images using a two-step proc
 
 2. **Convert PDF pages to JPEG images**:
    ```bash
-   pdftoppm -jpeg -r 150 document.pdf page
+   pdftoppm -jpeg -r 150 document.pdf preview
    ```
-   This creates files like `page-1.jpg`, `page-2.jpg`, etc.
+   Creates `preview-1.jpg`, `preview-2.jpg`, etc.
 
-Options:
-- `-r 150`: Sets resolution to 150 DPI (adjust for quality/size balance)
-- `-jpeg`: Output JPEG format (use `-png` for PNG if preferred)
-- `-f N`: First page to convert (e.g., `-f 2` starts from page 2)
-- `-l N`: Last page to convert (e.g., `-l 5` stops at page 5)
-- `page`: Prefix for output files
+3. **Inspect the images** for:
+   - Text cutoff or overflow at page edges
+   - Table columns too narrow or text wrapping poorly
+   - Heading hierarchy is visually clear
+   - Colors have sufficient contrast for readability
+   - Consistent spacing between sections
+   - Page breaks in logical places
+   - Headers/footers rendering correctly
 
-Example for specific range:
+4. **Iterate** — Fix any issues in the generation script and regenerate
+
+Options for pdftoppm:
+- `-r 150`: Resolution in DPI (adjust for quality/size balance)
+- `-jpeg` or `-png`: Output format
+- `-f N -l N`: Specific page range (e.g., `-f 2 -l 5` for pages 2-5)
+
+### Alternative: Text Verification
+
+For quick content checks without visual rendering:
 ```bash
-pdftoppm -jpeg -r 150 -f 2 -l 5 document.pdf page  # Converts only pages 2-5
+# Using pandoc
+pandoc document.docx -o check.md
+
+# Using markitdown (pip install "markitdown[docx]")
+python3 -m markitdown document.docx
 ```
 
 ## Code Style Guidelines
@@ -199,8 +347,16 @@ pdftoppm -jpeg -r 150 -f 2 -l 5 document.pdf page  # Converts only pages 2-5
 
 Required dependencies (install if not available):
 
-- **pandoc**: `sudo apt-get install pandoc` (for text extraction)
+- **pandoc**: `sudo apt-get install pandoc` or `brew install pandoc` (for text extraction)
 - **docx**: `npm install -g docx` (for creating new documents)
-- **LibreOffice**: `sudo apt-get install libreoffice` (for PDF conversion)
-- **Poppler**: `sudo apt-get install poppler-utils` (for pdftoppm to convert PDF to images)
+- **LibreOffice**: `sudo apt-get install libreoffice` or `brew install --cask libreoffice` (for PDF conversion)
+- **Poppler**: `sudo apt-get install poppler-utils` or `brew install poppler` (for pdftoppm)
+- **markitdown**: `pip install "markitdown[docx]"` (for quick text verification)
 - **defusedxml**: `pip install defusedxml` (for secure XML parsing)
+
+**IMPORTANT: NODE_PATH for globally installed packages**
+
+When `docx` is installed globally (`npm install -g docx`), Node.js may not resolve it from project directories. Use:
+```bash
+NODE_PATH=$(npm root -g) node your-script.js
+```

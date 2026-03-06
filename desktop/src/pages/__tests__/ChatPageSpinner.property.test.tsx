@@ -40,7 +40,7 @@ const toolUseContentArb: fc.Arbitrary<ToolUseContent> = nonEmptyString.map(name 
   type: 'tool_use' as const,
   id: `toolu_${Math.random().toString(36).slice(2, 10)}`,
   name,
-  input: {},
+  summary: 'Using tool',
 }));
 
 /** Generate a ToolResultContent block. */
@@ -49,6 +49,7 @@ const toolResultContentArb: fc.Arbitrary<ToolResultContent> = fc.record({
   toolUseId: fc.string({ minLength: 5, maxLength: 15 }),
   content: fc.option(fc.string(), { nil: undefined }),
   isError: fc.boolean(),
+  truncated: fc.boolean(),
 });
 
 /**
@@ -87,7 +88,7 @@ const contentWithTrailingToolUseArb: fc.Arbitrary<{
         type: 'tool_use' as const,
         id: `toolu_${Math.random().toString(36).slice(2, 10)}`,
         name: toolName,
-        input: {},
+        summary: 'Using tool',
       },
     ],
     expectedToolName: toolName,
@@ -188,9 +189,9 @@ describe('deriveStreamingActivity — Bug Condition Exploration', () => {
           fc.pre(firstName !== lastName);
 
           const blocks: ContentBlock[] = [
-            { type: 'tool_use', id: 'tu_1', name: firstName, input: {} },
+            { type: 'tool_use', id: 'tu_1', name: firstName, summary: 'Using tool' },
             { type: 'text', text: 'intermediate output' },
-            { type: 'tool_use', id: 'tu_2', name: lastName, input: {} },
+            { type: 'tool_use', id: 'tu_2', name: lastName, summary: 'Using tool' },
           ];
           const messages: Message[] = [
             makeMessage('user', [{ type: 'text', text: 'do stuff' }]),

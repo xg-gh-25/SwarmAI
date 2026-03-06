@@ -96,7 +96,7 @@ export function makeToolUse(name: string, id?: string): ContentBlock {
     type: 'tool_use' as const,
     id: id ?? crypto.randomUUID(),
     name,
-    input: {},
+    summary: 'Using tool',
   };
 }
 

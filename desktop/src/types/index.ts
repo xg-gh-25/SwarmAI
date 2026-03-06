@@ -156,7 +156,8 @@ export interface ToolUseContent {
   type: 'tool_use';
   id: string;
   name: string;
-  input: Record<string, unknown>;
+  summary: string;
+  category?: string;
 }
 
 export interface ToolResultContent {
@@ -164,6 +165,7 @@ export interface ToolResultContent {
   toolUseId: string;
   content?: string;
   isError: boolean;
+  truncated: boolean;
 }
 
 // AskUserQuestion types

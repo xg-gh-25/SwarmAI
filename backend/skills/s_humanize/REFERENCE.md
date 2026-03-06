@@ -2,6 +2,16 @@
 
 Quick-reference tables for AI pattern detection and replacement strategies.
 
+## Top 5 Highest-Impact Patterns (Fix These First)
+
+| # | Pattern | Example | Fix |
+|---|---------|---------|-----|
+| 1 | **"By [gerund]"** | "By implementing..." | "When implementing...", "Through X,", lead with outcome |
+| 2 | **Em-dashes** | "The result—faster—was..." | Replace with periods, commas, colons, or parentheses |
+| 3 | **"This [verb] that"** | "This suggests that..." | "...which suggests", question form, or just state it |
+| 4 | **Uniform sentence length** | All sentences 12-18 words | Mix short (<6) and long (>25) sentences |
+| 5 | **Indirect speech** | "Research suggests...", "The field is shifting..." | Name actors: "Smith et al. found...", "Researchers are..." |
+
 ---
 
 ## AI Pattern Detection Table

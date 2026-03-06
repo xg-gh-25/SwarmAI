@@ -984,7 +984,7 @@ function ContentBlockRenderer({ block, onAnswerQuestion, pendingToolUseId, isStr
         </div>
         <div className="p-3 max-h-32 overflow-y-auto">
           <pre className="text-xs text-[var(--color-text-muted)] overflow-x-auto whitespace-pre-wrap break-words">
-            <code>{JSON.stringify(block.input, null, 2)}</code>
+            <code>{block.summary}</code>
           </pre>
         </div>
       </div>

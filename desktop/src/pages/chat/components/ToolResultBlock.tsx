@@ -13,9 +13,10 @@ import { useState } from 'react';
 interface ToolResultBlockProps {
   content?: string;
   isError: boolean;
+  truncated: boolean;
 }
 
-export function ToolResultBlock({ content, isError }: ToolResultBlockProps) {
+export function ToolResultBlock({ content, isError, truncated }: ToolResultBlockProps) {
   const [isExpanded, setIsExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
 
@@ -75,6 +76,11 @@ export function ToolResultBlock({ content, isError }: ToolResultBlockProps) {
           <pre className="text-sm text-[var(--color-text-muted)] overflow-x-auto whitespace-pre-wrap break-words">
             <code>{resolvedContent}</code>
           </pre>
+          {truncated && (
+            <span className="text-xs text-[var(--color-text-muted)] italic mt-1 block">
+              Content truncated
+            </span>
+          )}
         </div>
       )}
     </div>

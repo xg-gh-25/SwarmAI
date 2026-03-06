@@ -79,9 +79,6 @@ export function formatElapsed(seconds: number): string {
  */
 export const MIN_ACTIVITY_DISPLAY_MS = 1500;
 
-/** Maximum character length for the operational context string. */
-const MAX_CONTEXT_LENGTH = 60;
-
 /** Shape returned by ``deriveStreamingActivity``. */
 export interface StreamingActivity {
   hasContent: boolean;
@@ -95,80 +92,6 @@ export interface StreamingActivity {
 // ---------------------------------------------------------------------------
 // Pure helpers — exported for unit / property-based test access
 // ---------------------------------------------------------------------------
-
-/**
- * Patterns that indicate sensitive content in a command string.
- * Anything after these tokens (up to the next flag or end-of-string) is stripped.
- */
-const SENSITIVE_FLAG_RE = /--(password|token|key)\b/i;
-
-/**
- * Sanitize a command string by stripping potential secrets.
- *
- * - Strips everything after ``--password``, ``--token``, ``--key``
- * - Strips environment variable ``KEY=value`` assignments
- * - Returns ``[command]`` placeholder if the entire command is sensitive
- * - Truncates to ``MAX_CONTEXT_LENGTH`` characters
- *
- * Exported for testability.
- */
-export function sanitizeCommand(command: string): string {
-  let sanitized = command;
-
-  // Strip everything after sensitive flags
-  const flagMatch = SENSITIVE_FLAG_RE.exec(sanitized);
-  if (flagMatch) {
-    sanitized = sanitized.slice(0, flagMatch.index).trim();
-  }
-
-  // Strip env var assignments (UPPER_CASE=value only — avoids stripping lowercase path=/usr/bin)
-  sanitized = sanitized.replace(/(?:^|\s)[A-Z_][A-Z0-9_]*=\S*/g, '').trim();
-
-  if (!sanitized) return '[command]';
-
-  return sanitized.slice(0, MAX_CONTEXT_LENGTH);
-}
-
-/**
- * Extract operational context from a tool_use block's input object.
- *
- * Priority order:
- *   1. ``input.command`` → sanitized first 60 chars
- *   2. ``input.path`` or ``input.file_path`` → file path directly
- *   3. ``input.query``, ``input.search``, or ``input.pattern`` → first 60 chars
- *   4. Otherwise → ``null``
- *
- * Exported for testability.
- */
-export function extractToolContext(input: Record<string, unknown> | null | undefined): string | null {
-  if (!input || typeof input !== 'object') return null;
-
-  // 1. Command
-  if (typeof input.command === 'string' && input.command.trim()) {
-    return sanitizeCommand(input.command.trim());
-  }
-
-  // 2. File path
-  if (typeof input.path === 'string' && input.path.trim()) {
-    return input.path.trim().slice(0, MAX_CONTEXT_LENGTH);
-  }
-  if (typeof input.file_path === 'string' && input.file_path.trim()) {
-    return input.file_path.trim().slice(0, MAX_CONTEXT_LENGTH);
-  }
-
-  // 3. Query / search / pattern
-  if (typeof input.query === 'string' && input.query.trim()) {
-    return input.query.trim().slice(0, MAX_CONTEXT_LENGTH);
-  }
-  if (typeof input.search === 'string' && input.search.trim()) {
-    return input.search.trim().slice(0, MAX_CONTEXT_LENGTH);
-  }
-  if (typeof input.pattern === 'string' && input.pattern.trim()) {
-    return input.pattern.trim().slice(0, MAX_CONTEXT_LENGTH);
-  }
-
-  return null;
-}
 
 /**
  * Find the last element in an array matching a predicate.
@@ -217,12 +140,11 @@ export function deriveStreamingActivity(
       ? (lastToolUse as { name?: string }).name?.trim() || null
       : null;
 
-  // Extract operational context from the last tool_use's input
-  const toolInput =
-    lastToolUse && 'input' in lastToolUse
-      ? (lastToolUse as { input?: Record<string, unknown> }).input
+  // Extract operational context from the last tool_use's summary field
+  const toolContext =
+    lastToolUse && 'summary' in lastToolUse
+      ? (lastToolUse as { summary?: string }).summary ?? null
       : null;
-  const toolContext = extractToolContext(toolInput ?? null);
 
   return { hasContent, toolName, toolContext, toolCount };
 }
