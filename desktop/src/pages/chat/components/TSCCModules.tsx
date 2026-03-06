@@ -101,7 +101,11 @@ export function SystemPromptModule({
     setIsLoadingFullText(true);
     try {
       const result = await getSystemPromptMetadata(sessionId);
-      setFullText(result.fullText);
+      if (result) {
+        setFullText(result.fullText);
+      } else {
+        setFullText('(Session not initialized yet)');
+      }
       setShowModal(true);
     } catch {
       setFullText('(Failed to load system prompt)');
