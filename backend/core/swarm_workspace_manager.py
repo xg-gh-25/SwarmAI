@@ -81,6 +81,7 @@ GITIGNORE_CONTENT = """\
 *.db
 *.db-wal
 *.db-shm
+*.lock
 __pycache__/
 .venv/
 node_modules/
