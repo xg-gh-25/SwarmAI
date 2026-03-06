@@ -34,7 +34,7 @@ const makeSampleSnapshot = (
   whatAiDoing: ['Analyzing code structure'],
   activeSources: [
     { path: 'src/main.py', origin: 'Project' },
-    { path: 'docs/README.md', origin: 'Knowledge Base' },
+    { path: 'docs/README.md', origin: 'Library' },
   ],
   keySummary: ['Initial analysis complete', 'Found 3 issues'],
   ...overrides,
@@ -95,7 +95,7 @@ describe('TSCCSnapshotCard', () => {
     expect(screen.getByText('src/main.py')).toBeInTheDocument();
     expect(screen.getByText('Project')).toBeInTheDocument();
     expect(screen.getByText('docs/README.md')).toBeInTheDocument();
-    expect(screen.getByText('Knowledge Base')).toBeInTheDocument();
+    expect(screen.getByText('Library')).toBeInTheDocument();
   });
 
   it('displays activity items when expanded', () => {

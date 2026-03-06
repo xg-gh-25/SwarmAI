@@ -60,8 +60,8 @@ class TSCCSource(BaseModel):
     origin: str = Field(
         ...,
         description=(
-            "Provenance tag: Project, Knowledge Base, Notes, Memory, "
-            "or External MCP"
+            "Provenance tag: Project, Library, Notes, Reports, Meetings, "
+            "Archives, DailyActivity, Memory, or External MCP"
         ),
     )
 

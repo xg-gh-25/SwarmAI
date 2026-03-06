@@ -223,6 +223,7 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
     content: string;
     isSwarmWorkspace: boolean;
     gitStatus?: GitStatus;
+    readonly?: boolean;
   } | null>(null);
 
   // Swarm workspace warning state - Requirement 4.3
@@ -234,7 +235,7 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
   // Open file editor with content — reads via backend API (no Tauri fs scope issues)
   const openFileEditor = useCallback(async (file: FileTreeItem, gitStatus?: GitStatus) => {
     try {
-      const response = await api.get<{ content: string; path: string; name: string }>(
+      const response = await api.get<{ content: string; path: string; name: string; readonly?: boolean }>(
         '/workspace/file',
         { params: { path: file.path } },
       );
@@ -247,6 +248,7 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
         content: response.data.content,
         isSwarmWorkspace: file.isSwarmWorkspace || false,
         gitStatus,
+        readonly: response.data.readonly ?? false,
       });
     } catch (error) {
       console.error('Failed to read file:', error);
@@ -337,6 +339,7 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
           gitStatus={fileEditorState.gitStatus}
           onAttachToChat={attachFile}
           isAttached={attachedFiles.some(f => f.id === fileEditorState.filePath)}
+          readonly={fileEditorState.readonly}
         />
       )}
 

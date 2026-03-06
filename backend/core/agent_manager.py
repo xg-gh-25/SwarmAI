@@ -28,7 +28,7 @@ Key responsibilities retained in this module:
 """
 from typing import AsyncIterator, Optional, Any
 from uuid import uuid4
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 import logging
 import os
@@ -769,6 +769,30 @@ class AgentManager:
             model_context_window = self._get_model_context_window(model)
             context_text = loader.load_all(model_context_window=model_context_window)
 
+            # ── BOOTSTRAP.md detection (ephemeral, not in L1 cache) ──
+            bootstrap_path = context_dir / "BOOTSTRAP.md"
+            if bootstrap_path.exists():
+                try:
+                    bootstrap_content = bootstrap_path.read_text(encoding="utf-8").strip()
+                    if bootstrap_content:
+                        context_text = f"## Onboarding\n{bootstrap_content}\n\n{context_text}"
+                except (OSError, UnicodeDecodeError):
+                    pass
+
+            # ── DailyActivity reading — today + yesterday (ephemeral) ──
+            daily_activity_dir = Path(working_directory) / "Knowledge" / "DailyActivity"
+            if daily_activity_dir.is_dir():
+                today = date.today()
+                for d in [today, today - timedelta(days=1)]:
+                    daily_file = daily_activity_dir / f"{d.isoformat()}.md"
+                    if daily_file.is_file():
+                        try:
+                            daily_content = daily_file.read_text(encoding="utf-8").strip()
+                            if daily_content:
+                                context_text += f"\n\n## Daily Activity ({d.isoformat()})\n{daily_content}"
+                        except (OSError, UnicodeDecodeError):
+                            pass
+
             if context_text:
                 existing = agent_config.get("system_prompt", "") or ""
                 agent_config["system_prompt"] = (
@@ -801,12 +825,14 @@ class AgentManager:
                         "filename": spec.filename,
                         "tokens": tokens,
                         "truncated": truncated,
+                        "user_customized": spec.user_customized,
                     })
                 except (OSError, UnicodeDecodeError):
                     continue
 
             total_tokens = sum(f["tokens"] for f in prompt_metadata["files"])
             prompt_metadata["total_tokens"] = total_tokens
+            prompt_metadata["effective_token_budget"] = loader.compute_token_budget(model_context_window)
             prompt_metadata["full_text"] = agent_config.get("system_prompt", "") or ""
 
         except Exception as e:

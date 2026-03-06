@@ -20,7 +20,7 @@ Structured narrative writing drives decision-making, innovation, and customer fo
 ~/.swarm-ai/SwarmWS/Knowledge/Notes/
 ```
 
-This is the designated location for draft documents. Once finalized and approved, documents can be moved to `Knowledge/Knowledge Base/`.
+This is the designated location for draft documents. Once finalized and approved, documents can be moved to `Knowledge/Library/`.
 
 ## Usage
 

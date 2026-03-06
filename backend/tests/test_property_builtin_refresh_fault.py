@@ -1,24 +1,24 @@
 """Bug condition exploration test for ContextDirectoryLoader.ensure_directory().
 
-This module verifies the fault condition described in bugfix requirement 1.1:
-when a developer updates a built-in context file in ``backend/context/`` and
-restarts the app, the system skips copying the updated file because
-``ensure_directory()`` unconditionally skips any destination file that already
-exists (``if dest.exists(): continue``).
+This module verifies that system-default context files (``user_customized=False``)
+are always refreshed from templates on startup.  Originally written for bugfix
+requirement 1.1, now updated for the two-mode copy architecture where
+``ensure_directory()`` only iterates ``CONTEXT_FILES`` entries.
 
 Testing methodology:
     Property-based testing with Hypothesis.  Random file content pairs (source
-    vs. stale destination) are generated to demonstrate that ``ensure_directory()``
-    fails to overwrite existing built-in files with updated source content.
+    vs. stale destination) are generated for system-default filenames from
+    ``CONTEXT_FILES`` to verify that ``ensure_directory()`` always overwrites
+    stale system files with the template content.
 
 Key property verified:
-    **Property 1 — Built-in context files always match source on startup.**
-    For every file in ``templates_dir``, after calling ``ensure_directory()``,
-    the corresponding file in ``context_dir`` SHALL have content identical to
-    the source.  On unfixed code this property FAILS because the method skips
-    existing files.
+    **Property 1 — System-default context files always match source on startup.**
+    For every ``ContextFileSpec`` in ``CONTEXT_FILES`` with
+    ``user_customized=False``, after calling ``ensure_directory()``, the
+    corresponding file in ``context_dir`` SHALL have content identical to
+    the template source.
 
-Validates: Requirements 1.1, 2.1
+Validates: Requirements 1.1, 2.1, 10.5, 14.3
 """
 
 import os
@@ -29,30 +29,36 @@ import pytest
 from hypothesis import given, settings, HealthCheck
 from hypothesis import strategies as st
 
-from core.context_directory_loader import ContextDirectoryLoader
+from core.context_directory_loader import (
+    CONTEXT_FILES,
+    ContextDirectoryLoader,
+)
 
 
 # ── Hypothesis strategies ──────────────────────────────────────────────
 
-# Generate safe filenames: 1-20 lowercase alphanumeric chars + .md extension
-_safe_filename = st.from_regex(r"[a-z][a-z0-9]{0,19}\.md", fullmatch=True)
+# System-default filenames from CONTEXT_FILES (user_customized=False)
+_system_filenames = [
+    spec.filename for spec in CONTEXT_FILES if not spec.user_customized
+]
 
-# Generate non-empty file content (1-200 bytes of printable ASCII)
+# Generate non-empty file content (1-200 bytes)
 _file_content = st.binary(min_size=1, max_size=200)
 
 # A single file entry: (filename, source_content, stale_dest_content)
 # where source and stale content are guaranteed to differ.
+# Uses actual system-default filenames from CONTEXT_FILES.
 _file_entry = st.tuples(
-    _safe_filename,
+    st.sampled_from(_system_filenames),
     _file_content,
     _file_content,
 ).filter(lambda t: t[1] != t[2])
 
-# A list of 1-5 file entries with unique filenames
+# A list of 1-4 file entries with unique filenames (max = len of system files)
 _file_entries = st.lists(
     _file_entry,
     min_size=1,
-    max_size=5,
+    max_size=min(4, len(_system_filenames)),
     unique_by=lambda t: t[0],
 )
 

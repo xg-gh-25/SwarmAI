@@ -63,6 +63,7 @@ const fileContentToCamelCase = (data: Record<string, unknown>): WorkspaceFileCon
     encoding: data.encoding as 'utf-8' | 'base64',
     size: data.size as number,
     mimeType: data.mime_type as string,
+    readonly: (data.readonly as boolean | undefined) ?? false,
   };
 };
 

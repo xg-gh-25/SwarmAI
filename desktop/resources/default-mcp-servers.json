@@ -8,5 +8,57 @@
       "command": "npx",
       "args": ["-y", "@modelcontextprotocol/server-filesystem", "/"]
     }
+  },
+  {
+    "id": "amzn-mcp",
+    "name": "amzn-mcp",
+    "description": "Amazon internal MCP (Pippin, Quip, internal search)",
+    "connection_type": "stdio",
+    "config": {
+      "command": "amzn-mcp",
+      "args": ["--include-publish-status=experimental"],
+      "env": {
+        "QUIP_API_TOKEN": "Y1ROOU1BWm1pb3A=|1799993082|SQCpHHTzBvKOxB/Nznw2fdV9en6/0VxnR6myB5GCNMM="
+      }
+    }
+  },
+  {
+    "id": "builder-mcp",
+    "name": "builder-mcp",
+    "description": "Builder MCP (Internal websites, search, Quip, Taskei, Skills)",
+    "connection_type": "stdio",
+    "config": {
+      "command": "builder-mcp"
+    }
+  },
+  {
+    "id": "aws-outlook-mcp",
+    "name": "aws-outlook-mcp",
+    "description": "AWS Outlook email MCP",
+    "connection_type": "stdio",
+    "config": {
+      "command": "aws-outlook-mcp",
+      "args": []
+    }
+  },
+  {
+    "id": "workplace-chat-mcp",
+    "name": "workplace-chat-mcp",
+    "description": "Workplace Chat MCP",
+    "connection_type": "stdio",
+    "config": {
+      "command": "workplace-chat-mcp",
+      "args": []
+    }
+  },
+  {
+    "id": "insomnia-mcp",
+    "name": "insomnia",
+    "description": "Insomnia API testing MCP",
+    "connection_type": "stdio",
+    "config": {
+      "command": "npx",
+      "args": ["mcp-insomnia"]
+    }
   }
 ]

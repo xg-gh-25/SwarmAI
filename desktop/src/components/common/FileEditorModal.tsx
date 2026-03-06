@@ -45,6 +45,8 @@ export interface FileEditorModalProps {
   onAttachToChat?: (item: FileTreeItem) => void;
   /** Whether the file is already attached to the chat context. */
   isAttached?: boolean;
+  /** When true, the file is a system-default context file and editing is disabled. */
+  readonly?: boolean;
 }
 
 export interface FileEditorState {
@@ -415,6 +417,7 @@ export default function FileEditorModal({
   gitStatus,
   onAttachToChat,
   isAttached,
+  readonly,
 }: FileEditorModalProps) {
   const [content, setContent] = useState(initialContent);
   const [originalContent, setOriginalContent] = useState(initialContent);
@@ -533,7 +536,7 @@ export default function FileEditorModal({
   // Handle Ctrl+S / Cmd+S to save (disabled in diff mode)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === 's' && isOpen && !showDiff) {
+      if ((e.ctrlKey || e.metaKey) && e.key === 's' && isOpen && !showDiff && !readonly) {
         e.preventDefault();
         handleSave();
       }
@@ -546,7 +549,7 @@ export default function FileEditorModal({
     return () => {
       document.removeEventListener('keydown', handleKeyDown);
     };
-  }, [isOpen, showDiff, handleSave]);
+  }, [isOpen, showDiff, readonly, handleSave]);
 
   const handleCancel = useCallback(() => {
     if (isDirty) {
@@ -747,6 +750,16 @@ export default function FileEditorModal({
           </div>
         </div>
 
+        {/* Readonly banner for system-default context files — Requirement 9.5 */}
+        {readonly && (
+          <div
+            className="flex items-center gap-2 px-4 py-2 text-xs border-b border-[var(--color-border)] bg-amber-500/10 text-amber-700 dark:text-amber-300 shrink-0"
+            data-testid="readonly-banner"
+          >
+            <span>⚙️ System Default — This file is managed by SwarmAI and refreshed on every startup. Use STEERING.md to customize behavior.</span>
+          </div>
+        )}
+
         {/* Editor area — gutter + textarea/pre overlay OR diff view */}
         <div className="flex-1 relative overflow-hidden flex">
           {/* SearchBar (Task 9.2/9.3) */}
@@ -834,17 +847,19 @@ export default function FileEditorModal({
                 <textarea
                   ref={textareaRef}
                   value={content}
-                  onChange={(e) => setContent(e.target.value)}
+                  onChange={(e) => { if (!readonly) setContent(e.target.value); }}
                   onScroll={handleScroll}
                   onSelect={handleSelect}
                   onClick={handleSelect}
                   onKeyUp={handleSelect}
+                  readOnly={readonly}
                   className={clsx(
                     'absolute inset-0 w-full h-full m-0 p-4 resize-none',
                     'font-mono text-sm leading-6 whitespace-pre-wrap break-words',
                     'bg-transparent text-transparent caret-[var(--color-text)]',
                     'border-none outline-none',
-                    'overflow-auto'
+                    'overflow-auto',
+                    readonly && 'cursor-default'
                   )}
                   spellCheck={false}
                   autoCapitalize="off"
@@ -880,7 +895,7 @@ export default function FileEditorModal({
               size="sm"
               onClick={handleSave}
               isLoading={isSaving}
-              disabled={!isDirty || showDiff}
+              disabled={!isDirty || showDiff || readonly}
               data-testid="file-editor-save"
             >
               Save

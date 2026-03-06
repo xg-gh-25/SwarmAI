@@ -68,7 +68,7 @@ Unless otherwise stated by the user or existing template
 ~/.swarm-ai/SwarmWS/Knowledge/Notes/
 ```
 
-This is the designated location for draft spreadsheets. Once finalized, spreadsheets can be moved to `Knowledge/Knowledge Base/`.
+This is the designated location for draft spreadsheets. Once finalized, spreadsheets can be moved to `Knowledge/Library/`.
 
 ## Overview
 
