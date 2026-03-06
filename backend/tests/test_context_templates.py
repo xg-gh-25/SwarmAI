@@ -73,7 +73,8 @@ class TestSoulTemplate:
 
     def test_chinese_framing(self):
         content = _read_template("SOUL.md")
-        assert "你不是聊天机器人" in content
+        assert "You're not a chatbot" in content
+        assert "becoming someone" in content
 
     def test_good_bad_examples(self):
         content = _read_template("SOUL.md")
@@ -111,7 +112,7 @@ class TestAgentTemplate:
 
     def test_write_it_down_directive(self):
         content = _read_template("AGENT.md")
-        assert "写下来" in content
+        assert "Write it down" in content
 
     def test_trash_over_rm_rule(self):
         content = _read_template("AGENT.md")
@@ -152,7 +153,8 @@ class TestUserTemplate:
 
     def test_humanistic_footer(self):
         content = _read_template("USER.md")
-        assert "你是在了解一个人，而不是在建立档案" in content
+        assert "getting to know a person" in content
+        assert "not building a dossier" in content
 
 
 # ---------------------------------------------------------------------------
@@ -164,8 +166,8 @@ class TestSteeringTemplate:
 
     def test_write_it_down_directive(self):
         content = _read_template("STEERING.md")
-        assert "写下来" in content
-        assert "文件 > 大脑" in content
+        assert "Write it down" in content
+        assert "Files > Brain" in content
 
     def test_no_mental_notes(self):
         content = _read_template("STEERING.md")

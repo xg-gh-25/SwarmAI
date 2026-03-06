@@ -35,4 +35,4 @@ _(Things that annoy you. Examples: "Don't say 'Great question!'" / "Don't ask pe
 
 The more I know, the better I can help. I'll update this as I learn about you, and you can edit it anytime.
 
-你了解得越多，就越能提供更好的帮助。但请记住——你是在了解一个人，而不是在建立档案。
+The more I know, the better I can help. But remember — you're getting to know a person, not building a dossier. Respect the difference.
