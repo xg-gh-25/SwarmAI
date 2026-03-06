@@ -91,20 +91,32 @@ export async function getTSCCState(threadId: string): Promise<TSCCState> {
   return toCamelCase(response.data as Record<string, unknown>);
 }
 
-/** Fetch system prompt metadata for a session (snake_case → camelCase). */
+/** Fetch system prompt metadata for a session (snake_case → camelCase).
+ *  Returns null if the session hasn't been initialized yet (404). */
 export async function getSystemPromptMetadata(
   sessionId: string,
-): Promise<SystemPromptMetadata> {
-  const response = await api.get(`/chat/${sessionId}/system-prompt`);
-  const data = response.data as Record<string, unknown>;
-  const files = (data.files as Record<string, unknown>[]) ?? [];
-  return {
-    files: files.map((f) => ({
-      filename: f.filename as string,
-      tokens: f.tokens as number,
-      truncated: f.truncated as boolean,
-    })),
-    totalTokens: (data.total_tokens as number) ?? 0,
-    fullText: (data.full_text as string) ?? '',
-  };
+): Promise<SystemPromptMetadata | null> {
+  try {
+    const response = await api.get(`/chat/${sessionId}/system-prompt`);
+    const data = response.data as Record<string, unknown>;
+    const files = (data.files as Record<string, unknown>[]) ?? [];
+    return {
+      files: files.map((f) => ({
+        filename: f.filename as string,
+        tokens: f.tokens as number,
+        truncated: f.truncated as boolean,
+      })),
+      totalTokens: (data.total_tokens as number) ?? 0,
+      fullText: (data.full_text as string) ?? '',
+    };
+  } catch (err: unknown) {
+    // 404 is expected when session hasn't been initialized yet
+    if (err && typeof err === 'object' && 'response' in err) {
+      const axiosErr = err as { response?: { status?: number } };
+      if (axiosErr.response?.status === 404) {
+        return null;
+      }
+    }
+    throw err;
+  }
 }

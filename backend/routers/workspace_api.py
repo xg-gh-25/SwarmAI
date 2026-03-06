@@ -458,15 +458,19 @@ async def get_workspace_file(
     """
     # Reject obvious traversal attempts
     if ".." in path.split("/"):
-        raise HTTPException(status_code=400, detail="Path traversal not allowed")
+        raise HTTPException(status_code=400, detail=f"Path traversal not allowed: {path}")
 
     expanded_path = await _get_workspace_path()
     workspace_root = Path(expanded_path)
     target = (workspace_root / path).resolve()
 
-    # Ensure resolved path is still under workspace root
-    if not str(target).startswith(str(workspace_root.resolve())):
-        raise HTTPException(status_code=400, detail="Path outside workspace")
+    # Ensure resolved path is still under workspace root.
+    # Exception: .claude/skills/ contains symlinks to built-in skills outside
+    # the workspace (PyInstaller temp dir). Allow reading these as read-only.
+    ws_resolved = str(workspace_root.resolve())
+    is_skill_symlink = path.startswith(".claude/skills/") or path.startswith(".claude\\skills\\")
+    if not str(target).startswith(ws_resolved) and not is_skill_symlink:
+        raise HTTPException(status_code=400, detail=f"Path outside workspace: {path}")
 
     if not target.is_file():
         raise HTTPException(status_code=404, detail=f"File not found: {path}")
@@ -478,7 +482,9 @@ async def get_workspace_file(
     except OSError as exc:
         raise HTTPException(status_code=500, detail=f"Failed to read file: {exc}")
 
-    return {"content": content, "path": path, "name": target.name, "readonly": _is_readonly_context_file(path)}
+    # Skill symlinks are always readonly (they point to built-in templates)
+    is_readonly = _is_readonly_context_file(path) or is_skill_symlink
+    return {"content": content, "path": path, "name": target.name, "readonly": is_readonly}
 
 
 @router.put("/workspace/file")
