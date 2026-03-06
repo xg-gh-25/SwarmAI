@@ -17,6 +17,7 @@ export interface AgentStatus {
 
 export interface ChannelGatewayStatus {
   running: boolean;
+  startupState: string;  // "not_started" | "starting" | "started" | "failed"
 }
 
 export interface SwarmWorkspaceStatus {
@@ -34,6 +35,8 @@ export interface SystemStatus {
   initialized: boolean;
   initializationMode: string;  // 'first_run', 'quick_validation', or 'reset'
   initializationComplete: boolean;  // The persistent flag value
+  startupTimeMs: number | null;                    // Total backend startup duration in ms
+  phaseTimings: Record<string, number> | null;     // Per-phase durations (database_ms, workspace_ms, etc.)
   timestamp: string;
 }
 
@@ -68,6 +71,7 @@ const toCamelCase = (data: Record<string, unknown>): SystemStatus => {
     },
     channelGateway: {
       running: channelGateway.running as boolean,
+      startupState: (channelGateway.startup_state as string) ?? 'not_started',
     },
     swarmWorkspace: {
       ready: swarmWorkspace.ready as boolean,
@@ -78,6 +82,8 @@ const toCamelCase = (data: Record<string, unknown>): SystemStatus => {
     initialized: data.initialized as boolean,
     initializationMode: (data.initialization_mode as string) ?? 'unknown',
     initializationComplete: (data.initialization_complete as boolean) ?? false,
+    startupTimeMs: (data.startup_time_ms as number) ?? null,
+    phaseTimings: (data.phase_timings as Record<string, number>) ?? null,
     timestamp: data.timestamp as string,
   };
 };

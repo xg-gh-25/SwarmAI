@@ -1,6 +1,6 @@
 {
   "startup": {
-    "connectingToBackend": "Connecting to backend...",
+    "connectingToBackend": "Waking up your SwarmAI...",
     "databaseInitialized": "Database initialized",
     "swarmAgentReady": "SwarmAgent ready",
     "channelGatewayStarted": "Channel gateway started",
@@ -13,7 +13,7 @@
     "databaseError": "Database error: {{error}}",
     "agentNotReady": "SwarmAgent not ready",
     "channelGatewayNotRunning": "Channel gateway not running",
-    "waitingForReady": "Waiting for system to be ready...",
+    "waitingForReady": "Almost there...",
     "waitingForAgent": "Waiting for SwarmAgent to be ready...",
     "waitingForWorkspace": "Waiting for SwarmWorkspace to be ready...",
     "initializationTimeout": "Initialization timed out after {{seconds}} seconds",
