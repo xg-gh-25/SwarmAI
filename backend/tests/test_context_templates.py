@@ -124,7 +124,11 @@ class TestAgentTemplate:
 
     def test_channel_feishu(self):
         content = _read_template("AGENT.md")
-        assert "Feishu" in content or "飞书" in content
+        assert "Feishu" in content
+
+    def test_channel_slack(self):
+        content = _read_template("AGENT.md")
+        assert "Slack" in content
 
     def test_channel_cli(self):
         content = _read_template("AGENT.md")
