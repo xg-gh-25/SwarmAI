@@ -149,6 +149,7 @@ class TestDatabaseErrorHandling:
         # Mock gateway as running
         mock_gateway = MagicMock()
         mock_gateway._shutting_down = False
+        mock_gateway.startup_state = "started"
 
         with patch("routers.system.db") as mock_db, \
              patch("routers.system.get_default_agent", mock_get_default_agent), \
@@ -247,6 +248,7 @@ class TestMissingAgentHandling:
         # Mock gateway as running
         mock_gateway = MagicMock()
         mock_gateway._shutting_down = False
+        mock_gateway.startup_state = "started"
 
         with patch("routers.system.db") as mock_db, \
              patch("routers.system.get_default_agent", mock_get_default_agent), \
@@ -269,6 +271,7 @@ class TestChannelGatewayStatus:
         """Test that stopped gateway returns running=false."""
         mock_gateway = MagicMock()
         mock_gateway._shutting_down = True
+        mock_gateway.startup_state = "started"
 
         with patch("routers.system.channel_gateway", mock_gateway):
             response = client.get("/api/system/status")
@@ -281,6 +284,7 @@ class TestChannelGatewayStatus:
         """Test that running gateway returns running=true."""
         mock_gateway = MagicMock()
         mock_gateway._shutting_down = False
+        mock_gateway.startup_state = "started"
 
         with patch("routers.system.channel_gateway", mock_gateway):
             response = client.get("/api/system/status")
@@ -373,6 +377,7 @@ class TestAllComponentsReady:
         # Mock gateway as running
         mock_gateway = MagicMock()
         mock_gateway._shutting_down = False
+        mock_gateway.startup_state = "started"
 
         # Create mock db with proper async methods
         mock_db = MagicMock()

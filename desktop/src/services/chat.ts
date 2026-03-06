@@ -195,6 +195,20 @@ export const chatService = {
     return response.data.map(toMessageCamelCase);
   },
 
+  // Get messages for a session with cursor-based pagination
+  async getSessionMessagesPaginated(
+    sessionId: string,
+    limit?: number,
+    beforeId?: string,
+  ): Promise<ChatMessage[]> {
+    const params = new URLSearchParams();
+    if (limit !== undefined) params.set('limit', String(limit));
+    if (beforeId !== undefined) params.set('before_id', beforeId);
+    const url = `/chat/sessions/${sessionId}/messages?${params.toString()}`;
+    const response = await api.get<Record<string, unknown>[]>(url);
+    return response.data.map(toMessageCamelCase);
+  },
+
   // Delete chat session
   async deleteSession(sessionId: string): Promise<void> {
     await api.delete(`/chat/sessions/${sessionId}`);

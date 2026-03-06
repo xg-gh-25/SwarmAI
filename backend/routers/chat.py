@@ -358,8 +358,16 @@ async def get_session(session_id: str):
 
 
 @router.get("/sessions/{session_id}/messages", response_model=list[ChatMessageResponse])
-async def get_session_messages(session_id: str):
-    """Get all messages for a chat session.
+async def get_session_messages(
+    session_id: str,
+    limit: Optional[int] = Query(None, ge=1, le=200),
+    before_id: Optional[str] = Query(None),
+):
+    """Get messages for a chat session with optional cursor-based pagination.
+
+    When ``limit`` or ``before_id`` is provided, uses paginated query
+    (most recent N messages, or messages before a cursor).  When neither
+    is provided, returns all messages for backward compatibility.
 
     Returns messages in chronological order.
     """
@@ -371,7 +379,13 @@ async def get_session_messages(session_id: str):
             suggested_action="Please check the session ID and try again"
         )
 
-    messages = await agent_manager.get_session_messages(session_id)
+    if limit is not None or before_id is not None:
+        messages = await db.messages.list_by_session_paginated(
+            session_id, limit=limit, before_id=before_id
+        )
+    else:
+        messages = await agent_manager.get_session_messages(session_id)
+
     return [
         ChatMessageResponse(
             id=msg.get("id"),

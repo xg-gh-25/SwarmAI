@@ -37,6 +37,53 @@ import VirtualizedTree from './VirtualizedTree';
 import ResizeHandle from './ResizeHandle';
 import type { FileTreeItem } from './FileTreeNode';
 
+/**
+ * Skeleton placeholder for the file tree while loading.
+ * Renders 8 pulsing lines with indentation to suggest a tree structure.
+ * Widths are deterministic to avoid layout shifts on re-render.
+ */
+function TreeSkeleton() {
+  const lines = [
+    { indent: 0, width: '75%' },
+    { indent: 0, width: '65%' },
+    { indent: 16, width: '80%' },
+    { indent: 16, width: '70%' },
+    { indent: 32, width: '60%' },
+    { indent: 0, width: '85%' },
+    { indent: 16, width: '72%' },
+    { indent: 0, width: '68%' },
+  ];
+  return (
+    <div className="p-3 space-y-2" data-testid="tree-skeleton">
+      {lines.map((line, i) => (
+        <div
+          key={i}
+          className="h-4 bg-[var(--color-hover)] rounded animate-pulse"
+          style={{ marginLeft: line.indent, width: line.width }}
+        />
+      ))}
+    </div>
+  );
+}
+
+/**
+ * Inline error state with retry button, shown when the tree fetch fails.
+ * ChatPage remains fully interactive regardless of this error.
+ */
+function TreeErrorState({ onRetry }: { onRetry: () => void }) {
+  return (
+    <div className="p-4 text-center" data-testid="tree-error-state">
+      <p className="text-sm text-[var(--color-text-muted)] mb-2">Failed to load file tree</p>
+      <button
+        onClick={onRetry}
+        className="text-xs text-primary hover:underline"
+      >
+        Retry
+      </button>
+    </div>
+  );
+}
+
 export interface WorkspaceExplorerProps {
   /** Callback when a file node is double-clicked (e.g., to open in editor). */
   onFileDoubleClick?: (node: FileTreeItem) => void;
@@ -110,32 +157,9 @@ export default function WorkspaceExplorer({ onFileDoubleClick, onAttachToChat }:
 
       {/* Tree content area — fills remaining vertical space */}
       <div className="flex-1 overflow-hidden">
-        {isLoading && (
-          <div
-            className="flex items-center justify-center h-full text-sm text-[var(--color-text-muted)]"
-            data-testid="explorer-loading"
-          >
-            Loading...
-          </div>
-        )}
+        {isLoading && <TreeSkeleton />}
 
-        {!isLoading && error && (
-          <div
-            className="flex flex-col items-center justify-center h-full gap-2 px-4 text-center"
-            data-testid="explorer-error"
-          >
-            <span className="text-sm text-[var(--color-text-muted)]">
-              Failed to load workspace tree.
-            </span>
-            <button
-              onClick={refreshTree}
-              className="text-sm text-[var(--color-primary)] hover:underline"
-              data-testid="retry-button"
-            >
-              Retry
-            </button>
-          </div>
-        )}
+        {!isLoading && error && <TreeErrorState onRetry={refreshTree} />}
 
         {!isLoading && !error && treeData.length === 0 && (
           <div

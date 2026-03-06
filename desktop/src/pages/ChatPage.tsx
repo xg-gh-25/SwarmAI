@@ -20,7 +20,7 @@
  *
  * @module ChatPage
  */
-import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo, useLayoutEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
@@ -53,6 +53,17 @@ import { useLayout } from '../contexts/LayoutContext';
 export { deriveStreamingActivity, formatElapsed, ELAPSED_DISPLAY_THRESHOLD_MS, MIN_ACTIVITY_DISPLAY_MS } from '../hooks/useChatStreamingLifecycle';
 export { MAX_OPEN_TABS } from '../hooks/useUnifiedTabState';
 
+/** Convert a backend ChatMessage to the frontend Message shape. */
+function toDisplayMessage(msg: { id: string; role: string; content: ContentBlock[]; createdAt: string; model?: string }): Message {
+  return {
+    id: msg.id,
+    role: msg.role as 'user' | 'assistant',
+    content: msg.content as ContentBlock[],
+    timestamp: msg.createdAt,
+    model: msg.model,
+  };
+}
+
 export default function ChatPage() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
@@ -63,6 +74,10 @@ export default function ChatPage() {
 
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>('default');
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+  const [messagesReady, setMessagesReady] = useState(false);
+  const mountTimeRef = useRef(performance.now());
+  const [hasMoreMessages, setHasMoreMessages] = useState(true);
+  const [isLoadingOlderMessages, setIsLoadingOlderMessages] = useState(false);
   const [agentLoadError, setAgentLoadError] = useState<string | null>(null);
 
   // Pending states (permission is ChatPage-only; question is in the hook)
@@ -96,22 +111,25 @@ export default function ChatPage() {
   const { data: skills = [] } = useQuery({
     queryKey: ['skills'],
     queryFn: skillsService.list,
+    enabled: messagesReady,
   });
 
   const { data: mcpServers = [] } = useQuery({
     queryKey: ['mcpServers'],
     queryFn: mcpService.list,
+    enabled: messagesReady,
   });
 
   const { data: plugins = [] } = useQuery({
     queryKey: ['plugins'],
     queryFn: pluginsService.listPlugins,
+    enabled: messagesReady,
   });
 
   const { data: sessions = [], refetch: refetchSessions } = useQuery({
     queryKey: ['chatSessions', selectedAgentId],
     queryFn: () => chatService.listSessions(selectedAgentId || undefined),
-    enabled: !!selectedAgentId,
+    enabled: !!selectedAgentId && messagesReady,
   });
 
   const taskId = searchParams.get('taskId');
@@ -231,17 +249,12 @@ export default function ChatPage() {
   const loadSessionMessages = useCallback(async (sid: string) => {
     setIsLoadingHistory(true);
     try {
-      const sessionMessages = await chatService.getSessionMessages(sid);
-      const formattedMessages: Message[] = sessionMessages.map((msg) => ({
-        id: msg.id,
-        role: msg.role as 'user' | 'assistant',
-        content: msg.content as ContentBlock[],
-        timestamp: msg.createdAt,
-        model: msg.model,
-      }));
+      const sessionMessages = await chatService.getSessionMessagesPaginated(sid, 50);
+      const formattedMessages: Message[] = sessionMessages.map(toDisplayMessage);
       setMessages(formattedMessages);
       setSessionId(sid);
       setPendingQuestion(null);
+      setHasMoreMessages(sessionMessages.length === 50);
       // Sync loaded messages back into the tab map so subsequent tab switches
       // don't see empty messages and re-fetch unnecessarily.
       const currentTabId = activeTabIdRef.current;
@@ -255,8 +268,30 @@ export default function ChatPage() {
       console.error('Failed to load session messages:', error);
     } finally {
       setIsLoadingHistory(false);
+      setMessagesReady(true);
     }
   }, [setMessages, setSessionId, setPendingQuestion, setIsLoadingHistory]);
+
+  // Load older messages for infinite scroll (paginated)
+  const loadOlderMessages = useCallback(async () => {
+    if (!sessionId || !hasMoreMessages || isLoadingOlderMessages) return;
+    const oldestMessage = messagesRef.current[0];
+    if (!oldestMessage) return;
+
+    setIsLoadingOlderMessages(true);
+    try {
+      const olderMessages = await chatService.getSessionMessagesPaginated(
+        sessionId, 50, oldestMessage.id
+      );
+      if (olderMessages.length < 50) setHasMoreMessages(false);
+      // Capture scroll height before prepending for position preservation
+      const container = messagesContainerRef.current;
+      if (container) prevScrollHeightRef.current = container.scrollHeight;
+      setMessages(prev => [...olderMessages.map(toDisplayMessage), ...prev]);
+    } finally {
+      setIsLoadingOlderMessages(false);
+    }
+  }, [sessionId, hasMoreMessages, isLoadingOlderMessages]);
 
   // Handle new chat
   const handleNewChat = useCallback(() => {
@@ -365,13 +400,7 @@ export default function ChatPage() {
         const sessionMessages = await chatService.getSessionMessages(tab.sessionId);
         // Async guard: only apply if user hasn't switched away during the load
         if (activeTabIdRef.current !== loadedTabId) return;
-        const formattedMessages: Message[] = sessionMessages.map((msg) => ({
-          id: msg.id,
-          role: msg.role as 'user' | 'assistant',
-          content: msg.content as ContentBlock[],
-          timestamp: msg.createdAt,
-          model: msg.model,
-        }));
+        const formattedMessages: Message[] = sessionMessages.map(toDisplayMessage);
         setMessages(formattedMessages);
         setSessionId(tab.sessionId);
         // Initialize the tab in the per-tab map now that we have data
@@ -457,6 +486,7 @@ export default function ChatPage() {
 
   // Scroll to bottom on new messages — conditional on user scroll position (Fix 2)
   const messagesContainerRef = useRef<HTMLDivElement>(null);
+  const prevScrollHeightRef = useRef(0);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -469,7 +499,12 @@ export default function ChatPage() {
     const threshold = 100; // px from bottom
     const isNearBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - threshold;
     userScrolledUpRef.current = !isNearBottom;
-  }, [userScrolledUpRef]);
+
+    // Infinite scroll: load older messages when scrolled to top
+    if (el.scrollTop === 0) {
+      loadOlderMessages();
+    }
+  }, [userScrolledUpRef, loadOlderMessages]);
 
   useEffect(() => {
     // Only auto-scroll if user hasn't scrolled up (Fix 2)
@@ -477,6 +512,24 @@ export default function ChatPage() {
       scrollToBottom();
     }
   }, [messages]);
+
+  // Scroll position preservation when prepending older messages
+  useLayoutEffect(() => {
+    if (!prevScrollHeightRef.current) return;
+    const container = messagesContainerRef.current;
+    if (container) {
+      container.scrollTop = container.scrollHeight - prevScrollHeightRef.current;
+      prevScrollHeightRef.current = 0;
+    }
+  }, [messages]); // eslint-disable-line react-hooks/exhaustive-deps — fires after prepend
+
+  // Log time-to-interactive when messagesReady becomes true (Req 8.4)
+  useEffect(() => {
+    if (messagesReady && mountTimeRef.current) {
+      console.log(`[ChatPage] Time to interactive: ${(performance.now() - mountTimeRef.current).toFixed(0)}ms`);
+      mountTimeRef.current = 0; // Only log once
+    }
+  }, [messagesReady]);
 
   // Register the initial/default tab in the per-tab state map on mount.
   // Without this, the first tab has no entry in tabMapRef and all
@@ -519,6 +572,7 @@ export default function ChatPage() {
                 setMessages([]);
                 setSessionId(undefined);
                 setIsLoadingHistory(false);
+                setMessagesReady(true);
               }
             }
           } else {
@@ -527,6 +581,7 @@ export default function ChatPage() {
               setMessages([]);
               setSessionId(undefined);
               setIsLoadingHistory(false);
+              setMessagesReady(true);
             }
           }
           return;
@@ -537,7 +592,10 @@ export default function ChatPage() {
         console.warn('[ChatPage] File tab restore failed:', err);
       }
       // Only clear loading for non-restore cases (fresh install, error)
-      if (mounted) setIsLoadingHistory(false);
+      if (mounted) {
+        setIsLoadingHistory(false);
+        setMessagesReady(true);
+      }
     };
 
     doRestore();
@@ -1085,6 +1143,11 @@ export default function ChatPage() {
                   : 'flex-1 overflow-y-auto p-4 space-y-4 min-w-0'
                 }
               >
+                {isLoadingOlderMessages && (
+                  <div className="flex justify-center py-2">
+                    <Spinner size="sm" />
+                  </div>
+                )}
                 {messages.length === 0 ? (
                   <WelcomeScreen />
                 ) : (

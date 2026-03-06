@@ -32,8 +32,15 @@ class AgentStatus(BaseModel):
 
 
 class ChannelGatewayStatus(BaseModel):
-    """Channel gateway status."""
+    """Channel gateway status.
+
+    Attributes:
+        running: Whether the gateway is actively running (not shutting down).
+        startup_state: Lifecycle state — one of ``"not_started"``,
+            ``"starting"``, ``"started"``, or ``"failed"``.
+    """
     running: bool
+    startup_state: str = "not_started"
 
 
 class SwarmWorkspaceStatus(BaseModel):
@@ -44,7 +51,23 @@ class SwarmWorkspaceStatus(BaseModel):
 
 
 class SystemStatusResponse(BaseModel):
-    """System initialization status response."""
+    """System initialization status response.
+
+    Attributes:
+        database: Database health status.
+        agent: SwarmAgent readiness status.
+        channel_gateway: Channel gateway running and startup state.
+        swarm_workspace: Workspace initialization status.
+        initialized: Overall readiness flag (all critical components ready).
+        initialization_mode: How the backend was initialized
+            (``'first_run'``, ``'quick_validation'``, or ``'reset'``).
+        initialization_complete: Persistent flag from the database.
+        startup_time_ms: Total backend startup duration in milliseconds,
+            or ``None`` if not yet available.
+        phase_timings: Per-phase durations (e.g. ``database_ms``,
+            ``workspace_ms``), or ``None`` if not yet available.
+        timestamp: ISO 8601 UTC timestamp of the response.
+    """
     database: DatabaseStatus
     agent: AgentStatus
     channel_gateway: ChannelGatewayStatus
@@ -52,6 +75,8 @@ class SystemStatusResponse(BaseModel):
     initialized: bool
     initialization_mode: str  # 'first_run', 'quick_validation', or 'reset'
     initialization_complete: bool  # The persistent flag value
+    startup_time_ms: Optional[float] = None
+    phase_timings: Optional[dict[str, float]] = None
     timestamp: str
 
 
@@ -113,7 +138,10 @@ async def get_system_status() -> SystemStatusResponse:
     # Gateway is considered running if it has been started (not shutting down)
     gateway_running = not channel_gateway._shutting_down
     
-    channel_gateway_status = ChannelGatewayStatus(running=gateway_running)
+    channel_gateway_status = ChannelGatewayStatus(
+        running=gateway_running,
+        startup_state=channel_gateway.startup_state,
+    )
     
     # Check Swarm Workspace status
     workspace_ready = False
@@ -137,11 +165,18 @@ async def get_system_status() -> SystemStatusResponse:
         path=workspace_path
     )
     
-    # Overall initialization: all components must be ready
+    # Overall initialization: all critical components must be ready.
+    # When no channels are configured (startup_state == "not_started"),
+    # the gateway's running flag is irrelevant — the user simply has no
+    # channels, so we don't gate readiness on the gateway.
+    gateway_ok = (
+        channel_gateway_status.startup_state == "not_started"
+        or channel_gateway_status.running
+    )
     initialized = (
         database_status.healthy and
         agent_status.ready and
-        channel_gateway_status.running and
+        gateway_ok and
         swarm_workspace_status.ready
     )
     
@@ -154,6 +189,9 @@ async def get_system_status() -> SystemStatusResponse:
     # ISO 8601 timestamp
     timestamp = datetime.now(timezone.utc).isoformat()
     
+    # Lazy import to avoid circular dependency (main -> routers -> system -> main).
+    import main as _main_module
+
     return SystemStatusResponse(
         database=database_status,
         agent=agent_status,
@@ -162,6 +200,8 @@ async def get_system_status() -> SystemStatusResponse:
         initialized=initialized,
         initialization_mode=initialization_mode,
         initialization_complete=initialization_complete,
+        startup_time_ms=_main_module._startup_time_ms,
+        phase_timings=_main_module._phase_timings,
         timestamp=timestamp
     )
 

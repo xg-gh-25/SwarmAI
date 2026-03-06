@@ -4,6 +4,7 @@ This module was refactored from a multi-workspace model to a single-workspace
 + projects model centred on the ``SwarmWS`` workspace.  It is responsible for:
 
 - ``SwarmWorkspaceManager``          — Main class managing workspace filesystem
+- ``_batch_remove``                  — Sync helper for batched legacy file removal
 - ``FOLDER_STRUCTURE``               — Minimal folder layout (Knowledge, Projects)
 - ``SYSTEM_MANAGED_*`` constants     — Sets of paths that cannot be deleted/renamed
 - ``PROJECT_SYSTEM_FILES``           — Per-project system files (.project.json)
@@ -84,6 +85,38 @@ node_modules/
 """
 
 # ─────────────────────────────────────────────────────────────────────────────
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Batch filesystem removal helper
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _batch_remove(paths_to_remove: list[tuple[Path, str]]) -> list[str]:
+    """Remove all legacy paths in a single synchronous batch.
+
+    Designed to be called once via ``anyio.to_thread.run_sync()`` so that
+    all filesystem I/O happens in a single thread dispatch instead of one
+    dispatch per item.
+
+    Args:
+        paths_to_remove: List of ``(path, kind)`` tuples where *kind* is
+            ``"file"`` or ``"dir"``.
+
+    Returns:
+        List of error messages for items that failed to remove.  An empty
+        list means every removal succeeded.
+    """
+    errors: list[str] = []
+    for path, kind in paths_to_remove:
+        try:
+            if kind == "dir":
+                shutil.rmtree(path, ignore_errors=False)
+            else:
+                path.unlink(missing_ok=True)
+        except Exception as e:
+            errors.append(f"{path}: {e}")
+    return errors
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Manager class
@@ -437,9 +470,13 @@ class SwarmWorkspaceManager:
     async def _cleanup_legacy_content(self, workspace_path: str) -> None:
         """Remove legacy files and folders from pre-restructure SwarmWS.
 
-        Runs once per startup on existing workspaces. Idempotent — safe to
-        call repeatedly. Uses a marker file to skip on subsequent startups
-        once all legacy content has been cleaned.
+        Runs once per startup on existing workspaces.  Idempotent — safe to
+        call repeatedly.  Uses a marker file (``.legacy_cleaned``) to skip on
+        subsequent startups once all legacy content has been cleaned.
+
+        All filesystem removals are batched into a **single**
+        ``anyio.to_thread.run_sync()`` call via :func:`_batch_remove` to
+        avoid dispatching one thread call per item.
 
         Removes:
         - Legacy Knowledge subdirectories (Knowledge Base, Memory, Notes)
@@ -455,15 +492,15 @@ class SwarmWorkspaceManager:
         if marker.exists():
             return
 
-        # Legacy Knowledge subdirectories (Memory was legacy, KB and Notes are kept)
+        # ── Collect ALL legacy paths into a single list ──────────────────
+        paths_to_remove: list[tuple[Path, str]] = []
+
+        # Legacy Knowledge subdirectories
         legacy_knowledge_dirs = ["Memory"]
         for dirname in legacy_knowledge_dirs:
             legacy_dir = root / "Knowledge" / dirname
             if legacy_dir.exists():
-                await anyio.to_thread.run_sync(
-                    lambda d=legacy_dir: shutil.rmtree(d, ignore_errors=True)
-                )
-                logger.info("Removed legacy directory: Knowledge/%s", dirname)
+                paths_to_remove.append((legacy_dir, "dir"))
 
         # Legacy root-level files
         legacy_root_files = [
@@ -474,10 +511,7 @@ class SwarmWorkspaceManager:
         for filename in legacy_root_files:
             legacy_file = root / filename
             if legacy_file.exists():
-                await anyio.to_thread.run_sync(
-                    lambda f=legacy_file: f.unlink(missing_ok=True)
-                )
-                logger.info("Removed legacy file: %s", filename)
+                paths_to_remove.append((legacy_file, "file"))
 
         # Legacy Knowledge-level files
         legacy_knowledge_files = [
@@ -486,10 +520,7 @@ class SwarmWorkspaceManager:
         for filename in legacy_knowledge_files:
             legacy_file = root / "Knowledge" / filename
             if legacy_file.exists():
-                await anyio.to_thread.run_sync(
-                    lambda f=legacy_file: f.unlink(missing_ok=True)
-                )
-                logger.info("Removed legacy file: Knowledge/%s", filename)
+                paths_to_remove.append((legacy_file, "file"))
 
         # Legacy per-project context files
         projects_dir = root / "Projects"
@@ -500,13 +531,7 @@ class SwarmWorkspaceManager:
                 for filename in ["context-L0.md", "context-L1.md"]:
                     legacy_file = project_dir / filename
                     if legacy_file.exists():
-                        await anyio.to_thread.run_sync(
-                            lambda f=legacy_file: f.unlink(missing_ok=True)
-                        )
-                        logger.info(
-                            "Removed legacy file: Projects/%s/%s",
-                            project_dir.name, filename,
-                        )
+                        paths_to_remove.append((legacy_file, "file"))
 
         # Legacy root-level directories
         legacy_root_dirs = [
@@ -515,10 +540,21 @@ class SwarmWorkspaceManager:
         for dirname in legacy_root_dirs:
             legacy_dir = root / dirname
             if legacy_dir.exists():
-                await anyio.to_thread.run_sync(
-                    lambda d=legacy_dir: shutil.rmtree(d, ignore_errors=True)
-                )
-                logger.info("Removed legacy directory: %s", dirname)
+                paths_to_remove.append((legacy_dir, "dir"))
+
+        # ── Single batch removal in one thread dispatch ──────────────────
+        if paths_to_remove:
+            errors = await anyio.to_thread.run_sync(
+                lambda: _batch_remove(paths_to_remove)
+            )
+            # Log successful removals
+            for path, kind in paths_to_remove:
+                rel = path.relative_to(root)
+                if not any(str(path) in err for err in errors):
+                    logger.info("Removed legacy %s: %s", kind, rel)
+            # Log any per-item failures
+            for err in errors:
+                logger.warning("Legacy cleanup error: %s", err)
 
         # Mark cleanup as done so we skip on future startups
         try:
@@ -1228,6 +1264,7 @@ class SwarmWorkspaceManager:
             return metadata.get("update_history", [])
 
         return await anyio.to_thread.run_sync(_read_history)
+
 
 
 
