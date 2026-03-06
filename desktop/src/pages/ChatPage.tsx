@@ -245,11 +245,17 @@ export default function ChatPage() {
   const enableSkills = selectedAgent?.allowAllSkills || agentSkills.length > 0 || agentPlugins.length > 0;
   const enableMCP = agentMCPs.length > 0;
 
-  // Load session messages helper
+  // Load session messages helper.
+  // Uses a generation counter to discard stale results when multiple
+  // loadSessionMessages calls race (e.g. rapid tab switches, restart restore).
+  const loadGenRef = useRef(0);
   const loadSessionMessages = useCallback(async (sid: string) => {
+    const thisGen = ++loadGenRef.current;
     setIsLoadingHistory(true);
     try {
       const sessionMessages = await chatService.getSessionMessagesPaginated(sid, 50);
+      // Async guard: discard if a newer load was started while we awaited
+      if (loadGenRef.current !== thisGen) return;
       const formattedMessages: Message[] = sessionMessages.map(toDisplayMessage);
       setMessages(formattedMessages);
       setSessionId(sid);
@@ -265,10 +271,13 @@ export default function ChatPage() {
         }
       }
     } catch (error) {
+      if (loadGenRef.current !== thisGen) return; // stale — discard
       console.error('Failed to load session messages:', error);
     } finally {
-      setIsLoadingHistory(false);
-      setMessagesReady(true);
+      if (loadGenRef.current === thisGen) {
+        setIsLoadingHistory(false);
+        setMessagesReady(true);
+      }
     }
   }, [setMessages, setSessionId, setPendingQuestion, setIsLoadingHistory]);
 
@@ -559,8 +568,6 @@ export default function ChatPage() {
         if (!mounted) return;
         if (restored) {
           console.log('[ChatPage] Tabs restored from open_tabs.json');
-          // Directly load messages for the active tab instead of relying
-          // on the sync-active-tab effect, which can miss due to timing.
           const activeId = activeTabIdRef.current;
           const activeState = activeId ? tabMapRef.current.get(activeId) : null;
           if (activeState?.sessionId) {
@@ -651,24 +658,37 @@ export default function ChatPage() {
   }, [sessionId, isStreaming, refetchSessions]);
 
   // Validate tabs against sessions - filter out tabs referencing deleted sessions (Req 3.4)
+  // Guard: skip during initial restore — sessions query may return stale data
+  // before the full session list is loaded, causing valid tabs to be invalidated.
   useEffect(() => {
     if (sessions.length === 0) return;
+    if (!messagesReady) return; // Don't invalidate tabs before restore completes
     
     const validSessionIds = new Set(sessions.map(s => s.id));
     removeInvalidTabs(validSessionIds);
-  }, [sessions, removeInvalidTabs]);
+  }, [sessions, messagesReady, removeInvalidTabs]);
 
   // Sync active tab content when activeTabId changes (for tab switching/closing)
   // IMPORTANT: Only react to activeTabId changes — NOT sessionId or openTabs changes.
   // sessionId changes during streaming (session_start event) must not trigger
   // a reload, or it will wipe in-progress messages.
   // openTabs changes (from render counter bumps) must not re-trigger this effect.
+  //
+  // RACE FIX: Skip during initial tab restore (isLoadingHistory=true) to prevent
+  // the else branch from wiping messages before doRestore finishes loading them.
+  // Without this guard, restoreFromFile() sets activeTabId (triggering this effect)
+  // before loadSessionMessages completes, causing messages=[] → layout collapse.
   const prevActiveTabIdRef = useRef<string | null>(null);
   useEffect(() => {
     if (!activeTabId) return;
     // Skip if activeTabId hasn't actually changed
     if (prevActiveTabIdRef.current === activeTabId) return;
     prevActiveTabIdRef.current = activeTabId;
+
+    // Guard: skip during initial restore — doRestore handles message loading
+    // directly and will set messagesReady when done. Without this, the else
+    // branch below fires before the tab map is fully populated, wiping messages.
+    if (isLoadingHistory) return;
     
     // Read tab metadata from the map (stable, not from openTabs which triggers re-renders)
     const activeTabState = tabMapRef.current.get(activeTabId);
@@ -685,7 +705,7 @@ export default function ChatPage() {
       setSessionId(undefined);
       setPendingQuestion(null);
     }
-  }, [activeTabId, sessionId, isStreaming, loadSessionMessages, tabMapRef]);
+  }, [activeTabId, sessionId, isStreaming, isLoadingHistory, loadSessionMessages, tabMapRef]);
 
 
 
@@ -1125,7 +1145,7 @@ export default function ChatPage() {
                 <p className="text-[var(--color-text-muted)] mt-4">{t('chat.loadingAgent', 'Loading agent...')}</p>
               </div>
             </div>
-          ) : isLoadingHistory ? (
+          ) : isLoadingHistory || !messagesReady ? (
             <div className="flex-1 flex items-center justify-center">
               <div className="text-center">
                 <Spinner size="lg" />
