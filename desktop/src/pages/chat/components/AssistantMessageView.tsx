@@ -16,8 +16,8 @@
  * Validates: Requirements 2.1, 3.1, 3.2, 3.3, 6.1, 6.2
  */
 
-import React, { useState, useCallback } from 'react';
-import type { Message } from '../../../types';
+import React, { useState, useCallback, useMemo } from 'react';
+import type { Message, ToolResultContent } from '../../../types';
 import { ContentBlockRenderer } from './ContentBlockRenderer';
 import { AssistantHeader } from './AssistantHeader';
 
@@ -48,6 +48,17 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
       .join('\n');
   }, [message.content]);
 
+  // Pre-build result map for O(1) tool_use → tool_result pairing
+  const resultMap = useMemo(() => {
+    const map = new Map<string, ToolResultContent>();
+    for (const block of message.content) {
+      if (block.type === 'tool_result') {
+        map.set(block.toolUseId, block);
+      }
+    }
+    return map;
+  }, [message.content]);
+
   const handleCopy = useCallback(() => {
     navigator.clipboard.writeText(extractMessageText());
     setCopied(true);
@@ -64,6 +75,8 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
       <ContentBlockRenderer
         key={key}
         block={block}
+        resultMap={resultMap}
+        allBlocks={message.content}
         onAnswerQuestion={onAnswerQuestion}
         pendingToolUseId={pendingToolUseId}
         isStreaming={isStreaming}

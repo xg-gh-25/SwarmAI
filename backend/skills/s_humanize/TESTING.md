@@ -4,11 +4,11 @@ Evaluation scenarios and validation commands for testing the humanize skill.
 
 ## Model Coverage
 
-| Model | Tested | Notes |
-|-------|--------|-------|
-| Claude Opus 4.5 | Yes | Primary development model. Best at preserving word count. |
-| Claude Sonnet 4 | Yes | Good performance. Occasionally over-summarizes; remind about ±20 rule. |
-| Claude Haiku | Partial | Can handle simple documents. May miss subtle patterns. |
+| Model Class | Tested | Notes |
+|-------------|--------|-------|
+| Large (e.g., Opus) | Yes | Primary development target. Best at preserving word count. |
+| Medium (e.g., Sonnet) | Yes | Good performance. Occasionally over-summarizes; remind about ±20 rule. |
+| Small (e.g., Haiku) | Partial | Can handle simple documents. May miss subtle patterns. |
 
 ## Evaluation Scenarios
 

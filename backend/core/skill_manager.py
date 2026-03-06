@@ -20,6 +20,7 @@ import asyncio
 import logging
 import re
 import shutil
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -303,10 +304,15 @@ class SkillManager:
         if builtin_path is not None:
             self.builtin_path = builtin_path
         else:
-            # Default: backend/skills/ relative to this file's grandparent
-            self.builtin_path = (
-                Path(__file__).resolve().parent.parent / "skills"
-            )
+            # Default: backend/skills/ relative to this file's grandparent.
+            # In PyInstaller bundles, __file__ resolves inside the temp
+            # extraction dir — use sys._MEIPASS instead.
+            if getattr(sys, 'frozen', False):
+                self.builtin_path = Path(sys._MEIPASS) / "skills"
+            else:
+                self.builtin_path = (
+                    Path(__file__).resolve().parent.parent / "skills"
+                )
 
         if user_skills_path is not None:
             self.user_skills_path = user_skills_path

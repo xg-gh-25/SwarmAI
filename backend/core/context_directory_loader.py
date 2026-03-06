@@ -144,20 +144,23 @@ class ContextDirectoryLoader:
         return max(1, int(word_count * 4 / 3))
 
     def ensure_directory(self) -> None:
-        """Create context directory and copy missing template files.
+        """Create context directory and refresh built-in template files.
 
         Creates ``~/.swarm-ai/.context/`` if it does not exist, then copies
-        default templates from ``templates_dir`` (``backend/context/``) for
-        any files that are missing.  Existing files are never overwritten.
+        ALL files from ``templates_dir`` (``backend/context/``), overwriting
+        only when content differs.  User-created files (not present in
+        ``templates_dir``) are never touched.
 
-        The method copies all 9 source file defaults plus the L0 and L1
-        cache template files.  Individual copy failures are logged as
-        warnings and do not prevent the remaining files from being copied.
+        A byte-comparison is performed before writing so that most startups
+        incur only reads (no writes) when nothing has changed.
+
+        Individual copy failures are logged as warnings and do not prevent
+        the remaining files from being copied.
 
         If ``templates_dir`` was not provided at init time, this method
         is a no-op beyond directory creation.
 
-        Validates: Requirements 1.1, 1.2, 1.3, 1.4
+        Validates: bugfix-spec Requirements 2.1, 3.1 (builtin-defaults-refresh)
         """
         # Create the context directory (and parents) if needed
         try:
@@ -173,34 +176,19 @@ class ContextDirectoryLoader:
         if self.templates_dir is None:
             return
 
-        # Build the list of files to copy: 9 source files + L0 + L1
-        files_to_copy: list[str] = [
-            spec.filename for spec in CONTEXT_FILES
-        ]
-        files_to_copy.append(L0_CACHE_FILENAME)
-        files_to_copy.append(L1_CACHE_FILENAME)
-
-        for filename in files_to_copy:
-            dest = self.context_dir / filename
-            if dest.exists():
-                # Preserve existing files — never overwrite
+        # Copy ALL files from templates_dir, overwriting only when content differs
+        for src in self.templates_dir.iterdir():
+            if not src.is_file():
                 continue
-
-            src = self.templates_dir / filename
+            dest = self.context_dir / src.name
             try:
-                if not src.exists():
-                    logger.warning(
-                        "Template file not found, skipping: %s", src
-                    )
+                src_bytes = src.read_bytes()
+                # Skip write if content is identical (avoids unnecessary I/O)
+                if dest.exists() and dest.read_bytes() == src_bytes:
                     continue
-                dest.write_bytes(src.read_bytes())
+                dest.write_bytes(src_bytes)
             except OSError as exc:
-                logger.warning(
-                    "Failed to copy template %s → %s: %s",
-                    src,
-                    dest,
-                    exc,
-                )
+                logger.warning("Failed to copy %s → %s: %s", src, dest, exc)
 
     # ── Private Methods ────────────────────────────────────────────────
 

@@ -438,13 +438,22 @@ class SwarmWorkspaceManager:
         """Remove legacy files and folders from pre-restructure SwarmWS.
 
         Runs once per startup on existing workspaces. Idempotent — safe to
-        call repeatedly. Removes:
+        call repeatedly. Uses a marker file to skip on subsequent startups
+        once all legacy content has been cleaned.
+
+        Removes:
         - Legacy Knowledge subdirectories (Knowledge Base, Memory, Notes)
         - Legacy root files (context-L0.md, context-L1.md, system-prompts.md,
           index.md, knowledge-map.md)
         - Legacy per-project context files (context-L0.md, context-L1.md)
+        - Legacy root directories (chats/, _tmp_transfer/, ContextFiles/, workspace/)
         """
         root = Path(workspace_path)
+
+        # Skip if already cleaned (marker file exists)
+        marker = root / ".legacy_cleaned"
+        if marker.exists():
+            return
 
         # Legacy Knowledge subdirectories (Memory was legacy, KB and Notes are kept)
         legacy_knowledge_dirs = ["Memory"]
@@ -460,7 +469,7 @@ class SwarmWorkspaceManager:
         legacy_root_files = [
             "context-L0.md", "context-L1.md", "system-prompts.md",
             "index.md", "knowledge-map.md", "generate_ppt.py",
-            "SwarmAI_Capabilities.pptx",
+            "SwarmAI_Capabilities.pptx", "gen_news_pdf.py",
         ]
         for filename in legacy_root_files:
             legacy_file = root / filename
@@ -501,7 +510,7 @@ class SwarmWorkspaceManager:
 
         # Legacy root-level directories
         legacy_root_dirs = [
-            "_tmp_transfer", "ContextFiles", "workspace",
+            "_tmp_transfer", "ContextFiles", "workspace", "chats",
         ]
         for dirname in legacy_root_dirs:
             legacy_dir = root / dirname
@@ -510,6 +519,12 @@ class SwarmWorkspaceManager:
                     lambda d=legacy_dir: shutil.rmtree(d, ignore_errors=True)
                 )
                 logger.info("Removed legacy directory: %s", dirname)
+
+        # Mark cleanup as done so we skip on future startups
+        try:
+            marker.write_text("done")
+        except OSError:
+            pass  # Non-critical — cleanup will just re-run next time
 
     async def verify_integrity(self, workspace_path: str) -> bool:
         """Verify Knowledge/, Projects/, and Knowledge subdirs exist, recreating if missing.
