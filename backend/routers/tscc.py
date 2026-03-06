@@ -8,16 +8,27 @@ Key endpoints:
 - ``GET  /api/chat_threads/{thread_id}/tscc``          — current state
 - ``GET  /api/chat/{session_id}/system-prompt``        — system prompt metadata
 
+Both endpoints return a default empty state when no in-memory data exists
+(e.g. after backend restart).  This avoids 404 console errors on the
+frontend and is semantically correct — "not yet initialized" is a valid
+state, not an error.
+
 All responses use snake_case field names per backend convention.
 
 Requirements: 6.1, 6.2, 6.7
 """
 
 import logging
+from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 
-from schemas.tscc import SystemPromptMetadata, TSCCState
+from schemas.tscc import (
+    SystemPromptMetadata,
+    TSCCContext,
+    TSCCLiveState,
+    TSCCState,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +45,23 @@ def register_tscc_dependencies(state_manager) -> None:
     _state_manager = state_manager
 
 
+def _make_default_tscc_state(thread_id: str) -> TSCCState:
+    """Build a default TSCC state for a thread with no in-memory data."""
+    return TSCCState(
+        thread_id=thread_id,
+        project_id=None,
+        scope_type="workspace",
+        last_updated_at=datetime.now(timezone.utc).isoformat(),
+        lifecycle_state="new",
+        live_state=TSCCLiveState(
+            context=TSCCContext(
+                scope_label="Workspace: SwarmWS (General)",
+                thread_title="",
+            ),
+        ),
+    )
+
+
 @tscc_router.get(
     "/chat_threads/{thread_id}/tscc",
     response_model=TSCCState,
@@ -41,11 +69,13 @@ def register_tscc_dependencies(state_manager) -> None:
 async def get_tscc_state(thread_id: str):
     """Return the current TSCC state for a thread.
 
-    Returns 404 if no state exists for the given thread_id.
+    Returns a default empty state if no in-memory state exists (e.g. after
+    backend restart).  This is not an error — the state will be populated
+    when the next conversation starts on this thread.
     """
     state = await _state_manager.get_state(thread_id)
     if state is None:
-        raise HTTPException(status_code=404, detail="Thread not found")
+        return _make_default_tscc_state(thread_id)
     return state
 
 
@@ -56,14 +86,13 @@ async def get_tscc_state(thread_id: str):
 async def get_system_prompt(session_id: str):
     """Return the assembled system prompt metadata for a session.
 
-    Returns the list of context files loaded, their token counts,
-    truncation status, and the full assembled prompt text.
-
-    Returns 404 if no metadata exists for the given session_id.
+    Returns an empty metadata object if no metadata exists for the given
+    session_id (e.g. after backend restart).  The metadata will be
+    populated when the next conversation starts on this session.
     """
     from core.agent_manager import _system_prompt_metadata
 
     metadata = _system_prompt_metadata.get(session_id)
     if metadata is None:
-        raise HTTPException(status_code=404, detail="No system prompt metadata for session")
+        return SystemPromptMetadata()
     return SystemPromptMetadata(**metadata)
