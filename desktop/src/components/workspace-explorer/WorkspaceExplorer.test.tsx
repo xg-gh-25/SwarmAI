@@ -112,17 +112,18 @@ describe('WorkspaceExplorer', () => {
     setupMocks();
   });
 
-  it('renders "Loading..." when isLoading is true', () => {
+  it('renders TreeSkeleton when isLoading is true', () => {
     setupMocks({ isLoading: true, treeData: [] });
     render(<WorkspaceExplorer />);
-    expect(screen.getByText('Loading...')).toBeInTheDocument();
+    expect(screen.getByTestId('tree-skeleton')).toBeInTheDocument();
   });
 
-  it('renders error state with retry button when error is set', () => {
+  it('renders TreeErrorState with retry button when error is set', () => {
     setupMocks({ error: 'Network error' });
     render(<WorkspaceExplorer />);
-    expect(screen.getByText('Failed to load workspace tree.')).toBeInTheDocument();
-    expect(screen.getByTestId('retry-button')).toBeInTheDocument();
+    expect(screen.getByTestId('tree-error-state')).toBeInTheDocument();
+    expect(screen.getByText('Failed to load file tree')).toBeInTheDocument();
+    expect(screen.getByText('Retry')).toBeInTheDocument();
   });
 
   it('renders empty state when treeData is empty and not loading', () => {

@@ -78,6 +78,7 @@ class TestInitializedFieldConsistency:
         # Mock the channel gateway
         mock_gateway = MagicMock()
         mock_gateway._shutting_down = not gateway_running
+        mock_gateway.startup_state = "started"
 
         # Create mock db with proper async methods
         mock_db = MagicMock()
@@ -155,6 +156,7 @@ class TestInitializedFieldConsistency:
         # Mock the channel gateway
         mock_gateway = MagicMock()
         mock_gateway._shutting_down = not gateway_running
+        mock_gateway.startup_state = "started"
 
         # Create mock db with proper async methods
         mock_db = MagicMock()
@@ -234,6 +236,7 @@ class TestInitializedFieldConsistency:
 
             mock_gateway = MagicMock()
             mock_gateway._shutting_down = not gateway_running
+            mock_gateway.startup_state = "started"
 
             # Create mock db with proper async methods
             mock_db = MagicMock()
@@ -291,6 +294,7 @@ class TestInitializedFieldConsistency:
 
         mock_gateway = MagicMock()
         mock_gateway._shutting_down = False
+        mock_gateway.startup_state = "started"
 
         # Create mock db with proper async methods
         mock_db = MagicMock()

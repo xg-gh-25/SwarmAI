@@ -91,6 +91,19 @@ class ChannelGateway:
         self._channel_cache: dict[str, dict] = {}
         # Flag to prevent retries during shutdown
         self._shutting_down = False
+        # Startup lifecycle state for the system status endpoint.
+        # Valid values: "not_started", "starting", "started", "failed"
+        self._startup_state: str = "not_started"
+
+    @property
+    def startup_state(self) -> str:
+        """Current startup lifecycle state.
+
+        Returns one of ``"not_started"``, ``"starting"``, ``"started"``,
+        or ``"failed"``.  Read by the system status endpoint to report
+        channel gateway readiness.
+        """
+        return self._startup_state
 
     # ------------------------------------------------------------------
     # Lifecycle

@@ -11,6 +11,7 @@ import os
 import shutil
 import sqlite3
 import sys
+import time
 from pathlib import Path
 
 from config import settings, get_app_data_dir
@@ -26,6 +27,14 @@ from database import initialize_database
 # Runtime flag to track if lifespan startup has completed
 # This is different from initialization_complete in DB which persists across restarts
 _startup_complete = False
+
+# Startup timing instrumentation (populated by lifespan, read by system status endpoint).
+# ``_startup_time_ms`` holds the total wall-clock time from lifespan entry to
+# ``_startup_complete = True``.  ``_phase_timings`` holds per-phase durations
+# keyed by phase name (e.g. ``"database_ms"``, ``"workspace_ms"``).
+# Both are ``None`` until the lifespan completes its critical path.
+_startup_time_ms: float | None = None
+_phase_timings: dict[str, float] | None = None
 
 
 def get_log_file_path() -> Path:
@@ -145,11 +154,39 @@ def _ensure_database_initialized() -> bool:
     return True
 
 
+async def _deferred_refresh_defaults(label: str) -> None:
+    """Background task that refreshes built-in skills and context files.
+
+    Shared by both the fast-path and full-init quick-validation paths to
+    avoid duplicating the same closure.  Logs success/failure and records
+    elapsed time into the module-level ``_phase_timings`` dict.
+
+    Args:
+        label: Human-readable label for log messages (e.g. ``"fast path"``).
+    """
+    _t_start = time.monotonic()
+    try:
+        from core.initialization_manager import initialization_manager
+        await initialization_manager.refresh_builtin_defaults()
+        logger.info("Builtin defaults refreshed (deferred, %s)", label)
+    except Exception:
+        logger.exception("Deferred refresh_builtin_defaults failed (non-fatal, %s)", label)
+    finally:
+        elapsed = round((time.monotonic() - _t_start) * 1000)
+        _phase_timings_ref = _phase_timings
+        if _phase_timings_ref is not None:
+            _phase_timings_ref["refresh_defaults_ms"] = elapsed
+        logger.info("Phase: refresh_builtin_defaults (deferred) — %dms", elapsed)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan handler."""
-    global _startup_complete
+    global _startup_complete, _startup_time_ms, _phase_timings
     from core.initialization_manager import initialization_manager
+
+    t0 = time.monotonic()
+    phase_timings: dict[str, float] = {}
     
     # Startup
     logger.info(f"Starting {settings.app_name} v{settings.app_version}")
@@ -168,6 +205,10 @@ async def lifespan(app: FastAPI):
         await initialize_database(skip_schema=True)
         logger.info("Database instance created (schema skipped)")
 
+        t_db = time.monotonic()
+        phase_timings["database_ms"] = round((t_db - t0) * 1000)
+        logger.info("Phase: database init — %dms", phase_timings["database_ms"])
+
         # Ensure workspace filesystem exists on disk.
         # The seed DB contains the workspace_config row but NOT the
         # actual directories/files.  For returning users this also
@@ -183,8 +224,16 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error("Failed to ensure workspace on fast startup: %s", e)
 
-        # Refresh built-in skills and context files on every startup
-        await initialization_manager.refresh_builtin_defaults()
+        t_workspace = time.monotonic()
+        phase_timings["workspace_ms"] = round((t_workspace - t_db) * 1000)
+        logger.info("Phase: workspace verify — %dms", phase_timings["workspace_ms"])
+
+        # Refresh built-in skills and context files — deferred to background
+        # so it doesn't block _startup_complete.  The DB already has
+        # skill/context data from the previous session (or the seed).
+        phase_timings["refresh_defaults_ms"] = 0  # Updated by background task on completion
+        asyncio.create_task(_deferred_refresh_defaults("fast path"))
+        logger.info("refresh_builtin_defaults deferred to background")
     else:
         # Full initialization path — dev-mode fallback (no seed.db available).
         # Preserve the existing init pipeline exactly.
@@ -195,6 +244,10 @@ async def lifespan(app: FastAPI):
             logger.error("Database initialization timed out after 45 seconds — check migrations")
             raise RuntimeError("Database initialization timed out")
         logger.info("Database initialized")
+
+        t_db = time.monotonic()
+        phase_timings["database_ms"] = round((t_db - t0) * 1000)
+        logger.info("Phase: database init — %dms", phase_timings["database_ms"])
 
         # Check initialization state and run appropriate flow
         # Validates: Requirements 3.1
@@ -208,16 +261,78 @@ async def lifespan(app: FastAPI):
             else:
                 logger.info("Quick validation passed - fast startup complete")
                 
-                # Refresh built-in skills and context files
-                await initialization_manager.refresh_builtin_defaults()
+                # Refresh built-in skills and context files — deferred to
+                # background since quick validation passed (data exists in DB).
+                phase_timings["refresh_defaults_ms"] = 0  # Updated by background task
+                asyncio.create_task(_deferred_refresh_defaults("quick-val path"))
+                logger.info("refresh_builtin_defaults deferred to background (quick-val path)")
         else:
             # First-time initialization
             logger.info("First-time startup, running full initialization...")
             await initialization_manager.run_full_initialization()
 
-    # Start channel gateway (auto-starts active channels)
-    await channel_gateway.startup()
-    logger.info("Channel gateway started")
+        # On the full-init path, workspace is handled inside the init pipeline.
+        # Record workspace_ms as the time from DB init to end of init pipeline.
+        t_workspace = time.monotonic()
+        phase_timings["workspace_ms"] = round((t_workspace - t_db) * 1000)
+        logger.info("Phase: workspace/init pipeline — %dms", phase_timings["workspace_ms"])
+
+        # refresh_defaults_ms: set to 0 if not already set (full init runs it synchronously)
+        if "refresh_defaults_ms" not in phase_timings:
+            phase_timings["refresh_defaults_ms"] = 0
+
+    # Start channel gateway (deferred to background if channels exist)
+    # Validates: Requirements 1.1, 1.2, 1.3, 1.4
+    phase_timings["gateway_ms"] = 0  # Updated by background task on completion
+
+    _channels_count: int | None = None  # None = query failed, fall back to sync
+    try:
+        from database import db as _startup_db
+        _channels_list = await _startup_db.channels.list()
+        _channels_count = len(_channels_list)
+    except Exception:
+        logger.warning(
+            "Failed to query channels count — falling back to synchronous gateway startup"
+        )
+
+    if _channels_count == 0:
+        # No channels configured — skip gateway startup entirely.
+        channel_gateway._startup_state = "not_started"
+        logger.info("No channels configured — skipping channel gateway startup")
+    elif _channels_count is not None and _channels_count > 0:
+        # Channels exist — defer startup to a background task so it
+        # doesn't block _startup_complete.
+        async def _deferred_gateway_startup() -> None:
+            _t_start = time.monotonic()
+            try:
+                channel_gateway._startup_state = "starting"
+                await channel_gateway.startup()
+                channel_gateway._startup_state = "started"
+                logger.info(
+                    "Channel gateway started (deferred, %d channels)",
+                    _channels_count,
+                )
+            except Exception:
+                channel_gateway._startup_state = "failed"
+                logger.exception("Deferred channel gateway startup failed")
+            finally:
+                elapsed = round((time.monotonic() - _t_start) * 1000)
+                _phase_timings_ref = _phase_timings
+                if _phase_timings_ref is not None:
+                    _phase_timings_ref["gateway_ms"] = elapsed
+                logger.info("Phase: channel gateway (deferred) — %dms", elapsed)
+
+        asyncio.create_task(_deferred_gateway_startup())
+        logger.info(
+            "Channel gateway startup deferred to background (%d channels)",
+            _channels_count,
+        )
+    else:
+        # Fallback: channels count query failed (None) — run synchronously
+        # (preserves current behavior).
+        await channel_gateway.startup()
+        channel_gateway._startup_state = "started"
+        logger.info("Channel gateway started (synchronous fallback)")
 
     # --- Initialize file-based config and permission components ---
     # These replace the module-level singletons that were previously
@@ -239,10 +354,13 @@ async def lifespan(app: FastAPI):
     cred_validator = CredentialValidator()
     logger.info("CredentialValidator initialized")
 
+    t_config = time.monotonic()
+    phase_timings["config_ms"] = round((t_config - t_workspace) * 1000)
+    logger.info("Phase: config/permission load — %dms", phase_timings["config_ms"])
+
     # Pre-warm boto3 import so the first STS call doesn't pay the ~8s
     # PyInstaller import cost on the hot path.  This runs in a background
     # thread to avoid blocking startup.
-    import asyncio
     async def _prewarm_boto3():
         try:
             await asyncio.to_thread(lambda: __import__("boto3"))
@@ -258,6 +376,10 @@ async def lifespan(app: FastAPI):
         credential_validator=cred_validator,
     )
     logger.info("AgentManager configured with injected components")
+
+    t_agent = time.monotonic()
+    phase_timings["agent_manager_ms"] = round((t_agent - t_config) * 1000)
+    logger.info("Phase: agent manager configure — %dms", phase_timings["agent_manager_ms"])
 
     # Wire AppConfigManager into Settings router (DI).
     # Skip if already configured (e.g. test fixtures may pre-set).
@@ -277,6 +399,17 @@ async def lifespan(app: FastAPI):
 
     # Mark startup as complete - health check will now return healthy
     _startup_complete = True
+    total_ms = round((time.monotonic() - t0) * 1000)
+    _startup_time_ms = total_ms
+    _phase_timings = phase_timings
+    logger.info(
+        "Startup complete — total %dms (db=%dms, workspace=%dms, config=%dms, agent=%dms)",
+        total_ms,
+        phase_timings.get("database_ms", 0),
+        phase_timings.get("workspace_ms", 0),
+        phase_timings.get("config_ms", 0),
+        phase_timings.get("agent_manager_ms", 0),
+    )
     logger.info("Startup complete - ready to serve requests")
 
     yield

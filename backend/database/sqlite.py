@@ -192,6 +192,101 @@ class SQLiteMessagesTable(SQLiteTable[T], Generic[T]):
                 rows = await cursor.fetchall()
                 return [self._row_to_dict(row) for row in rows]
 
+    async def list_by_session_paginated(
+        self,
+        session_id: str,
+        limit: Optional[int] = None,
+        before_id: Optional[str] = None,
+    ) -> list[T]:
+        """List messages for a session with optional cursor-based pagination.
+
+        Supports three modes:
+        - **Both limit and before_id**: Return up to ``limit`` messages older
+          than the message identified by ``before_id``, using
+          ``(created_at, rowid)`` as a stable cursor for tie-breaking when
+          multiple messages share the same timestamp.
+        - **Only limit**: Return the ``limit`` most recent messages.
+        - **Neither** (backward compat): Return all messages in chronological
+          order, identical to ``list_by_session()``.
+
+        In all paginated modes the result is returned in chronological
+        (ascending) order so callers can append/prepend without re-sorting.
+
+        Args:
+            session_id: The session to query.
+            limit: Max number of messages to return (most recent first when
+                paginating).  Must be between 1 and 200 inclusive.
+            before_id: Return only messages created before the message with
+                this ID.  Uses ``(created_at, rowid)`` for deterministic
+                cursor positioning even when timestamps collide.
+
+        Returns:
+            Messages ordered by ``created_at ASC`` (chronological).
+        """
+        # --- Neither param: backward-compatible full fetch ---
+        if limit is None and before_id is None:
+            return await self.list_by_session(session_id)
+
+        async with self._get_connection() as conn:
+            conn.row_factory = aiosqlite.Row
+
+            if before_id is not None and limit is not None:
+                # Both limit and before_id: cursor-based page of older messages.
+                # SQLite doesn't support tuple comparison directly, so we
+                # expand (created_at, rowid) < (cursor_ca, cursor_rowid) into:
+                #   (created_at < cursor_ca) OR
+                #   (created_at = cursor_ca AND rowid < cursor_rowid)
+                query = (
+                    f"SELECT *, rowid FROM {self.table_name} "
+                    f"WHERE session_id = ? "
+                    f"  AND ("
+                    f"    created_at < (SELECT created_at FROM {self.table_name} WHERE id = ?)"
+                    f"    OR ("
+                    f"      created_at = (SELECT created_at FROM {self.table_name} WHERE id = ?)"
+                    f"      AND rowid < (SELECT rowid FROM {self.table_name} WHERE id = ?)"
+                    f"    )"
+                    f"  ) "
+                    f"ORDER BY created_at DESC, rowid DESC "
+                    f"LIMIT ?"
+                )
+                params = (session_id, before_id, before_id, before_id, limit)
+            elif limit is not None:
+                # Only limit: most recent N messages.
+                query = (
+                    f"SELECT *, rowid FROM {self.table_name} "
+                    f"WHERE session_id = ? "
+                    f"ORDER BY created_at DESC, rowid DESC "
+                    f"LIMIT ?"
+                )
+                params = (session_id, limit)
+            else:
+                # Only before_id without limit — fetch all older messages.
+                query = (
+                    f"SELECT *, rowid FROM {self.table_name} "
+                    f"WHERE session_id = ? "
+                    f"  AND ("
+                    f"    created_at < (SELECT created_at FROM {self.table_name} WHERE id = ?)"
+                    f"    OR ("
+                    f"      created_at = (SELECT created_at FROM {self.table_name} WHERE id = ?)"
+                    f"      AND rowid < (SELECT rowid FROM {self.table_name} WHERE id = ?)"
+                    f"    )"
+                    f"  ) "
+                    f"ORDER BY created_at ASC"
+                )
+                params = (session_id, before_id, before_id, before_id)
+
+            async with conn.execute(query, params) as cursor:
+                rows = await cursor.fetchall()
+                results = [self._row_to_dict(row) for row in rows]
+
+            # When fetching with DESC ordering (limit provided), reverse to
+            # return chronological order.
+            if limit is not None:
+                results.reverse()
+
+            return results
+
+
     async def delete_by_session(self, session_id: str) -> int:
         """Delete all messages for a session. Returns count of deleted items."""
         async with self._get_connection() as conn:
@@ -1022,6 +1117,7 @@ class SQLiteDatabase(BaseDatabase):
     );
     CREATE INDEX IF NOT EXISTS idx_messages_session_id ON messages(session_id);
     CREATE INDEX IF NOT EXISTS idx_messages_expires_at ON messages(expires_at);
+    CREATE INDEX IF NOT EXISTS idx_messages_session_created ON messages(session_id, created_at);
 
     -- Users table (for local single-user, may only have one record)
     CREATE TABLE IF NOT EXISTS users (

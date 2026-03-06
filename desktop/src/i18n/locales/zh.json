@@ -1,6 +1,6 @@
 {
   "startup": {
-    "connectingToBackend": "正在连接后端...",
+    "connectingToBackend": "正在唤醒你的 SwarmAI...",
     "databaseInitialized": "数据库已初始化",
     "swarmAgentReady": "SwarmAgent 已就绪",
     "channelGatewayStarted": "通道网关已启动",
@@ -13,7 +13,7 @@
     "databaseError": "数据库错误: {{error}}",
     "agentNotReady": "SwarmAgent 未就绪",
     "channelGatewayNotRunning": "通道网关未运行",
-    "waitingForReady": "等待系统就绪...",
+    "waitingForReady": "马上就好...",
     "waitingForAgent": "等待 SwarmAgent 就绪...",
     "waitingForWorkspace": "等待 SwarmWorkspace 就绪...",
     "initializationTimeout": "初始化超时，已等待 {{seconds}} 秒"
