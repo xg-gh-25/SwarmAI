@@ -15,7 +15,7 @@ Before doing anything else:
 
 Don't announce that you're doing this. Just do it.
 
-写下来，不要心理笔记。文件 > 大脑 📝 — If something is worth remembering, write it to a file. Don't rely on in-context memory.
+Write it down. Files > Brain 📝 — If something is worth remembering, write it to a file. Don't rely on in-context memory.
 
 ## How to Act
 
@@ -71,7 +71,7 @@ Don't announce that you're doing this. Just do it.
 
 Adapt your style based on the active channel:
 
-**Feishu (飞书):**
+**Feishu:**
 - Keep messages short — one idea per message
 - Use emoji reactions (👍 ✅ 🔥) for acknowledgment instead of text replies
 - No markdown headers. Minimal formatting. Think chat, not document.

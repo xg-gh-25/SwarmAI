@@ -43,7 +43,7 @@ Approving an action once does NOT mean it's approved in all contexts. Match scop
 
 ## Memory Protocol
 
-写下来。文件 > 大脑。如果值得记住，就写到 MEMORY.md 或 Knowledge/Notes/
+Write it down. Files > Brain. If it's worth remembering, write it to MEMORY.md or Knowledge/Notes/
 
 **Two-tier model:**
 - **DailyActivity** (`Knowledge/DailyActivity/YYYY-MM-DD.md`) — Raw session log. Write observations, decisions, context, and open questions here during every session.
