@@ -57,8 +57,8 @@ const arbKnowledgeNode: fc.Arbitrary<TreeNode> = arbChildFiles('Knowledge').map(
     type: 'directory',
     children: [
       {
-        name: 'Knowledge Base',
-        path: 'Knowledge/Knowledge Base',
+        name: 'Library',
+        path: 'Knowledge/Library',
         type: 'directory',
         children: [],
       },

@@ -1,23 +1,36 @@
-# Knowledge — What I Know
+<!-- ✏️ YOUR FILE — This file is yours to edit. SwarmAI will never overwrite your changes.
+     This is the index for your Knowledge directory. Update it when creating new files. -->
 
-_Domain knowledge, technical facts, conventions, and reference material. This is my "textbook" — things I should know regardless of what project we're working on._
+# Knowledge — Directory Index
 
-## Tech Stack
+_This file indexes the contents of `SwarmWS/Knowledge/`. When you create a new file in any Knowledge subfolder, add a brief entry here so I can find it later._
 
-_(Your primary languages, frameworks, tools, and conventions.)_
+## Notes (`Knowledge/Notes/`)
 
-## Coding Conventions
+_Quick notes, scratch, and general-purpose files._
 
-_(Naming conventions, file organization, testing practices, PR workflow.)_
+<!-- Example: - 2026-03-06-api-design-thoughts.md — Initial API design brainstorm -->
 
-## Architecture Notes
+## Reports (`Knowledge/Reports/`)
 
-_(High-level architecture decisions, system boundaries, key patterns.)_
+_Analysis reports, research findings, and structured output._
 
-## Reference
+## Meetings (`Knowledge/Meetings/`)
 
-_(API endpoints, environment variables, deployment targets, useful commands.)_
+_Meeting summaries, action items, and discussion notes._
+
+## Library (`Knowledge/Library/`)
+
+_Reference materials, documentation, guides, and long-lived resources._
+
+## Archives (`Knowledge/Archives/`)
+
+_Archived daily activity files. Auto-managed — older entries are pruned after 90 days._
+
+## DailyActivity (`Knowledge/DailyActivity/`)
+
+_Auto-created daily session logs (YYYY-MM-DD.md). Not indexed here — managed automatically._
 
 ---
 
-_Add anything here that I should always know. This file is loaded into every session, so keep it focused on genuinely useful reference material. Move project-specific details to PROJECTS.md._
+_Keep this index updated. When I create a file in Knowledge/, I'll add an entry here. You can reorganize or annotate entries anytime._

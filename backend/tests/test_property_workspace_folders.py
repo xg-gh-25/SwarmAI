@@ -36,6 +36,16 @@ REQUIRED_FOLDERS = [
     "Projects",
 ]
 
+# Knowledge subdirectories created by create_folder_structure
+REQUIRED_KNOWLEDGE_SUBDIRS = [
+    "Knowledge/Notes",
+    "Knowledge/Reports",
+    "Knowledge/Meetings",
+    "Knowledge/Library",
+    "Knowledge/Archives",
+    "Knowledge/DailyActivity",
+]
+
 FORBIDDEN_FOLDERS = [
     "Tasks",
     "ToDos",
@@ -137,7 +147,7 @@ class TestWorkspaceFolderCreation:
                     )
                     actual_folders.add(rel)
 
-            expected_folders = set(REQUIRED_FOLDERS)
+            expected_folders = set(REQUIRED_FOLDERS) | set(REQUIRED_KNOWLEDGE_SUBDIRS)
 
             assert actual_folders == expected_folders, (
                 f"Folder set mismatch.\n"

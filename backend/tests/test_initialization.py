@@ -105,12 +105,10 @@ class TestFirstLaunchCreatesFullStructure:
         )
 
         # Default Knowledge subdirectories exist
-        assert os.path.isdir(os.path.join(root, "Knowledge", "Knowledge Base")), (
-            "Knowledge Base subdirectory should exist"
-        )
-        assert os.path.isdir(os.path.join(root, "Knowledge", "Notes")), (
-            "Notes subdirectory should exist"
-        )
+        for subdir in ["Notes", "Reports", "Meetings", "Library", "Archives", "DailyActivity"]:
+            assert os.path.isdir(os.path.join(root, "Knowledge", subdir)), (
+                f"{subdir} subdirectory should exist"
+            )
 
 
 class TestSubsequentLaunchPreservesContent:

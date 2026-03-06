@@ -1,3 +1,7 @@
+<!-- ✏️ YOUR FILE — This file is yours to edit. SwarmAI will never overwrite your changes.
+     Add standing rules, session overrides, and behavioral preferences here.
+     This is the primary place to customize how the agent works for you. -->
+
 # Steering — Session Overrides & Standing Rules
 
 _Rules that apply across all sessions. Edit anytime to change behavior. Temporary rules go in "Current Focus"; permanent rules go in the standing sections._
@@ -39,11 +43,34 @@ Approving an action once does NOT mean it's approved in all contexts. Match scop
 
 ## Memory Protocol
 
-- At session start: read MEMORY.md silently. Don't announce it.
-- During session: note important discoveries mentally. Don't write on every turn.
-- When user says "remember this": update MEMORY.md immediately.
-- At session end (if asked): persist key decisions, lessons, and open threads.
-- Topic-specific details go in KNOWLEDGE.md, not MEMORY.md.
+写下来。文件 > 大脑。如果值得记住，就写到 MEMORY.md 或 Knowledge/Notes/
+
+**Two-tier model:**
+- **DailyActivity** (`Knowledge/DailyActivity/YYYY-MM-DD.md`) — Raw session log. Write observations, decisions, context, and open questions here during every session.
+- **MEMORY.md** — Curated long-term memory. Only distilled, high-value content belongs here.
+
+**During a session:**
+- Write noteworthy observations and decisions to today's DailyActivity file
+- Do NOT write raw session details to MEMORY.md
+
+**When user says "remember this" / "save to memory":**
+- Write the specified content to MEMORY.md immediately
+
+**At session start:**
+- Read MEMORY.md silently (loaded via system prompt)
+- Read today's and yesterday's DailyActivity files for recent context
+- Don't announce any of this
+
+**At session end (if asked):**
+- Persist key decisions, lessons, and open threads to MEMORY.md
+- Update "Open Threads" section if there are unfinished tasks
+
+**Distillation (automatic, silent):**
+- When DailyActivity has >7 unprocessed files, distill at next session start
+- Promote to MEMORY.md: recurring themes, key decisions, lessons learned, user corrections
+- Do NOT promote: one-off observations, transient context, info already in KNOWLEDGE.md
+- After distillation, move processed files to `Knowledge/Archives/` with `distilled: true` frontmatter
+- All memory operations are silent — never announce or ask permission for housekeeping
 
 ## Prompt Suggestions
 
@@ -82,6 +109,65 @@ When working on specs, designs, or complex documents:
 4. Iterate until the user says "done"
 
 Don't try to get it perfect in one shot. Iterate.
+
+## Language
+
+- Match the user's language. If the user writes in Chinese, respond in Chinese.
+- Technical terms (function names, CLI commands, file paths) keep English.
+- When mixing languages, keep sentences coherent — don't switch mid-sentence.
+
+## Output Style
+
+- Prefer concise, actionable responses over verbose explanations.
+- Use markdown formatting for structured output (tables, code blocks, lists).
+- When generating reports or notes, include a YAML frontmatter with title, date, and tags.
+- Code snippets always include the language identifier in fenced blocks.
+
+## File Saving & Knowledge Organization
+
+When generating notes, analysis reports, markdown files, or any written output:
+- Default save location: `Knowledge/Notes/` (unless user specifies otherwise)
+- Create the directory if it doesn't exist before saving
+- Use descriptive filenames with date prefix (e.g., `2026-03-06-meeting-analysis.md`)
+- Analysis reports go to `Knowledge/Reports/`
+- Meeting summaries go to `Knowledge/Meetings/`
+- Reference materials go to `Knowledge/Library/`
+- Daily session logs go to `Knowledge/DailyActivity/YYYY-MM-DD.md` (auto-created)
+- Archived daily files go to `Knowledge/Archives/` (auto-managed)
+- Always add a brief entry to KNOWLEDGE.md when creating new files in Knowledge/
+
+## SwarmWS Directory Structure
+
+```
+SwarmWS/                          # Workspace root (agent cwd)
+├── .context/                     # Context files → system prompt
+│   ├── SWARMAI.md                #   P0 — Core identity & principles
+│   ├── IDENTITY.md               #   P1 — Agent identity
+│   ├── SOUL.md                   #   P2 — Personality & tone
+│   ├── AGENT.md                  #   P3 — Behavioral directives
+│   ├── USER.md                   #   P4 — User preferences
+│   ├── STEERING.md               #   P5 — This file (session overrides)
+│   ├── TOOLS.md                  #   P6 — Tools & environment config
+│   ├── MEMORY.md                 #   P7 — Persistent memory (curated)
+│   ├── KNOWLEDGE.md              #   P8 — Knowledge directory index
+│   └── PROJECTS.md               #   P9 — Active projects index
+├── Knowledge/                    # Knowledge base
+│   ├── Notes/                    #   Quick notes, scratch
+│   ├── Reports/                  #   Analysis reports
+│   ├── Meetings/                 #   Meeting summaries
+│   ├── Library/                  #   Reference materials
+│   ├── Archives/                 #   Archived daily activity (auto-pruned at 90 days)
+│   └── DailyActivity/            #   Auto-created YYYY-MM-DD.md daily logs
+├── Projects/                     # Project workspaces
+│   └── <ProjectName>/            #   Per-project folder
+│       ├── .project.json         #     Project metadata
+│       ├── research/             #     Research materials
+│       ├── reports/              #     Project-specific reports
+│       └── chats/                #     Chat exports
+└── .claude/skills/               # Symlinked skills for SDK discovery
+```
+
+When creating files, respect this structure. Don't create top-level files in SwarmWS root.
 
 ---
 

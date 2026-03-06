@@ -202,8 +202,8 @@ describe('ExplorerContext - Property-Based Tests', () => {
           type: 'directory',
           children: [
             {
-              name: 'Knowledge Base',
-              path: 'Knowledge/Knowledge Base',
+              name: 'Library',
+              path: 'Knowledge/Library',
               type: 'directory',
               children: [],
             },

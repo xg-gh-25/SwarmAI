@@ -20,7 +20,7 @@ import logging
 import os
 import re
 import shutil
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 from uuid import uuid4
@@ -39,10 +39,14 @@ logger = logging.getLogger(__name__)
 # Simplified folder structure — only user-facing directories
 FOLDER_STRUCTURE = ["Knowledge", "Projects"]
 
-# Default Knowledge subdirectories
-KNOWLEDGE_SUBDIRS = ["Knowledge Base", "Notes"]
+# Default Knowledge subdirectories (6 subdirs under Knowledge/)
+KNOWLEDGE_SUBDIRS = ["Notes", "Reports", "Meetings", "Library", "Archives", "DailyActivity"]
 
-SYSTEM_MANAGED_FOLDERS = {"Knowledge", "Projects"}
+SYSTEM_MANAGED_FOLDERS = {
+    "Knowledge", "Projects",
+    "Knowledge/Notes", "Knowledge/Reports", "Knowledge/Meetings",
+    "Knowledge/Library", "Knowledge/Archives", "Knowledge/DailyActivity",
+}
 
 SYSTEM_MANAGED_ROOT_FILES: set[str] = set()
 
@@ -277,7 +281,9 @@ class SwarmWorkspaceManager:
     async def create_folder_structure(self, workspace_path: str) -> None:
         """Create the minimal folder structure for the workspace.
 
-        Creates Knowledge/ and Projects/ directories plus .gitignore.
+        Creates Knowledge/ and Projects/ directories, six Knowledge
+        subdirectories (Notes, Reports, Meetings, Library, Archives,
+        DailyActivity), and .gitignore.
         Context files are managed by ContextDirectoryLoader separately.
         """
         if not self.validate_path(workspace_path):
@@ -478,8 +484,11 @@ class SwarmWorkspaceManager:
         ``anyio.to_thread.run_sync()`` call via :func:`_batch_remove` to
         avoid dispatching one thread call per item.
 
+        Migrates:
+        - Legacy ``Knowledge Base/`` → ``Library/`` (preserves user files)
+
         Removes:
-        - Legacy Knowledge subdirectories (Knowledge Base, Memory, Notes)
+        - Legacy Knowledge subdirectories (Memory)
         - Legacy root files (context-L0.md, context-L1.md, system-prompts.md,
           index.md, knowledge-map.md)
         - Legacy per-project context files (context-L0.md, context-L1.md)
@@ -491,6 +500,23 @@ class SwarmWorkspaceManager:
         marker = root / ".legacy_cleaned"
         if marker.exists():
             return
+
+        # ── Migrate "Knowledge Base" → "Library" (preserve user files) ───
+        legacy_kb = root / "Knowledge" / "Knowledge Base"
+        new_library = root / "Knowledge" / "Library"
+        if legacy_kb.exists():
+            def _migrate_kb_to_library() -> None:
+                new_library.mkdir(parents=True, exist_ok=True)
+                for item in legacy_kb.iterdir():
+                    dest = new_library / item.name
+                    if not dest.exists():
+                        shutil.move(str(item), str(dest))
+                # Remove empty legacy dir
+                if not any(legacy_kb.iterdir()):
+                    legacy_kb.rmdir()
+
+            await anyio.to_thread.run_sync(_migrate_kb_to_library)
+            logger.info("Migrated Knowledge Base/ → Library/")
 
         # ── Collect ALL legacy paths into a single list ──────────────────
         paths_to_remove: list[tuple[Path, str]] = []
@@ -563,7 +589,12 @@ class SwarmWorkspaceManager:
             pass  # Non-critical — cleanup will just re-run next time
 
     async def verify_integrity(self, workspace_path: str) -> bool:
-        """Verify Knowledge/, Projects/, and Knowledge subdirs exist, recreating if missing.
+        """Verify Knowledge/, Projects/, and all six Knowledge subdirs exist, recreating if missing.
+
+        Checks Notes, Reports, Meetings, Library, Archives, DailyActivity
+        under Knowledge/ and recreates any that are missing without modifying
+        existing ones.  Also prunes archived DailyActivity files older than
+        90 days (Req 7.6, 15.11).
 
         Returns True if any folder was recreated.
         """
@@ -585,7 +616,59 @@ class SwarmWorkspaceManager:
                 )
                 recreated = True
                 logger.info("Recreated missing folder: Knowledge/%s", subdir)
+
+        # Auto-prune old archived DailyActivity files (Req 7.6, 15.11)
+        expanded = str(root)
+        await anyio.to_thread.run_sync(lambda: self.prune_archives(expanded))
+
         return recreated
+
+    def prune_archives(self, workspace_path: str, max_age_days: int = 90) -> int:
+        """Delete archived DailyActivity files older than *max_age_days*.
+
+        Scans ``Knowledge/Archives/`` for markdown files whose stem is a
+        valid ISO-8601 date (``YYYY-MM-DD``).  Files with a date older than
+        the cutoff are removed.  Non-date filenames and IO errors are
+        silently skipped so that manually-placed files are never touched.
+
+        This is a synchronous helper designed to be called from
+        ``verify_integrity()`` (via ``anyio.to_thread.run_sync``) or
+        directly during workspace maintenance.
+
+        Args:
+            workspace_path: Expanded absolute path to the workspace root.
+            max_age_days: Number of days to retain archived files.
+                Defaults to 90.
+
+        Returns:
+            Number of files successfully deleted.
+        """
+        archives_dir = Path(workspace_path) / "Knowledge" / "Archives"
+        if not archives_dir.is_dir():
+            return 0
+
+        cutoff = date.today() - timedelta(days=max_age_days)
+        deleted = 0
+
+        for f in archives_dir.iterdir():
+            if not f.is_file() or f.suffix != ".md":
+                continue
+            try:
+                file_date = date.fromisoformat(f.stem)
+            except ValueError:
+                continue  # Not a date-formatted filename — skip
+            if file_date < cutoff:
+                try:
+                    f.unlink()
+                    deleted += 1
+                    logger.debug("Pruned archived file: %s", f.name)
+                except OSError as exc:
+                    logger.warning("Failed to prune %s: %s", f.name, exc)
+
+        if deleted:
+            logger.info("Pruned %d archived file(s) older than %d days", deleted, max_age_days)
+        return deleted
+
 
     def _resolve_workspace_path(self, workspace_path: Optional[str]) -> str:
         """Resolve workspace_path to an expanded absolute path.

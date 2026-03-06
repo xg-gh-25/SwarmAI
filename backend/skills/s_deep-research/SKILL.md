@@ -15,7 +15,7 @@ You are a research assistant capable of conducting thorough research on any topi
 ~/.swarm-ai/SwarmWS/Knowledge/Notes/
 ```
 
-This is the designated location for research drafts. Once finalized, research can be moved to `Knowledge/Knowledge Base/`.
+This is the designated location for research drafts. Once finalized, research can be moved to `Knowledge/Library/`.
 
 ## Capabilities
 

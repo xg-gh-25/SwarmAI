@@ -23,6 +23,7 @@ Helper functions:
 - ``_should_include``      — Hidden-file filter (excludes dotfiles except .project.json)
 - ``_get_git_status``      — Run ``git status --porcelain`` and return {path: status} dict
 - ``_build_tree``          — Recursive tree builder with depth bounding, sorting, and git status
+- ``_is_readonly_context_file`` — Check if a path is a readonly system-default context file
 
 Helper models (request bodies):
 
@@ -45,7 +46,8 @@ from fastapi import APIRouter, Header, HTTPException, Query
 from fastapi.responses import Response
 from pydantic import BaseModel
 
-from core.swarm_workspace_manager import swarm_workspace_manager
+from core.context_directory_loader import CONTEXT_FILES
+from core.swarm_workspace_manager import SYSTEM_MANAGED_FOLDERS, swarm_workspace_manager
 from database import db
 from schemas.workspace_config import (
     TreeNodeResponse,
@@ -417,6 +419,29 @@ async def get_workspace_tree(
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+def _is_readonly_context_file(relative_path: str) -> bool:
+    """Check if a file path corresponds to a readonly system-default context file.
+
+    Only applies to files in the ``.context/`` directory.  Returns ``True``
+    when the file matches a ``ContextFileSpec`` with ``user_customized=False``
+    (system default → readonly).  Returns ``False`` for all other files,
+    including user-customized context files and non-context files.
+
+    Falls back to ``False`` on any error (permissive default per Req 9.4).
+    """
+    try:
+        normalized = relative_path.replace("\\", "/")
+        if not normalized.startswith(".context/"):
+            return False
+        filename = normalized.split("/")[-1]
+        for spec in CONTEXT_FILES:
+            if spec.filename == filename and not spec.user_customized:
+                return True
+        return False
+    except Exception:
+        return False
+
+
 @router.get("/workspace/file")
 async def get_workspace_file(
     path: str = Query(..., description="Relative path within the workspace"),
@@ -453,7 +478,7 @@ async def get_workspace_file(
     except OSError as exc:
         raise HTTPException(status_code=500, detail=f"Failed to read file: {exc}")
 
-    return {"content": content, "path": path, "name": target.name}
+    return {"content": content, "path": path, "name": target.name, "readonly": _is_readonly_context_file(path)}
 
 
 @router.put("/workspace/file")
@@ -500,6 +525,7 @@ async def put_workspace_file(
 # ─────────────────────────────────────────────────────────────────────────────
 
 
+@router.post("/workspace/folders")
 async def create_folder(request: FolderCreateRequest):
     """Create a folder inside the workspace.
 
@@ -524,15 +550,23 @@ async def create_folder(request: FolderCreateRequest):
 
 
 
+@router.delete("/workspace/folders", status_code=204)
 async def delete_folder(request: FolderDeleteRequest):
     """Delete a folder or file inside the workspace.
 
-    Increments project_files_version for context cache invalidation
-    when project files are removed (Requirement 34.2).  Also increments
-    memory_version when the deleted path is under Knowledge/Memory/.
+    Returns HTTP 403 if the target is a system-managed directory
+    (Requirement 12.9).
     """
     expanded_path = await _get_workspace_path()
     target = _validate_relative_path(request.path, expanded_path)
+
+    # Reject delete on system-managed folders (Req 12.9)
+    rel_path = request.path.replace("\\", "/").strip("/")
+    if rel_path in SYSTEM_MANAGED_FOLDERS:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Cannot delete/rename system-managed directory: {rel_path}",
+        )
 
     if not target.exists():
         raise HTTPException(status_code=404, detail="Path not found")
@@ -542,24 +576,32 @@ async def delete_folder(request: FolderDeleteRequest):
     else:
         target.unlink()
 
-    # Increment version counters for context cache invalidation (Req 34.2)
-    normalized = request.path.replace("\\", "/")
-    if "Knowledge/Memory" in normalized or "Knowledge/Memory" in normalized.replace("\\", "/"):
-        pass
-
     logger.info("Deleted: %s", request.path)
     return Response(status_code=204)
 
 
 
 
+@router.put("/workspace/rename")
 async def rename_item(request: FolderRenameRequest):
     """Rename or move an item inside the workspace.
 
     Increments project_files_version for context cache invalidation
     when project files are renamed or moved (Requirement 34.2).
+
+    Returns HTTP 403 if the source is a system-managed directory
+    (Requirement 12.9).
     """
     expanded_path = await _get_workspace_path()
+
+    # Reject rename on system-managed folders (Req 12.9)
+    normalized_old = request.old_path.replace("\\", "/").strip("/")
+    if normalized_old in SYSTEM_MANAGED_FOLDERS:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Cannot delete/rename system-managed directory: {normalized_old}",
+        )
+
     old_target = _validate_relative_path(request.old_path, expanded_path)
     new_target = _validate_relative_path(request.new_path, expanded_path)
 
