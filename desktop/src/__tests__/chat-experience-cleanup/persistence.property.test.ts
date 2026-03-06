@@ -43,7 +43,7 @@ const arbToolUseContent = fc.record({
   type: fc.constant('tool_use' as const),
   id: fc.uuid(),
   name: fc.string({ minLength: 1, maxLength: 50 }),
-  input: fc.constant({} as Record<string, unknown>),
+  summary: fc.constant('Using tool'),
 });
 
 /** Arbitrary for a tool_result content block. */
@@ -52,6 +52,7 @@ const arbToolResultContent = fc.record({
   toolUseId: fc.uuid(),
   content: fc.option(fc.string({ maxLength: 300 }), { nil: undefined }),
   isError: fc.boolean(),
+  truncated: fc.boolean(),
 });
 
 /** Arbitrary for any ContentBlock (text, tool_use, or tool_result). */
@@ -168,13 +169,14 @@ describe('Feature: chat-experience-cleanup, Property 2: Persist/Restore Round-Tr
       type: 'tool_use' as const,
       id: `tool-use-${i}`,
       name: `tool_${i}`,
-      input: {},
+      summary: 'Using tool',
     }));
     const longToolResult: ContentBlock = {
       type: 'tool_result' as const,
       toolUseId: 'tool-use-0',
       content: 'x'.repeat(500), // Will be truncated to 200 chars + '…'
       isError: false,
+      truncated: false,
     };
 
     const messages: Message[] = [

@@ -1790,25 +1790,31 @@ class AgentManager:
                     # would be too late - the SDK has already decided to execute the tool.
                     # The hook denial is detected in ToolResultBlock below.
 
-                    # Regular tool use block
+                    # Regular tool use block — emit summary instead of full input
+                    from core.tool_summarizer import summarize_tool_use, get_tool_category
+                    summary = summarize_tool_use(block.name, block.input)
                     content_blocks.append({
                         "type": "tool_use",
                         "id": block.id,
                         "name": block.name,
-                        "input": block.input
+                        "summary": summary,
+                        "category": get_tool_category(block.name),
                     })
                 elif isinstance(block, ToolResultBlock):
-                    block_content = str(block.content) if block.content else None
+                    block_content = str(block.content) if block.content else ""
 
                     # Note: Permission request handling is now done via the queue mechanism
                     # and emitted directly in the message loop before formatting.
                     # This ToolResultBlock will just contain the normal tool output.
 
+                    from core.tool_summarizer import truncate_tool_result
+                    truncated_content, was_truncated = truncate_tool_result(block_content)
                     content_blocks.append({
                         "type": "tool_result",
                         "tool_use_id": block.tool_use_id,
-                        "content": block_content,
-                        "is_error": getattr(block, 'is_error', False)
+                        "content": truncated_content,
+                        "is_error": getattr(block, 'is_error', False),
+                        "truncated": was_truncated,
                     })
 
             if content_blocks:

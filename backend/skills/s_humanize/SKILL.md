@@ -5,15 +5,42 @@ description: Convert AI-written text to more human-like writing through subtle e
 
 # Humanize Text
 
-Make AI-generated content read like it was written by a human through targeted, subtle edits.
+## USER NOTIFICATION (DISPLAY IMMEDIATELY)
 
-**Why?** AI-written text has telltale patterns—formulaic transitions, passive voice, overly balanced sentences—that make it feel mechanical. This skill fixes those patterns without rewriting the whole document.
+**When this skill is triggered, you MUST display this message to the user:**
 
-**Model Coverage:** Tested on Opus 4.5, Sonnet 4, Haiku. See **[TESTING.md](./TESTING.md)** for details.
+---
 
-## Quick Start
+✍️ **Humanize Text Activated**
 
-1. `wc -w FILE` (baseline) → 2. Scan for patterns → 3. Make 10-20 targeted edits → 4. Verify ±20 words & 0 em-dashes → 5. Check burstiness
+I can make AI-generated content read like it was written by a human through targeted, subtle edits.
+
+**What I'll do:**
+- Scan for AI-writing patterns (formulaic transitions, passive voice, uniform sentence length)
+- Apply 10-20 targeted edits without rewriting the whole document
+- Verify word count stays within ±20 words of the original
+- Ensure no content is fabricated — only style is transformed
+
+**Example requests:**
+- "Humanize this blog post"
+- "Make this sound less robotic"
+- "This reads too AI — fix it"
+- "Make this email more natural"
+
+Paste or reference the text you'd like me to work on.
+
+---
+
+## Quick Reference
+
+| Step | What | Verification |
+|------|------|-------------|
+| 1. Baseline | `wc -w FILE` | Record original word count |
+| 2. Scan | Identify top AI patterns | Priority: "By [gerund]", em-dashes, "This suggests that" |
+| 3. Edit | 10-20 targeted edits | Restructure, don't condense |
+| 4. Word count | `wc -w FILE` | Must be within ±20 of original |
+| 5. Em-dashes | `grep -o '—' FILE \| wc -l` | Target: 0 |
+| 6. Burstiness | Check sentence length variety | Mix short (<6 words) and long (>25 words) |
 
 **Supporting Files:** [REFERENCE.md](./REFERENCE.md) (pattern tables) | [TESTING.md](./TESTING.md) (evaluation scenarios)
 
@@ -342,6 +369,12 @@ grep -o '—' FILE | wc -l      # Em-dashes (target: 0)
 - If detector scores <70% AI, minimal changes needed
 - Focus only on obvious patterns (em-dashes, "By [gerund]")
 - Risk: over-editing good text makes it worse
+
+**Edge Case 4: Mixed Content (Part Human, Part AI)**
+- Scan the full document but identify which sections read AI-generated vs human-written
+- Focus edits on the AI-heavy sections; leave human-written sections mostly untouched
+- Goal: make the whole document feel consistent in voice, not just "less AI"
+- Watch for jarring tone shifts between sections after editing
 
 **Cross-Article Consistency:**
 When editing multiple articles, vary replacements across articles; don't use "The key insight:" in every one.

@@ -267,14 +267,6 @@ class InitializationManager:
                 # Non-critical — continue initialization; the migration will
                 # retry on next startup since it is idempotent.
 
-            # Initialize SkillManager singleton and trigger initial scan
-            try:
-                from core.skill_manager import skill_manager as _sm
-                await _sm.scan_all()
-                logger.info("SkillManager initial scan completed")
-            except Exception as e:
-                logger.error("SkillManager initial scan failed (non-fatal): %s", e)
-
             # Create/update default agent (includes skill and MCP registration)
             # This is a critical step - failure means we don't set initialization_complete
             try:
@@ -298,33 +290,12 @@ class InitializationManager:
             # Expand workspace path and run workspace setup
             workspace_path = swarm_workspace_manager.expand_path(workspace["file_path"])
             
-            # Project skill symlinks (all skills, shared across agents)
-            # Uses ProjectionLayer which replaced AgentSandboxManager's skill methods
-            try:
-                from core.projection_layer import ProjectionLayer
-                from core.skill_manager import skill_manager as _sm
-                _projection = ProjectionLayer(_sm)
-                await _projection.project_skills(Path(workspace_path), allow_all=True)
-                logger.info("Workspace skills projected during full initialization")
-            except Exception as e:
-                logger.error("Failed to project workspace skills: %s", e)
-                # Non-critical - continue initialization
-            
-            # Ensure context directory is initialized
-            try:
-                from core.context_directory_loader import ContextDirectoryLoader
-                loader = ContextDirectoryLoader(
-                    context_dir=Path(workspace_path) / ".context",
-                    templates_dir=Path(__file__).resolve().parent.parent / "context",
-                )
-                loader.ensure_directory()
-                logger.info("Context directory ensured during full initialization")
-            except Exception as e:
-                logger.error("Failed to ensure context directory: %s", e)
-                # Non-critical - continue initialization
-            
-            # Cache the expanded path for per-session use
+            # Cache the expanded path BEFORE refresh (refresh_builtin_defaults
+            # calls get_cached_workspace_path())
             self._cached_workspace_path = workspace_path
+            
+            # Refresh built-in skills and context files
+            await self.refresh_builtin_defaults()
             
             # All critical steps succeeded - set the flag
             await self.set_initialization_complete(True)
@@ -335,6 +306,60 @@ class InitializationManager:
             logger.error("Full initialization failed: %s", e)
             # Do NOT set initialization_complete
             return False
+
+    async def refresh_builtin_defaults(self) -> None:
+        """Refresh built-in skills and context files.
+
+        Called on every startup (both full init and quick validation).
+        Each step is independent — failure in one does not block others.
+
+        Steps:
+            1. Re-scan skills (populates cache with latest built-in skills)
+            2. Re-project skill symlinks (creates/removes symlinks based on cache)
+            3. Refresh built-in context files (overwrites with latest source)
+
+        Validates: Requirements 2.1, 2.3
+        """
+        from pathlib import Path
+
+        workspace_path = self.get_cached_workspace_path()
+
+        # Step 1: Re-scan skills (MUST run before projection)
+        _sm = None
+        try:
+            from core.skill_manager import skill_manager as _sm
+            await _sm.scan_all()
+            logger.info("SkillManager scan completed during refresh")
+        except Exception as e:
+            logger.error("Skill scan failed during refresh (non-fatal): %s", e)
+
+        # Step 2: Re-project skill symlinks (uses cache from step 1)
+        try:
+            if _sm is None:
+                from core.skill_manager import skill_manager as _sm
+            from core.projection_layer import ProjectionLayer
+            _projection = ProjectionLayer(_sm)
+            await _projection.project_skills(Path(workspace_path), allow_all=True)
+            logger.info("Skill symlinks projected during refresh")
+        except Exception as e:
+            logger.error("Skill projection failed during refresh (non-fatal): %s", e)
+
+        # Step 3: Refresh built-in context files
+        # Note: templates_dir uses __file__-relative path here, which is safe
+        # because initialization_manager.py always passes templates_dir
+        # explicitly. The sys._MEIPASS fallback is only needed in
+        # SkillManager where builtin_path defaults from __file__.
+        try:
+            from core.context_directory_loader import ContextDirectoryLoader
+            loader = ContextDirectoryLoader(
+                context_dir=Path(workspace_path) / ".context",
+                templates_dir=Path(__file__).resolve().parent.parent / "context",
+            )
+            loader.ensure_directory()
+            logger.info("Context directory refreshed during refresh")
+        except Exception as e:
+            logger.error("Context refresh failed during refresh (non-fatal): %s", e)
+
 
     async def reset_to_defaults(self) -> dict:
         """Reset initialization state and re-run full initialization.

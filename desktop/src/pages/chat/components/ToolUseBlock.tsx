@@ -1,81 +1,25 @@
 /**
- * Collapsible tool-use block, collapsed by default to a single summary line.
+ * Simplified tool-use block — fallback for edge cases where MergedToolBlock
+ * is not used. Renders a single-line summary label with no expand/collapse.
  *
- * Uses a single root element with toggled content to prevent React
- * reconciliation issues when multiple tool blocks are rendered consecutively.
- *
- * JSON serialization is deferred until the block is expanded to avoid
- * unnecessary work for collapsed blocks (Requirement 4.1–4.4, 7.2).
+ * @exports ToolUseBlock — The fallback component
  */
 
-import { useState, useMemo } from 'react';
+import { getToolIcon } from './MergedToolBlock';
 
 interface ToolUseBlockProps {
   name: string;
-  input: Record<string, unknown>;
+  summary: string;
+  category?: string;
 }
 
-export function ToolUseBlock({ name, input }: ToolUseBlockProps) {
-  const [isExpanded, setIsExpanded] = useState(false);
-  const [copied, setCopied] = useState(false);
-
-  // Defer JSON serialization — only compute when expanded
-  const content = useMemo(
-    () => (isExpanded ? JSON.stringify(input, null, 2) : ''),
-    [input, isExpanded],
-  );
-
-  const handleCopy = () => {
-    navigator.clipboard.writeText(content);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-
-  const handleToggle = () => setIsExpanded((prev) => !prev);
-
+export function ToolUseBlock({ name, summary, category }: ToolUseBlockProps) {
   return (
-    <div className={isExpanded
-      ? 'bg-[var(--color-card)] border border-[var(--color-border)] rounded-lg overflow-hidden'
-      : undefined
-    }>
-      {/* Header / toggle row */}
-      <button
-        type="button"
-        onClick={handleToggle}
-        aria-expanded={isExpanded}
-        className={isExpanded
-          ? 'flex items-center justify-between w-full px-4 py-2 bg-[var(--color-hover)] text-left hover:brightness-95 transition-colors'
-          : 'flex items-center gap-2 w-full px-3 py-1.5 rounded-md bg-[var(--color-hover)] text-left hover:brightness-95 transition-colors'
-        }
-      >
-        <div className="flex items-center gap-2 flex-1 min-w-0">
-          <span className="material-symbols-outlined text-primary text-sm">terminal</span>
-          <span className={`text-sm truncate flex-1 ${isExpanded ? 'font-medium text-[var(--color-text)]' : 'text-[var(--color-text-muted)]'}`}>
-            {isExpanded ? `Tool Call: ${name}` : name}
-          </span>
-        </div>
-        <span className="material-symbols-outlined text-sm text-[var(--color-text-muted)]">
-          {isExpanded ? 'expand_less' : 'expand_more'}
-        </span>
-      </button>
-
-      {/* Expanded content */}
-      {isExpanded && (
-        <div className="p-4 relative">
-          <button
-            onClick={handleCopy}
-            className="absolute top-2 right-2 flex items-center gap-1 px-2 py-1 text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] bg-[var(--color-hover)] rounded transition-colors"
-          >
-            <span className="material-symbols-outlined text-sm">
-              {copied ? 'check' : 'content_copy'}
-            </span>
-            {copied ? 'Copied!' : 'Copy'}
-          </button>
-          <pre className="text-sm text-[var(--color-text-muted)] overflow-x-auto whitespace-pre-wrap break-words">
-            <code>{content}</code>
-          </pre>
-        </div>
-      )}
+    <div className="flex items-center gap-2 px-3 py-1.5 rounded-md bg-[var(--color-hover)]">
+      <span className="material-symbols-outlined text-primary text-sm">{getToolIcon(category)}</span>
+      <span className="text-sm text-[var(--color-text-muted)] truncate">
+        {summary || name || 'Unknown tool'}
+      </span>
     </div>
   );
 }

@@ -50,7 +50,7 @@ import { useLayout } from '../contexts/LayoutContext';
  * extracted hooks so existing test imports (``from '../pages/ChatPage'``)
  * continue to resolve.
  */
-export { deriveStreamingActivity, formatElapsed, ELAPSED_DISPLAY_THRESHOLD_MS, MIN_ACTIVITY_DISPLAY_MS, sanitizeCommand, extractToolContext } from '../hooks/useChatStreamingLifecycle';
+export { deriveStreamingActivity, formatElapsed, ELAPSED_DISPLAY_THRESHOLD_MS, MIN_ACTIVITY_DISPLAY_MS } from '../hooks/useChatStreamingLifecycle';
 export { MAX_OPEN_TABS } from '../hooks/useUnifiedTabState';
 
 export default function ChatPage() {

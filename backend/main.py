@@ -182,6 +182,9 @@ async def lifespan(app: FastAPI):
             logger.info("Workspace filesystem verified on fast startup path")
         except Exception as e:
             logger.error("Failed to ensure workspace on fast startup: %s", e)
+
+        # Refresh built-in skills and context files on every startup
+        await initialization_manager.refresh_builtin_defaults()
     else:
         # Full initialization path — dev-mode fallback (no seed.db available).
         # Preserve the existing init pipeline exactly.
@@ -205,17 +208,8 @@ async def lifespan(app: FastAPI):
             else:
                 logger.info("Quick validation passed - fast startup complete")
                 
-                # Ensure skill symlinks exist (idempotent projection)
-                # Even on quick validation path, we need symlinks for Claude SDK
-                try:
-                    from core.projection_layer import ProjectionLayer
-                    from core.skill_manager import skill_manager as _sm
-                    workspace_path = initialization_manager.get_cached_workspace_path()
-                    _projection = ProjectionLayer(_sm)
-                    await _projection.project_skills(Path(workspace_path), allow_all=True)
-                    logger.info("Skill symlinks verified/created during quick validation")
-                except Exception as e:
-                    logger.error("Failed to project skills during quick validation: %s", e)
+                # Refresh built-in skills and context files
+                await initialization_manager.refresh_builtin_defaults()
         else:
             # First-time initialization
             logger.info("First-time startup, running full initialization...")
