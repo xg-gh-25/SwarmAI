@@ -33,7 +33,7 @@ export default function UpdateNotification() {
           setState('idle');
         }
       } catch (err) {
-        console.error('Update check failed:', err);
+        console.warn('[Updater] Update check failed (expected in dev builds):', err);
         setState('idle');
       }
     };
