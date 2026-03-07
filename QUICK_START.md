@@ -115,8 +115,10 @@ All data stays local in `~/.swarm-ai/`:
 |------|------|
 | Database | `~/.swarm-ai/data.db` |
 | Configuration | `~/.swarm-ai/config.json` |
-| Workspaces | `~/.swarm-ai/SwarmWS/` |
+| Workspace | `~/.swarm-ai/SwarmWS/` |
+| Context Files | `~/.swarm-ai/SwarmWS/.context/` |
 | Skills | `~/.swarm-ai/skills/` |
+| Plugin Skills | `~/.swarm-ai/plugin-skills/` |
 | Logs | `~/.swarm-ai/logs/` |
 
 ---
