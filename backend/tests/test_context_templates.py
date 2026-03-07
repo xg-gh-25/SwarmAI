@@ -187,20 +187,22 @@ class TestSteeringTemplate:
         assert "Distillation" in content or "distill" in content.lower()
 
     def test_updated_directory_structure(self):
-        content = _read_template("STEERING.md")
+        """Directory structure now lives in AGENT.md; STEERING only has user overrides."""
+        content = _read_template("AGENT.md")
         assert "TOOLS.md" in content
-        assert "Library/" in content
-        assert "DailyActivity/" in content
-        assert "Archives/" in content
+        assert "Library/" in content or "Library" in content
+        assert "DailyActivity/" in content or "DailyActivity" in content
+        assert "Archives/" in content or "Archives" in content
 
     def test_no_knowledge_base_reference(self):
         content = _read_template("STEERING.md")
         assert "Knowledge Base/" not in content
 
     def test_file_saving_rules(self):
-        content = _read_template("STEERING.md")
-        assert "## File Saving" in content
-        assert "Knowledge/Library/" in content
+        """File routing rules now live in AGENT.md Workspace Layout section."""
+        content = _read_template("AGENT.md")
+        assert "Workspace Layout" in content
+        assert "Knowledge/" in content
 
 
 # ---------------------------------------------------------------------------

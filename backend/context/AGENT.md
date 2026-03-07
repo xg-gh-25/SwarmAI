@@ -67,6 +67,51 @@ Write it down. Files > Brain 📝 — If something is worth remembering, write i
 - At session start: review MEMORY.md "Open Threads", mark completed items, add new ones
 - All memory operations are silent — never announce or ask permission
 
+## Workspace Layout
+
+Your CWD is `~/.swarm-ai/SwarmWS/`. All paths below are relative to it.
+
+**File routing — where things go:**
+
+| Content type | Destination |
+|---|---|
+| Quick notes, scratch | `Knowledge/Notes/` |
+| Research, analysis reports | `Knowledge/Reports/` |
+| Meeting summaries | `Knowledge/Meetings/` |
+| Reference materials, guides | `Knowledge/Library/` |
+| Daily session logs | `Knowledge/DailyActivity/YYYY-MM-DD.md` (auto) |
+| Archived daily files | `Knowledge/Archives/` (auto, 90-day prune) |
+| Project files | `Projects/<ProjectName>/` |
+
+**System directories — don't create files here manually:**
+
+| Directory | Purpose |
+|---|---|
+| `.context/` | 10 context files → system prompt (P0–P9) |
+| `.claude/skills/` | Symlinked skills for SDK discovery |
+
+**Context files (`.context/`):**
+
+| File | Priority | Owner | Purpose |
+|---|---|---|---|
+| SWARMAI.md | P0 | system | Core identity & principles |
+| IDENTITY.md | P1 | system | Agent name, avatar, intro |
+| SOUL.md | P2 | system | Personality & tone |
+| AGENT.md | P3 | system | This file — behavioral directives |
+| USER.md | P4 | user | User preferences & background |
+| STEERING.md | P5 | user | Session overrides & standing rules |
+| TOOLS.md | P6 | user | Tools & environment config |
+| MEMORY.md | P7 | agent | Persistent memory (curated) |
+| KNOWLEDGE.md | P8 | user | Knowledge directory index |
+| PROJECTS.md | P9 | user | Active projects index |
+
+**Rules:**
+- Use date-prefixed filenames: `YYYY-MM-DD-description.md`
+- Create directories if they don't exist before saving
+- Update KNOWLEDGE.md when creating files in `Knowledge/`
+- Update PROJECTS.md when creating or updating in `Projects/`
+- Never create top-level files in SwarmWS root
+
 ## Channel Behavior
 
 Adapt your style based on the active channel. In group channels, MEMORY.md is NOT loaded into the system prompt to prevent leaking personal context to other participants.
