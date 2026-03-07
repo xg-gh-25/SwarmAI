@@ -166,7 +166,10 @@ All data is stored locally in `~/.swarm-ai/`:
 | Database | `~/.swarm-ai/data.db` |
 | Configuration | `~/.swarm-ai/config.json` |
 | Workspaces | `~/.swarm-ai/SwarmWS/` |
+| Context Files | `~/.swarm-ai/SwarmWS/.context/` |
 | Skills | `~/.swarm-ai/skills/` |
+| Plugin Skills | `~/.swarm-ai/plugin-skills/` |
+| Command Permissions | `~/.swarm-ai/cmd_permissions/` |
 | Logs | `~/.swarm-ai/logs/` |
 | Tab State | `~/.swarm-ai/open_tabs.json` |
 
@@ -179,7 +182,7 @@ All data is stored locally in `~/.swarm-ai/`:
 | Desktop Framework | Tauri 2.0 + React 19 + TypeScript 5.x |
 | Backend | FastAPI (PyInstaller sidecar) |
 | AI Engine | Claude Agent SDK + AWS Bedrock / Anthropic API |
-| Database | SQLite (pre-seeded for fast startup) |
+| Database | SQLite (pre-seeded for fast startup, WAL mode) |
 | Styling | Tailwind CSS 4.x + CSS custom properties |
 | State Management | TanStack Query + useUnifiedTabState hook |
 | Build Tools | Vite + Rust + PyInstaller |
@@ -189,14 +192,16 @@ All data is stored locally in `~/.swarm-ai/`:
 
 ## Security
 
-Defense-in-depth with four layers:
+Defense-in-depth with four PreToolUse hook layers:
 
 | Layer | Protection |
 |-------|------------|
-| **Workspace Isolation** | Each agent runs in an isolated directory |
-| **Skill Access Control** | PreToolUse hooks validate skill invocations |
-| **File Tool Access Control** | Validates all file operation paths |
-| **Bash Command Protection** | Parses and validates file paths in commands |
+| **Tool Logger** | Logs all tool invocations (observability, never blocks) |
+| **Command Blocker** | Regex blocks 13 dangerous bash patterns (rm -rf /, fork bombs, etc.) |
+| **Human Approval** | Glob-based detection → SSE permission dialog → persistent filesystem-backed approvals |
+| **Skill Access Control** | Validates skill invocations against agent's allowed list |
+
+Additional: workspace isolation, file path validation, bash sandboxing, error sanitization in production.
 
 ---
 
@@ -206,7 +211,7 @@ Defense-in-depth with four layers:
 SwarmAI/
 ├── desktop/                 # Desktop app (Tauri 2.0 + React)
 │   ├── src/                 # React frontend
-│   │   ├── pages/           # Route components (ChatPage, TasksPage, etc.)
+│   │   ├── pages/           # Route components (ChatPage, TasksPage, SettingsPage, etc.)
 │   │   ├── hooks/           # Custom hooks (useUnifiedTabState, useChatStreamingLifecycle)
 │   │   ├── services/        # API service layer with case conversion
 │   │   └── components/      # UI components
@@ -215,12 +220,15 @@ SwarmAI/
 │
 ├── backend/                 # FastAPI backend (Python)
 │   ├── main.py              # Entry point with fast startup / full init paths
-│   ├── core/                # Business logic (agent_manager, session_manager, etc.)
-│   ├── routers/             # API routes (agents, chat, skills, mcp, settings)
+│   ├── core/                # Business logic (agent_manager, context_directory_loader,
+│   │                        #   skill_manager, security_hooks, cmd_permission_manager, etc.)
+│   ├── routers/             # API routes (agents, chat, skills, mcp, plugins, settings, etc.)
+│   ├── context/             # Default context file templates (12 files)
+│   ├── skills/              # Built-in skill definitions
 │   ├── database/            # SQLite with migrations
 │   └── schemas/             # Pydantic models
 │
-├── .kiro/specs/             # Product specifications (organized by topic)
+├── .kiro/specs/             # Architecture docs and product specifications
 └── assets/                  # Images and mockups
 ```
 
