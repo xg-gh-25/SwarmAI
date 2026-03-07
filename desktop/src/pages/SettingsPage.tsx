@@ -14,6 +14,7 @@ import {
 } from '../services/updater';
 import { Update } from '@tauri-apps/plugin-updater';
 import { Dropdown } from '../components/common';
+import { evolutionService, type EvolutionConfig } from '../services/evolution';
 
 // Check if running in development mode
 const isDev = import.meta.env.DEV;
@@ -95,12 +96,17 @@ export default function SettingsPage() {
   const [updateProgress, setUpdateProgress] = useState<UpdateProgress | null>(null);
   const [updateError, setUpdateError] = useState<string | null>(null);
 
+  // Evolution config state
+  const [evolutionConfig, setEvolutionConfig] = useState<EvolutionConfig | null>(null);
+  const [savingEvolution, setSavingEvolution] = useState(false);
+
   useEffect(() => {
     // Load status first (which syncs the port), then load API config
     const init = async () => {
       await loadStatus();
       await loadAPIConfig();
       await checkSystemDependencies();
+      await loadEvolutionConfig();
 
       // Get app version from Tauri (only in production)
       if (!isDev) {
@@ -301,6 +307,41 @@ export default function SettingsPage() {
 
   const handleSetDefaultModel = async (modelId: string) => {
     await saveModelConfig(availableModels, modelId);
+  };
+
+  const loadEvolutionConfig = async () => {
+    try {
+      const config = await evolutionService.getConfig();
+      setEvolutionConfig(config);
+    } catch (error) {
+      console.error('Failed to load evolution config:', error);
+    }
+  };
+
+  const handleEvolutionToggle = async (field: keyof EvolutionConfig, value: boolean) => {
+    if (!evolutionConfig) return;
+    setSavingEvolution(true);
+    try {
+      const updated = await evolutionService.updateConfig({ [field]: value });
+      setEvolutionConfig(updated);
+    } catch (error) {
+      setMessage({ type: 'error', text: `Failed to save evolution config: ${error}` });
+    } finally {
+      setSavingEvolution(false);
+    }
+  };
+
+  const handleEvolutionNumber = async (field: keyof EvolutionConfig, value: number) => {
+    if (!evolutionConfig || isNaN(value) || value < 0) return;
+    setSavingEvolution(true);
+    try {
+      const updated = await evolutionService.updateConfig({ [field]: value });
+      setEvolutionConfig(updated);
+    } catch (error) {
+      setMessage({ type: 'error', text: `Failed to save evolution config: ${error}` });
+    } finally {
+      setSavingEvolution(false);
+    }
   };
 
   const checkSystemDependencies = async () => {
@@ -646,6 +687,182 @@ export default function SettingsPage() {
           </p>
         </div>
       </section>
+
+      {/* Self-Evolution */}
+      {evolutionConfig && (
+        <section className="mb-8 bg-[var(--color-card)] rounded-lg p-6">
+          <h2 className="text-lg font-semibold text-[var(--color-text)] mb-2">Self-Evolution</h2>
+          <p className="text-sm text-[var(--color-text-muted)] mb-4">
+            Controls how the agent autonomously builds new capabilities when it encounters gaps or optimization opportunities.
+          </p>
+          <div className="space-y-4">
+            {/* Master toggle */}
+            <div className="flex items-center justify-between p-3 bg-[var(--color-bg)] rounded-lg">
+              <div>
+                <label className="text-sm font-medium text-[var(--color-text)]">Enable Self-Evolution</label>
+                <p className="text-xs text-[var(--color-text-muted)]">Master switch for all evolution triggers</p>
+              </div>
+              <button
+                onClick={() => handleEvolutionToggle('enabled', !evolutionConfig.enabled)}
+                disabled={savingEvolution}
+                role="switch"
+                aria-checked={evolutionConfig.enabled}
+                className={`relative w-12 h-6 rounded-full transition-colors ${
+                  evolutionConfig.enabled ? 'bg-[var(--color-primary)]' : 'bg-gray-600'
+                }`}
+              >
+                <span className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-transform ${
+                  evolutionConfig.enabled ? 'left-7' : 'left-1'
+                }`} />
+              </button>
+            </div>
+
+            {/* Per-trigger toggles */}
+            <div className="flex items-center justify-between p-3 bg-[var(--color-bg)] rounded-lg">
+              <div>
+                <label className="text-sm font-medium text-[var(--color-text)]">Proactive Optimization</label>
+                <p className="text-xs text-[var(--color-text-muted)]">Detect and act on optimization opportunities</p>
+              </div>
+              <button
+                onClick={() => handleEvolutionToggle('proactiveEnabled', !evolutionConfig.proactiveEnabled)}
+                disabled={savingEvolution || !evolutionConfig.enabled}
+                role="switch"
+                aria-checked={evolutionConfig.proactiveEnabled && evolutionConfig.enabled}
+                className={`relative w-12 h-6 rounded-full transition-colors ${
+                  evolutionConfig.proactiveEnabled && evolutionConfig.enabled ? 'bg-[var(--color-primary)]' : 'bg-gray-600'
+                }`}
+              >
+                <span className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-transform ${
+                  evolutionConfig.proactiveEnabled && evolutionConfig.enabled ? 'left-7' : 'left-1'
+                }`} />
+              </button>
+            </div>
+
+            <div className="flex items-center justify-between p-3 bg-[var(--color-bg)] rounded-lg">
+              <div>
+                <label className="text-sm font-medium text-[var(--color-text)]">Stuck Detection</label>
+                <p className="text-xs text-[var(--color-text-muted)]">Detect loops and switch strategies automatically</p>
+              </div>
+              <button
+                onClick={() => handleEvolutionToggle('stuckDetectionEnabled', !evolutionConfig.stuckDetectionEnabled)}
+                disabled={savingEvolution || !evolutionConfig.enabled}
+                role="switch"
+                aria-checked={evolutionConfig.stuckDetectionEnabled && evolutionConfig.enabled}
+                className={`relative w-12 h-6 rounded-full transition-colors ${
+                  evolutionConfig.stuckDetectionEnabled && evolutionConfig.enabled ? 'bg-[var(--color-primary)]' : 'bg-gray-600'
+                }`}
+              >
+                <span className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-transform ${
+                  evolutionConfig.stuckDetectionEnabled && evolutionConfig.enabled ? 'left-7' : 'left-1'
+                }`} />
+              </button>
+            </div>
+
+            {/* Auto-approve toggles */}
+            <div className="pt-2 border-t border-[var(--color-border)]">
+              <p className="text-xs text-[var(--color-text-muted)] mb-3">Auto-approve (skip confirmation prompts)</p>
+            </div>
+
+            <div className="flex items-center justify-between p-3 bg-[var(--color-bg)] rounded-lg">
+              <div>
+                <label className="text-sm font-medium text-[var(--color-text)]">Auto-approve Skills</label>
+                <p className="text-xs text-[var(--color-text-muted)]">Create new skills without asking</p>
+              </div>
+              <button
+                onClick={() => handleEvolutionToggle('autoApproveSkills', !evolutionConfig.autoApproveSkills)}
+                disabled={savingEvolution || !evolutionConfig.enabled}
+                role="switch"
+                aria-checked={evolutionConfig.autoApproveSkills && evolutionConfig.enabled}
+                className={`relative w-12 h-6 rounded-full transition-colors ${
+                  evolutionConfig.autoApproveSkills && evolutionConfig.enabled ? 'bg-[var(--color-primary)]' : 'bg-gray-600'
+                }`}
+              >
+                <span className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-transform ${
+                  evolutionConfig.autoApproveSkills && evolutionConfig.enabled ? 'left-7' : 'left-1'
+                }`} />
+              </button>
+            </div>
+
+            <div className="flex items-center justify-between p-3 bg-[var(--color-bg)] rounded-lg">
+              <div>
+                <label className="text-sm font-medium text-[var(--color-text)]">Auto-approve Scripts</label>
+                <p className="text-xs text-[var(--color-text-muted)]">Create new scripts without asking</p>
+              </div>
+              <button
+                onClick={() => handleEvolutionToggle('autoApproveScripts', !evolutionConfig.autoApproveScripts)}
+                disabled={savingEvolution || !evolutionConfig.enabled}
+                role="switch"
+                aria-checked={evolutionConfig.autoApproveScripts && evolutionConfig.enabled}
+                className={`relative w-12 h-6 rounded-full transition-colors ${
+                  evolutionConfig.autoApproveScripts && evolutionConfig.enabled ? 'bg-[var(--color-primary)]' : 'bg-gray-600'
+                }`}
+              >
+                <span className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-transform ${
+                  evolutionConfig.autoApproveScripts && evolutionConfig.enabled ? 'left-7' : 'left-1'
+                }`} />
+              </button>
+            </div>
+
+            <div className="flex items-center justify-between p-3 bg-[var(--color-bg)] rounded-lg">
+              <div>
+                <label className="text-sm font-medium text-[var(--color-text)]">Auto-approve Installs</label>
+                <p className="text-xs text-[var(--color-text-muted)]">Install packages (pip/npm/brew) without asking</p>
+              </div>
+              <button
+                onClick={() => handleEvolutionToggle('autoApproveInstalls', !evolutionConfig.autoApproveInstalls)}
+                disabled={savingEvolution || !evolutionConfig.enabled}
+                role="switch"
+                aria-checked={evolutionConfig.autoApproveInstalls && evolutionConfig.enabled}
+                className={`relative w-12 h-6 rounded-full transition-colors ${
+                  evolutionConfig.autoApproveInstalls && evolutionConfig.enabled ? 'bg-[var(--color-primary)]' : 'bg-gray-600'
+                }`}
+              >
+                <span className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-transform ${
+                  evolutionConfig.autoApproveInstalls && evolutionConfig.enabled ? 'left-7' : 'left-1'
+                }`} />
+              </button>
+            </div>
+
+            {/* Numeric inputs */}
+            <div className="pt-2 border-t border-[var(--color-border)]">
+              <p className="text-xs text-[var(--color-text-muted)] mb-3">Limits</p>
+            </div>
+
+            <div className="flex items-center justify-between p-3 bg-[var(--color-bg)] rounded-lg">
+              <div>
+                <label className="text-sm font-medium text-[var(--color-text)]">Max Retries</label>
+                <p className="text-xs text-[var(--color-text-muted)]">Attempts per evolution trigger (1–5)</p>
+              </div>
+              <input
+                type="number"
+                min={1}
+                max={5}
+                value={evolutionConfig.maxRetries}
+                onChange={(e) => handleEvolutionNumber('maxRetries', parseInt(e.target.value, 10))}
+                disabled={savingEvolution || !evolutionConfig.enabled}
+                className="w-16 px-2 py-1 bg-[var(--color-bg)] border border-[var(--color-border)] rounded text-[var(--color-text)] text-sm text-center focus:outline-none focus:border-[var(--color-primary)]"
+              />
+            </div>
+
+            <div className="flex items-center justify-between p-3 bg-[var(--color-bg)] rounded-lg">
+              <div>
+                <label className="text-sm font-medium text-[var(--color-text)]">Verification Timeout</label>
+                <p className="text-xs text-[var(--color-text-muted)]">Seconds to wait for capability verification</p>
+              </div>
+              <input
+                type="number"
+                min={30}
+                max={600}
+                step={30}
+                value={evolutionConfig.verificationTimeoutSeconds}
+                onChange={(e) => handleEvolutionNumber('verificationTimeoutSeconds', parseInt(e.target.value, 10))}
+                disabled={savingEvolution || !evolutionConfig.enabled}
+                className="w-20 px-2 py-1 bg-[var(--color-bg)] border border-[var(--color-border)] rounded text-[var(--color-text)] text-sm text-center focus:outline-none focus:border-[var(--color-primary)]"
+              />
+            </div>
+          </div>
+        </section>
+      )}
 
       {/* System Dependencies */}
       {!isDev && (

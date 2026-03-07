@@ -36,11 +36,64 @@ from core.exceptions import (
 import json
 import asyncio
 import logging
+import re as _re
 import time
 from datetime import datetime
 from typing import AsyncIterator, List, Optional
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Evolution marker parsing
+# ---------------------------------------------------------------------------
+
+_EVOLUTION_MARKER_RE = _re.compile(
+    r"<!--\s*EVOLUTION_EVENT:\s*(\{.*?\})\s*-->",
+    _re.DOTALL,
+)
+
+
+def _extract_evolution_events(message: dict) -> list[dict]:
+    """Extract evolution event markers from a message's text content.
+
+    Searches for ``<!-- EVOLUTION_EVENT: {...} -->`` patterns in the
+    message text and returns parsed JSON payloads as event dicts.
+    Malformed markers are silently ignored.
+
+    Args:
+        message: SSE message dict from the agent.
+
+    Returns:
+        List of evolution event dicts (may be empty).
+    """
+    events: list[dict] = []
+    # Look for text content in common message fields
+    text = ""
+    if isinstance(message.get("content"), str):
+        text = message["content"]
+    elif isinstance(message.get("text"), str):
+        text = message["text"]
+    elif isinstance(message.get("content"), list):
+        # Content blocks format
+        for block in message["content"]:
+            if isinstance(block, dict) and block.get("type") == "text":
+                text += block.get("text", "")
+
+    if not text:
+        return events
+
+    for match in _EVOLUTION_MARKER_RE.finditer(text):
+        try:
+            payload = json.loads(match.group(1))
+            if isinstance(payload, dict) and "event" in payload:
+                events.append(payload)
+        except (json.JSONDecodeError, KeyError):
+            logger.debug(
+                "Ignoring malformed evolution marker: %s",
+                match.group(0)[:100],
+            )
+
+    return events
 
 router = APIRouter()
 chat_threads_router = APIRouter()
@@ -117,6 +170,9 @@ async def sse_with_heartbeat(
                     break
                 elif item_type == "message":
                     yield f"data: {json.dumps(item)}\n\n"
+                    # Check for evolution event markers embedded in agent output
+                    for evo_event in _extract_evolution_events(item):
+                        yield f"data: {json.dumps(evo_event)}\n\n"
                 elif item_type == "error":
                     raise item
 
