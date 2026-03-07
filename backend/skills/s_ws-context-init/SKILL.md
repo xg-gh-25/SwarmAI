@@ -1,6 +1,9 @@
 ---
 name: Workspace Init
-description: Analyze a workspace and create or improve a workspace context file for SwarmAI. Only use when the user explicitly invokes this skill by name, e.g. "run init skill", "use the init skill", "activate init", 'init ws', 'init workspace', 'initi my workspace context', or "call init".
+description: >
+  Analyze a workspace and create or improve a workspace context file for SwarmAI.
+  TRIGGER: "init workspace", "init ws", "run init skill", "initialize my workspace context".
+  DO NOT USE: on generic "init" or "/init" commands — those may refer to built-in IDE commands.
 version: 1.0.0
 ---
 

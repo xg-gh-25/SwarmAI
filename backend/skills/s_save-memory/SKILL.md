@@ -1,9 +1,10 @@
 ---
 name: Save Memory
 description: >
-  Write specific content to MEMORY.md when the user says "remember this",
-  "save to memory", "save the lessons", or similar. Uses locked_write.py
-  for concurrent write protection.
+  Write specific content to MEMORY.md for long-term persistence.
+  TRIGGER: "remember this", "save to memory", "save the lessons", "persist this".
+  DO NOT USE: for session handoffs (use save-context) or daily logs (use save-activity).
+  Uses locked_write.py for concurrent write protection.
 ---
 
 ## Save Memory Skill

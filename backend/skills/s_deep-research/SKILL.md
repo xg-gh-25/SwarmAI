@@ -1,6 +1,10 @@
 ---
 name: Deep Research
-description: Thorough research with citations, analysis, and synthesis
+description: >
+  Thorough multi-source research with citations, analysis, and synthesis.
+  TRIGGER: "research", "deep dive", "investigate", "find out about", "comprehensive analysis".
+  DO NOT USE: for quick factual lookups (just use WebFetch directly).
+  Saves output to Knowledge/Notes/ by default.
 version: "1.0.0"
 ---
 

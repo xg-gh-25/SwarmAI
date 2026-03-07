@@ -1,6 +1,9 @@
 ---
-name: s-pptx
-description: "Presentation creation, editing, and analysis. Use when working with presentations (.pptx files) for: (1) Creating new presentations, (2) Modifying or editing content, (3) Working with layouts, (4) Adding comments or speaker notes, or any other presentation tasks"
+name: PPTX Editor
+description: >
+  Presentation creation, editing, and analysis (.pptx files).
+  TRIGGER: any request involving PowerPoint, presentations, slides, or speaker notes.
+  DO NOT USE: for simple text outlines (just use markdown).
 tags: [skill, PPT, PPTX, PPT-create, PPT-edit, PPT-read, PPT-update]
 owners: gawan@, GCR-AIDLC
 ---

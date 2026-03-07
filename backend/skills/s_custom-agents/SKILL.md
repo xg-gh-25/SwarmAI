@@ -1,6 +1,9 @@
 ---
 name: Custom Agents
-description: Create and configure SwarmAI custom agents with tools, permissions, resources, and hooks. Use when creating agent configurations, managing tool access, or troubleshooting agent behavior.
+description: >
+  Create and configure SwarmAI custom agents with tools, permissions, resources, and hooks.
+  TRIGGER: "create agent", "custom agent", "agent configuration", "configure agent".
+  DO NOT USE: for skill creation (use skill-builder).
 version: 1.0.0
 tags: [skill, custom-agents, agent-configuration, mcp]
 ---

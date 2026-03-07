@@ -1,6 +1,9 @@
 ---
 name: Skillify Session
-description: Convert the current conversation into a reusable skill by extracting the workflow that was just performed. Use when the user says "skillify", "turn this into a skill", "make this repeatable", "save this workflow as a skill", or "create a skill from this session".
+description: >
+  Convert the current conversation into a reusable skill.
+  TRIGGER: "skillify", "turn this into a skill", "make this repeatable", "save this workflow".
+  DO NOT USE: for creating skills from scratch (use skill-builder) or reviewing existing skills (use skill-feedback).
 ---
 
 # Skillify Current Session
@@ -62,7 +65,10 @@ Use this format:
 ```markdown
 ---
 name: <skill-name>
-description: <One-line description. Start with what action it performs. Include trigger phrases. Max 1024 chars.>
+description: >
+  <One-line purpose sentence>.
+  TRIGGER: "<phrase 1>", "<phrase 2>", "<phrase 3>".
+  DO NOT USE: <when a different skill or approach is better> (use <alternative> instead).
 ---
 
 # <Skill Title>
@@ -102,7 +108,11 @@ What to do in this step. Be specific and actionable. Include commands when appro
 
 **Frontmatter rules:**
 - `name`: Must match folder name. Lowercase, numbers, hyphens only (max 64 chars)
-- `description`: Critical for activation. Start with the action verb. Include trigger phrases. SwarmAI matches this against user requests to decide when to load the full skill
+- `description`: Must follow this schema:
+  - First line: one-sentence purpose (start with action verb)
+  - `TRIGGER:` line with quoted phrases the user would say
+  - `DO NOT USE:` line with boundary and alternative skill
+  - Max 1024 chars total. Critical for activation — SwarmAI matches this against user requests
 
 ## Step 4: Confirm and Save
 

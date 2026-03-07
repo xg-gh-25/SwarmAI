@@ -19,7 +19,10 @@ skill-name/
 ```markdown
 ---
 name: skill-folder-name
-description: [What it does in one sentence]. Use when [trigger context 1], [trigger context 2], or when the user mentions [keyword 1], [keyword 2], or [keyword 3].
+description: >
+  [What it does in one sentence].
+  TRIGGER: "[phrase 1]", "[phrase 2]", "[phrase 3]".
+  DO NOT USE: [when a different skill or approach is better] (use [alternative] instead).
 ---
 
 # [Skill Title]
@@ -79,7 +82,10 @@ skill-name/
 ```markdown
 ---
 name: workflow-skill-folder-name
-description: [What it does]. Use when [trigger 1], [trigger 2], or when the user mentions [keywords]. [Optional: scope clarification like "This is for X, not Y."]
+description: >
+  [What it does in one sentence].
+  TRIGGER: "[phrase 1]", "[phrase 2]", "[phrase 3]".
+  DO NOT USE: [when condition] (use [alternative] instead).
 ---
 
 # [Workflow Name]
@@ -448,7 +454,10 @@ Use for skills that generate artifacts (commits, PRs, reports).
 ```markdown
 ---
 name: artifact-generator-folder-name
-description: Generate [artifact type] by [method]. Use when [trigger 1], [trigger 2], or when the user asks for [keywords].
+description: >
+  Generate [artifact type] by [method].
+  TRIGGER: "[phrase 1]", "[phrase 2]", "[phrase 3]".
+  DO NOT USE: [when condition] (use [alternative] instead).
 ---
 
 # [Artifact Type] Generator

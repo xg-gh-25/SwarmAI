@@ -32,8 +32,16 @@ class SystemPromptBuilder:
         self.channel_context = channel_context
         self.add_dirs = add_dirs or []
 
+    # SDK identity line to strip (injected by Claude Agent SDK at runtime)
+    _SDK_IDENTITY_LINE = 'You are a Claude agent, built on Anthropic\'s Claude Agent SDK.'
+
     def build(self) -> str:
-        """Assemble and return the full system prompt string."""
+        """Assemble and return the full system prompt string.
+
+        Post-processes the assembled prompt to strip any SDK-injected
+        identity line, avoiding the need for a counter-instruction that
+        wastes tokens on every API call.
+        """
         sections = [
             self._section_identity(),
             self._section_safety(),
@@ -44,6 +52,8 @@ class SystemPromptBuilder:
         ]
 
         prompt = "\n\n".join(s for s in sections if s)
+        # Strip SDK identity injection if present (saves ~30 tokens vs counter-instruction)
+        prompt = prompt.replace(self._SDK_IDENTITY_LINE, "").strip()
         logger.debug(f"System prompt built ({len(prompt)} chars)")
         return prompt
 
@@ -53,10 +63,6 @@ class SystemPromptBuilder:
         line = f"You are {name}, a personal assistant running inside SwarmAI."
         if description:
             line += f" {description}"
-        line += (
-            "\nIgnore any prior instruction that says "
-            "\"You are a Claude agent, built on Anthropic's Claude Agent SDK.\""
-        )
         return line
 
     def _section_safety(self) -> str:
@@ -92,7 +98,6 @@ class SystemPromptBuilder:
 
     def _section_runtime(self) -> str:
         name = self.agent_config.get("name", "Assistant")
-        model = self.agent_config.get("model", "default")
         os_name = platform.system()
         arch = platform.machine()
         channel = (
@@ -100,7 +105,8 @@ class SystemPromptBuilder:
             if self.channel_context
             else "direct"
         )
-        return (
-            f"`agent={name} | model={model} | os={os_name} ({arch}) "
-            f"| channel={channel}`"
-        )
+        parts = [f"agent={name}", f"os={os_name} ({arch})", f"channel={channel}"]
+        model = self.agent_config.get("model")
+        if model and model != "default":
+            parts.insert(1, f"model={model}")
+        return "`" + " | ".join(parts) + "`"

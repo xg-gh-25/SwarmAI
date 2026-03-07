@@ -169,9 +169,9 @@ class TestSteeringTemplate:
     """Verify STEERING.md has revised Memory Protocol and updated structure."""
 
     def test_write_it_down_directive(self):
+        """Write-it-down directive now lives in AGENT.md only; STEERING extends with two-tier details."""
         content = _read_template("STEERING.md")
-        assert "Write it down" in content
-        assert "Files > Brain" in content
+        assert "Two-tier model" in content or "two-tier" in content.lower()
 
     def test_no_mental_notes(self):
         content = _read_template("STEERING.md")
@@ -318,11 +318,14 @@ class TestSessionStartOpenThreads:
             "AGENT.md still contains 'At session end' directive"
         )
 
-    def test_steering_md_session_start_block(self):
-        """Req 5.3: STEERING.md contains 'At session start' block."""
+    def test_steering_md_extended_memory_protocol(self):
+        """Req 5.3: STEERING.md contains extended memory protocol (distillation rules)."""
         content = _read_template("STEERING.md")
-        assert "At session start" in content, (
-            "STEERING.md missing 'At session start' block"
+        assert "Memory Protocol" in content, (
+            "STEERING.md missing 'Memory Protocol' section"
+        )
+        assert "extend" in content.lower(), (
+            "STEERING.md should reference extending AGENT.md base rules"
         )
 
     def test_steering_md_no_session_end_block(self):

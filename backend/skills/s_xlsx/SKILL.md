@@ -1,6 +1,9 @@
 ---
 name: XLSX Editor
-description: "Comprehensive spreadsheet creation, editing, and analysis with support for formulas, formatting, data analysis, and visualization. When the agent needs to work with spreadsheets (.xlsx, .xlsm, .csv, .tsv, etc) for: (1) Creating new spreadsheets with formulas and formatting, (2) Reading or analyzing data, (3) Modify existing spreadsheets while preserving formulas, (4) Data analysis and visualization in spreadsheets, or (5) Recalculating formulas"
+description: >
+  Spreadsheet creation, editing, and analysis (.xlsx, .xlsm, .csv, .tsv).
+  TRIGGER: any request involving spreadsheets, Excel files, CSV data, formulas, or data visualization.
+  DO NOT USE: for plain text tables (just use markdown).
 ---
 
 # Requirements for Outputs

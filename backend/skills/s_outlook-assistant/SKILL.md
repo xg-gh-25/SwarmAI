@@ -1,7 +1,9 @@
 ---
 name: Outlook Assistant
-source: outlook-mcp-server
-description: Manage Outlook inbox with AI-powered triage, cleanup, and organization. Use when the user mentions outlook, work email, email triage, clean inbox, email cleanup, check email, email summary, delete emails, manage inbox, calendar, or wants to organize their work email.
+description: >
+  Manage Outlook inbox: triage, cleanup, and organization via Outlook MCP server.
+  TRIGGER: "check email", "email triage", "clean inbox", "email summary", "outlook", "calendar".
+  DO NOT USE: for non-Outlook email or general scheduling questions.
 ---
 
 # Outlook Assistant

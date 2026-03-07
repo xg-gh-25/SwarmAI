@@ -254,14 +254,12 @@ IMPORTANT GUIDELINES:
 2. Follow the skill creation workflow from the skill-creator skill
 3. Create skills in the ~/.swarm-ai/skills/ directory (the user skills directory)
 4. Ensure SKILL.md has proper YAML frontmatter with name and description
-5. Keep skills concise and focused - only include what Claude needs
-6. Test any scripts you create before completing
-
-The skill-creator skill provides comprehensive guidance on:
-- Skill anatomy and structure
-- Progressive disclosure design
-- When to use scripts, references, and assets
-- Best practices for SKILL.md content
+5. Description MUST follow this schema:
+   - First line: one-sentence purpose
+   - TRIGGER: quoted phrases the user would say
+   - DO NOT USE: when a different skill/approach is better (with alternative)
+6. Keep skills concise and focused - only include what Claude needs
+7. Test any scripts you create before completing
 
 Current task: Create a skill named "{skill_name}" that {skill_description}"""
 
