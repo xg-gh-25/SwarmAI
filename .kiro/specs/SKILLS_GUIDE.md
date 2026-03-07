@@ -73,26 +73,45 @@ The description is critical — it's how Claude discovers your skill. Be specifi
 
 ---
 
-## Skill Sources
+## Three-Tier Skill System
 
-Skills can come from three places:
+Skills are discovered from three directories in precedence order (first-seen folder name wins):
 
-| Source | Location | How Added |
-|--------|----------|-----------|
-| System Skills | Bundled with app | Pre-installed, `is_system=true` |
-| Plugin Skills | `~/.swarm-ai/skills/` | Installed via Plugin Manager |
-| User Skills | `~/.swarm-ai/skills/` | Uploaded via ZIP or created with AI |
+| Tier | Location | Precedence | How Added |
+|------|----------|------------|-----------|
+| Built-in | `backend/skills/` | Highest | Ships with app, always projected |
+| User | `~/.swarm-ai/skills/` | Medium | Uploaded via ZIP or created with AI |
+| Plugin | `~/.swarm-ai/plugin-skills/` | Lowest | Installed via Plugin Manager |
 
-All skills are symlinked into the workspace at `.claude/skills/` so Claude can discover them:
+### Skill Discovery via SkillManager
+
+`SkillManager` scans all three tier directories, applies precedence, and maintains an in-memory cache:
+
+```python
+cache = await skill_manager.scan_all()
+# Returns: dict[str, SkillInfo] keyed by folder_name
+# SkillInfo: name, description, path, source_tier, is_builtin
+```
+
+Cache is invalidated on CRUD operations and rebuilt with an asyncio lock to prevent races.
+
+### Skill Projection (ProjectionLayer)
+
+Skills are projected as symlinks into the workspace for Claude SDK discovery:
 
 ```
-~/.swarm-ai/SwarmWS/
-└── .claude/
-    └── skills/
-        ├── pdf-processor -> ~/.swarm-ai/skills/pdf-processor
-        ├── code-review -> ~/.swarm-ai/skills/code-review
-        └── ...
+~/.swarm-ai/skills/my-skill/SKILL.md
+        ↓ symlink
+~/.swarm-ai/SwarmWS/.claude/skills/my-skill → ~/.swarm-ai/skills/my-skill
+        ↓ SDK discovery
+setting_sources=["project"] → SDK scans {cwd}/.claude/skills/
 ```
+
+Projection rules:
+- Built-in skills: always projected unconditionally
+- User/plugin skills: projected based on agent's `allowed_skills` list or `allow_all` flag
+- Stale symlinks (skills no longer available) cleaned up on every projection pass
+- Symlink targets validated against known tier directories before creation
 
 ---
 
@@ -105,11 +124,34 @@ All skills are symlinked into the workspace at `.claude/skills/` so Claude can d
 3. Select a ZIP file containing a skill directory with `SKILL.md`
 4. The skill is extracted, registered in the database, and symlinked
 
-### Create with AI
+### Create with AI (Skill Creator Agent)
 
 1. Click "Create with Agent"
 2. Describe what you want the skill to do
 3. The AI generates a `SKILL.md` with appropriate instructions
+
+Under the hood, `POST /api/skills/generate` calls `run_skill_creator_conversation()`:
+
+- Creates a temporary agent config with `SKILL_CREATOR_SYSTEM_PROMPT_TEMPLATE`
+- Invokes the built-in `skill-creator` skill for best-practice guidance
+- Creates skills in `~/.swarm-ai/skills/` (user tier)
+- Supports multi-turn iteration via session_id (same resume-fallback pattern as regular chat)
+- Default model: `claude-sonnet-4-5-20250929`
+
+### Install from Plugin Marketplace
+
+1. Go to the Plugins page
+2. Sync a marketplace repository (git-based)
+3. Browse available plugins and install
+4. Plugin skills are extracted to `~/.swarm-ai/plugin-skills/`
+
+The `PluginManager` handles the full lifecycle:
+
+- **Marketplace sync**: `sync_git_marketplace()` clones or pulls a git repo containing a `marketplace.json` manifest
+- **Plugin install**: Extracts skill directories from the marketplace repo to `~/.swarm-ai/plugin-skills/`, writes `PluginMetadata` JSON
+- **Plugin uninstall**: Removes skill directory and cleans up symlinks
+- **Standalone detection**: Can detect a single skill repo as a plugin (no manifest needed)
+- **Cache**: Marketplace data cached locally in `~/.swarm-ai/marketplace-cache/{marketplace_name}/`
 
 ### Enable Skills for an Agent
 
@@ -208,13 +250,28 @@ description: >
 
 ## Security
 
-Skills run within the agent's security sandbox:
+Skills run within the agent's security sandbox with multiple protection layers:
 
-- **PreToolUse hooks** validate that the skill is in the agent's allowed list before invocation
-- **Workspace isolation** restricts file access to the agent's sandbox directory
-- **Bash command protection** blocks operations outside the workspace boundary
+### PreToolUse Hook (Layer 4: skill_access_checker)
 
-If a skill is not enabled for the current agent, Claude cannot invoke it even if it matches the request.
+```python
+# Only added when enable_skills=True AND allow_all_skills=False
+def create_skill_access_checker(allowed_skills, builtin_skills):
+    async def checker(tool_name, tool_input):
+        skill_name = tool_input.get("skill_name")
+        if skill_name in builtin_skills:
+            return "allow"  # Built-in always allowed
+        if skill_name not in allowed_skills:
+            return "deny"   # Not in agent's allowed list
+        return "allow"
+```
+
+### Additional Protections
+
+- **Workspace isolation**: File access restricted to agent's sandbox directory
+- **Bash command protection**: Regex blocks operations outside workspace boundary
+- **Symlink validation**: Targets verified against known tier directories
+- **System-managed folder protection**: HTTP 403 on delete/rename of system folders
 
 ---
 
@@ -226,3 +283,5 @@ If a skill is not enabled for the current agent, Claude cannot invoke it even if
 | Skill not being invoked | Improve the `description` — Claude matches on this text |
 | Skill invocation blocked | Verify the skill is enabled for the agent |
 | Symlinks missing after upload | Skills are re-synced on CRUD operations; restart app if needed |
+| Plugin skill shadowed | Built-in > user > plugin precedence; rename to avoid conflicts |
+| Skill cache stale | CRUD operations auto-invalidate; restart app for manual refresh |
