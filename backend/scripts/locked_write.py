@@ -6,6 +6,7 @@ modify MEMORY.md under an advisory file lock.  Inlines the locking logic
 
 Usage:
     python locked_write.py --file PATH --section SECTION --append TEXT
+    python locked_write.py --file PATH --section SECTION --prepend TEXT
     python locked_write.py --file PATH --section SECTION --replace TEXT
 
 Public symbols:
@@ -13,6 +14,9 @@ Public symbols:
   modify section, write back, release lock.
 - ``LOCK_TIMEOUT``             — Maximum seconds to wait for lock (5.0).
 - ``FALLBACK_SECTION``         — Default section header when target not found.
+
+The ``--prepend`` mode inserts text at the top of a section (right after
+the header), enabling newest-first ordering for date-prefixed entries.
 """
 
 import argparse
@@ -96,6 +100,20 @@ def _modify_content(content: str, section: str, text: str, mode: str) -> str:
         # Replace everything between header and next header
         return content[:header_end] + text + "\n" + content[next_header_pos:]
 
+    if mode == "prepend":
+        # Insert text at the beginning of the section (right after header)
+        existing_section = content[header_end:next_header_pos]
+        if existing_section.strip():
+            return (
+                content[:header_end]
+                + text
+                + "\n"
+                + existing_section.lstrip("\n")
+                + content[next_header_pos:]
+            )
+        else:
+            return content[:header_end] + text + "\n" + content[next_header_pos:]
+
     # mode == "append"
     # Insert text at the end of the section (before next header)
     insert_pos = next_header_pos
@@ -124,8 +142,8 @@ def locked_read_modify_write(
     Args:
         file_path: Path to the target Markdown file.
         section: Section header to find (e.g. "Recent Context").
-        text: Content to append or replace.
-        mode: "append" (default) or "replace".
+        text: Content to append, prepend, or replace.
+        mode: "append" (default), "prepend", or "replace".
 
     Raises:
         SystemExit: With code 1 if the lock cannot be acquired within
@@ -195,9 +213,10 @@ def main():
         help="Section header to target (e.g. 'Recent Context')",
     )
 
-    # Mutually exclusive: --append or --replace
+    # Mutually exclusive: --append, --prepend, or --replace
     group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument("--append", dest="text_append", help="Text to append")
+    group.add_argument("--append", dest="text_append", help="Text to append to section end")
+    group.add_argument("--prepend", dest="text_prepend", help="Text to prepend to section start (newest-first)")
     group.add_argument(
         "--replace", dest="text_replace", help="Text to replace section with"
     )
@@ -207,6 +226,9 @@ def main():
     if args.text_append is not None:
         mode = "append"
         text = args.text_append
+    elif args.text_prepend is not None:
+        mode = "prepend"
+        text = args.text_prepend
     else:
         mode = "replace"
         text = args.text_replace
