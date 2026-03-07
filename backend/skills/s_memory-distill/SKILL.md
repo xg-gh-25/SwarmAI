@@ -1,8 +1,9 @@
 ---
 name: Memory Distill
 description: >
-  Distill unprocessed DailyActivity files into MEMORY.md. Auto-triggers
-  when >7 unprocessed files are detected at session start. Runs silently.
+  Distill unprocessed DailyActivity files into curated MEMORY.md entries.
+  TRIGGER: auto-triggers when >7 unprocessed DailyActivity files detected at session start.
+  DO NOT USE: manually — this runs silently and automatically.
 ---
 
 ## Memory Distillation Skill

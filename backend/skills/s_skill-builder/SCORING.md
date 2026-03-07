@@ -46,7 +46,10 @@ The YAML frontmatter is required for the skill to load.
 # 15 points - Perfect (folder: generating-commit-messages/)
 ---
 name: generating-commit-messages
-description: Generate descriptive commit messages from git diffs. Use when writing commits or reviewing staged changes.
+description: >
+  Generate descriptive commit messages from git diffs.
+  TRIGGER: "write commit", "commit message", "review staged changes".
+  DO NOT USE: for code review feedback (use code-review skill instead).
 ---
 
 # 10 points - Name doesn't match folder
@@ -77,13 +80,16 @@ The description determines when the agent invokes the skill.
 |--------|----------|
 | 0 | Empty or missing description |
 | 5 | Vague description (e.g., "helps with files") |
-| 10 | Clear "what" but missing "when to use" triggers |
-| 13 | Specific "what" + multiple triggers, but no "Why?" line after title |
-| 15 | Specific "what" + multiple triggers + **"Why?" line** explaining the problem solved |
+| 10 | Clear purpose sentence but missing `TRIGGER:` or `DO NOT USE:` lines |
+| 13 | Purpose + `TRIGGER:` phrases present, but no `DO NOT USE:` boundary |
+| 15 | Purpose + `TRIGGER:` + `DO NOT USE:` + **"Why?" line** after title |
 
-**Formula for perfect description:**
-```
-[What the skill does] + [When to use it with trigger keywords]
+**Required description schema:**
+```yaml
+description: >
+  [One-line purpose sentence].
+  TRIGGER: "[phrase 1]", "[phrase 2]", "[phrase 3]".
+  DO NOT USE: [when condition] (use [alternative] instead).
 ```
 
 **"Why?" line** (after title in SKILL.md body):
@@ -95,9 +101,12 @@ The description determines when the agent invokes the skill.
 
 ```yaml
 # 15 points - Excellent
-description: Extract entities AND relationships from vault files into the GraphRAG knowledge graph. Use when processing meeting notes, syncing the knowledge graph, indexing files for GraphRAG, or when the user mentions graph updates, knowledge extraction, or relationship mapping.
+description: >
+  Extract entities and relationships from vault files into the GraphRAG knowledge graph.
+  TRIGGER: "process meeting notes", "sync knowledge graph", "index files for GraphRAG".
+  DO NOT USE: for simple file search (use workspace search directly).
 
-# 10 points - Missing triggers
+# 10 points - Missing TRIGGER/DO NOT USE
 description: Extract entities and relationships from vault files into the knowledge graph.
 
 # 5 points - Vague
@@ -281,9 +290,9 @@ Use this worksheet when evaluating a skill:
 **Score: __/15**
 
 ### Description Quality (15 points)
-- [ ] Clearly states what the skill does
-- [ ] Includes "when to use" context
-- [ ] Has multiple trigger keywords
+- [ ] First line states what the skill does (one sentence)
+- [ ] Has `TRIGGER:` line with quoted user phrases
+- [ ] Has `DO NOT USE:` line with boundary and alternative
 - [ ] Specific, not vague
 **Score: __/15**
 

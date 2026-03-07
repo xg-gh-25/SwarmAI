@@ -1,6 +1,9 @@
 ---
 name: Save Context
-description: Create a structured handoff document for the next agent session. Use when switching agents, ending work, or when user says "save context", "handoff", or "wrap up". Not for persistent memory (use save-memory instead).
+description: >
+  Create a structured handoff document for the next agent session.
+  TRIGGER: "save context", "handoff", "wrap up", "switching agents", "ending work".
+  DO NOT USE: for persistent memory (use save-memory) or daily logs (use save-activity).
 ---
 
 # Save Context

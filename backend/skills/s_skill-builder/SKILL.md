@@ -1,6 +1,9 @@
 ---
 name: Skill Builder
-description: Create, evaluate, and improve Agent skills to production quality (100/100). Use when the user wants to create a new skill from scratch, review an existing skill, score a skill against best practices, or improve a skill's quality. Also use when the user mentions skill development, skill templates, or skill optimization. Do NOT use when the user wants to convert the current session into a skill (use skillify-session instead).
+description: >
+  Create, evaluate, and improve Agent skills to production quality.
+  TRIGGER: "create a skill", "build a skill", "review skill", "score skill", "improve skill".
+  DO NOT USE: when user wants to convert current session into a skill (use skillify-session).
 ---
 
 # Skill Builder Workflow
@@ -153,13 +156,23 @@ This is the standard location for user-created skills in the three-tier model (B
 
 Use templates from TEMPLATES.md. Ensure:
 1. **Frontmatter** — valid YAML with `name` (must match folder name) and `description`
-2. **Description** — includes BOTH what it does AND when to use it
+2. **Description schema** — MUST follow this exact pattern:
+   ```yaml
+   description: >
+     One-line purpose sentence.
+     TRIGGER: "phrase1", "phrase2", "phrase3".
+     DO NOT USE: when condition (use alternative-skill instead).
+   ```
+   - First line: what the skill does (one sentence)
+   - `TRIGGER:` — quoted phrases the user would say to invoke this skill
+   - `DO NOT USE:` — when a similar skill should be used instead, with explicit boundary
 3. **"Why?" line** — one sentence after title explaining the problem this solves
 4. **Workflow** — clear, numbered steps
 5. **Progressive disclosure** — link to supporting files (only if needed)
 
 > [!TIP]
-> Description is critical for discovery. Include multiple trigger keywords.
+> The `TRIGGER:` and `DO NOT USE:` lines are critical for skill discovery and disambiguation.
+> Without them, the agent guesses — and guesses wrong on similar skills.
 
 ### Step 5: Save and Notify User
 
@@ -212,7 +225,7 @@ Based on evaluation, prioritize:
 
 Work systematically:
 1. Fix frontmatter first (skill won't load without valid YAML)
-2. Enhance description with trigger keywords
+2. Standardize description: purpose + `TRIGGER:` + `DO NOT USE:` schema
 3. Add progressive disclosure if SKILL.md > 200 lines
 4. Create supporting files as needed
 5. Add quality sections (Troubleshooting, Quick Start)
@@ -230,7 +243,7 @@ Work systematically:
 
 Before declaring complete:
 - [ ] `name` in frontmatter matches folder name
-- [ ] `description` includes what AND when
+- [ ] `description` has: purpose sentence + `TRIGGER:` phrases + `DO NOT USE:` boundary
 - [ ] **"Why?" line** present after title
 - [ ] SKILL.md under 500 lines
 - [ ] Structure matches complexity (not over-engineered)

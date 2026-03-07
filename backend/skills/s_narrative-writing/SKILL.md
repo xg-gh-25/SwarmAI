@@ -1,6 +1,9 @@
 ---
 name: Narrative Writing
-description: Structured writing culture for clear, data-driven documents that drive decisions. Use when writing narratives, technical documentation, business plans, or improving document clarity. Use this skill for six-pagers, PR/FAQs, working backwards documents, or any document requiring structured writing.
+description: >
+  Structured writing for clear, data-driven documents that drive decisions.
+  TRIGGER: "six-pager", "PR/FAQ", "working backwards", "write a narrative", "technical doc".
+  DO NOT USE: for casual notes or quick summaries (just write directly).
 version: 1.0.0
 tags: [skill, narrative-writing, narratives, technical-documentation, six-pager, pr-faq, working-backwards, document-structure, data-presentation]
 ---

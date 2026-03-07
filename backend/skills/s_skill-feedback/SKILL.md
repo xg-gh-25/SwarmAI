@@ -1,6 +1,9 @@
 ---
 name: Skill Feedback
-description: Generate improvement reports for skills or CLI packages you authored. Use when ending a session where you worked on your own skill, when the user mentions "skill-feedback", "capture improvements", "session learnings", or when friction was observed during skill/package usage.
+description: >
+  Generate improvement reports for skills or CLI packages based on session learnings.
+  TRIGGER: "skill-feedback", "capture improvements", "session learnings".
+  DO NOT USE: for creating new skills (use skill-builder) or converting sessions (use skillify-session).
 ---
 # Skill Feedback Generator
 
