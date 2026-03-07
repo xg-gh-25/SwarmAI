@@ -67,6 +67,20 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "anthropic_base_url": None,
     "claude_code_disable_experimental_betas": True,
+    "evolution": {
+        "enabled": True,
+        "max_retries": 3,
+        "verification_timeout_seconds": 120,
+        "auto_approve_skills": False,
+        "auto_approve_scripts": False,
+        "auto_approve_installs": False,
+        "proactive_enabled": True,
+        "stuck_detection_enabled": True,
+        "max_triggers_per_session": 3,
+        "same_type_cooldown_seconds": 60,
+        "max_active_entries": 30,
+        "deprecation_days": 30,
+    },
 }
 
 

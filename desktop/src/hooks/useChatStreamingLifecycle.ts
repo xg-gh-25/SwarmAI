@@ -1056,6 +1056,27 @@ export function useChatStreamingLifecycle(
             updateTabStatus(capturedTabId, 'error');
           }
         }
+        // Evolution SSE events — inject as standalone messages in the stream
+        else if (event.type?.startsWith('evolution_')) {
+          const evolutionMessage: Message = {
+            id: `evo-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+            role: 'assistant',
+            content: [],
+            timestamp: new Date().toISOString(),
+            evolutionEvent: {
+              eventType: event.type,
+              data: (event as unknown as Record<string, unknown>).data as Record<string, unknown>
+                ?? (event as unknown as Record<string, unknown>),
+            },
+          };
+
+          if (tabState) {
+            tabState.messages = [...tabState.messages, evolutionMessage];
+          }
+          if (isActiveTab) {
+            setMessages((prev) => [...prev, evolutionMessage]);
+          }
+        }
         // Telemetry events (agent_activity, tool_invocation, etc.) are no
         // longer processed — TSCC fetches metadata from the endpoint instead.
       };
