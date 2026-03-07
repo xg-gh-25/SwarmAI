@@ -291,6 +291,8 @@ class AgentManager:
         self._config: AppConfigManager | None = config_manager
         self._cmd_pm: CmdPermissionManager | None = cmd_permission_manager
         self._credential_validator: CredentialValidator | None = credential_validator
+        # Session lifecycle hook manager (set at startup via set_hook_manager)
+        self._hook_manager = None  # type: SessionLifecycleHookManager | None
 
     def configure(
         self,
@@ -309,6 +311,36 @@ class AgentManager:
         self._config = config_manager
         self._cmd_pm = cmd_permission_manager
         self._credential_validator = credential_validator
+
+    def set_hook_manager(self, hook_manager) -> None:
+        """Inject the session lifecycle hook manager at startup."""
+        self._hook_manager = hook_manager
+
+    @property
+    def hook_manager(self):
+        """Public read access to the session lifecycle hook manager."""
+        return self._hook_manager
+
+    async def _build_hook_context(self, session_id: str, info: dict):
+        """Build a HookContext from active session info.
+
+        Uses ``count_by_session()`` (SELECT COUNT) instead of loading
+        all messages, for efficiency.
+        """
+        from .session_hooks import HookContext
+        message_count = await db.messages.count_by_session(session_id)
+        session = await session_manager.get_session(session_id)
+        return HookContext(
+            session_id=session_id,
+            agent_id=info.get("agent_id", session.agent_id if session else ""),
+            message_count=message_count,
+            session_start_time=session.created_at if session else "",
+            session_title=session.title if session else "Unknown",
+        )
+
+    def has_active_session(self, session_id: str) -> bool:
+        """Check if a session is currently active in memory."""
+        return session_id in self._active_sessions
 
     def _start_cleanup_loop(self):
         """Start background task to clean up stale sessions."""
@@ -333,8 +365,24 @@ class AgentManager:
             except Exception as e:
                 logger.error(f"Error in session cleanup loop: {e}")
 
-    async def _cleanup_session(self, session_id: str):
-        """Disconnect and remove a stored session client."""
+    async def _cleanup_session(self, session_id: str, skip_hooks: bool = False):
+        """Disconnect and remove a stored session client.
+
+        Args:
+            session_id: The session to clean up.
+            skip_hooks: If True, skip firing lifecycle hooks. Used by
+                error-recovery paths and ``disconnect_all()`` (which
+                fires hooks in its own outer loop).
+        """
+        # get BEFORE hooks — hooks need session info to build HookContext
+        info = self._active_sessions.get(session_id)
+        if info and self._hook_manager and not skip_hooks:
+            try:
+                context = await self._build_hook_context(session_id, info)
+                await self._hook_manager.fire_post_session_close(context)
+            except Exception as exc:
+                logger.error("Hook context build failed for %s: %s", session_id, exc)
+        # NOW pop and clean up resources
         info = self._active_sessions.pop(session_id, None)
         if info:
             wrapper = info.get("wrapper")
@@ -815,27 +863,43 @@ class AgentManager:
                 except (OSError, UnicodeDecodeError):
                     pass
 
-            # ── DailyActivity reading — today + yesterday (ephemeral) ──
+            # ── DailyActivity reading — last 2 files by date (ephemeral) ──
+            # Scans the directory and takes the 2 most recent files by
+            # filename (YYYY-MM-DD.md sort).  Handles date gaps (weekends).
             # Token cap is applied per-file to prevent a busy day's log
             # from squeezing out higher-priority context.  Disk files are
             # never modified — truncation is ephemeral.
             daily_activity_dir = Path(working_directory) / "Knowledge" / "DailyActivity"
             if daily_activity_dir.is_dir():
-                today = date.today()
-                for d in [today, today - timedelta(days=1)]:
-                    daily_file = daily_activity_dir / f"{d.isoformat()}.md"
-                    if daily_file.is_file():
-                        try:
-                            daily_content = daily_file.read_text(encoding="utf-8").strip()
-                            if daily_content:
-                                token_count = ContextDirectoryLoader.estimate_tokens(daily_content)
-                                if token_count > TOKEN_CAP_PER_DAILY_FILE:
-                                    daily_content = _truncate_daily_content(
-                                        daily_content, TOKEN_CAP_PER_DAILY_FILE
-                                    )
-                                context_text += f"\n\n## Daily Activity ({d.isoformat()})\n{daily_content}"
-                        except (OSError, UnicodeDecodeError):
-                            pass
+                # Sort .md files by filename descending, take top 2
+                da_files = sorted(
+                    [f for f in daily_activity_dir.glob("*.md") if f.stem[:4].isdigit()],
+                    key=lambda f: f.stem,
+                    reverse=True,
+                )[:2]
+                for daily_file in da_files:
+                    try:
+                        daily_content = daily_file.read_text(encoding="utf-8").strip()
+                        if daily_content:
+                            token_count = ContextDirectoryLoader.estimate_tokens(daily_content)
+                            if token_count > TOKEN_CAP_PER_DAILY_FILE:
+                                daily_content = _truncate_daily_content(
+                                    daily_content, TOKEN_CAP_PER_DAILY_FILE
+                                )
+                            context_text += f"\n\n## Daily Activity ({daily_file.stem})\n{daily_content}"
+                    except (OSError, UnicodeDecodeError):
+                        pass
+
+                # ── Distillation flag check ──
+                flag_path = daily_activity_dir / ".needs_distillation"
+                if flag_path.is_file():
+                    context_text += (
+                        "\n\n## Memory Maintenance Required\n"
+                        "Run the s_memory-distill skill now — there are undistilled "
+                        "DailyActivity files that need promotion to MEMORY.md. "
+                        "After distillation completes, delete the flag file at "
+                        f"`{flag_path}`."
+                    )
 
             if context_text:
                 existing = agent_config.get("system_prompt", "") or ""
@@ -1358,7 +1422,7 @@ class AgentManager:
                 else session_context.get("sdk_session_id")
             )
             if eff_sid and eff_sid in self._active_sessions:
-                await self._cleanup_session(eff_sid)
+                await self._cleanup_session(eff_sid, skip_hooks=True)
             yield _build_error_event(
                 code="CONVERSATION_ERROR",
                 message=str(e),
@@ -1529,7 +1593,7 @@ class AgentManager:
                                 else session_context.get("sdk_session_id")
                             )
                             if eff_sid and eff_sid in self._active_sessions:
-                                await self._cleanup_session(eff_sid)
+                                await self._cleanup_session(eff_sid, skip_hooks=True)
                                 logger.info(f"Removed broken session {eff_sid} from active sessions pool")
                             yield _build_error_event(
                                 code="ERROR_DURING_EXECUTION",
@@ -1791,11 +1855,8 @@ class AgentManager:
                             "num_turns": getattr(message, 'num_turns', 1),
                         }
 
-                        # Auto-commit workspace changes (non-blocking background thread)
-                        try:
-                            await self._auto_commit_workspace(display_text or "Chat")
-                        except Exception:
-                            logger.debug("Auto-commit failed (non-critical)", exc_info=True)
+                        # NOTE: Auto-commit moved to WorkspaceAutoCommitHook
+                        # (fires at session close, not per-turn). See hooks/auto_commit_hook.py.
         finally:
             # Cleanup: cancel both background tasks regardless of how we exited the loop
             # (normal completion, error, or early return). The await-after-cancel pattern
@@ -2062,10 +2123,24 @@ class AgentManager:
         logger.info(f"Permission decision processed, original stream will handle execution")
 
     async def disconnect_all(self):
-        """Disconnect all active clients and long-lived sessions."""
-        # Clean up long-lived sessions
+        """Disconnect all active clients and long-lived sessions.
+
+        Fires lifecycle hooks in the outer loop first, then calls
+        ``_cleanup_session(skip_hooks=True)`` for resource cleanup only.
+        This prevents double hook execution on shutdown.
+        """
+        # Fire hooks for each active session before cleanup
         for session_id in list(self._active_sessions.keys()):
-            await self._cleanup_session(session_id)
+            if self._hook_manager:
+                info = self._active_sessions.get(session_id)
+                if info:
+                    try:
+                        context = await self._build_hook_context(session_id, info)
+                        await self._hook_manager.fire_post_session_close(context)
+                    except Exception as exc:
+                        logger.error("Shutdown hook failed for %s: %s", session_id, exc)
+            # Resource cleanup only — hooks already fired above
+            await self._cleanup_session(session_id, skip_hooks=True)
         # Clean up any remaining transient clients
         for session_id, client in list(self._clients.items()):
             try:
@@ -2324,7 +2399,7 @@ Create the skill in the `.claude/skills/` directory within the current workspace
                 else session_context.get("sdk_session_id")
             )
             if eff_sid and eff_sid in self._active_sessions:
-                await self._cleanup_session(eff_sid)
+                await self._cleanup_session(eff_sid, skip_hooks=True)
             yield _build_error_event(
                 code="SKILL_CREATION_ERROR",
                 message=str(e),

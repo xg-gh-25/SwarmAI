@@ -377,6 +377,32 @@ async def lifespan(app: FastAPI):
     )
     logger.info("AgentManager configured with injected components")
 
+    # ── Session lifecycle hooks ──────────────────────────────────────
+    from core.session_hooks import SessionLifecycleHookManager
+    from core.summarization import SummarizationPipeline
+    from core.compliance import ComplianceTracker
+    from hooks.daily_activity_hook import DailyActivityExtractionHook
+    from hooks.auto_commit_hook import WorkspaceAutoCommitHook
+    from hooks.distillation_hook import DistillationTriggerHook
+    from routers.memory import set_compliance_tracker
+
+    summarization_pipeline = SummarizationPipeline()
+    compliance_tracker = ComplianceTracker()
+    hook_manager = SessionLifecycleHookManager(timeout_seconds=30.0)
+
+    # Order matters: extraction first, then commit, then distillation check
+    hook_manager.register(DailyActivityExtractionHook(
+        summarization_pipeline=summarization_pipeline,
+        compliance_tracker=compliance_tracker,
+    ))
+    hook_manager.register(WorkspaceAutoCommitHook())
+    hook_manager.register(DistillationTriggerHook())
+
+    agent_manager.set_hook_manager(hook_manager)
+    set_compliance_tracker(compliance_tracker)
+    logger.info("Session lifecycle hooks registered (3 hooks)")
+    # ─────────────────────────────────────────────────────────────────
+
     t_agent = time.monotonic()
     phase_timings["agent_manager_ms"] = round((t_agent - t_config) * 1000)
     logger.info("Phase: agent manager configure — %dms", phase_timings["agent_manager_ms"])
@@ -493,6 +519,10 @@ app.include_router(workspace_api_router, prefix="/api", tags=["workspace-api"])
 app.include_router(projects_router, prefix="/api", tags=["projects"])
 app.include_router(tscc_router, prefix="/api", tags=["tscc"])
 app.include_router(autonomous_jobs_router, prefix="/api/autonomous-jobs", tags=["autonomous-jobs"])
+
+# Memory compliance router (no prefix — router defines /api internally)
+from routers.memory import router as memory_router
+app.include_router(memory_router, tags=["memory"])
 
 # Register development-only router when DEBUG=true
 if settings.debug:

@@ -42,19 +42,26 @@ Map the content to the appropriate MEMORY.md section:
 
 #### Step 3: Write using locked_write.py
 
-Use the locked write script for concurrent-safe MEMORY.md modification:
+Use the locked write script for concurrent-safe MEMORY.md modification.
+
+**Always prefix entries with today's date** in `YYYY-MM-DD` format:
 
 ```bash
 python backend/scripts/locked_write.py \
   --file .context/MEMORY.md \
   --section "Key Decisions" \
-  --append "- <content to save>"
+  --prepend "- 2026-03-07: <content to save>"
 ```
 
-Replace the section name and content as appropriate.
+Use `--prepend` (not `--append`) so newest entries appear at the top of each section.
+Replace the section name, date, and content as appropriate.
 
 If the target section doesn't exist in MEMORY.md, the script automatically
 appends under a `## Distilled` fallback section.
+
+**If `--prepend` is not supported by locked_write.py**, use `--append` and note
+that entries will be in chronological order (oldest first) instead. The date
+prefix still ensures entries are sortable.
 
 #### Step 4: Confirm silently
 
@@ -67,7 +74,9 @@ Keep confirmation to one line. Don't repeat the content back.
 ### Rules
 
 - **Always use `locked_write.py`** — never write MEMORY.md directly with file tools
+- **Always date-prefix** — every entry must start with `YYYY-MM-DD:` (today's date)
+- **Newest first** — use `--prepend` so the most recent entries are at the top of each section
 - **Append only** — never remove or replace existing MEMORY.md content
 - **Be concise** — one line per entry, no raw conversation dumps
-- **Don't duplicate** — check if the content is already in MEMORY.md before adding
+- **Don't duplicate** — check if the content is already in MEMORY.md before adding (match by content, ignore date)
 - **MEMORY.md location** — always at `.context/MEMORY.md` (relative to workspace root)
