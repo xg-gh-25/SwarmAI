@@ -92,7 +92,100 @@ sequenceDiagram
 
 ---
 
-## 3. Tab Switching Flow
+## 3. Context and Memory Assembly Flow
+
+```mermaid
+flowchart TD
+    A["_build_system_prompt()"] --> B[ContextDirectoryLoader]
+    B --> B1["ensure_directory()"]
+    B1 --> B2["Copy defaults from backend/context/"]
+    B2 --> B3{"Model context window?"}
+
+    B3 -->|"≥ 64K"| C{L1 cache fresh?}
+    C -->|YES| D[Load L1 cache]
+    C -->|NO| E["Assemble 10 source files"]
+    E --> E1["Enforce token budget"]
+    E1 --> E2["Write L1 cache"]
+    E2 --> D
+
+    B3 -->|"< 64K"| F{L0 cache exists?}
+    F -->|YES| G[Load L0 compact cache]
+    F -->|NO| H[Fallback to source files]
+
+    D --> I{BOOTSTRAP.md exists?}
+    G --> I
+    H --> I
+
+    I -->|YES| J["Prepend ## Onboarding section"]
+    I -->|NO| K[Skip]
+    J --> L
+    K --> L
+
+    L["Read DailyActivity"] --> L1{"Today's log exists?"}
+    L1 -->|YES| L2["Append ## Daily Activity<br/>(2K token cap per file)"]
+    L1 -->|NO| L3[Skip]
+    L2 --> M
+    L3 --> M
+
+    M["Collect per-file metadata<br/>for TSCC viewer"] --> N[SystemPromptBuilder]
+    N --> N1["Identity line"]
+    N1 --> N2["Safety principles"]
+    N2 --> N3["Workspace cwd"]
+    N3 --> N4["Date/time"]
+    N4 --> N5["Runtime metadata"]
+    N5 --> O["Final system prompt"]
+```
+
+---
+
+## 4. Context File Two-Mode Copy
+
+```mermaid
+flowchart TD
+    A["ensure_directory()"] --> B{File exists in .context/?}
+
+    B -->|NO| C["Copy from backend/context/ template"]
+    C --> D{user_customized?}
+    D -->|YES| E["Set 0o644 (read-write)"]
+    D -->|NO| F["Set 0o444 (readonly)"]
+
+    B -->|YES| G{user_customized?}
+    G -->|YES| H["Skip — preserve user edits"]
+    G -->|NO| I{Content changed?}
+    I -->|YES| J["Overwrite with latest template"]
+    J --> F
+    I -->|NO| K["Skip — already current"]
+```
+
+---
+
+## 5. Token Budget Enforcement
+
+```mermaid
+flowchart TD
+    A["_enforce_token_budget()"] --> B["Calculate total tokens"]
+    B --> C{Total > budget?}
+    C -->|NO| D["Return all sections unchanged"]
+    C -->|YES| E["Sort truncatable sections by priority DESC"]
+    E --> F["Start with lowest priority (P9 PROJECTS)"]
+    F --> G{Still over budget?}
+    G -->|YES| H{truncate_from?}
+    H -->|tail| I["Truncate from end (keep beginning)"]
+    H -->|head| J["Truncate from start (keep end/newest)"]
+    I --> K{Section fully removed?}
+    J --> K
+    K -->|NO| G
+    K -->|YES| L["Move to next priority"]
+    L --> G
+    G -->|NO| M["Return truncated sections"]
+
+    style J fill:#ff9,stroke:#333
+    style I fill:#9ff,stroke:#333
+```
+
+---
+
+## 6. Tab Switching Flow
 
 ```mermaid
 flowchart TD
@@ -115,7 +208,7 @@ flowchart TD
 
 ---
 
-## 4. Tab Persistence Flow
+## 7. Tab Persistence Flow
 
 ```mermaid
 flowchart LR
@@ -139,7 +232,7 @@ flowchart LR
 
 ---
 
-## 5. Session ID Mapping — Resume After Restart
+## 8. Session ID Mapping — Resume After Restart
 
 ```mermaid
 sequenceDiagram
@@ -172,7 +265,7 @@ sequenceDiagram
 
 ---
 
-## 6. Tool Use & Permission Flow
+## 9. Tool Use & Permission Flow
 
 ```mermaid
 sequenceDiagram
@@ -206,7 +299,54 @@ sequenceDiagram
 
 ---
 
-## 7. SwarmWS Workspace Integrity Flow
+## 10. Skill Projection Flow
+
+```mermaid
+flowchart TD
+    A[ProjectionLayer.project_skills] --> B[SkillManager.get_cache]
+    B --> C{For each skill in cache}
+
+    C --> D{source_tier?}
+    D -->|built-in| E[Always project]
+    D -->|user/plugin| F{allow_all?}
+    F -->|YES| E
+    F -->|NO| G{In allowed_skills?}
+    G -->|YES| E
+    G -->|NO| H[Skip]
+
+    E --> I{Symlink exists + correct target?}
+    I -->|YES| J[Skip - already current]
+    I -->|NO| K[Validate target in tier directory]
+    K --> L{Valid?}
+    L -->|YES| M[Create symlink]
+    L -->|NO| N[Log warning, skip]
+
+    M --> O[Cleanup stale symlinks]
+    J --> O
+    H --> O
+```
+
+---
+
+## 11. Memory Write Flow
+
+```mermaid
+flowchart TD
+    A[Agent invokes s_save-memory skill] --> B[locked_write.py]
+    B --> C["fcntl.flock(LOCK_EX) on MEMORY.md"]
+    C --> D[Read current content]
+    D --> E[Merge new content]
+    E --> F[Write updated content]
+    F --> G["fcntl.flock(LOCK_UN)"]
+
+    H[DailyActivity append] --> I["OS O_APPEND flag"]
+    I --> J["Write to Knowledge/DailyActivity/{date}.md"]
+    J --> K[No lock needed - append-only]
+```
+
+---
+
+## 12. SwarmWS Workspace Integrity Flow
 
 ```mermaid
 flowchart TD
@@ -219,14 +359,14 @@ flowchart TD
     F --> G{All system folders exist?}
     G -->|YES| H[Done - workspace healthy]
     G -->|NO| I[Create missing folders]
-    I --> J[Write context-L0.md / context-L1.md]
-    J --> K[Write system-prompts.md]
+    I --> J[Create Knowledge/ subdirectories]
+    J --> K[Ensure .context/ directory]
     K --> H
-
+```
 
 ---
 
-## 8. Skill Execution Flow
+## 13. Skill Execution Flow
 
 ```mermaid
 sequenceDiagram
@@ -249,7 +389,7 @@ sequenceDiagram
 
 ---
 
-## 9. Build Pipeline Flow
+## 14. Build Pipeline Flow
 
 ```mermaid
 flowchart LR
@@ -272,6 +412,172 @@ flowchart LR
 
 ---
 
+## 15. ChatThread Binding Flow
+
+```mermaid
+sequenceDiagram
+    participant FE as Frontend
+    participant API as chat_threads_router
+    participant CTM as ChatThreadManager
+    participant DB as SQLite
+
+    FE->>API: POST /api/chat_threads/{id}/bind
+    API->>CTM: bind_thread(thread_id, project_id, agent_id)
+    CTM->>DB: Update chat_threads SET project_id, agent_id
+    CTM->>CTM: Update TSCC scope (workspace → project)
+    CTM-->>API: ThreadBindResponse
+    API-->>FE: 200 OK with updated thread
+```
+
+---
+
+## 16. Answer User Question Flow
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant FE as Frontend
+    participant SS as sessionStorage
+    participant API as FastAPI
+    participant AM as AgentManager
+    participant SDK as ClaudeSDKClient
+
+    Note over SDK: ask_user_question event
+    SDK-->>AM: AskUserQuestion tool_use
+    AM-->>API: yield ask_user_question event
+    AM->>AM: Save partial assistant content to DB
+    API-->>FE: SSE ask_user_question
+    FE->>SS: persistPendingState(sessionId, messages, question)
+    FE->>User: Show question form
+
+    User->>FE: Submit answers
+    FE->>SS: removePendingState(sessionId)
+    FE->>API: POST /api/chat/answer-question
+    API->>AM: continue_with_answer(session_id, answers)
+    AM->>AM: _execute_on_session(is_resuming=True)
+
+    alt Active client exists
+        AM->>SDK: Reuse client, query(formatted_answers)
+    else No active client
+        AM->>SDK: Create fresh client (resume-fallback)
+    end
+
+    loop SSE Streaming
+        SDK-->>AM: Response chunks
+        AM-->>API: yield events
+        API-->>FE: SSE events
+    end
+```
+
+---
+
+## 17. Command Permission Flow (Full)
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant FE as Frontend
+    participant API as FastAPI
+    participant AM as AgentManager
+    participant Hook as human_approval_hook
+    participant PM as PermissionManager
+    participant CmdPM as CmdPermissionManager
+
+    Note over Hook: Dangerous bash command detected
+    Hook->>PM: Create permission request (UUID)
+    PM->>AM: Put request in SSE queue
+    AM-->>API: yield cmd_permission_request
+    API-->>FE: SSE cmd_permission_request
+    FE->>User: Show PermissionRequestModal
+    Hook->>Hook: await wait_for_permission_decision(request_id)
+
+    User->>FE: Approve / Deny
+    FE->>API: POST /api/chat/cmd-permission-continue
+
+    alt Approved
+        API->>CmdPM: approve(command) — persistent, filesystem-backed
+        API->>PM: set_permission_decision(request_id, "approve")
+        Note over Hook: Unblocked — command executes
+    else Denied
+        API->>PM: set_permission_decision(request_id, "deny")
+        Note over Hook: Unblocked — command skipped
+    end
+
+    API-->>FE: permission_acknowledged event
+    Note over AM: Original SSE stream continues
+```
+
+---
+
+## 18. sessionStorage Persistence Flow
+
+```mermaid
+flowchart TD
+    A[ask_user_question event arrives] --> B[persistPendingState]
+    B --> C["Write to sessionStorage:<br/>swarm_chat_pending_{sessionId}"]
+    C --> D[User sees question form]
+
+    E[Component re-mounts] --> F[restorePendingState]
+    F --> G{Entry exists + valid schema?}
+    G -->|YES| H[Restore messages + pendingQuestion]
+    G -->|NO| I[Show welcome / empty state]
+
+    J[result event arrives] --> K[removePendingState]
+    K --> L[Delete sessionStorage entry]
+
+    M[Mount + 2s delay] --> N[cleanupStalePendingEntries]
+    N --> O{Session still active?}
+    O -->|404| P[Remove stale entry]
+    O -->|Active| Q[Keep entry]
+    O -->|Network error| Q
+```
+
+---
+
+## 19. Auto-Commit Workspace Flow
+
+```mermaid
+flowchart TD
+    A[ResultMessage received] --> B["_auto_commit_workspace(title)"]
+    B --> C["asyncio.to_thread()"]
+    C --> D["git status --porcelain"]
+    D --> E{Changes detected?}
+    E -->|NO| F[Skip silently]
+    E -->|YES| G["git add -A"]
+    G --> H["git commit -m 'Session: {title}'"]
+    H --> I[Log success]
+
+    style C fill:#9ff,stroke:#333
+    style F fill:#ddd,stroke:#333
+```
+
+---
+
+## 20. Deferred Startup Flow
+
+```mermaid
+flowchart TD
+    A[Fast startup path] --> B[DB init + workspace verify]
+    B --> C["_startup_complete = True"]
+    C --> D[Frontend can serve requests]
+
+    B --> E["asyncio.create_task()"]
+    E --> F["refresh_builtin_defaults()"]
+    F --> G[Re-scan built-in skills]
+    G --> H[Refresh context file templates]
+
+    B --> I{Channels configured?}
+    I -->|0 channels| J[Skip gateway]
+    I -->|N channels| K["asyncio.create_task()"]
+    K --> L["channel_gateway.startup()"]
+
+    style C fill:#9f9,stroke:#333
+    style E fill:#ff9,stroke:#333
+    style K fill:#ff9,stroke:#333
+```
+
+---
+
 ## Diagram Legend
 
 | Symbol | Meaning |
@@ -280,4 +586,7 @@ flowchart LR
 | Dashed arrow | Async response or SSE event |
 | Diamond | Decision point |
 | Rectangle | Process or component |
-| Cylinder | Database or storage |
+| Yellow fill | Head truncation (MEMORY.md) / Deferred background task |
+| Cyan fill | Tail truncation (default) / Background thread |
+| Green fill | Startup complete / success state |
+| Grey fill | Skipped / no-op |
