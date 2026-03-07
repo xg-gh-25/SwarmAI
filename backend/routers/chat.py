@@ -418,11 +418,37 @@ async def stop_session(session_id: str):
 
 @router.delete("/sessions/{session_id}", status_code=204)
 async def delete_session(session_id: str):
-    """Delete a chat session and all its messages."""
-    # First delete all messages for this session
-    await db.messages.delete_by_session(session_id)
+    """Delete a chat session and all its messages.
 
-    # Then delete the session itself
+    Fires post-session-close hooks BEFORE deleting data so hooks can
+    read the conversation log.  Also cleans up ``_active_sessions`` to
+    prevent the stale reaper from double-firing hooks.
+    """
+    # 1. Fire lifecycle hooks before data deletion
+    hook_mgr = agent_manager.hook_manager
+    if hook_mgr:
+        try:
+            session = await session_manager.get_session(session_id)
+            if session:
+                from core.session_hooks import HookContext
+                message_count = await db.messages.count_by_session(session_id)
+                context = HookContext(
+                    session_id=session_id,
+                    agent_id=session.agent_id,
+                    message_count=message_count,
+                    session_start_time=session.created_at,
+                    session_title=session.title,
+                )
+                await hook_mgr.fire_post_session_close(context)
+        except Exception as exc:
+            logger.warning("Hooks failed for delete_session %s: %s", session_id, exc)
+
+    # 2. Clean up active session (skip_hooks=True to prevent stale reaper double-fire)
+    if agent_manager.has_active_session(session_id):
+        await agent_manager._cleanup_session(session_id, skip_hooks=True)
+
+    # 3. Delete messages and session from DB
+    await db.messages.delete_by_session(session_id)
     deleted = await session_manager.delete_session(session_id)
     if not deleted:
         raise SessionNotFoundException(

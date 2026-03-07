@@ -39,19 +39,25 @@ KNOWLEDGE.md or other context files.
 
 Write distilled content to the appropriate sections of MEMORY.md:
 
-1. Use `python backend/scripts/locked_write.py` for all MEMORY.md writes:
+1. Use `python backend/scripts/locked_write.py` for all MEMORY.md writes.
+   **Always prefix entries with the source DailyActivity date** (not today's date):
    ```bash
    python backend/scripts/locked_write.py \
      --file .context/MEMORY.md \
      --section "Key Decisions" \
-     --append "- <distilled entry>"
+     --prepend "- 2026-03-07: <distilled entry>"
    ```
+   Use `--prepend` so newest entries appear at the top of each section.
+   If `--prepend` is not supported, use `--append` — the date prefix still
+   ensures entries are sortable.
+
 2. Map extracted content to MEMORY.md sections:
-   - Key decisions → `## Key Decisions` (or `## Recent Context`)
+   - Key decisions → `## Key Decisions`
    - Lessons learned → `## Lessons Learned`
    - Recurring themes → `## Patterns and Preferences`
    - User corrections → `## Lessons Learned`
    - Error resolutions → `## Lessons Learned`
+   - Current work status → `## Recent Context`
    - Open thread updates → `## Open Threads`
 3. **Fallback**: If a target section is not found (user may have renamed or removed it),
    append content under a `## Distilled` fallback section at the end of the file:
@@ -59,10 +65,11 @@ Write distilled content to the appropriate sections of MEMORY.md:
    python backend/scripts/locked_write.py \
      --file .context/MEMORY.md \
      --section "Distilled" \
-     --append "- <distilled entry>"
+     --prepend "- 2026-03-07: <distilled entry>"
    ```
-4. **Never remove** existing MEMORY.md content — only append or update sections
-5. Keep entries concise: one line per decision/lesson, grouped by theme
+4. **Never remove** existing MEMORY.md content — only prepend or append to sections
+5. Keep entries concise: one line per decision/lesson, date-prefixed, grouped by theme
+6. **Deduplication**: Before writing, check if the same content (ignoring date prefix) already exists in the target section. Skip duplicates.
 
 ### 4. Marking Processed Files
 

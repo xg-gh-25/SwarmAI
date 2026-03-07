@@ -297,6 +297,16 @@ class SQLiteMessagesTable(SQLiteTable[T], Generic[T]):
             await conn.commit()
             return cursor.rowcount
 
+    async def count_by_session(self, session_id: str) -> int:
+        """Count messages for a session without loading them into memory."""
+        async with self._get_connection() as conn:
+            cursor = await conn.execute(
+                f"SELECT COUNT(*) FROM {self.table_name} WHERE session_id = ?",
+                (session_id,),
+            )
+            row = await cursor.fetchone()
+            return row[0] if row else 0
+
     async def cleanup_expired(self) -> int:
         """Delete expired messages based on TTL. Returns count of deleted items."""
         current_time = int(time.time())
