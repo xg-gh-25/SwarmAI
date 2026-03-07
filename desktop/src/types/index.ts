@@ -203,6 +203,11 @@ export interface Message {
   model?: string;
   /** When true, the message contains an error and should be visually distinguished (red border). */
   isError?: boolean;
+  /** When set, this message represents an evolution SSE event and should be rendered with EvolutionMessage. */
+  evolutionEvent?: {
+    eventType: string;
+    data: Record<string, unknown>;
+  };
 }
 
 export interface ChatRequest {

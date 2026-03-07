@@ -33,7 +33,8 @@ import { pluginsService } from '../services/plugins';
 import { workspaceService } from '../services/workspace';
 import { tasksService } from '../services/tasks';
 import { Spinner, ConfirmDialog, AgentFormModal, Toast } from '../components/common';
-import { PermissionRequestModal } from '../components/chat';
+import { PermissionRequestModal, EvolutionMessage } from '../components/chat';
+import type { EvolutionEventType } from '../services/evolution';
 import { FilePreviewModal } from '../components/workspace/FilePreviewModal';
 import { useFileAttachment, useRightSidebarGroup } from '../hooks';
 import { useTSCCState } from '../hooks/useTSCCState';
@@ -1172,6 +1173,16 @@ export default function ChatPage() {
                   <WelcomeScreen />
                 ) : (
                   messages.map((msg, idx) => {
+                    // Evolution events get their own renderer
+                    if (msg.evolutionEvent) {
+                      return (
+                        <EvolutionMessage
+                          key={msg.id}
+                          eventType={msg.evolutionEvent.eventType as EvolutionEventType}
+                          data={msg.evolutionEvent.data}
+                        />
+                      );
+                    }
                     // Only pass isStreaming to the last assistant message
                     const isLastAssistant = isStreaming
                       && msg.role === 'assistant'

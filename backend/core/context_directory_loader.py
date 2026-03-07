@@ -10,7 +10,7 @@ centralized directory.  It is responsible for:
 - ``ContextFileSpec``           — Frozen dataclass defining a source file's
                                   metadata (filename, priority, section_name,
                                   truncatable, user_customized, truncate_from)
-- ``CONTEXT_FILES``             — Ordered list of all 10 ContextFileSpec entries
+- ``CONTEXT_FILES``             — Ordered list of all 12 ContextFileSpec entries
 - ``DEFAULT_TOKEN_BUDGET``      — Default token budget constant (25,000)
 - ``BUDGET_LARGE_MODEL``        — Token budget for >= 200K models (40,000)
 - ``L1_CACHE_FILENAME``         — Filename for the full L1 cache
@@ -94,18 +94,20 @@ class ContextFileSpec:
 
 
 CONTEXT_FILES: list[ContextFileSpec] = [
-    ContextFileSpec("SWARMAI.md",    0, "SwarmAI",          False, False, "tail"),
-    ContextFileSpec("IDENTITY.md",   1, "Identity",         False, False, "tail"),
-    ContextFileSpec("SOUL.md",       2, "Soul",             False, False, "tail"),
-    ContextFileSpec("AGENT.md",      3, "Agent Directives", True,  False, "tail"),
-    ContextFileSpec("USER.md",       4, "User",             True,  True,  "tail"),
-    ContextFileSpec("STEERING.md",   5, "Steering",         True,  True,  "tail"),
-    ContextFileSpec("TOOLS.md",      6, "Tools",            True,  True,  "tail"),
-    ContextFileSpec("MEMORY.md",     7, "Memory",           True,  True,  "head"),
-    ContextFileSpec("KNOWLEDGE.md",  8, "Knowledge",        True,  True,  "tail"),
-    ContextFileSpec("PROJECTS.md",   9, "Projects",         True,  True,  "tail"),
+    ContextFileSpec("SWARMAI.md",           0,  "SwarmAI",            False, False, "tail"),
+    ContextFileSpec("IDENTITY.md",          1,  "Identity",           False, False, "tail"),
+    ContextFileSpec("SOUL.md",              2,  "Soul",               False, False, "tail"),
+    ContextFileSpec("GROWTH_PRINCIPLES.md", 3,  "Growth Principles",  True,  True,  "tail"),
+    ContextFileSpec("AGENT.md",             4,  "Agent Directives",   True,  False, "tail"),
+    ContextFileSpec("USER.md",              5,  "User",               True,  True,  "tail"),
+    ContextFileSpec("STEERING.md",          6,  "Steering",           True,  True,  "tail"),
+    ContextFileSpec("TOOLS.md",             7,  "Tools",              True,  True,  "tail"),
+    ContextFileSpec("MEMORY.md",            8,  "Memory",             True,  True,  "head"),
+    ContextFileSpec("EVOLUTION.md",         9,  "Evolution Registry", True,  True,  "head"),
+    ContextFileSpec("KNOWLEDGE.md",         10, "Knowledge",          True,  True,  "tail"),
+    ContextFileSpec("PROJECTS.md",          11, "Projects",           True,  True,  "tail"),
 ]
-"""All 10 context source files in ascending priority order."""
+"""All 12 context source files in ascending priority order."""
 
 
 class ContextDirectoryLoader:

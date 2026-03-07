@@ -32,6 +32,8 @@ import { WaitingInputList } from './WaitingInputList';
 import { WipTaskList } from './WipTaskList';
 import { CompletedTaskList } from './CompletedTaskList';
 import { AutonomousJobList } from './AutonomousJobList';
+import { EvolutionBadge } from './EvolutionBadge';
+import type { EvolutionSessionCount } from './EvolutionBadge';
 import './SwarmRadar.css';
 
 export interface SwarmRadarProps {
@@ -42,6 +44,8 @@ export interface SwarmRadarProps {
   pendingQuestion?: PendingQuestion | null;
   pendingPermission?: PermissionRequest | null;
   activeSessionId?: string;
+  /** Successful evolution counts for the current session (Phase 2). */
+  evolutionCounts?: EvolutionSessionCount;
 }
 
 // Zone expand/collapse default state
@@ -68,6 +72,7 @@ export function SwarmRadar({
   pendingQuestion,
   pendingPermission,
   activeSessionId,
+  evolutionCounts,
 }: SwarmRadarProps) {
   const [expanded, setExpanded] = useState(DEFAULT_EXPANDED);
 
@@ -154,6 +159,7 @@ export function SwarmRadar({
         <div className="swarm-radar-header-title">
           <span className="material-symbols-outlined">radar</span>
           <span>Swarm Radar</span>
+          {evolutionCounts && <EvolutionBadge counts={evolutionCounts} />}
         </div>
         {onClose && (
           <button
