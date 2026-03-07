@@ -83,6 +83,63 @@ A user may ask you to create, edit, or analyze the contents of an .xlsx file. Yo
 
 ## Reading and analyzing data
 
+### Quick SQL analysis with DuckDB
+
+For exploratory analysis, ad-hoc queries, and cross-file joins, use **DuckDB** -- it reads Excel/CSV directly and supports full SQL without loading into pandas first.
+
+```python
+import duckdb
+
+# Read and query Excel directly
+con = duckdb.connect()
+
+# Single file query
+result = con.sql("""
+    SELECT * FROM read_csv_auto('data.csv') LIMIT 10
+""").fetchdf()
+
+# Excel files (each sheet becomes queryable)
+result = con.sql("""
+    SELECT * FROM st_read('data.xlsx', layer='Sheet1') LIMIT 10
+""").fetchdf()
+
+# Cross-file joins
+result = con.sql("""
+    SELECT a.*, b.category
+    FROM read_csv_auto('sales.csv') a
+    JOIN read_csv_auto('products.csv') b ON a.product_id = b.id
+    WHERE a.amount > 1000
+    ORDER BY a.amount DESC
+""").fetchdf()
+
+# Aggregation, window functions, CTEs -- full SQL support
+result = con.sql("""
+    WITH monthly AS (
+        SELECT date_trunc('month', date) as month,
+               SUM(revenue) as total_revenue
+        FROM read_csv_auto('revenue.csv')
+        GROUP BY 1
+    )
+    SELECT month, total_revenue,
+           LAG(total_revenue) OVER (ORDER BY month) as prev_month,
+           total_revenue - LAG(total_revenue) OVER (ORDER BY month) as change
+    FROM monthly
+    ORDER BY month
+""").fetchdf()
+```
+
+**When to use DuckDB vs pandas:**
+
+| Use DuckDB when... | Use pandas when... |
+|--------------------|--------------------|
+| Exploring unfamiliar data | Building Excel output with formulas |
+| Running complex SQL (joins, CTEs, window functions) | Need matplotlib/seaborn visualization |
+| Querying large files (DuckDB is columnar, faster) | Doing iterative data cleaning |
+| Cross-file analysis | Working with existing pandas-based code |
+| User asks "show me X where Y" (natural SQL) | Need to write back to Excel with formatting |
+
+**DuckDB install:** `pip install duckdb` (likely already available).
+
 ### Data analysis with pandas
 For data analysis, visualization, and basic operations, use **pandas** which provides powerful data manipulation capabilities:
 
@@ -287,6 +344,25 @@ The script returns JSON with error details:
 - Specify data types to avoid inference issues: `pd.read_excel('file.xlsx', dtype={'id': str})`
 - For large files, read specific columns: `pd.read_excel('file.xlsx', usecols=['A', 'C', 'E'])`
 - Handle dates properly: `pd.read_excel('file.xlsx', parse_dates=['date_column'])`
+
+## Exporting Query Results
+
+DuckDB results can be exported directly without pandas:
+
+```python
+# To CSV
+con.sql("COPY (SELECT * FROM read_csv_auto('data.csv') WHERE x > 10) TO 'output.csv' (HEADER)")
+
+# To JSON
+con.sql("COPY (SELECT * FROM read_csv_auto('data.csv')) TO 'output.json' (FORMAT JSON, ARRAY true)")
+
+# To Markdown (for inline display)
+result = con.sql("SELECT * FROM read_csv_auto('data.csv') LIMIT 20")
+print(result.show())
+
+# To pandas DataFrame (for further processing or Excel output)
+df = result.fetchdf()
+```
 
 ## Code Style Guidelines
 **IMPORTANT**: When generating Python code for Excel operations:
