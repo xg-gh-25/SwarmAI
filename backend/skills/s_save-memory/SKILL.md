@@ -48,7 +48,7 @@ Use the locked write script for concurrent-safe MEMORY.md modification.
 **Always prefix entries with today's date** in `YYYY-MM-DD` format:
 
 ```bash
-python backend/scripts/locked_write.py \
+python .claude/skills/s_save-memory/scripts/locked_write.py \
   --file .context/MEMORY.md \
   --section "Key Decisions" \
   --prepend "- 2026-03-07: <content to save>"
