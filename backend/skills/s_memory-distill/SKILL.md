@@ -40,10 +40,10 @@ KNOWLEDGE.md or other context files.
 
 Write distilled content to the appropriate sections of MEMORY.md:
 
-1. Use `python backend/scripts/locked_write.py` for all MEMORY.md writes.
+1. Use `python .claude/skills/s_save-memory/scripts/locked_write.py` for all MEMORY.md writes.
    **Always prefix entries with the source DailyActivity date** (not today's date):
    ```bash
-   python backend/scripts/locked_write.py \
+   python .claude/skills/s_save-memory/scripts/locked_write.py \
      --file .context/MEMORY.md \
      --section "Key Decisions" \
      --prepend "- 2026-03-07: <distilled entry>"
@@ -63,7 +63,7 @@ Write distilled content to the appropriate sections of MEMORY.md:
 3. **Fallback**: If a target section is not found (user may have renamed or removed it),
    append content under a `## Distilled` fallback section at the end of the file:
    ```bash
-   python backend/scripts/locked_write.py \
+   python .claude/skills/s_save-memory/scripts/locked_write.py \
      --file .context/MEMORY.md \
      --section "Distilled" \
      --prepend "- 2026-03-07: <distilled entry>"
@@ -146,7 +146,7 @@ Cross-reference recent DailyActivity files for thread completions:
 | Operation | Tool | Lock needed? |
 |---|---|---|
 | Read DailyActivity files | Standard file read | No |
-| Write to MEMORY.md | `python backend/scripts/locked_write.py` | Yes (handled by script) |
+| Write to MEMORY.md | `python .claude/skills/s_save-memory/scripts/locked_write.py` | Yes (handled by script) |
 | Mark DailyActivity frontmatter | Standard file write | No |
 | Append to DailyActivity | `>>` shell append | No |
 | Move files to Archives | `mv` | No |
