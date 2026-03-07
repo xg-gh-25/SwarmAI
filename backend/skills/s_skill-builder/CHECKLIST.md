@@ -58,9 +58,9 @@ head -20 SKILL.md | grep -E "^(---|name:|description:)"
 
 ### Content Requirements
 
-- [ ] **3.1** Description states WHAT the skill does
-- [ ] **3.2** Description states WHEN to use it
-- [ ] **3.3** Description includes at least 2 trigger keywords
+- [ ] **3.1** Description first line states WHAT the skill does (one sentence)
+- [ ] **3.2** Description has `TRIGGER:` line with quoted user phrases
+- [ ] **3.3** Description has `DO NOT USE:` line with boundary and alternative skill
 - [ ] **3.4** Description is specific (not vague like "helps with stuff")
 - [ ] **3.5** Description is under 1024 characters
 - [ ] **3.6** Description doesn't contain XML tags

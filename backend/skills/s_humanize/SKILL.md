@@ -1,6 +1,9 @@
 ---
 name: Humanize Text
-description: Convert AI-written text to more human-like writing through subtle edits. Use when text reads "too AI", when the user mentions "humanize", "sounds robotic", "AI-written", "make it natural", or when editing for a more conversational voice.
+description: >
+  Convert AI-written text to more human-like writing through subtle, targeted edits.
+  TRIGGER: "humanize", "sounds robotic", "AI-written", "make it natural", "too AI".
+  DO NOT USE: for full rewrites or creative writing (just write directly).
 ---
 
 # Humanize Text

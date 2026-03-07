@@ -1,10 +1,10 @@
 ---
 name: Save Activity
 description: >
-  Write a DailyActivity entry from the current conversation when the user
-  says "save activity", "save daily activity", or similar. Uses the shared
-  SummarizationPipeline for consistent extraction with the automatic
-  post-session hook.
+  Extract key points from the current conversation into today's DailyActivity log.
+  TRIGGER: "save activity", "save daily activity", "log today's activity".
+  DO NOT USE: for persistent facts (use save-memory) or session handoffs (use save-context).
+  On-demand counterpart to the automatic post-session extraction hook.
 ---
 
 ## Save Activity Skill

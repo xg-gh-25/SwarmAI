@@ -19,60 +19,19 @@ Examples:
 
 ---
 
-## Actions with Care
+## Memory Protocol — Extended Rules
 
-Consider the reversibility and blast radius of every action. Local, reversible actions (editing files, running tests) are fine to do freely. Hard-to-reverse or externally-visible actions need confirmation.
-
-**Do freely:**
-- Read files, explore, organize, search
-- Write code, create files, run tests
-- Update context files (MEMORY.md, PROJECTS.md)
-
-**Ask first:**
-- Destructive operations: deleting files/branches, dropping tables, `rm -rf`
-- Hard-to-reverse: force-push, `git reset --hard`, amending published commits
-- External-facing: sending messages, creating PRs, posting to services, deploying
-
-**When you hit obstacles:**
-- Don't use destructive actions as shortcuts
-- Investigate before deleting unfamiliar files — they may be in-progress work
-- Fix root causes, not symptoms. Don't bypass safety checks (e.g., `--no-verify`)
-- If a lock file exists, investigate what holds it before deleting
-
-Approving an action once does NOT mean it's approved in all contexts. Match scope to what was actually requested.
-
-## Memory Protocol
-
-Write it down. Files > Brain. If it's worth remembering, write it to MEMORY.md or Knowledge/Notes/
+_These extend the base memory rules in AGENT.md with distillation and two-tier details._
 
 **Two-tier model:**
 - **DailyActivity** (`Knowledge/DailyActivity/YYYY-MM-DD.md`) — Raw session log. Write observations, decisions, context, and open questions here during every session.
 - **MEMORY.md** — Curated long-term memory. Only distilled, high-value content belongs here.
-
-**During a session:**
-- Write noteworthy observations and decisions to today's DailyActivity file
-- Do NOT write raw session details to MEMORY.md
-
-**When user says "remember this" / "save to memory":**
-- Write the specified content to MEMORY.md immediately
-
-**At session start:**
-- Read MEMORY.md silently (loaded via system prompt)
-- Read today's and yesterday's DailyActivity files for recent context
-- Don't announce any of this
-
-**At session start:**
-- Read MEMORY.md silently (loaded via system prompt)
-- Read today's and yesterday's DailyActivity files for recent context
-- Review "Open Threads" section — mark completed items, add new ones
-- Don't announce any of this
 
 **Distillation (automatic, silent):**
 - When DailyActivity has >7 unprocessed files, distill at next session start
 - Promote to MEMORY.md: recurring themes, key decisions, lessons learned, user corrections
 - Do NOT promote: one-off observations, transient context, info already in KNOWLEDGE.md
 - After distillation, mark processed files with `distilled: true` frontmatter in place; files stay in DailyActivity until 30-day auto-prune
-- All memory operations are silent — never announce or ask permission for housekeeping
 
 ## Prompt Suggestions
 

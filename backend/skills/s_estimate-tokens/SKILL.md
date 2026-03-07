@@ -1,6 +1,9 @@
 ---
 name: Token Estimator
-description: Estimate token count for files using word count and conversion ratio. Use when user asks to "estimate tokens", "count tokens", or needs to know token usage for AI context windows.
+description: >
+  Estimate token count for files using the bundled script.
+  TRIGGER: "estimate tokens", "count tokens", "token usage", "context window size".
+  DO NOT USE: for manual token math — always run the script.
 version: 1.0.0
 tags: [skill, estimate-tokens, tokens, word-count, ai, context-window]
 ---

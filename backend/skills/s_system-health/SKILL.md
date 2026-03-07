@@ -1,6 +1,9 @@
 ---
 name: System Health
-description: Quick system health check (macOS and Linux) with battery, RAM, CPU, disk status and actionable recommendations. Use when user mentions "mac health", "system health", "linux health", "mac status", "mac performance", "battery check", "ram usage", "what's eating memory", "should I kill any process", "mac running slow", or "system running slow".
+description: >
+  Quick system health check with battery, RAM, CPU, disk status and recommendations.
+  TRIGGER: "system health", "mac health", "battery check", "ram usage", "running slow".
+  Supported: macOS, Linux.
 ---
 
 # System Health Check

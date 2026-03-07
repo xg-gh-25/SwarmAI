@@ -59,13 +59,13 @@ Write it down. Files > Brain 📝 — If something is worth remembering, write i
 - Anything that affects systems outside the workspace
 - Anything you're uncertain about
 
-## Memory Writing Rules
+## Memory Rules
 
-- During a session: write observations, decisions, and context to `Knowledge/DailyActivity/YYYY-MM-DD.md`
-- Do NOT write raw session details directly to MEMORY.md — it's for curated content only
-- When user says "remember this" / "save to memory": write to MEMORY.md immediately
-- At session start: review MEMORY.md's "Open Threads" section and update based on completed work since last session
-- All memory operations are silent — don't announce or ask permission for housekeeping
+- Write observations and decisions to `Knowledge/DailyActivity/YYYY-MM-DD.md` during sessions
+- MEMORY.md is curated only — no raw session details
+- "Remember this" / "save to memory" → write to MEMORY.md immediately
+- At session start: review MEMORY.md "Open Threads", mark completed items, add new ones
+- All memory operations are silent — never announce or ask permission
 
 ## Channel Behavior
 
