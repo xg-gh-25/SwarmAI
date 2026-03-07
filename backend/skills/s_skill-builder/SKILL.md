@@ -4,6 +4,7 @@ description: >
   Create, evaluate, and improve Agent skills to production quality.
   TRIGGER: "create a skill", "build a skill", "review skill", "score skill", "improve skill".
   DO NOT USE: when user wants to convert current session into a skill (use skillify-session).
+  SIBLINGS: skill-builder = create/evaluate/improve from scratch | skillify-session = extract current conversation into a skill | skill-feedback = post-session improvement report for existing skill.
 ---
 
 # Skill Builder Workflow
@@ -113,6 +114,28 @@ Ask: "What are the 2-3 hardest judgment calls in this domain?"
 
 > [!WARNING]
 > **A lookup table is not disambiguation.** If your skill has a reference table but no logic for handling cases that match multiple entries, it's incomplete.
+
+### Step 1.7: Design for Progressive Disclosure
+
+> [!IMPORTANT]
+> **Skills share the context window.** Claude is already very smart -- only add information it doesn't already possess. Every token in a skill costs context budget.
+
+**Three-tier context loading model:**
+
+| Tier | What | Budget | When Loaded |
+|------|------|--------|-------------|
+| **Metadata** | Frontmatter `name` + `description` | ~100 words | Always (skill discovery) |
+| **SKILL.md body** | Core workflow, steps, rules | <5,000 words | When skill is triggered |
+| **Bundled resources** | references/, scripts/, REFERENCE.md | Unlimited on disk | Conditionally, on demand |
+
+**Design rules:**
+- Metadata must be ruthlessly concise -- it's loaded in every session for routing
+- SKILL.md body should contain the complete workflow for the common case
+- Move variant-specific details, lookup tables, and large reference data into separate files
+- Use "Read REFERENCE.md for..." links instead of inlining everything
+- If SKILL.md exceeds 300 lines, refactor: extract reference material to supporting files
+
+**Context budget test:** Before finalizing, ask: "If I removed this section, would the skill still work for 80% of cases?" If yes, move it to a reference file.
 
 ### Step 2: Assess Complexity & Choose Structure
 
