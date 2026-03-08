@@ -1,5 +1,5 @@
 <!-- ✏️ YOUR FILE — This file is yours to edit. SwarmAI will never overwrite your changes. -->
-# Tools & Environment
+# Tools — Environment Config
 
 ## Device Names
 <!-- List your machines, e.g., "MacBook Pro → dev-laptop" -->
