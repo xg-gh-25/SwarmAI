@@ -58,6 +58,7 @@ from config import settings, get_bedrock_model_id, get_app_data_dir
 from .session_manager import session_manager
 from .system_prompt import SystemPromptBuilder
 from .context_directory_loader import DEFAULT_TOKEN_BUDGET
+from .context_monitor import check_context_usage, CHECK_INTERVAL_TURNS
 from .initialization_manager import initialization_manager
 
 logger = logging.getLogger(__name__)
@@ -73,7 +74,7 @@ from .agent_defaults import (  # noqa: F401
 
 
 # Claude environment extracted to claude_environment.py — re-exported for backward compatibility
-from .claude_environment import _ClaudeClientWrapper, _configure_claude_environment, AuthenticationNotConfiguredError  # noqa: F401
+from .claude_environment import _ClaudeClientWrapper, _configure_claude_environment, AuthenticationNotConfiguredError, _env_lock  # noqa: F401
 
 
 # PermissionManager extracted to permission_manager.py — re-exported for backward compatibility
@@ -83,6 +84,8 @@ approve_command = _pm.approve_command
 is_command_approved = _pm.is_command_approved
 set_permission_decision = _pm.set_permission_decision
 wait_for_permission_decision = _pm.wait_for_permission_decision
+
+# Re-export the permission request queue for backward compatibility
 _permission_request_queue = _pm.get_permission_queue()
 
 # Keep clear_session_approvals and hash_command accessible
@@ -285,12 +288,19 @@ class AgentManager:
         # Key: session_id, Value: {"client": ClaudeSDKClient, "wrapper": _ClaudeClientWrapper, "created_at": float, "last_used": float}
         self._active_sessions: dict[str, dict] = {}
         self._cleanup_task: asyncio.Task | None = None
+        # Per-session locks — prevents concurrent execution on the same session
+        # (e.g. double-click "Send" or frontend retry).  Lazily created, cleaned
+        # up in _cleanup_session.
+        self._session_locks: dict[str, asyncio.Lock] = {}
         # Injected components (set at startup via main.py)
         self._config: AppConfigManager | None = config_manager
         self._cmd_pm: CmdPermissionManager | None = cmd_permission_manager
         self._credential_validator: CredentialValidator | None = credential_validator
         # Session lifecycle hook manager (set at startup via set_hook_manager)
         self._hook_manager = None  # type: SessionLifecycleHookManager | None
+        # Per-session user turn counter for context monitoring.
+        # Key: effective session_id, Value: cumulative user turns.
+        self._user_turn_counts: dict[str, int] = {}
 
     def configure(
         self,
@@ -391,6 +401,15 @@ class AgentManager:
             except Exception as e:
                 logger.warning(f"Error disconnecting session {session_id}: {e}")
         self._clients.pop(session_id, None)
+        # Clean up per-session permission queue and session lock
+        _pm.remove_session_queue(session_id)
+        self._session_locks.pop(session_id, None)
+        # Clean up per-session approved commands to prevent unbounded memory growth
+        _pm.clear_session_approvals(session_id)
+        # Clean up system prompt metadata to prevent unbounded memory growth
+        _system_prompt_metadata.pop(session_id, None)
+        # Clean up context monitor turn counter
+        self._user_turn_counts.pop(session_id, None)
 
     def _get_active_client(self, session_id: str) -> ClaudeSDKClient | None:
         """Get an existing long-lived client for a session, if available."""
@@ -628,6 +647,22 @@ class AgentManager:
             )
             logger.info(f"Skill access checker hook added for skills: {allowed_skill_names} (built-in: {builtin_names})")
 
+        # PreCompact hook — fires before the SDK compacts the context window.
+        # Sets flags on session_context so _run_query_on_client can emit an
+        # SSE event to the frontend after compaction completes.
+        if session_context is not None:
+            async def _pre_compact_hook(hook_input, tool_name, hook_context):
+                trigger = getattr(hook_input, 'trigger', 'auto')
+                logger.info(f"PreCompact hook fired — trigger={trigger}, session={session_context.get('sdk_session_id')}")
+                session_context["_compacted"] = True
+                session_context["_compact_trigger"] = trigger
+                return {}  # empty dict = continue normally
+
+            hooks.setdefault("PreCompact", [])
+            hooks["PreCompact"].append(
+                HookMatcher(hooks=[_pre_compact_hook])
+            )
+
         return hooks, effective_allowed_skills, allow_all_skills
 
 
@@ -857,18 +892,36 @@ class AgentManager:
         # ── 1. Centralized context directory (global context) ──────────
         prompt_metadata: dict = {"files": [], "total_tokens": 0, "full_text": ""}
         try:
-            from .context_directory_loader import ContextDirectoryLoader, CONTEXT_FILES
+            from .context_directory_loader import (
+                ContextDirectoryLoader, CONTEXT_FILES, GROUP_CHANNEL_EXCLUDE,
+            )
             context_dir = Path(working_directory) / ".context"
+            # Reserve headroom for ephemeral injections (DailyActivity, Bootstrap)
+            # that are appended after the token-budgeted assembly.
+            # 2 DailyActivity files × 2000 tokens each = 4000 token reservation.
+            EPHEMERAL_HEADROOM = 2 * TOKEN_CAP_PER_DAILY_FILE
+            base_budget = agent_config.get("context_token_budget", DEFAULT_TOKEN_BUDGET)
             loader = ContextDirectoryLoader(
                 context_dir=context_dir,
-                token_budget=agent_config.get("context_token_budget", DEFAULT_TOKEN_BUDGET),
+                token_budget=max(base_budget - EPHEMERAL_HEADROOM, base_budget // 2),
                 templates_dir=Path(__file__).resolve().parent.parent / "context",
             )
             loader.ensure_directory()
 
             model = self._resolve_model(agent_config)
             model_context_window = self._get_model_context_window(model)
-            context_text = loader.load_all(model_context_window=model_context_window)
+
+            # Exclude personal files (MEMORY.md, USER.md) in group channels
+            # to prevent leaking private context to other participants.
+            exclude_files: set[str] | None = None
+            if channel_context and channel_context.get("is_group"):
+                exclude_files = set(GROUP_CHANNEL_EXCLUDE)
+                logger.info("Group channel detected — excluding %s from context", exclude_files)
+
+            context_text = loader.load_all(
+                model_context_window=model_context_window,
+                exclude_filenames=exclude_files,
+            )
 
             # ── BOOTSTRAP.md detection (ephemeral, not in L1 cache) ──
             bootstrap_path = context_dir / "BOOTSTRAP.md"
@@ -930,6 +983,9 @@ class AgentManager:
                 )
 
             # ── Collect per-file metadata for TSCC system prompt viewer ──
+            # The truncation marker format is "[Truncated: N,NNN → M,MMM tokens]".
+            # To detect per-section truncation, find the section header in the
+            # assembled text and check for the marker within that section block.
             for spec in CONTEXT_FILES:
                 filepath = context_dir / spec.filename
                 try:
@@ -939,13 +995,23 @@ class AgentManager:
                     if not file_content:
                         continue
                     tokens = ContextDirectoryLoader.estimate_tokens(file_content)
-                    # Per-file truncation: check if this specific section
-                    # has a [Truncated:] marker in the assembled text
-                    truncated = bool(
-                        context_text
-                        and spec.section_name
-                        and f"[Truncated: {spec.section_name}]" in context_text
-                    )
+
+                    # Detect truncation: find this section's block in the
+                    # assembled text and check for [Truncated: ... tokens]
+                    truncated = False
+                    if context_text and spec.section_name:
+                        section_header = f"## {spec.section_name}\n"
+                        header_pos = context_text.find(section_header)
+                        if header_pos != -1:
+                            # Find the next section header (or end of text)
+                            next_header = context_text.find("\n## ", header_pos + len(section_header))
+                            section_block = (
+                                context_text[header_pos:next_header]
+                                if next_header != -1
+                                else context_text[header_pos:]
+                            )
+                            truncated = "[Truncated:" in section_block and "tokens]" in section_block
+
                     prompt_metadata["files"].append({
                         "filename": spec.filename,
                         "tokens": tokens,
@@ -1203,7 +1269,11 @@ class AgentManager:
             deferred_user_content = user_content
             app_session_id = session_id
 
-        # Delegate to shared session execution pattern
+        # Delegate to shared session execution pattern.
+        # Track the effective session ID from the result event so we can
+        # key the per-session turn counter after the stream completes.
+        effective_sid: str | None = None
+
         async for event in self._execute_on_session(
             agent_config=agent_config,
             query_content=query_content,
@@ -1219,7 +1289,54 @@ class AgentManager:
             app_session_id=app_session_id,
             deferred_user_content=deferred_user_content,
         ):
+            # Capture session_id from the result event for turn counting
+            if event.get("type") == "result" and event.get("session_id"):
+                effective_sid = event["session_id"]
             yield event
+
+        # --- Post-response context monitor ---
+        # Increment user turn counter and check context usage periodically.
+        # Runs after the full response stream (including the result event)
+        # so it never interrupts the agent's answer.
+        if effective_sid:
+            try:
+                turns = self._user_turn_counts.get(effective_sid, 0) + 1
+                self._user_turn_counts[effective_sid] = turns
+
+                if turns % CHECK_INTERVAL_TURNS == 0:
+                    status = check_context_usage()
+                    if status.level in ("warn", "critical"):
+                        logger.info(
+                            "Context monitor [%s]: %s (%d%%, ~%dK tokens)",
+                            status.level, effective_sid, status.pct,
+                            status.tokens_est // 1000,
+                        )
+                        yield {
+                            "type": "context_warning",
+                            "level": status.level,
+                            "pct": status.pct,
+                            "tokensEst": status.tokens_est,
+                            "message": status.message,
+                        }
+                    else:
+                        logger.debug(
+                            "Context monitor [ok]: %d%% after %d turns",
+                            status.pct, turns,
+                        )
+            except Exception:
+                # Context monitoring is best-effort; never break the response
+                logger.debug("Context monitor check failed", exc_info=True)
+
+    def _get_session_lock(self, session_id: str) -> asyncio.Lock:
+        """Return (or create) a per-session asyncio.Lock.
+
+        Prevents concurrent execution on the same session (e.g. double-click
+        "Send", frontend retry, or overlapping answer/permission continuations).
+        Locks are lazily created and cleaned up in ``_cleanup_session()``.
+        """
+        if session_id not in self._session_locks:
+            self._session_locks[session_id] = asyncio.Lock()
+        return self._session_locks[session_id]
 
     async def _execute_on_session(
         self,
@@ -1245,10 +1362,71 @@ class AgentManager:
         - Falling back to fresh sessions when --resume can't work
         - Storing clients for future reuse
         - Error handling and session cleanup
+
+        Concurrency: A per-session lock prevents two concurrent executions
+        on the same session (e.g. double-click "Send" or frontend retry).
+        If the lock is already held, the caller gets an immediate error.
         """
-        # Configure Claude environment variables
+        # Per-session concurrency guard — prevents double-send corruption.
+        # Use the stable app_session_id (tab session ID) when available,
+        # otherwise fall back to the SDK session_id or agent_id.
+        lock_key = app_session_id or session_id or agent_id
+        session_lock = self._get_session_lock(lock_key)
+
+        if session_lock.locked():
+            logger.warning(
+                "Session %s is already executing — rejecting concurrent request",
+                lock_key,
+            )
+            yield _build_error_event(
+                code="SESSION_BUSY",
+                message="This chat session is still processing a previous message. Please wait for it to finish.",
+                suggested_action="Wait for the current response to complete, then try again.",
+            )
+            return
+
+        async with session_lock:
+            async for event in self._execute_on_session_inner(
+                agent_config=agent_config,
+                query_content=query_content,
+                display_text=display_text,
+                session_id=session_id,
+                enable_skills=enable_skills,
+                enable_mcp=enable_mcp,
+                is_resuming=is_resuming,
+                content=content,
+                user_message=user_message,
+                agent_id=agent_id,
+                channel_context=channel_context,
+                app_session_id=app_session_id,
+                deferred_user_content=deferred_user_content,
+            ):
+                yield event
+
+    async def _execute_on_session_inner(
+        self,
+        agent_config: dict,
+        query_content: Any,
+        display_text: str,
+        session_id: Optional[str],
+        enable_skills: bool,
+        enable_mcp: bool,
+        is_resuming: bool,
+        content: Optional[list[dict]],
+        user_message: Optional[str],
+        agent_id: str,
+        channel_context: Optional[dict] = None,
+        app_session_id: Optional[str] = None,
+        deferred_user_content: Optional[list[dict]] = None,
+    ) -> AsyncIterator[dict]:
+        """Inner implementation of ``_execute_on_session`` (runs under session lock)."""
+        # Configure Claude environment variables.
+        # Acquire _env_lock to prevent concurrent sessions from racing on
+        # os.environ.  The lock is held through client creation (PATH A) so
+        # the spawned subprocess inherits the correct env vars.
         try:
-            _configure_claude_environment(self._config)
+            async with _env_lock:
+                _configure_claude_environment(self._config)
         except AuthenticationNotConfiguredError:
             logger.warning("No authentication configured — neither ANTHROPIC_API_KEY nor Bedrock enabled")
             yield _build_error_event(
@@ -1380,7 +1558,12 @@ class AgentManager:
 
                 logger.info(f"Creating new ClaudeSDKClient...")
                 wrapper = _ClaudeClientWrapper(options=options)
-                client = await wrapper.__aenter__()
+                # Hold _env_lock during client creation so the spawned
+                # subprocess inherits the correct os.environ values.
+                # After __aenter__ the subprocess has its own env copy.
+                async with _env_lock:
+                    _configure_claude_environment(self._config)
+                    client = await wrapper.__aenter__()
                 logger.info(f"ClaudeSDKClient created, is_resuming={is_resuming}")
 
                 try:
@@ -1525,24 +1708,27 @@ class AgentManager:
                     logger.debug("SDK message reader finished")
 
             async def permission_request_forwarder():
-                """Monitor the global permission queue and forward requests for this session.
+                """Consume permission requests from this session's dedicated queue.
 
-                Permission requests arrive on a shared global queue from security hooks.
-                Only requests matching this session's ID are forwarded; mismatched requests
-                are put back so other sessions can claim them. The sleep(0.01) prevents
-                busy-looping when repeatedly re-queuing mismatched requests.
+                Each session has its own queue in PermissionManager, so this task
+                simply awaits new items — no filtering, no re-enqueuing, no busy-loop.
+                The security hook writes directly to the correct session queue via
+                ``enqueue_permission_request(session_id, ...)``.
                 """
                 try:
                     while True:
-                        request = await _permission_request_queue.get()
-                        current_session_id = session_context["sdk_session_id"]
-                        if request.get("sessionId") == current_session_id:
-                            logger.info(f"Forwarding permission request {request.get('requestId')} to combined queue for session {current_session_id}")
-                            await combined_queue.put({"source": "permission", "request": request})
-                        else:
-                            logger.debug(f"Request {request.get('requestId')} for session {request.get('sessionId')} doesn't match current session {current_session_id}, putting back")
-                            await _permission_request_queue.put(request)
-                            await asyncio.sleep(0.01)
+                        # Wait for the session_id to be assigned (init message)
+                        current_session_id = session_context.get("sdk_session_id")
+                        if not current_session_id:
+                            await asyncio.sleep(0.05)
+                            continue
+                        session_queue = _pm.get_session_queue(current_session_id)
+                        request = await session_queue.get()
+                        logger.info(
+                            "Forwarding permission request %s to combined queue for session %s",
+                            request.get("requestId"), current_session_id,
+                        )
+                        await combined_queue.put({"source": "permission", "request": request})
                 except asyncio.CancelledError:
                     logger.debug("Permission request forwarder cancelled")
                     raise
@@ -1861,8 +2047,24 @@ class AgentManager:
                                 model=assistant_model
                             )
 
+                        # Compaction notification — if the PreCompact hook fired during
+                        # this turn, emit an SSE event so the frontend can notify the user.
+                        if session_context.get("_compacted"):
+                            compact_trigger = session_context.pop("_compact_trigger", "auto")
+                            session_context.pop("_compacted", None)
+                            yield {
+                                "type": "context_compacted",
+                                "session_id": (
+                                    session_context["app_session_id"]
+                                    if session_context.get("app_session_id") is not None
+                                    else session_context["sdk_session_id"]
+                                ),
+                                "trigger": compact_trigger,
+                            }
+
                         # Terminal SSE event — signals the frontend that the turn is complete
                         # and carries usage metrics for display.
+                        usage = getattr(message, 'usage', None) or {}
                         yield {
                             "type": "result",
                             "session_id": (
@@ -1873,6 +2075,12 @@ class AgentManager:
                             "duration_ms": getattr(message, 'duration_ms', 0),
                             "total_cost_usd": getattr(message, 'total_cost_usd', None),
                             "num_turns": getattr(message, 'num_turns', 1),
+                            "usage": {
+                                "input_tokens": usage.get("input_tokens"),
+                                "output_tokens": usage.get("output_tokens"),
+                                "cache_read_input_tokens": usage.get("cache_read_input_tokens"),
+                                "cache_creation_input_tokens": usage.get("cache_creation_input_tokens"),
+                            } if usage else None,
                         }
 
                         # NOTE: Auto-commit moved to WorkspaceAutoCommitHook
@@ -2025,7 +2233,10 @@ class AgentManager:
         # is saved under the correct session ID even if resume-fallback occurs.
         # (Previously saved eagerly here, which caused duplicates on restart.)
 
-        # Delegate to shared session execution pattern
+        # Delegate to shared session execution pattern.
+        # Track effective_sid for context monitoring (same pattern as run_conversation).
+        effective_sid: str | None = None
+
         async for event in self._execute_on_session(
             agent_config=agent_config,
             query_content=answer_message,
@@ -2040,7 +2251,32 @@ class AgentManager:
             app_session_id=session_id,
             deferred_user_content=[{"type": "text", "text": f"User answers:\n{answer_message}"}],
         ):
+            if event.get("type") == "result" and event.get("session_id"):
+                effective_sid = event["session_id"]
             yield event
+
+        # Post-response context monitor (same as run_conversation)
+        if effective_sid:
+            try:
+                turns = self._user_turn_counts.get(effective_sid, 0) + 1
+                self._user_turn_counts[effective_sid] = turns
+                if turns % CHECK_INTERVAL_TURNS == 0:
+                    status = check_context_usage()
+                    if status.level in ("warn", "critical"):
+                        logger.info(
+                            "Context monitor [%s]: %s (%d%%, ~%dK tokens)",
+                            status.level, effective_sid, status.pct,
+                            status.tokens_est // 1000,
+                        )
+                        yield {
+                            "type": "context_warning",
+                            "level": status.level,
+                            "pct": status.pct,
+                            "tokensEst": status.tokens_est,
+                            "message": status.message,
+                        }
+            except Exception:
+                logger.debug("Context monitor check failed", exc_info=True)
 
     async def continue_with_cmd_permission(
         self,
@@ -2205,6 +2441,69 @@ class AgentManager:
                 "message": f"Failed to interrupt session: {str(e)}",
             }
 
+    async def compact_session(self, session_id: str, instructions: Optional[str] = None) -> dict:
+        """Trigger manual compaction of a session's context window.
+
+        Sends the ``/compact`` slash command to the Claude CLI subprocess via
+        ``client.query()``.  The CLI compresses the conversation history into a
+        summary, freeing context space for further turns.
+
+        The client is looked up in ``_active_sessions`` (the long-lived store
+        that persists between turns), NOT ``_clients`` (which only exists during
+        active streaming).  A per-session lock prevents this from racing with
+        an active ``_run_query_on_client`` stream.
+
+        Args:
+            session_id: The session ID to compact.
+            instructions: Optional natural-language guidance for what the
+                compaction should preserve (appended after ``/compact``).
+
+        Returns:
+            Dict with ``success`` bool and ``message`` string.
+        """
+        # Look up the long-lived client (persists between turns)
+        client = self._get_active_client(session_id)
+        if not client:
+            logger.warning(f"compact_session: no active client for {session_id}")
+            return {
+                "success": False,
+                "message": f"No active session found with ID {session_id}",
+            }
+
+        # Acquire session lock to prevent racing with an active stream.
+        # If a stream is running, the lock will be held — use non-blocking
+        # try to avoid deadlock and return an informative error instead.
+        session_lock = self._get_session_lock(session_id)
+        if session_lock.locked():
+            return {
+                "success": False,
+                "message": "Session is currently processing a message. Wait for it to finish before compacting.",
+            }
+
+        async with session_lock:
+            try:
+                command = "/compact"
+                if instructions:
+                    command = f"/compact {instructions}"
+                logger.info(f"Compacting session {session_id}: {command}")
+
+                # Send the slash command via query() and drain the response
+                # stream so the CLI processes it fully.
+                await client.query(prompt=command, session_id=session_id)
+                async for _msg in client.receive_response():
+                    pass  # drain
+
+                return {
+                    "success": True,
+                    "message": "Session compacted successfully",
+                }
+            except Exception as e:
+                logger.error(f"Error compacting session {session_id}: {e}")
+                return {
+                    "success": False,
+                    "message": f"Failed to compact session: {str(e)}",
+                }
+
     async def run_skill_creator_conversation(
         self,
         skill_name: str,
@@ -2285,7 +2584,8 @@ Create the skill in the `.claude/skills/` directory within the current workspace
         from core.app_config_manager import AppConfigManager as _ACM
         _cfg = _ACM()
         _cfg.load()
-        _configure_claude_environment(_cfg)
+        async with _env_lock:
+            _configure_claude_environment(_cfg)
 
         # Track the actual SDK session_id
         session_context = {"sdk_session_id": session_id}  # Will be updated for new sessions
@@ -2365,7 +2665,11 @@ Create the skill in the `.claude/skills/` directory within the current workspace
                 logger.info(f"Working directory: {options.cwd}")
 
                 wrapper = _ClaudeClientWrapper(options=options)
-                client = await wrapper.__aenter__()
+                # Hold _env_lock during client creation so the spawned
+                # subprocess inherits the correct os.environ values.
+                async with _env_lock:
+                    _configure_claude_environment(_cfg)
+                    client = await wrapper.__aenter__()
                 logger.info(f"ClaudeSDKClient created for skill creation")
 
                 try:
