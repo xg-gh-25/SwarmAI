@@ -23,7 +23,7 @@ from schemas.chat_thread import ChatThreadResponse
 from schemas.context import ThreadBindRequest, ThreadBindResponse
 from schemas.permission import PermissionResponseRequest, PermissionRequestResponse
 from database import db
-from core.agent_manager import agent_manager, set_permission_decision
+from core.agent_manager import agent_manager, set_permission_decision, _build_error_event
 from core.chat_thread_manager import chat_thread_manager
 from core.session_manager import session_manager
 from core.exceptions import (
@@ -48,7 +48,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _EVOLUTION_MARKER_RE = _re.compile(
-    r"<!--\s*EVOLUTION_EVENT:\s*(\{.*?\})\s*-->",
+    r"<!--\s*EVOLUTION_EVENT:\s*(.+?)\s*-->",
     _re.DOTALL,
 )
 
@@ -253,21 +253,19 @@ async def chat_stream(request: Request):
                     "suggested_action": "Please try again"
                 }
             elif "connection" in error_message.lower() or "network" in error_message.lower():
-                yield {
-                    "type": "error",
-                    "code": "SERVICE_UNAVAILABLE",
-                    "message": "Unable to connect to the AI service",
-                    "detail": error_message,
-                    "suggested_action": "Please check your connection and try again"
-                }
+                yield _build_error_event(
+                    code="SERVICE_UNAVAILABLE",
+                    message="Unable to connect to the AI service",
+                    detail=error_message,
+                    suggested_action="Please check your connection and try again",
+                )
             else:
-                yield {
-                    "type": "error",
-                    "code": "AGENT_EXECUTION_ERROR",
-                    "message": "Agent execution failed",
-                    "detail": f"{error_message}\n\nTraceback:\n{error_traceback}",
-                    "suggested_action": "Please try again or contact support"
-                }
+                yield _build_error_event(
+                    code="AGENT_EXECUTION_ERROR",
+                    message="Agent execution failed",
+                    detail=error_traceback,
+                    suggested_action="Please try again or contact support",
+                )
 
     return StreamingResponse(
         sse_with_heartbeat(message_generator()),
@@ -338,13 +336,12 @@ async def answer_question(request: Request):
             error_message = str(e)
             logger.error(f"Error in answer-question stream: {error_message}")
             logger.error(f"Full traceback:\n{error_traceback}")
-            yield {
-                "type": "error",
-                "code": "AGENT_EXECUTION_ERROR",
-                "message": "Agent execution failed",
-                "detail": f"{error_message}\n\nTraceback:\n{error_traceback}",
-                "suggested_action": "Please try again or contact support"
-            }
+            yield _build_error_event(
+                code="AGENT_EXECUTION_ERROR",
+                message="Agent execution failed",
+                detail=error_traceback,
+                suggested_action="Please try again or contact support",
+            )
 
     return StreamingResponse(
         sse_with_heartbeat(message_generator()),
@@ -469,6 +466,26 @@ async def stop_session(session_id: str):
         return {"status": "stopped", "message": result["message"]}
     else:
         # Return 200 even if session not found - client may have already finished
+        return {"status": "not_found", "message": result["message"]}
+
+
+@router.post("/compact/{session_id}")
+async def compact_session(session_id: str, body: Optional[dict] = None):
+    """Trigger manual compaction of a session's context window.
+
+    Sends the /compact slash command to the running Claude CLI subprocess,
+    compressing the conversation history into a summary to free context space.
+
+    Optional JSON body:
+        { "instructions": "Preserve the database schema discussion" }
+    """
+    instructions = body.get("instructions") if body else None
+    logger.info(f"Received compact request for session {session_id}")
+    result = await agent_manager.compact_session(session_id, instructions=instructions)
+
+    if result["success"]:
+        return {"status": "compacted", "message": result["message"]}
+    else:
         return {"status": "not_found", "message": result["message"]}
 
 
@@ -652,13 +669,12 @@ async def cmd_permission_continue(request: Request):
             error_message = str(e)
             logger.error(f"Error in cmd-permission-continue stream: {error_message}")
             logger.error(f"Full traceback:\n{error_traceback}")
-            yield {
-                "type": "error",
-                "code": "AGENT_EXECUTION_ERROR",
-                "message": "Agent execution failed",
-                "detail": f"{error_message}\n\nTraceback:\n{error_traceback}",
-                "suggested_action": "Please try again or contact support"
-            }
+            yield _build_error_event(
+                code="AGENT_EXECUTION_ERROR",
+                message="Agent execution failed",
+                detail=error_traceback,
+                suggested_action="Please try again or contact support",
+            )
 
     return StreamingResponse(
         sse_with_heartbeat(message_generator()),

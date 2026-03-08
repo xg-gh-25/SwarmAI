@@ -16,12 +16,17 @@ setup concerns.  It is responsible for:
 - ``AuthenticationNotConfiguredError`` — Raised by pre-flight validation when
                                          neither an Anthropic API key nor
                                          Bedrock authentication is configured.
+- ``_env_lock``                        — Module-level ``asyncio.Lock`` that
+                                         serializes ``_configure_claude_environment``
+                                         + client creation to prevent concurrent
+                                         sessions from racing on ``os.environ``.
 
 All public symbols are re-exported by ``agent_manager.py`` for backward
 compatibility, so existing callers require zero import changes.
 """
 from __future__ import annotations
 
+import asyncio
 import os
 import logging
 from typing import TYPE_CHECKING
@@ -35,6 +40,12 @@ if TYPE_CHECKING:
     from core.app_config_manager import AppConfigManager
 
 logger = logging.getLogger(__name__)
+
+# Module-level lock that serializes _configure_claude_environment + client
+# creation.  The Claude Agent SDK reads os.environ at subprocess spawn time,
+# so we must hold this lock from env configuration through client.__aenter__()
+# to prevent concurrent sessions from seeing each other's env mutations.
+_env_lock = asyncio.Lock()
 
 
 class _ClaudeClientWrapper:

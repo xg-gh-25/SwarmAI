@@ -466,11 +466,23 @@ async def get_workspace_file(
 
     # Ensure resolved path is still under workspace root.
     # Exception: .claude/skills/ contains symlinks to built-in skills outside
-    # the workspace (PyInstaller temp dir). Allow reading these as read-only.
+    # the workspace (PyInstaller temp dir). Allow reading these as read-only,
+    # but ONLY if the symlink originates from within the workspace and the
+    # resolved target is a regular file (not a directory or special file).
     ws_resolved = str(workspace_root.resolve())
     is_skill_symlink = path.startswith(".claude/skills/") or path.startswith(".claude\\skills\\")
-    if not str(target).startswith(ws_resolved) and not is_skill_symlink:
-        raise HTTPException(status_code=400, detail=f"Path outside workspace: {path}")
+    if not str(target).startswith(ws_resolved):
+        if not is_skill_symlink:
+            raise HTTPException(status_code=400, detail=f"Path outside workspace: {path}")
+        # Validate the symlink itself lives inside the workspace
+        symlink_path = (workspace_root / path)
+        if not symlink_path.exists():
+            raise HTTPException(status_code=404, detail=f"File not found: {path}")
+        if not str(symlink_path.parent.resolve()).startswith(ws_resolved):
+            raise HTTPException(status_code=400, detail=f"Path outside workspace: {path}")
+        # Only allow regular files (not directories, devices, etc.)
+        if not target.is_file():
+            raise HTTPException(status_code=400, detail=f"Symlink target is not a regular file: {path}")
 
     if not target.is_file():
         raise HTTPException(status_code=404, detail=f"File not found: {path}")
