@@ -2,9 +2,16 @@
  * Hook for the one-click "Save to Memory" feature.
  *
  * Manages the API call to POST /api/memory/save-session, tracks loading/saved
- * state, and supports incremental saves (second click only processes new messages).
+ * state per session via `statusMap` and `toastMap`, and supports incremental
+ * saves (second click only processes new messages).
+ *
+ * Key exports:
+ * - ``useMemorySave``       — React hook returning per-session status maps and actions
+ * - ``MemorySaveStatus``    — Union type for save status values
+ * - ``nextMessageIdxMap``   — Module-scoped map preserving incremental save indices
+ *                             across component remounts
  */
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback } from 'react';
 import api from '../services/api';
 
 export type MemorySaveStatus = 'idle' | 'loading' | 'saved' | 'empty' | 'error';
@@ -23,14 +30,14 @@ interface SaveSessionResponse {
 }
 
 interface UseMemorySaveReturn {
-  /** Current status of the save operation */
-  status: MemorySaveStatus;
-  /** Human-readable message for toast display */
-  toastMessage: string | null;
+  /** Per-session status map — look up via `statusMap[sessionId] || 'idle'` */
+  statusMap: Record<string, MemorySaveStatus>;
+  /** Per-session toast message map — look up via `toastMap[sessionId] || null` */
+  toastMap: Record<string, string | null>;
   /** Trigger a save for the given session */
   save: (sessionId: string) => Promise<void>;
-  /** Reset status back to idle (e.g., after toast dismisses) */
-  reset: () => void;
+  /** Reset status for a specific session back to idle */
+  reset: (sessionId: string) => void;
 }
 
 /**
@@ -65,21 +72,24 @@ function formatToastMessage(data: SaveSessionResponse): string {
   return `Saved: ${parts.join(', ')}`;
 }
 
-export function useMemorySave(): UseMemorySaveReturn {
-  const [status, setStatus] = useState<MemorySaveStatus>('idle');
-  const [toastMessage, setToastMessage] = useState<string | null>(null);
+/**
+ * Module-scoped map preserving incremental save indices across component
+ * remounts. Keyed by sessionId so each session tracks its own position.
+ */
+const nextMessageIdxMap: Record<string, number> = {};
 
-  // Track the next message index for incremental saves per session
-  const nextMessageIdxRef = useRef<Record<string, number>>({});
+export function useMemorySave(): UseMemorySaveReturn {
+  const [statusMap, setStatusMap] = useState<Record<string, MemorySaveStatus>>({});
+  const [toastMap, setToastMap] = useState<Record<string, string | null>>({});
 
   const save = useCallback(async (sessionId: string) => {
     if (!sessionId) return;
 
-    setStatus('loading');
-    setToastMessage(null);
+    setStatusMap(prev => ({ ...prev, [sessionId]: 'loading' }));
+    setToastMap(prev => ({ ...prev, [sessionId]: null }));
 
     try {
-      const sinceIdx = nextMessageIdxRef.current[sessionId] || 0;
+      const sinceIdx = nextMessageIdxMap[sessionId] || 0;
 
       const response = await api.post<SaveSessionResponse>('/memory/save-session', {
         session_id: sessionId,
@@ -90,29 +100,37 @@ export function useMemorySave(): UseMemorySaveReturn {
 
       // Update the next message index for incremental saves
       if (data.next_message_idx > 0) {
-        nextMessageIdxRef.current[sessionId] = data.next_message_idx;
+        nextMessageIdxMap[sessionId] = data.next_message_idx;
       }
 
       const message = formatToastMessage(data);
-      setToastMessage(message);
+      setToastMap(prev => ({ ...prev, [sessionId]: message }));
 
       if (data.status === 'saved') {
-        setStatus('saved');
+        setStatusMap(prev => ({ ...prev, [sessionId]: 'saved' }));
       } else if (data.status === 'empty') {
-        setStatus('empty');
+        setStatusMap(prev => ({ ...prev, [sessionId]: 'empty' }));
       } else {
-        setStatus('error');
+        setStatusMap(prev => ({ ...prev, [sessionId]: 'error' }));
       }
-    } catch (err) {
-      setStatus('error');
-      setToastMessage('Failed to save to memory');
+    } catch {
+      setStatusMap(prev => ({ ...prev, [sessionId]: 'error' }));
+      setToastMap(prev => ({ ...prev, [sessionId]: 'Failed to save to memory' }));
     }
   }, []);
 
-  const reset = useCallback(() => {
-    setStatus('idle');
-    setToastMessage(null);
+  const reset = useCallback((sessionId: string) => {
+    setStatusMap(prev => {
+      const next = { ...prev };
+      delete next[sessionId];
+      return next;
+    });
+    setToastMap(prev => {
+      const next = { ...prev };
+      delete next[sessionId];
+      return next;
+    });
   }, []);
 
-  return { status, toastMessage, save, reset };
+  return { statusMap, toastMap, save, reset };
 }
