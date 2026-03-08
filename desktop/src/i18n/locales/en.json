@@ -450,6 +450,25 @@
       "envKeyPlaceholder": "Variable name",
       "envValuePlaceholder": "Value",
       "addEnvVar": "Add Variable"
+    },
+    "catalog": {
+      "title": "Add Integration",
+      "subtitle": "Connect your favorite tools and services to SwarmAI.",
+      "empty": "No integrations available in catalog.",
+      "installed": "Installed",
+      "install": "Set Up",
+      "installing": "Installing...",
+      "selectPreset": "Quick Setup",
+      "requiredFields": "Required",
+      "optionalFields": "Optional",
+      "setupHint": "Setup Hint",
+      "setupDocs": "View Setup Guide",
+      "installSuccess": "Successfully installed!",
+      "installFailed": "Failed to install. Please check your configuration.",
+      "alreadyInstalled": "Already installed",
+      "back": "Back to catalog",
+      "configure": "Configure & Install",
+      "presetNone": "Manual Configuration"
     }
   },
   "plugins": {

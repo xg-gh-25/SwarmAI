@@ -1,5 +1,5 @@
 import api from './api';
-import type { MCPServer, MCPServerCreateRequest, MCPServerUpdateRequest } from '../types';
+import type { MCPServer, MCPServerCreateRequest, MCPServerUpdateRequest, MCPCatalogEntry, MCPCatalogInstallRequest } from '../types';
 
 // Convert camelCase to snake_case for API requests
 const toSnakeCase = (data: MCPServerCreateRequest | MCPServerUpdateRequest) => {
@@ -61,5 +61,17 @@ export const mcpService = {
   // Delete MCP server
   async delete(id: string): Promise<void> {
     await api.delete(`/mcp/${id}`);
+  },
+
+  // Get optional MCP catalog
+  async getCatalog(): Promise<MCPCatalogEntry[]> {
+    const response = await api.get<MCPCatalogEntry[]>('/mcp/catalog');
+    return response.data;
+  },
+
+  // Install an MCP from the catalog
+  async installFromCatalog(request: MCPCatalogInstallRequest): Promise<MCPServer> {
+    const response = await api.post<Record<string, unknown>>('/mcp/catalog/install', request);
+    return toCamelCase(response.data);
   },
 };

@@ -447,6 +447,25 @@
       "envKeyPlaceholder": "变量名",
       "envValuePlaceholder": "值",
       "addEnvVar": "添加变量"
+    },
+    "catalog": {
+      "title": "添加集成",
+      "subtitle": "将常用工具和服务连接到 SwarmAI。",
+      "empty": "目录中暂无可用集成。",
+      "installed": "已安装",
+      "install": "设置",
+      "installing": "安装中...",
+      "selectPreset": "快速设置",
+      "requiredFields": "必填",
+      "optionalFields": "选填",
+      "setupHint": "设置提示",
+      "setupDocs": "查看设置指南",
+      "installSuccess": "安装成功！",
+      "installFailed": "安装失败，请检查配置。",
+      "alreadyInstalled": "已安装",
+      "back": "返回目录",
+      "configure": "配置并安装",
+      "presetNone": "手动配置"
     }
   },
   "plugins": {
