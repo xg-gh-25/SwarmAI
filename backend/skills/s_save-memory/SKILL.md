@@ -49,7 +49,7 @@ Use the locked write script for concurrent-safe MEMORY.md modification.
 **Always prefix entries with today's date** in `YYYY-MM-DD` format:
 
 ```bash
-python .claude/skills/s_save-memory/scripts/locked_write.py \
+python3 .claude/skills/s_save-memory/scripts/locked_write.py \
   --file .context/MEMORY.md \
   --section "Key Decisions" \
   --prepend "- 2026-03-07: <content to save>"
@@ -75,10 +75,11 @@ Keep confirmation to one line. Don't repeat the content back.
 
 ### Rules
 
-- **Always use `locked_write.py`** — never write MEMORY.md directly with file tools
+- **Always use `locked_write.py`** via `python3` — never write MEMORY.md directly with file tools
 - **Always date-prefix** — every entry must start with `YYYY-MM-DD:` (today's date)
 - **Newest first** — use `--prepend` so the most recent entries are at the top of each section
 - **Append only** — never remove or replace existing MEMORY.md content
 - **Be concise** — one line per entry, no raw conversation dumps
 - **Don't duplicate** — check if the content is already in MEMORY.md before adding (match by content, ignore date)
 - **MEMORY.md location** — always at `.context/MEMORY.md` (relative to workspace root)
+- **Size management** — if MEMORY.md exceeds ~5KB (~100 entries), move the oldest entries from each section to `Knowledge/Archives/MEMORY-archive-YYYY-MM.md` before adding new ones. Keep MEMORY.md focused on the most recent and relevant items

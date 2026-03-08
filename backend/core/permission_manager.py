@@ -8,7 +8,13 @@ State managed:
     - _approved_commands: session ID → set of approved command hashes
     - _permission_events: request ID → asyncio.Event for signaling decisions
     - _permission_results: request ID → decision string ("approve" or "deny")
-    - _permission_request_queue: asyncio.Queue for permission requests
+    - _session_queues: session ID → per-session asyncio.Queue for permission requests
+
+Per-session queue design (replaces the previous global queue):
+    Each active session gets its own ``asyncio.Queue`` via ``get_session_queue()``.
+    The security hook writes directly to the session's queue using the SDK session ID.
+    This eliminates the cross-session busy-loop that occurred when multiple sessions
+    competed for a single shared queue, re-enqueuing non-matching requests.
 """
 
 import asyncio
@@ -25,14 +31,16 @@ class PermissionManager:
     Provides methods for:
     - Hashing and tracking approved commands per session
     - Waiting for and setting human permission decisions
-    - Accessing the shared permission request queue
+    - Per-session permission request queues for parallel session isolation
     """
 
     def __init__(self) -> None:
         self._approved_commands: dict[str, set[str]] = {}
         self._permission_events: dict[str, asyncio.Event] = {}
         self._permission_results: dict[str, str] = {}
-        self._permission_request_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        # Per-session permission request queues — each session gets its own
+        # queue so parallel sessions never compete or busy-loop.
+        self._session_queues: dict[str, asyncio.Queue[dict[str, Any]]] = {}
         # In-memory store for pending permission requests (replaces DB table)
         self._pending_requests: dict[str, dict[str, Any]] = {}
 
@@ -109,9 +117,72 @@ class PermissionManager:
             # No waiter — clean up immediately to prevent memory leak
             self._permission_results.pop(request_id, None)
 
+    # ------------------------------------------------------------------
+    # Per-session permission request queues
+    # ------------------------------------------------------------------
+
+    def get_session_queue(self, session_id: str) -> asyncio.Queue[dict[str, Any]]:
+        """Return (or create) the permission request queue for a specific session.
+
+        Each session gets its own queue so that parallel sessions never
+        compete or busy-loop.  Queues are lazily created and cleaned up
+        via ``remove_session_queue()`` when the session ends.
+
+        Args:
+            session_id: The SDK session ID.
+
+        Returns:
+            The per-session asyncio.Queue.
+        """
+        if session_id not in self._session_queues:
+            self._session_queues[session_id] = asyncio.Queue()
+            logger.debug("Created permission queue for session %s", session_id)
+        return self._session_queues[session_id]
+
+    def remove_session_queue(self, session_id: str) -> None:
+        """Remove the permission request queue for a session.
+
+        Called during session cleanup to free memory.  Any items still in
+        the queue are discarded (the session is ending anyway).
+        """
+        removed = self._session_queues.pop(session_id, None)
+        if removed:
+            logger.debug("Removed permission queue for session %s", session_id)
+
+    async def enqueue_permission_request(
+        self, session_id: str, request: dict[str, Any]
+    ) -> None:
+        """Enqueue a permission request to the correct session's queue.
+
+        Called by the security hook when a dangerous command is detected.
+        Routes the request directly to the session's queue — no global
+        queue, no re-enqueuing, no cross-session contention.
+
+        Args:
+            session_id: The SDK session ID that owns this request.
+            request: The permission request dict.
+        """
+        queue = self.get_session_queue(session_id)
+        await queue.put(request)
+        logger.info(
+            "Enqueued permission request %s for session %s",
+            request.get("requestId", "?"),
+            session_id,
+        )
+
+    # Backward compatibility — deprecated, prefer get_session_queue()
     def get_permission_queue(self) -> asyncio.Queue[dict[str, Any]]:
-        """Return the permission request queue."""
-        return self._permission_request_queue
+        """Return a legacy global queue (DEPRECATED).
+
+        .. deprecated::
+            Use ``get_session_queue(session_id)`` instead for proper
+            per-session isolation.  This method creates a throwaway queue
+            so legacy callers don't crash, but new code should never use it.
+        """
+        logger.warning(
+            "get_permission_queue() is deprecated — use get_session_queue(session_id)"
+        )
+        return asyncio.Queue()
 
 
 # Module-level singleton

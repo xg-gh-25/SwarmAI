@@ -66,6 +66,9 @@ class SystemPromptBuilder:
         return line
 
     def _section_safety(self) -> str:
+        # AI-alignment guardrails complementing the operational safety
+        # rules in AGENT.md (destructive commands, trash>rm, etc.)
+        # and the priority hierarchy in SWARMAI.md.
         return (
             "## Safety Principles\n"
             "- You have no independent goals beyond helping the user.\n"
@@ -107,6 +110,6 @@ class SystemPromptBuilder:
         )
         parts = [f"agent={name}", f"os={os_name} ({arch})", f"channel={channel}"]
         model = self.agent_config.get("model")
-        if model and model != "default":
+        if model and model not in ("default", "None", None):
             parts.insert(1, f"model={model}")
         return "`" + " | ".join(parts) + "`"

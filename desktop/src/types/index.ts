@@ -314,7 +314,7 @@ export const SUPPORTED_FILE_TYPES = {
 } as const;
 
 export interface StreamEvent {
-  type: 'assistant' | 'tool_use' | 'tool_result' | 'result' | 'error' | 'ask_user_question' | 'session_start' | 'session_cleared' | 'cmd_permission_request' | 'cmd_permission_decision' | 'cmd_permission_acknowledged' | 'heartbeat' | 'agent_activity' | 'tool_invocation' | 'capability_activated' | 'sources_updated' | 'summary_updated' | (string & {});
+  type: 'assistant' | 'tool_use' | 'tool_result' | 'result' | 'error' | 'ask_user_question' | 'session_start' | 'session_cleared' | 'cmd_permission_request' | 'cmd_permission_decision' | 'cmd_permission_acknowledged' | 'heartbeat' | 'agent_activity' | 'tool_invocation' | 'capability_activated' | 'sources_updated' | 'summary_updated' | 'context_warning' | 'context_compacted' | (string & {});
   content?: ContentBlock[];
   model?: string;
   sessionId?: string;
@@ -344,6 +344,19 @@ export interface StreamEvent {
   code?: string;
   detail?: string;
   suggestedAction?: string;
+  // Context warning fields (context_warning event)
+  level?: 'ok' | 'warn' | 'critical';
+  pct?: number;
+  tokensEst?: number;
+  // Context compaction fields (context_compacted event)
+  trigger?: 'manual' | 'auto';
+  // Usage/caching fields (result event)
+  usage?: {
+    input_tokens?: number;
+    output_tokens?: number;
+    cache_read_input_tokens?: number;
+    cache_creation_input_tokens?: number;
+  };
   // TSCC telemetry fields
   threadId?: string;
   agentName?: string;

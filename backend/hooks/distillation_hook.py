@@ -1,83 +1,121 @@
-"""Distillation trigger hook — flags undistilled DailyActivity files.
+"""Distillation trigger hook — auto-distills undistilled DailyActivity files.
 
 Checks the count of undistilled DailyActivity files after each session
-close.  When the threshold (>7) is exceeded, writes a
-``.needs_distillation`` flag file.  The next session's
-``_build_system_prompt()`` reads this flag and injects a system-level
-instruction requesting the agent to run ``s_memory-distill``.
+close.  When the threshold (>3) is exceeded, runs a lightweight
+rule-based distillation directly in the hook (no agent session needed),
+writing curated entries to MEMORY.md via ``locked_write.py``.
+
+Falls back to the flag-file approach if direct distillation fails,
+so the next agent session can pick it up.
 
 Key public symbols:
 
 - ``DistillationTriggerHook``  — Implements ``SessionLifecycleHook``.
+- ``UNDISTILLED_THRESHOLD``    — Minimum undistilled files to trigger (3).
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import re
+import subprocess
+import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from core.session_hooks import HookContext
 from core.initialization_manager import initialization_manager
+from core.daily_activity_writer import parse_frontmatter, write_frontmatter
 
 logger = logging.getLogger(__name__)
 
-UNDISTILLED_THRESHOLD = 7
+# Canonical location of locked_write.py (backend/scripts/).
+_CANONICAL_LOCKED_WRITE = Path(__file__).resolve().parent.parent / "scripts" / "locked_write.py"
+
+UNDISTILLED_THRESHOLD = 3
 FLAG_FILENAME = ".needs_distillation"
 SCAN_DAYS = 30  # Only check files from last 30 days
 
+# Patterns to identify distillation-worthy content
+_DECISION_PATTERNS = re.compile(
+    r"\b(?:decided to|chose|will use|going with|switched to|adopted|"
+    r"the approach is|selected|confirmed|approved|rejected)\b",
+    re.IGNORECASE,
+)
+_LESSON_PATTERNS = re.compile(
+    r"\b(?:lesson|learned|mistake|fixed by|root cause|workaround|"
+    r"always|never|important to|should have|next time|"
+    r"bug was|issue was|problem was)\b",
+    re.IGNORECASE,
+)
+
 
 class DistillationTriggerHook:
-    """Checks undistilled DailyActivity count and writes flag if needed.
+    """Checks undistilled DailyActivity count and runs direct distillation.
 
-    Since ``s_memory-distill`` is an agent skill requiring a live SDK
-    session, and the session is closing, the hook cannot invoke it
-    directly.  Instead it writes a flag file that the next session's
-    system prompt picks up.
+    Unlike the previous flag-based approach, this hook distills directly
+    using ``locked_write.py`` via subprocess.  If direct distillation
+    fails, it falls back to writing a ``.needs_distillation`` flag for
+    the next agent session.
     """
 
     name = "distillation_trigger"
 
     async def execute(self, context: HookContext) -> None:
-        """Scan DailyActivity files and write flag if threshold exceeded."""
+        """Scan DailyActivity files and distill if threshold exceeded."""
         ws_path = initialization_manager.get_cached_workspace_path()
         da_dir = Path(ws_path) / "Knowledge" / "DailyActivity"
 
         if not da_dir.exists():
             return
 
-        undistilled_count = await asyncio.to_thread(
-            self._count_undistilled, da_dir
+        undistilled_files = await asyncio.to_thread(
+            self._get_undistilled_files, da_dir
         )
 
-        if undistilled_count > UNDISTILLED_THRESHOLD:
-            logger.info(
-                "Distillation threshold exceeded (%d > %d), setting flag",
-                undistilled_count,
-                UNDISTILLED_THRESHOLD,
-            )
-            flag_path = da_dir / FLAG_FILENAME
-            flag_path.write_text(
-                f"undistilled_count={undistilled_count}\n"
-                f"flagged_at={datetime.now().isoformat()}\n",
-                encoding="utf-8",
-            )
-        else:
+        if len(undistilled_files) <= UNDISTILLED_THRESHOLD:
             logger.debug(
-                "Undistilled count %d <= %d, no flag needed",
-                undistilled_count,
+                "Undistilled count %d <= %d, no distillation needed",
+                len(undistilled_files),
                 UNDISTILLED_THRESHOLD,
             )
+            return
+
+        logger.info(
+            "Distillation threshold exceeded (%d > %d), running direct distillation",
+            len(undistilled_files),
+            UNDISTILLED_THRESHOLD,
+        )
+
+        # Attempt direct distillation
+        try:
+            distilled_count = await asyncio.to_thread(
+                self._distill_files, undistilled_files, Path(ws_path)
+            )
+            logger.info(
+                "Direct distillation complete: %d files processed, entries promoted to MEMORY.md",
+                distilled_count,
+            )
+            # Clean up any stale flag file
+            flag_path = da_dir / FLAG_FILENAME
+            if flag_path.exists():
+                flag_path.unlink(missing_ok=True)
+        except Exception as exc:
+            logger.warning(
+                "Direct distillation failed (%s), falling back to flag file",
+                exc,
+            )
+            self._write_flag(da_dir, len(undistilled_files))
 
     @staticmethod
-    def _count_undistilled(da_dir: Path) -> int:
-        """Count DailyActivity files where distilled != true.
+    def _get_undistilled_files(da_dir: Path) -> list[Path]:
+        """Get DailyActivity files where distilled != true.
 
         Only checks files from the last 30 days to bound scan scope.
-        Older files should already be archived by s_memory-distill.
+        Returns sorted list (oldest first) for chronological processing.
         """
-        count = 0
+        files = []
         cutoff = date.today() - timedelta(days=SCAN_DAYS)
         for f in da_dir.glob("*.md"):
             try:
@@ -91,8 +129,148 @@ class DistillationTriggerHook:
             except (OSError, UnicodeDecodeError):
                 continue
             if not _is_distilled(content):
-                count += 1
-        return count
+                files.append(f)
+        return sorted(files, key=lambda f: f.stem)
+
+    def _distill_files(self, files: list[Path], ws_path: Path) -> int:
+        """Extract entries from DailyActivity files and write to MEMORY.md.
+
+        Returns the number of files successfully distilled.
+        """
+        locked_write_path = self._resolve_locked_write(ws_path)
+        memory_path = ws_path / ".context" / "MEMORY.md"
+
+        if not locked_write_path.exists():
+            raise FileNotFoundError(f"locked_write.py not found at {locked_write_path}")
+
+        distilled_count = 0
+        for da_file in files:
+            try:
+                content = da_file.read_text(encoding="utf-8")
+                _, body = parse_frontmatter(content)
+                file_date = da_file.stem  # YYYY-MM-DD
+
+                # Extract decisions and lessons
+                decisions = self._extract_decisions(body)
+                lessons = self._extract_lessons(body)
+
+                # Write to MEMORY.md via locked_write.py
+                for decision in decisions:
+                    self._run_locked_write(
+                        locked_write_path, memory_path,
+                        "Key Decisions",
+                        f"- {file_date}: {decision}",
+                    )
+
+                for lesson in lessons:
+                    self._run_locked_write(
+                        locked_write_path, memory_path,
+                        "Lessons Learned",
+                        f"- {file_date}: {lesson}",
+                    )
+
+                # Mark file as distilled
+                fm, body_text = parse_frontmatter(content)
+                fm["distilled"] = True
+                fm["distilled_date"] = date.today().isoformat()
+                new_content = write_frontmatter(fm, body_text)
+                da_file.write_text(new_content, encoding="utf-8")
+
+                distilled_count += 1
+                logger.debug("Distilled %s: %d decisions, %d lessons",
+                             da_file.name, len(decisions), len(lessons))
+            except Exception as exc:
+                logger.warning("Failed to distill %s: %s", da_file.name, exc)
+                continue
+
+        return distilled_count
+
+    @staticmethod
+    def _extract_decisions(body: str) -> list[str]:
+        """Extract decision-worthy lines from DailyActivity body."""
+        decisions = []
+        in_decisions_section = False
+        for line in body.splitlines():
+            stripped = line.strip()
+            # Track Key Decisions subsections
+            if stripped.startswith("### Key Decisions"):
+                in_decisions_section = True
+                continue
+            if stripped.startswith("### "):
+                in_decisions_section = False
+                continue
+            # Lines in Key Decisions sections
+            if in_decisions_section and stripped.startswith("- ") and stripped != "- (none)":
+                entry = stripped[2:].strip()
+                if len(entry) > 15:  # Skip trivially short entries
+                    decisions.append(entry[:200])
+            # Lines elsewhere that match decision patterns
+            elif stripped.startswith("- ") and _DECISION_PATTERNS.search(stripped):
+                entry = stripped[2:].strip()
+                if len(entry) > 15:
+                    decisions.append(entry[:200])
+        return decisions[:10]  # Cap to prevent MEMORY.md bloat
+
+    @staticmethod
+    def _extract_lessons(body: str) -> list[str]:
+        """Extract lesson-worthy lines from DailyActivity body."""
+        lessons = []
+        for line in body.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("- ") and _LESSON_PATTERNS.search(stripped):
+                entry = stripped[2:].strip()
+                if len(entry) > 15 and entry != "(none)":
+                    lessons.append(entry[:200])
+        return lessons[:5]  # Cap to prevent MEMORY.md bloat
+
+    @staticmethod
+    def _resolve_locked_write(ws_path: Path) -> Path:
+        """Resolve locked_write.py with fallback to canonical backend path."""
+        projected = (
+            ws_path / ".claude" / "skills"
+            / "s_save-memory" / "scripts" / "locked_write.py"
+        )
+        if projected.exists():
+            return projected
+        if _CANONICAL_LOCKED_WRITE.exists():
+            return _CANONICAL_LOCKED_WRITE
+        return projected
+
+    @staticmethod
+    def _run_locked_write(
+        script_path: Path,
+        memory_path: Path,
+        section: str,
+        text: str,
+    ) -> None:
+        """Run locked_write.py via subprocess to write to MEMORY.md."""
+        result = subprocess.run(
+            [
+                sys.executable, str(script_path),
+                "--file", str(memory_path),
+                "--section", section,
+                "--prepend", text,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode != 0:
+            logger.warning(
+                "locked_write.py failed (rc=%d): %s",
+                result.returncode,
+                result.stderr.strip(),
+            )
+
+    @staticmethod
+    def _write_flag(da_dir: Path, count: int) -> None:
+        """Write the .needs_distillation flag file as a fallback."""
+        flag_path = da_dir / FLAG_FILENAME
+        flag_path.write_text(
+            f"undistilled_count={count}\n"
+            f"flagged_at={datetime.now().isoformat()}\n",
+            encoding="utf-8",
+        )
 
 
 def _is_distilled(content: str) -> bool:

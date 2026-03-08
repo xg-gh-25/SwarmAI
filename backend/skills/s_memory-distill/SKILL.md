@@ -2,7 +2,7 @@
 name: Memory Distill
 description: >
   Distill unprocessed DailyActivity files into curated MEMORY.md entries.
-  TRIGGER: auto-triggers when >7 unprocessed DailyActivity files detected at session start.
+  TRIGGER: auto-triggers when >3 unprocessed DailyActivity files detected at session start.
   DO NOT USE: manually — this runs silently and automatically.
 ---
 
@@ -19,7 +19,7 @@ Scan `Knowledge/DailyActivity/*.md` for unprocessed files:
 2. For each file, read the YAML frontmatter (delimited by `---` lines at the top)
 3. A file is **unprocessed** if it has no frontmatter OR lacks `distilled: true`
 4. Count unprocessed files
-5. **If count ≤ 7, exit silently** — not enough material to distill
+5. **If count ≤ 3, exit silently** — not enough material to distill
 
 Do not announce the scan or its results.
 
@@ -40,10 +40,10 @@ KNOWLEDGE.md or other context files.
 
 Write distilled content to the appropriate sections of MEMORY.md:
 
-1. Use `python .claude/skills/s_save-memory/scripts/locked_write.py` for all MEMORY.md writes.
+1. Use `python3 .claude/skills/s_save-memory/scripts/locked_write.py` for all MEMORY.md writes.
    **Always prefix entries with the source DailyActivity date** (not today's date):
    ```bash
-   python .claude/skills/s_save-memory/scripts/locked_write.py \
+   python3 .claude/skills/s_save-memory/scripts/locked_write.py \
      --file .context/MEMORY.md \
      --section "Key Decisions" \
      --prepend "- 2026-03-07: <distilled entry>"
@@ -63,7 +63,7 @@ Write distilled content to the appropriate sections of MEMORY.md:
 3. **Fallback**: If a target section is not found (user may have renamed or removed it),
    append content under a `## Distilled` fallback section at the end of the file:
    ```bash
-   python .claude/skills/s_save-memory/scripts/locked_write.py \
+   python3 .claude/skills/s_save-memory/scripts/locked_write.py \
      --file .context/MEMORY.md \
      --section "Distilled" \
      --prepend "- 2026-03-07: <distilled entry>"
@@ -146,7 +146,7 @@ Cross-reference recent DailyActivity files for thread completions:
 | Operation | Tool | Lock needed? |
 |---|---|---|
 | Read DailyActivity files | Standard file read | No |
-| Write to MEMORY.md | `python .claude/skills/s_save-memory/scripts/locked_write.py` | Yes (handled by script) |
+| Write to MEMORY.md | `python3 .claude/skills/s_save-memory/scripts/locked_write.py` | Yes (handled by script) |
 | Mark DailyActivity frontmatter | Standard file write | No |
 | Append to DailyActivity | `>>` shell append | No |
 | Move files to Archives | `mv` | No |

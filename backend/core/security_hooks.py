@@ -191,9 +191,11 @@ def create_human_approval_hook(
         # Store in memory via PermissionManager (replaces DB storage)
         permission_mgr.store_pending_request(permission_request)
 
-        # Put permission request in queue for SSE streaming (use actual SDK session_id!)
-        await permission_mgr.get_permission_queue().put({
-            "sessionId": actual_session_id,  # Use actual SDK session_id for matching
+        # Put permission request in the session's dedicated queue for SSE streaming.
+        # Uses per-session queue (not a global queue) so parallel sessions never
+        # compete or busy-loop when forwarding permission requests.
+        await permission_mgr.enqueue_permission_request(actual_session_id, {
+            "sessionId": actual_session_id,
             "requestId": request_id,
             "toolName": "Bash",
             "toolInput": tool_input_data,
@@ -208,6 +210,10 @@ def create_human_approval_hook(
         decision = await permission_mgr.wait_for_permission_decision(request_id)
 
         logger.info(f"User decision received for request {request_id}: {decision}")
+
+        # Clean up the pending request now that a decision has been made.
+        # This prevents unbounded growth of _pending_requests over time.
+        permission_mgr.remove_pending_request(request_id)
 
         # Return the decision to the SDK
         if decision == "approve":

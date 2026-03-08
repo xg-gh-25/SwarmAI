@@ -62,8 +62,7 @@ The next agent needs context for what's **actionable**, not a history of everyth
    - "What's the most important thing the next agent should know?"
    - "Any blockers or decisions pending your input?"
 7. **Generate the context document**
-8. **Save to `.context/`**
-9. **Ensure .gitignore protection**
+8. **Save to `Knowledge/Handoffs/`**
 
 ## Template
 
@@ -137,38 +136,26 @@ Generate **only sections with content**. Omit empty sections entirely - don't in
 
 ## File Management
 
-### Location (in project root) & Naming
+### Location & Naming
+
+Handoff files are stored in `Knowledge/Handoffs/` (NOT in `.context/` which is
+reserved for system context files like MEMORY.md, AGENT.md, etc.):
 
 ```
-.context/
+Knowledge/Handoffs/
 ├── 2025-01-03-1430.md
 └── 2025-01-02-0900.md
 ```
 
 ```bash
-PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
-mkdir -p "$PROJECT_ROOT/.context"
-FILENAME="$PROJECT_ROOT/.context/$(date +%Y-%m-%d-%H%M).md"
+mkdir -p Knowledge/Handoffs
+FILENAME="Knowledge/Handoffs/$(date +%Y-%m-%d-%H%M).md"
 ```
 
-### Gitignore Protection
+### Cleanup
 
-Context files should NEVER be pushed to remote repositories.
-
-After saving the context file, ensure `.context/` is protected:
-
-```bash
-if [ ! -f .gitignore ]; then
-    echo ".context/" > .gitignore
-    echo "Created .gitignore with .context/"
-elif grep -q "^\.context" .gitignore; then
-    echo "Already protected"
-else
-    echo "" >> .gitignore
-    echo ".context/" >> .gitignore
-    echo "Added .context/ to .gitignore"
-fi
-```
+Handoff files older than 14 days can be safely deleted — their content
+should have been absorbed into DailyActivity/MEMORY.md by then.
 
 ## Quality Checklist
 

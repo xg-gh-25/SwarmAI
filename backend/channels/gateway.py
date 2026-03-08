@@ -562,11 +562,20 @@ class ChannelGateway:
             except json.JSONDecodeError:
                 channel_config = {}
 
+        # Determine if this is a group conversation.  Adapters set
+        # ``chat_type`` in msg.metadata (e.g. Feishu: "p2p" / "group",
+        # Slack: "channel" / "im").  We normalize to a boolean here so
+        # downstream code (context loader) can exclude personal files
+        # like MEMORY.md and USER.md from group prompts.
+        chat_type = msg.metadata.get("chat_type", "")
+        is_group = chat_type in ("group", "channel", "mpim")
+
         channel_context = {
             "channel_type": channel.get("channel_type", ""),
             "channel_id": channel_id,
             "chat_id": msg.external_chat_id,
             "reply_to_message_id": msg.external_message_id,
+            "is_group": is_group,
             # Extract only the credential keys needed by channel adapters
             "app_id": channel_config.get("app_id", ""),
             "app_secret": channel_config.get("app_secret", ""),

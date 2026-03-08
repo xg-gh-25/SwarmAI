@@ -80,3 +80,4 @@ Keep confirmation to one line.
 - **Be concise** — summarize, don't dump raw conversation
 - **Use consistent format** — always include all 4 subsections
 - **Deduplicate** — don't repeat topics or files already in today's entry
+- **Read before write** — always read the existing file first, then append using the Write tool with the full content (read + new entry). This prevents race conditions with the backend's automatic DailyActivity extraction hook which may write simultaneously at session close
