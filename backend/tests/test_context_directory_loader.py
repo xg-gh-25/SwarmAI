@@ -558,3 +558,212 @@ class TestLoadL1IfFresh:
         loader._is_l1_fresh = lambda: True
         result = loader._load_l1_if_fresh(expected_budget=25000)
         assert result is None
+
+
+# ── CJK Token Estimation ─────────────────────────────────────────────
+
+
+class TestEstimateTokensCJK:
+    """Tests for CJK-aware token estimation."""
+
+    def test_pure_ascii_unchanged(self):
+        """Pure ASCII text uses the original word-based heuristic."""
+        text = "Hello world this is a test"
+        result = ContextDirectoryLoader.estimate_tokens(text)
+        # 6 words * 4/3 = 8
+        assert result == 8
+
+    def test_pure_chinese_text(self):
+        """Pure Chinese text should count characters, not words."""
+        # 12 Chinese characters — should be ~8 tokens (12 / 1.5)
+        text = "你好世界这是一个测试用例吧"
+        result = ContextDirectoryLoader.estimate_tokens(text)
+        assert result == 8  # 12 / 1.5 = 8
+
+    def test_mixed_cjk_and_latin(self):
+        """Mixed CJK + Latin text sums both estimates."""
+        # 4 Chinese chars → 4/1.5 ≈ 2 CJK tokens
+        # "hello world" → 2 words * 4/3 ≈ 2 Latin tokens
+        text = "你好世界 hello world"
+        result = ContextDirectoryLoader.estimate_tokens(text)
+        assert result >= 4  # At least 2 CJK + 2 Latin
+
+    def test_chinese_much_higher_than_naive(self):
+        """A Chinese paragraph should estimate far more than 1 token."""
+        # This is a single "word" by split() but should be many tokens
+        text = "这是一段中文文本用于测试令牌估算的准确性确保中日韩文字不会被低估"
+        naive_word_count = len(text.split())
+        assert naive_word_count == 1  # Naive split sees 1 word
+        result = ContextDirectoryLoader.estimate_tokens(text)
+        assert result >= 15  # Should be much more than 1
+
+    def test_japanese_hiragana(self):
+        """Japanese hiragana characters should be CJK-counted."""
+        text = "おはようございます"  # 9 hiragana chars
+        result = ContextDirectoryLoader.estimate_tokens(text)
+        assert result == 6  # 9 / 1.5 = 6
+
+    def test_empty_returns_zero(self):
+        """Empty/whitespace returns 0 (unchanged behavior)."""
+        assert ContextDirectoryLoader.estimate_tokens("") == 0
+        assert ContextDirectoryLoader.estimate_tokens("   ") == 0
+
+    def test_single_cjk_char(self):
+        """Single CJK character returns at least 1."""
+        result = ContextDirectoryLoader.estimate_tokens("你")
+        assert result >= 1
+
+
+# ── Group Channel Exclusion ──────────────────────────────────────────
+
+
+class TestExcludeFilenames:
+    """Tests for the exclude_filenames parameter in assembly."""
+
+    def _write_context_files(self, context_dir: Path):
+        """Create minimal context files for testing exclusion."""
+        (context_dir / "SWARMAI.md").write_text("# Core\nYou are SwarmAI.")
+        (context_dir / "MEMORY.md").write_text("# Memory\nSecret personal memory content.")
+        (context_dir / "USER.md").write_text("# User\n**Name:** TestUser\n**Timezone:** UTC\n**Role:** Dev")
+        (context_dir / "PROJECTS.md").write_text("# Projects\nActive project list.")
+
+    def test_no_exclusion_includes_all(self, tmp_path):
+        """Without exclusions, all files appear in output."""
+        context_dir = tmp_path / "ctx"
+        context_dir.mkdir()
+        self._write_context_files(context_dir)
+        loader = ContextDirectoryLoader(context_dir=context_dir)
+        result = loader._assemble_from_sources(exclude_filenames=None)
+        assert "Secret personal memory" in result
+        assert "TestUser" in result
+
+    def test_exclude_memory_removes_it(self, tmp_path):
+        """Excluding MEMORY.md removes personal memory from output."""
+        context_dir = tmp_path / "ctx"
+        context_dir.mkdir()
+        self._write_context_files(context_dir)
+        loader = ContextDirectoryLoader(context_dir=context_dir)
+        result = loader._assemble_from_sources(exclude_filenames={"MEMORY.md"})
+        assert "Secret personal memory" not in result
+        assert "SwarmAI" in result  # Non-excluded files still present
+
+    def test_exclude_memory_and_user(self, tmp_path):
+        """Group channel exclusion removes both MEMORY.md and USER.md."""
+        context_dir = tmp_path / "ctx"
+        context_dir.mkdir()
+        self._write_context_files(context_dir)
+        loader = ContextDirectoryLoader(context_dir=context_dir)
+        from core.context_directory_loader import GROUP_CHANNEL_EXCLUDE
+        result = loader._assemble_from_sources(exclude_filenames=set(GROUP_CHANNEL_EXCLUDE))
+        assert "Secret personal memory" not in result
+        assert "TestUser" not in result
+        assert "SwarmAI" in result
+
+    def test_load_all_skips_cache_when_excluding(self, tmp_path):
+        """load_all bypasses L1 cache when exclude_filenames is set."""
+        context_dir = tmp_path / "ctx"
+        context_dir.mkdir()
+        self._write_context_files(context_dir)
+        loader = ContextDirectoryLoader(context_dir=context_dir)
+
+        # Pre-populate L1 cache with full content (includes MEMORY)
+        full = loader._assemble_from_sources()
+        loader._write_l1_cache(full, budget=40000)
+        loader._is_l1_fresh = lambda: True
+
+        # Load with exclusion — should NOT use the cache
+        result = loader.load_all(
+            model_context_window=200_000,
+            exclude_filenames={"MEMORY.md"},
+        )
+        assert "Secret personal memory" not in result
+
+    def test_load_all_no_exclusion_uses_cache(self, tmp_path):
+        """load_all uses L1 cache when no exclusions (normal path)."""
+        context_dir = tmp_path / "ctx"
+        context_dir.mkdir()
+        self._write_context_files(context_dir)
+        loader = ContextDirectoryLoader(context_dir=context_dir)
+
+        # Write cache with known content
+        loader._write_l1_cache("cached content only", budget=40000)
+        loader._is_l1_fresh = lambda: True
+
+        result = loader.load_all(model_context_window=200_000)
+        assert result == "cached content only"
+
+
+# ── Content Cleaning ─────────────────────────────────────────────────
+
+
+class TestCleanContent:
+    """Tests for _clean_content — HTML comment stripping and H1 dedup."""
+
+    def test_strips_html_comments(self):
+        """HTML comments are removed from assembled content."""
+        raw = '<!-- ⚙️ SYSTEM DEFAULT -->\n# Soul\nYou are warm.'
+        result = ContextDirectoryLoader._clean_content(raw, "Soul")
+        assert "SYSTEM DEFAULT" not in result
+        assert "warm" in result
+
+    def test_strips_multiline_html_comment(self):
+        """Multi-line HTML comments are fully removed."""
+        raw = (
+            '<!-- ⚙️ SYSTEM DEFAULT — Managed by SwarmAI.\n'
+            '     Edits here will be OVERWRITTEN. -->\n'
+            '# Identity\nI am SwarmAI.'
+        )
+        result = ContextDirectoryLoader._clean_content(raw, "Identity")
+        assert "OVERWRITTEN" not in result
+        assert "SwarmAI" in result
+
+    def test_strips_redundant_h1_matching_section_name(self):
+        """H1 that matches section_name is removed (avoids ## + # duplication)."""
+        raw = "# SwarmAI — Your AI Command Center\n\nYou are the central intelligence."
+        result = ContextDirectoryLoader._clean_content(raw, "SwarmAI")
+        assert not result.startswith("# SwarmAI")
+        assert "central intelligence" in result
+
+    def test_keeps_h1_not_matching_section_name(self):
+        """H1 that doesn't match section_name is preserved."""
+        raw = "# Completely Different Title\n\nSome content here."
+        result = ContextDirectoryLoader._clean_content(raw, "SwarmAI")
+        assert "# Completely Different Title" in result
+
+    def test_keeps_h2_headers(self):
+        """H2 headers are never stripped (only H1 is checked)."""
+        raw = "## Sub Section\nContent here."
+        result = ContextDirectoryLoader._clean_content(raw, "Sub Section")
+        assert "## Sub Section" in result
+
+    def test_empty_after_comment_strip_returns_empty(self):
+        """If only HTML comments exist, returns empty string."""
+        raw = "<!-- just a comment -->"
+        result = ContextDirectoryLoader._clean_content(raw, "Test")
+        assert result == ""
+
+    def test_h1_with_colon_separator(self):
+        """H1 with colon separator: 'Soul: Who You Are' matches 'Soul'."""
+        raw = "# Soul: Who You Are\n\nPersonality content."
+        result = ContextDirectoryLoader._clean_content(raw, "Soul")
+        assert not result.startswith("# Soul")
+        assert "Personality content" in result
+
+    def test_h1_with_en_dash_separator(self):
+        """H1 with en-dash: 'Agent – Directives' matches 'Agent Directives'."""
+        raw = "# Agent Directives – How to Act\n\nBe resourceful."
+        result = ContextDirectoryLoader._clean_content(raw, "Agent Directives")
+        assert not result.startswith("# Agent Directives")
+        assert "Be resourceful" in result
+
+    def test_case_insensitive_h1_match(self):
+        """H1 matching is case-insensitive."""
+        raw = "# SWARMAI\n\nContent."
+        result = ContextDirectoryLoader._clean_content(raw, "SwarmAI")
+        assert not result.startswith("# SWARMAI")
+
+    def test_preserves_content_without_h1(self):
+        """Content without an H1 is returned unchanged (minus comments)."""
+        raw = "Just plain content\nwith multiple lines."
+        result = ContextDirectoryLoader._clean_content(raw, "Test")
+        assert result == raw

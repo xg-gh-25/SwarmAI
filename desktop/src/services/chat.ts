@@ -220,6 +220,13 @@ export const chatService = {
     return response.data;
   },
 
+  // Trigger manual compaction of a session's context window
+  async compactSession(sessionId: string, instructions?: string): Promise<{ status: string; message: string }> {
+    const body = instructions ? { instructions } : undefined;
+    const response = await api.post<{ status: string; message: string }>(`/chat/compact/${sessionId}`, body);
+    return response.data;
+  },
+
   // Submit AskUserQuestion answer and continue streaming
   streamAnswerQuestion(
     request: {

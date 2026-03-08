@@ -509,6 +509,20 @@ export interface ChatStreamingLifecycle {
   // Fix 5: sessionStorage persistence
   /** Remove persisted pending state for a session (call on successful answer submission). */
   removePendingStateForSession: (sessionId: string) => void;
+
+  // Context window monitoring
+  /** Non-null when the backend emits a context_warning SSE event (level: warn | critical). */
+  contextWarning: ContextWarning | null;
+  /** Dismiss the context warning banner/toast. */
+  clearContextWarning: () => void;
+}
+
+/** Context warning payload from the backend context monitor. */
+export interface ContextWarning {
+  level: 'ok' | 'warn' | 'critical';
+  pct: number;
+  tokensEst: number;
+  message: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -584,6 +598,10 @@ export function useChatStreamingLifecycle(
 
   // --- Fix 9: Elapsed time counter during initial wait ---
   const [elapsedSeconds, setElapsedSeconds] = useState<number>(0);
+
+  // --- Context window monitoring ---
+  const [contextWarning, setContextWarning] = useState<ContextWarning | null>(null);
+  const clearContextWarning = useCallback(() => setContextWarning(null), []);
 
   // --- Fix 8: Tab status indicators ---
   // Tab statuses are now managed by the unified hook (useUnifiedTabState)
@@ -1056,6 +1074,30 @@ export function useChatStreamingLifecycle(
             updateTabStatus(capturedTabId, 'error');
           }
         }
+        // Context compacted — backend emits when the SDK compacts the context window
+        // (either auto or manual trigger). Show a brief toast to inform the user.
+        else if (event.type === 'context_compacted') {
+          const trigger = (event as unknown as Record<string, unknown>).trigger ?? 'auto';
+          const msg = trigger === 'manual'
+            ? 'Context compacted (manual)'
+            : 'Context auto-compacted — long conversation summarized to free space';
+          setContextWarning({
+            level: 'ok',
+            pct: 0,
+            tokensEst: 0,
+            message: msg,
+          });
+        }
+        // Context window warning — backend emits after every 15th user turn
+        // when usage exceeds 70% (warn) or 85% (critical).
+        else if (event.type === 'context_warning' && event.level && event.pct != null) {
+          setContextWarning({
+            level: event.level as 'warn' | 'critical',
+            pct: event.pct,
+            tokensEst: event.tokensEst ?? 0,
+            message: event.message ?? `Context ${event.pct}% full`,
+          });
+        }
         // Evolution SSE events — inject as standalone messages in the stream
         else if (event.type?.startsWith('evolution_')) {
           const evolutionMessage: Message = {
@@ -1213,5 +1255,7 @@ export function useChatStreamingLifecycle(
     createCompleteHandler,
     createErrorHandler,
     removePendingStateForSession: removePendingState,
+    contextWarning,
+    clearContextWarning,
   };
 }

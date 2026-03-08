@@ -44,6 +44,7 @@ REQUIRED_KNOWLEDGE_SUBDIRS = [
     "Knowledge/Library",
     "Knowledge/Archives",
     "Knowledge/DailyActivity",
+    "Knowledge/Handoffs",
 ]
 
 FORBIDDEN_FOLDERS = [

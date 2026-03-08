@@ -23,6 +23,45 @@ T = TypeVar("T", bound=dict)
 DEFAULT_AUDIT_LOG_LIMIT: int = 100
 
 
+class _WALConnection:
+    """Wrapper around aiosqlite.connect that enables WAL mode and busy timeout.
+
+    WAL (Write-Ahead Logging) mode allows readers and writers to operate
+    concurrently without blocking each other — critical when multiple
+    chat sessions save messages in parallel.
+
+    WAL mode is set once per db_path per process (it persists in the DB file).
+    Busy timeout (5 seconds) prevents immediate SQLITE_BUSY errors under
+    concurrent write pressure from parallel chat sessions.
+    """
+
+    # Class-level set: tracks which db_paths have had WAL mode enabled
+    # this process.  WAL persists in the DB file, so this is idempotent
+    # across restarts.
+    _wal_initialized: ClassVar[set] = set()
+
+    def __init__(self, db_path: str):
+        self._db_path = db_path
+        self._conn = None
+
+    async def __aenter__(self):
+        self._conn = await aiosqlite.connect(self._db_path)
+        # Enable WAL mode if not already done for this db_path in this process.
+        if self._db_path not in _WALConnection._wal_initialized:
+            await self._conn.execute("PRAGMA journal_mode=WAL")
+            await self._conn.execute("PRAGMA busy_timeout=5000")
+            _WALConnection._wal_initialized.add(self._db_path)
+            logger.info("SQLite WAL mode enabled for %s", self._db_path)
+        else:
+            # Still set busy_timeout per connection (not persisted in DB file)
+            await self._conn.execute("PRAGMA busy_timeout=5000")
+        return self._conn
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        if self._conn:
+            await self._conn.__aexit__(exc_type, exc_val, exc_tb)
+
+
 class SQLiteTable(BaseTable[T], Generic[T]):
     """SQLite table implementation of BaseTable interface."""
 
@@ -30,15 +69,18 @@ class SQLiteTable(BaseTable[T], Generic[T]):
         self.table_name = table_name
         self.db_path = db_path
 
-    def _get_connection(self) -> aiosqlite.Connection:
-        """Get an async SQLite connection context manager.
+    def _get_connection(self) -> _WALConnection:
+        """Get an async SQLite connection context manager with WAL mode.
+
+        Each connection is configured with WAL journal mode and busy timeout
+        for safe concurrent access from parallel chat sessions.
 
         Usage:
             async with self._get_connection() as conn:
                 conn.row_factory = aiosqlite.Row
                 # use conn
         """
-        return aiosqlite.connect(str(self.db_path))
+        return _WALConnection(str(self.db_path))
 
     def _row_to_dict(self, row: aiosqlite.Row) -> dict:
         """Convert a SQLite row to a dictionary, parsing JSON fields."""
@@ -1487,6 +1529,14 @@ class SQLiteDatabase(BaseDatabase):
         async with aiosqlite.connect(str(self.db_path)) as conn:
             t1 = time.monotonic()
             logger.info("DB init: connection opened in %.2fs, executing schema...", t1 - t0)
+
+            # Enable WAL mode for concurrent read/write from parallel chat sessions.
+            # WAL persists in the DB file, so this is idempotent across restarts.
+            # busy_timeout prevents immediate SQLITE_BUSY under write contention.
+            await conn.execute("PRAGMA journal_mode=WAL")
+            await conn.execute("PRAGMA busy_timeout=5000")
+            _WALConnection._wal_initialized.add(str(self.db_path))
+            logger.info("DB init: WAL mode enabled")
 
             await conn.executescript(self.SCHEMA)
             await conn.commit()

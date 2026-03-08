@@ -249,6 +249,7 @@ async def create_mcp_server(request: MCPCreateRequest):
         "rejected_tools": request.rejected_tools,
         "endpoint": endpoint,
         "version": "v1.0.0",
+        "is_active": True,
     }
     server = await db.mcp_servers.put(server_data)
     return server

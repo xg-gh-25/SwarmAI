@@ -2,6 +2,11 @@
 
 # SwarmAI Evolution Registry
 
+<!-- Archival: when this file exceeds ~30 entries, summarize older entries
+     (Usage Count == 0, Status == inactive) into a one-line "Archived" list
+     at the bottom and remove the full entry blocks. This keeps the file
+     within token budget while preserving discoverability. -->
+
 ## Capabilities Built
 
 _No capabilities built yet. The Evolution Engine will register new capabilities here._
