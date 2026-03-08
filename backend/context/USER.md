@@ -33,6 +33,4 @@ _(Things that annoy you. Examples: "Don't say 'Great question!'" / "Don't ask pe
 
 ---
 
-The more I know, the better I can help. I'll update this as I learn about you, and you can edit it anytime.
-
 The more I know, the better I can help. But remember — you're getting to know a person, not building a dossier. Respect the difference.

@@ -108,8 +108,10 @@ CONTEXT_FILES: list[ContextFileSpec] = [
     ContextFileSpec("KNOWLEDGE.md",         8,  "Knowledge",          True,  True,  "tail"),
     ContextFileSpec("PROJECTS.md",          9,  "Projects",           True,  True,  "tail"),
     # GROWTH_PRINCIPLES.md removed — content folded into SOUL.md and skills.
-    # EVOLUTION.md removed — agent reads it on-demand via Read tool per AGENT.md
+    # EVOLUTION.md — agent-managed, provisioned in ensure_directory() as
+    #   copy-only-if-missing.  Read on-demand via Read tool per AGENT.md
     #   "Every Session" directive, not loaded into system prompt.
+    # EVOLUTION_CHANGELOG.jsonl — likewise agent-managed, seeded on first run.
 ]
 """All 10 context source files in ascending priority order (P0-P9)."""
 
@@ -296,6 +298,31 @@ class ContextDirectoryLoader:
                         pass  # Best-effort on non-Unix
             except OSError as exc:
                 logger.warning("Failed to copy %s → %s: %s", src, dest, exc)
+
+        # Provision agent-managed files that live in .context/ but are NOT
+        # part of the system prompt.  These are copy-only-if-missing (0o644)
+        # so the agent can write to them freely after first creation.
+        _AGENT_MANAGED_FILES = ["EVOLUTION.md", "EVOLUTION_CHANGELOG.jsonl"]
+        for filename in _AGENT_MANAGED_FILES:
+            dest = self.context_dir / filename
+            if dest.exists():
+                continue
+            if self.templates_dir is not None:
+                src = self.templates_dir / filename
+                if src.is_file():
+                    try:
+                        dest.write_bytes(src.read_bytes())
+                        created.append(filename)
+                    except OSError as exc:
+                        logger.warning("Failed to copy %s → %s: %s", src, dest, exc)
+                    continue
+            # No template available — create an empty seed so the agent can
+            # append to it without a file-not-found error.
+            try:
+                dest.write_text("")
+                created.append(filename)
+            except OSError as exc:
+                logger.warning("Failed to seed %s: %s", dest, exc)
 
         # Startup health report
         if refreshed or created:
