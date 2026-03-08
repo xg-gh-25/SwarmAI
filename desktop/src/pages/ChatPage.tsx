@@ -151,6 +151,12 @@ export default function ChatPage() {
   const effectiveBasePath = agentWorkDir?.path;
   const selectedAgent = agents.find((a) => a.id === selectedAgentId);
 
+  // Last assistant message index — memoized for Save-to-Memory button placement
+  const lastAssistantIdx = useMemo(
+    () => messages.reduce((lastIdx, m, i) => m.role === 'assistant' ? i : lastIdx, -1),
+    [messages],
+  );
+
   // Tab state management — unified hook (single source of truth)
   const {
     openTabs,
@@ -1204,7 +1210,7 @@ export default function ChatPage() {
                       );
                     }
                     // Only pass isStreaming to the last assistant message
-                    const isLastAssistant = isStreaming
+                    const isLastAssistantForStreaming = isStreaming
                       && msg.role === 'assistant'
                       && idx === messages.length - 1;
                     return (
@@ -1213,7 +1219,9 @@ export default function ChatPage() {
                         message={msg}
                         onAnswerQuestion={handleAnswerQuestion}
                         pendingToolUseId={pendingQuestion?.toolUseId}
-                        isStreaming={isLastAssistant}
+                        isStreaming={isLastAssistantForStreaming}
+                        sessionId={sessionId}
+                        isLastAssistant={idx === lastAssistantIdx}
                       />
                     );
                   })
