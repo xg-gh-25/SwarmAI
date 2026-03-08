@@ -37,18 +37,28 @@ connection_type_strategy = st.sampled_from(["stdio", "sse", "http"])
 mcp_name_strategy = st.text(alphabet=_safe_chars, min_size=1, max_size=12)
 
 
-def _make_mcp_record(name: str, connection_type: str) -> dict:
+rejected_tools_strategy = st.lists(
+    st.text(alphabet=_safe_chars, min_size=1, max_size=12),
+    min_size=0,
+    max_size=4,
+)
+
+
+def _make_mcp_record(name: str, connection_type: str, rejected_tools: list | None = None) -> dict:
     """Build a fake MCP server DB record for the given connection type."""
     config: dict = {}
     if connection_type == "stdio":
         config = {"command": "/usr/bin/test", "args": ["--flag"], "env": {"KEY": "val"}}
     elif connection_type in ("sse", "http"):
         config = {"url": f"http://localhost:8080/{name}"}
-    return {
+    record = {
         "name": name,
         "connection_type": connection_type,
         "config": config,
     }
+    if rejected_tools:
+        record["rejected_tools"] = rejected_tools
+    return record
 
 
 # Strategy: generate a list of (mcp_id, name, connection_type) tuples with unique IDs
@@ -70,16 +80,20 @@ async def _build_mcp_config_under_test(
     agent_config: dict,
     enable_mcp: bool,
     db_get_fn,
-) -> dict:
+) -> tuple[dict, list[str]]:
     """Replicate the simplified _build_mcp_config logic.
 
     This mirrors the production code so we can test the algorithm
     without importing the full AgentManager (which has heavy deps).
+
+    Returns:
+        Tuple of (mcp_servers dict, disallowed_tools list).
     """
     mcp_servers: dict = {}
+    disallowed_tools: list[str] = []
 
     if not (enable_mcp and agent_config.get("mcp_ids")):
-        return mcp_servers
+        return mcp_servers, disallowed_tools
 
     used_names: set = set()
     for mcp_id in agent_config["mcp_ids"]:
@@ -116,7 +130,12 @@ async def _build_mcp_config_under_test(
                     "url": config.get("url"),
                 }
 
-    return mcp_servers
+            # Collect per-server rejected_tools → global disallowed_tools
+            rejected = mcp_config.get("rejected_tools") or []
+            for tool in rejected:
+                disallowed_tools.append(f"mcp__{server_name}__{tool}")
+
+    return mcp_servers, disallowed_tools
 
 
 # ---------------------------------------------------------------------------
@@ -152,7 +171,7 @@ class TestMcpConfigWithoutWorkspaceFiltering:
         async def mock_get(mid):
             return db_records.get(mid)
 
-        result = asyncio.run(
+        result, _ = asyncio.run(
             _build_mcp_config_under_test(agent_config, True, mock_get)
         )
 
@@ -180,7 +199,7 @@ class TestMcpConfigWithoutWorkspaceFiltering:
         async def mock_get(mid):
             return db_records.get(mid)
 
-        result = asyncio.run(
+        result, _ = asyncio.run(
             _build_mcp_config_under_test(agent_config, True, mock_get)
         )
 
@@ -217,7 +236,7 @@ class TestMcpConfigWithoutWorkspaceFiltering:
         async def mock_get(mid):
             return db_records.get(mid)
 
-        result = asyncio.run(
+        result, _ = asyncio.run(
             _build_mcp_config_under_test(agent_config, True, mock_get)
         )
 
@@ -254,11 +273,12 @@ class TestMcpConfigWithoutWorkspaceFiltering:
         async def mock_get(mid):
             return {"name": mid, "connection_type": "stdio", "config": {"command": "x"}}
 
-        result = asyncio.run(
+        result, disallowed = asyncio.run(
             _build_mcp_config_under_test(agent_config, False, mock_get)
         )
 
         assert result == {}, f"Expected empty dict when MCP disabled, got {result}"
+        assert disallowed == [], f"Expected empty disallowed when MCP disabled, got {disallowed}"
 
     @given(mcp_entries=agent_mcp_ids_strategy)
     @PROPERTY_SETTINGS
@@ -282,10 +302,52 @@ class TestMcpConfigWithoutWorkspaceFiltering:
         async def mock_get(mid):
             return db_records.get(mid)
 
-        result = asyncio.run(
+        result, _ = asyncio.run(
             _build_mcp_config_under_test(agent_config, True, mock_get)
         )
 
         assert len(result) == known_count, (
             f"Expected {known_count} entries (known IDs only), got {len(result)}"
         )
+
+    @given(
+        name=mcp_name_strategy,
+        conn_type=connection_type_strategy,
+        rejected=rejected_tools_strategy,
+    )
+    @PROPERTY_SETTINGS
+    def test_rejected_tools_become_disallowed(self, name, conn_type, rejected):
+        """Per-server rejected_tools produce mcp__<Name>__<tool> disallowed entries.
+
+        **Validates: rejected_tools → disallowed_tools mapping**
+        """
+        mcp_id = "test_mcp"
+        record = _make_mcp_record(name, conn_type, rejected_tools=rejected)
+        agent_config = {"mcp_ids": [mcp_id]}
+
+        async def mock_get(mid):
+            return record if mid == mcp_id else None
+
+        _, disallowed = asyncio.run(
+            _build_mcp_config_under_test(agent_config, True, mock_get)
+        )
+
+        # Every rejected tool should appear as mcp__<name>__<tool>
+        expected = [f"mcp__{name}__{t}" for t in rejected]
+        assert disallowed == expected, (
+            f"Expected disallowed={expected}, got {disallowed}"
+        )
+
+    def test_no_rejected_tools_means_empty_disallowed(self):
+        """MCP without rejected_tools produces no disallowed entries."""
+        record = _make_mcp_record("MyServer", "stdio")
+        agent_config = {"mcp_ids": ["id1"]}
+
+        async def mock_get(mid):
+            return record if mid == "id1" else None
+
+        _, disallowed = asyncio.run(
+            _build_mcp_config_under_test(agent_config, True, mock_get)
+        )
+
+        assert disallowed == [], f"Expected empty disallowed, got {disallowed}"

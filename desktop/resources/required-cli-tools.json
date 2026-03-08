@@ -1,0 +1,29 @@
+[
+  {
+    "id": "gh",
+    "name": "GitHub CLI",
+    "description": "GitHub PR management, issue tracking, Actions, code search, repo operations. No built-in equivalent.",
+    "priority": "P0",
+    "check_command": "gh",
+    "install": {
+      "brew": "gh",
+      "apt": "gh",
+      "note": "https://cli.github.com/"
+    },
+    "post_install": "gh auth login",
+    "capabilities": ["pr-review", "issue-tracking", "code-search", "actions", "release-management"]
+  },
+  {
+    "id": "jq",
+    "name": "jq",
+    "description": "Command-line JSON processor — essential for curl pipelines, API response parsing, config transformation. api-test skill depends on it.",
+    "priority": "P0",
+    "check_command": "jq",
+    "install": {
+      "brew": "jq",
+      "apt": "jq",
+      "note": "https://jqlang.github.io/jq/"
+    },
+    "capabilities": ["json-processing", "api-testing", "data-transformation"]
+  }
+]

@@ -347,12 +347,16 @@ export function ExplorerProvider({ children }: ExplorerProviderProps) {
    *  Restored when focus mode is toggled OFF. */
   const preFocusExpandedPaths = useRef<Set<string> | null>(null);
 
+  // ── Polling ref (declared early so fetchTree/refreshTree can seed it) ──
+  const lastTreeRef = useRef<TreeNode[] | null>(null);
+
   // ── Fetch tree data on mount ───────────────────────────────────────────
   const fetchTree = useCallback(async () => {
     setIsLoading(true);
     setError(null);
     try {
       const tree = await workspaceService.getTree();
+      lastTreeRef.current = tree; // Seed polling ref to avoid redundant first-poll re-render
       setTreeData(tree);
     } catch (err: unknown) {
       const message =
@@ -361,23 +365,53 @@ export function ExplorerProvider({ children }: ExplorerProviderProps) {
     } finally {
       setIsLoading(false);
     }
+  // lastTreeRef is a stable ref — safe to omit from deps
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const refreshTree = useCallback(async () => {
     setError(null);
     try {
       const tree = await workspaceService.refreshTree();
+      lastTreeRef.current = tree; // Keep polling ref in sync after manual refresh
       setTreeData(tree);
     } catch (err: unknown) {
       const message =
         err instanceof Error ? err.message : 'Failed to load workspace tree';
       setError(message);
     }
+  // lastTreeRef is a stable ref — safe to omit from deps
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
     fetchTree();
   }, [fetchTree]);
+
+  // ── Auto-refresh via ETag polling ─────────────────────────────────────
+  // Poll getTree() every 5 seconds. The service-layer ETag cache makes
+  // this very lightweight: when nothing changed the server returns 304
+  // and getTree() returns the same cached array reference. We compare
+  // against lastTreeRef so we only call setTreeData on actual changes.
+  useEffect(() => {
+    const POLL_INTERVAL_MS = 5_000;
+    const id = setInterval(async () => {
+      // Skip polling when tab is hidden to save resources
+      if (document.hidden) return;
+      try {
+        const tree = await workspaceService.getTree();
+        // On 304, getTree() returns the same _cachedTree reference.
+        // Only update state when the reference differs (actual change).
+        if (tree !== lastTreeRef.current) {
+          lastTreeRef.current = tree;
+          setTreeData(tree);
+        }
+      } catch {
+        // Silently ignore polling errors — manual refresh still works
+      }
+    }, POLL_INTERVAL_MS);
+    return () => clearInterval(id);
+  }, []);
 
   // ── Default-expand zone folders on first load (no saved session) ───────
   useEffect(() => {

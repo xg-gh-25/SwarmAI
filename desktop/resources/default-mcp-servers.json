@@ -6,7 +6,16 @@
     "connection_type": "stdio",
     "config": {
       "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/"]
-    }
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "$HOME"]
+    },
+    "_rejected_tools_rationale": "These 6 MCP tools overlap with built-in SDK tools (Read, Write, Edit, Glob). Blocking them saves ~1k tokens/session, eliminates tool-choice ambiguity, and ensures file operations go through security_hooks. The remaining 8 MCP tools (directory_tree, list_directory, get_file_info, create_directory, move_file, read_media_file, etc.) are kept because they have no built-in equivalent. This does NOT reduce agent capability — self-evolution uses Read/Edit/Grep/Bash which are all built-in.",
+    "rejected_tools": [
+      "read_file",
+      "read_text_file",
+      "read_multiple_files",
+      "write_file",
+      "edit_file",
+      "search_files"
+    ]
   }
 ]
