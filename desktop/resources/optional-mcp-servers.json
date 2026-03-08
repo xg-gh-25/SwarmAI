@@ -1,0 +1,149 @@
+[
+  {
+    "id": "email",
+    "name": "Email",
+    "description": "Read, search, send, and manage email across Gmail, Outlook, iCloud, and IMAP/SMTP providers. 47 tools including triage, drafts, scheduling, and analytics.",
+    "connection_type": "stdio",
+    "category": "communication",
+    "package": "@codefuturist/email-mcp",
+    "config": {
+      "command": "npx",
+      "args": ["-y", "@codefuturist/email-mcp"]
+    },
+    "required_env": [
+      { "key": "MCP_EMAIL_ADDRESS", "label": "Email address", "placeholder": "you@example.com" },
+      { "key": "MCP_EMAIL_PASSWORD", "label": "App password", "placeholder": "xxxx-xxxx-xxxx-xxxx", "secret": true },
+      { "key": "MCP_EMAIL_IMAP_HOST", "label": "IMAP host", "placeholder": "imap.gmail.com" },
+      { "key": "MCP_EMAIL_SMTP_HOST", "label": "SMTP host", "placeholder": "smtp.gmail.com" }
+    ],
+    "optional_env": [
+      { "key": "MCP_EMAIL_IMAP_PORT", "label": "IMAP port", "default": "993" },
+      { "key": "MCP_EMAIL_SMTP_PORT", "label": "SMTP port", "default": "465" },
+      { "key": "MCP_EMAIL_RATE_LIMIT", "label": "Max sends/min", "default": "10" }
+    ],
+    "presets": {
+      "gmail": {
+        "label": "Gmail",
+        "env": { "MCP_EMAIL_IMAP_HOST": "imap.gmail.com", "MCP_EMAIL_SMTP_HOST": "smtp.gmail.com" },
+        "setup_hint": "Use an App Password: Google Account → Security → 2FA → App Passwords"
+      },
+      "outlook": {
+        "label": "Outlook / Hotmail",
+        "env": { "MCP_EMAIL_IMAP_HOST": "outlook.office365.com", "MCP_EMAIL_SMTP_HOST": "smtp.office365.com", "MCP_EMAIL_SMTP_PORT": "587" },
+        "setup_hint": "Enable IMAP in Outlook settings. Use your account password or an App Password."
+      },
+      "icloud": {
+        "label": "iCloud Mail",
+        "env": { "MCP_EMAIL_IMAP_HOST": "imap.mail.me.com", "MCP_EMAIL_SMTP_HOST": "smtp.mail.me.com", "MCP_EMAIL_SMTP_PORT": "587" },
+        "setup_hint": "Generate an app-specific password at appleid.apple.com → Sign-In and Security"
+      }
+    },
+    "setup_command": "npx @codefuturist/email-mcp setup"
+  },
+  {
+    "id": "slack",
+    "name": "Slack",
+    "description": "Read, search, and send Slack messages. List channels, users, and threads. 11 tools with auto-token refresh on macOS.",
+    "connection_type": "stdio",
+    "category": "communication",
+    "package": "@jtalk22/slack-mcp",
+    "config": {
+      "command": "npx",
+      "args": ["-y", "@jtalk22/slack-mcp"]
+    },
+    "required_env": [
+      { "key": "SLACK_TOKEN", "label": "Slack token (xoxc-...)", "placeholder": "xoxc-...", "secret": true },
+      { "key": "SLACK_COOKIE", "label": "Slack cookie (xoxd-...)", "placeholder": "xoxd-...", "secret": true }
+    ],
+    "optional_env": [],
+    "presets": {
+      "macos_auto": {
+        "label": "macOS auto-extract from Chrome",
+        "env": {},
+        "setup_hint": "Tokens are auto-extracted from Chrome on macOS. Just sign in to Slack in Chrome."
+      }
+    },
+    "setup_command": "npx -y @jtalk22/slack-mcp --setup"
+  },
+  {
+    "id": "teams",
+    "name": "Microsoft Teams",
+    "description": "Send messages, start/reply to threads, list members, and read channel messages in Microsoft Teams. Requires Azure AD app registration.",
+    "connection_type": "stdio",
+    "category": "communication",
+    "package": "mcp-teams-server",
+    "runtime": "python",
+    "config": {
+      "command": "uvx",
+      "args": ["mcp-teams-server"]
+    },
+    "required_env": [
+      { "key": "TEAMS_APP_ID", "label": "Azure AD App ID", "placeholder": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" },
+      { "key": "TEAMS_APP_PASSWORD", "label": "Client secret", "placeholder": "...", "secret": true },
+      { "key": "TEAMS_APP_TYPE", "label": "Tenant type", "placeholder": "SingleTenant" },
+      { "key": "TEAMS_APP_TENANT_ID", "label": "Tenant ID", "placeholder": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" },
+      { "key": "TEAM_ID", "label": "Team/Group ID", "placeholder": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" },
+      { "key": "TEAMS_CHANNEL_ID", "label": "Channel ID", "placeholder": "19:xxxxx@thread.tacv2" }
+    ],
+    "optional_env": [],
+    "presets": {},
+    "setup_command": null,
+    "setup_docs_url": "https://github.com/InditexTech/mcp-teams-server#setup"
+  },
+  {
+    "id": "playwright",
+    "name": "Playwright Browser",
+    "description": "Browser automation via Playwright: navigate pages, click elements, fill forms, take screenshots, extract content, and run accessibility audits. Replaces manual browser-agent workflows with native structured tool calls.",
+    "connection_type": "stdio",
+    "category": "development",
+    "package": "@anthropic-ai/mcp-playwright",
+    "config": {
+      "command": "npx",
+      "args": ["-y", "@anthropic-ai/mcp-playwright"]
+    },
+    "required_env": [],
+    "optional_env": [
+      { "key": "PLAYWRIGHT_HEADLESS", "label": "Headless mode", "default": "true" },
+      { "key": "PLAYWRIGHT_BROWSER", "label": "Browser (chromium/firefox/webkit)", "default": "chromium" }
+    ],
+    "presets": {},
+    "setup_command": null,
+    "setup_docs_url": "https://github.com/anthropics/anthropic-quickstarts/tree/main/mcp-playwright"
+  },
+  {
+    "id": "git",
+    "name": "Git",
+    "description": "Native Git operations: status, diff, log, commit, branch, checkout, merge, stash, and more. Structured tool calls instead of shell commands — safer and more reliable for agent-driven version control.",
+    "connection_type": "stdio",
+    "category": "development",
+    "package": "@modelcontextprotocol/server-git",
+    "config": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-git"]
+    },
+    "required_env": [],
+    "optional_env": [],
+    "presets": {},
+    "setup_command": null,
+    "setup_docs_url": "https://github.com/modelcontextprotocol/servers/tree/main/src/git"
+  },
+  {
+    "id": "sqlite",
+    "name": "SQLite",
+    "description": "Query and manage SQLite databases: run SQL, list tables, describe schemas, create tables, insert/update/delete rows. Ideal for local data analysis, prototyping, and agent memory stores. Must use a separate database — SwarmAI system DB is blocked.",
+    "connection_type": "stdio",
+    "category": "data",
+    "package": "@modelcontextprotocol/server-sqlite",
+    "config": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-sqlite"]
+    },
+    "required_env": [
+      { "key": "SQLITE_DB_PATH", "label": "Database file path (not SwarmAI system DB)", "placeholder": "~/Documents/my-data.db" }
+    ],
+    "optional_env": [],
+    "presets": {},
+    "setup_command": null,
+    "setup_docs_url": "https://github.com/modelcontextprotocol/servers/tree/main/src/sqlite"
+  }
+]

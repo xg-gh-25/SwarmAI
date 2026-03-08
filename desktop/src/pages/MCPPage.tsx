@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { SearchBar, Button, Modal, SkeletonTable, ResizableTable, ResizableTableCell, ConfirmDialog, Breadcrumb } from '../components/common';
+import MCPCatalogModal from '../components/modals/MCPCatalogModal';
 import type { MCPServer, MCPServerCreateRequest } from '../types';
 import { mcpService } from '../services/mcp';
 
@@ -52,6 +53,9 @@ export default function MCPPage() {
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [selectedServer, setSelectedServer] = useState<MCPServer | null>(null);
   const [isInitialLoading, setIsInitialLoading] = useState(true);
+
+  // Catalog modal state
+  const [isCatalogOpen, setIsCatalogOpen] = useState(false);
 
   // Delete confirmation state
   const [deleteTarget, setDeleteTarget] = useState<MCPServer | null>(null);
@@ -125,9 +129,14 @@ export default function MCPPage() {
           <h1 className="text-2xl font-bold text-[var(--color-text)]">{t('mcp.title')}</h1>
           <p className="text-[var(--color-text-muted)] mt-1">{t('mcp.subtitle')}</p>
         </div>
-        <Button icon="add" onClick={() => setIsAddModalOpen(true)}>
-          {t('mcp.addMcp')}
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="secondary" icon="store" onClick={() => setIsCatalogOpen(true)}>
+            {t('mcp.catalog.title')}
+          </Button>
+          <Button icon="add" onClick={() => setIsAddModalOpen(true)}>
+            {t('mcp.addMcp')}
+          </Button>
+        </div>
       </div>
 
       {/* Search */}
@@ -252,6 +261,15 @@ export default function MCPPage() {
         cancelText={t('common.button.cancel')}
         variant="danger"
         isLoading={isDeleting}
+      />
+
+      {/* Catalog Modal — Browse & Install optional MCPs */}
+      <MCPCatalogModal
+        isOpen={isCatalogOpen}
+        onClose={() => setIsCatalogOpen(false)}
+        onInstalled={(server) => {
+          setServers((prev) => [...prev, server]);
+        }}
       />
     </div>
   );

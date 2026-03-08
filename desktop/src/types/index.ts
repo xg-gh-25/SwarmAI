@@ -128,6 +128,43 @@ export interface MCPServerCreateRequest {
 
 export interface MCPServerUpdateRequest extends Partial<MCPServerCreateRequest> {}
 
+// MCP Catalog Types (Optional MCP servers users can install)
+export interface MCPCatalogEnvField {
+  key: string;
+  label: string;
+  placeholder?: string;
+  secret?: boolean;
+  default?: string;
+}
+
+export interface MCPCatalogPreset {
+  label: string;
+  env: Record<string, string>;
+  setup_hint: string;
+}
+
+export interface MCPCatalogEntry {
+  id: string;
+  name: string;
+  description: string;
+  connection_type: 'stdio' | 'sse' | 'http';
+  category: string;
+  package: string;
+  runtime?: string;
+  config: Record<string, unknown>;
+  required_env: MCPCatalogEnvField[];
+  optional_env: MCPCatalogEnvField[];
+  presets: Record<string, MCPCatalogPreset>;
+  setup_command?: string | null;
+  setup_docs_url?: string;
+  installed: boolean;
+}
+
+export interface MCPCatalogInstallRequest {
+  catalog_id: string;
+  env: Record<string, string>;
+}
+
 // Chat/Message Types
 export interface ChatSession {
   id: string;
