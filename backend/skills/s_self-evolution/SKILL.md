@@ -9,27 +9,22 @@ description: >
 
 ## Self-Evolution Engine
 
-Always-active self-improvement capability. Continuously self-monitor during
-every session. Do NOT wait for user to ask — detect triggers proactively.
+Always-active self-improvement. Detect triggers proactively — don't wait for user.
 
-### Trigger Detection (5 types)
+### Trigger Detection
 
 #### 🔴 Reactive — Something isn't working
 
-- Tool/command error indicating a **capability gap** (not transient)
-- No skill matches user's need
-- CLI tool not installed (`command not found`)
-- Knowledge exhausted after checking all context
+- Tool/command error = **capability gap** (not transient)
+- No skill matches need / CLI tool missing / knowledge exhausted
+- Gap types: `missing_skill`, `missing_tool`, `knowledge_gap`
+- First occurrence = transient. Recurrence = capability gap → evolution loop.
 
-**Gap types:** `missing_skill`, `missing_tool`, `knowledge_gap`
-**First occurrence = transient. Recurrence = capability gap → enter evolution loop.**
+#### 🟡 Proactive — Better way exists
 
-#### 🟡 Proactive — You see a better way
-
-- `known_better_approach` — EVOLUTION.md entry matches current situation
-- `applicable_lesson` — MEMORY.md / DailyActivity lesson applies here
-
-**Deferred:** Note but don't interrupt current task. Act after task completes.
+- EVOLUTION.md entry matches current situation
+- MEMORY.md / DailyActivity lesson applies
+- **Deferred:** Note but don't interrupt current task. Act after task completes.
 
 #### 🔵 Stuck — Going in circles
 
@@ -43,157 +38,289 @@ every session. Do NOT wait for user to ask — detect triggers proactively.
 
 #### 🟢 Correction Capture — User corrects your output
 
-Detect: "不对", "应该是", "that's wrong", "actually it should be", user overrides
-your suggestion, or user provides a better approach.
-
-**When detected:** Assess novelty → if systematic gap → record C-entry silently.
-**Skip:** Typos, formatting preferences, one-off context corrections, known facts.
+Detect: "不对", "应该是", "that's wrong", "actually it should be", user overrides.
+Systematic gap → C-entry. Skip: typos, formatting preferences, one-off context.
 
 #### 🟣 Task Completion Review — Post-task reflection
 
-After significant tasks (5+ tool calls): Was this the most efficient approach?
-Did I discover something reusable? Would a competence entry help next time?
-
-**Novel insight → record O/K-entry. No insight → skip. Spend <5 seconds.**
+After 5+ tool calls: most efficient approach? Reusable insight? → O/K-entry if novel.
 
 ### Priority: Stuck > Reactive > Correction > Proactive
 
-**Session limits:** Max 3 triggers/session. 60s cooldown between same-type.
+**Limits:** Max 3 triggers/session. 60s cooldown between same-type.
 **Always return** to user's task after evolution. Summarize what changed.
 
 ### Drift Prevention (ADL Protocol)
 
 **Stability > Interpretability > Reusability > Extensibility > Novelty**
 
-Prohibited: complexity for appearance, unverifiable changes, sacrificing
-stability for extensibility, unnecessary dependencies, frameworks when
-scripts suffice.
+Self-check: 1) More stable? 2) Understandable? 3) Safe to revert? If no → simplify/skip.
 
-**Self-check:** 1) More or less stable? 2) Understandable? 3) Safe to revert?
-If any answer is concerning → simplify or skip.
-
-### Session Startup Review
+### Session Startup
 
 1. Read `.context/EVOLUTION.md`
 2. Match active entries to current situation → apply + increment usage count
-3. Check salience thresholds → update fading/deprecated entries
+3. Check salience: entries idle >30 days → mark `deprecated`
 4. Scan for promotion candidates (3+ entries with same pattern)
-5. No match → proceed; triggers will fire if needed
+5. No match → proceed; triggers fire if needed
 
 ### Evolution Loop (max 3 attempts, each DIFFERENT)
 
-| Trigger | Strategy 1 | Strategy 2 | Strategy 3 |
-|---------|-----------|-----------|-----------|
+| Trigger | Try 1 | Try 2 | Try 3 |
+|---------|-------|-------|-------|
 | Reactive | `compose_existing` | `build_new` | `research_and_build` |
-| Proactive | `optimize_in_place` | `build_replacement` | `research_best_practice_and_rebuild` |
-| Stuck | `completely_different_approach` | `simplify_to_mvp` | `research_and_new_approach` |
+| Proactive | `optimize_in_place` | `build_replacement` | `research_best_practice` |
+| Stuck | `completely_different` | `simplify_to_mvp` | `research_new_approach` |
 
-**Cycle:** Build → Test against original task → Pass → register. Fail → next strategy.
+**Cycle:** Build → Test against original task → Pass → register. Fail → next.
 
-### Capability Building
+### Building Capabilities
 
-- **Skill:** `.claude/skills/s_{name}/SKILL.md` — check `auto_approve_skills`
-- **Script:** `.swarm-ai/scripts/{name}.py` — chmod +x, test immediately — check `auto_approve_scripts`
-- **Tool:** pip/npm/brew install — check `auto_approve_installs` (always ask if false)
+- **Skill:** `.claude/skills/s_{name}/SKILL.md` — check `auto_approve_skills` first
+- **Script:** `.swarm-ai/scripts/{name}.py` — chmod +x, test immediately
+- **Tool install:** brew/pip/npm — **always** check `auto_approve_installs` first
 
 ### Verification
 
 Re-attempt the original triggering task. Pass → register. Fail → next strategy.
-Timeout: `verification_timeout_seconds` (default 120s). Never declare success untested.
+Never declare a capability successful without testing it.
 
-### Entry Types (write templates in REFERENCE.md)
+---
 
-| Type | Section | Purpose |
-|------|---------|---------|
-| E-entry | Capabilities Built | New capability created |
-| O-entry | Optimizations Learned | Better approach discovered |
-| F-entry | Failed Evolutions | Failed attempt (always record) |
-| C-entry | Corrections Captured | User correction with systematic gap |
-| K-entry | Competence Learned | HOW to solve a problem class + success rate |
+## Config
 
-**Always use `locked_write.py`.** Read REFERENCE.md for exact write templates.
-**Always write JSONL changelog.** See REFERENCE.md for format.
+Defaults are hardcoded below. User can override in `~/.swarm-ai/config.json`
+under the `"evolution"` key. If the key is absent or empty, defaults apply.
 
-### Pattern Detection and Auto-Promotion
+| Key | Default | Effect |
+|-----|---------|--------|
+| `enabled` | `true` | `false` = disable all evolution |
+| `auto_approve_skills` | `false` | `false` = ask user before creating skills |
+| `auto_approve_scripts` | `false` | `false` = ask user before creating scripts |
+| `auto_approve_installs` | `false` | `false` = ask user before installing packages |
+| `proactive_enabled` | `true` | `false` = skip proactive triggers |
+| `stuck_detection_enabled` | `true` | `false` = skip stuck detection |
+| `max_triggers_per_session` | `3` | Cap on evolution triggers per session |
+| `max_retries` | `3` | Max attempts per trigger |
+| `max_active_entries` | `30` | Soft cap on active EVOLUTION.md entries |
+| `deprecation_days` | `30` | Days idle before auto-deprecation |
 
-When 3+ entries share the same root cause / problem class:
+To check for user overrides:
+```bash
+cat ~/.swarm-ai/config.json 2>/dev/null | jq '.evolution // empty' 2>/dev/null || echo "Using defaults"
+```
+
+---
+
+## Writing to EVOLUTION.md
+
+**Use the built-in Read + Edit tools.** No external scripts. No special tooling.
+
+### Append a new entry
+
+1. `Read .context/EVOLUTION.md`
+2. Find the target section's last content
+3. `Edit` tool: `old_string` = last lines before next `## Section` header,
+   `new_string` = those same lines + newline + new entry
+
+**Example — appending E006 after E005 ends with `- **Auto Generated**: true`
+and the next section is `## Optimizations Learned`:**
 
 ```
-Raw entries (E/O/C/K) → [≥3 times + VFM ≥50] → MEMORY.md or new skill
+old_string:
+- **Auto Generated**: true
+
+## Optimizations Learned
+
+new_string:
+- **Auto Generated**: true
+
+### E006 | reactive | skill | 2026-03-15
+- **Name**: New Skill
+- **Description**: Does the thing
+- **Location**: .claude/skills/s_new-skill/
+- **Usage**: Instruction skill
+- **When to Use**: When user needs the thing
+- **Principle Applied**: Reuse before you build
+- **Usage Count**: 0
+- **Status**: active
+- **Auto Generated**: true
+
+## Optimizations Learned
 ```
 
-1. Identify pattern across 3+ entries
-2. Score with VFM (see REFERENCE.md) — must be ≥50
-3. Synthesize into actionable rule or procedure
-4. Write to MEMORY.md (principle) or new skill (procedure)
-5. Mark sources with `Promoted-To:` + log to JSONL changelog
+### Update a field
 
-### Salience-Based Entry Management
+Use `Edit` with the entry header as context for uniqueness:
 
-- Start salience = 1.0. Usage resets to 1.0. Decay: -0.1/week idle.
-- K-entries with >80% success rate decay at half speed (-0.05/week).
-- At 0.3 → `fading`. At 0.0 → `deprecated`.
-- Revision ops: `supersede` (link replacement), `fork` (variant), `contest` (conflicting evidence).
+```
+old_string:
+### E003 | proactive | skill | 2026-03-08
+...
+- **Usage Count**: 0
 
-### Rules (Hard Constraints)
+new_string:
+### E003 | proactive | skill | 2026-03-08
+...
+- **Usage Count**: 1
+```
 
-1. **Max 3 attempts per trigger** — then Help Request and stop
-2. **Verify before registering** — test against original task
-3. **Always record failures** — every failed attempt gets an F-entry
-4. **Always return to user's task** — summarize evolution, resume work
-5. **Respect all config toggles** — check before acting
-6. **Never install without checking `auto_approve_installs`**
-7. **Never create skills without checking `auto_approve_skills`**
-8. **Use `locked_write.py` for ALL EVOLUTION.md writes**
-9. **Proactive triggers are deferred** — never interrupt active work
-10. **Each attempt must be fundamentally different**
-11. **Corrections require novelty filter** — systematic gaps only
-12. **Promotion requires VFM ≥50** — no exceptions
-13. **ADL drift prevention** — stability > everything
-14. **Always write JSONL changelog** — no silent mutations
+Or for simple unique fields:
+- `old_string: "**Usage Count**: 0"` → `new_string: "**Usage Count**: 1"`
+  (only if that exact string is unique in the file)
 
-### Growth Principles
+### JSONL Changelog
+
+Append one line per mutation:
+```bash
+echo '{"ts":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","action":"add","type":"capability","id":"E006","summary":"..."}' >> .context/EVOLUTION_CHANGELOG.jsonl
+```
+
+Valid actions: `add`, `use`, `promote`, `supersede`, `fork`, `contest`, `deprecate`
+
+---
+
+## Entry Templates
+
+**ID generation:** Read last ID in target section, increment. Empty section → 001.
+
+### E-entry → "Capabilities Built"
+```
+### E{NNN} | {trigger_type} | {capability_type} | {YYYY-MM-DD}
+- **Name**: {name}
+- **Description**: {description}
+- **Location**: {file_path}
+- **Usage**: {usage_instructions}
+- **When to Use**: {matching_criteria}
+- **Principle Applied**: {principle_name}
+- **Usage Count**: 0
+- **Status**: active
+- **Auto Generated**: true
+```
+
+### O-entry → "Optimizations Learned"
+```
+### O{NNN} | {YYYY-MM-DD}
+- **Optimization**: {description}
+- **Context**: {when_this_applies}
+- **Before**: {old_approach}
+- **After**: {new_approach}
+- **When Applicable**: {matching_criteria}
+```
+
+### C-entry → "Corrections Captured"
+```
+### C{NNN} | {YYYY-MM-DD}
+- **What I Did Wrong**: {incorrect_approach}
+- **Correct Approach**: {what_user_showed}
+- **Root Cause**: {why_I_got_it_wrong}
+- **Prevention Rule**: {rule_to_prevent_recurrence}
+- **Occurrences**: 1
+```
+
+### K-entry → "Competence Learned"
+```
+### K{NNN} | {YYYY-MM-DD}
+- **Problem Class**: {type_of_problem}
+- **Procedure**: {step_by_step_how}
+- **When to Apply**: {matching_criteria}
+- **Success Rate**: 1/1
+- **Last Used**: {YYYY-MM-DD}
+- **Status**: active
+```
+
+### F-entry → "Failed Evolutions"
+```
+### F{NNN} | {trigger_type} | {YYYY-MM-DD}
+- **Attempted**: {what_was_tried}
+- **Strategy**: {strategy_name}
+- **Why Failed**: {failure_reason}
+- **Lesson**: {what_was_learned}
+- **Alternative**: {suggested_alternative}
+```
+
+---
+
+## Pattern Promotion
+
+3+ entries with same root cause + VFM ≥50 → promote to MEMORY.md or new skill.
+
+**VFM:** `(Reusability×3 + ErrorPrevention×3 + AnalysisQuality×2 + EfficiencyGain×2) / 10`
+- ≥70 → promote immediately. 50-69 → promote if 3+ occurrences. <50 → keep.
+
+### Salience
+
+Start 1.0. Usage resets to 1.0. Decay -0.1/week idle. K-entries >80% success → half decay.
+At 0.3 → `fading`. At 0.0 → `deprecated`.
+
+---
+
+## SSE Events
+
+Emit markers for frontend rendering:
+```
+<!-- EVOLUTION_EVENT: {"event": "evolution_start", "data": {"triggerType": "reactive", "description": "...", "strategySelected": "compose_existing", "attemptNumber": 1}} -->
+```
+
+Events: `evolution_start`, `evolution_result`, `evolution_stuck_detected`, `evolution_help_request`
+
+## Help Request (after 3 failures)
+
+```
+I need your help. Here's what happened:
+
+**Original Task**: {what you were trying to do}
+**Trigger**: {trigger type} — {description}
+
+**Attempts**:
+1. Strategy: {strategy_1} — Failed because: {reason_1}
+2. Strategy: {strategy_2} — Failed because: {reason_2}
+3. Strategy: {strategy_3} — Failed because: {reason_3}
+
+**My Assessment**: {why the task is blocked}
+**Suggested Next Step**: {what the user could do}
+```
+
+---
+
+## Context Window Monitoring
+
+Run `node .claude/skills/s_context-monitor/context-check.mjs` to estimate usage.
+
+**When:** Every ~15 user messages, before multi-step tasks, after 10+ tool calls.
+
+**Act on result:**
+- `ok` (<70%) — silent
+- `warn` (70-84%) — append note after response
+- `critical` (≥85%) — warn at start of response, offer save-context
+
+---
+
+## Growth Principles
 
 - "Reuse before you build" → check EVOLUTION.md first
 - "Small fix over big system" → scripts > skills for simple tasks
 - "Verify before you declare" → test before registering
 - "Know when to stop" → hard stop at 3 attempts
-- "If you're stuck, step back and switch" → different approach, not variation
 - "Stability over novelty" → ADL priority ordering
-- "Earn your promotion" → VFM ≥50 + 3 occurrences
 
-### Context Window Monitoring
+## DailyActivity Logging
 
-Always-on background check. Runs `s_context-monitor/context-check.mjs` to
-estimate context window usage and warn the user before the session runs out.
+After significant evolution events, append to `Knowledge/DailyActivity/YYYY-MM-DD.md`.
 
-**When to check:**
-- Every ~15 user messages (count turns: 15, 30, 45...)
-- Before starting multi-step tasks (deep-research, skill building, etc.)
-- After 10+ consecutive tool calls
-- When user asks ("context left?", "how much space?")
+## Rules (Hard Constraints)
 
-**How to check:**
-```bash
-node .claude/skills/s_context-monitor/context-check.mjs
-```
-
-**Act on result:**
-- `ok` (< 70%) — silent, do nothing
-- `warn` (70-84%) — append note AFTER current response:
-  "Heads up — session context is ~{pct}% full. Consider saving context soon."
-- `critical` (>= 85%) — warn at START of response:
-  "**Context alert**: {pct}% full. Recommend `save context` + new session."
-  Then still complete the task. Offer to run save-context afterward.
-
-**Rules:** Never interrupt task to warn. Max 1 check per 15 messages.
-
-### DailyActivity Logging
-
-After significant evolution events, append to `Knowledge/DailyActivity/YYYY-MM-DD.md`:
-- Successful capability build — what, why, where
-- All-3-failed — what was attempted, why it failed
-
-### Config & SSE Events
-
-See REFERENCE.md for the full config table, SSE event formats, and help request template.
+1. **Max 3 attempts per trigger** — then Help Request and stop
+2. **Verify before registering** — test against original task
+3. **Always record failures** — every failed attempt gets an F-entry
+4. **Always return to user's task** — summarize evolution, resume work
+5. **Respect config toggles** — check before acting
+6. **Never install without checking `auto_approve_installs`**
+7. **Never create skills without checking `auto_approve_skills`**
+8. **Use Read + Edit for EVOLUTION.md writes** — built-in tools only, no external scripts
+9. **Proactive triggers are deferred** — never interrupt active work
+10. **Each attempt must be fundamentally different**
+11. **Corrections require novelty filter** — systematic gaps only
+12. **Promotion requires VFM ≥50**
+13. **ADL drift prevention** — stability over everything
+14. **Always write JSONL changelog** — no silent mutations

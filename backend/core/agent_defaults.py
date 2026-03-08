@@ -87,21 +87,33 @@ async def ensure_default_agent(skip_registration: bool = False) -> dict:
         else:
             logger.warning(f"Default MCP servers config not found: {mcp_config_path}")
     
-    # Query system MCP servers from database
+    # Query active system MCP servers from database.
+    # After _register_default_mcp_servers runs, stale system MCPs have
+    # is_system=False, so list_by_system() only returns current ones.
     all_system_mcps = await db.mcp_servers.list_by_system()
-    mcp_ids = [mcp["id"] for mcp in all_system_mcps]
-    
-    logger.info(f"Found {len(mcp_ids)} system MCPs to bind to SwarmAgent")
-    
+    system_mcp_ids = set(mcp["id"] for mcp in all_system_mcps)
+
+    logger.info(f"Found {len(system_mcp_ids)} system MCPs to bind to SwarmAgent")
+
     # Check if default agent already exists
     existing = await db.agents.get(DEFAULT_AGENT_ID)
     if existing:
-        # Update existing agent with any new default MCPs
         existing_mcp_ids = set(existing.get("mcp_ids", []))
-        new_mcp_ids = set(mcp_ids)
-        
-        # Merge new default MCPs into existing (preserve user additions)
-        updated_mcp_ids = list(existing_mcp_ids | new_mcp_ids)
+
+        # Merge: add new system MCPs, remove deactivated ones, preserve user-added.
+        # User-added MCPs are those in existing_mcp_ids but not previously system.
+        # We keep them by only removing IDs that were system and are now gone.
+        # Simple approach: (existing ∪ current_system) works for adds;
+        # for removals, we check each existing ID — if it's not in system_mcp_ids
+        # AND its DB record has is_system=False, it was deactivated → remove it.
+        updated_mcp_ids_set = set(existing_mcp_ids) | system_mcp_ids
+        for mcp_id in list(updated_mcp_ids_set):
+            if mcp_id not in system_mcp_ids:
+                record = await db.mcp_servers.get(mcp_id)
+                if record and not record.get("is_system") and not record.get("is_active", True):
+                    updated_mcp_ids_set.discard(mcp_id)
+                    logger.info(f"Removed deactivated MCP from agent: {mcp_id}")
+        updated_mcp_ids = list(updated_mcp_ids_set)
         
         # Check if we need to update MCPs or system agent properties
         needs_update = (
@@ -230,9 +242,26 @@ async def _register_default_mcp_servers(config_path: Path) -> list[str]:
             mcp_ids.append(mcp_id)
             logger.debug(f"Registered default MCP server: {mcp_data['name']}")
             
+        # Cleanup: deactivate system MCPs that are no longer in the JSON config.
+        # This handles the case where a default MCP is removed between versions
+        # (e.g. Filesystem MCP removed because built-in tools cover all its features).
+        # Only affects is_system=True records — user-added MCPs are never touched.
+        all_system_mcps = await db.mcp_servers.list_by_system()
+        active_ids = set(mcp_ids)
+        for mcp in all_system_mcps:
+            if mcp["id"] not in active_ids:
+                await db.mcp_servers.update(mcp["id"], {
+                    "is_system": False,
+                    "is_active": False,
+                })
+                logger.info(
+                    f"Deactivated stale system MCP: {mcp['id']} "
+                    f"(no longer in default-mcp-servers.json)"
+                )
+
     except Exception as e:
         logger.error(f"Failed to register MCP servers: {e}")
-    
+
     return mcp_ids
 
 

@@ -253,11 +253,10 @@ class SeedDatabaseGenerator:
         else:
             logger.info("✓ SwarmAgent validated")
         
-        # Validate system MCPs exist
+        # Validate system MCPs (zero is valid — default-mcp-servers.json may be empty)
         mcps = await self.db.mcp_servers.list_by_system()
         if not mcps:
-            logger.error("Validation failed: No system MCP servers found")
-            valid = False
+            logger.info("✓ No system MCP servers (default-mcp-servers.json is empty)")
         else:
             for mcp in mcps:
                 if not mcp.get("is_system"):
