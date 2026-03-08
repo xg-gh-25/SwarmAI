@@ -52,6 +52,9 @@ trap "rm -rf $BUILD_DIR" EXIT
 # Copy backend code to build directory
 cp -r "$BACKEND_DIR"/* "$BUILD_DIR/"
 
+# Copy resource files needed by PyInstaller into the build directory
+cp "$PROJECT_ROOT/resources/optional-mcp-servers.json" "$BUILD_DIR/optional-mcp-servers.json"
+
 # Create entry point script for PyInstaller
 cat > "$BUILD_DIR/desktop_main.py" << 'EOF'
 #!/usr/bin/env python3
@@ -245,6 +248,8 @@ datas += collect_data_files('certifi')
 # Include built-in context files and skills for agent workspace initialization
 datas += [('context', 'context')]
 datas += [('skills', 'skills')]
+# Include optional MCP catalog for the /mcp/catalog endpoint
+datas += [('optional-mcp-servers.json', '.')]
 
 # Add local modules explicitly (these are in the current directory, not installed packages)
 local_modules = [
