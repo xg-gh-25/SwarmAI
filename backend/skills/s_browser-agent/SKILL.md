@@ -11,6 +11,31 @@ description: >
 
 # Browser Agent — DOM-Based Web Automation
 
+## MCP + Skill Routing
+
+**If Playwright MCP is available** (check for `mcp__playwright__*` tools):
+- Use MCP for **simple tasks**: navigate, click, fill forms, read page via accessibility snapshot
+- MCP uses accessibility tree (like a screen reader) — stable and token-efficient
+- Prefer MCP as the default — it's structured, reliable, and zero-setup
+
+**Fall back to browser-agent script** for:
+- Multi-tab workflows (MCP doesn't support tab management)
+- Persistent sessions across commands (CDP keeps browser alive)
+- DOM extraction with CSS selectors (`extract` command)
+- Custom DOM compression with `[N]` element indices
+- Screenshots with specific viewport control
+- `eval` (arbitrary JS execution in page)
+
+**Decision tree:**
+```
+Need browser? → Is Playwright MCP loaded?
+  → YES: Simple task? → Use MCP tools
+          Complex/multi-tab/persistent? → Use browser-agent.mjs
+  → NO: Use browser-agent.mjs for everything
+```
+
+---
+
 **Why?** Automate real browser interactions: navigate sites, read page content as compressed DOM,
 click buttons/links by element index, fill forms, extract data, and take screenshots.
 Uses Playwright with DOM compression (not screenshot/coordinate based) for reliable, token-efficient

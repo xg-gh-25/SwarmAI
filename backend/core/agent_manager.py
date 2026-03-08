@@ -444,12 +444,15 @@ class AgentManager:
         self,
         agent_config: dict,
         enable_mcp: bool,
-    ) -> dict:
+    ) -> tuple[dict, list[str]]:
         """Build MCP server configuration dict from agent's mcp_ids.
 
         Iterates over the agent's ``mcp_ids``, looks up each MCP server record
         from the database, and assembles the ``mcp_servers`` dict keyed by
         server name (to keep tool names short for Bedrock's 64-char limit).
+
+        Per-server ``rejected_tools`` are collected and converted to the SDK's
+        global ``disallowed_tools`` format (``mcp__<ServerName>__<tool>``).
 
         No workspace filtering — all agent MCPs are included.
 
@@ -458,12 +461,13 @@ class AgentManager:
             enable_mcp: Whether MCP servers are enabled.
 
         Returns:
-            Dict mapping server names to their connection configuration.
+            Tuple of (mcp_servers dict, disallowed_tools list).
         """
         mcp_servers: dict = {}
+        disallowed_tools: list[str] = []
 
         if not (enable_mcp and agent_config.get("mcp_ids")):
-            return mcp_servers
+            return mcp_servers, disallowed_tools
 
         used_names: set = set()  # Track used names to handle collisions
         for mcp_id in agent_config["mcp_ids"]:
@@ -483,10 +487,13 @@ class AgentManager:
                 used_names.add(server_name)
 
                 if connection_type == "stdio":
+                    # Expand environment variables in args (e.g. $HOME → /Users/xxx)
+                    raw_args = config.get("args", [])
+                    expanded_args = [os.path.expandvars(a) for a in raw_args]
                     mcp_servers[server_name] = {
                         "type": "stdio",
                         "command": config.get("command"),
-                        "args": config.get("args", []),
+                        "args": expanded_args,
                     }
                     env = config.get("env")
                     if env and isinstance(env, dict):
@@ -502,7 +509,19 @@ class AgentManager:
                         "url": config.get("url"),
                     }
 
-        return mcp_servers
+                # Collect per-server rejected_tools → global disallowed_tools.
+                # SDK uses mcp__<ServerName>__<tool_name> format.
+                #
+                # WHY: MCP servers may expose tools that overlap with built-in
+                # SDK tools (e.g. Filesystem MCP's read_text_file vs built-in
+                # Read). Blocking duplicates saves context tokens, prevents
+                # tool-choice ambiguity, and keeps file ops routed through
+                # security_hooks. See default-mcp-servers.json for details.
+                rejected = mcp_config.get("rejected_tools") or []
+                for tool in rejected:
+                    disallowed_tools.append(f"mcp__{server_name}__{tool}")
+
+        return mcp_servers, disallowed_tools
 
     async def _build_hooks(
         self,
@@ -987,7 +1006,7 @@ class AgentManager:
         allowed_tools = self._resolve_allowed_tools(agent_config)
 
         # 2. Build MCP server configuration (no workspace_id)
-        mcp_servers = await self._build_mcp_config(agent_config, enable_mcp)
+        mcp_servers, mcp_disallowed_tools = await self._build_mcp_config(agent_config, enable_mcp)
 
         # 3. Build hooks
         hooks, effective_allowed_skills, allow_all_skills = await self._build_hooks(
@@ -1042,6 +1061,9 @@ class AgentManager:
         return ClaudeAgentOptions(
             system_prompt=system_prompt_config,
             allowed_tools=allowed_tools if allowed_tools else None,
+            # Per-MCP rejected_tools mapped to SDK disallowed_tools format.
+            # Blocks duplicate MCP tools that overlap with built-in SDK tools.
+            disallowed_tools=mcp_disallowed_tools if mcp_disallowed_tools else [],
             mcp_servers=mcp_servers if mcp_servers else None,
             plugins=None,
             permission_mode=permission_mode,

@@ -12,6 +12,25 @@ description: >
 
 # Git Operations — Advanced Git Workflows
 
+## MCP + Skill Routing
+
+**If Git MCP is available** (check for `mcp__git__*` tools):
+- Use MCP for **atomic operations**: status, diff, log, commit, branch, stash
+- MCP provides structured output (JSON) — easier to parse than raw git CLI text
+- Prefer MCP for single-command operations
+
+**Use Bash + git CLI** for:
+- Complex piped commands (`git log --format=... | sort | uniq -c`)
+- Operations MCP doesn't cover (bisect, cherry-pick range, interactive rebase)
+- Custom formatting (`git log --oneline --graph`)
+- Operations that need shell variable capture (`HASH=$(git rev-parse HEAD)`)
+
+**This skill provides strategy for both:**
+- PR review checklist, changelog format, conflict resolution workflow
+- These workflows work regardless of whether MCP or Bash is the "hand"
+
+---
+
 Structured workflows for git operations beyond basic add/commit/push.
 PR reviews, changelog generation, conflict resolution, commit analysis,
 and release management.

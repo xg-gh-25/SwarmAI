@@ -11,6 +11,26 @@ description: >
 
 # Database Query — SQL Database Operations
 
+## MCP + Skill Routing
+
+**If SQLite MCP is available** (check for `mcp__sqlite__*` tools):
+- Use MCP for **all SQLite operations**: query, list tables, describe schema, create/insert/update
+- MCP returns structured results — no need to parse CLI text output
+- MCP enforces read/write safety through its own transaction handling
+- Prefer MCP as the default for SQLite
+
+**Use Bash + sqlite3 CLI** for:
+- Non-SQLite databases (PostgreSQL via psql, MySQL via mysql)
+- Bulk import/export (`.import`, `.dump`, CSV export)
+- Operations needing shell piping (`sqlite3 db ".dump" | gzip > backup.gz`)
+- SQLite when MCP is not loaded in the current session
+- Database file paths not configured in MCP
+
+**This skill provides strategy for both paths** — schema exploration sequence,
+safe mutation patterns, output formatting, and multi-engine support.
+
+---
+
 Query, explore, and manage SQL databases directly. Supports SQLite (built-in),
 PostgreSQL (via psql), and MySQL (via mysql CLI).
 
