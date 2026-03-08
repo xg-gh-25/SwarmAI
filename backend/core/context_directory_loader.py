@@ -97,7 +97,7 @@ CONTEXT_FILES: list[ContextFileSpec] = [
     ContextFileSpec("SWARMAI.md",           0,  "SwarmAI",            False, False, "tail"),
     ContextFileSpec("IDENTITY.md",          1,  "Identity",           False, False, "tail"),
     ContextFileSpec("SOUL.md",              2,  "Soul",               False, False, "tail"),
-    ContextFileSpec("GROWTH_PRINCIPLES.md", 3,  "Growth Principles",  True,  True,  "tail"),
+    ContextFileSpec("GROWTH_PRINCIPLES.md", 3,  "Growth Principles",  True,  False, "tail"),
     ContextFileSpec("AGENT.md",             4,  "Agent Directives",   True,  False, "tail"),
     ContextFileSpec("USER.md",              5,  "User",               True,  True,  "tail"),
     ContextFileSpec("STEERING.md",          6,  "Steering",           True,  True,  "tail"),
