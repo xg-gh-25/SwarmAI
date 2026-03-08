@@ -50,6 +50,22 @@ After 5+ tool calls: most efficient approach? Reusable insight? → O/K-entry if
 **Limits:** Max 3 triggers/session. 60s cooldown between same-type.
 **Always return** to user's task after evolution. Summarize what changed.
 
+### Trigger Counter (compaction-safe)
+
+The in-context trigger count is lost when the context window compacts.
+Persist it to a file so it survives:
+
+- **Before each evolution trigger:** read the counter file:
+  ```bash
+  cat /tmp/swarm-evo-triggers 2>/dev/null || echo "0"
+  ```
+- If count ≥ `max_triggers_per_session` (default 3) → **skip**, do not evolve.
+- **After each trigger fires:** increment and write back:
+  ```bash
+  echo "$(($(cat /tmp/swarm-evo-triggers 2>/dev/null || echo 0) + 1))" > /tmp/swarm-evo-triggers
+  ```
+- File is in `/tmp/` so it auto-cleans on reboot (session boundary).
+
 ### Drift Prevention (ADL Protocol)
 
 **Stability > Interpretability > Reusability > Extensibility > Novelty**
@@ -116,12 +132,17 @@ cat ~/.swarm-ai/config.json 2>/dev/null | jq '.evolution // empty' 2>/dev/null |
 
 **Use the built-in Read + Edit tools.** No external scripts. No special tooling.
 
+**Every write is a 2-step atomic pair — never do step 1 without step 2:**
+1. **Edit** EVOLUTION.md (add/update/deprecate entry)
+2. **Immediately** append JSONL changelog line (same tool-call batch, no other work in between)
+
 ### Append a new entry
 
 1. `Read .context/EVOLUTION.md`
 2. Find the target section's last content
 3. `Edit` tool: `old_string` = last lines before next `## Section` header,
    `new_string` = those same lines + newline + new entry
+4. **Immediately run** the JSONL append (see below)
 
 **Example — appending E006 after E005 ends with `- **Auto Generated**: true`
 and the next section is `## Optimizations Learned`:**
@@ -169,9 +190,9 @@ Or for simple unique fields:
 - `old_string: "**Usage Count**: 0"` → `new_string: "**Usage Count**: 1"`
   (only if that exact string is unique in the file)
 
-### JSONL Changelog
+### JSONL Changelog (mandatory — run immediately after every Edit)
 
-Append one line per mutation:
+Append one line per mutation. **This is not optional — Rule #14.**
 ```bash
 echo '{"ts":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","action":"add","type":"capability","id":"E006","summary":"..."}' >> .context/EVOLUTION_CHANGELOG.jsonl
 ```

@@ -471,7 +471,7 @@ class TestE2EDirectChannel:
         assert "channel=direct" in prompt
 
     def test_priority_order_preserved(self, workspace):
-        """Files are assembled in priority order (P0 first, P11 last)."""
+        """Files are assembled in priority order (P0 first, P9 last)."""
         prompt, _ = _simulate_build(workspace)
         swarmai_pos = prompt.find("## SwarmAI")
         identity_pos = prompt.find("## Identity")
@@ -480,7 +480,7 @@ class TestE2EDirectChannel:
         projects_pos = prompt.find("## Projects")
 
         assert swarmai_pos < identity_pos < soul_pos
-        # Memory (P8) comes before Projects (P11)
+        # Memory (P7) comes before Projects (P9)
         assert memory_pos < projects_pos
 
 
@@ -643,7 +643,7 @@ class TestE2ETruncationDetection:
         # Create a minimal SWARMAI.md (non-truncatable, P0)
         (ctx / "SWARMAI.md").write_text("Core principles here.")
 
-        # Create a massive PROJECTS.md (P11, truncatable) that will force truncation
+        # Create a massive PROJECTS.md (P9, truncatable) that will force truncation
         huge_content = "Project details. " * 5000  # ~10K words → ~13K tokens
         (ctx / "PROJECTS.md").write_text(f"# Projects\n\n{huge_content}")
 

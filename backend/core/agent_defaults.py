@@ -164,7 +164,7 @@ async def ensure_default_agent(skip_registration: bool = False) -> dict:
         "is_system_agent": True,  # Mark as protected system agent
         "allowed_skills": [],  # Built-in skills always available without explicit listing
         "allow_all_skills": agent_config.get("allow_all_skills", True),
-        "mcp_ids": mcp_ids,
+        "mcp_ids": list(system_mcp_ids),
         "enable_bash_tool": agent_config.get("enable_bash_tool", True),
         "enable_file_tools": agent_config.get("enable_file_tools", True),
         "enable_web_tools": agent_config.get("enable_web_tools", True),

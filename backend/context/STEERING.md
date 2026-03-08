@@ -28,7 +28,7 @@ _These extend the base memory rules in AGENT.md with distillation and two-tier d
 - **MEMORY.md** — Curated long-term memory. Only distilled, high-value content belongs here.
 
 **Distillation (automatic, silent):**
-- When DailyActivity has >7 unprocessed files, distill at next session start
+- When DailyActivity has >3 unprocessed files, distill at next session start
 - Promote to MEMORY.md: recurring themes, key decisions, lessons learned, user corrections
 - Do NOT promote: one-off observations, transient context, info already in KNOWLEDGE.md
 - After distillation, mark processed files with `distilled: true` frontmatter in place; files stay in DailyActivity until 30-day auto-prune

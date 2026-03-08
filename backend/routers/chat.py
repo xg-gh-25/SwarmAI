@@ -86,6 +86,9 @@ def _extract_evolution_events(message: dict) -> list[dict]:
         try:
             payload = json.loads(match.group(1))
             if isinstance(payload, dict) and "event" in payload:
+                # Normalize "event" → "type" so the frontend SSE handler
+                # (which switches on event.type) recognises evolution events.
+                payload["type"] = payload.pop("event")
                 events.append(payload)
         except (json.JSONDecodeError, KeyError):
             logger.debug(
