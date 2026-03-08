@@ -369,7 +369,7 @@ class TestDistillationSkill:
         """Req 3.2/3.3: SKILL.md has Detection section with threshold."""
         content = (SKILLS_DIR / "s_memory-distill" / "SKILL.md").read_text()
         assert "Detection" in content
-        assert "≤ 7" in content or "<= 7" in content or "≤7" in content
+        assert "≤ 3" in content or "<= 3" in content or "≤3" in content
 
     def test_skill_has_extraction_section(self):
         """Req 3.4: SKILL.md has Extraction section."""

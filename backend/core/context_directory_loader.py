@@ -10,7 +10,7 @@ centralized directory.  It is responsible for:
 - ``ContextFileSpec``           — Frozen dataclass defining a source file's
                                   metadata (filename, priority, section_name,
                                   truncatable, user_customized, truncate_from)
-- ``CONTEXT_FILES``             — Ordered list of all 12 ContextFileSpec entries
+- ``CONTEXT_FILES``             — Ordered list of all 10 ContextFileSpec entries
 - ``DEFAULT_TOKEN_BUDGET``      — Default token budget constant (25,000)
 - ``BUDGET_LARGE_MODEL``        — Token budget for >= 200K models (40,000)
 - ``L1_CACHE_FILENAME``         — Filename for the full L1 cache
@@ -63,6 +63,9 @@ THRESHOLD_SKIP_LOW_PRIORITY = 32_000
 BUDGET_LARGE_MODEL = 40_000
 """Token budget for models with >= 200K context window (20% of 200K)."""
 
+GROUP_CHANNEL_EXCLUDE: frozenset[str] = frozenset({"MEMORY.md", "USER.md"})
+"""Files excluded from group channel prompts to prevent personal data leakage."""
+
 
 # ── Data Models ────────────────────────────────────────────────────────
 
@@ -97,17 +100,18 @@ CONTEXT_FILES: list[ContextFileSpec] = [
     ContextFileSpec("SWARMAI.md",           0,  "SwarmAI",            False, False, "tail"),
     ContextFileSpec("IDENTITY.md",          1,  "Identity",           False, False, "tail"),
     ContextFileSpec("SOUL.md",              2,  "Soul",               False, False, "tail"),
-    ContextFileSpec("GROWTH_PRINCIPLES.md", 3,  "Growth Principles",  True,  False, "tail"),
-    ContextFileSpec("AGENT.md",             4,  "Agent Directives",   True,  False, "tail"),
-    ContextFileSpec("USER.md",              5,  "User",               True,  True,  "tail"),
-    ContextFileSpec("STEERING.md",          6,  "Steering",           True,  True,  "tail"),
-    ContextFileSpec("TOOLS.md",             7,  "Tools",              True,  True,  "tail"),
-    ContextFileSpec("MEMORY.md",            8,  "Memory",             True,  True,  "head"),
-    ContextFileSpec("EVOLUTION.md",         9,  "Evolution Registry", True,  True,  "head"),
-    ContextFileSpec("KNOWLEDGE.md",         10, "Knowledge",          True,  True,  "tail"),
-    ContextFileSpec("PROJECTS.md",          11, "Projects",           True,  True,  "tail"),
+    ContextFileSpec("AGENT.md",             3,  "Agent Directives",   True,  False, "tail"),
+    ContextFileSpec("USER.md",              4,  "User",               True,  True,  "tail"),
+    ContextFileSpec("STEERING.md",          5,  "Steering",           True,  True,  "tail"),
+    ContextFileSpec("TOOLS.md",             6,  "Tools",              True,  True,  "tail"),
+    ContextFileSpec("MEMORY.md",            7,  "Memory",             True,  True,  "head"),
+    ContextFileSpec("KNOWLEDGE.md",         8,  "Knowledge",          True,  True,  "tail"),
+    ContextFileSpec("PROJECTS.md",          9,  "Projects",           True,  True,  "tail"),
+    # GROWTH_PRINCIPLES.md removed — content folded into SOUL.md and skills.
+    # EVOLUTION.md removed — agent reads it on-demand via Read tool per AGENT.md
+    #   "Every Session" directive, not loaded into system prompt.
 ]
-"""All 12 context source files in ascending priority order."""
+"""All 10 context source files in ascending priority order (P0-P9)."""
 
 
 class ContextDirectoryLoader:
@@ -143,18 +147,36 @@ class ContextDirectoryLoader:
         self.templates_dir = templates_dir
 
 
-    # ── Public API ─────────────────────────────────────────────────────
+    # ── Class-level compiled regexes ─────────────────────────────────
+
+    # HTML comments (<!-- ... -->) — stripped during assembly to save tokens.
+    # Uses re.DOTALL so multi-line comments are matched.
+    _HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
+
+    # Regex matching CJK Unified Ideographs, CJK Extension A, Hangul,
+    # Hiragana, Katakana, and fullwidth forms — characters that are NOT
+    # space-separated and need per-character token estimation.
+    _CJK_RE = re.compile(
+        r"[\u3000-\u303f\u3040-\u309f\u30a0-\u30ff\u3400-\u4dbf"
+        r"\u4e00-\u9fff\uf900-\ufaff\ufe30-\ufe4f\uff00-\uffef"
+        r"\U00020000-\U0002a6df\U0002a700-\U0002b73f]"
+    )
 
     @staticmethod
     def estimate_tokens(text: str) -> int:
-        """Estimate token count using word-based heuristic.
+        """Estimate token count with CJK awareness.
 
-        Formula::
+        Uses a two-pass heuristic:
 
-            tokens = max(1, int(word_count * 4 / 3))
+        1. Count CJK characters (Chinese/Japanese/Korean ideographs) and
+           estimate at **1.5 characters per token** (~0.67 tokens/char).
+        2. Remove CJK characters, then count remaining space-separated
+           words at **4/3 tokens per word** (~0.75 words/token).
+        3. Sum both estimates.
 
-        This approximation (1 token ≈ 0.75 words) provides a fast,
-        dependency-free estimate suitable for budget enforcement.
+        This avoids the major underestimation that occurs with pure
+        word-split on CJK text (a Chinese paragraph may be 1 "word"
+        but 100+ tokens).
 
         Args:
             text: Input text to estimate.
@@ -165,8 +187,26 @@ class ContextDirectoryLoader:
         """
         if not text or not text.strip():
             return 0
-        word_count = len(text.split())
-        return max(1, int(word_count * 4 / 3))
+
+        # Count CJK characters
+        cjk_chars = ContextDirectoryLoader._CJK_RE.findall(text)
+        cjk_count = len(cjk_chars)
+
+        if cjk_count == 0:
+            # Fast path: pure Latin/ASCII text — original heuristic
+            word_count = len(text.split())
+            return max(1, int(word_count * 4 / 3))
+
+        # CJK tokens: ~1.5 chars per token (empirical average for
+        # Chinese/Japanese with cl100k_base / Claude tokenizers)
+        cjk_tokens = int(cjk_count / 1.5)
+
+        # Remove CJK chars, estimate remaining words
+        latin_text = ContextDirectoryLoader._CJK_RE.sub("", text)
+        latin_words = len(latin_text.split())
+        latin_tokens = int(latin_words * 4 / 3)
+
+        return max(1, cjk_tokens + latin_tokens)
 
     def ensure_directory(self) -> None:
         """Create context directory and refresh context files with two-mode copy.
@@ -210,6 +250,8 @@ class ContextDirectoryLoader:
         if self.templates_dir is None:
             return
 
+        refreshed: list[str] = []
+        created: list[str] = []
         for spec in CONTEXT_FILES:
             src = self.templates_dir / spec.filename
             if not src.is_file():
@@ -226,6 +268,7 @@ class ContextDirectoryLoader:
                         os.chmod(dest, 0o644)
                     except OSError:
                         pass  # Best-effort on non-Unix (Windows)
+                    created.append(spec.filename)
                 else:
                     # Always-overwrite: system defaults refreshed every startup
                     # Single read of source, compare against dest to skip no-ops
@@ -245,6 +288,7 @@ class ContextDirectoryLoader:
                             except OSError:
                                 pass
                         dest.write_bytes(src_bytes)
+                        refreshed.append(spec.filename)
                     # Always ensure readonly permission (whether written or not)
                     try:
                         os.chmod(dest, 0o444)
@@ -252,6 +296,16 @@ class ContextDirectoryLoader:
                         pass  # Best-effort on non-Unix
             except OSError as exc:
                 logger.warning("Failed to copy %s → %s: %s", src, dest, exc)
+
+        # Startup health report
+        if refreshed or created:
+            logger.info(
+                "Context sync: refreshed=%s, created=%s",
+                refreshed or "none",
+                created or "none",
+            )
+        else:
+            logger.debug("Context sync: all %d files current", len(CONTEXT_FILES))
 
         # BOOTSTRAP.md detection: create if USER.md is empty template
         self._maybe_create_bootstrap()
@@ -367,10 +421,53 @@ class ContextDirectoryLoader:
 
     # ── Private Methods ────────────────────────────────────────────────
 
+    @classmethod
+    def _clean_content(cls, raw: str, section_name: str) -> str:
+        """Strip boilerplate from file content before assembly.
+
+        Removes:
+
+        1. **HTML comments** (``<!-- ... -->``) — template markers like
+           ``<!-- ⚙️ SYSTEM DEFAULT -->`` are useful for human editors
+           but waste ~200 tokens in the LLM system prompt.
+        2. **Redundant first H1** — each file already gets a
+           ``## {section_name}`` wrapper during assembly, so a leading
+           ``# Title`` that repeats the section name is redundant.
+           Only stripped when the H1 text is a close match to
+           ``section_name`` (case-insensitive prefix match after
+           stripping markdown formatting).
+
+        Args:
+            raw: Raw file content (before stripping).
+            section_name: The section header name for this file.
+
+        Returns:
+            Cleaned, stripped content.  May be empty string.
+        """
+        # 1. Strip HTML comments
+        content = cls._HTML_COMMENT_RE.sub("", raw).strip()
+        if not content:
+            return ""
+
+        # 2. Strip redundant leading H1 if it matches section_name
+        #    e.g. "# SwarmAI — Your AI Command Center" matches section "SwarmAI"
+        lines = content.split("\n", 1)
+        first_line = lines[0].strip()
+        if first_line.startswith("# ") and not first_line.startswith("## "):
+            h1_text = first_line[2:].strip()
+            # Normalize: take text before em-dash, en-dash, double-dash, or colon
+            h1_prefix = h1_text.split("—")[0].split("–")[0].split(" -- ")[0].split(":")[0].strip()
+            if h1_prefix.lower() == section_name.lower():
+                # Remove the H1, keep the rest
+                content = lines[1].strip() if len(lines) > 1 else ""
+
+        return content
+
     def _assemble_from_sources(
         self,
         model_context_window: int = 200_000,
         token_budget: int | None = None,
+        exclude_filenames: set[str] | None = None,
     ) -> str:
         """Read all source files, enforce token budget, and assemble.
 
@@ -382,6 +479,9 @@ class ContextDirectoryLoader:
         For models with a context window below ``THRESHOLD_SKIP_LOW_PRIORITY``
         (32K), KNOWLEDGE.md and PROJECTS.md are excluded entirely.
 
+        Files listed in ``exclude_filenames`` are also skipped (used by
+        group channels to suppress MEMORY.md and USER.md).
+
         After reading, the sections are passed through
         ``_enforce_token_budget()`` to ensure the assembled output fits
         within the computed budget.
@@ -392,6 +492,8 @@ class ContextDirectoryLoader:
             token_budget: Dynamic token budget computed by
                 ``compute_token_budget()``.  Falls back to
                 ``self.token_budget`` when ``None``.
+            exclude_filenames: Set of filenames to skip entirely (e.g.
+                ``{"MEMORY.md", "USER.md"}`` for group channels).
 
         Returns:
             Assembled context string with section headers separated by
@@ -400,9 +502,9 @@ class ContextDirectoryLoader:
         Validates: Requirements 2.1, 2.2, 2.3, 2.4, 6.4, 11.6, 11.7
         """
         effective_budget = token_budget if token_budget is not None else self.token_budget
-        skip_filenames: set[str] = set()
+        skip_filenames: set[str] = set(exclude_filenames or ())
         if model_context_window < THRESHOLD_SKIP_LOW_PRIORITY:
-            skip_filenames = {"KNOWLEDGE.md", "PROJECTS.md"}
+            skip_filenames |= {"KNOWLEDGE.md", "PROJECTS.md"}
 
         # Build section tuples: (priority, section_name, content, truncatable, truncate_from)
         section_tuples: list[tuple[int, str, str, bool, str]] = []
@@ -427,7 +529,7 @@ class ContextDirectoryLoader:
                 )
                 continue
 
-            content = content.strip()
+            content = self._clean_content(content, spec.section_name)
             if not content:
                 continue
 
@@ -578,8 +680,6 @@ class ContextDirectoryLoader:
             )
             return truncated + indicator
 
-        return result
-
     # ── L1 Cache ───────────────────────────────────────────────────────
 
     def _is_l1_fresh(self) -> bool:
@@ -712,7 +812,11 @@ class ContextDirectoryLoader:
 
     # ── Main Entry Point ───────────────────────────────────────────────
 
-    def load_all(self, model_context_window: int = 200_000) -> str:
+    def load_all(
+        self,
+        model_context_window: int = 200_000,
+        exclude_filenames: set[str] | None = None,
+    ) -> str:
         """Load and assemble context based on model context window.
 
         Main entry point.  Selects the loading strategy based on the
@@ -726,11 +830,17 @@ class ContextDirectoryLoader:
         and ``_enforce_token_budget()`` so the budget scales with the
         model's capacity.
 
+        When ``exclude_filenames`` is provided, the L1 cache is bypassed
+        (exclusions are session-specific and the cache is shared).
+
         The entire method is wrapped in try/except so context loading
         failures never block agent startup.
 
         Args:
             model_context_window: Model's context window size in tokens.
+            exclude_filenames: Set of filenames to skip (e.g.
+                ``{"MEMORY.md", "USER.md"}`` for group channels).
+                When non-empty, L1 cache is bypassed.
 
         Returns:
             Assembled context string.  Returns ``""`` on any failure.
@@ -745,19 +855,22 @@ class ContextDirectoryLoader:
                 # Small model: use L0 compact cache
                 return self._load_l0(model_context_window)
 
-            # Large model: try L1 cache first
-            cached = self._load_l1_if_fresh(expected_budget=dynamic_budget)
-            if cached:
-                return cached
+            # When files are excluded (group channels), skip L1 cache —
+            # exclusions are session-specific and the cache is shared.
+            if not exclude_filenames:
+                cached = self._load_l1_if_fresh(expected_budget=dynamic_budget)
+                if cached:
+                    return cached
 
-            # L1 stale or missing: assemble from sources
+            # Assemble from sources (with exclusions if any)
             assembled = self._assemble_from_sources(
                 model_context_window=model_context_window,
                 token_budget=dynamic_budget,
+                exclude_filenames=exclude_filenames,
             )
 
-            # Write L1 cache for next time
-            if assembled:
+            # Only write L1 cache when no exclusions (cache is the full set)
+            if assembled and not exclude_filenames:
                 self._write_l1_cache(assembled, budget=dynamic_budget)
 
             return assembled

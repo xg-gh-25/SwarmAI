@@ -199,6 +199,8 @@ export default function ChatPage() {
     createStreamHandler,
     createCompleteHandler,
     createErrorHandler,
+    contextWarning,
+    clearContextWarning,
   } = useChatStreamingLifecycle({
     queryClient,
     getTabState,
@@ -539,6 +541,24 @@ export default function ChatPage() {
       console.log(`[ChatPage] Time to interactive: ${(performance.now() - mountTimeRef.current).toFixed(0)}ms`);
       mountTimeRef.current = 0; // Only log once
     }
+  }, [messagesReady]);
+
+  // Scroll to bottom after tab restore completes.
+  // The normal scroll effect ([messages]) may fire before the messages container
+  // is rendered (it's gated behind messagesReady). This effect ensures a
+  // reliable scroll-to-bottom once the DOM is fully laid out after restore.
+  useEffect(() => {
+    if (messagesReady && messages.length > 0) {
+      // Double-rAF: first rAF runs after React commit, second runs after
+      // the browser has painted the new DOM, guaranteeing scroll targets exist.
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
+        });
+      });
+    }
+    // Only fire once when messagesReady transitions to true — not on every message change
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [messagesReady]);
 
   // Register the initial/default tab in the per-tab state map on mount.
@@ -1298,6 +1318,16 @@ export default function ChatPage() {
       {/* Tab Limit Toast - Fix 7 (Req 2.16) */}
       {tabLimitToast && (
         <Toast message={tabLimitToast} type="info" onDismiss={() => setTabLimitToast(null)} />
+      )}
+
+      {/* Context Window Warning / Compaction notification */}
+      {contextWarning && (
+        <Toast
+          message={contextWarning.message}
+          type={contextWarning.level === 'critical' ? 'error' : contextWarning.level === 'ok' ? 'info' : 'warning'}
+          duration={contextWarning.level === 'critical' ? 0 : contextWarning.level === 'ok' ? 5000 : 15000}
+          onDismiss={clearContextWarning}
+        />
       )}
     </div>
   );

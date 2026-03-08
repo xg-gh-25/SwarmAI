@@ -1,4 +1,4 @@
-import { useRef, useCallback } from 'react';
+import { useRef, useCallback, useEffect } from 'react';
 import type { OpenTab } from '../types';
 import type { TabStatus } from '../../../hooks/useUnifiedTabState';
 import { SessionTab } from './SessionTab';
@@ -45,6 +45,18 @@ export function SessionTabBar({
       tabElement.scrollIntoView?.({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
     }
   }, []);
+
+  // Auto-scroll the active tab into view on mount and when activeTabId changes.
+  // Handles the app-restart scenario where the active tab (e.g. tab 6) is
+  // off-screen in the scrollable tab bar after restore from open_tabs.json.
+  useEffect(() => {
+    if (!activeTabId) return;
+    // Use rAF to ensure the DOM has laid out before scrolling
+    requestAnimationFrame(() => {
+      const el = tabRefs.current.get(activeTabId);
+      el?.scrollIntoView?.({ behavior: 'smooth', block: 'nearest', inline: 'nearest' });
+    });
+  }, [activeTabId]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent, currentTabId: string) => {
     const currentIndex = tabs.findIndex(tab => tab.id === currentTabId);

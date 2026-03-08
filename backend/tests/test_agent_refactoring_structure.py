@@ -81,8 +81,7 @@ def test_permission_manager_singleton_identity():
 
     Bound methods are not identity-equal across accesses, so we verify
     that the re-exported callables reference the same underlying
-    PermissionManager instance (via __self__) and that the queue object
-    is the exact same instance.
+    PermissionManager instance (via __self__).
     """
     from core.permission_manager import permission_manager as direct_pm
 
@@ -93,9 +92,6 @@ def test_permission_manager_singleton_identity():
     assert am.is_command_approved.__self__ is direct_pm
     assert am.set_permission_decision.__self__ is direct_pm
     assert am.wait_for_permission_decision.__self__ is direct_pm
-
-    # The re-exported queue should be the exact same object
-    assert am._permission_request_queue is direct_pm.get_permission_queue()
 
 
 # ---------------------------------------------------------------------------

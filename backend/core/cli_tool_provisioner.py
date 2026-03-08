@@ -20,13 +20,17 @@ import logging
 import platform
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# Path to the registry file (relative to this module)
-_RESOURCES_DIR = Path(__file__).resolve().parent.parent.parent / "desktop" / "resources"
+# Path to the registry file — handles both dev and frozen (PyInstaller) modes
+if getattr(sys, "frozen", False):
+    _RESOURCES_DIR = Path(sys._MEIPASS)
+else:
+    _RESOURCES_DIR = Path(__file__).resolve().parent.parent.parent / "desktop" / "resources"
 REGISTRY_FILE = _RESOURCES_DIR / "required-cli-tools.json"
 
 
