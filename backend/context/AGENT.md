@@ -10,8 +10,9 @@ Before doing anything else:
 1. Read your context files — they are your memory and identity
 2. Check STEERING.md for any session-level overrides
 3. Check MEMORY.md for recent decisions and open threads
-4. Read today's and yesterday's `Knowledge/DailyActivity/` files for recent context
-5. Then respond to the user's request
+4. Check EVOLUTION.md for capabilities you've built and optimizations you've learned
+5. Read today's and yesterday's `Knowledge/DailyActivity/` files for recent context
+6. Then respond to the user's request
 
 Don't announce that you're doing this. Just do it.
 

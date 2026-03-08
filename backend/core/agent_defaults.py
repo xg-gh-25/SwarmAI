@@ -192,10 +192,21 @@ async def _register_default_mcp_servers(config_path: Path) -> list[str]:
             # Check if MCP server already exists
             existing = await db.mcp_servers.get(mcp_id)
             if existing:
-                # Update existing record to ensure is_system=True (Requirement 7.4)
+                # Sync system MCP fields from config on every startup.
+                # This ensures returning users pick up new defaults
+                # (e.g. rejected_tools, config changes like $HOME path).
+                updates: dict = {}
                 if not existing.get("is_system"):
-                    await db.mcp_servers.update(mcp_id, {"is_system": True})
-                    logger.debug(f"Updated existing MCP server with is_system=True: {mcp_id}")
+                    updates["is_system"] = True
+                new_rejected = mcp_config.get("rejected_tools", [])
+                if existing.get("rejected_tools") != new_rejected:
+                    updates["rejected_tools"] = new_rejected
+                new_cfg = mcp_config.get("config", {})
+                if existing.get("config") != new_cfg:
+                    updates["config"] = new_cfg
+                if updates:
+                    await db.mcp_servers.update(mcp_id, updates)
+                    logger.debug(f"Synced system MCP server fields: {mcp_id} → {list(updates.keys())}")
                 mcp_ids.append(mcp_id)
                 continue
             
@@ -207,6 +218,7 @@ async def _register_default_mcp_servers(config_path: Path) -> list[str]:
                 "description": mcp_config.get("description", ""),
                 "connection_type": mcp_config.get("connection_type", "stdio"),
                 "config": mcp_config.get("config", {}),
+                "rejected_tools": mcp_config.get("rejected_tools", []),
                 "source_type": "system",
                 "is_system": True,
                 "is_active": True,

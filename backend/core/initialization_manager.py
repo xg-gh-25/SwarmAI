@@ -360,6 +360,31 @@ class InitializationManager:
         except Exception as e:
             logger.error("Context refresh failed during refresh (non-fatal): %s", e)
 
+        # Step 4: Check CLI tool availability (non-fatal, report-only)
+        # Actual installation is deferred to user consent or explicit request.
+        try:
+            from core.cli_tool_provisioner import check_all_tools
+            status = check_all_tools()
+            if status["missing"]:
+                missing_ids = [t["id"] for t in status["missing"]]
+                logger.warning(
+                    "CLI tools missing (%d/%d): %s — "
+                    "install via 'brew install %s' or ask SwarmAI to provision",
+                    len(status["missing"]), status["total"],
+                    missing_ids,
+                    " ".join(
+                        t.get("install", {}).get("brew", t["id"])
+                        for t in status["missing"]
+                    ),
+                )
+            else:
+                logger.info(
+                    "All %d required CLI tools are available",
+                    status["total"],
+                )
+        except Exception as e:
+            logger.error("CLI tool check failed (non-fatal): %s", e)
+
 
     async def reset_to_defaults(self) -> dict:
         """Reset initialization state and re-run full initialization.
