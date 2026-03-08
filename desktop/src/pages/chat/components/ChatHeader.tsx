@@ -4,8 +4,6 @@ import type { OpenTab } from '../types';
 import type { TabStatus } from '../../../hooks/useUnifiedTabState';
 import { SessionTabBar } from './SessionTabBar';
 import type { RightSidebarId } from '../constants';
-import { useMemorySave } from '../../../hooks/useMemorySave';
-import type { MemorySaveStatus } from '../../../hooks/useMemorySave';
 import { Toast } from '../../../components/common/Toast';
 import { useState } from 'react';
 import { chatService } from '../../../services/chat';
@@ -26,22 +24,13 @@ interface ChatHeaderProps {
   onOpenSidebar: (id: RightSidebarId) => void;
 }
 
-/** Material icon name for each save-to-memory state. */
-const MEMORY_ICON_MAP: Record<MemorySaveStatus, string> = {
-  idle: 'neurology',       // brain icon (Material Symbols)
-  loading: 'progress_activity', // spinner
-  saved: 'check_circle',
-  empty: 'neurology',
-  error: 'error',
-};
-
 /**
  * Chat Header Component - spans full width with session tabs and action buttons.
  * 
  * Layout:
  * ┌─────────────────────────────────────────────────────────────────────┐
- * │ [Tab1][Tab2][Tab3]...←scroll→        │  [+] [checklist] [history]  │
- * │ ◄─── SessionTabBar (flex-1) ───►     │  ◄─── HeaderActions ───►    │
+ * │ [Tab1][Tab2][Tab3]...←scroll→        │  [compact][+] [checklist]   │
+ * │ ◄─── SessionTabBar (flex-1) ───►     │  [history] [folder]         │
  * └─────────────────────────────────────────────────────────────────────┘
  * 
  * Validates: Requirements 2.1, 4.2, 4.3, 4.4
@@ -57,19 +46,12 @@ export function ChatHeader({
   onOpenSidebar,
 }: ChatHeaderProps) {
   const { t } = useTranslation();
-  const { status: memorySaveStatus, toastMessage, save: saveMemory, reset: resetMemory } = useMemorySave();
   const [compactStatus, setCompactStatus] = useState<'idle' | 'loading' | 'done'>('idle');
   const [compactToast, setCompactToast] = useState<string | null>(null);
 
   // Resolve the backend session ID for the active tab
   const activeTab = openTabs.find(tab => tab.id === activeTabId);
   const activeSessionId = activeTab?.sessionId;
-
-  const handleSaveMemory = () => {
-    if (activeSessionId && memorySaveStatus !== 'loading') {
-      saveMemory(activeSessionId);
-    }
-  };
 
   const handleCompact = async () => {
     if (!activeSessionId || compactStatus === 'loading') return;
@@ -82,17 +64,6 @@ export function ChatHeader({
     } catch {
       setCompactStatus('idle');
       setCompactToast('Failed to compact session');
-    }
-  };
-
-  // Auto-reset saved/empty/error status after toast dismisses
-  const handleToastDismiss = () => {
-    // Revert to 'saved' indicator (checkmark) if save succeeded, otherwise reset to idle
-    if (memorySaveStatus === 'saved') {
-      resetMemory();
-      // Keep the saved state visible — don't reset immediately
-    } else {
-      resetMemory();
     }
   };
 
@@ -109,30 +80,6 @@ export function ChatHeader({
 
       {/* Right Section: Header Actions */}
       <div className="flex items-center gap-1 flex-shrink-0">
-        {/* Save to Memory Button (🧠) — One-click session memory extraction */}
-        <button
-          onClick={handleSaveMemory}
-          disabled={memorySaveStatus === 'loading' || !activeSessionId}
-          className={clsx(
-            'p-2 rounded-lg transition-colors',
-            memorySaveStatus === 'saved'
-              ? 'text-green-500 bg-green-500/10 hover:bg-green-500/20'
-              : memorySaveStatus === 'error'
-                ? 'text-red-500 bg-red-500/10 hover:bg-red-500/20'
-                : 'text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)]',
-            (!activeSessionId || memorySaveStatus === 'loading') && 'opacity-50 cursor-not-allowed'
-          )}
-          title={t('chat.saveMemory', 'Save to Memory')}
-          aria-label={t('chat.saveMemory', 'Save to Memory')}
-        >
-          <span className={clsx(
-            'material-symbols-outlined',
-            memorySaveStatus === 'loading' && 'animate-spin'
-          )}>
-            {MEMORY_ICON_MAP[memorySaveStatus]}
-          </span>
-        </button>
-
         {/* Compact Context Button — manually triggers context window compaction */}
         <button
           onClick={handleCompact}
@@ -213,16 +160,6 @@ export function ChatHeader({
           <span className="material-symbols-outlined">folder</span>
         </button>
       </div>
-
-      {/* Toast notification for Save to Memory results */}
-      {toastMessage && (
-        <Toast
-          message={toastMessage}
-          type={memorySaveStatus === 'saved' ? 'success' : memorySaveStatus === 'error' ? 'error' : 'info'}
-          duration={4000}
-          onDismiss={handleToastDismiss}
-        />
-      )}
 
       {/* Toast notification for Compact results */}
       {compactToast && (
