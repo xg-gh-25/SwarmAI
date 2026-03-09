@@ -17,6 +17,7 @@
 import { useState, useRef, useMemo, useCallback, useEffect } from 'react';
 import type { Message } from '../types/index';
 import type { PendingQuestion, OpenTab } from '../pages/chat/types';
+import type { ContextWarning } from './useChatStreamingLifecycle';
 import {
   tabPersistenceService,
   type OpenTabsFileData,
@@ -59,6 +60,8 @@ export interface UnifiedTab {
   abortController: AbortController | null;
   streamGen: number;
   status: TabStatus;
+  /** Per-tab context warning from backend context monitor (null = no warning). */
+  contextWarning: ContextWarning | null;
 }
 
 /** Fields persisted to ~/.swarm-ai/open_tabs.json (re-exported from tabPersistence service). */
@@ -126,6 +129,7 @@ function createDefaultTab(agentId: string): UnifiedTab {
     abortController: null,
     streamGen: 0,
     status: 'idle',
+    contextWarning: null,
   };
 }
 
@@ -150,6 +154,7 @@ function hydrateTab(s: PersistedTab): UnifiedTab {
     abortController: null,
     streamGen: 0,
     status: 'idle',
+    contextWarning: null,
   };
 }
 
@@ -386,6 +391,7 @@ export function useUnifiedTabState(
         abortController: null,
         streamGen: 0,
         status: 'idle',
+        contextWarning: null,
       };
       tabMapRef.current.set(tabId, tab);
       bump();

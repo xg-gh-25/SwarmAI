@@ -28,7 +28,7 @@ Score across four dimensions (each 0-10):
 ### evolution_start
 ```json
 {
-  "event": "evolution_start",
+  "type": "evolution_start",
   "data": {
     "triggerType": "reactive|proactive|stuck",
     "description": "What triggered it",
@@ -42,7 +42,7 @@ Score across four dimensions (each 0-10):
 ### evolution_result
 ```json
 {
-  "event": "evolution_result",
+  "type": "evolution_result",
   "data": {
     "outcome": "success|failure",
     "durationMs": 5000,
@@ -56,7 +56,7 @@ Score across four dimensions (each 0-10):
 ### evolution_stuck_detected
 ```json
 {
-  "event": "evolution_stuck_detected",
+  "type": "evolution_stuck_detected",
   "data": {
     "detectedSignals": ["repeated_error", "cosmetic_retry"],
     "triedSummary": "Tried X and Y, both failed",
@@ -68,7 +68,7 @@ Score across four dimensions (each 0-10):
 ### evolution_help_request
 ```json
 {
-  "event": "evolution_help_request",
+  "type": "evolution_help_request",
   "data": {
     "taskSummary": "What was being attempted",
     "triggerType": "reactive",

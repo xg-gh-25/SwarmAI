@@ -4,6 +4,7 @@ import clsx from 'clsx';
 import type { FileAttachment, SystemPromptMetadata } from '../../../types';
 import { FileAttachmentButton, FileAttachmentPreview, AttachedFileChips } from '../../../components/chat';
 import { TSCCPopoverButton } from './TSCCPopoverButton';
+import { ContextUsageRing } from './ContextUsageRing';
 import { SLASH_COMMANDS } from '../constants';
 import type { FileTreeItem } from '../../../components/workspace-explorer/FileTreeNode';
 
@@ -28,6 +29,8 @@ interface ChatInputProps {
   sessionId?: string | null;
   /** System prompt metadata for the popover button */
   promptMetadata?: SystemPromptMetadata | null;
+  /** Context usage percentage for the ring indicator (null = no data) */
+  contextPct?: number | null;
 }
 
 const MAX_ROWS = 20;
@@ -52,6 +55,7 @@ export function ChatInput({
   onRemoveContextFile,
   sessionId,
   promptMetadata,
+  contextPct,
 }: ChatInputProps) {
   const { t } = useTranslation();
   const [showCommandSuggestions, setShowCommandSuggestions] = useState(false);
@@ -337,6 +341,7 @@ export function ChatInput({
             <div className="flex items-center gap-2">
               <FileAttachmentButton onFilesSelected={onAddFiles} disabled={isProcessingFiles || isStreaming} canAddMore={canAddMore} />
               <TSCCPopoverButton sessionId={sessionId ?? null} metadata={promptMetadata ?? null} />
+              <ContextUsageRing pct={contextPct ?? null} />
             </div>
             <span className="text-xs text-[var(--color-text-muted)]">
               Type <kbd className="px-1.5 py-0.5 bg-[var(--color-hover)] rounded text-xs mx-1">/</kbd> for commands

@@ -8,9 +8,10 @@
  * All layout, avatar, header, and content rendering logic lives in the
  * sub-components. This file only owns the props interface and the role switch.
  *
- * Props `sessionId` and `isLastAssistant` are threaded through to
- * AssistantMessageView so it can conditionally render the Save-to-Memory
- * button on the last assistant message.
+ * Props `sessionId`, `isLastAssistant`, and `contextWarning` are threaded
+ * through to AssistantMessageView so it can conditionally render the
+ * Save-to-Memory button on the last assistant message and the Compact
+ * Context button when a context warning is active.
  *
  * @exports MessageBubble      — The dispatcher component
  * @exports MessageBubbleProps  — Props interface
@@ -19,6 +20,7 @@
  */
 
 import type { Message } from '../../../types';
+import type { ContextWarning } from '../../../hooks/useChatStreamingLifecycle';
 import { UserMessageView } from './UserMessageView';
 import { AssistantMessageView } from './AssistantMessageView';
 
@@ -29,6 +31,7 @@ export interface MessageBubbleProps {
   isStreaming?: boolean;
   sessionId?: string;
   isLastAssistant?: boolean;
+  contextWarning?: ContextWarning | null;
 }
 
 export function MessageBubble({
@@ -38,6 +41,7 @@ export function MessageBubble({
   isStreaming,
   sessionId,
   isLastAssistant,
+  contextWarning,
 }: MessageBubbleProps) {
   if (message.role === 'user') {
     return <UserMessageView message={message} />;
@@ -51,6 +55,7 @@ export function MessageBubble({
       isStreaming={isStreaming}
       sessionId={sessionId}
       isLastAssistant={isLastAssistant}
+      contextWarning={contextWarning}
     />
   );
 }

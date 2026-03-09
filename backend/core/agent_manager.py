@@ -1303,7 +1303,7 @@ class AgentManager:
                 turns = self._user_turn_counts.get(effective_sid, 0) + 1
                 self._user_turn_counts[effective_sid] = turns
 
-                if turns % CHECK_INTERVAL_TURNS == 0:
+                if turns == 1 or turns % CHECK_INTERVAL_TURNS == 0:
                     status = check_context_usage()
                     if status.level in ("warn", "critical"):
                         logger.info(
@@ -1311,18 +1311,18 @@ class AgentManager:
                             status.level, effective_sid, status.pct,
                             status.tokens_est // 1000,
                         )
-                        yield {
-                            "type": "context_warning",
-                            "level": status.level,
-                            "pct": status.pct,
-                            "tokensEst": status.tokens_est,
-                            "message": status.message,
-                        }
                     else:
                         logger.debug(
                             "Context monitor [ok]: %d%% after %d turns",
                             status.pct, turns,
                         )
+                    yield {
+                        "type": "context_warning",
+                        "level": status.level,
+                        "pct": status.pct,
+                        "tokensEst": status.tokens_est,
+                        "message": status.message,
+                    }
             except Exception:
                 # Context monitoring is best-effort; never break the response
                 logger.debug("Context monitor check failed", exc_info=True)
@@ -2273,7 +2273,7 @@ class AgentManager:
             try:
                 turns = self._user_turn_counts.get(effective_sid, 0) + 1
                 self._user_turn_counts[effective_sid] = turns
-                if turns % CHECK_INTERVAL_TURNS == 0:
+                if turns == 1 or turns % CHECK_INTERVAL_TURNS == 0:
                     status = check_context_usage()
                     if status.level in ("warn", "critical"):
                         logger.info(
@@ -2281,13 +2281,18 @@ class AgentManager:
                             status.level, effective_sid, status.pct,
                             status.tokens_est // 1000,
                         )
-                        yield {
-                            "type": "context_warning",
-                            "level": status.level,
-                            "pct": status.pct,
-                            "tokensEst": status.tokens_est,
-                            "message": status.message,
-                        }
+                    else:
+                        logger.debug(
+                            "Context monitor [ok]: %d%% after %d turns",
+                            status.pct, turns,
+                        )
+                    yield {
+                        "type": "context_warning",
+                        "level": status.level,
+                        "pct": status.pct,
+                        "tokensEst": status.tokens_est,
+                        "message": status.message,
+                    }
             except Exception:
                 logger.debug("Context monitor check failed", exc_info=True)
 

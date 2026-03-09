@@ -68,6 +68,7 @@ export function initTestTab(tabId: string, initialMessages?: Message[]): void {
     abortController: null,
     streamGen: 0,
     status: 'idle' as TabStatus,
+    contextWarning: null,
   });
   testActiveTabIdRef.current = tabId;
 }
