@@ -72,11 +72,17 @@ export default function ChatPage() {
 
   // Core chat state — streaming lifecycle delegated to extracted hook
   const [inputValue, setInputValue] = useState('');
+  const [isExpanded, setIsExpanded] = useState(false);
 
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>('default');
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
   const [messagesReady, setMessagesReady] = useState(false);
   const mountTimeRef = useRef(performance.now());
+  /** Per-tab draft text storage — NOT serialized to open_tabs.json to avoid large text writes. */
+  const inputValueMapRef = useRef<Map<string, string>>(new Map());
+  /** Ref mirror of isExpanded for synchronous reads in handleTabSelect (avoids dep array churn). */
+  const isExpandedRef = useRef(isExpanded);
+  isExpandedRef.current = isExpanded;
   const [hasMoreMessages, setHasMoreMessages] = useState(true);
   const [isLoadingOlderMessages, setIsLoadingOlderMessages] = useState(false);
   const [agentLoadError, setAgentLoadError] = useState<string | null>(null);
@@ -349,6 +355,7 @@ export default function ChatPage() {
     setPendingQuestion(null);
     setContextWarning(null);
     setIsStreaming(false, newTab!.id); // New tab is not streaming
+    setIsExpanded(false); // New tab always starts in compact mode
   }, [selectedAgentId, addTab, initTabState, tabMapRef, updateTabState, activeTabIdRef, setIsStreaming, setContextWarning]);
 
   // Handle tab selection - switches active tab and loads session messages (Req 1.6)
@@ -364,8 +371,10 @@ export default function ChatPage() {
         messages: messagesRef.current,
         sessionId: sessionIdRef.current,
         pendingQuestion: pendingQuestion,
+        isExpanded: isExpandedRef.current,
         // isStreaming is already authoritative in tabMapRef — no need to write it back
       });
+      inputValueMapRef.current.set(currentTabId, inputValueRef.current);
     }
     
     selectTab(tabId);
@@ -383,6 +392,8 @@ export default function ChatPage() {
           setSessionId(tabState.sessionId);
           setPendingQuestion(null);
           setContextWarning(tabState.contextWarning ?? null);
+          setIsExpanded(tabState.isExpanded ?? false);
+          setInputValue(inputValueMapRef.current.get(tabId) ?? '');
           bumpStreamingDerivation();
           setPendingPermission(null);
           if (tabStatuses[tabId] === 'complete_unread') {
@@ -395,6 +406,8 @@ export default function ChatPage() {
         setSessionId(tabState.sessionId);
         setPendingQuestion(tabState.pendingQuestion);
         setContextWarning(tabState.contextWarning ?? null);
+        setIsExpanded(tabState.isExpanded ?? false);
+        setInputValue(inputValueMapRef.current.get(tabId) ?? '');
         // isStreaming derivation automatically reflects target tab's state
         // from tabMapRef — no need to call setIsStreaming which would corrupt
         // the source tab's streaming state. Just bump to re-derive.
@@ -457,6 +470,8 @@ export default function ChatPage() {
 
     // Clean up pendingStreamTabs entry for this tab (prevents stale entries)
     clearPendingStreamTab(tabId);
+    // Clean up per-tab draft text to prevent unbounded memory growth
+    inputValueMapRef.current.delete(tabId);
 
     // Let closeTab handle map deletion + auto-create of last tab.
     // Do NOT call cleanupTabState before closeTab — it deletes the tab
@@ -1267,6 +1282,8 @@ export default function ChatPage() {
                 onSend={handleSendMessage}
                 onStop={handleStop}
                 isStreaming={isStreaming}
+                isExpanded={isExpanded}
+                onExpandedChange={setIsExpanded}
                 selectedAgentId={selectedAgentId}
                 attachments={attachments}
                 onAddFiles={addFiles}
