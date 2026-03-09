@@ -1369,8 +1369,15 @@ class AgentManager:
         """
         # Per-session concurrency guard — prevents double-send corruption.
         # Use the stable app_session_id (tab session ID) when available,
-        # otherwise fall back to the SDK session_id or agent_id.
-        lock_key = app_session_id or session_id or agent_id
+        # otherwise fall back to the SDK session_id.  For new sessions
+        # (both IDs None), generate an ephemeral UUID so parallel new
+        # sessions don't collide on the shared agent_id.
+        lock_key = app_session_id or session_id or str(uuid4())
+        is_ephemeral_lock = (app_session_id is None and session_id is None)
+        if is_ephemeral_lock:
+            logger.info(f"Using ephemeral lock key {lock_key} for new session (agent={agent_id})")
+        else:
+            logger.debug(f"Using stable lock key {lock_key} for session")
         session_lock = self._get_session_lock(lock_key)
 
         if session_lock.locked():
@@ -1385,23 +1392,29 @@ class AgentManager:
             )
             return
 
-        async with session_lock:
-            async for event in self._execute_on_session_inner(
-                agent_config=agent_config,
-                query_content=query_content,
-                display_text=display_text,
-                session_id=session_id,
-                enable_skills=enable_skills,
-                enable_mcp=enable_mcp,
-                is_resuming=is_resuming,
-                content=content,
-                user_message=user_message,
-                agent_id=agent_id,
-                channel_context=channel_context,
-                app_session_id=app_session_id,
-                deferred_user_content=deferred_user_content,
-            ):
-                yield event
+        try:
+            async with session_lock:
+                async for event in self._execute_on_session_inner(
+                    agent_config=agent_config,
+                    query_content=query_content,
+                    display_text=display_text,
+                    session_id=session_id,
+                    enable_skills=enable_skills,
+                    enable_mcp=enable_mcp,
+                    is_resuming=is_resuming,
+                    content=content,
+                    user_message=user_message,
+                    agent_id=agent_id,
+                    channel_context=channel_context,
+                    app_session_id=app_session_id,
+                    deferred_user_content=deferred_user_content,
+                ):
+                    yield event
+        finally:
+            # Clean up ephemeral lock keys to prevent unbounded memory growth.
+            # Non-ephemeral keys are cleaned up by _cleanup_session().
+            if is_ephemeral_lock:
+                self._session_locks.pop(lock_key, None)
 
     async def _execute_on_session_inner(
         self,
@@ -2573,162 +2586,192 @@ Create the skill in the `.claude/skills/` directory within the current workspace
 
         logger.info(f"Running skill creator conversation for '{skill_name}', session {session_id}, model {agent_config['model']}, is_resuming={is_resuming}")
 
+        # Per-session concurrency guard — prevents double-send corruption.
+        # For new sessions (session_id is None), generate an ephemeral UUID
+        # so parallel new skill-creator sessions don't collide.
+        lock_key = session_id or str(uuid4())
+        is_ephemeral_lock = (session_id is None)
+        if is_ephemeral_lock:
+            logger.info(f"Using ephemeral lock key {lock_key} for new skill creator session")
+        else:
+            logger.debug(f"Using stable lock key {lock_key} for skill creator session")
+        session_lock = self._get_session_lock(lock_key)
+
+        if session_lock.locked():
+            logger.warning(
+                "Skill creator session %s is already executing — rejecting concurrent request",
+                lock_key,
+            )
+            yield _build_error_event(
+                code="SESSION_BUSY",
+                message="This skill creation session is still processing. Please wait for it to finish.",
+                suggested_action="Wait for the current response to complete, then try again.",
+            )
+            return
+
         # Defer session_start and store_session for resumed sessions until
         # after the SDK client path is determined (same pattern as
         # run_conversation). This prevents duplicate session_start events
         # when the backend restarts and falls back to a fresh SDK session.
 
-        # Configure Claude environment variables
-        # TODO(task-9.2): Replace with self._config once AppConfigManager is
-        # wired into AgentManager constructor.
-        from core.app_config_manager import AppConfigManager as _ACM
-        _cfg = _ACM()
-        _cfg.load()
-        async with _env_lock:
-            _configure_claude_environment(_cfg)
-
-        # Track the actual SDK session_id
-        session_context = {"sdk_session_id": session_id}  # Will be updated for new sessions
-        # Track app_session_id for resume-fallback (same pattern as _execute_on_session)
-        session_context["app_session_id"] = session_id if is_resuming else None
-        assistant_content = ContentBlockAccumulator()
-
-        # Try to reuse existing long-lived client for resume
-        reused_client = self._get_active_client(session_id) if is_resuming else None
-
         try:
-            if reused_client and session_id:
-                # Reuse existing client
-                client = reused_client
-                logger.info(f"Reusing long-lived client for skill creator, session {session_id}")
-                self._clients[session_id] = client
-
-                # Deferred save for resumed conversations (reused client path):
-                if session_context.get("app_session_id") is not None:
-                    yield {
-                        "type": "session_start",
-                        "sessionId": session_context["app_session_id"],
-                    }
-                    title = f"Creating skill: {skill_name}"
-                    await session_manager.store_session(session_context["app_session_id"], "skill-creator", title)
-                    await self._save_message(
-                        session_id=session_context["app_session_id"],
-                        role="user",
-                        content=[{"type": "text", "text": prompt}],
-                    )
-
-                async for event in self._run_query_on_client(
-                    client=client,
-                    query_content=prompt,
-                    display_text=f"Creating skill: {skill_name}",
-                    agent_config=agent_config,
-                    session_context=session_context,
-                    assistant_content=assistant_content,
-                    is_resuming=is_resuming,
-                    content=None,
-                    user_message=prompt,
-                    agent_id="skill-creator",
-                ):
-                    if event.get("type") == "result":
-                        event["skill_name"] = skill_name
-                    yield event
-            else:
-                # No active client — start fresh (--resume won't work with SDK 0.1.34+)
-                if is_resuming:
-                    logger.info(f"No active client for skill creator session {session_id}, starting fresh")
-                    is_resuming = False
-                    session_context["sdk_session_id"] = None
-                    # Observability: log the resume-fallback path
-                    if session_context.get("app_session_id") is not None:
-                        logger.info(
-                            f"Resume-fallback in run_skill_creator_conversation: "
-                            f"no active client for app session {session_context['app_session_id']}, "
-                            f"creating fresh SDK session"
-                        )
-
-                # Deferred save for resumed conversations (fresh client path):
-                if session_context.get("app_session_id") is not None:
-                    yield {
-                        "type": "session_start",
-                        "sessionId": session_context["app_session_id"],
-                    }
-                    title = f"Creating skill: {skill_name}"
-                    await session_manager.store_session(session_context["app_session_id"], "skill-creator", title)
-                    await self._save_message(
-                        session_id=session_context["app_session_id"],
-                        role="user",
-                        content=[{"type": "text", "text": prompt}],
-                    )
-
-                options = await self._build_options(agent_config, enable_skills=True, enable_mcp=False)
-                logger.info(f"Skill creator options - allowed_tools: {options.allowed_tools}")
-                logger.info(f"Working directory: {options.cwd}")
-
-                wrapper = _ClaudeClientWrapper(options=options)
-                # Hold _env_lock during client creation so the spawned
-                # subprocess inherits the correct os.environ values.
+            async with session_lock:
+                # Configure Claude environment variables
+                # TODO(task-9.2): Replace with self._config once AppConfigManager is
+                # wired into AgentManager constructor.
+                from core.app_config_manager import AppConfigManager as _ACM
+                _cfg = _ACM()
+                _cfg.load()
                 async with _env_lock:
                     _configure_claude_environment(_cfg)
-                    client = await wrapper.__aenter__()
-                logger.info(f"ClaudeSDKClient created for skill creation")
+
+                # Track the actual SDK session_id
+                session_context = {"sdk_session_id": session_id}  # Will be updated for new sessions
+                # Track app_session_id for resume-fallback (same pattern as _execute_on_session)
+                session_context["app_session_id"] = session_id if is_resuming else None
+                assistant_content = ContentBlockAccumulator()
+
+                # Try to reuse existing long-lived client for resume
+                reused_client = self._get_active_client(session_id) if is_resuming else None
 
                 try:
-                    async for event in self._run_query_on_client(
-                        client=client,
-                        query_content=prompt,
-                        display_text=f"Creating skill: {skill_name}",
-                        agent_config=agent_config,
-                        session_context=session_context,
-                        assistant_content=assistant_content,
-                        is_resuming=is_resuming,
-                        content=None,
-                        user_message=prompt,
-                        agent_id="skill-creator",
-                    ):
-                        if event.get("type") == "result":
-                            event["skill_name"] = skill_name
-                        yield event
-                except Exception:
-                    try:
-                        await wrapper.__aexit__(None, None, None)
-                    except Exception:
-                        pass
-                    raise
+                    if reused_client and session_id:
+                        # Reuse existing client
+                        client = reused_client
+                        logger.info(f"Reusing long-lived client for skill creator, session {session_id}")
+                        self._clients[session_id] = client
 
-                # Store for reuse — key by effective_session_id so the next
-                # resume finds the client under the original tab session ID.
-                final_session_id = session_context["sdk_session_id"]
-                effective_session_id = (
-                    session_context["app_session_id"]
-                    if session_context.get("app_session_id") is not None
-                    else final_session_id
-                )
-                if effective_session_id:
-                    self._active_sessions[effective_session_id] = {
-                        "client": client,
-                        "wrapper": wrapper,
-                        "created_at": time.time(),
-                        "last_used": time.time(),
-                    }
-                    logger.info(f"Stored long-lived client for skill creator session {effective_session_id}")
+                        # Deferred save for resumed conversations (reused client path):
+                        if session_context.get("app_session_id") is not None:
+                            yield {
+                                "type": "session_start",
+                                "sessionId": session_context["app_session_id"],
+                            }
+                            title = f"Creating skill: {skill_name}"
+                            await session_manager.store_session(session_context["app_session_id"], "skill-creator", title)
+                            await self._save_message(
+                                session_id=session_context["app_session_id"],
+                                role="user",
+                                content=[{"type": "text", "text": prompt}],
+                            )
 
-        except Exception as e:
-            error_traceback = traceback.format_exc()
-            logger.error(f"Error in skill creation conversation: {e}")
-            logger.error(f"Full traceback:\n{error_traceback}")
-            # Clean up broken session — use effective_session_id
-            eff_sid = (
-                session_context["app_session_id"]
-                if session_context.get("app_session_id") is not None
-                else session_context.get("sdk_session_id")
-            )
-            if eff_sid and eff_sid in self._active_sessions:
-                await self._cleanup_session(eff_sid, skip_hooks=True)
-            yield _build_error_event(
-                code="SKILL_CREATION_ERROR",
-                message=str(e),
-                detail=error_traceback,
-            )
+                        async for event in self._run_query_on_client(
+                            client=client,
+                            query_content=prompt,
+                            display_text=f"Creating skill: {skill_name}",
+                            agent_config=agent_config,
+                            session_context=session_context,
+                            assistant_content=assistant_content,
+                            is_resuming=is_resuming,
+                            content=None,
+                            user_message=prompt,
+                            agent_id="skill-creator",
+                        ):
+                            if event.get("type") == "result":
+                                event["skill_name"] = skill_name
+                            yield event
+                    else:
+                        # No active client — start fresh (--resume won't work with SDK 0.1.34+)
+                        if is_resuming:
+                            logger.info(f"No active client for skill creator session {session_id}, starting fresh")
+                            is_resuming = False
+                            session_context["sdk_session_id"] = None
+                            # Observability: log the resume-fallback path
+                            if session_context.get("app_session_id") is not None:
+                                logger.info(
+                                    f"Resume-fallback in run_skill_creator_conversation: "
+                                    f"no active client for app session {session_context['app_session_id']}, "
+                                    f"creating fresh SDK session"
+                                )
+
+                        # Deferred save for resumed conversations (fresh client path):
+                        if session_context.get("app_session_id") is not None:
+                            yield {
+                                "type": "session_start",
+                                "sessionId": session_context["app_session_id"],
+                            }
+                            title = f"Creating skill: {skill_name}"
+                            await session_manager.store_session(session_context["app_session_id"], "skill-creator", title)
+                            await self._save_message(
+                                session_id=session_context["app_session_id"],
+                                role="user",
+                                content=[{"type": "text", "text": prompt}],
+                            )
+
+                        options = await self._build_options(agent_config, enable_skills=True, enable_mcp=False)
+                        logger.info(f"Skill creator options - allowed_tools: {options.allowed_tools}")
+                        logger.info(f"Working directory: {options.cwd}")
+
+                        wrapper = _ClaudeClientWrapper(options=options)
+                        # Hold _env_lock during client creation so the spawned
+                        # subprocess inherits the correct os.environ values.
+                        async with _env_lock:
+                            _configure_claude_environment(_cfg)
+                            client = await wrapper.__aenter__()
+                        logger.info(f"ClaudeSDKClient created for skill creation")
+
+                        try:
+                            async for event in self._run_query_on_client(
+                                client=client,
+                                query_content=prompt,
+                                display_text=f"Creating skill: {skill_name}",
+                                agent_config=agent_config,
+                                session_context=session_context,
+                                assistant_content=assistant_content,
+                                is_resuming=is_resuming,
+                                content=None,
+                                user_message=prompt,
+                                agent_id="skill-creator",
+                            ):
+                                if event.get("type") == "result":
+                                    event["skill_name"] = skill_name
+                                yield event
+                        except Exception:
+                            try:
+                                await wrapper.__aexit__(None, None, None)
+                            except Exception:
+                                pass
+                            raise
+
+                        # Store for reuse — key by effective_session_id so the next
+                        # resume finds the client under the original tab session ID.
+                        final_session_id = session_context["sdk_session_id"]
+                        effective_session_id = (
+                            session_context["app_session_id"]
+                            if session_context.get("app_session_id") is not None
+                            else final_session_id
+                        )
+                        if effective_session_id:
+                            self._active_sessions[effective_session_id] = {
+                                "client": client,
+                                "wrapper": wrapper,
+                                "created_at": time.time(),
+                                "last_used": time.time(),
+                            }
+                            logger.info(f"Stored long-lived client for skill creator session {effective_session_id}")
+
+                except Exception as e:
+                    error_traceback = traceback.format_exc()
+                    logger.error(f"Error in skill creation conversation: {e}")
+                    logger.error(f"Full traceback:\n{error_traceback}")
+                    # Clean up broken session — use effective_session_id
+                    eff_sid = (
+                        session_context["app_session_id"]
+                        if session_context.get("app_session_id") is not None
+                        else session_context.get("sdk_session_id")
+                    )
+                    if eff_sid and eff_sid in self._active_sessions:
+                        await self._cleanup_session(eff_sid, skip_hooks=True)
+                    yield _build_error_event(
+                        code="SKILL_CREATION_ERROR",
+                        message=str(e),
+                        detail=error_traceback,
+                    )
+        finally:
+            # Clean up ephemeral lock keys to prevent unbounded memory growth.
+            # Non-ephemeral keys are cleaned up by _cleanup_session().
+            if is_ephemeral_lock:
+                self._session_locks.pop(lock_key, None)
 
 
 # Global instance
