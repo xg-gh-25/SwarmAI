@@ -130,10 +130,11 @@ cat ~/.swarm-ai/config.json 2>/dev/null | jq '.evolution // empty' 2>/dev/null |
 
 ## Writing to EVOLUTION.md
 
-**Use the built-in Read + Edit tools.** No external scripts. No special tooling.
+**New entries:** Use the built-in Read + Edit tools (need full-file context for ID generation).
+**Field updates (Usage Count, Status):** Use `locked_write.py` for atomic, locked modifications.
 
 **Every write is a 2-step atomic pair — never do step 1 without step 2:**
-1. **Edit** EVOLUTION.md (add/update/deprecate entry)
+1. **Edit/locked_write** EVOLUTION.md (add/update/deprecate entry)
 2. **Immediately** append JSONL changelog line (same tool-call batch, no other work in between)
 
 ### Append a new entry
@@ -170,25 +171,27 @@ new_string:
 ## Optimizations Learned
 ```
 
-### Update a field
+### Update a field (use locked_write.py for atomicity)
 
-Use `Edit` with the entry header as context for uniqueness:
-
-```
-old_string:
-### E003 | proactive | skill | 2026-03-08
-...
-- **Usage Count**: 0
-
-new_string:
-### E003 | proactive | skill | 2026-03-08
-...
-- **Usage Count**: 1
+For Usage Count increments:
+```bash
+python3 .claude/skills/s_save-memory/scripts/locked_write.py \
+  --file .context/EVOLUTION.md \
+  --section "Capabilities Built" \
+  --increment-field "Usage Count" \
+  --entry-id "E003"
 ```
 
-Or for simple unique fields:
-- `old_string: "**Usage Count**: 0"` → `new_string: "**Usage Count**: 1"`
-  (only if that exact string is unique in the file)
+For Status changes (e.g., deprecation):
+```bash
+python3 .claude/skills/s_save-memory/scripts/locked_write.py \
+  --file .context/EVOLUTION.md \
+  --section "Capabilities Built" \
+  --set-field "Status" --value "deprecated" \
+  --entry-id "E003"
+```
+
+These operations are atomic (file-locked read-modify-write) and safe for concurrent access.
 
 ### JSONL Changelog (mandatory — run immediately after every Edit)
 
@@ -280,7 +283,7 @@ At 0.3 → `fading`. At 0.0 → `deprecated`.
 
 Emit markers for frontend rendering:
 ```
-<!-- EVOLUTION_EVENT: {"event": "evolution_start", "data": {"triggerType": "reactive", "description": "...", "strategySelected": "compose_existing", "attemptNumber": 1}} -->
+<!-- EVOLUTION_EVENT: {"type": "evolution_start", "data": {"triggerType": "reactive", "description": "...", "strategySelected": "compose_existing", "attemptNumber": 1}} -->
 ```
 
 Events: `evolution_start`, `evolution_result`, `evolution_stuck_detected`, `evolution_help_request`
@@ -338,7 +341,7 @@ After significant evolution events, append to `Knowledge/DailyActivity/YYYY-MM-D
 5. **Respect config toggles** — check before acting
 6. **Never install without checking `auto_approve_installs`**
 7. **Never create skills without checking `auto_approve_skills`**
-8. **Use Read + Edit for EVOLUTION.md writes** — built-in tools only, no external scripts
+8. **Use Read + Edit for new entries, locked_write.py for field updates** — new entries need full-file context for ID generation; field updates (Usage Count, Status) use locked_write.py for atomicity
 9. **Proactive triggers are deferred** — never interrupt active work
 10. **Each attempt must be fundamentally different**
 11. **Corrections require novelty filter** — systematic gaps only

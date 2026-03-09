@@ -296,8 +296,10 @@ All context lives in `~/.swarm-ai/SwarmWS/.context/` — a single hidden directo
 ├── STEERING.md             — Session-level rules, overrides (P5, user-customized)
 ├── TOOLS.md                — Tool usage guidance (P6, user-customized)
 ├── MEMORY.md               — Cross-session persistent memory (P7, user-customized)
-├── KNOWLEDGE.md            — Domain knowledge, reference material (P8, user-customized)
-├── PROJECTS.md             — Active projects summary (P9, user-customized)
+├── EVOLUTION.md            — Self-evolution registry (P8, user-customized, truncates from head)
+├── KNOWLEDGE.md            — Domain knowledge, reference material (P9, user-customized)
+├── PROJECTS.md             — Active projects summary (P10, user-customized)
+├── EVOLUTION_CHANGELOG.jsonl — Evolution audit log (agent-managed, not in system prompt)
 ├── BOOTSTRAP.md            — First-run onboarding (ephemeral, not in cache)
 ├── L0_SYSTEM_PROMPTS.md    — Compact cache for small models (auto-generated)
 └── L1_SYSTEM_PROMPTS.md    — Full cache for large models (auto-generated)
@@ -328,8 +330,9 @@ class ContextFileSpec:
 | STEERING.md | 5 | Yes | Yes | tail |
 | TOOLS.md | 6 | Yes | Yes | tail |
 | MEMORY.md | 7 | Yes | Yes | head (keep newest) |
-| KNOWLEDGE.md | 8 | Yes | Yes | tail |
-| PROJECTS.md | 9 | Yes | Yes | tail |
+| EVOLUTION.md | 8 | Yes | Yes | head (keep newest) |
+| KNOWLEDGE.md | 9 | Yes | Yes | tail |
+| PROJECTS.md | 10 | Yes | Yes | tail |
 
 ### 5.3 Two-Mode Copy Behavior
 
@@ -380,7 +383,7 @@ _build_system_prompt() in AgentManager
   │     loader = ContextDirectoryLoader(SwarmWS/.context/, budget)
   │     loader.ensure_directory()  → copy defaults from backend/context/
   │     context_text = loader.load_all(model_context_window)
-  │       → ≥64K: L1 cache (if fresh) or assemble from 10 source files
+  │       → ≥64K: L1 cache (if fresh) or assemble from 11 source files
   │       → <64K: L0 compact cache
   │     Appended to agent_config["system_prompt"]
   │
@@ -412,9 +415,21 @@ MEMORY.md is the curated long-term memory file:
 - **Location**: `~/.swarm-ai/SwarmWS/.context/MEMORY.md`
 - **Writes**: Via `locked_write.py` (fcntl.flock for safe concurrent access)
 - **Truncation**: From head (keeps newest content at bottom)
-- **Distillation**: Agent-driven via `s_memory-distill` skill
-- **DailyActivity**: Append-only logs in `Knowledge/DailyActivity/`, OS `O_APPEND`, no lock needed
-- **Session-start**: Open Threads review (replaced unreliable session-end hooks)
+- **Distillation**: Primary: code-driven via `DistillationTriggerHook` (regex extraction at session close). Fallback: flag file triggers agent `s_memory-distill` skill at next session start
+- **DailyActivity extraction**: Code-enforced via `DailyActivityExtractionHook` at session close (rule-based `SummarizationPipeline`, no LLM)
+- **DailyActivity loading**: Last 2 files by filename date (handles weekend gaps), ephemeral, 2K token cap per file
+- **One-click save**: `POST /api/memory/save-session` → LLM extraction via `memory_extractor.py` (Bedrock Sonnet)
+- **Auto-commit**: `WorkspaceAutoCommitHook` at session close with smart conventional commit messages (replaced per-turn commits)
+
+### 5.7.1 Session Lifecycle Hooks (Code-Enforced Memory Pipeline)
+
+Three hooks fire sequentially on every session close (TTL expiry, explicit delete, backend shutdown):
+
+1. `DailyActivityExtractionHook` — extracts conversation summary → `Knowledge/DailyActivity/YYYY-MM-DD.md`
+2. `WorkspaceAutoCommitHook` — smart git commit with conventional prefixes
+3. `DistillationTriggerHook` — checks undistilled count, runs direct regex distillation if threshold (>3) exceeded
+
+All hooks are error-isolated (failing hook doesn't block others) with 30s per-hook timeout.
 
 ### 5.8 Knowledge Directory
 
@@ -425,7 +440,7 @@ MEMORY.md is the curated long-term memory file:
 ├── Meetings/        # Meeting notes
 ├── Library/         # Reference material (migrated from Knowledge Base/)
 ├── Archives/        # Auto-pruned at 90 days via prune_archives()
-└── DailyActivity/   # Append-only daily logs (today + yesterday loaded)
+└── DailyActivity/   # Append-only daily logs (last 2 by date loaded at session start)
 ```
 
 ---
@@ -460,7 +475,7 @@ MEMORY.md is the curated long-term memory file:
 
 ```
 ~/.swarm-ai/SwarmWS/
-├── .context/                  # Centralized context directory (10 source files + caches)
+├── .context/                  # Centralized context directory (11 source files + caches)
 ├── .claude/
 │   └── skills/                # Symlinked skills (projected by ProjectionLayer)
 ├── Knowledge/                 # Shared reusable assets (6 subdirectories)
@@ -475,20 +490,21 @@ MEMORY.md is the curated long-term memory file:
 
 ### 5.9 Auto-Commit Workspace
 
-After every conversation turn completes (ResultMessage), the agent auto-commits SwarmWS changes via git:
+Workspace auto-commit has been migrated from per-turn to per-session-close via `WorkspaceAutoCommitHook`:
 
 ```python
-async def _auto_commit_workspace(self, title: str) -> None:
-    # Runs in background thread (non-blocking)
-    git status --porcelain  # Check for changes
-    git add -A              # Stage all changes
-    git commit -m "Session: {title[:50]}"
+class WorkspaceAutoCommitHook:
+    # Registered as 2nd session lifecycle hook
+    # Analyzes git diff --stat, categorizes files by path pattern
+    # Generates conventional commit messages (framework:, skills:, content:, project:, output:, chore:)
+    # Skips trivial changes (only skill config syncs)
 ```
 
-- Runs in `asyncio.to_thread()` so it never blocks the SSE response
-- Skips silently if nothing changed or git is unavailable
-- Provides workspace versioning — every conversation turn is a git commit
-- Failure is non-critical (logged as debug, never surfaces to user)
+- Fires once per session close (not per message — cleaner git history)
+- Smart commit messages derived from actual file changes, not user's first message
+- Categorizes by path prefix: `.context/` → `framework:`, `Knowledge/` → `content:`, etc.
+- Trivial changes (only skill syncs) get `chore: session sync` or are skipped
+- The legacy `_auto_commit_workspace()` method is retained but no longer called per-turn
 
 ---
 

@@ -105,15 +105,16 @@ CONTEXT_FILES: list[ContextFileSpec] = [
     ContextFileSpec("STEERING.md",          5,  "Steering",           True,  True,  "tail"),
     ContextFileSpec("TOOLS.md",             6,  "Tools",              True,  True,  "tail"),
     ContextFileSpec("MEMORY.md",            7,  "Memory",             True,  True,  "head"),
-    ContextFileSpec("KNOWLEDGE.md",         8,  "Knowledge",          True,  True,  "tail"),
-    ContextFileSpec("PROJECTS.md",          9,  "Projects",           True,  True,  "tail"),
-    # GROWTH_PRINCIPLES.md removed — content folded into SOUL.md and skills.
-    # EVOLUTION.md — agent-managed, provisioned in ensure_directory() as
-    #   copy-only-if-missing.  Read on-demand via Read tool per AGENT.md
-    #   "Every Session" directive, not loaded into system prompt.
-    # EVOLUTION_CHANGELOG.jsonl — likewise agent-managed, seeded on first run.
+    ContextFileSpec("EVOLUTION.md",         8,  "Evolution Registry", True,  True,  "head"),
+    ContextFileSpec("KNOWLEDGE.md",         9,  "Knowledge",          True,  True,  "tail"),
+    ContextFileSpec("PROJECTS.md",         10,  "Projects",           True,  True,  "tail"),
+    # GROWTH_PRINCIPLES.md removed (2026-03) — content folded into SOUL.md
+    #   Operating Principles and s_self-evolution/SKILL.md Growth Principles
+    #   section.  Template file deleted from backend/context/.
+    # EVOLUTION_CHANGELOG.jsonl — agent-managed, seeded on first run via
+    #   _AGENT_MANAGED_FILES in ensure_directory().  Not a context file.
 ]
-"""All 10 context source files in ascending priority order (P0-P9)."""
+"""All 11 context source files in ascending priority order (P0-P10)."""
 
 
 class ContextDirectoryLoader:
@@ -300,9 +301,10 @@ class ContextDirectoryLoader:
                 logger.warning("Failed to copy %s → %s: %s", src, dest, exc)
 
         # Provision agent-managed files that live in .context/ but are NOT
-        # part of the system prompt.  These are copy-only-if-missing (0o644)
-        # so the agent can write to them freely after first creation.
-        _AGENT_MANAGED_FILES = ["EVOLUTION.md", "EVOLUTION_CHANGELOG.jsonl"]
+        # part of the CONTEXT_FILES list.  Copy-only-if-missing (0o644).
+        # EVOLUTION.md was moved into CONTEXT_FILES (P8) so it loads into
+        # the system prompt automatically.  Only the JSONL changelog remains here.
+        _AGENT_MANAGED_FILES = ["EVOLUTION_CHANGELOG.jsonl"]
         for filename in _AGENT_MANAGED_FILES:
             dest = self.context_dir / filename
             if dest.exists():

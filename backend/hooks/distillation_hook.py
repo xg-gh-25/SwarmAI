@@ -37,16 +37,19 @@ UNDISTILLED_THRESHOLD = 3
 FLAG_FILENAME = ".needs_distillation"
 SCAN_DAYS = 30  # Only check files from last 30 days
 
-# Patterns to identify distillation-worthy content
+# Patterns to identify distillation-worthy content.
+# These must be specific enough to avoid false positives from common words
+# like "confirmed" (the file exists), "always" (run tests), "never" (seen this).
+# Each pattern requires a decision/lesson-oriented verb phrase, not just a keyword.
 _DECISION_PATTERNS = re.compile(
-    r"\b(?:decided to|chose|will use|going with|switched to|adopted|"
-    r"the approach is|selected|confirmed|approved|rejected)\b",
+    r"(?:decided to \w+|chose to \w+|will use \w+|going with \w+|switched to \w+|"
+    r"adopted \w+|the approach is \w+|opted for \w+|selected \w+ (?:as|for|over|instead))",
     re.IGNORECASE,
 )
 _LESSON_PATTERNS = re.compile(
-    r"\b(?:lesson|learned|mistake|fixed by|root cause|workaround|"
-    r"always|never|important to|should have|next time|"
-    r"bug was|issue was|problem was)\b",
+    r"(?:lesson learned|learned that|mistake was|fixed by \w+|root cause (?:was|is)|"
+    r"workaround[: ]|should have \w+|next time \w+|"
+    r"bug was \w+|issue was \w+|problem was \w+|important to \w+ before)",
     re.IGNORECASE,
 )
 
