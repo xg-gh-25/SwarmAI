@@ -5,7 +5,7 @@
 SwarmAI's context and memory system gives agents persistent identity, personality, knowledge, and cross-session memory. All context lives in a single hidden directory (`~/.swarm-ai/SwarmWS/.context/`) using filesystem-only storage — no database for context content. The system assembles context into the system prompt on every session start, with dynamic token budgets and L0/L1 caching for different model sizes.
 
 Three cooperating systems build the final system prompt:
-1. `ContextDirectoryLoader` — reads 10 source files from `.context/`, enforces token budget
+1. `ContextDirectoryLoader` — reads 11 source files from `.context/`, enforces token budget
 2. `_build_system_prompt()` in AgentManager — orchestrates assembly, adds ephemeral context
 3. `SystemPromptBuilder` — appends non-file sections (safety, datetime, runtime metadata)
 
@@ -18,7 +18,7 @@ Three cooperating systems build the final system prompt:
 │                    CONTEXT ASSEMBLY PIPELINE                     │
 │                                                                  │
 │  backend/context/          ~/.swarm-ai/SwarmWS/.context/         │
-│  (templates, 12 files)     (runtime, 10 source + 2 cache)       │
+│  (templates, 12 files)     (runtime, 11 source + 2 cache)       │
 │         │                           │                            │
 │         ▼                           ▼                            │
 │  ┌──────────────────────────────────────────────┐               │
@@ -40,7 +40,7 @@ Three cooperating systems build the final system prompt:
 │  │                                               │               │
 │  │  1. ContextDirectoryLoader output             │               │
 │  │  2. BOOTSTRAP.md (ephemeral, first-run)       │               │
-│  │  3. DailyActivity (today + yesterday, 2K cap) │               │
+│  │  3. DailyActivity (last 2 by date, 2K cap)  │               │
 │  │  4. Metadata for TSCC viewer                  │               │
 │  └──────────────────┬───────────────────────────┘               │
 │                     │                                            │
@@ -62,7 +62,7 @@ Three cooperating systems build the final system prompt:
 
 ---
 
-## The 10 Context Files
+## The 11 Context Files
 
 ### ContextFileSpec Data Model
 
@@ -83,16 +83,17 @@ class ContextFileSpec:
 
 ```python
 CONTEXT_FILES = [
-    ContextFileSpec("SWARMAI.md",    0, "SwarmAI",          False, False, "tail"),
-    ContextFileSpec("IDENTITY.md",   1, "Identity",         False, False, "tail"),
-    ContextFileSpec("SOUL.md",       2, "Soul",             False, False, "tail"),
-    ContextFileSpec("AGENT.md",      3, "Agent Directives", True,  False, "tail"),
-    ContextFileSpec("USER.md",       4, "User",             True,  True,  "tail"),
-    ContextFileSpec("STEERING.md",   5, "Steering",         True,  True,  "tail"),
-    ContextFileSpec("TOOLS.md",      6, "Tools",            True,  True,  "tail"),
-    ContextFileSpec("MEMORY.md",     7, "Memory",           True,  True,  "head"),
-    ContextFileSpec("KNOWLEDGE.md",  8, "Knowledge",        True,  True,  "tail"),
-    ContextFileSpec("PROJECTS.md",   9, "Projects",         True,  True,  "tail"),
+    ContextFileSpec("SWARMAI.md",    0, "SwarmAI",            False, False, "tail"),
+    ContextFileSpec("IDENTITY.md",   1, "Identity",           False, False, "tail"),
+    ContextFileSpec("SOUL.md",       2, "Soul",               False, False, "tail"),
+    ContextFileSpec("AGENT.md",      3, "Agent Directives",   True,  False, "tail"),
+    ContextFileSpec("USER.md",       4, "User",               True,  True,  "tail"),
+    ContextFileSpec("STEERING.md",   5, "Steering",           True,  True,  "tail"),
+    ContextFileSpec("TOOLS.md",      6, "Tools",              True,  True,  "tail"),
+    ContextFileSpec("MEMORY.md",     7, "Memory",             True,  True,  "head"),
+    ContextFileSpec("EVOLUTION.md",  8, "Evolution Registry",  True,  True,  "head"),
+    ContextFileSpec("KNOWLEDGE.md",  9, "Knowledge",          True,  True,  "tail"),
+    ContextFileSpec("PROJECTS.md",  10, "Projects",           True,  True,  "tail"),
 ]
 ```
 
@@ -108,8 +109,9 @@ CONTEXT_FILES = [
 | STEERING.md | 5 | Steering | Yes | User | Session-level rules, temporary focus areas, overrides |
 | TOOLS.md | 6 | Tools | Yes | User | Tool usage guidance and conventions |
 | MEMORY.md | 7 | Memory | Yes (head) | User | Cross-session persistent memory (curated, not raw logs) |
-| KNOWLEDGE.md | 8 | Knowledge | Yes | User | Domain knowledge, API references, codebase conventions |
-| PROJECTS.md | 9 | Projects | Yes | User | Active projects summary, priorities, status |
+| EVOLUTION.md | 8 | Evolution Registry | Yes (head) | User | Self-evolution capabilities, optimizations, corrections, failures |
+| KNOWLEDGE.md | 9 | Knowledge | Yes | User | Domain knowledge, API references, codebase conventions |
+| PROJECTS.md | 10 | Projects | Yes | User | Active projects summary, priorities, status |
 
 ---
 
@@ -193,9 +195,9 @@ If total > budget:
      e. If total <= budget → stop
 ```
 
-Truncation order: PROJECTS (P9) → KNOWLEDGE (P8) → MEMORY (P7) → TOOLS (P6) → STEERING (P5) → USER (P4) → AGENT (P3). Priorities 0–2 (SWARMAI, IDENTITY, SOUL) are never truncated.
+Truncation order: PROJECTS (P10) → KNOWLEDGE (P9) → EVOLUTION (P8) → MEMORY (P7) → TOOLS (P6) → STEERING (P5) → USER (P4) → AGENT (P3). Priorities 0–2 (SWARMAI, IDENTITY, SOUL) are never truncated.
 
-MEMORY.md is the only file that truncates from head — this keeps the newest content (at the bottom of the file) and discards older entries.
+MEMORY.md and EVOLUTION.md both truncate from head — this keeps the newest content (at the bottom of the file) and discards older entries. All other files truncate from tail (keeps the beginning).
 
 ### Small Model Exclusions
 
@@ -275,12 +277,14 @@ _build_system_prompt(agent_config, working_directory, channel_context)
   │     If .context/BOOTSTRAP.md exists:
   │       context_text = "## Onboarding\n{bootstrap}" + context_text
   │
-  ├── 3. DailyActivity (ephemeral, today + yesterday)
-  │     For each of [today, yesterday]:
-  │       Read Knowledge/DailyActivity/{date}.md
-  │       If token_count > 2000: _truncate_daily_content() (keep tail/newest)
+  ├── 3. DailyActivity (ephemeral, last 2 by filename date)
+  │     Scan Knowledge/DailyActivity/, sort *.md by filename DESC, take top 2
+  │     Handles date gaps (weekends, holidays) — always loads most recent 2
+  │     For each file:
+  │       Read content, apply token cap (2000 tokens), truncate from head if over
   │       Append as "## Daily Activity ({date})\n{content}"
   │     Disk files are NEVER modified — truncation is ephemeral
+  │     Also checks for .needs_distillation flag → injects "Memory Maintenance Required"
   │
   ├── 4. Inject into agent_config["system_prompt"]
   │     existing + "\n\n" + context_text
@@ -313,7 +317,97 @@ Bedrock model IDs are stripped of prefix/suffix before lookup: `us.anthropic.cla
 
 ---
 
-## Memory System
+## Memory System — End-to-End Lifecycle
+
+The memory system forms a closed loop: conversations produce DailyActivity → DailyActivity gets distilled into MEMORY.md → MEMORY.md loads into the next session's system prompt. Every step in the critical path is code-enforced via backend hooks — the model cannot forget to persist memory.
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                     1. SESSION START (Loading)                       │
+│                                                                     │
+│  _build_system_prompt() assembles context:                          │
+│    [CODE-ENFORCED] ContextDirectoryLoader.load_all()                │
+│       → Reads 11 context files from ~/.swarm-ai/.context/           │
+│       → MEMORY.md at P7 (truncates from head = newest kept)         │
+│       → EVOLUTION.md at P8 (truncates from head = newest kept)      │
+│    [CODE-ENFORCED] DailyActivity loading                            │
+│       → Scans Knowledge/DailyActivity/, sorts by filename DESC      │
+│       → Loads last 2 files regardless of date gaps (weekends OK)    │
+│       → Per-file token cap (2000) prevents squeezing higher ctx     │
+│    [CODE-ENFORCED] Distillation flag check                          │
+│       → If .needs_distillation exists → injects maintenance prompt  │
+│    [CODE-ENFORCED] SystemPromptBuilder adds identity, safety, etc.  │
+│                                                                     │
+│  Result: Agent starts with full memory + evolution context          │
+└─────────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                   2. DURING SESSION (In-Memory)                     │
+│                                                                     │
+│  [SDK-MANAGED] Claude SDK remembers everything within the session   │
+│  [USER-TRIGGERED] "save memory" → s_save-memory → locked_write.py  │
+│  [USER-TRIGGERED] "save activity" → s_save-activity → Write tool   │
+│  [USER-TRIGGERED] 🧠 button → POST /api/memory/save-session        │
+│       → memory_extractor.py → LLM extraction → locked_write.py     │
+│                                                                     │
+│  No automatic memory writes during session — SDK handles context    │
+└─────────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│               3. SESSION CLOSE (Recording — Code-Enforced)          │
+│                                                                     │
+│  Triggers: TTL expiry (12h) │ explicit delete │ backend shutdown    │
+│                                                                     │
+│  [CODE-ENFORCED] SessionLifecycleHookManager fires 3 hooks:        │
+│                                                                     │
+│    Hook 1: DailyActivityExtractionHook                              │
+│       → Retrieves conversation log from DB (limit=500 messages)     │
+│       → SummarizationPipeline extracts topics, decisions, files     │
+│       → write_daily_activity() appends to YYYY-MM-DD.md (flock)    │
+│       → ComplianceTracker records success/failure                   │
+│                                                                     │
+│    Hook 2: WorkspaceAutoCommitHook                                  │
+│       → git diff --stat → categorize files → conventional commit    │
+│       → One commit per session (not per-turn)                       │
+│                                                                     │
+│    Hook 3: DistillationTriggerHook                                  │
+│       → Scans DailyActivity/*.md frontmatter (last 30 days)        │
+│       → If undistilled count > 3: direct regex distillation         │
+│         → Extracts decisions/lessons → locked_write.py → MEMORY.md  │
+│         → Marks files as distilled: true                            │
+│       → If direct distillation fails: writes .needs_distillation    │
+│                                                                     │
+│  All hooks error-isolated — failures don't block cleanup            │
+│  Per-hook timeout: 30 seconds                                       │
+└─────────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                  4. NEXT SESSION START (Loop)                       │
+│                                                                     │
+│  _build_system_prompt() loads updated MEMORY.md + recent            │
+│  DailyActivity → agent has full accumulated knowledge               │
+│                                                                     │
+│  The cycle repeats. Memory is never lost.                           │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### Trigger Mechanism Classification
+
+| Operation | Mechanism | Can model forget? |
+|-----------|-----------|-------------------|
+| DailyActivity extraction | `SessionLifecycleHookManager` → `DailyActivityExtractionHook` | No — code-enforced |
+| Workspace auto-commit | `SessionLifecycleHookManager` → `WorkspaceAutoCommitHook` | No — code-enforced |
+| Distillation (primary) | `SessionLifecycleHookManager` → `DistillationTriggerHook` | No — code-enforced |
+| Distillation (fallback) | `.needs_distillation` flag → system prompt injection | Yes — prompt-dependent |
+| MEMORY.md loading | `CONTEXT_FILES` P7 → `ContextDirectoryLoader` | No — code-enforced |
+| EVOLUTION.md loading | `CONTEXT_FILES` P8 → `ContextDirectoryLoader` | No — code-enforced |
+| DailyActivity loading | `_build_system_prompt()` directory scan | No — code-enforced |
+| One-click 🧠 save | `POST /api/memory/save-session` → `memory_extractor.py` | No — backend API |
+| User "save memory" | Agent invokes `s_save-memory` skill | Yes — but user-initiated |
+| User "save activity" | Agent invokes `s_save-activity` skill | Yes — but user-initiated |
 
 ### MEMORY.md — Cross-Session Persistent Memory
 
@@ -348,19 +442,19 @@ Section finding: regex matches `## {section_name}` headers. If section not found
 ### DailyActivity — Append-Only Logs
 
 - Location: `~/.swarm-ai/SwarmWS/Knowledge/DailyActivity/{YYYY-MM-DD}.md`
-- Write mode: OS `O_APPEND` flag — no lock needed (atomic appends)
-- Read: Today + yesterday loaded at session start (ephemeral, not cached)
+- Write: Automatic via `DailyActivityExtractionHook` at session close (code-enforced, `fcntl.flock`)
+- Read: Last 2 files by filename date loaded at session start (handles gaps, ephemeral, not cached)
 - Token cap: 2,000 tokens per file (`TOKEN_CAP_PER_DAILY_FILE`)
 - Truncation: From head (keeps newest entries), ephemeral only — disk files never modified
+- Format: YAML frontmatter (`date`, `sessions_count`, `distilled`) + `## Session — HH:MM | id | title` entries
 - Auto-pruning: Archives older than 90 days via `prune_archives()` in `verify_integrity()`
 
 ### Memory Distillation
 
-Agent-driven via `s_memory-distill` skill:
-- Reads MEMORY.md, identifies stale/redundant entries
-- Compresses and rewrites via `locked_write.py`
-- Frontmatter tracking: `parse_frontmatter()` / `write_frontmatter()` in `frontmatter.py`
-- DailyActivity files get `distilled: true` frontmatter after processing
+Two-path distillation system:
+
+1. **Primary (code-enforced)**: `DistillationTriggerHook` fires at session close, checks undistilled count, runs direct regex extraction if threshold (>3) exceeded. Writes to MEMORY.md via `locked_write.py`. Marks files as `distilled: true`.
+2. **Fallback (prompt-dependent)**: If direct distillation fails, writes `.needs_distillation` flag file. Next session's `_build_system_prompt()` injects "Memory Maintenance Required" instruction, prompting agent to run `s_memory-distill` skill.
 
 ### STEERING.md — Session-Level Overrides
 
@@ -440,10 +534,13 @@ At session start, `_build_system_prompt()` checks for BOOTSTRAP.md and prepends 
 ## Memory                              ← P7, truncates from HEAD
 <cross-session persistent memory>
 
-## Knowledge                           ← P8, user-customized
+## Evolution Registry                  ← P8, truncates from HEAD
+<self-evolution capabilities, optimizations, corrections>
+
+## Knowledge                           ← P9, user-customized
 <domain knowledge, references>
 
-## Projects                            ← P9, lowest priority
+## Projects                            ← P10, lowest priority
 <active projects summary>
 
 ## Daily Activity (2026-03-07)         ← Ephemeral, 2K cap
@@ -513,13 +610,28 @@ backend/
 │   ├── context_directory_loader.py  # ContextDirectoryLoader, ContextFileSpec, CONTEXT_FILES
 │   ├── system_prompt.py             # SystemPromptBuilder (non-file sections)
 │   ├── agent_manager.py             # _build_system_prompt(), _get_model_context_window()
+│   ├── session_hooks.py             # SessionLifecycleHookManager, HookContext, Protocol
+│   ├── summarization.py             # SummarizationPipeline, StructuredSummary
+│   ├── daily_activity_writer.py     # write_daily_activity(), parse/write_frontmatter
+│   ├── compliance.py                # ComplianceTracker, DailyMetrics
+│   ├── memory_extractor.py          # LLM-powered extraction for one-click 🧠 button
 │   └── frontmatter.py              # parse_frontmatter(), write_frontmatter()
-├── context/                         # Default templates (12 files)
-│   ├── SWARMAI.md ... PROJECTS.md   # 10 source file templates
+├── hooks/
+│   ├── daily_activity_hook.py       # DailyActivityExtractionHook
+│   ├── auto_commit_hook.py          # WorkspaceAutoCommitHook
+│   └── distillation_hook.py         # DistillationTriggerHook
+├── routers/
+│   └── memory.py                    # /api/memory-compliance, /api/memory/save-session
+├── context/                         # Default templates
+│   ├── SWARMAI.md ... PROJECTS.md   # 10 source file templates + EVOLUTION.md
 │   ├── BOOTSTRAP.md                 # First-run onboarding template
 │   ├── L0_SYSTEM_PROMPTS.md         # Compact cache template
 │   ├── L1_SYSTEM_PROMPTS.md         # Full cache template
 │   └── USER.example.md             # Example user profile
-└── scripts/
-    └── locked_write.py              # Locked MEMORY.md modification
+├── scripts/
+│   └── locked_write.py              # Locked MEMORY.md/EVOLUTION.md modification
+└── skills/
+    ├── s_save-memory/               # User-triggered MEMORY.md writes
+    ├── s_save-activity/             # User-triggered DailyActivity writes
+    └── s_memory-distill/            # Agent-driven distillation (fallback path)
 ```
