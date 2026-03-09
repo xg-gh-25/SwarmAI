@@ -36,7 +36,7 @@ CRITICAL_PCT = 85
 CHARS_PER_TOKEN = 3  # compromise between English (~4) and CJK (~1.5)
 
 # Check interval: run the monitor every N user turns.
-CHECK_INTERVAL_TURNS = 15
+CHECK_INTERVAL_TURNS = 5
 
 # Compaction marker substring (injected by Claude SDK on context compaction).
 _COMPACTION_MARKER = "continued from a previous conversation that ran out of context"

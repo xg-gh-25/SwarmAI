@@ -513,6 +513,8 @@ export interface ChatStreamingLifecycle {
   // Context window monitoring
   /** Non-null when the backend emits a context_warning SSE event (level: warn | critical). */
   contextWarning: ContextWarning | null;
+  /** Set the context warning display mirror (used by tab switch restore). */
+  setContextWarning: React.Dispatch<React.SetStateAction<ContextWarning | null>>;
   /** Dismiss the context warning banner/toast. */
   clearContextWarning: () => void;
 }
@@ -601,7 +603,14 @@ export function useChatStreamingLifecycle(
 
   // --- Context window monitoring ---
   const [contextWarning, setContextWarning] = useState<ContextWarning | null>(null);
-  const clearContextWarning = useCallback(() => setContextWarning(null), []);
+  const clearContextWarning = useCallback(() => {
+    const tabId = activeTabIdRef.current;
+    if (tabId) {
+      const tabState = tabMapRef.current.get(tabId);
+      if (tabState) tabState.contextWarning = null;
+    }
+    setContextWarning(null);
+  }, [activeTabIdRef, tabMapRef]);
 
   // --- Fix 8: Tab status indicators ---
   // Tab statuses are now managed by the unified hook (useUnifiedTabState)
@@ -1075,28 +1084,37 @@ export function useChatStreamingLifecycle(
           }
         }
         // Context compacted — backend emits when the SDK compacts the context window
-        // (either auto or manual trigger). Show a brief toast to inform the user.
+        // (either auto or manual trigger). Clear the originating tab's warning.
         else if (event.type === 'context_compacted') {
-          const trigger = (event as unknown as Record<string, unknown>).trigger ?? 'auto';
-          const msg = trigger === 'manual'
-            ? 'Context compacted (manual)'
-            : 'Context auto-compacted — long conversation summarized to free space';
-          setContextWarning({
-            level: 'ok',
-            pct: 0,
-            tokensEst: 0,
-            message: msg,
-          });
+          const tabState = capturedTabId
+            ? tabMapRef.current.get(capturedTabId)
+            : undefined;
+          if (tabState) {
+            tabState.contextWarning = null;
+          }
+          if (capturedTabId === null || capturedTabId === activeTabIdRef.current) {
+            setContextWarning(null);
+          }
         }
-        // Context window warning — backend emits after every 15th user turn
-        // when usage exceeds 70% (warn) or 85% (critical).
+        // Context window warning — backend emits context usage at all levels
+        // (ok, warn, critical). Write to the originating tab's UnifiedTab,
+        // mirror to React state only if this is the active tab (display mirror pattern).
         else if (event.type === 'context_warning' && event.level && event.pct != null) {
-          setContextWarning({
-            level: event.level as 'warn' | 'critical',
+          const warning: ContextWarning = {
+            level: event.level as 'ok' | 'warn' | 'critical',
             pct: event.pct,
             tokensEst: event.tokensEst ?? 0,
             message: event.message ?? `Context ${event.pct}% full`,
-          });
+          };
+          const tabState = capturedTabId
+            ? tabMapRef.current.get(capturedTabId)
+            : undefined;
+          if (tabState) {
+            tabState.contextWarning = warning;
+          }
+          if (capturedTabId === null || capturedTabId === activeTabIdRef.current) {
+            setContextWarning(warning);
+          }
         }
         // Evolution SSE events — inject as standalone messages in the stream
         else if (event.type?.startsWith('evolution_')) {
@@ -1256,6 +1274,7 @@ export function useChatStreamingLifecycle(
     createErrorHandler,
     removePendingStateForSession: removePendingState,
     contextWarning,
+    setContextWarning,
     clearContextWarning,
   };
 }

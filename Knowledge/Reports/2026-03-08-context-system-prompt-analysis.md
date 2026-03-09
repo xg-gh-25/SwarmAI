@@ -45,15 +45,14 @@ Final system prompt → Claude Agent SDK
 | P0 | SWARMAI.md | system | No | — |
 | P1 | IDENTITY.md | system | No | — |
 | P2 | SOUL.md | system | No | — |
-| P3 | GROWTH_PRINCIPLES.md | system | Yes | tail |
-| P4 | AGENT.md | system | Yes | tail |
-| P5 | USER.md | user | Yes | tail |
-| P6 | STEERING.md | user | Yes | tail |
-| P7 | TOOLS.md | user | Yes | tail |
-| P8 | MEMORY.md | agent | Yes | head |
-| P9 | EVOLUTION.md | agent | Yes | head |
-| P10 | KNOWLEDGE.md | user | Yes | tail |
-| P11 | PROJECTS.md | user | Yes | tail |
+| ~~P3~~ | ~~GROWTH_PRINCIPLES.md~~ | ~~system~~ | ~~Yes~~ | ~~tail~~ | _Removed 2026-03 — folded into SOUL.md + s_self-evolution/SKILL.md_ |
+| P3 | AGENT.md | system | Yes | tail |
+| P4 | USER.md | user | Yes | tail |
+| P5 | STEERING.md | user | Yes | tail |
+| P6 | TOOLS.md | user | Yes | tail |
+| P7 | MEMORY.md | agent | Yes | head |
+| P8 | KNOWLEDGE.md | user | Yes | tail |
+| P9 | PROJECTS.md | user | Yes | tail |
 
 **Key Design Properties:**
 - P0–P2 are non-truncatable (identity/personality always survives budget pressure)

@@ -151,12 +151,6 @@ export default function ChatPage() {
   const effectiveBasePath = agentWorkDir?.path;
   const selectedAgent = agents.find((a) => a.id === selectedAgentId);
 
-  // Last assistant message index — memoized for Save-to-Memory button placement
-  const lastAssistantIdx = useMemo(
-    () => messages.reduce((lastIdx, m, i) => m.role === 'assistant' ? i : lastIdx, -1),
-    [messages],
-  );
-
   // Tab state management — unified hook (single source of truth)
   const {
     openTabs,
@@ -206,6 +200,7 @@ export default function ChatPage() {
     createCompleteHandler,
     createErrorHandler,
     contextWarning,
+    setContextWarning,
     clearContextWarning,
   } = useChatStreamingLifecycle({
     queryClient,
@@ -220,6 +215,12 @@ export default function ChatPage() {
   const {
     promptMetadata,
   } = useTSCCState(sessionId ?? null);
+
+  // Last assistant message index — memoized for Save-to-Memory button placement
+  const lastAssistantIdx = useMemo(
+    () => messages.reduce((lastIdx, m, i) => m.role === 'assistant' ? i : lastIdx, -1),
+    [messages],
+  );
 
   // Refs for frequently-changing values — stabilizes useCallback identity for
   // handleSendMessage (Req 7.1, 7.3). Without these, the callback would need
@@ -346,8 +347,9 @@ export default function ChatPage() {
     setMessages([]);
     setSessionId(undefined);
     setPendingQuestion(null);
+    setContextWarning(null);
     setIsStreaming(false, newTab!.id); // New tab is not streaming
-  }, [selectedAgentId, addTab, initTabState, tabMapRef, updateTabState, activeTabIdRef, setIsStreaming]);
+  }, [selectedAgentId, addTab, initTabState, tabMapRef, updateTabState, activeTabIdRef, setIsStreaming, setContextWarning]);
 
   // Handle tab selection - switches active tab and loads session messages (Req 1.6)
   // Fix 6: Save current tab state, restore target tab state from per-tab map
@@ -380,6 +382,7 @@ export default function ChatPage() {
         if (tabState.sessionId && tabState.messages.length === 0) {
           setSessionId(tabState.sessionId);
           setPendingQuestion(null);
+          setContextWarning(tabState.contextWarning ?? null);
           bumpStreamingDerivation();
           setPendingPermission(null);
           if (tabStatuses[tabId] === 'complete_unread') {
@@ -391,6 +394,7 @@ export default function ChatPage() {
         setMessages(tabState.messages);
         setSessionId(tabState.sessionId);
         setPendingQuestion(tabState.pendingQuestion);
+        setContextWarning(tabState.contextWarning ?? null);
         // isStreaming derivation automatically reflects target tab's state
         // from tabMapRef — no need to call setIsStreaming which would corrupt
         // the source tab's streaming state. Just bump to re-derive.
@@ -409,6 +413,7 @@ export default function ChatPage() {
     // Not in map — load from API or initialize fresh
     activeTabIdRef.current = tabId;
     setPendingPermission(null);
+    setContextWarning(null);
     bumpStreamingDerivation(); // re-derive isStreaming for new active tab
     if (tab.sessionId) {
       // New tab with existing session — load from API with async guard
@@ -439,7 +444,7 @@ export default function ChatPage() {
       setPendingQuestion(null);
       initTabState(tabId, []);
     }
-  }, [openTabs, selectTab, restoreTab, getTabState, initTabState, updateTabState, activeTabIdRef, tabMapRef, tabStatuses, updateTabStatus, pendingQuestion]);
+  }, [openTabs, selectTab, restoreTab, getTabState, initTabState, updateTabState, activeTabIdRef, tabMapRef, tabStatuses, updateTabStatus, pendingQuestion, setContextWarning]);
 
   // Handle tab close - removes tab, handles last-tab case (Req 3.3)
   // Fix 6: Clean up per-tab state map entry and abort controller
@@ -1222,6 +1227,7 @@ export default function ChatPage() {
                         isStreaming={isLastAssistantForStreaming}
                         sessionId={sessionId}
                         isLastAssistant={idx === lastAssistantIdx}
+                        contextWarning={contextWarning}
                       />
                     );
                   })
@@ -1272,6 +1278,7 @@ export default function ChatPage() {
                 onRemoveContextFile={removeAttachedFile}
                 sessionId={sessionId}
                 promptMetadata={promptMetadata}
+                contextPct={contextWarning?.pct ?? null}
               />
             </>
           )}
