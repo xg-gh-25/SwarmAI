@@ -31,6 +31,10 @@ interface ChatInputProps {
   promptMetadata?: SystemPromptMetadata | null;
   /** Context usage percentage for the ring indicator (null = no data) */
   contextPct?: number | null;
+  /** Whether the textarea is in expanded mode (60vh max-height) */
+  isExpanded: boolean;
+  /** Callback to toggle expanded/compact mode */
+  onExpandedChange: (expanded: boolean) => void;
 }
 
 const MAX_ROWS = 20;
@@ -56,14 +60,19 @@ export function ChatInput({
   sessionId,
   promptMetadata,
   contextPct,
+  isExpanded,
+  onExpandedChange,
 }: ChatInputProps) {
   const { t } = useTranslation();
   const [showCommandSuggestions, setShowCommandSuggestions] = useState(false);
   const [selectedCommandIndex, setSelectedCommandIndex] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
+  const [lineCount, setLineCount] = useState(1);
+  const [modeAnnouncement, setModeAnnouncement] = useState('');
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const maxHeightRef = useRef<number>(400); // fallback: 20 * 20px
+  const transitionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Compute maxHeight once from actual computed line-height at mount
   useEffect(() => {
@@ -73,20 +82,85 @@ export function ChatInput({
     maxHeightRef.current = MAX_ROWS * lineHeight;
   }, []);
 
+  // Apply a brief CSS transition for mode toggle animations only (not during typing)
+  const applyTransition = useCallback(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.transition = 'height 150ms ease-out';
+    if (transitionTimerRef.current) clearTimeout(transitionTimerRef.current);
+    transitionTimerRef.current = setTimeout(() => {
+      if (el) el.style.transition = '';
+      transitionTimerRef.current = null;
+    }, 160); // slightly longer than transition duration
+  }, []);
+
+  // Cleanup transition timer and inline style on unmount
+  useEffect(() => {
+    return () => {
+      if (transitionTimerRef.current) clearTimeout(transitionTimerRef.current);
+      const el = textareaRef.current;
+      if (el) el.style.transition = '';
+    };
+  }, []);
+
   const adjustHeight = useCallback(() => {
     const el = textareaRef.current;
     if (!el) return;
-    const maxHeight = maxHeightRef.current;
+    const maxHeight = isExpanded ? window.innerHeight * 0.6 : maxHeightRef.current;
     el.style.height = 'auto';
     const next = Math.min(el.scrollHeight, maxHeight);
     el.style.height = `${next}px`;
     el.style.overflowY = el.scrollHeight > maxHeight ? 'auto' : 'hidden';
-  }, []);
+    // Update line count — only trigger re-render when the value actually changes
+    const lines = el.value.split('\n').length;
+    setLineCount(prev => prev !== lines ? lines : prev);
+  }, [isExpanded]);
 
   // Call adjustHeight whenever inputValue changes (handles programmatic clears after send)
   useEffect(() => {
     adjustHeight();
-  }, [inputValue, adjustHeight]);
+  }, [inputValue, isExpanded, adjustHeight]);
+
+  // Re-clamp textarea height on window resize when expanded (60vh is viewport-relative)
+  useEffect(() => {
+    if (!isExpanded) return;
+    let resizeTimer: ReturnType<typeof setTimeout> | null = null;
+    const handleResize = () => {
+      if (resizeTimer) clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(() => adjustHeight(), 100);
+    };
+    window.addEventListener('resize', handleResize);
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      if (resizeTimer) clearTimeout(resizeTimer);
+    };
+  }, [isExpanded, adjustHeight]);
+
+  // Toggle between compact and expanded modes, preserving cursor position
+  const toggleExpanded = useCallback(() => {
+    const el = textareaRef.current;
+    const selStart = el?.selectionStart ?? 0;
+    const selEnd = el?.selectionEnd ?? 0;
+    applyTransition();
+    onExpandedChange(!isExpanded);
+    setModeAnnouncement(isExpanded ? 'Input collapsed' : 'Input expanded');
+    // Clear announcement after 2s to prevent stale re-announcements on focus changes
+    setTimeout(() => setModeAnnouncement(''), 2000);
+    requestAnimationFrame(() => {
+      if (el) {
+        el.selectionStart = selStart;
+        el.selectionEnd = selEnd;
+        const lineHeight = parseFloat(getComputedStyle(el).lineHeight) || 20;
+        const cursorLine = el.value.substring(0, selStart).split('\n').length;
+        const cursorTop = (cursorLine - 1) * lineHeight;
+        if (cursorTop < el.scrollTop) {
+          el.scrollTop = cursorTop;
+        } else if (cursorTop + lineHeight > el.scrollTop + el.clientHeight) {
+          el.scrollTop = cursorTop + lineHeight - el.clientHeight;
+        }
+      }
+    });
+  }, [isExpanded, onExpandedChange, applyTransition]);
 
   // Filter commands based on input
   const filteredCommands = SLASH_COMMANDS.filter((cmd) =>
@@ -162,6 +236,13 @@ export function ChatInput({
   );
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    // Expand/collapse shortcut
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'E') {
+      e.preventDefault();
+      toggleExpanded();
+      return;
+    }
+
     // Handle slash command navigation
     if (showCommandSuggestions && filteredCommands.length > 0) {
       if (e.key === 'ArrowDown') {
@@ -195,13 +276,17 @@ export function ChatInput({
 
   // Wrap onSend to reset textarea height after sending
   const handleSend = useCallback(() => {
+    if (isExpanded) {
+      applyTransition();
+      onExpandedChange(false);
+    }
     onSend();
     const el = textareaRef.current;
     if (el) {
       el.style.height = '';       // clear inline style, rows={2} reasserts minimum
       el.style.overflowY = 'hidden';
     }
-  }, [onSend]);
+  }, [onSend, isExpanded, onExpandedChange, applyTransition]);
 
   const hasAttachments = attachments.some((a) => a.base64);
   const canSend = (inputValue.trim() || hasAttachments) && selectedAgentId;
@@ -309,6 +394,21 @@ export function ChatInput({
               )}
             />
 
+            {/* Expand/Collapse Toggle Button */}
+            {(lineCount > 3 || isExpanded) && (
+              <button
+                onClick={toggleExpanded}
+                aria-label={isExpanded ? 'Collapse input' : 'Expand input'}
+                aria-expanded={isExpanded}
+                title={`${isExpanded ? 'Collapse' : 'Expand'} input (${/Mac|iPhone|iPad/.test(navigator.userAgent) ? '⌘' : 'Ctrl'}+Shift+E)`}
+                className="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)] transition-colors"
+              >
+                <span className="material-symbols-outlined text-lg">
+                  {isExpanded ? 'collapse_content' : 'expand_content'}
+                </span>
+              </button>
+            )}
+
             {/* Send Button */}
             <button
               onClick={isStreaming ? onStop : handleSend}
@@ -343,9 +443,21 @@ export function ChatInput({
               <TSCCPopoverButton sessionId={sessionId ?? null} metadata={promptMetadata ?? null} />
               <ContextUsageRing pct={contextPct ?? null} />
             </div>
-            <span className="text-xs text-[var(--color-text-muted)]">
-              Type <kbd className="px-1.5 py-0.5 bg-[var(--color-hover)] rounded text-xs mx-1">/</kbd> for commands
-            </span>
+            <div className="flex items-center gap-3">
+              {lineCount > 5 && (
+                <span className="text-xs text-[var(--color-text-muted)]">
+                  {lineCount} lines
+                </span>
+              )}
+              <span className="text-xs text-[var(--color-text-muted)]">
+                Type <kbd className="px-1.5 py-0.5 bg-[var(--color-hover)] rounded text-xs mx-1">/</kbd> for commands
+              </span>
+            </div>
+          </div>
+
+          {/* Accessibility: announce mode changes to screen readers */}
+          <div aria-live="polite" className="sr-only">
+            {modeAnnouncement}
           </div>
         </div>
     </div>

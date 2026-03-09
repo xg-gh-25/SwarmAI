@@ -62,6 +62,8 @@ export interface UnifiedTab {
   status: TabStatus;
   /** Per-tab context warning from backend context monitor (null = no warning). */
   contextWarning: ContextWarning | null;
+  /** Per-tab expanded/compact mode for ChatInput (runtime-only, NOT serialized). */
+  isExpanded?: boolean;
 }
 
 /** Fields persisted to ~/.swarm-ai/open_tabs.json (re-exported from tabPersistence service). */
