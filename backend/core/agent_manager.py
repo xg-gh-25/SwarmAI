@@ -276,6 +276,10 @@ class AgentManager:
 
     # TTL for idle sessions before automatic cleanup (12 hours)
     SESSION_TTL_SECONDS = 12 * 60 * 60
+    # Idle threshold for early DailyActivity extraction (30 minutes).
+    # When a session has no messages for this long, extract activity
+    # but keep the session alive so the user can resume.
+    ACTIVITY_IDLE_SECONDS = 30 * 60
 
     def __init__(
         self,
@@ -356,11 +360,30 @@ class AgentManager:
             self._cleanup_task = asyncio.create_task(self._cleanup_stale_sessions_loop())
 
     async def _cleanup_stale_sessions_loop(self):
-        """Periodically clean up sessions that have been idle too long."""
+        """Periodically clean up sessions that have been idle too long.
+
+        Two-tier idle detection:
+        1. **Activity extraction** (30 min idle): Fire the DailyActivity
+           extraction hook only.  Session stays alive so the user can
+           resume without losing conversation context.
+        2. **Full cleanup** (12 h idle): Tear down the session and fire
+           all post-session-close hooks.
+        """
         while True:
             try:
                 await asyncio.sleep(60)  # Check every minute
                 now = time.time()
+
+                # --- Tier 1: Early DailyActivity extraction (30 min idle) ---
+                idle_for_extraction = [
+                    (sid, info) for sid, info in self._active_sessions.items()
+                    if (now - info.get("last_used", info["created_at"]) > self.ACTIVITY_IDLE_SECONDS
+                        and not info.get("activity_extracted"))
+                ]
+                for sid, info in idle_for_extraction:
+                    await self._extract_activity_early(sid, info)
+
+                # --- Tier 2: Full cleanup (12 h TTL) ---
                 stale = [
                     sid for sid, info in self._active_sessions.items()
                     if now - info.get("last_used", info["created_at"]) > self.SESSION_TTL_SECONDS
@@ -372,6 +395,49 @@ class AgentManager:
                 break
             except Exception as e:
                 logger.error(f"Error in session cleanup loop: {e}")
+
+    async def _extract_activity_early(self, session_id: str, info: dict) -> None:
+        """Fire only the DailyActivity extraction hook for an idle session.
+
+        Called when a session has been idle for ``ACTIVITY_IDLE_SECONDS``
+        but has not yet reached the full TTL.  The session stays alive so
+        the user can resume.  The ``activity_extracted`` flag prevents
+        re-extraction on subsequent loop iterations.
+        """
+        if not self._hook_manager:
+            return
+
+        # Find the DailyActivity extraction hook by name
+        extraction_hook = None
+        for hook in self._hook_manager._hooks:
+            if getattr(hook, "name", "") == "daily_activity_extraction":
+                extraction_hook = hook
+                break
+
+        if not extraction_hook:
+            return
+
+        try:
+            # Set flag BEFORE execution to prevent re-entry from the next
+            # loop iteration and narrow the race window with _get_active_client
+            # (which resets the flag when the user sends a new message).
+            info["activity_extracted"] = True
+            context = await self._build_hook_context(session_id, info)
+            await asyncio.wait_for(
+                extraction_hook.execute(context),
+                timeout=30.0,
+            )
+            logger.info(
+                "Early DailyActivity extraction for idle session %s (idle %ds)",
+                session_id,
+                int(time.time() - info.get("last_used", info["created_at"])),
+            )
+        except asyncio.TimeoutError:
+            info["activity_extracted"] = False  # Allow retry on next cycle
+            logger.error("Early activity extraction timed out for session %s", session_id)
+        except Exception as exc:
+            info["activity_extracted"] = False  # Allow retry on next cycle
+            logger.error("Early activity extraction failed for session %s: %s", session_id, exc)
 
     async def _cleanup_session(self, session_id: str, skip_hooks: bool = False):
         """Disconnect and remove a stored session client.
@@ -387,7 +453,18 @@ class AgentManager:
         if info and self._hook_manager and not skip_hooks:
             try:
                 context = await self._build_hook_context(session_id, info)
-                await self._hook_manager.fire_post_session_close(context)
+                if info.get("activity_extracted"):
+                    # Activity already captured by idle-trigger — run
+                    # remaining hooks (auto-commit, distillation) only.
+                    for hook in self._hook_manager._hooks:
+                        if getattr(hook, "name", "") == "daily_activity_extraction":
+                            continue
+                        try:
+                            await asyncio.wait_for(hook.execute(context), timeout=30.0)
+                        except Exception as exc:
+                            logger.error("Hook '%s' failed for %s: %s", getattr(hook, "name", "?"), session_id, exc)
+                else:
+                    await self._hook_manager.fire_post_session_close(context)
             except Exception as exc:
                 logger.error("Hook context build failed for %s: %s", session_id, exc)
         # NOW pop and clean up resources
@@ -416,6 +493,9 @@ class AgentManager:
         info = self._active_sessions.get(session_id)
         if info:
             info["last_used"] = time.time()
+            # Reset early-extraction flag so new activity gets captured
+            # after the next idle period.
+            info["activity_extracted"] = False
             return info["client"]
         return None
 
@@ -1623,6 +1703,7 @@ class AgentManager:
                         "wrapper": wrapper,
                         "created_at": time.time(),
                         "last_used": time.time(),
+                        "activity_extracted": False,
                     }
                     logger.info(f"Stored long-lived client for session {effective_session_id}")
 
@@ -1758,6 +1839,17 @@ class AgentManager:
             #   "error"      → the SDK reader encountered an exception
             formatted = None
             assistant_model = None
+            # Stale-result detection for resumed sessions.  During --resume the
+            # SDK may replay old messages and return the *previous* turn's
+            # ResultMessage without processing the new query.  We track whether
+            # the SDK executed any tool_use blocks in this stream — if it did,
+            # the result is fresh.  If ResultMessage arrives during a resume
+            # with no tool_use execution, we flag it as stale and re-send the
+            # query on the same client (up to _MAX_STALE_RETRIES times).
+            _MAX_STALE_RETRIES = 2
+            _stale_retry_count = 0
+            _saw_tool_use = False
+            _saw_new_text_block = False  # True once an AssistantMessage TextBlock arrives
 
             while True:
                 item = await combined_queue.get()
@@ -1863,6 +1955,71 @@ class AgentManager:
                             )
 
                         else:
+                            # --- Stale-result detection ---
+                            # During --resume the SDK may return the *previous* turn's
+                            # cached ResultMessage before it processes the new query.
+                            # Heuristic: stale if resuming, no tool_use seen, num_turns<=1,
+                            # and we haven't exhausted retries.
+                            _num_turns = getattr(message, 'num_turns', 0) or 0
+                            _is_likely_stale = (
+                                is_resuming
+                                and not _saw_tool_use
+                                and _num_turns <= 1
+                                and _stale_retry_count < _MAX_STALE_RETRIES
+                            )
+
+                            if _is_likely_stale:
+                                _stale_retry_count += 1
+                                _result_preview = (message.result or "")[:80]
+                                logger.warning(
+                                    "Stale ResultMessage detected (attempt %d/%d, "
+                                    "num_turns=%d, saw_tool_use=%s): %s — re-sending query",
+                                    _stale_retry_count, _MAX_STALE_RETRIES,
+                                    _num_turns, _saw_tool_use, _result_preview,
+                                )
+                                # Discard the stale result — do NOT yield it to frontend.
+                                # Cancel the current SDK reader (it already pushed sdk_done
+                                # or is about to), drain remaining queue items, re-send the
+                                # query, and restart the message reader.
+                                if sdk_reader_task and not sdk_reader_task.done():
+                                    sdk_reader_task.cancel()
+                                    try:
+                                        await sdk_reader_task
+                                    except asyncio.CancelledError:
+                                        pass
+
+                                # Drain any remaining items from the combined_queue
+                                while not combined_queue.empty():
+                                    try:
+                                        combined_queue.get_nowait()
+                                    except asyncio.QueueEmpty:
+                                        break
+
+                                # Re-send the query on the same client
+                                if isinstance(query_content, list):
+                                    async def _retry_multimodal():
+                                        msg = {
+                                            "type": "user",
+                                            "message": {"role": "user", "content": query_content},
+                                            "parent_tool_use_id": None,
+                                        }
+                                        yield msg
+                                    await client.query(_retry_multimodal())
+                                else:
+                                    await client.query(query_content)
+                                logger.info("Re-sent query after stale detection, restarting SDK reader")
+
+                                # Reset tracking for the new attempt
+                                _saw_tool_use = False
+                                _saw_new_text_block = False
+                                message_count = 0
+                                assistant_content = ContentBlockAccumulator()
+
+                                # Restart the SDK message reader
+                                sdk_reader_task = asyncio.create_task(sdk_message_reader())
+                                continue  # Back to the while-True loop
+
+                            # --- Normal (non-stale) result handling ---
                             result_text = message.result
                             if result_text:
                                 logger.debug(f"ResultMessage result_text: {result_text[:50]}...")
@@ -1946,6 +2103,17 @@ class AgentManager:
 
                         # Other SystemMessages are internal metadata — not forwarded
                         continue
+
+                    # --- Stale-result tracking for AssistantMessage ---
+                    # Track whether this stream has seen tool_use or fresh text
+                    # blocks, which indicate the SDK is doing real work (not
+                    # just replaying the previous turn's cached result).
+                    if isinstance(message, AssistantMessage):
+                        for _blk in message.content:
+                            if isinstance(_blk, ToolUseBlock):
+                                _saw_tool_use = True
+                            elif isinstance(_blk, TextBlock):
+                                _saw_new_text_block = True
 
                     # --- Format and dispatch non-system messages ---
                     # _format_message converts SDK message types (AssistantMessage, ToolUseMessage,
@@ -2410,7 +2578,17 @@ class AgentManager:
                 if info:
                     try:
                         context = await self._build_hook_context(session_id, info)
-                        await self._hook_manager.fire_post_session_close(context)
+                        if info.get("activity_extracted"):
+                            # Already extracted — skip extraction, run rest
+                            for hook in self._hook_manager._hooks:
+                                if getattr(hook, "name", "") == "daily_activity_extraction":
+                                    continue
+                                try:
+                                    await asyncio.wait_for(hook.execute(context), timeout=30.0)
+                                except Exception as exc:
+                                    logger.error("Hook '%s' failed for %s: %s", getattr(hook, "name", "?"), session_id, exc)
+                        else:
+                            await self._hook_manager.fire_post_session_close(context)
                     except Exception as exc:
                         logger.error("Shutdown hook failed for %s: %s", session_id, exc)
             # Resource cleanup only — hooks already fired above
@@ -2752,6 +2930,7 @@ Create the skill in the `.claude/skills/` directory within the current workspace
                                 "wrapper": wrapper,
                                 "created_at": time.time(),
                                 "last_used": time.time(),
+                                "activity_extracted": False,
                             }
                             logger.info(f"Stored long-lived client for skill creator session {effective_session_id}")
 

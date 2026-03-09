@@ -158,53 +158,92 @@ def _format_conversation(messages: list[dict], since_idx: int = 0) -> str:
     return result
 
 
-def _call_llm(prompt: str, config: dict[str, Any] | None = None) -> str:
-    """Make a direct Bedrock API call for extraction.
+_LLM_MAX_RETRIES = 3
+_LLM_RETRY_DELAY = 1.0  # seconds, doubles each retry
 
-    Uses boto3 bedrock-runtime to invoke the model. Falls back to
-    returning empty JSON on any error.
+
+def _call_llm(prompt: str, config: dict[str, Any] | None = None) -> str:
+    """Make a direct Bedrock API call for extraction with retry.
+
+    Uses boto3 bedrock-runtime to invoke the model.  Retries up to
+    ``_LLM_MAX_RETRIES`` times on transient errors (network, throttling,
+    zlib decompression failures from corrupted HTTP responses).
 
     Args:
         prompt: The fully formatted extraction prompt.
         config: Optional app config dict for model/region overrides.
 
     Returns:
-        Raw LLM response text.
+        Raw LLM response text, or ``"{}"`` if all retries fail.
     """
+    import time
     import boto3
+    from botocore.config import Config as BotoConfig
 
     region = "us-east-1"
     model_id = EXTRACTION_MODEL
 
     if config:
         region = config.get("aws_region", region)
-        # Allow config override for extraction model
         model_id = config.get("memory_extraction_model", model_id)
 
-    try:
-        client = boto3.client("bedrock-runtime", region_name=region)
-        response = client.invoke_model(
-            modelId=model_id,
-            contentType="application/json",
-            accept="application/json",
-            body=json.dumps({
-                "anthropic_version": "bedrock-2023-05-31",
-                "max_tokens": 1024,
-                "temperature": 0,
-                "messages": [
-                    {"role": "user", "content": prompt}
-                ],
-            }),
-        )
-        result = json.loads(response["body"].read())
-        # Extract text from Bedrock response format
-        content = result.get("content", [])
-        if content and isinstance(content, list):
-            return content[0].get("text", "{}")
-        return "{}"
-    except Exception as e:
-        logger.error("LLM extraction call failed: %s", e, exc_info=True)
-        return "{}"
+    # Configure boto3 with built-in retry for standard AWS errors,
+    # plus we add our own retry loop for non-standard errors (zlib, etc.)
+    boto_config = BotoConfig(
+        retries={"max_attempts": 2, "mode": "adaptive"},
+        connect_timeout=10,
+        read_timeout=30,
+    )
+
+    last_error: Exception | None = None
+    delay = _LLM_RETRY_DELAY
+
+    for attempt in range(1, _LLM_MAX_RETRIES + 1):
+        try:
+            client = boto3.client(
+                "bedrock-runtime",
+                region_name=region,
+                config=boto_config,
+            )
+            response = client.invoke_model(
+                modelId=model_id,
+                contentType="application/json",
+                accept="application/json",
+                body=json.dumps({
+                    "anthropic_version": "bedrock-2023-05-31",
+                    "max_tokens": 1024,
+                    "temperature": 0,
+                    "messages": [
+                        {"role": "user", "content": prompt}
+                    ],
+                }),
+            )
+            result = json.loads(response["body"].read())
+            content = result.get("content", [])
+            if content and isinstance(content, list):
+                return content[0].get("text", "{}")
+            return "{}"
+        except Exception as e:
+            last_error = e
+            if attempt < _LLM_MAX_RETRIES:
+                logger.warning(
+                    "LLM extraction attempt %d/%d failed: %s — retrying in %.1fs",
+                    attempt,
+                    _LLM_MAX_RETRIES,
+                    e,
+                    delay,
+                )
+                time.sleep(delay)
+                delay *= 2  # exponential backoff
+            else:
+                logger.error(
+                    "LLM extraction failed after %d attempts: %s",
+                    _LLM_MAX_RETRIES,
+                    e,
+                    exc_info=True,
+                )
+
+    return "{}"
 
 
 def _parse_extraction(raw: str) -> dict[str, list[str]]:
@@ -395,7 +434,21 @@ async def extract_and_save(
     )
 
     # Run LLM call in thread to avoid blocking async event loop
-    raw_response = await asyncio.to_thread(_call_llm, prompt, config)
+    try:
+        raw_response = await asyncio.to_thread(_call_llm, prompt, config)
+    except Exception as exc:
+        # Catch errors that bypass _call_llm's internal try/except
+        # (e.g. zlib decompression errors from boto3/urllib3 response handling)
+        logger.error(
+            "LLM thread call failed for session %s: %s",
+            session_id,
+            exc,
+            exc_info=True,
+        )
+        return MemoryExtractionResult(
+            next_message_idx=total_messages,
+            error=f"LLM extraction failed: {type(exc).__name__}",
+        )
 
     # 7. Parse extraction result
     extracted = _parse_extraction(raw_response)
@@ -412,9 +465,19 @@ async def extract_and_save(
     for key, section_header in _SECTION_MAP.items():
         entries = extracted.get(key, [])
         if entries:
-            success = await asyncio.to_thread(
-                _write_entries, entries, section_header, memory_path, locked_write_script
-            )
+            try:
+                success = await asyncio.to_thread(
+                    _write_entries, entries, section_header, memory_path, locked_write_script
+                )
+            except Exception as exc:
+                logger.error(
+                    "Write thread failed for section %s, session %s: %s",
+                    section_header,
+                    session_id,
+                    exc,
+                    exc_info=True,
+                )
+                success = False
             if success:
                 count = len(entries)
                 setattr(result, key, count)
