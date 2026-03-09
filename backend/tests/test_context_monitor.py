@@ -335,12 +335,12 @@ class TestMessageClassification:
 class TestCheckInterval:
     def test_interval_is_positive(self):
         assert CHECK_INTERVAL_TURNS > 0
-        assert CHECK_INTERVAL_TURNS == 15
+        assert CHECK_INTERVAL_TURNS == 5
 
     def test_modulo_triggers_correctly(self):
         """Verify the turn-counting logic matches the agent_manager pattern."""
         triggered = []
         for turn in range(1, 61):
-            if turn % CHECK_INTERVAL_TURNS == 0:
+            if turn == 1 or turn % CHECK_INTERVAL_TURNS == 0:
                 triggered.append(turn)
-        assert triggered == [15, 30, 45, 60]
+        assert triggered == [1, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60]

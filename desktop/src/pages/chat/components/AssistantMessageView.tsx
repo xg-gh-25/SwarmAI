@@ -8,6 +8,9 @@
  * - min-w-0 overflow constraint on content (prevents flex overflow)
  * - Save-to-Memory button on the last assistant message (hover-to-reveal,
  *   next to the Copy button) with per-session status tracking
+ * - Compact Context button on the last assistant message (hover-to-reveal,
+ *   after Save-to-Memory) — conditionally visible when contextWarning
+ *   level is 'warn' or 'critical', with urgency coloring at critical level
  *
  * Key layout change: content starts at the left margin directly below the
  * header line — no avatar column or indentation gap.
@@ -15,15 +18,18 @@
  * @exports AssistantMessageView      — The view React component
  * @exports AssistantMessageViewProps  — Props interface
  *
- * Validates: Requirements 2.1, 2.4, 3.1, 3.2, 3.5
+ * Validates: Requirements 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7, 2.8,
+ *            3.1, 3.2, 3.3, 3.4, 3.5, 4.1, 4.2, 4.3, 4.4, 4.5, 4.6
  */
 
 import React, { useState, useCallback, useMemo } from 'react';
 import clsx from 'clsx';
 import type { Message, ToolResultContent } from '../../../types';
+import type { ContextWarning } from '../../../hooks/useChatStreamingLifecycle';
 import { ContentBlockRenderer } from './ContentBlockRenderer';
 import { AssistantHeader } from './AssistantHeader';
 import { useMemorySave } from '../../../hooks/useMemorySave';
+import { chatService } from '../../../services/chat';
 import type { MemorySaveStatus } from '../../../hooks/useMemorySave';
 import { Toast } from '../../../components/common/Toast';
 
@@ -40,6 +46,8 @@ export interface AssistantMessageViewProps {
   sessionId?: string;
   /** Whether this is the last assistant message in the session */
   isLastAssistant?: boolean;
+  /** Context warning from the backend context monitor (per-session, display mirror) */
+  contextWarning?: ContextWarning | null;
 }
 
 /** Map of memory save status to Material Symbols icon names. */
@@ -58,6 +66,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
   isStreaming,
   sessionId,
   isLastAssistant,
+  contextWarning,
 }) => {
   const [copied, setCopied] = useState(false);
 
@@ -65,6 +74,28 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
   const { statusMap, toastMap, save: saveMemory, reset: resetMemory } = useMemorySave();
   const memorySaveStatus: MemorySaveStatus = sessionId ? (statusMap[sessionId] || 'idle') : 'idle';
   const memoryToastMessage = sessionId ? (toastMap[sessionId] || null) : null;
+
+  // Compact button local state
+  const [compactStatus, setCompactStatus] = useState<'idle' | 'loading' | 'done'>('idle');
+  const [compactToast, setCompactToast] = useState<string | null>(null);
+
+  const handleCompact = useCallback(async () => {
+    if (!sessionId || compactStatus === 'loading') return;
+    setCompactStatus('loading');
+    try {
+      const result = await chatService.compactSession(sessionId);
+      setCompactStatus('done');
+      setCompactToast(
+        result.status === 'compacted'
+          ? 'Context compacted successfully'
+          : result.message
+      );
+      setTimeout(() => setCompactStatus('idle'), 3000);
+    } catch {
+      setCompactStatus('idle');
+      setCompactToast('Failed to compact session');
+    }
+  }, [sessionId, compactStatus]);
 
   /** Extract plain text from all content blocks for clipboard copy. */
   const extractMessageText = useCallback((): string => {
@@ -96,6 +127,13 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
       saveMemory(sessionId);
     }
   }, [sessionId, memorySaveStatus, saveMemory]);
+
+  // Compact button visibility: only on last assistant, not streaming, with active warning
+  const showCompactButton = isLastAssistant
+    && !isStreaming
+    && sessionId
+    && contextWarning
+    && (contextWarning.level === 'warn' || contextWarning.level === 'critical');
 
   const contentBlocks = message.content.map((block, index) => {
     // Use block-specific IDs for stable keys to prevent state mix-ups
@@ -185,6 +223,38 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
               {memorySaveStatus === 'saved' ? 'Saved!' : memorySaveStatus === 'loading' ? 'Saving...' : 'Save'}
             </button>
           )}
+
+          {/* Compact Context button — only when context warning is active */}
+          {showCompactButton && (
+            <button
+              type="button"
+              onClick={handleCompact}
+              disabled={compactStatus === 'loading'}
+              className={clsx(
+                'flex items-center gap-1 px-2 py-0.5 text-xs rounded transition-colors',
+                contextWarning.level === 'critical'
+                  ? 'text-red-500 hover:text-red-400'
+                  : compactStatus === 'done'
+                    ? 'text-green-500 hover:text-green-400'
+                    : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]',
+                compactStatus === 'loading' && 'opacity-50 cursor-not-allowed'
+              )}
+              title={`Compact Context (${contextWarning.pct}% used)`}
+              aria-label="Compact Context"
+            >
+              <span className={clsx(
+                'material-symbols-outlined text-sm',
+                compactStatus === 'loading' && 'animate-spin'
+              )}>
+                {compactStatus === 'loading' ? 'progress_activity'
+                  : compactStatus === 'done' ? 'check_circle'
+                  : 'compress'}
+              </span>
+              {compactStatus === 'loading' ? 'Compacting...'
+                : compactStatus === 'done' ? 'Compacted!'
+                : 'Compact'}
+            </button>
+          )}
         </div>
       )}
 
@@ -195,6 +265,16 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
           type={memorySaveStatus === 'saved' ? 'success' : memorySaveStatus === 'error' ? 'error' : 'info'}
           duration={4000}
           onDismiss={() => resetMemory(sessionId)}
+        />
+      )}
+
+      {/* Toast for compact results — only when compact button is visible */}
+      {showCompactButton && compactToast && (
+        <Toast
+          message={compactToast}
+          type={compactStatus === 'done' ? 'success' : 'error'}
+          duration={4000}
+          onDismiss={() => setCompactToast(null)}
         />
       )}
     </div>
