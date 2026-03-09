@@ -45,10 +45,11 @@ class DailyMetrics:
 class ComplianceTracker:
     """Tracks DailyActivity extraction metrics.
 
-    In-memory store with 30-day retention.  No lock needed — all hook
-    execution is sequential within ``fire_post_session_close()``, and
-    concurrent session closes each get their own tracker calls that
-    operate on different date keys (no contention).
+    In-memory store with 30-day retention.  Thread safety note: hook
+    execution within a single ``fire_post_session_close()`` call is
+    sequential, but multiple session closes can run concurrently (e.g.,
+    TTL expiry in the cleanup loop vs explicit delete).  This is safe
+    in CPython due to the GIL, but not formally thread-safe.
     """
 
     def __init__(self) -> None:

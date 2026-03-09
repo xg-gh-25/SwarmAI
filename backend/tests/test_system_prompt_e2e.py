@@ -13,7 +13,7 @@ Simulates the full flow that ``AgentManager._build_system_prompt()`` performs:
 9. HTML comment stripping and H1 dedup (``_clean_content``)
 10. CJK token estimation accuracy
 
-Each test creates a realistic temp workspace with all 10 context files,
+Each test creates a realistic temp workspace with all 11 context files,
 DailyActivity logs, and optional Bootstrap — then runs the same logic
 as ``_build_system_prompt`` (extracted into ``_simulate_build``).
 
@@ -158,6 +158,17 @@ TEMPLATES: dict[str, str] = {
         ### SwarmAI
         - **Status:** In Progress
         - **Priority:** High
+    """),
+    "EVOLUTION.md": textwrap.dedent("""\
+        # SwarmAI Evolution Registry
+
+        ## Capabilities Built
+
+        _No capabilities built yet._
+
+        ## Failed Evolutions
+
+        _No failed evolutions recorded yet._
     """),
 }
 
@@ -366,9 +377,9 @@ class TestE2EDirectChannel:
     """Full pipeline for a normal direct (1:1) channel session."""
 
     def test_all_10_context_files_present(self, workspace):
-        """All 10 context files appear in the assembled prompt."""
+        """All 11 context files appear in the assembled prompt."""
         prompt, meta = _simulate_build(workspace)
-        assert len(meta["files"]) == 10
+        assert len(meta["files"]) == 11
         filenames = {f["filename"] for f in meta["files"]}
         expected = {spec.filename for spec in CONTEXT_FILES}
         assert filenames == expected
@@ -784,9 +795,9 @@ class TestE2EMetadataAccuracy:
     """Prompt metadata is accurate and complete."""
 
     def test_metadata_file_count(self, workspace):
-        """Metadata reports all 10 context files."""
+        """Metadata reports all 11 context files."""
         _, meta = _simulate_build(workspace)
-        assert len(meta["files"]) == 10
+        assert len(meta["files"]) == 11
 
     def test_metadata_total_tokens_positive(self, workspace):
         """Total tokens is a positive number."""

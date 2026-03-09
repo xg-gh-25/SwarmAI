@@ -244,10 +244,17 @@ class SummarizationPipeline:
         return decisions
 
     def _extract_files_modified(self, messages: list[dict]) -> list[str]:
-        """Extract file paths from Write/Edit tool_use events only.
+        """Extract file paths from write tool_use events.
 
-        Improved: only counts Write/Edit as modifications (not Read),
-        extracts paths from Bash commands that contain file writes.
+        DB-stored messages use a summarized format from ``_format_message``:
+        ``{"type": "tool_use", "name": "Write", "summary": "Writing to path/file",
+        "category": "write"}``.  The raw ``input`` dict is NOT stored.
+
+        This method handles both formats:
+        - **Summarized** (DB path): uses ``category`` and parses paths from ``summary``
+        - **Raw** (direct SDK path): uses ``name`` and reads ``input`` dict
+
+        Only write-category tools count as modifications (not reads).
         """
         seen: set[str] = set()
         files: list[str] = []
@@ -260,21 +267,44 @@ class SummarizationPipeline:
                     continue
                 if block.get("type") != "tool_use":
                     continue
+
+                category = block.get("category", "")
                 tool_name = block.get("name", "")
+                summary = block.get("summary", "")
                 inp = block.get("input", {})
 
-                if tool_name in _WRITE_TOOL_NAMES:
+                # Path 1: Summarized format (DB-stored messages)
+                if category == "write" and summary:
+                    # Summary format: "Writing to path/to/file"
+                    path = summary.removeprefix("Writing to ").strip()
+                    if path and "/" in path and path not in seen:
+                        seen.add(path)
+                        files.append(path)
+                    continue
+
+                if category == "bash" and summary:
+                    # Summary format: "Running: command..."
+                    cmd = summary.removeprefix("Running: ").strip()
+                    if any(w in cmd for w in (">", "mv ", "cp ", "mkdir ", "tee ")):
+                        for token in cmd.split():
+                            if "/" in token and not token.startswith("-"):
+                                clean = token.strip("'\">;|&")
+                                if clean and clean not in seen and len(clean) > 3:
+                                    seen.add(clean)
+                                    files.append(clean)
+                    continue
+
+                # Path 2: Raw format (direct SDK messages, fallback)
+                if tool_name in _WRITE_TOOL_NAMES and isinstance(inp, dict):
                     for key in ("file_path", "path", "filename"):
                         val = inp.get(key, "")
                         if isinstance(val, str) and val and "/" in val:
                             if val not in seen:
                                 seen.add(val)
                                 files.append(val)
-                elif tool_name == "Bash":
-                    # Extract file paths from bash commands that write
+                elif tool_name == "Bash" and isinstance(inp, dict):
                     cmd = inp.get("command", "")
                     if any(w in cmd for w in (">", "mv ", "cp ", "mkdir ", "tee ")):
-                        # Simple heuristic: find paths in the command
                         for token in cmd.split():
                             if "/" in token and not token.startswith("-"):
                                 clean = token.strip("'\">;|&")
@@ -287,7 +317,17 @@ class SummarizationPipeline:
     _extract_files = _extract_files_modified
 
     def _extract_open_questions(self, messages: list[dict]) -> list[str]:
-        """Extract questions from ask_user_question tool_use blocks."""
+        """Extract open questions from the conversation.
+
+        ``AskUserQuestion`` events are NOT stored as tool_use content blocks
+        in the DB — they're yielded as separate SSE events.  So we can't
+        extract them from stored messages directly.
+
+        Instead, we look for user messages that appear to be answers to
+        questions (contain JSON with ``"answers"`` key from
+        ``continue_with_answer``), which indicates a question was asked.
+        This is a best-effort heuristic.
+        """
         questions: list[str] = []
         for msg in messages:
             content = msg.get("content")
@@ -296,14 +336,15 @@ class SummarizationPipeline:
             for block in content:
                 if not isinstance(block, dict):
                     continue
-                if block.get("type") != "tool_use":
-                    continue
-                if block.get("name") != "ask_user_question":
-                    continue
-                inp = block.get("input", {})
-                q = inp.get("question", "")
-                if q:
-                    questions.append(q[:200])
+                # Check for the raw SDK format (in case messages come from
+                # a non-DB source like the on-demand skill)
+                if block.get("type") == "tool_use":
+                    name = block.get("name", "")
+                    if name == "AskUserQuestion" or name == "ask_user_question":
+                        inp = block.get("input", {})
+                        q = inp.get("question", "")
+                        if q:
+                            questions.append(q[:200])
         return questions
 
     @staticmethod
