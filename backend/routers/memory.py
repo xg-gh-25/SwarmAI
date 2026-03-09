@@ -189,10 +189,25 @@ async def save_session_to_memory(req: SaveSessionRequest):
     """
     from core.memory_extractor import extract_and_save
 
-    result = await extract_and_save(
-        session_id=req.session_id,
-        since_message_idx=req.since_message_idx,
-    )
+    try:
+        result = await extract_and_save(
+            session_id=req.session_id,
+            since_message_idx=req.since_message_idx,
+        )
+    except Exception as exc:
+        logger.error(
+            "Unhandled error in extract_and_save for session %s: %s",
+            req.session_id,
+            exc,
+            exc_info=True,
+        )
+        return SaveSessionResponse(
+            status="error",
+            entries={"key_decisions": 0, "lessons_learned": 0, "open_threads": 0, "recent_context": 0},
+            total_saved=0,
+            next_message_idx=req.since_message_idx,
+            message=f"Extraction failed: {type(exc).__name__}. Please try again.",
+        )
 
     if result.error:
         if result.total_saved > 0:
