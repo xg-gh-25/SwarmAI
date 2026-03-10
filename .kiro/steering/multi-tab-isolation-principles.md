@@ -1,6 +1,6 @@
 ---
 inclusion: fileMatch
-fileMatchPattern: "desktop/src/pages/ChatPage.tsx,desktop/src/hooks/useChatStreamingLifecycle.ts,desktop/src/hooks/useUnifiedTabState.ts"
+fileMatchPattern: "desktop/src/pages/ChatPage.tsx,desktop/src/hooks/useChatStreamingLifecycle.ts,desktop/src/hooks/useUnifiedTabState.ts,desktop/src/services/tabPersistence.ts,desktop/src/services/chat.ts"
 ---
 
 # Multi-Tab Chat Isolation Principles
@@ -170,3 +170,22 @@ When modifying chat tab code, verify:
 - [ ] Error/complete handlers use `capturedTabId`, not `activeTabIdRef.current`
 - [ ] Permission state is guarded by `isActiveTab` before showing modal
 - [ ] Tests cover multi-tab scenarios (at least 2 tabs with concurrent streaming)
+
+## Tab Persistence Safety
+
+Tab state is persisted to `~/.swarm-ai/open_tabs.json` via the backend settings API (replaces unreliable localStorage on macOS Tauri WebKit).
+
+Rules:
+- Persistence is debounced (500ms) to avoid excessive writes during streaming
+- Save effect is gated by `fileRestoreDone` — prevents overwriting persisted state with the temporary default tab before real tabs are restored
+- Race condition guard: if user already started a conversation before file restore completes, skip restore (don't clobber active state)
+- On app restart: `restoreFromFile()` hydrates tabs from the file, then messages are loaded from the DB via `getSessionMessages()`
+
+Anti-pattern: Saving tab state before `fileRestoreDone.current` is true — this overwrites the real persisted tabs with a single default tab.
+
+## Cross-Reference: Backend Isolation
+
+Frontend tab isolation depends on backend session isolation. See `session-identity-and-backend-isolation.md` for:
+- Per-session concurrency locks (prevents double-send)
+- Per-session permission queues (prevents cross-session contention)
+- Session ID stability across backend restarts (resume-fallback path)

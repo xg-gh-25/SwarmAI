@@ -78,3 +78,25 @@ When creating or modifying code files, ALWAYS use `fsWrite` + `fsAppend` (small 
 - **NEVER** write files larger than ~50 lines in a single `fsWrite` call — split into `fsWrite` for the first chunk, then `fsAppend` for subsequent chunks
 - For edits to existing files, prefer `strReplace` or `editCode` over rewriting the whole file
 - After writing, verify with `executeBash` using `head` or `wc -l` to confirm the file landed correctly
+
+## Regression-Prone Areas — Steering Cross-References
+
+The following areas have dedicated steering files with detailed invariants and regression checklists. Always consult the relevant steering file before modifying code in these areas:
+
+| Area | Steering File | Key Files |
+|------|--------------|-----------|
+| Multi-tab chat isolation | `multi-tab-isolation-principles.md` | ChatPage.tsx, useChatStreamingLifecycle.ts, useUnifiedTabState.ts |
+| Session identity & backend isolation | `session-identity-and-backend-isolation.md` | agent_manager.py, session_manager.py, permission_manager.py, chat.py |
+| Context & memory safety | `context-and-memory-safety.md` | context_directory_loader.py, system_prompt.py, hooks/*.py, locked_write.py |
+| Self-evolution guardrails | `self-evolution-guardrails.md` | s_self-evolution/*, EVOLUTION.md, chat.py (SSE parsing) |
+
+## Global Anti-Patterns
+
+These anti-patterns apply across the entire codebase:
+
+1. **Shared mutable state between sessions**: Never add module-level mutable state (dicts, lists, sets) that isn't keyed by session ID. Use per-session data structures or the existing `_active_sessions` / `_session_locks` patterns.
+2. **React useState for cross-tab decisions**: Never read React `useState` values to make decisions about a specific tab. Always read from `tabMapRef` (authoritative source). React state is a display mirror only.
+3. **Overwriting user files**: Never overwrite files with `user_customized=True` in `ensure_directory()`. User edits are sacred.
+4. **Global permission queue**: Never use `permission_manager.get_permission_queue()` (deprecated). Use `get_session_queue(session_id)`.
+5. **Direct MEMORY.md writes**: Never write to MEMORY.md without `locked_write.py`. Concurrent writes from hooks + skills can corrupt the file.
+6. **Heredoc file writes**: Never use `cat > file << 'EOF'` in bash — it hangs the agent process. Use `fsWrite` + `fsAppend`.
