@@ -438,6 +438,11 @@ export default function FileEditorModal({
   const overlayRef = useRef<HTMLDivElement>(null);
 
   const isDirty = isDirtyState(content, originalContent);
+  // hasUnsavedEdits tracks whether the user made manual edits in the textarea.
+  // This is separate from isDirty (which also accounts for committedContent
+  // vs disk content for the "Show Changes" diff). The close warning should
+  // only trigger on manual edits, not on pre-existing git changes.
+  const hasUnsavedEdits = isDirtyState(content, initialContent);
   const language = detectLanguage(fileName);
 
   // --- Handlers (defined before useEffects that reference them) ---
@@ -452,12 +457,12 @@ export default function FileEditorModal({
   }, []);
 
   const handleCloseAttempt = useCallback(() => {
-    if (isDirty) {
+    if (hasUnsavedEdits) {
       setShowUnsavedWarning(true);
     } else {
       onClose();
     }
-  }, [isDirty, onClose]);
+  }, [hasUnsavedEdits, onClose]);
 
   const handleSave = useCallback(async () => {
     setIsSaving(true);
@@ -534,7 +539,7 @@ export default function FileEditorModal({
       document.removeEventListener('keydown', handleEscape);
       document.body.style.overflow = '';
     };
-  }, [isOpen, isDirty, showSearch, handleCloseAttempt, handleSearchClose]);
+  }, [isOpen, hasUnsavedEdits, showSearch, handleCloseAttempt, handleSearchClose]);
 
   // Handle Ctrl+S / Cmd+S to save (disabled in diff mode)
   useEffect(() => {
@@ -555,18 +560,18 @@ export default function FileEditorModal({
   }, [isOpen, showDiff, readonly, handleSave]);
 
   const handleCancel = useCallback(() => {
-    if (isDirty) {
+    if (hasUnsavedEdits) {
       setShowUnsavedWarning(true);
     } else {
       onClose();
     }
-  }, [isDirty, onClose]);
+  }, [hasUnsavedEdits, onClose]);
 
   const handleDiscardChanges = useCallback(() => {
     setShowUnsavedWarning(false);
-    setContent(originalContent);
+    setContent(initialContent);
     onClose();
-  }, [originalContent, onClose]);
+  }, [initialContent, onClose]);
 
   const handleContinueEditing = useCallback(() => {
     setShowUnsavedWarning(false);
@@ -699,7 +704,7 @@ export default function FileEditorModal({
             })()}
             {/* Breadcrumb path (Task 5.2) */}
             <BreadcrumbBar filePath={filePath} />
-            {isDirty && (
+            {hasUnsavedEdits && (
               <span className="text-xs px-1.5 py-0.5 rounded bg-[var(--color-warning)] bg-opacity-20 text-[var(--color-warning)] shrink-0">
                 Modified
               </span>
@@ -898,7 +903,7 @@ export default function FileEditorModal({
               size="sm"
               onClick={handleSave}
               isLoading={isSaving}
-              disabled={!isDirty || showDiff || readonly}
+              disabled={!hasUnsavedEdits || showDiff || readonly}
               data-testid="file-editor-save"
             >
               Save
