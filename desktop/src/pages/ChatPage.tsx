@@ -952,14 +952,24 @@ export default function ChatPage() {
     const activeTabForGuard = tabMapRef.current.get(activeTabIdRef.current ?? '');
     if (activeTabForGuard?.isStreaming || pendingStreamTabs.has(activeTabIdRef.current ?? '')) return;
 
+    // Set streaming flag IMMEDIATELY after guard passes to close the race
+    // window between guard check and the old setIsStreaming call ~20 lines
+    // below.  setIsStreaming synchronously mutates tabMapRef.isStreaming,
+    // so a second rapid click/Enter will be caught by the guard above.
+    setIsStreaming(true, activeTabIdRef.current ?? undefined);
+
     if (messageText.trim().startsWith('/plugin')) {
+      setIsStreaming(false, activeTabIdRef.current ?? undefined);
       setInputValue('');
       await handlePluginCommand(messageText.trim());
       return;
     }
 
     const content = await buildContentArray(messageText, currentAttachments);
-    if (content.length === 0) return;
+    if (content.length === 0) {
+      setIsStreaming(false, activeTabIdRef.current ?? undefined);
+      return;
+    }
 
     const displayText = hasText ? messageText : '[Attachments]';
     const userMessageContent: ContentBlock[] = [{ type: 'text', text: displayText }];
@@ -973,7 +983,6 @@ export default function ChatPage() {
     clearAttachments();
     resetUserScroll(); // Fix 2: resume auto-scroll on new user message
     incrementStreamGen(); // Fix 1: new stream generation
-    setIsStreaming(true, activeTabIdRef.current ?? undefined);
 
     // Fix 8: Transition tab status to 'streaming' (handles error → streaming case too)
     const currentActiveTabId = activeTabIdRef.current;
