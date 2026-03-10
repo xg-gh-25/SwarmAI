@@ -1,4 +1,11 @@
-"""Tests for core.context_monitor — context window usage estimation."""
+"""Tests for core.context_monitor — context window usage estimation.
+
+NOTE: These tests cover the DEPRECATED ``context_monitor`` module.
+The ``agent_manager.py`` post-response pipeline now computes context
+usage inline from the SDK's ``ResultMessage.usage.input_tokens`` instead
+of scanning ``.jsonl`` transcript files.  These tests are retained to
+verify the deprecated module still works for reference purposes.
+"""
 
 import json
 import os

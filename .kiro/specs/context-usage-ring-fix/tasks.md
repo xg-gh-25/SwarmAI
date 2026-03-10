@@ -1,0 +1,105 @@
+# Implementation Plan
+
+- [x] 1. Write bug condition exploration test
+  - **Property 1: Fault Condition** - Context Usage Reads Wrong Data Source and Skips Turns
+  - **CRITICAL**: This test MUST FAIL on unfixed code - failure confirms the bug exists
+  - **DO NOT attempt to fix the test or the code when it fails**
+  - **NOTE**: This test encodes the expected behavior - it will validate the fix when it passes after implementation
+  - **GOAL**: Surface counterexamples that demonstrate the bug exists
+  - **Scoped PBT Approach**: Scope the property to concrete failing cases:
+    - `check_context_usage()` returns 0% when no `.jsonl` files exist, despite SDK reporting real token usage
+    - Turns 2, 3, 4 produce no `context_warning` event in `run_conversation()` even though `result` events carry valid `usage.input_tokens`
+    - `continue_with_answer()` exhibits the same skipped-turn bug on non-interval turns
+  - **Test file**: `backend/tests/test_context_usage_inline.py`
+  - **Test details**:
+    - Mock `_execute_on_session` to yield a `result` event with known `usage.input_tokens` (e.g., 50000 on a 200K window)
+    - Assert that `context_warning` SSE event is emitted with `pct = round(50000/200000*100) = 25` and `level = "ok"`
+    - Assert that `context_warning` is emitted on turn 2 (not just turns 1, 5, 10...)
+    - Assert that `context_warning.pct` reflects SDK `input_tokens`, NOT filesystem-scanned data
+    - Test both `run_conversation()` and `continue_with_answer()` code paths
+  - Run test on UNFIXED code
+  - **EXPECTED OUTCOME**: Test FAILS (this is correct - it proves the bug exists: wrong data source and skipped turns)
+  - Document counterexamples found (e.g., "turn 2 emits no context_warning", "pct is 0% despite SDK reporting 50K tokens")
+  - Mark task complete when test is written, run, and failure is documented
+  - _Requirements: 1.1, 1.2, 1.3, 1.4, 2.1, 2.3, 2.5_
+
+- [x] 2. Write preservation property tests (BEFORE implementing fix)
+  - **Property 2: Preservation** - Threshold Levels, SSE Shape, Error Resilience, and Multi-Tab Isolation
+  - **IMPORTANT**: Follow observation-first methodology
+  - **Test file**: `backend/tests/test_context_usage_inline.py` (same file, separate test class)
+  - **Observation phase** (run on UNFIXED code to capture baseline):
+    - Observe: threshold classification logic — pct < 70 → `ok`, 70 ≤ pct < 85 → `warn`, pct ≥ 85 → `critical`
+    - Observe: `context_warning` SSE event contains fields `type`, `level`, `pct`, `tokensEst`, `message`
+    - Observe: when `usage` is None or `input_tokens` is missing, no crash occurs (best-effort)
+    - Observe: each session's `context_warning` is scoped to its own generator locals, not shared state
+  - **Property-based tests**:
+    - For all random `pct` values in [0, 100]: verify `level` is `ok` when pct < 70, `warn` when 70 ≤ pct < 85, `critical` when pct ≥ 85 (from Preservation Requirements: 3.1, 3.2, 3.3)
+    - For all random `(input_tokens, window)` pairs where window > 0: verify `pct = round(input_tokens / window * 100)` (percentage calculation consistency)
+    - For all `context_warning` events: verify event contains `type`, `level`, `pct`, `tokensEst`, `message` fields (SSE shape preservation: 3.5)
+    - For None/missing `usage.input_tokens`: verify no exception raised and no `context_warning` emitted (error resilience: 3.6)
+  - **Unit tests for boundary values**:
+    - pct = 0 → `ok`, pct = 69 → `ok`, pct = 70 → `warn`, pct = 84 → `warn`, pct = 85 → `critical`, pct = 100 → `critical`
+  - Verify tests PASS on UNFIXED code (threshold logic is correct in existing code, just fed wrong data)
+  - **EXPECTED OUTCOME**: Tests PASS (this confirms baseline behavior to preserve)
+  - Mark task complete when tests are written, run, and passing on unfixed code
+  - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7_
+
+- [x] 3. Fix context usage ring data source
+
+  - [x] 3.1 Capture `last_input_tokens` and `last_model` from result events in both code paths
+    - In `run_conversation()` (~line 1386): add `last_input_tokens: Optional[int] = None` and `last_model: Optional[str] = None` before the `async for event` loop
+    - In `continue_with_answer()` (~line 2465): add the same local variables before its `async for event` loop
+    - Inside both loops, when `event.get("type") == "result"`: capture `usage_data = event.get("usage")`, set `last_input_tokens = usage_data.get("input_tokens")` if usage_data, set `last_model = event.get("model") or agent_model`
+    - These are LOCAL variables (not instance/module-level) — safe for multi-tab isolation
+    - _Bug_Condition: isBugCondition(input) where input.dataSource = "jsonl_filesystem_scan" OR input is a skipped turn_
+    - _Expected_Behavior: context_warning.pct = round(input_tokens / model_context_window * 100), emitted every turn_
+    - _Preservation: Local variables ensure no shared mutable state (Anti-Pattern #1), SSE event shape unchanged_
+    - _Requirements: 2.1, 2.4, 2.5, 3.7_
+
+  - [x] 3.2 Replace `check_context_usage()` call with inline SDK-based computation in both code paths
+    - Remove `CHECK_INTERVAL_TURNS` gating (`if turns == 1 or turns % CHECK_INTERVAL_TURNS == 0:`)
+    - Replace `check_context_usage()` call with inline computation:
+      - Guard: `if last_input_tokens is not None and last_input_tokens > 0:`
+      - `window = self._get_model_context_window(last_model)`
+      - `pct = round((last_input_tokens / window) * 100) if window > 0 else 0`
+      - `level = "critical" if pct >= 85 else "warn" if pct >= 70 else "ok"`
+      - Build message string with `tokens_k = last_input_tokens // 1000`, `window_k = window // 1000`
+      - Yield `context_warning` SSE event with `type`, `level`, `pct`, `tokensEst`, `message`
+    - Apply to BOTH `run_conversation()` and `continue_with_answer()` blocks
+    - Wrap in try/except to preserve best-effort error resilience (requirement 3.6)
+    - _Bug_Condition: Eliminates filesystem scan and interval gating_
+    - _Expected_Behavior: Every turn with valid usage data emits context_warning with correct pct_
+    - _Preservation: Threshold levels (ok/warn/critical), SSE event shape, error resilience unchanged_
+    - _Requirements: 2.1, 2.2, 2.3, 2.4, 2.5, 3.1, 3.2, 3.3, 3.5, 3.6_
+
+  - [x] 3.3 Remove `check_context_usage` import and deprecate `context_monitor.py`
+    - Remove `from .context_monitor import check_context_usage, CHECK_INTERVAL_TURNS` from `agent_manager.py`
+    - Add deprecation notice to `context_monitor.py` module docstring and `check_context_usage()` function docstring
+    - Add deprecation comment to `backend/tests/test_context_monitor.py` noting tests cover deprecated module
+    - Do NOT delete `context_monitor.py` or its tests — keep for reference
+    - _Requirements: 2.1, 2.4_
+
+  - [x] 3.4 Verify bug condition exploration test now passes
+    - **Property 1: Expected Behavior** - Context Usage Reads SDK Data and Emits Every Turn
+    - **IMPORTANT**: Re-run the SAME test from task 1 - do NOT write a new test
+    - The test from task 1 encodes the expected behavior (SDK-based pct, every-turn emission)
+    - When this test passes, it confirms: data source is SDK `input_tokens`, emission happens every turn, both code paths work
+    - Run bug condition exploration test from step 1
+    - **EXPECTED OUTCOME**: Test PASSES (confirms bug is fixed)
+    - _Requirements: 2.1, 2.2, 2.3, 2.4, 2.5_
+
+  - [x] 3.5 Verify preservation tests still pass
+    - **Property 2: Preservation** - Threshold Levels, SSE Shape, Error Resilience, and Multi-Tab Isolation
+    - **IMPORTANT**: Re-run the SAME tests from task 2 - do NOT write new tests
+    - Run preservation property tests from step 2
+    - **EXPECTED OUTCOME**: Tests PASS (confirms no regressions)
+    - Confirm threshold classification unchanged, SSE event shape unchanged, error resilience intact, multi-tab isolation preserved
+    - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7_
+
+- [x] 4. Checkpoint - Ensure all tests pass
+  - Run full test suite: `cd backend && pytest tests/test_context_usage_inline.py tests/test_context_monitor.py -v`
+  - Verify all exploration tests (Property 1) pass — confirms bug is fixed
+  - Verify all preservation tests (Property 2) pass — confirms no regressions
+  - Verify deprecated `test_context_monitor.py` tests still pass — confirms backward compatibility
+  - Ensure no new shared mutable state was introduced (multi-tab isolation safety)
+  - Ask the user if questions arise
