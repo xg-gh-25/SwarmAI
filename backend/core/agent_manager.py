@@ -1462,12 +1462,20 @@ class AgentManager:
                 _usage = event.get("usage")
                 if _usage:
                     last_input_tokens = self._sum_usage_input_tokens(_usage)
+                    # The SDK reports CUMULATIVE token counts across all
+                    # internal agentic turns (tool-use loops).  Dividing by
+                    # num_turns gives the approximate per-turn context window
+                    # consumption, which is what the ring should display.
+                    _n_turns = event.get("num_turns") or 1
+                    if _n_turns > 1:
+                        last_input_tokens = last_input_tokens // _n_turns
                 last_model = agent_config.get("model")
             yield event
 
         # --- Post-response context monitor ---
-        # Compute context usage from the SDK's ResultMessage.usage.input_tokens
-        # (inline, no filesystem scan). Emits on every turn with valid data.
+        # Compute context usage from the SDK's ResultMessage.usage
+        # normalized by num_turns (inline, no filesystem scan).
+        # Emits on every turn with valid data.
         if effective_sid:
             try:
                 turns = self._user_turn_counts.get(effective_sid, 0) + 1
@@ -2557,6 +2565,11 @@ class AgentManager:
                 _usage = event.get("usage")
                 if _usage:
                     last_input_tokens = self._sum_usage_input_tokens(_usage)
+                    # Normalize cumulative SDK usage by num_turns
+                    # (same logic as run_conversation — see comment there).
+                    _n_turns = event.get("num_turns") or 1
+                    if _n_turns > 1:
+                        last_input_tokens = last_input_tokens // _n_turns
                 last_model = agent_config.get("model")
             yield event
 

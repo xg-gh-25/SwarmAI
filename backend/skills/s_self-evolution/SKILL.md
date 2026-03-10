@@ -309,11 +309,11 @@ I need your help. Here's what happened:
 
 ## Context Window Monitoring
 
-Run `node .claude/skills/s_context-monitor/context-check.mjs` to estimate usage.
+Context usage is monitored automatically by the inline pipeline in
+``agent_manager.py`` — no manual script invocation needed.  The backend
+emits ``context_warning`` SSE events after every turn with usage data.
 
-**When:** Every ~15 user messages, before multi-step tasks, after 10+ tool calls.
-
-**Act on result:**
+**Act on result (when visible in SSE events):**
 - `ok` (<70%) — silent
 - `warn` (70-84%) — append note after response
 - `critical` (≥85%) — warn at start of response, offer save-context
