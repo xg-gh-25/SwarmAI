@@ -37,7 +37,8 @@ from core.system_prompt import SystemPromptBuilder
 
 # ── Constants mirrored from agent_manager.py ─────────────────────────
 TOKEN_CAP_PER_DAILY_FILE = 2000
-EPHEMERAL_HEADROOM = 2 * TOKEN_CAP_PER_DAILY_FILE
+RESUME_CONTEXT_BUDGET = 2000
+EPHEMERAL_HEADROOM = 2 * TOKEN_CAP_PER_DAILY_FILE + RESUME_CONTEXT_BUDGET
 
 
 # ── Realistic template content ───────────────────────────────────────
@@ -710,14 +711,14 @@ class TestE2EBudgetHeadroom:
         """The loader receives a reduced budget to leave room for DailyActivity."""
         base = DEFAULT_TOKEN_BUDGET  # 25000
         effective = max(base - EPHEMERAL_HEADROOM, base // 2)
-        assert effective == base - EPHEMERAL_HEADROOM  # 25000 - 4000 = 21000
-        assert effective == 21_000
+        assert effective == base - EPHEMERAL_HEADROOM  # 25000 - 6000 = 19000
+        assert effective == 19_000
 
     def test_headroom_never_below_half(self):
         """With a very small base budget, headroom doesn't go below 50%."""
         small_budget = 5000
         effective = max(small_budget - EPHEMERAL_HEADROOM, small_budget // 2)
-        # 5000 - 4000 = 1000, but 5000 // 2 = 2500, so we get 2500
+        # 5000 - 6000 = -1000, but 5000 // 2 = 2500, so we get 2500
         assert effective == 2500
 
 
