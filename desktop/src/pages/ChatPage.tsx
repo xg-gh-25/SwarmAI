@@ -495,9 +495,12 @@ export default function ChatPage() {
         setMessages([]);
         setSessionId(undefined);
         setPendingQuestion(null);
+        setContextWarning(null);
+        setPendingPermission(null);
+        setIsExpanded(false);
       }
     }
-  }, [closeTab, clearPendingStreamTab, pendingStreamTabs, tabMapRef, activeTabIdRef, setMessages, setSessionId, setPendingQuestion]);
+  }, [closeTab, clearPendingStreamTab, pendingStreamTabs, tabMapRef, activeTabIdRef, setMessages, setSessionId, setPendingQuestion, setContextWarning]);
 
   // Handle session selection
   const handleSelectSession = useCallback(async (session: ChatSession) => {
@@ -1352,12 +1355,12 @@ export default function ChatPage() {
         <Toast message={tabLimitToast} type="info" onDismiss={() => setTabLimitToast(null)} />
       )}
 
-      {/* Context Window Warning / Compaction notification */}
-      {contextWarning && (
+      {/* Context Window Warning / Compaction notification — only critical level gets a Toast */}
+      {contextWarning && contextWarning.level === 'critical' && (
         <Toast
           message={contextWarning.message}
-          type={contextWarning.level === 'critical' ? 'error' : contextWarning.level === 'ok' ? 'info' : 'warning'}
-          duration={contextWarning.level === 'critical' ? 0 : contextWarning.level === 'ok' ? 5000 : 15000}
+          type="error"
+          duration={0}
           onDismiss={clearContextWarning}
         />
       )}
