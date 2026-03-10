@@ -58,7 +58,6 @@ from config import settings, get_bedrock_model_id, get_app_data_dir
 from .session_manager import session_manager
 from .system_prompt import SystemPromptBuilder
 from .context_directory_loader import DEFAULT_TOKEN_BUDGET
-from .context_monitor import check_context_usage, CHECK_INTERVAL_TURNS
 from .initialization_manager import initialization_manager
 
 logger = logging.getLogger(__name__)
@@ -914,6 +913,8 @@ class AgentManager:
         "claude-opus-4-5-20251101": 200_000,
     }
     _DEFAULT_CONTEXT_WINDOW: int = 200_000
+    _CONTEXT_WARN_PCT: int = 70
+    _CONTEXT_CRITICAL_PCT: int = 85
 
     def _get_model_context_window(self, model: Optional[str]) -> int:
         """Return the context window size for a model ID.
@@ -926,6 +927,55 @@ class AgentManager:
         if base.endswith("-v1"):
             base = base[:-3]
         return self._MODEL_CONTEXT_WINDOWS.get(base, self._DEFAULT_CONTEXT_WINDOW)
+
+    def _build_context_warning(
+        self,
+        input_tokens: int,
+        model: Optional[str],
+    ) -> Optional[dict]:
+        """Build a context_warning SSE event dict from SDK usage data.
+
+        Returns None if input_tokens is invalid (None, 0, negative).
+        Uses named threshold constants ``_CONTEXT_WARN_PCT`` and
+        ``_CONTEXT_CRITICAL_PCT`` for level classification.
+        """
+        if input_tokens is None or input_tokens <= 0:
+            return None
+        window = self._get_model_context_window(model)
+        pct = round((input_tokens / window) * 100) if window > 0 else 0
+        level = (
+            "critical" if pct >= self._CONTEXT_CRITICAL_PCT
+            else "warn" if pct >= self._CONTEXT_WARN_PCT
+            else "ok"
+        )
+        tokens_k = input_tokens // 1000
+        window_k = window // 1000
+
+        if pct >= self._CONTEXT_CRITICAL_PCT:
+            msg = (
+                f"**Context alert**: Session is {pct}% full "
+                f"(~{tokens_k}K/{window_k}K tokens). "
+                f"Recommend: save context and start a new session."
+            )
+        elif pct >= self._CONTEXT_WARN_PCT:
+            msg = (
+                f"Heads up — we've used about {pct}% of this session's "
+                f"context window (~{tokens_k}K/{window_k}K tokens). "
+                f"Consider saving context soon if more heavy tasks remain."
+            )
+        else:
+            msg = (
+                f"Context {pct}% full "
+                f"(~{tokens_k}K/{window_k}K tokens). Plenty of room."
+            )
+
+        return {
+            "type": "context_warning",
+            "level": level,
+            "pct": pct,
+            "tokensEst": input_tokens,
+            "message": msg,
+        }
 
     async def _auto_commit_workspace(self, title: str) -> None:
         """Auto-commit workspace changes at session end. Runs in background thread."""
@@ -1353,6 +1403,10 @@ class AgentManager:
         # Track the effective session ID from the result event so we can
         # key the per-session turn counter after the stream completes.
         effective_sid: str | None = None
+        # Capture SDK usage data from the result event for inline context
+        # monitoring (local to this generator — safe for multi-tab).
+        last_input_tokens: Optional[int] = None
+        last_model: Optional[str] = None
 
         async for event in self._execute_on_session(
             agent_config=agent_config,
@@ -1369,40 +1423,38 @@ class AgentManager:
             app_session_id=app_session_id,
             deferred_user_content=deferred_user_content,
         ):
-            # Capture session_id from the result event for turn counting
-            if event.get("type") == "result" and event.get("session_id"):
-                effective_sid = event["session_id"]
+            # Capture session_id and usage data from the result event
+            if event.get("type") == "result":
+                if event.get("session_id"):
+                    effective_sid = event["session_id"]
+                _usage = event.get("usage")
+                if _usage:
+                    last_input_tokens = _usage.get("input_tokens")
+                last_model = event.get("model")
             yield event
 
         # --- Post-response context monitor ---
-        # Increment user turn counter and check context usage periodically.
-        # Runs after the full response stream (including the result event)
-        # so it never interrupts the agent's answer.
+        # Compute context usage from the SDK's ResultMessage.usage.input_tokens
+        # (inline, no filesystem scan). Emits on every turn with valid data.
         if effective_sid:
             try:
                 turns = self._user_turn_counts.get(effective_sid, 0) + 1
                 self._user_turn_counts[effective_sid] = turns
 
-                if turns == 1 or turns % CHECK_INTERVAL_TURNS == 0:
-                    status = check_context_usage()
-                    if status.level in ("warn", "critical"):
+                warning_event = self._build_context_warning(last_input_tokens, last_model)
+                if warning_event:
+                    if warning_event["level"] in ("warn", "critical"):
                         logger.info(
                             "Context monitor [%s]: %s (%d%%, ~%dK tokens)",
-                            status.level, effective_sid, status.pct,
-                            status.tokens_est // 1000,
+                            warning_event["level"], effective_sid,
+                            warning_event["pct"], warning_event["tokensEst"] // 1000,
                         )
                     else:
                         logger.debug(
                             "Context monitor [ok]: %d%% after %d turns",
-                            status.pct, turns,
+                            warning_event["pct"], turns,
                         )
-                    yield {
-                        "type": "context_warning",
-                        "level": status.level,
-                        "pct": status.pct,
-                        "tokensEst": status.tokens_est,
-                        "message": status.message,
-                    }
+                    yield warning_event
             except Exception:
                 # Context monitoring is best-effort; never break the response
                 logger.debug("Context monitor check failed", exc_info=True)
@@ -2439,6 +2491,10 @@ class AgentManager:
         # Delegate to shared session execution pattern.
         # Track effective_sid for context monitoring (same pattern as run_conversation).
         effective_sid: str | None = None
+        # Capture SDK usage data from the result event for inline context
+        # monitoring (local to this generator — safe for multi-tab).
+        last_input_tokens: Optional[int] = None
+        last_model: Optional[str] = None
 
         async for event in self._execute_on_session(
             agent_config=agent_config,
@@ -2454,35 +2510,36 @@ class AgentManager:
             app_session_id=session_id,
             deferred_user_content=[{"type": "text", "text": f"User answers:\n{answer_message}"}],
         ):
-            if event.get("type") == "result" and event.get("session_id"):
-                effective_sid = event["session_id"]
+            # Capture session_id and usage data from the result event
+            if event.get("type") == "result":
+                if event.get("session_id"):
+                    effective_sid = event["session_id"]
+                _usage = event.get("usage")
+                if _usage:
+                    last_input_tokens = _usage.get("input_tokens")
+                last_model = event.get("model")
             yield event
 
-        # Post-response context monitor (same as run_conversation)
+        # Post-response context monitor (same helper as run_conversation)
         if effective_sid:
             try:
                 turns = self._user_turn_counts.get(effective_sid, 0) + 1
                 self._user_turn_counts[effective_sid] = turns
-                if turns == 1 or turns % CHECK_INTERVAL_TURNS == 0:
-                    status = check_context_usage()
-                    if status.level in ("warn", "critical"):
+
+                warning_event = self._build_context_warning(last_input_tokens, last_model)
+                if warning_event:
+                    if warning_event["level"] in ("warn", "critical"):
                         logger.info(
                             "Context monitor [%s]: %s (%d%%, ~%dK tokens)",
-                            status.level, effective_sid, status.pct,
-                            status.tokens_est // 1000,
+                            warning_event["level"], effective_sid,
+                            warning_event["pct"], warning_event["tokensEst"] // 1000,
                         )
                     else:
                         logger.debug(
                             "Context monitor [ok]: %d%% after %d turns",
-                            status.pct, turns,
+                            warning_event["pct"], turns,
                         )
-                    yield {
-                        "type": "context_warning",
-                        "level": status.level,
-                        "pct": status.pct,
-                        "tokensEst": status.tokens_est,
-                        "message": status.message,
-                    }
+                    yield warning_event
             except Exception:
                 logger.debug("Context monitor check failed", exc_info=True)
 

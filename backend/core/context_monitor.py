@@ -1,5 +1,13 @@
-"""Context window usage monitor.
+"""Context window usage monitor (DEPRECATED).
 
+.. deprecated::
+    This module is deprecated.  The ``agent_manager.py`` post-response
+    pipeline now computes context usage inline from the SDK's
+    ``ResultMessage.usage.input_tokens`` instead of scanning ``.jsonl``
+    transcript files.  This module is retained for reference only.
+
+Original description
+--------------------
 Estimates current session context window usage by analyzing the Claude
 transcript ``.jsonl`` file.  Returns a structured status dict that the
 agent manager uses to decide whether to emit a warning SSE event.
@@ -140,6 +148,12 @@ def check_context_usage(
     window_tokens: int = DEFAULT_WINDOW_TOKENS,
 ) -> ContextStatus:
     """Analyze the latest transcript and return context usage status.
+
+    .. deprecated::
+        This function is deprecated.  ``agent_manager.py`` now computes
+        context usage inline from the SDK's ``ResultMessage.usage.input_tokens``
+        instead of scanning ``.jsonl`` transcript files.  Retained for
+        reference and backward compatibility with existing tests.
 
     This is a synchronous function (file I/O only, no network) that can
     be called from the agent manager's response pipeline.
