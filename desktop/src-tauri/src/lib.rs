@@ -294,6 +294,49 @@ pub struct BackendStatus {
     port: u16,
 }
 
+/// Gracefully shut down the backend and then force-kill as safety net.
+///
+/// Mirrors the `stop_backend` command pattern:
+/// 1. Capture state under lock, mark as not running
+/// 2. Release lock before blocking I/O
+/// 3. If was running: send_shutdown_request → sleep 3s
+/// 4. Force kill process tree + child as safety net
+///
+/// Double-fire safe: if `backend.running` is already false (set by a
+/// previous handler in the same close sequence), skips the shutdown
+/// request and sleep, proceeding directly to force-kill.
+fn graceful_shutdown_and_kill(state: SharedBackendState, context: &str) {
+    tauri::async_runtime::block_on(async {
+        let mut backend = state.lock().await;
+        let was_running = backend.running;
+        let port = backend.port;
+        let pid = backend.pid;
+        let child = backend.child.take();
+
+        // Mark as not running under lock — prevents double-fire
+        backend.running = false;
+        backend.pid = None;
+        drop(backend); // Release lock before blocking I/O
+
+        // Graceful shutdown only if backend was actually running
+        if was_running {
+            println!("[{}] Attempting graceful shutdown on port {}", context, port);
+            send_shutdown_request(port);
+            std::thread::sleep(std::time::Duration::from_secs(3));
+        }
+
+        // Force kill as safety net (always, even if shutdown request succeeded)
+        if let Some(pid) = pid {
+            kill_process_tree(pid);
+            println!("[{}] Killed backend process tree (PID: {})", context, pid);
+        }
+
+        if let Some(child) = child {
+            let _ = child.kill();
+        }
+    });
+}
+
 
 // Start the Python backend sidecar
 #[tauri::command]
@@ -800,25 +843,9 @@ pub fn run() {
                 let app_handle = app.handle().clone();
                 window.on_window_event(move |event| {
                     if let tauri::WindowEvent::Destroyed = event {
-                        // Clean up backend process when window is destroyed
+                        // Graceful shutdown: send POST /shutdown, wait, then force-kill
                         let state = app_handle.state::<SharedBackendState>();
-                        let state_clone = state.inner().clone();
-
-                        tauri::async_runtime::block_on(async {
-                            let mut backend = state_clone.lock().await;
-
-                            // Kill the entire process tree (works on all platforms)
-                            if let Some(pid) = backend.pid {
-                                kill_process_tree(pid);
-                                println!("Killed backend process tree (PID: {}) on window destroy", pid);
-                            }
-
-                            if let Some(child) = backend.child.take() {
-                                let _ = child.kill();
-                            }
-                            backend.running = false;
-                            backend.pid = None;
-                        });
+                        graceful_shutdown_and_kill(state.inner().clone(), "window_destroy");
                     }
                 });
             }
@@ -830,51 +857,17 @@ pub fn run() {
         .run(|app_handle, event| {
             match event {
                 tauri::RunEvent::Exit => {
-                    // Clean up backend process on exit
+                    // Graceful shutdown: send POST /shutdown, wait, then force-kill
                     let state = app_handle.state::<SharedBackendState>();
-                    let state_clone = state.inner().clone();
-
-                    // Use blocking task to ensure cleanup completes
-                    tauri::async_runtime::block_on(async {
-                        let mut backend = state_clone.lock().await;
-
-                        // Kill the entire process tree (works on all platforms)
-                        if let Some(pid) = backend.pid {
-                            kill_process_tree(pid);
-                            println!("Killed backend process tree (PID: {}) on exit", pid);
-                        }
-
-                        if let Some(child) = backend.child.take() {
-                            let _ = child.kill();
-                            println!("Backend process terminated on exit");
-                        }
-                        backend.running = false;
-                        backend.pid = None;
-                    });
+                    graceful_shutdown_and_kill(state.inner().clone(), "exit");
                 }
                 tauri::RunEvent::ExitRequested { api, .. } => {
                     // Don't prevent exit, but ensure cleanup
                     let _ = api; // Allow default exit behavior
 
-                    // Clean up backend process
+                    // Graceful shutdown: send POST /shutdown, wait, then force-kill
                     let state = app_handle.state::<SharedBackendState>();
-                    let state_clone = state.inner().clone();
-
-                    tauri::async_runtime::block_on(async {
-                        let mut backend = state_clone.lock().await;
-
-                        // Kill the entire process tree (works on all platforms)
-                        if let Some(pid) = backend.pid {
-                            kill_process_tree(pid);
-                            println!("Killed backend process tree (PID: {}) on exit request", pid);
-                        }
-
-                        if let Some(child) = backend.child.take() {
-                            let _ = child.kill();
-                        }
-                        backend.running = false;
-                        backend.pid = None;
-                    });
+                    graceful_shutdown_and_kill(state.inner().clone(), "exit_requested");
                 }
                 _ => {}
             }
