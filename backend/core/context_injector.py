@@ -20,9 +20,15 @@ _TOOL_ONLY_TYPES = {"tool_use", "tool_result"}
 _SECTION_HEADER = "## Previous Conversation Context"
 
 _PREAMBLE = (
-    "The following is a summary of the previous conversation in this chat "
-    "session. You did not experience these turns directly — they are provided "
-    "for context only. Do not repeat or re-execute any actions described below."
+    "The user resumed this chat after an app restart. The turns below are "
+    "READ-ONLY history from the previous session — treat them as background "
+    "context, NOT as prompts to respond to.\n"
+    "\n"
+    "RULES:\n"
+    "- Do NOT re-answer, re-apologize, or re-explain anything from the history.\n"
+    "- Do NOT re-execute any actions, tool calls, or code changes mentioned below.\n"
+    "- Do NOT reference this history section unless the user explicitly asks about it.\n"
+    "- Wait for the user's NEW message (after this section) and respond ONLY to that."
 )
 
 _TRUNCATION_NOTE = "[Earlier messages truncated to fit token budget]"
@@ -210,6 +216,12 @@ async def build_resume_context(
             return ""
 
         filtered = _filter_tool_only_messages(raw_messages)
+        # Drop the last assistant message — Claude will generate a fresh
+        # response to the user's new message.  Keeping it in the injected
+        # context triggers the "re-answer" duplication pattern where Claude
+        # sees its own previous response and paraphrases it again.
+        if filtered and filtered[-1].get("role") == "assistant":
+            filtered = filtered[:-1]
         recent = filtered[-max_messages:]
 
         formatted: list[str] = []
