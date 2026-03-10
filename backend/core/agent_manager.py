@@ -1778,16 +1778,24 @@ class AgentManager:
             combined_queue: asyncio.Queue = asyncio.Queue()
             message_count = 0
 
-            async def sdk_message_reader():
+            # Generation counter for stale-result filtering during --resume.
+            # Each SDK reader task is assigned a monotonically increasing generation.
+            # Queue items are tagged with their generation so the main loop can
+            # discard items from old readers without draining the queue.
+            _generation = 0
+            _reader_tasks: list[asyncio.Task] = []
+
+            async def sdk_message_reader(gen: int):
                 """Read SDK messages and put them in the combined queue.
 
                 Drains the SDK response stream into combined_queue. On error, pushes
                 an error sentinel so the main loop can break cleanly. Always pushes
                 sdk_done as a termination signal regardless of success or failure.
+                Each item is tagged with ``gen`` so the main loop can filter stale items.
                 """
                 try:
                     async for message in client.receive_response():
-                        await combined_queue.put({"source": "sdk", "message": message})
+                        await combined_queue.put({"source": "sdk", "message": message, "gen": gen})
                 except Exception as e:
                     error_traceback = traceback.format_exc()
                     logger.error(f"SDK message reader error: {e}")
@@ -1796,10 +1804,10 @@ class AgentManager:
                         logger.error(f"SDK stderr: {e.stderr}")  # type: ignore[attr-defined]
                     if hasattr(e, 'stdout'):
                         logger.error(f"SDK stdout: {e.stdout}")  # type: ignore[attr-defined]
-                    await combined_queue.put({"source": "error", "error": str(e), "detail": error_traceback})
+                    await combined_queue.put({"source": "error", "error": str(e), "detail": error_traceback, "gen": gen})
                 finally:
-                    await combined_queue.put({"source": "sdk_done"})
-                    logger.debug("SDK message reader finished")
+                    await combined_queue.put({"source": "sdk_done", "gen": gen})
+                    logger.debug("SDK message reader (gen %d) finished", gen)
 
             async def permission_request_forwarder():
                 """Consume permission requests from this session's dedicated queue.
@@ -1827,7 +1835,8 @@ class AgentManager:
                     logger.debug("Permission request forwarder cancelled")
                     raise
 
-            sdk_reader_task = asyncio.create_task(sdk_message_reader())
+            sdk_reader_task = asyncio.create_task(sdk_message_reader(_generation))
+            _reader_tasks.append(sdk_reader_task)
             forwarder_task = asyncio.create_task(permission_request_forwarder())
 
             # --- Main message loop ---
@@ -1853,6 +1862,11 @@ class AgentManager:
 
             while True:
                 item = await combined_queue.get()
+
+                # Generation filter: discard items from old SDK reader generations.
+                # Permission items (no "gen" key) pass through unconditionally.
+                if item.get("gen") is not None and item["gen"] < _generation:
+                    continue
 
                 if item["source"] == "sdk_done":
                     logger.info("SDK iterator finished, exiting message loop")
@@ -1958,42 +1972,36 @@ class AgentManager:
                             # --- Stale-result detection ---
                             # During --resume the SDK may return the *previous* turn's
                             # cached ResultMessage before it processes the new query.
-                            # Heuristic: stale if resuming, no tool_use seen, num_turns<=1,
-                            # and we haven't exhausted retries.
+                            # Heuristic: stale if resuming, no tool_use seen, num_turns<=1.
+                            # If retries remain, bump generation and re-send query.
+                            # If retries exhausted, discard the stale result silently.
                             _num_turns = getattr(message, 'num_turns', 0) or 0
-                            _is_likely_stale = (
+                            _looks_stale = (
                                 is_resuming
                                 and not _saw_tool_use
                                 and _num_turns <= 1
-                                and _stale_retry_count < _MAX_STALE_RETRIES
                             )
 
-                            if _is_likely_stale:
+                            if _looks_stale and _stale_retry_count < _MAX_STALE_RETRIES:
                                 _stale_retry_count += 1
                                 _result_preview = (message.result or "")[:80]
                                 logger.warning(
                                     "Stale ResultMessage detected (attempt %d/%d, "
-                                    "num_turns=%d, saw_tool_use=%s): %s — re-sending query",
+                                    "num_turns=%d, saw_tool_use=%s): %s — bumping generation and re-sending query",
                                     _stale_retry_count, _MAX_STALE_RETRIES,
                                     _num_turns, _saw_tool_use, _result_preview,
                                 )
-                                # Discard the stale result — do NOT yield it to frontend.
-                                # Cancel the current SDK reader (it already pushed sdk_done
-                                # or is about to), drain remaining queue items, re-send the
-                                # query, and restart the message reader.
+
+                                # Bump generation — all items from old readers will be filtered
+                                _generation += 1
+
+                                # Cancel old reader (SDK doesn't support concurrent receive_response iterators)
                                 if sdk_reader_task and not sdk_reader_task.done():
                                     sdk_reader_task.cancel()
                                     try:
                                         await sdk_reader_task
                                     except asyncio.CancelledError:
                                         pass
-
-                                # Drain any remaining items from the combined_queue
-                                while not combined_queue.empty():
-                                    try:
-                                        combined_queue.get_nowait()
-                                    except asyncio.QueueEmpty:
-                                        break
 
                                 # Re-send the query on the same client
                                 if isinstance(query_content, list):
@@ -2007,17 +2015,30 @@ class AgentManager:
                                     await client.query(_retry_multimodal())
                                 else:
                                     await client.query(query_content)
-                                logger.info("Re-sent query after stale detection, restarting SDK reader")
+                                logger.info("Re-sent query after stale detection (gen %d), restarting SDK reader", _generation)
 
-                                # Reset tracking for the new attempt
+                                # Reset tracking for the new generation
                                 _saw_tool_use = False
                                 _saw_new_text_block = False
                                 message_count = 0
                                 assistant_content = ContentBlockAccumulator()
 
-                                # Restart the SDK message reader
-                                sdk_reader_task = asyncio.create_task(sdk_message_reader())
+                                # Start new reader with current generation
+                                sdk_reader_task = asyncio.create_task(sdk_message_reader(_generation))
+                                _reader_tasks.append(sdk_reader_task)
                                 continue  # Back to the while-True loop
+
+                            if _looks_stale and _stale_retry_count >= _MAX_STALE_RETRIES:
+                                # Retry budget exhausted but result still looks stale.
+                                # Discard it — do NOT yield stale text to the frontend.
+                                # The loop will continue to sdk_done and exit cleanly.
+                                _result_preview = (message.result or "")[:80]
+                                logger.warning(
+                                    "Stale ResultMessage discarded after exhausting retries "
+                                    "(retry_count=%d, num_turns=%d, saw_tool_use=%s): %s",
+                                    _stale_retry_count, _num_turns, _saw_tool_use, _result_preview,
+                                )
+                                continue
 
                             # --- Normal (non-stale) result handling ---
                             result_text = message.result
@@ -2267,16 +2288,17 @@ class AgentManager:
                         # NOTE: Auto-commit moved to WorkspaceAutoCommitHook
                         # (fires at session close, not per-turn). See hooks/auto_commit_hook.py.
         finally:
-            # Cleanup: cancel both background tasks regardless of how we exited the loop
-            # (normal completion, error, or early return). The await-after-cancel pattern
-            # ensures the tasks have fully stopped before we proceed.
-            if sdk_reader_task and not sdk_reader_task.done():
-                sdk_reader_task.cancel()
-                try:
-                    await sdk_reader_task
-                except asyncio.CancelledError:
-                    pass
-                logger.debug("SDK reader task cancelled")
+            # Cancel ALL spawned reader tasks (defense-in-depth).
+            # In practice only the current-generation reader should be alive,
+            # but the list covers edge cases where cancellation didn't complete.
+            for task in _reader_tasks:
+                if task and not task.done():
+                    task.cancel()
+                    try:
+                        await task
+                    except asyncio.CancelledError:
+                        pass
+            logger.debug("All SDK reader tasks cancelled")
 
             if forwarder_task and not forwarder_task.done():
                 forwarder_task.cancel()

@@ -1,0 +1,82 @@
+# Implementation Plan
+
+- [x] 1. Write bug condition exploration test
+  - **Property 1: Fault Condition** — Stale ResultMessages Are Discarded During Resume
+  - **CRITICAL**: This test MUST FAIL on unfixed code — failure confirms the bug exists
+  - **DO NOT attempt to fix the test or the code when it fails**
+  - **NOTE**: This test encodes the expected behavior — it will validate the fix when it passes after implementation
+  - **GOAL**: Surface counterexamples that demonstrate the stale-result bug during `--resume`
+  - **Scoped PBT Approach**: Scope the property to the concrete failing case — a resume session where the SDK replays a stale `ResultMessage` with `num_turns=1` and no preceding `ToolUseBlock`s
+  - **Test file**: `backend/tests/test_property_resume_stale_fault.py`
+  - **Test infrastructure**: Follow the pattern in `test_property_auth_error_fault.py` — use `collect_events_from_run_query()` helper, mock `client.receive_response()` as async generator, mock `client.query` as `AsyncMock()`
+  - **Concrete test cases**:
+    - Mock `client.receive_response()` to yield `[SystemMessage(init), ResultMessage(stale, num_turns=1)]` with `is_resuming=True`. Assert the stale result text is NOT yielded as an `assistant` SSE event. On unfixed code, the loop exits on the first `ResultMessage`, yielding it to the frontend.
+    - Mock two sequential `receive_response()` calls: first yields stale messages, second yields fresh `[SystemMessage(init), AssistantMessage(fresh text), ResultMessage(fresh, num_turns=2)]`. Assert only the fresh result is yielded. On unfixed code, the retry may waste attempts or accept the stale result.
+    - Mock a repeated-replay scenario: both first and second `receive_response()` replay the same stale `ResultMessage(num_turns=1)`, third yields fresh. Assert the system reaches the fresh result. On unfixed code, `_stale_retry_count` hits `_MAX_STALE_RETRIES` and the stale result is accepted.
+  - **Property-based test**: Use Hypothesis to generate arbitrary stale result text and verify that for all `is_resuming=True` sessions with `num_turns<=1` and no tool use, the stale `ResultMessage` is not yielded as an assistant event
+  - **Fault Condition from design**: `isBugCondition(input)` where `input.session.is_resuming == True AND input.message IS ResultMessage AND input.message.is_error == False AND input.message.subtype != 'error_during_execution' AND input.reader_generation < current_generation`
+  - Run test on UNFIXED code — expect FAILURE (this confirms the bug exists)
+  - Document counterexamples found (e.g., "stale ResultMessage with num_turns=1 is yielded as assistant event instead of being discarded")
+  - Mark task complete when test is written, run, and failure is documented
+  - _Requirements: 1.1, 1.2, 1.3, 2.1, 2.3, 2.4_
+
+- [x] 2. Write preservation property tests (BEFORE implementing fix)
+  - **Property 2: Preservation** — Non-Resume and Error ResultMessages Are Unaffected
+  - **IMPORTANT**: Follow observation-first methodology — run UNFIXED code with non-buggy inputs, observe outputs, then write tests asserting those outputs
+  - **Test file**: `backend/tests/test_property_resume_stale_preservation.py`
+  - **Test infrastructure**: Follow the pattern in `test_property_auth_error_fault.py` — use `collect_events_from_run_query()` helper
+  - **Observation-first methodology**:
+    - Observe: Non-resume session (`is_resuming=False`) with `[SystemMessage(init), AssistantMessage(text), ResultMessage(fresh)]` yields `session_start`, `assistant`, `assistant` (result text), and `result` SSE events on unfixed code
+    - Observe: Error `ResultMessage` (`is_error=True`) during resume yields `error` SSE event on unfixed code
+    - Observe: `ResultMessage` with `subtype='error_during_execution'` yields `error` SSE event with code `ERROR_DURING_EXECUTION` on unfixed code
+    - Observe: `AssistantMessage` with `ToolUseBlock` followed by `ResultMessage` during resume (`_saw_tool_use=True`) yields the result normally on unfixed code
+    - Observe: Permission request items are forwarded as `cmd_permission_request` SSE events regardless of session state on unfixed code
+  - **Property-based tests**:
+    - For all `is_resuming=False` sessions: `ResultMessage` is yielded as `assistant` + `result` SSE events (no generation filtering applied)
+    - For all `ResultMessage` with `is_error=True` and `subtype != 'error_during_execution'`: yields `error` SSE event in both resume and non-resume sessions
+    - For all `ResultMessage` with `subtype='error_during_execution'`: yields `error` SSE event with code `ERROR_DURING_EXECUTION`
+    - For all resume sessions where `AssistantMessage` with `ToolUseBlock` precedes `ResultMessage`: result is accepted as fresh (tool use indicates real work)
+  - **Preservation Requirements from design**: All inputs where `is_resuming=False`, or where the `ResultMessage` is an error, are completely unaffected by this fix. Permission forwarding, SystemMessage handling, DB persistence, and SSE event structure remain unchanged.
+  - Verify all tests PASS on UNFIXED code
+  - Mark task complete when tests are written, run, and passing on unfixed code
+  - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.5_
+
+- [x] 3. Fix for stale ResultMessage during resume
+
+  - [x] 3.1 Implement the generation counter pattern in `_run_query_on_client()`
+    - **File**: `backend/core/agent_manager.py`, method `_run_query_on_client()` (line ~1729)
+    - Add `_generation = 0` counter and `_reader_tasks: list[asyncio.Task] = []` before the main loop
+    - Modify `sdk_message_reader()` to accept a `gen: int` parameter and tag every queue item with `"gen": gen` (sdk, error, and sdk_done items)
+    - Add generation filter at top of main loop: `if item.get("gen") is not None and item["gen"] < _generation: continue` — discards all items from old readers. Permission items (no `gen` key) pass through unconditionally. `sdk_done` from old generations is correctly discarded (prevents premature loop exit).
+    - Replace the stale-detection + drain + retry block: on stale detection, increment `_generation`, cancel old reader task and `await` it (SDK does NOT support concurrent `receive_response()` iterators), re-send query via `client.query()`, start new `sdk_message_reader(_generation)` task, reset `_saw_tool_use`, `_saw_new_text_block`, `message_count`, and `assistant_content`, then `continue`
+    - `_saw_tool_use` is effectively scoped to current generation: reset on each generation bump, and old-generation `AssistantMessage` items are filtered before reaching tracking code
+    - Remove the `while not combined_queue.empty()` drain loop — generation filtering replaces it
+    - Track all spawned reader tasks in `_reader_tasks` list, append each new task
+    - Update `finally` block to cancel ALL tasks in `_reader_tasks` (defense-in-depth)
+    - Keep `_MAX_STALE_RETRIES` and `_stale_retry_count` as safety net for bounded retries
+    - _Bug_Condition: `isBugCondition(input)` where `is_resuming=True AND message IS ResultMessage AND is_error=False AND subtype != 'error_during_execution' AND reader_generation < current_generation`_
+    - _Expected_Behavior: Discard all stale ResultMessages, only yield ResultMessage from current-generation reader. SSE stream remains open until fresh result arrives._
+    - _Preservation: Non-resume sessions, error ResultMessages, permission forwarding, SystemMessage handling, DB persistence, SSE event structure all unchanged._
+    - _Requirements: 1.1, 1.2, 1.3, 1.4, 2.1, 2.2, 2.3, 2.4, 2.5, 3.1, 3.2, 3.3, 3.4, 3.5_
+
+  - [x] 3.2 Verify bug condition exploration test now passes
+    - **Property 1: Expected Behavior** — Stale ResultMessages Are Discarded During Resume
+    - **IMPORTANT**: Re-run the SAME test from task 1 — do NOT write a new test
+    - The test from task 1 encodes the expected behavior (stale results discarded, fresh results yielded)
+    - When this test passes, it confirms the generation counter correctly filters stale items
+    - Run: `cd backend && python -m pytest tests/test_property_resume_stale_fault.py -v`
+    - **EXPECTED OUTCOME**: Test PASSES (confirms bug is fixed)
+    - _Requirements: 2.1, 2.3, 2.4_
+
+  - [x] 3.3 Verify preservation tests still pass
+    - **Property 2: Preservation** — Non-Resume and Error ResultMessages Are Unaffected
+    - **IMPORTANT**: Re-run the SAME tests from task 2 — do NOT write new tests
+    - Run: `cd backend && python -m pytest tests/test_property_resume_stale_preservation.py -v`
+    - **EXPECTED OUTCOME**: Tests PASS (confirms no regressions)
+    - Confirm all preservation tests still pass after fix (non-resume sessions, error handling, permission forwarding, tool-use tracking, DB persistence all unchanged)
+
+- [x] 4. Checkpoint — Ensure all tests pass
+  - Run full test suite: `cd backend && python -m pytest tests/test_property_resume_stale_fault.py tests/test_property_resume_stale_preservation.py -v`
+  - Ensure all property-based tests pass (both fault condition and preservation)
+  - Verify no regressions in existing tests: `cd backend && python -m pytest tests/test_property_auth_error_fault.py -v`
+  - Ensure all tests pass, ask the user if questions arise.
