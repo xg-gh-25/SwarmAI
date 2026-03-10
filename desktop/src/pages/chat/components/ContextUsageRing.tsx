@@ -23,7 +23,7 @@ export function ContextUsageRing({ pct, size = 18 }: ContextUsageRingProps) {
   const strokeWidth = 2.5;
   const radius = (size - strokeWidth) / 2;
   const circumference = 2 * Math.PI * radius;
-  const fillPct = pct ?? 0;
+  const fillPct = Math.min(Math.max(Number.isFinite(pct) ? pct! : 0, 0), 100);
   const offset = circumference - (fillPct / 100) * circumference;
 
   const strokeColor = pct === null ? 'var(--color-border)'
@@ -39,7 +39,8 @@ export function ContextUsageRing({ pct, size = 18 }: ContextUsageRingProps) {
     >
       <svg width={size} height={size} className="transform -rotate-90">
         <circle cx={size/2} cy={size/2} r={radius}
-          fill="none" stroke="var(--color-border)" strokeWidth={strokeWidth} />
+          fill="none" stroke="var(--color-border)" strokeWidth={strokeWidth}
+          {...(pct === null ? { strokeDasharray: '2 2', opacity: 0.5 } : {})} />
         <circle cx={size/2} cy={size/2} r={radius}
           fill="none" stroke={strokeColor} strokeWidth={strokeWidth}
           strokeDasharray={circumference} strokeDashoffset={offset}
