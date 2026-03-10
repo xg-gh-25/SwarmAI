@@ -224,6 +224,7 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
     isSwarmWorkspace: boolean;
     gitStatus?: GitStatus;
     readonly?: boolean;
+    committedContent?: string;
   } | null>(null);
 
   // Swarm workspace warning state - Requirement 4.3
@@ -240,6 +241,22 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
         { params: { path: file.path } },
       );
 
+      // Fetch committed version for diff when file has git changes
+      let committedContent: string | undefined;
+      if (gitStatus) {
+        try {
+          const committedResponse = await api.get<{ content: string }>(
+            '/workspace/file/committed',
+            { params: { path: file.path } },
+          );
+          committedContent = committedResponse.data.content;
+        } catch (err) {
+          // Untracked or binary file — fall back to empty string
+          console.warn('Failed to fetch committed version:', err);
+          committedContent = '';
+        }
+      }
+
       setFileEditorState({
         isOpen: true,
         filePath: file.path,
@@ -249,6 +266,7 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
         isSwarmWorkspace: file.isSwarmWorkspace || false,
         gitStatus,
         readonly: response.data.readonly ?? false,
+        committedContent,
       });
     } catch (error) {
       console.error('Failed to read file:', error);
@@ -265,13 +283,13 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
     }
 
     // Open the file editor
-    await openFileEditor(file);
+    await openFileEditor(file, file.gitStatus);
   }, [openFileEditor]);
 
   // Handle Swarm workspace warning confirmation - Requirement 4.3, 4.5
   const handleSwarmWarningConfirm = useCallback(async () => {
     if (swarmWarning.pendingFile) {
-      await openFileEditor(swarmWarning.pendingFile);
+      await openFileEditor(swarmWarning.pendingFile, swarmWarning.pendingFile.gitStatus);
     }
     setSwarmWarning({ isOpen: false, pendingFile: null });
   }, [swarmWarning.pendingFile, openFileEditor]);
@@ -340,6 +358,7 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
           onAttachToChat={attachFile}
           isAttached={attachedFiles.some(f => f.id === fileEditorState.filePath)}
           readonly={fileEditorState.readonly}
+          committedContent={fileEditorState.committedContent}
         />
       )}
 
