@@ -27,5 +27,6 @@ export function toFileTreeItem(node: TreeNode): FileTreeItem {
     workspaceId: '',
     workspaceName: '',
     children: node.children?.map(toFileTreeItem),
+    gitStatus: node.gitStatus,
   };
 }

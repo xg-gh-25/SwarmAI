@@ -9,6 +9,7 @@ Public endpoints:
 - ``GET  /workspace``              — Retrieve singleton workspace config
 - ``PUT  /workspace``              — Update workspace config (icon, context)
 - ``GET  /workspace/tree``         — Return workspace filesystem tree as nested JSON
+- ``GET  /workspace/file/committed`` — Return last committed version of a file (git show HEAD:<path>)
 - ``GET  /projects``               — List all projects
 - ``POST /projects``               — Create a new project
 - ``GET  /projects/{project_id}``  — Get project by ID
@@ -309,10 +310,16 @@ def _build_tree(
         rel_path = str(d.relative_to(workspace_root)).replace("\\", "/")
         children = _build_tree(d, workspace_root, depth - 1, git_status) if depth > 1 else None
 
-        # Directory git status: inherit from children (any modified child → modified dir)
+        # Directory git status: check direct match first, then inherit from children
         dir_status = None
         if git_status:
-            # Check if any file under this directory has a git status
+            # Check if this directory itself has a git status entry (e.g., symlink flat-path)
+            if rel_path in git_status:
+                dir_status = git_status[rel_path]
+            # Also check if any child file has a git status (prefix scan).
+            # Note: if children have status, we upgrade to "modified" even if
+            # the directory itself had a more specific status (e.g., "untracked").
+            # This is intentional — "modified" is the correct aggregate indicator.
             prefix = rel_path + "/"
             for gpath, gstatus in git_status.items():
                 if gpath.startswith(prefix):
@@ -465,24 +472,28 @@ async def get_workspace_file(
     target = (workspace_root / path).resolve()
 
     # Ensure resolved path is still under workspace root.
-    # Exception: .claude/skills/ contains symlinks to built-in skills outside
-    # the workspace (PyInstaller temp dir). Allow reading these as read-only,
-    # but ONLY if the symlink originates from within the workspace and the
-    # resolved target is a regular file (not a directory or special file).
+    # Exception: .claude/skills/ contains projected skill files that may
+    # resolve outside the workspace for legacy symlinks. After copytree
+    # migration, skill files are real files inside the workspace, but we
+    # keep this escape hatch for backward compatibility with any remaining
+    # legacy symlinks. Allow reading these as read-only, but ONLY if the
+    # path originates from within the workspace and the resolved target is
+    # a regular file (not a directory or special file).
     ws_resolved = str(workspace_root.resolve())
-    is_skill_symlink = path.startswith(".claude/skills/") or path.startswith(".claude\\skills\\")
+    is_skill_file = path.startswith(".claude/skills/") or path.startswith(".claude\\skills\\")
     if not str(target).startswith(ws_resolved):
-        if not is_skill_symlink:
+        if not is_skill_file:
             raise HTTPException(status_code=400, detail=f"Path outside workspace: {path}")
-        # Validate the symlink itself lives inside the workspace
-        symlink_path = (workspace_root / path)
-        if not symlink_path.exists():
+        # Skill file escape hatch: handles both legacy symlinks and
+        # copytree'd files that may resolve outside the workspace.
+        skill_path = (workspace_root / path)
+        if not skill_path.exists():
             raise HTTPException(status_code=404, detail=f"File not found: {path}")
-        if not str(symlink_path.parent.resolve()).startswith(ws_resolved):
+        if not str(skill_path.parent.resolve()).startswith(ws_resolved):
             raise HTTPException(status_code=400, detail=f"Path outside workspace: {path}")
         # Only allow regular files (not directories, devices, etc.)
         if not target.is_file():
-            raise HTTPException(status_code=400, detail=f"Symlink target is not a regular file: {path}")
+            raise HTTPException(status_code=400, detail=f"Not a regular file: {path}")
 
     if not target.is_file():
         raise HTTPException(status_code=404, detail=f"File not found: {path}")
@@ -494,9 +505,68 @@ async def get_workspace_file(
     except OSError as exc:
         raise HTTPException(status_code=500, detail=f"Failed to read file: {exc}")
 
-    # Skill symlinks are always readonly (they point to built-in templates)
-    is_readonly = _is_readonly_context_file(path) or is_skill_symlink
+    # Projected skill files are always readonly (managed by the system)
+    is_readonly = _is_readonly_context_file(path) or is_skill_file
     return {"content": content, "path": path, "name": target.name, "readonly": is_readonly}
+
+
+@router.get("/workspace/file/committed")
+async def get_workspace_file_committed(
+    path: str = Query(..., description="Relative path within the workspace"),
+):
+    """Return the last committed version of a file via ``git show HEAD:<path>``.
+
+    Used by the file editor modal to compute diffs between the committed
+    version and the current disk content for files with git changes.
+
+    Returns ``{"content": "<committed text>"}`` for tracked files.
+    Returns ``{"content": ""}`` for untracked files (no committed version).
+    Returns 400 for binary files or path traversal attempts.
+    Returns 404 if the file doesn't exist in the workspace.
+    """
+    # Reject traversal attempts
+    if ".." in path.split("/"):
+        raise HTTPException(status_code=400, detail=f"Path traversal not allowed: {path}")
+
+    expanded_path = await _get_workspace_path()
+    workspace_root = Path(expanded_path)
+
+    # Verify the file exists on disk
+    target = (workspace_root / path).resolve()
+    ws_resolved = str(workspace_root.resolve())
+    is_skill_file = path.startswith(".claude/skills/") or path.startswith(".claude\\skills\\")
+    if not str(target).startswith(ws_resolved) and not is_skill_file:
+        raise HTTPException(status_code=400, detail=f"Path outside workspace: {path}")
+
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail=f"File not found: {path}")
+
+    # Check if workspace is a git repo
+    git_dir = workspace_root / ".git"
+    if not git_dir.is_dir():
+        return {"content": ""}
+
+    try:
+        result = subprocess.run(
+            ["git", "show", f"HEAD:{path}"],
+            cwd=str(workspace_root),
+            capture_output=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return {"content": ""}
+
+    if result.returncode != 0:
+        # File is untracked or not in HEAD — return empty string
+        return {"content": ""}
+
+    # Decode manually to catch binary files
+    try:
+        content = result.stdout.decode("utf-8")
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=400, detail="File is not valid UTF-8 text (binary file)")
+
+    return {"content": content}
 
 
 @router.put("/workspace/file")
@@ -514,6 +584,10 @@ async def put_workspace_file(
 
     if ".." in path.split("/"):
         raise HTTPException(status_code=400, detail="Path traversal not allowed")
+
+    # Skill files are read-only (managed by ProjectionLayer, overwritten on each launch)
+    if path.startswith(".claude/skills/") or path.startswith(".claude\\skills\\"):
+        raise HTTPException(status_code=403, detail="Skill files are read-only")
 
     expanded_path = await _get_workspace_path()
     workspace_root = Path(expanded_path)

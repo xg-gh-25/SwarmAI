@@ -47,6 +47,8 @@ export interface FileEditorModalProps {
   isAttached?: boolean;
   /** When true, the file is a system-default context file and editing is disabled. */
   readonly?: boolean;
+  /** The last committed (HEAD) version of the file, used as the diff baseline. */
+  committedContent?: string;
 }
 
 export interface FileEditorState {
@@ -418,6 +420,7 @@ export default function FileEditorModal({
   onAttachToChat,
   isAttached,
   readonly,
+  committedContent,
 }: FileEditorModalProps) {
   const [content, setContent] = useState(initialContent);
   const [originalContent, setOriginalContent] = useState(initialContent);
@@ -482,7 +485,7 @@ export default function FileEditorModal({
   useEffect(() => {
     if (isOpen) {
       setContent(initialContent);
-      setOriginalContent(initialContent);
+      setOriginalContent(committedContent ?? initialContent);
       setShowUnsavedWarning(false);
       setShowDiff(false);
       setShowSearch(false);
@@ -491,7 +494,7 @@ export default function FileEditorModal({
       setActiveLineNumber(undefined);
       setAttachFeedback(false);
     }
-  }, [isOpen, initialContent]);
+  }, [isOpen, initialContent, committedContent]);
 
   // Update syntax highlighting when content changes or returning from diff view
   useEffect(() => {

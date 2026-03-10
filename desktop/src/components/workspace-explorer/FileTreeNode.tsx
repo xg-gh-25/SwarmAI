@@ -16,6 +16,8 @@
  *
  * Retained for backward compatibility with chat and layout components.
  */
+import type { GitStatus } from '../../types';
+
 export interface FileTreeItem {
   id: string;
   name: string;
@@ -25,4 +27,5 @@ export interface FileTreeItem {
   workspaceName: string;
   children?: FileTreeItem[];
   isSwarmWorkspace?: boolean;
+  gitStatus?: GitStatus;
 }

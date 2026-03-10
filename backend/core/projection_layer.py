@@ -1,15 +1,20 @@
-"""Symlink projection layer for skill discovery by the Claude SDK.
+"""Copy-based projection layer for skill discovery by the Claude SDK.
 
 This module was extracted from ``agent_sandbox_manager.py`` to isolate
-skill symlink projection concerns.  ``AgentSandboxManager`` retains its
+skill projection concerns.  ``AgentSandboxManager`` retains its
 non-skill responsibilities (template copying, ``TEMPLATE_FILES``,
 ``ensure_templates_in_directory``).  ``ProjectionLayer`` is a new class
-that owns *only* skill symlink projection into the Claude SDK's
-discovery directory (``SwarmWS/.claude/skills/``).
+that owns *only* skill projection into the Claude SDK's discovery
+directory (``SwarmWS/.claude/skills/``).
+
+Skills are projected as real directory copies (via ``shutil.copytree``)
+rather than symlinks, so that git tracks actual file content and detects
+modifications.  Legacy symlinks from prior versions are cleaned up
+transparently.
 
 Key public symbols:
 
-- ``ProjectionLayer``  — Singleton that projects skill symlinks into a
+- ``ProjectionLayer``  — Singleton that projects skill copies into a
   workspace, respecting tier precedence and allowed-skills lists.
 
 Lifecycle:
@@ -20,6 +25,7 @@ Lifecycle:
 """
 
 import logging
+import shutil
 from pathlib import Path
 
 from core.skill_manager import SkillManager
@@ -28,17 +34,18 @@ logger = logging.getLogger(__name__)
 
 
 class ProjectionLayer:
-    """Project skill symlinks into a workspace for Claude SDK discovery.
+    """Project skill copies into a workspace for Claude SDK discovery.
 
     Merges skills from all three tiers (built-in, user, plugin) into
-    ``SwarmWS/.claude/skills/`` via symlinks.  Built-in skills are
-    always projected unconditionally.  User and plugin skills are
-    projected based on the agent's ``allowed_skills`` list or the
+    ``SwarmWS/.claude/skills/`` via ``shutil.copytree()``.  Built-in
+    skills are always projected unconditionally.  User and plugin skills
+    are projected based on the agent's ``allowed_skills`` list or the
     ``allow_all`` flag.
 
-    Stale symlinks (pointing to skills no longer available) are cleaned
-    up on every projection pass.  Symlink targets are validated to
-    resolve within one of the three known tier directories.
+    Stale entries (both legacy symlinks and real directories pointing to
+    skills no longer available) are cleaned up on every projection pass.
+    Skill source paths are validated to resolve within one of the three
+    known tier directories.
     """
 
     def __init__(self, skill_manager: SkillManager) -> None:
@@ -56,7 +63,7 @@ class ProjectionLayer:
         allowed_skills: list[str] | None = None,
         allow_all: bool = False,
     ) -> None:
-        """Project symlinks into ``workspace_path/.claude/skills/``.
+        """Project skill copies into ``workspace_path/.claude/skills/``.
 
         Built-in skills are **always** projected unconditionally.  For
         user and plugin skills:
@@ -65,11 +72,11 @@ class ProjectionLayer:
         - Otherwise, project only those whose ``folder_name`` appears in
           *allowed_skills*.
 
-        Stale symlinks (for skills no longer in the target set) are
-        removed.  Each symlink target is validated to resolve within a
-        known tier directory before creation.  ``OSError`` on individual
-        symlinks is caught, logged, and skipped so one bad entry does
-        not block the rest.
+        Stale entries (for skills no longer in the target set) are
+        removed — both legacy symlinks and real directories.  Each skill
+        source path is validated to resolve within a known tier directory
+        before copying.  ``OSError`` on individual copies is caught,
+        logged, and skipped so one bad entry does not block the rest.
 
         Args:
             workspace_path: Root of the SwarmWorkspace (e.g.
@@ -96,68 +103,70 @@ class ProjectionLayer:
             elif folder_name in allowed_set:
                 target_skills[folder_name] = info.path
 
-        # Create or update symlinks for each target skill
+        # Create or update copies for each target skill
         for folder_name, skill_path in target_skills.items():
             link_path = skills_dir / folder_name
 
-            # Validate the symlink target before creating
-            if not self._validate_symlink_target(skill_path):
+            # Validate the skill source before copying
+            if not self._validate_skill_source(skill_path):
                 logger.warning(
-                    "Skipping skill '%s': target path %s is outside "
+                    "Skipping skill '%s': source path %s is outside "
                     "known tier directories",
                     folder_name,
                     skill_path,
                 )
                 continue
 
-            # If symlink already exists and points to the correct target,
-            # skip re-creation
-            if link_path.is_symlink():
+            # If entry already exists, remove and re-copy (clean re-copy
+            # on every launch is acceptable and avoids stale content)
+            if link_path.exists() or link_path.is_symlink():
                 try:
-                    existing_target = link_path.resolve()
-                    if existing_target == skill_path.resolve():
-                        continue
-                    # Target changed — remove old symlink first
-                    link_path.unlink()
+                    if link_path.is_symlink():
+                        # Legacy symlink — just unlink
+                        link_path.unlink()
+                    else:
+                        shutil.rmtree(link_path)
                 except OSError as exc:
                     logger.warning(
-                        "Failed to inspect existing symlink for '%s': %s",
+                        "Failed to remove existing entry for '%s': %s",
                         folder_name,
                         exc,
                     )
-                    try:
-                        link_path.unlink()
-                    except OSError:
-                        pass
+                    continue
 
             try:
-                link_path.symlink_to(skill_path.resolve())
+                shutil.copytree(
+                    str(skill_path.resolve()),
+                    str(link_path),
+                    dirs_exist_ok=True,
+                )
             except OSError as exc:
                 logger.error(
-                    "Failed to create symlink for skill '%s' -> %s: %s",
+                    "Failed to copy skill '%s' from %s: %s",
                     folder_name,
                     skill_path,
                     exc,
                 )
 
-        # Clean up stale symlinks
-        self._cleanup_stale_symlinks(skills_dir, set(target_skills.keys()))
+        # Clean up stale entries (both legacy symlinks and real directories)
+        self._cleanup_stale_entries(skills_dir, set(target_skills.keys()))
 
-    def _cleanup_stale_symlinks(
+    def _cleanup_stale_entries(
         self,
         skills_dir: Path,
         target_names: set[str],
     ) -> None:
-        """Remove symlinks in *skills_dir* not present in *target_names*.
+        """Remove entries in *skills_dir* not present in *target_names*.
 
-        Iterates over existing symlinks and removes any whose name is
-        not in the expected target set.  A warning is logged for each
-        stale symlink removed.
+        Handles both legacy symlinks and real directories (from the
+        copytree migration).  Symlinks are unlinked; real directories
+        are removed via ``shutil.rmtree()``.  A warning is logged for
+        each stale entry removed.
 
         Args:
             skills_dir: The ``SwarmWS/.claude/skills/`` directory.
             target_names: Set of folder names that *should* have
-                symlinks.
+                entries.
         """
         try:
             entries = list(skills_dir.iterdir())
@@ -170,36 +179,41 @@ class ProjectionLayer:
             return
 
         for entry in entries:
-            if entry.is_symlink() and entry.name not in target_names:
+            if entry.name not in target_names:
                 logger.warning(
-                    "Removing stale skill symlink: %s",
+                    "Removing stale skill entry: %s",
                     entry,
                 )
                 try:
-                    entry.unlink()
+                    if entry.is_symlink():
+                        entry.unlink()
+                    elif entry.is_dir():
+                        shutil.rmtree(entry)
+                    else:
+                        entry.unlink()
                 except OSError as exc:
                     logger.error(
-                        "Failed to remove stale symlink %s: %s",
+                        "Failed to remove stale entry %s: %s",
                         entry,
                         exc,
                     )
 
-    def _validate_symlink_target(self, target: Path) -> bool:
-        """Verify *target* resolves within a known tier directory.
+    def _validate_skill_source(self, source: Path) -> bool:
+        """Verify *source* resolves within a known tier directory.
 
-        Resolves the target path to its canonical form and checks that
+        Resolves the source path to its canonical form and checks that
         it falls within one of the three skill source tier directories
         managed by the ``SkillManager``.
 
         Args:
-            target: The path to validate (typically ``SkillInfo.path``).
+            source: The path to validate (typically ``SkillInfo.path``).
 
         Returns:
-            ``True`` if the target is within a known tier directory,
+            ``True`` if the source is within a known tier directory,
             ``False`` otherwise.
         """
         try:
-            resolved = target.resolve()
+            resolved = source.resolve()
         except OSError:
             return False
 
