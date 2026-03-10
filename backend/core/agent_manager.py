@@ -1042,10 +1042,12 @@ class AgentManager:
                 ContextDirectoryLoader, CONTEXT_FILES, GROUP_CHANNEL_EXCLUDE,
             )
             context_dir = Path(working_directory) / ".context"
-            # Reserve headroom for ephemeral injections (DailyActivity, Bootstrap)
-            # that are appended after the token-budgeted assembly.
-            # 2 DailyActivity files × 2000 tokens each = 4000 token reservation.
-            EPHEMERAL_HEADROOM = 2 * TOKEN_CAP_PER_DAILY_FILE
+            # Reserve headroom for ephemeral injections (DailyActivity, Bootstrap,
+            # resume context) that are appended after the token-budgeted assembly.
+            # 2 DailyActivity files × 2000 tokens each = 4000 token reservation
+            # + 2000 tokens for resume conversation context.
+            RESUME_CONTEXT_BUDGET = 2000
+            EPHEMERAL_HEADROOM = 2 * TOKEN_CAP_PER_DAILY_FILE + RESUME_CONTEXT_BUDGET
             base_budget = agent_config.get("context_token_budget", DEFAULT_TOKEN_BUDGET)
             loader = ContextDirectoryLoader(
                 context_dir=context_dir,
@@ -1116,6 +1118,20 @@ class AgentManager:
                         "After distillation completes, delete the flag file at "
                         f"`{flag_path}`."
                     )
+
+            # ── Resume context injection (ephemeral, for resumed sessions) ──
+            if agent_config.get("needs_context_injection") and agent_config.get("resume_app_session_id"):
+                from .context_injector import build_resume_context
+                resume_ctx = await build_resume_context(agent_config["resume_app_session_id"])
+                if resume_ctx:
+                    context_text += f"\n\n{resume_ctx}"
+                    from .context_directory_loader import ContextDirectoryLoader
+                    logger.info(
+                        "Resume context injected: ~%d tokens",
+                        ContextDirectoryLoader.estimate_tokens(resume_ctx),
+                    )
+                else:
+                    logger.info("Resume context skipped: no injectable messages")
 
             if context_text:
                 existing = agent_config.get("system_prompt", "") or ""
@@ -1636,9 +1652,13 @@ class AgentManager:
         # Check if we can reuse an existing long-lived client for resume
         reused_client = self._get_active_client(session_id) if is_resuming else None
 
+        # Default: no context injection needed for non-resuming requests
+        agent_config["needs_context_injection"] = False
+
         try:
             if reused_client and session_id:
                 # PATH B: Reuse existing long-lived client
+                agent_config["needs_context_injection"] = False
                 client = reused_client
                 logger.info(f"Reusing long-lived client for session {session_id}")
                 self._clients[session_id] = client
@@ -1696,6 +1716,10 @@ class AgentManager:
                             f"no active client for app session {session_context['app_session_id']}, "
                             f"creating fresh SDK session"
                         )
+                    # Flag for context injection: we lost the SDK client, so
+                    # inject previous conversation context into the system prompt.
+                    agent_config["needs_context_injection"] = True
+                    agent_config["resume_app_session_id"] = app_session_id
 
                 # Deferred save for resumed conversations (PATH A):
                 # The resume failed (no active client), so we're creating a
@@ -2912,9 +2936,13 @@ Create the skill in the `.claude/skills/` directory within the current workspace
                 # Try to reuse existing long-lived client for resume
                 reused_client = self._get_active_client(session_id) if is_resuming else None
 
+                # Default: no context injection needed for non-resuming requests
+                agent_config["needs_context_injection"] = False
+
                 try:
                     if reused_client and session_id:
                         # Reuse existing client
+                        agent_config["needs_context_injection"] = False
                         client = reused_client
                         logger.info(f"Reusing long-lived client for skill creator, session {session_id}")
                         self._clients[session_id] = client
@@ -2961,6 +2989,10 @@ Create the skill in the `.claude/skills/` directory within the current workspace
                                     f"no active client for app session {session_context['app_session_id']}, "
                                     f"creating fresh SDK session"
                                 )
+                            # Flag for context injection: we lost the SDK client, so
+                            # inject previous conversation context into the system prompt.
+                            agent_config["needs_context_injection"] = True
+                            agent_config["resume_app_session_id"] = session_id
 
                         # Deferred save for resumed conversations (fresh client path):
                         if session_context.get("app_session_id") is not None:
