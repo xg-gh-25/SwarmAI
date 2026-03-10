@@ -1036,6 +1036,9 @@ class AgentManager:
         never blocked by context assembly failures.
         """
         # ── 1. Centralized context directory (global context) ──────────
+        # Reset system_prompt to avoid duplication when _build_options is
+        # called twice with the same agent_config (resume-fallback path).
+        agent_config["system_prompt"] = ""
         prompt_metadata: dict = {"files": [], "total_tokens": 0, "full_text": ""}
         try:
             from .context_directory_loader import (
@@ -1202,7 +1205,17 @@ class AgentManager:
             channel_context=channel_context,
             add_dirs=sdk_add_dirs,
         )
-        return prompt_builder.build()
+        builder_text = prompt_builder.build()
+
+        # ── 3. Combine: SystemPromptBuilder framing + context files ───
+        # SystemPromptBuilder provides identity/safety/datetime/runtime
+        # metadata.  Context files (11 files + DailyActivity) were loaded
+        # into agent_config["system_prompt"] by step 1 above.  Both must
+        # be returned so ClaudeAgentOptions receives the full prompt.
+        context_text = agent_config.get("system_prompt", "") or ""
+        if context_text:
+            return f"{builder_text}\n\n{context_text}"
+        return builder_text
 
     async def _build_options(
         self,
