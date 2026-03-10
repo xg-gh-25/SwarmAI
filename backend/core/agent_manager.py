@@ -928,6 +928,22 @@ class AgentManager:
             base = base[:-3]
         return self._MODEL_CONTEXT_WINDOWS.get(base, self._DEFAULT_CONTEXT_WINDOW)
 
+    @staticmethod
+    def _sum_usage_input_tokens(usage: dict) -> int:
+        """Sum all input token fields from SDK usage data.
+
+        Combines ``input_tokens``, ``cache_read_input_tokens``, and
+        ``cache_creation_input_tokens`` into a single total.  Each field
+        may be ``None`` (treated as 0).
+
+        Returns 0 when all fields are ``None`` or absent.
+        """
+        return (
+            (usage.get("input_tokens") or 0)
+            + (usage.get("cache_read_input_tokens") or 0)
+            + (usage.get("cache_creation_input_tokens") or 0)
+        )
+
     def _build_context_warning(
         self,
         input_tokens: int,
@@ -1429,8 +1445,8 @@ class AgentManager:
                     effective_sid = event["session_id"]
                 _usage = event.get("usage")
                 if _usage:
-                    last_input_tokens = _usage.get("input_tokens")
-                last_model = event.get("model")
+                    last_input_tokens = self._sum_usage_input_tokens(_usage)
+                last_model = agent_config.get("model")
             yield event
 
         # --- Post-response context monitor ---
@@ -2516,8 +2532,8 @@ class AgentManager:
                     effective_sid = event["session_id"]
                 _usage = event.get("usage")
                 if _usage:
-                    last_input_tokens = _usage.get("input_tokens")
-                last_model = event.get("model")
+                    last_input_tokens = self._sum_usage_input_tokens(_usage)
+                last_model = agent_config.get("model")
             yield event
 
         # Post-response context monitor (same helper as run_conversation)

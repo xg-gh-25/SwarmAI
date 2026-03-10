@@ -1,32 +1,44 @@
 """Bug condition exploration and preservation tests for context usage ring.
 
-These tests cover two complementary aspects of the context usage ring bugfix:
+These tests cover three complementary aspects of the context usage ring bugfixes:
 
-Bug summary
------------
+Bug summary (original — context-usage-ring-fix)
+------------------------------------------------
 ``check_context_usage()`` in ``context_monitor.py`` reads ``.jsonl``
 transcript files from ``~/.claude/projects/`` (Claude Code data) instead
 of using the ``input_tokens`` value from the SDK's ``ResultMessage.usage``
 dict.  Additionally, ``CHECK_INTERVAL_TURNS = 5`` causes the monitor to
 skip turns 2, 3, 4, 6, 7, 8, 9, etc., leaving the ring frozen.
 
+Bug summary (cached tokens — context-ring-cached-tokens-fix)
+-------------------------------------------------------------
+After the original fix, ``run_conversation()`` and ``continue_with_answer()``
+capture only ``_usage.get("input_tokens")`` — the non-cached portion — ignoring
+``cache_read_input_tokens`` and ``cache_creation_input_tokens``.  With prompt
+caching active, ``input_tokens`` is often single digits (e.g. 3) while the bulk
+of context consumption lives in the cached fields.  Additionally, the ``result``
+SSE event has no ``model`` field, so ``last_model`` is always ``None``.
+
 Test methodology
 ----------------
 - **TestBugConditionExploration**: Each test demonstrates a specific facet
-  of the bug by asserting the expected (fixed) behavior.  Failures on
-  unfixed code are the counterexamples that prove the bug.
+  of the original bug by asserting the expected (fixed) behavior.
 - **TestPreservation**: Property-based and unit tests that verify threshold
   classification, percentage math, SSE event shape, and error resilience.
-  These MUST PASS on unfixed code (the logic is correct, just fed wrong data)
-  and must continue to pass after the fix.
+- **TestCachedTokensBugExploration**: Exploration tests for the cached tokens
+  bug.  Each test simulates the token capture logic in ``run_conversation()``
+  and asserts the expected (fixed) behavior.  Failures on unfixed code prove
+  the bug exists.
 
 Key public symbols
 ------------------
-- ``classify_level``          — Pure helper mapping pct → ok/warn/critical
-- ``TestBugConditionExploration`` — Exploration tests (expected to fail pre-fix)
-- ``TestPreservation``        — Preservation tests (must always pass)
+- ``classify_level``                  — Pure helper mapping pct → ok/warn/critical
+- ``TestBugConditionExploration``     — Original exploration tests (expected to fail pre-fix)
+- ``TestPreservation``                — Preservation tests (must always pass)
+- ``TestCachedTokensBugExploration``  — Cached tokens exploration tests (expected to fail pre-fix)
 
-Validates: Requirements 1.1, 1.2, 1.3, 1.4, 2.1, 2.3, 2.5, 3.1–3.7
+Validates: Requirements 1.1–1.5, 2.1, 2.3, 2.5, 3.1–3.8
+- ``TestCachedTokensPreservation``    — Preservation tests for _build_context_warning() (must always pass)
 """
 
 from __future__ import annotations
@@ -39,6 +51,8 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
+from typing import Optional
+
 from core.context_monitor import (
     CHECK_INTERVAL_TURNS,
     CRITICAL_PCT,
@@ -46,6 +60,7 @@ from core.context_monitor import (
     ContextStatus,
     check_context_usage,
 )
+from core.agent_manager import AgentManager
 
 
 class TestBugConditionExploration:
@@ -325,3 +340,400 @@ class TestPreservation:
         assert status.level == "ok"
         # pct should be 0 (no data)
         assert status.pct == 0
+
+
+# ---------------------------------------------------------------------------
+# Cached Tokens Bug Exploration
+# ---------------------------------------------------------------------------
+
+
+class TestCachedTokensBugExploration:
+    """Exploration tests for the cached tokens bug in context usage ring.
+
+    These tests simulate the token capture logic in ``run_conversation()``
+    and ``continue_with_answer()`` to prove that:
+
+    1. Cached token fields (``cache_read_input_tokens``,
+       ``cache_creation_input_tokens``) are ignored — only ``input_tokens``
+       is passed to ``_build_context_warning()``.
+    2. The ``model`` field is always ``None`` because the ``result`` SSE
+       event does not include it.
+
+    Each test encodes the EXPECTED (fixed) behavior.  On unfixed code these
+    tests WILL FAIL — that failure IS the proof that the bug exists.
+
+    **Validates: Requirements 1.1, 1.2, 1.3, 1.4, 1.5, 2.1, 2.3, 2.5**
+    """
+
+    # Helper: simulate the token capture logic from run_conversation()
+    # This replicates the EXACT code path in the unfixed run_conversation():
+    #   _usage = event.get("usage")
+    #   if _usage:
+    #       last_input_tokens = _usage.get("input_tokens")
+    #   last_model = event.get("model")
+    @staticmethod
+    def _simulate_unfixed_capture(result_event: dict) -> tuple:
+        """Simulate the unfixed token capture from run_conversation().
+
+        Returns (last_input_tokens, last_model) as the unfixed code would
+        compute them.
+        """
+        last_input_tokens = None
+        last_model = None
+        _usage = result_event.get("usage")
+        if _usage:
+            last_input_tokens = _usage.get("input_tokens")
+        last_model = result_event.get("model")
+        return last_input_tokens, last_model
+
+    @staticmethod
+    def _compute_expected_total(usage: dict) -> int:
+        """Compute the EXPECTED total input tokens (sum of all three fields).
+
+        This is what the fixed code should compute.
+        """
+        return (
+            (usage.get("input_tokens") or 0)
+            + (usage.get("cache_read_input_tokens") or 0)
+            + (usage.get("cache_creation_input_tokens") or 0)
+        )
+
+    # ------------------------------------------------------------------
+    # Test 1: Cached tokens ignored — only input_tokens is captured
+    # ------------------------------------------------------------------
+    def test_cached_tokens_ignored_in_context_usage(self):
+        """Proves cached token fields are ignored by the unfixed code.
+
+        **Validates: Requirements 1.1, 1.3, 2.1, 2.3**
+
+        Scenario: SDK returns ``input_tokens: 3``,
+        ``cache_read_input_tokens: 98599``,
+        ``cache_creation_input_tokens: 948``.
+        Total should be 99550, but unfixed code captures only 3.
+
+        On unfixed code, ``_build_context_warning()`` receives 3 (not
+        99550), so pct ≈ 0% instead of ≈ 50%.  This assertion FAILS,
+        proving the bug.
+        """
+        usage = {
+            "input_tokens": 3,
+            "cache_read_input_tokens": 98599,
+            "cache_creation_input_tokens": 948,
+            "output_tokens": 500,
+        }
+        result_event = {
+            "type": "result",
+            "session_id": "test-session-1",
+            "usage": usage,
+        }
+
+        # What the unfixed code captures
+        captured_tokens, _ = self._simulate_unfixed_capture(result_event)
+
+        # What the EXPECTED (fixed) total should be
+        expected_total = self._compute_expected_total(usage)
+        assert expected_total == 99550, "Sanity: 3 + 98599 + 948 = 99550"
+
+        # BUG ASSERTION: On unfixed code, captured_tokens == 3 (not 99550)
+        # This MUST be equal in the fixed code.
+        assert captured_tokens == expected_total, (
+            f"BUG: run_conversation() captured last_input_tokens="
+            f"{captured_tokens} (only input_tokens), but expected "
+            f"total={expected_total} (sum of all three fields). "
+            f"cache_read_input_tokens and cache_creation_input_tokens "
+            f"are ignored."
+        )
+
+    # ------------------------------------------------------------------
+    # Test 2: Over-window session not detected due to ignored cache
+    # ------------------------------------------------------------------
+    def test_over_window_not_detected_with_cached_tokens(self):
+        """Proves over-window condition is missed by the unfixed code.
+
+        **Validates: Requirements 1.2, 2.2**
+
+        Scenario: SDK returns ``input_tokens: 11337``,
+        ``cache_read_input_tokens: 661568``,
+        ``cache_creation_input_tokens: 66889``.
+        Total = 739794 on a 200K window → pct ≈ 370% (critical).
+        But unfixed code sees only 11337 → pct ≈ 6% (ok).
+
+        On unfixed code, the context_warning level is "ok" instead of
+        "critical".  This assertion FAILS, proving the bug.
+        """
+        usage = {
+            "input_tokens": 11337,
+            "cache_read_input_tokens": 661568,
+            "cache_creation_input_tokens": 66889,
+            "output_tokens": 2000,
+        }
+        result_event = {
+            "type": "result",
+            "session_id": "test-session-2",
+            "usage": usage,
+        }
+
+        captured_tokens, _ = self._simulate_unfixed_capture(result_event)
+        expected_total = self._compute_expected_total(usage)
+        assert expected_total == 739794, "Sanity: 11337 + 661568 + 66889"
+
+        # Compute pct using the captured (buggy) value
+        window = 200_000  # default context window
+        buggy_pct = round(captured_tokens / window * 100)
+        expected_pct = round(expected_total / window * 100)
+
+        assert expected_pct == 370, "Sanity: 739794/200000*100 ≈ 370"
+
+        # The expected pct should be critical (≥ 85%)
+        expected_level = classify_level(expected_pct)
+        assert expected_level == "critical"
+
+        # BUG ASSERTION: buggy_pct should equal expected_pct
+        # On unfixed code: buggy_pct ≈ 6 (ok), expected_pct ≈ 370
+        assert buggy_pct == expected_pct, (
+            f"BUG: Context warning shows pct={buggy_pct}% (level="
+            f"{classify_level(buggy_pct)}) using only input_tokens="
+            f"{captured_tokens}, but actual usage is pct="
+            f"{expected_pct}% (level={expected_level}) with total="
+            f"{expected_total} tokens. Over-window condition missed."
+        )
+
+    # ------------------------------------------------------------------
+    # Test 3: Model always None — result event has no model field
+    # ------------------------------------------------------------------
+    def test_model_always_none_from_result_event(self):
+        """Proves model is always None because result event lacks it.
+
+        **Validates: Requirements 1.5, 2.5**
+
+        The ``result`` SSE event built by ``_run_query_on_client()`` does
+        NOT include a ``model`` field.  So ``event.get("model")`` always
+        returns ``None``.  The EXPECTED behavior is to resolve the model
+        from ``agent_config.get("model")`` instead.
+
+        On unfixed code, ``last_model`` is ``None`` instead of the
+        configured model string.  This assertion FAILS, proving the bug.
+        """
+        # Simulate a result event as built by _run_query_on_client()
+        # — note: NO "model" field in the event
+        result_event = {
+            "type": "result",
+            "session_id": "test-session-3",
+            "usage": {
+                "input_tokens": 50000,
+                "cache_read_input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+                "output_tokens": 1000,
+            },
+        }
+
+        # The agent_config that would be available in run_conversation()
+        agent_config = {
+            "model": "claude-sonnet-4-20250514",
+            "name": "test-agent",
+        }
+
+        # What the unfixed code captures for model
+        _, captured_model = self._simulate_unfixed_capture(result_event)
+
+        # What the EXPECTED (fixed) code should use
+        expected_model = agent_config.get("model")
+        assert expected_model == "claude-sonnet-4-20250514"
+
+        # BUG ASSERTION: captured_model should equal expected_model
+        # On unfixed code: captured_model is None (event has no model)
+        assert captured_model == expected_model, (
+            f"BUG: run_conversation() captured last_model="
+            f"{captured_model!r} from event.get('model') (result "
+            f"event has no model field), but expected model="
+            f"{expected_model!r} from agent_config.get('model'). "
+            f"_get_model_context_window(None) always returns the "
+            f"default 200K window."
+        )
+
+
+# ---------------------------------------------------------------------------
+# Cached Tokens Preservation Tests
+# ---------------------------------------------------------------------------
+
+
+class TestCachedTokensPreservation:
+    """Preservation tests for ``_build_context_warning()`` behavior.
+
+    These tests target ``_build_context_warning()`` directly — the function
+    that is NOT modified by the cached-tokens fix.  They verify that
+    threshold classification, event shape, null suppression, and the
+    None-handling sum formula remain correct on both unfixed and fixed code.
+
+    Since ``isBugCondition`` is true for every turn (model is always None
+    in the result event), preservation checking must target this function
+    directly rather than the full pipeline.
+
+    **Validates: Requirements 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7, 3.8**
+    """
+
+    # Shared fixture: lightweight AgentManager (no DB, no async needed)
+    @pytest.fixture(autouse=True)
+    def _setup_manager(self):
+        self.mgr = AgentManager()
+        self.window = 200_000  # default context window for all models
+
+    # ------------------------------------------------------------------
+    # Property-based test 1: Non-cached inputs produce correct pct/level
+    # ------------------------------------------------------------------
+    @given(input_tokens=st.integers(min_value=1, max_value=500_000))
+    @settings(max_examples=200)
+    def test_non_cached_input_produces_correct_pct_and_level(
+        self, input_tokens: int
+    ):
+        """For random input_tokens > 0 with no cached tokens, verify pct and level.
+
+        **Validates: Requirements 3.1, 3.2, 3.3**
+
+        When cache_read=0 and cache_creation=0, the sum equals
+        input_tokens.  ``_build_context_warning(input_tokens, model)``
+        must return a dict with:
+        - ``pct = round(input_tokens / window * 100)``
+        - ``level`` matching the threshold classification
+        """
+        result = self.mgr._build_context_warning(input_tokens, None)
+        assert result is not None, (
+            f"Expected a dict for input_tokens={input_tokens}, got None"
+        )
+
+        expected_pct = round(input_tokens / self.window * 100)
+        assert result["pct"] == expected_pct, (
+            f"input_tokens={input_tokens}: expected pct={expected_pct}, "
+            f"got {result['pct']}"
+        )
+
+        expected_level = classify_level(expected_pct)
+        assert result["level"] == expected_level, (
+            f"input_tokens={input_tokens}, pct={expected_pct}: "
+            f"expected level={expected_level!r}, got {result['level']!r}"
+        )
+
+    # ------------------------------------------------------------------
+    # Property-based test 2: Sum formula handles None values correctly
+    # ------------------------------------------------------------------
+    @given(
+        input_tokens=st.one_of(st.none(), st.integers(min_value=0, max_value=500_000)),
+        cache_read=st.one_of(st.none(), st.integers(min_value=0, max_value=500_000)),
+        cache_creation=st.one_of(st.none(), st.integers(min_value=0, max_value=500_000)),
+    )
+    @settings(max_examples=200)
+    def test_sum_formula_handles_none_values(
+        self,
+        input_tokens: Optional[int],
+        cache_read: Optional[int],
+        cache_creation: Optional[int],
+    ):
+        """Verify the three-field sum formula treats None as 0.
+
+        **Validates: Requirements 3.4**
+
+        The formula ``(x or 0) + (y or 0) + (z or 0)`` must produce
+        the same result as replacing each None with 0 and summing.
+        """
+        # The formula used in the fix
+        total_or = (
+            (input_tokens or 0)
+            + (cache_read or 0)
+            + (cache_creation or 0)
+        )
+
+        # Explicit None→0 replacement
+        expected = (
+            (input_tokens if input_tokens is not None else 0)
+            + (cache_read if cache_read is not None else 0)
+            + (cache_creation if cache_creation is not None else 0)
+        )
+
+        assert total_or == expected, (
+            f"Sum mismatch: ({input_tokens} or 0) + ({cache_read} or 0) "
+            f"+ ({cache_creation} or 0) = {total_or}, expected {expected}"
+        )
+
+    # ------------------------------------------------------------------
+    # Unit test 3: None or 0 input_tokens returns None (no event)
+    # ------------------------------------------------------------------
+    def test_returns_none_for_none_or_zero_input(self):
+        """_build_context_warning() returns None when input_tokens is None or 0.
+
+        **Validates: Requirements 3.4**
+
+        No ``context_warning`` event should be emitted when there is no
+        usage data.  This prevents false 0% readings.
+        """
+        assert self.mgr._build_context_warning(None, None) is None
+        assert self.mgr._build_context_warning(None, "claude-sonnet-4-20250514") is None
+        assert self.mgr._build_context_warning(0, None) is None
+        assert self.mgr._build_context_warning(0, "claude-sonnet-4-20250514") is None
+        # Negative values should also return None
+        assert self.mgr._build_context_warning(-1, None) is None
+        assert self.mgr._build_context_warning(-100, "claude-sonnet-4-20250514") is None
+
+    # ------------------------------------------------------------------
+    # Unit test 4: context_warning event shape has required fields
+    # ------------------------------------------------------------------
+    def test_context_warning_event_shape(self):
+        """Verify the returned dict contains all required SSE event fields.
+
+        **Validates: Requirements 3.5**
+
+        The ``context_warning`` event must contain: ``type``, ``level``,
+        ``pct``, ``tokensEst``, ``message``.
+        """
+        result = self.mgr._build_context_warning(100_000, None)
+        assert result is not None
+
+        required_keys = {"type", "level", "pct", "tokensEst", "message"}
+        assert set(result.keys()) == required_keys, (
+            f"Expected keys {required_keys}, got {set(result.keys())}"
+        )
+
+        # Type checks
+        assert result["type"] == "context_warning"
+        assert isinstance(result["level"], str)
+        assert result["level"] in ("ok", "warn", "critical")
+        assert isinstance(result["pct"], int)
+        assert isinstance(result["tokensEst"], int)
+        assert isinstance(result["message"], str)
+        assert result["tokensEst"] == 100_000
+
+    # ------------------------------------------------------------------
+    # Unit test 5: Threshold boundary values preserved
+    # ------------------------------------------------------------------
+    def test_threshold_boundaries_preserved(self):
+        """Verify exact threshold boundaries: 69→ok, 70→warn, 84→warn, 85→critical.
+
+        **Validates: Requirements 3.1, 3.2, 3.3**
+
+        Uses precise input_tokens values that produce exact boundary pct
+        values on the 200K default window.
+        """
+        window = self.window  # 200_000
+
+        # 69% → ok: input_tokens = 138_000 → round(138000/200000*100) = 69
+        result_69 = self.mgr._build_context_warning(138_000, None)
+        assert result_69 is not None
+        assert result_69["pct"] == 69
+        assert result_69["level"] == "ok"
+
+        # 70% → warn: input_tokens = 140_000 → round(140000/200000*100) = 70
+        result_70 = self.mgr._build_context_warning(140_000, None)
+        assert result_70 is not None
+        assert result_70["pct"] == 70
+        assert result_70["level"] == "warn"
+
+        # 84% → warn: input_tokens = 168_000 → round(168000/200000*100) = 84
+        result_84 = self.mgr._build_context_warning(168_000, None)
+        assert result_84 is not None
+        assert result_84["pct"] == 84
+        assert result_84["level"] == "warn"
+
+        # 85% → critical: input_tokens = 170_000 → round(170000/200000*100) = 85
+        result_85 = self.mgr._build_context_warning(170_000, None)
+        assert result_85 is not None
+        assert result_85["pct"] == 85
+        assert result_85["level"] == "critical"
