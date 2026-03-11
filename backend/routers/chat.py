@@ -500,9 +500,12 @@ async def delete_session(session_id: str):
     read the conversation log.  Also cleans up ``_active_sessions`` to
     prevent the stale reaper from double-firing hooks.
     """
-    # 1. Fire lifecycle hooks before data deletion
-    hook_mgr = agent_manager.hook_manager
-    if hook_mgr:
+    # 1. Fire lifecycle hooks BEFORE data deletion (fire-and-forget).
+    #    Hooks run as background tasks — delete_session returns immediately.
+    #    This prevents DailyActivity extraction / git commit / distillation
+    #    from blocking the UI when a user closes a tab.
+    hook_executor = agent_manager.hook_executor
+    if hook_executor:
         try:
             session = await session_manager.get_session(session_id)
             if session:
@@ -515,9 +518,9 @@ async def delete_session(session_id: str):
                     session_start_time=session.created_at,
                     session_title=session.title,
                 )
-                await hook_mgr.fire_post_session_close(context)
+                hook_executor.fire(context)
         except Exception as exc:
-            logger.warning("Hooks failed for delete_session %s: %s", session_id, exc)
+            logger.warning("Hook fire failed for delete_session %s: %s", session_id, exc)
 
     # 2. Clean up active session (skip_hooks=True to prevent stale reaper double-fire)
     if agent_manager.has_active_session(session_id):

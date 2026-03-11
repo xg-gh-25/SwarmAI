@@ -4,6 +4,10 @@ Replaces the per-turn ``_auto_commit_workspace()`` with an intelligent
 session-close commit that analyzes ``git diff --stat``, categorizes
 changes by file path, and generates meaningful commit messages.
 
+Uses a shared ``asyncio.Lock`` (provided by ``BackgroundHookExecutor``)
+to serialize git operations across concurrent session hooks, preventing
+``.git/index.lock`` contention.
+
 Key public symbols:
 
 - ``WorkspaceAutoCommitHook``  — Implements ``SessionLifecycleHook``.
@@ -49,14 +53,33 @@ class WorkspaceAutoCommitHook:
     Analyzes changed files via ``git diff --stat``, categorizes them by
     path pattern, generates a meaningful commit message, and skips
     trivial changes.
+
+    Accepts an optional shared ``asyncio.Lock`` to serialize git
+    operations across concurrent hook executions (multiple sessions
+    closing at the same time).
+
+    All git subprocesses have a 10-second timeout to prevent hanging on
+    ``.git/index.lock`` contention with live agent sessions.
     """
 
     name = "workspace_auto_commit"
 
+    # Timeout for individual git subprocess calls (seconds).
+    # Must be short — a hanging git command should fail fast,
+    # not block the background hook for 30s.
+    GIT_TIMEOUT = 10
+
+    def __init__(self, git_lock: asyncio.Lock | None = None) -> None:
+        self._git_lock = git_lock
+
     async def execute(self, context: HookContext) -> None:
         """Analyze changes and commit with a smart message."""
         ws_path = initialization_manager.get_cached_workspace_path()
-        await asyncio.to_thread(self._smart_commit, ws_path)
+        if self._git_lock:
+            async with self._git_lock:
+                await asyncio.to_thread(self._smart_commit, ws_path)
+        else:
+            await asyncio.to_thread(self._smart_commit, ws_path)
 
     @staticmethod
     def _cleanup_stale_git_lock(ws_path: str) -> None:
@@ -82,48 +105,65 @@ class WorkspaceAutoCommitHook:
             logger.warning("Failed to check/clean stale git lock: %s", e)
 
     def _smart_commit(self, ws_path: str) -> None:
-        """Run git operations in a background thread."""
+        """Run git operations in a background thread.
+
+        All subprocess calls use ``GIT_TIMEOUT`` to fail fast on lock
+        contention rather than hanging.  A ``TimeoutExpired`` aborts the
+        commit attempt — the changes will be picked up next time.
+        """
         # 0. Clean stale lock from previous crash
         self._cleanup_stale_git_lock(ws_path)
 
-        # 1. Check for changes
-        status = subprocess.run(
-            ["git", "status", "--porcelain"],
-            cwd=ws_path, capture_output=True, text=True,
-        )
-        if not status.stdout.strip():
-            return  # No changes
+        try:
+            # 1. Check for changes
+            status = subprocess.run(
+                ["git", "status", "--porcelain"],
+                cwd=ws_path, capture_output=True, text=True,
+                timeout=self.GIT_TIMEOUT,
+            )
+            if not status.stdout.strip():
+                return  # No changes
 
-        # 2. Stage all changes
-        add_result = subprocess.run(
-            ["git", "add", "-A"],
-            cwd=ws_path, capture_output=True,
-        )
-        if add_result.returncode != 0:
-            logger.warning("git add failed: %s", add_result.stderr)
-            return
+            # 2. Stage all changes
+            add_result = subprocess.run(
+                ["git", "add", "-A"],
+                cwd=ws_path, capture_output=True,
+                timeout=self.GIT_TIMEOUT,
+            )
+            if add_result.returncode != 0:
+                logger.warning("git add failed: %s", add_result.stderr)
+                return
 
-        # 3. Analyze staged changes
-        diff_stat = subprocess.run(
-            ["git", "diff", "--cached", "--stat"],
-            cwd=ws_path, capture_output=True, text=True,
-        )
-        changed_files = self._parse_diff_stat(diff_stat.stdout)
+            # 3. Analyze staged changes
+            diff_stat = subprocess.run(
+                ["git", "diff", "--cached", "--stat"],
+                cwd=ws_path, capture_output=True, text=True,
+                timeout=self.GIT_TIMEOUT,
+            )
+            changed_files = self._parse_diff_stat(diff_stat.stdout)
 
-        # 4. Generate commit message
-        if not changed_files:
-            message = "chore: session changes"
-        elif self._is_trivial(changed_files):
-            message = f"chore: session sync ({len(changed_files)} files)"
-        else:
-            message = self._generate_commit_message(changed_files)
+            # 4. Generate commit message
+            if not changed_files:
+                message = "chore: session changes"
+            elif self._is_trivial(changed_files):
+                message = f"chore: session sync ({len(changed_files)} files)"
+            else:
+                message = self._generate_commit_message(changed_files)
 
-        # 5. Commit
-        subprocess.run(
-            ["git", "commit", "-m", message],
-            cwd=ws_path, capture_output=True,
-        )
-        logger.info("Auto-committed workspace: %s", message)
+            # 5. Commit
+            subprocess.run(
+                ["git", "commit", "-m", message],
+                cwd=ws_path, capture_output=True,
+                timeout=self.GIT_TIMEOUT,
+            )
+            logger.info("Auto-committed workspace: %s", message)
+
+        except subprocess.TimeoutExpired:
+            logger.warning(
+                "Git operation timed out after %ds (likely index.lock contention) — "
+                "skipping auto-commit, changes will be picked up next time",
+                self.GIT_TIMEOUT,
+            )
 
     @staticmethod
     def _parse_diff_stat(diff_output: str) -> list[str]:

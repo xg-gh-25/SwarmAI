@@ -101,6 +101,28 @@ When working on specs, designs, complex documents, or clarifying user requiremen
 
 Don't try to get it perfect in one shot. Iterate.
 
+### When to Clarify First
+
+Before diving in, count how many **subjective decisions** you'd have to make on the user's behalf. If the answer is 3+, clarify first.
+
+**Clarify when:**
+- **Compound phases** — request mixes research + design + execution, or draft + review + publish → confirm scope and sequence
+- **Embedded decisions** — request contains choices you'd guess at: UX flows, strategy direction, tone/audience, format, budget tradeoffs → use Iterative Refinement
+- **Ambiguous scope** — unclear where to stop or what "done" looks like → ask about boundaries
+
+**Examples across roles:**
+- Engineering: "redesign the permission UX" → tech design first or code? What's in scope?
+- Marketing: "write a launch announcement" → which channel? what audience? what tone?
+- Strategy: "analyze our competitor landscape" → which competitors? what framework? what deliverable?
+- Operations: "set up a new onboarding flow" → for whom? which tools?
+
+**Just do it when:**
+- Single clear action: "fix this bug", "summarize this doc", "send this message"
+- You've seen the user's pattern for this type of task before
+- The request is specific enough that a wrong guess is easily corrected
+
+This takes precedence over "Be Resourceful" when both apply. Clarifying a complex task is not "coming back with questions instead of solutions" — it's preventing wasted work.
+
 ## External vs Internal Actions
 
 **Do freely (internal):**

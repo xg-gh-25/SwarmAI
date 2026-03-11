@@ -378,7 +378,7 @@ async def lifespan(app: FastAPI):
     logger.info("AgentManager configured with injected components")
 
     # ── Session lifecycle hooks ──────────────────────────────────────
-    from core.session_hooks import SessionLifecycleHookManager
+    from core.session_hooks import SessionLifecycleHookManager, BackgroundHookExecutor
     from core.summarization import SummarizationPipeline
     from core.compliance import ComplianceTracker
     from hooks.daily_activity_hook import DailyActivityExtractionHook
@@ -391,18 +391,23 @@ async def lifespan(app: FastAPI):
     compliance_tracker = ComplianceTracker()
     hook_manager = SessionLifecycleHookManager(timeout_seconds=30.0)
 
+    # Create fire-and-forget executor — hooks never block the chat path
+    hook_executor = BackgroundHookExecutor(hook_manager)
+
     # Order matters: extraction first, then commit, then distillation check, then evolution maintenance
     hook_manager.register(DailyActivityExtractionHook(
         summarization_pipeline=summarization_pipeline,
         compliance_tracker=compliance_tracker,
     ))
-    hook_manager.register(WorkspaceAutoCommitHook())
+    # Pass shared git lock to auto-commit hook to prevent .git/index.lock contention
+    hook_manager.register(WorkspaceAutoCommitHook(git_lock=hook_executor.git_lock))
     hook_manager.register(DistillationTriggerHook())
     hook_manager.register(EvolutionMaintenanceHook())
 
     agent_manager.set_hook_manager(hook_manager)
+    agent_manager.set_hook_executor(hook_executor)
     set_compliance_tracker(compliance_tracker)
-    logger.info("Session lifecycle hooks registered (4 hooks)")
+    logger.info("Session lifecycle hooks registered (4 hooks, background executor)")
     # ─────────────────────────────────────────────────────────────────
 
     t_agent = time.monotonic()
@@ -548,10 +553,18 @@ async def health_check():
             "sdk": "claude-agent-sdk",
         }
     
+    # PE Review Finding #5: Use property directly, not hasattr
+    pending_hooks = (
+        agent_manager.hook_executor.pending_count
+        if agent_manager.hook_executor
+        else 0
+    )
+
     return {
         "status": "healthy",
         "version": settings.app_version,
         "sdk": "claude-agent-sdk",
+        "pending_hook_tasks": pending_hooks,
     }
 
 
