@@ -29,7 +29,6 @@
   - [x] 5.1 Capture `send_shutdown_request` return value
   - [x] 5.2 If returned `false`, sleep `STOP_BACKEND_SLEEP_SECONDS` (5s); if `true`, skip sleep (fast path)
   - [x] 5.3 Preserve existing `kill_process_tree` and `child.kill()` calls unchanged
-  - [x] 5.3 Preserve existing `kill_process_tree` and `child.kill()` calls unchanged
   - Validates: Req 1.4, 6.1
 
 ## Backend Changes (agent_manager.py)
