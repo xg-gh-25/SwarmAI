@@ -34,7 +34,6 @@ REQUIRED_SYMBOLS = [
     "is_command_approved",
     "set_permission_decision",
     "wait_for_permission_decision",
-    "_permission_request_queue",
     "DEFAULT_AGENT_ID",
     "SWARM_AGENT_NAME",
     "AgentManager",

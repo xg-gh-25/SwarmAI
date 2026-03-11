@@ -17,7 +17,7 @@ export { default as Breadcrumb } from './Breadcrumb';
 export type { AgentFormModalProps } from './AgentFormModal';
 export type { DropdownOption } from './Dropdown';
 export { ToolSelector, TOOL_CATEGORIES, getDefaultEnabledTools, getCategoryToolIds } from './ToolSelector';
-export { ErrorBoundary, ErrorFallback, ApiError, ErrorToast } from './ErrorBoundary';
+export { ErrorBoundary, ErrorFallback, ApiError } from './ErrorBoundary';
 export {
   Skeleton,
   SkeletonText,
@@ -31,5 +31,4 @@ export {
 export { ResizableTable, ResizableTableCell } from './ResizableTable';
 export { default as BackendStartupOverlay } from './BackendStartupOverlay';
 export { default as UpdateNotification } from './UpdateNotification';
-export { Toast } from './Toast';
-export type { ToastType } from './Toast';
+

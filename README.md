@@ -234,6 +234,40 @@ SwarmAI/
 
 ---
 
+## SwarmAI vs OpenClaw
+
+[OpenClaw](https://github.com/openclaw/openclaw) is an open-source local-first AI assistant (300k+ GitHub stars) with broad platform reach. Here's how SwarmAI differs:
+
+| Dimension | SwarmAI | OpenClaw |
+|-----------|---------|----------|
+| **Philosophy** | Deep workspace — context compounds | Wide connector — AI everywhere |
+| **Runtime** | Tauri 2.0 desktop app | Node.js Gateway daemon |
+| **AI Engine** | Claude (Bedrock / Anthropic) | OpenAI primary, multi-provider |
+| **Channels** | 2 (Slack, Feishu) | 21+ (WhatsApp, Telegram, Discord, Signal, ...) |
+| **Skills** | 42 built-in + user skills | 5,400+ via ClawHub marketplace |
+| **Voice** | -- | Wake word + continuous voice |
+| **Mobile** | -- | iOS / Android node devices |
+
+### Where SwarmAI leads
+
+- **Context & Memory depth** — 11-file priority chain (P0-P10), token budget management, 3-layer memory pipeline (DailyActivity -> distillation -> MEMORY.md) with code-enforced lifecycle hooks. OpenClaw uses session pruning with no structured knowledge distillation.
+- **Self-evolution engine** — Detects capability gaps, builds new skills, persists learnings to EVOLUTION.md across sessions. Guardrailed with approval gates and per-session trigger limits.
+- **Multi-tab session isolation** — 3-6 concurrent tabs with 8 strict isolation principles. Per-tab abort controllers, stream handlers, and session identity.
+- **Desktop-native experience** — Tauri provides deeper OS integration than a background daemon.
+
+### Where OpenClaw leads
+
+- **Platform reach** — 21+ messaging integrations vs 2. If "AI on every touchpoint" is the goal, OpenClaw wins on coverage.
+- **Skill ecosystem** — ClawHub's 5,400+ community skills with auto-search-and-pull far exceeds SwarmAI's curated 42.
+- **Voice & mobile** — Wake word detection, continuous voice mode, and mobile node devices are capabilities SwarmAI doesn't yet have.
+- **Visual Canvas** — Live Canvas with A2UI provides an agent-driven visual workspace.
+
+### TL;DR
+
+SwarmAI optimizes for **depth** — making AI truly understand your work and compound value over time. OpenClaw optimizes for **breadth** — putting AI on every device and channel you use. Different problems, complementary strengths.
+
+---
+
 ## Contributing
 
 Issues and Pull Requests are welcome.
