@@ -8,7 +8,7 @@ description: >
   SIBLINGS: save-memory = permanent facts/decisions -> MEMORY.md | save-activity = session log -> DailyActivity/ | save-context = handoff doc for next session.
 ---
 
-## Save Activity Skill
+# Save Activity
 
 Extract key points from the current conversation and append them to today's
 DailyActivity file. This is the **on-demand** counterpart to the automatic

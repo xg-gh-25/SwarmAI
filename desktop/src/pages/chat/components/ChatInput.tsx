@@ -35,6 +35,8 @@ interface ChatInputProps {
   isExpanded: boolean;
   /** Callback to toggle expanded/compact mode */
   onExpandedChange: (expanded: boolean) => void;
+  /** External disabled flag (e.g. backend disconnected). Disables input and action buttons. */
+  disabled?: boolean;
 }
 
 const MAX_ROWS = 20;
@@ -62,6 +64,7 @@ export function ChatInput({
   contextPct,
   isExpanded,
   onExpandedChange,
+  disabled = false,
 }: ChatInputProps) {
   const { t } = useTranslation();
   const [showCommandSuggestions, setShowCommandSuggestions] = useState(false);
@@ -378,19 +381,19 @@ export function ChatInput({
               </div>
             )}
 
-            {/* Text Input — disabled during streaming to prevent concurrent sessions */}
+            {/* Text Input — disabled during streaming or when backend is disconnected */}
             <textarea
               ref={textareaRef}
               value={inputValue}
               onChange={handleInputChange}
               onKeyDown={handleKeyDown}
               onPaste={handlePaste}
-              placeholder={isStreaming ? t('chat.streamingPlaceholder', 'Waiting for response...') : 'Ask anything'}
+              placeholder={disabled ? t('chat.disconnectedPlaceholder', 'Backend offline...') : isStreaming ? t('chat.streamingPlaceholder', 'Waiting for response...') : 'Ask anything'}
               rows={2}
-              disabled={isStreaming}
+              disabled={isStreaming || disabled}
               className={clsx(
                 'flex-1 bg-transparent text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] resize-none focus:outline-none py-2',
-                isStreaming && 'opacity-50 cursor-not-allowed'
+                (isStreaming || disabled) && 'opacity-50 cursor-not-allowed'
               )}
             />
 
@@ -412,13 +415,13 @@ export function ChatInput({
             {/* Send Button */}
             <button
               onClick={isStreaming ? onStop : handleSend}
-              disabled={!isStreaming && !canSend}
+              disabled={(!isStreaming && !canSend) || disabled}
               className={clsx(
                 'w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 transition-colors',
                 isStreaming
                   ? 'bg-red-500 hover:bg-red-600'
                   : 'bg-primary hover:bg-primary-hover',
-                !isStreaming && !canSend && 'opacity-50 cursor-not-allowed'
+                ((!isStreaming && !canSend) || disabled) && 'opacity-50 cursor-not-allowed'
               )}
               title={
                 isStreaming
@@ -439,7 +442,7 @@ export function ChatInput({
           {/* Bottom Row - Attachment button + TSCC button + Commands hint */}
           <div className="flex items-center justify-between mt-3 pt-3 border-t border-[var(--color-border)]/50">
             <div className="flex items-center gap-2">
-              <FileAttachmentButton onFilesSelected={onAddFiles} disabled={isProcessingFiles || isStreaming} canAddMore={canAddMore} />
+              <FileAttachmentButton onFilesSelected={onAddFiles} disabled={isProcessingFiles || isStreaming || disabled} canAddMore={canAddMore} />
               <TSCCPopoverButton sessionId={sessionId ?? null} metadata={promptMetadata ?? null} />
               <ContextUsageRing pct={contextPct ?? null} />
             </div>

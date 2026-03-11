@@ -8,10 +8,11 @@
  *   ``pendingStreamTabs`` (per-tab pending tracking)
  * - **Refs**: ``messagesEndRef``, ``sessionIdRef``, ``messagesRef``
  * - **Factories**: ``createStreamHandler``, ``createCompleteHandler``,
- *   ``createErrorHandler``
+ *   ``createErrorHandler`` (with SSE reconnection logic)
  * - **Pure function**: ``deriveStreamingActivity`` (exported standalone for
  *   testability)
  * - **Pure function**: ``updateMessages`` (exported for testability)
+ * - **Pure function**: ``computeReconnectDelay`` (exported for testability)
  * - **Derived**: ``isStreaming`` derivation, ``streamingActivity`` memo
  *
  * Tab state management (per-tab map, activeTabIdRef, tab statuses, lifecycle
@@ -24,6 +25,9 @@
  * **Fix 1**: Stream generation counter prevents stale complete handlers.
  * **Fix 6**: Per-tab state isolation — stream handlers read/write the unified
  *   Tab_Map via injected deps (``tabMapRef``, ``activeTabIdRef``).
+ * **SSE Resilience**: Connection-phase failures trigger automatic reconnection
+ *   with exponential backoff (up to 3 attempts). Mid-stream failures preserve
+ *   partial content and show an error with a manual Retry button.
  *
  * @module useChatStreamingLifecycle
  */
@@ -37,6 +41,35 @@ import type {
 import type { PendingQuestion } from '../pages/chat/types';
 import type { UnifiedTab } from './useUnifiedTabState';
 import { type TabStatus } from './useUnifiedTabState';
+import { useToast } from '../contexts/ToastContext';
+
+// ---------------------------------------------------------------------------
+// Reconnection constants
+// ---------------------------------------------------------------------------
+
+/** Maximum number of automatic reconnection attempts for connection-phase failures. */
+const RECONNECT_MAX_ATTEMPTS = 3;
+
+/** Base delay in ms for exponential backoff (attempt 0 → 1000ms). */
+const RECONNECT_BASE_DELAY_MS = 1000;
+
+/** Maximum delay cap in ms for exponential backoff. */
+const RECONNECT_MAX_DELAY_MS = 30000;
+
+/**
+ * Compute the reconnection delay for a given attempt using exponential backoff.
+ *
+ * Formula: ``min(baseDelay * 2^attempt, maxDelay)``
+ *
+ * Exported for testability (Property 3).
+ */
+export function computeReconnectDelay(
+  attempt: number,
+  baseDelayMs: number = RECONNECT_BASE_DELAY_MS,
+  maxDelayMs: number = RECONNECT_MAX_DELAY_MS,
+): number {
+  return Math.min(baseDelayMs * Math.pow(2, attempt), maxDelayMs);
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -567,6 +600,9 @@ export function useChatStreamingLifecycle(
     activeTabIdRef,
   } = deps;
 
+  // --- Toast for reconnection notifications ---
+  const { addToast } = useToast();
+
   // --- Core chat state ---
   const [messages, setMessages] = useState<Message[]>([]);
   const [sessionId, setSessionId] = useState<string | undefined>();
@@ -768,6 +804,44 @@ export function useChatStreamingLifecycle(
     return () => clearInterval(intervalId);
   }, [isStreaming, streamingActivity]); // eslint-disable-line react-hooks/exhaustive-deps — elapsedSeconds intentionally omitted to avoid restarting the interval on every tick
 
+  // --- Long-stream timeout warning (Requirement 3.4) ---
+  // Fires a warning toast after 120 seconds of active streaming, suggesting
+  // the user may cancel. Timer is per-tab: stored in a ref keyed by the
+  // active tab at stream start, and cleared on stream end, abort, or tab close.
+  const longStreamTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (isStreaming) {
+      // Clear any existing timer before starting a new one
+      if (longStreamTimerRef.current) {
+        clearTimeout(longStreamTimerRef.current);
+      }
+      longStreamTimerRef.current = setTimeout(() => {
+        longStreamTimerRef.current = null;
+        addToast({
+          severity: 'warning',
+          message: 'This operation is taking a while. You can stop it using the Stop button.',
+          autoDismiss: true,
+          durationMs: 10000,
+          id: 'long-stream-warning',
+        });
+      }, 120_000);
+    } else {
+      // Stream ended — clear the timer
+      if (longStreamTimerRef.current) {
+        clearTimeout(longStreamTimerRef.current);
+        longStreamTimerRef.current = null;
+      }
+    }
+
+    return () => {
+      if (longStreamTimerRef.current) {
+        clearTimeout(longStreamTimerRef.current);
+        longStreamTimerRef.current = null;
+      }
+    };
+  }, [isStreaming, addToast]);
+
   // --- Fix 5: Mount-time restore from sessionStorage ---
   // On mount, check if there's a persisted pending state for the current
   // sessionId. If found, restore messages and pendingQuestion so the user
@@ -839,6 +913,25 @@ export function useChatStreamingLifecycle(
         // When capturedTabId is null (initial tab before registration), treat as active.
         // The null case only occurs for the first tab before initTabState fires.
         const isActiveTab = capturedTabId === null || capturedTabId === activeTabIdRef.current;
+
+        // Mark that we've received data — used by reconnection logic to
+        // distinguish connection-phase vs mid-stream failures.
+        if (tabState && !tabState.hasReceivedData) {
+          tabState.hasReceivedData = true;
+
+          // If we were reconnecting, the stream has successfully resumed.
+          // Clear reconnection state and fire a success toast.
+          if (tabState.isReconnecting) {
+            console.log(`[Reconnect] Tab ${capturedTabId}: reconnection succeeded`);
+            tabState.isReconnecting = false;
+            tabState.reconnectionAttempt = 0;
+            addToast({
+              severity: 'info',
+              message: 'Stream reconnected successfully.',
+              id: `reconnect-success-${capturedTabId}`,
+            });
+          }
+        }
 
         // DEBUG: trace every SSE event through the handler
         if (import.meta.env.DEV) {
@@ -1141,7 +1234,7 @@ export function useChatStreamingLifecycle(
         // longer processed — TSCC fetches metadata from the endpoint instead.
       };
     },
-    [queryClient, setIsStreaming, incrementStreamGen, updateTabStatus],
+    [queryClient, setIsStreaming, incrementStreamGen, updateTabStatus, addToast],
   );
 
   const createErrorHandler = useCallback(
@@ -1155,6 +1248,85 @@ export function useChatStreamingLifecycle(
           : undefined;
         const isActiveTab = capturedTabId === null || capturedTabId === activeTabIdRef.current;
 
+        // --- Connection-phase reconnection logic ---
+        // If no data has been received yet (connection-phase failure) and
+        // the tab is still open, attempt automatic reconnection with
+        // exponential backoff. Mid-stream failures cannot be resumed
+        // because the backend turn is stateful.
+        const isConnectionPhase = tabState ? !tabState.hasReceivedData : false;
+        const currentAttempt = tabState?.reconnectionAttempt ?? 0;
+
+        if (
+          isConnectionPhase &&
+          currentAttempt < RECONNECT_MAX_ATTEMPTS &&
+          tabState &&
+          tabState.retryStreamFn
+        ) {
+          // Tab still exists — schedule a retry
+          const nextAttempt = currentAttempt + 1;
+          tabState.reconnectionAttempt = nextAttempt;
+          tabState.isReconnecting = true;
+
+          // Mirror to React state if active tab
+          if (isActiveTab) {
+            // Force re-render so UI can show "Reconnecting..." indicator
+            setIsStreaming(true, capturedTabId ?? undefined);
+          }
+
+          const delay = computeReconnectDelay(currentAttempt);
+          console.log(
+            `[Reconnect] Tab ${capturedTabId}: attempt ${nextAttempt}/${RECONNECT_MAX_ATTEMPTS}, delay ${delay}ms`,
+          );
+
+          const retryFn = tabState.retryStreamFn;
+
+          setTimeout(() => {
+            // Guard: tab may have been closed during the delay
+            if (!capturedTabId || !tabMapRef.current.has(capturedTabId)) {
+              console.log(`[Reconnect] Tab ${capturedTabId} closed during backoff — aborting`);
+              return;
+            }
+
+            const currentTabState = tabMapRef.current.get(capturedTabId);
+            if (!currentTabState) return;
+
+            // Reset hasReceivedData for the new attempt so the next
+            // error handler can distinguish connection-phase again
+            currentTabState.hasReceivedData = false;
+
+            // Re-initiate the stream via the stored retry function
+            const newAbort = retryFn();
+
+            // Update the abort controller for the new stream
+            currentTabState.abortController = {
+              abort: () => { newAbort(); },
+              signal: { aborted: false },
+            } as unknown as AbortController;
+          }, delay);
+
+          return; // Don't show error — reconnection in progress
+        }
+
+        // --- Reconnection exhausted or mid-stream failure ---
+        // Clear reconnection state
+        if (tabState) {
+          const wasReconnecting = tabState.isReconnecting;
+          tabState.isReconnecting = false;
+          tabState.reconnectionAttempt = 0;
+          tabState.hasReceivedData = false;
+
+          // If we exhausted all reconnection attempts, log it
+          if (wasReconnecting && currentAttempt >= RECONNECT_MAX_ATTEMPTS) {
+            console.warn(
+              `[Reconnect] Tab ${capturedTabId}: all ${RECONNECT_MAX_ATTEMPTS} attempts exhausted`,
+            );
+          }
+        }
+
+        // If this was a successful reconnection that then failed mid-stream,
+        // fire the toast for the reconnection success (handled by stream handler).
+        // For exhausted retries or mid-stream failures, show the error.
+
         const errorContent: ContentBlock[] = [
           { type: 'text' as const, text: `Connection error: ${error.message}` },
         ];
@@ -1166,7 +1338,7 @@ export function useChatStreamingLifecycle(
           if (found) {
             return prev.map((msg) =>
               msg.id === assistantMessageId
-                ? { ...msg, content: errorContent }
+                ? { ...msg, content: errorContent, isError: true }
                 : msg,
             );
           }
@@ -1192,9 +1364,14 @@ export function useChatStreamingLifecycle(
         // Tab-aware: clear only this tab's streaming state
         setIsStreaming(false, capturedTabId ?? undefined);
         incrementStreamGen();
+
+        // Fix 8: Update tab status to 'error'
+        if (capturedTabId) {
+          updateTabStatus(capturedTabId, 'error');
+        }
       };
     },
-    [setIsStreaming, incrementStreamGen],
+    [setIsStreaming, incrementStreamGen, addToast, updateTabStatus],
   );
 
   /**

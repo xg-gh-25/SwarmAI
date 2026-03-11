@@ -3,7 +3,7 @@
 Checks the count of undistilled DailyActivity files after each session
 close.  When the threshold (>3) is exceeded, runs a lightweight
 rule-based distillation directly in the hook (no agent session needed),
-writing curated entries to MEMORY.md via ``locked_write.py``.
+writing curated entries to MEMORY.md via ``locked_read_modify_write()``.
 
 Falls back to the flag-file approach if direct distillation fails,
 so the next agent session can pick it up.
@@ -19,19 +19,15 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-import subprocess
-import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from core.session_hooks import HookContext
 from core.initialization_manager import initialization_manager
 from core.daily_activity_writer import parse_frontmatter, write_frontmatter
+from scripts.locked_write import locked_read_modify_write
 
 logger = logging.getLogger(__name__)
-
-# Canonical location of locked_write.py (backend/scripts/).
-_CANONICAL_LOCKED_WRITE = Path(__file__).resolve().parent.parent / "scripts" / "locked_write.py"
 
 UNDISTILLED_THRESHOLD = 3
 FLAG_FILENAME = ".needs_distillation"
@@ -140,11 +136,7 @@ class DistillationTriggerHook:
 
         Returns the number of files successfully distilled.
         """
-        locked_write_path = self._resolve_locked_write(ws_path)
         memory_path = ws_path / ".context" / "MEMORY.md"
-
-        if not locked_write_path.exists():
-            raise FileNotFoundError(f"locked_write.py not found at {locked_write_path}")
 
         distilled_count = 0
         for da_file in files:
@@ -157,17 +149,17 @@ class DistillationTriggerHook:
                 decisions = self._extract_decisions(body)
                 lessons = self._extract_lessons(body)
 
-                # Write to MEMORY.md via locked_write.py
+                # Write to MEMORY.md via direct function call
                 for decision in decisions:
                     self._run_locked_write(
-                        locked_write_path, memory_path,
+                        memory_path,
                         "Key Decisions",
                         f"- {file_date}: {decision}",
                     )
 
                 for lesson in lessons:
                     self._run_locked_write(
-                        locked_write_path, memory_path,
+                        memory_path,
                         "Lessons Learned",
                         f"- {file_date}: {lesson}",
                     )
@@ -227,43 +219,22 @@ class DistillationTriggerHook:
         return lessons[:5]  # Cap to prevent MEMORY.md bloat
 
     @staticmethod
-    def _resolve_locked_write(ws_path: Path) -> Path:
-        """Resolve locked_write.py with fallback to canonical backend path."""
-        projected = (
-            ws_path / ".claude" / "skills"
-            / "s_save-memory" / "scripts" / "locked_write.py"
-        )
-        if projected.exists():
-            return projected
-        if _CANONICAL_LOCKED_WRITE.exists():
-            return _CANONICAL_LOCKED_WRITE
-        return projected
-
-    @staticmethod
     def _run_locked_write(
-        script_path: Path,
         memory_path: Path,
         section: str,
         text: str,
     ) -> None:
-        """Run locked_write.py via subprocess to write to MEMORY.md."""
-        result = subprocess.run(
-            [
-                sys.executable, str(script_path),
-                "--file", str(memory_path),
-                "--section", section,
-                "--prepend", text,
-            ],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        if result.returncode != 0:
-            logger.warning(
-                "locked_write.py failed (rc=%d): %s",
-                result.returncode,
-                result.stderr.strip(),
-            )
+        """Write to MEMORY.md via direct locked_read_modify_write call.
+
+        Uses direct function import instead of subprocess to avoid
+        PyInstaller bundle issue where sys.executable != Python.
+        """
+        try:
+            locked_read_modify_write(memory_path, section, text, mode="prepend")
+        except SystemExit as e:
+            logger.warning("locked_write failed for section %s: exit code %s", section, e.code)
+        except Exception as e:
+            logger.warning("locked_write failed for section %s: %s", section, e)
 
     @staticmethod
     def _write_flag(da_dir: Path, count: int) -> None:

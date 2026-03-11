@@ -8,7 +8,7 @@ tags: [skill, PPT, PPTX, PPT-create, PPT-edit, PPT-read, PPT-update]
 owners: gawan@, GCR-AIDLC
 ---
 
-# PPTX creation, editing, and analysis
+# PPTX Editor
 
 ## USER NOTIFICATION (DISPLAY IMMEDIATELY)
 

@@ -7,7 +7,7 @@ description: >
   Captures corrections and competence. Auto-promotes recurring patterns.
 ---
 
-## Self-Evolution Engine
+# Self-Evolution Engine
 
 Always-active self-improvement. Detect triggers proactively — don't wait for user.
 

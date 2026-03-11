@@ -4,6 +4,20 @@ import type { ErrorResponse, RateLimitErrorResponse } from '../types';
 import { ErrorCodes } from '../types';
 import { getBackendPort } from './tauri';
 
+// ---------------------------------------------------------------------------
+// Global rate-limit registration callback
+// ---------------------------------------------------------------------------
+// Since hooks can't be used in service files, the useRateLimiter hook
+// registers a listener via `setRateLimitCallback`. When the interceptor
+// detects a 429, it invokes the callback so the hook can track the limit.
+type RateLimitCallback = (endpoint: string, retryAfterSec: number) => void;
+let _rateLimitCallback: RateLimitCallback | null = null;
+
+/** Called by useRateLimiter to register its `registerRateLimit` function. */
+export function setRateLimitCallback(cb: RateLimitCallback | null): void {
+  _rateLimitCallback = cb;
+}
+
 // Create axios instance with base configuration
 // For desktop app, we connect directly to the local backend
 const api = axios.create({
@@ -191,7 +205,13 @@ api.interceptors.response.use(
     if (parsedError.code === ErrorCodes.RATE_LIMIT_EXCEEDED) {
       const retryAfter = error.response?.headers['retry-after'];
       if (retryAfter) {
-        (parsedError as RateLimitErrorResponse).retryAfter = parseInt(retryAfter, 10);
+        const retryAfterSec = parseInt(retryAfter, 10);
+        (parsedError as RateLimitErrorResponse).retryAfter = retryAfterSec;
+        // Notify the rate limiter hook (if registered)
+        const endpoint = error.config?.url ?? 'unknown';
+        if (_rateLimitCallback) {
+          _rateLimitCallback(endpoint, retryAfterSec);
+        }
       }
     }
 

@@ -2,6 +2,19 @@ import type { ChatRequest, StreamEvent, ChatSession, ChatMessage, PermissionResp
 import api from './api';
 import { getBackendPort } from './tauri';
 
+// ---------------------------------------------------------------------------
+// Stall detection constant
+// ---------------------------------------------------------------------------
+
+/**
+ * If no data (including heartbeats) is received on an active SSE stream for
+ * this duration, the stream is considered stalled and the reader is cancelled,
+ * triggering the onError path which feeds into the reconnection logic.
+ *
+ * @see Requirements 2.6 — Stall detection triggers reconnection
+ */
+export const STALL_TIMEOUT_MS = 45_000;
+
 // Convert content blocks from camelCase to snake_case for API
 // The input is a generic array that may contain image/document blocks
 const toSnakeCaseContent = (content: unknown[]): unknown[] => {
@@ -75,6 +88,21 @@ export const chatService = {
     const controller = new AbortController();
     const port = getBackendPort();
 
+    // --- Stall detection state (R2.6) ---
+    // Shared between the fetch promise chain and the cleanup function.
+    // The timer resets on every reader.read() that returns data (including
+    // heartbeats). If 45s elapses with no data, the reader is cancelled
+    // and onError fires, feeding into the reconnection logic.
+    const stall = { timer: undefined as ReturnType<typeof setTimeout> | undefined, cleared: false };
+
+    const clearStallTimer = () => {
+      stall.cleared = true;
+      if (stall.timer !== undefined) {
+        clearTimeout(stall.timer);
+        stall.timer = undefined;
+      }
+    };
+
     // Build request body - support both message and content
     const requestBody: Record<string, unknown> = {
       agent_id: request.agentId,
@@ -118,13 +146,31 @@ export const chatService = {
         const decoder = new TextDecoder();
         let buffer = '';
 
+        // --- Stall detection (R2.6) ---
+        // Start the stall timer and define a reset helper. The timer
+        // fires onError if no data arrives within STALL_TIMEOUT_MS.
+        const startStallTimer = (readerRef: ReadableStreamDefaultReader<Uint8Array>) => {
+          if (stall.cleared) return;
+          if (stall.timer !== undefined) clearTimeout(stall.timer);
+          stall.timer = setTimeout(() => {
+            console.warn('[SSE] Stream stalled: no data received for 45 seconds');
+            readerRef.cancel().catch(() => { /* ignore cancel errors */ });
+            onError(new Error('Stream stalled: no data received for 45 seconds'));
+          }, STALL_TIMEOUT_MS);
+        };
+        startStallTimer(reader);
+
         while (true) {
           const { done, value } = await reader.read();
 
           if (done) {
+            clearStallTimer();
             onComplete();
             break;
           }
+
+          // Data received — reset stall timer (includes heartbeats)
+          startStallTimer(reader);
 
           buffer += decoder.decode(value, { stream: true });
 
@@ -136,6 +182,7 @@ export const chatService = {
             if (line.startsWith('data: ')) {
               const data = line.slice(6);
               if (data === '[DONE]') {
+                clearStallTimer();
                 onComplete();
                 return;
               }
@@ -159,13 +206,16 @@ export const chatService = {
         }
       })
       .catch((error) => {
+        // Clear stall timer on any error/abort exit path
+        clearStallTimer();
         if (error.name !== 'AbortError') {
           onError(error);
         }
       });
 
-    // Return cleanup function
+    // Return cleanup function — clears stall timer and aborts fetch
     return () => {
+      clearStallTimer();
       controller.abort();
     };
   },
@@ -244,6 +294,13 @@ export const chatService = {
     const controller = new AbortController();
     const port = getBackendPort();
 
+    // Stall detection state (R2.6) — same pattern as streamChat
+    const stall = { timer: undefined as ReturnType<typeof setTimeout> | undefined, cleared: false };
+    const clearStallTimer = () => {
+      stall.cleared = true;
+      if (stall.timer !== undefined) { clearTimeout(stall.timer); stall.timer = undefined; }
+    };
+
     fetch(`http://localhost:${port}/api/chat/answer-question`, {
       method: 'POST',
       headers: {
@@ -278,13 +335,29 @@ export const chatService = {
         const decoder = new TextDecoder();
         let buffer = '';
 
+        // Start stall timer (R2.6)
+        const startStallTimerAQ = (readerRef: ReadableStreamDefaultReader<Uint8Array>) => {
+          if (stall.cleared) return;
+          if (stall.timer !== undefined) clearTimeout(stall.timer);
+          stall.timer = setTimeout(() => {
+            console.warn('[SSE] Stream stalled (answer-question): no data received for 45 seconds');
+            readerRef.cancel().catch(() => {});
+            onError(new Error('Stream stalled: no data received for 45 seconds'));
+          }, STALL_TIMEOUT_MS);
+        };
+        startStallTimerAQ(reader);
+
         while (true) {
           const { done, value } = await reader.read();
 
           if (done) {
+            clearStallTimer();
             onComplete();
             break;
           }
+
+          // Data received — reset stall timer
+          startStallTimerAQ(reader);
 
           buffer += decoder.decode(value, { stream: true });
 
@@ -295,6 +368,7 @@ export const chatService = {
             if (line.startsWith('data: ')) {
               const data = line.slice(6);
               if (data === '[DONE]') {
+                clearStallTimer();
                 onComplete();
                 return;
               }
@@ -313,12 +387,14 @@ export const chatService = {
         }
       })
       .catch((error) => {
+        clearStallTimer();
         if (error.name !== 'AbortError') {
           onError(error);
         }
       });
 
     return () => {
+      clearStallTimer();
       controller.abort();
     };
   },
@@ -355,6 +431,13 @@ export const chatService = {
     const controller = new AbortController();
     const port = getBackendPort();
 
+    // Stall detection state (R2.6) — same pattern as streamChat
+    const stall = { timer: undefined as ReturnType<typeof setTimeout> | undefined, cleared: false };
+    const clearStallTimer = () => {
+      stall.cleared = true;
+      if (stall.timer !== undefined) { clearTimeout(stall.timer); stall.timer = undefined; }
+    };
+
     fetch(`http://localhost:${port}/api/chat/cmd-permission-continue`, {
       method: 'POST',
       headers: {
@@ -389,13 +472,29 @@ export const chatService = {
         const decoder = new TextDecoder();
         let buffer = '';
 
+        // Start stall timer (R2.6)
+        const startStallTimerPC = (readerRef: ReadableStreamDefaultReader<Uint8Array>) => {
+          if (stall.cleared) return;
+          if (stall.timer !== undefined) clearTimeout(stall.timer);
+          stall.timer = setTimeout(() => {
+            console.warn('[SSE] Stream stalled (cmd-permission-continue): no data received for 45 seconds');
+            readerRef.cancel().catch(() => {});
+            onError(new Error('Stream stalled: no data received for 45 seconds'));
+          }, STALL_TIMEOUT_MS);
+        };
+        startStallTimerPC(reader);
+
         while (true) {
           const { done, value } = await reader.read();
 
           if (done) {
+            clearStallTimer();
             onComplete();
             break;
           }
+
+          // Data received — reset stall timer
+          startStallTimerPC(reader);
 
           buffer += decoder.decode(value, { stream: true });
 
@@ -406,6 +505,7 @@ export const chatService = {
             if (line.startsWith('data: ')) {
               const data = line.slice(6);
               if (data === '[DONE]') {
+                clearStallTimer();
                 onComplete();
                 return;
               }
@@ -424,12 +524,14 @@ export const chatService = {
         }
       })
       .catch((error) => {
+        clearStallTimer();
         if (error.name !== 'AbortError') {
           onError(error);
         }
       });
 
     return () => {
+      clearStallTimer();
       controller.abort();
     };
   },

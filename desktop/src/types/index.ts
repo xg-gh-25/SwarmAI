@@ -941,6 +941,48 @@ export interface SystemPromptMetadata {
   fullText: string;
 }
 
+// ============== Toast Notification Types ==============
+
+export type ToastSeverity = 'success' | 'info' | 'warning' | 'error';
+
+export interface ToastOptions {
+  severity: ToastSeverity;
+  message: string;
+  autoDismiss?: boolean;
+  durationMs?: number;
+  id?: string;
+  action?: { label: string; onClick: () => void };
+}
+
+export interface ToastItem extends ToastOptions {
+  id: string;
+  createdAt: number;
+}
+
+// ============== Health Monitor Types ==============
+
+export type BackendStatus = 'connected' | 'disconnected' | 'initializing';
+
+export interface HealthState {
+  status: BackendStatus;
+  lastCheckedAt: number | null;
+  consecutiveFailures: number;
+}
+
+// ============== Rate Limit Types ==============
+
+export interface RateLimitEntry {
+  endpoint: string;
+  expiresAt: number;
+  retryAfterSec: number;
+}
+
+// ============== Validation Error Display Types ==============
+
+export interface FieldErrorMap {
+  [fieldName: string]: string;
+}
+
 // ============== Radar Types (Swarm Radar Redesign) ==============
 
 export * from './radar';
