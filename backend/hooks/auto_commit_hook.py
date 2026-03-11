@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import subprocess
 
 from core.session_hooks import HookContext
@@ -57,8 +58,34 @@ class WorkspaceAutoCommitHook:
         ws_path = initialization_manager.get_cached_workspace_path()
         await asyncio.to_thread(self._smart_commit, ws_path)
 
+    @staticmethod
+    def _cleanup_stale_git_lock(ws_path: str) -> None:
+        """Remove stale .git/index.lock if no git process is using it.
+
+        Prevents cascading failures when the backend was killed mid-commit.
+        Uses ``pgrep`` to verify no live git process targets this repo.
+        """
+        lock_file = os.path.join(ws_path, ".git", "index.lock")
+        if not os.path.exists(lock_file):
+            return
+        try:
+            result = subprocess.run(
+                ["pgrep", "-f", f"git.*{ws_path}"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode != 0:  # No matching git process
+                os.remove(lock_file)
+                logger.warning("Removed stale .git/index.lock before auto-commit")
+            else:
+                logger.info("Git index.lock exists and git is running — skipping cleanup")
+        except Exception as e:
+            logger.warning("Failed to check/clean stale git lock: %s", e)
+
     def _smart_commit(self, ws_path: str) -> None:
         """Run git operations in a background thread."""
+        # 0. Clean stale lock from previous crash
+        self._cleanup_stale_git_lock(ws_path)
+
         # 1. Check for changes
         status = subprocess.run(
             ["git", "status", "--porcelain"],

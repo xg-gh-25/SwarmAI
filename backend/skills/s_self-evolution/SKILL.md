@@ -147,10 +147,10 @@ cat ~/.swarm-ai/config.json 2>/dev/null | jq '.evolution // empty' 2>/dev/null |
 ## Writing to EVOLUTION.md
 
 **New entries:** Use the built-in Read + Edit tools (need full-file context for ID generation).
-**Field updates (Usage Count, Status):** Use `locked_write.py` for atomic, locked modifications.
+**Field updates (Usage Count, Status):** Use the Edit tool for atomic modifications (read → find entry → edit field).
 
 **Every write is a 2-step atomic pair — never do step 1 without step 2:**
-1. **Edit/locked_write** EVOLUTION.md (add/update/deprecate entry)
+1. **Edit** EVOLUTION.md (add/update/deprecate entry)
 2. **Immediately** append JSONL changelog line (same tool-call batch, no other work in between)
 
 ### Append a new entry
@@ -164,7 +164,7 @@ For each existing entry, compare against the proposed new entry:
 3. **Location match** (E-entries only): same file path → duplicate regardless of name.
 
 **If duplicate found → merge, don't create:**
-- Increment the existing entry's Usage Count via `locked_write.py`
+- Increment the existing entry's Usage Count via the Edit tool
 - If the new entry has additional context, append it as a note to the existing
   entry's Description (use Edit tool: append ` | Also: {new_context}` to the
   Description line)
@@ -205,27 +205,22 @@ new_string:
 ## Optimizations Learned
 ```
 
-### Update a field (use locked_write.py for atomicity)
+### Update a field (use Edit tool)
 
-For Usage Count increments:
-```bash
-python3 .claude/skills/s_save-memory/scripts/locked_write.py \
-  --file .context/EVOLUTION.md \
-  --section "Capabilities Built" \
-  --increment-field "Usage Count" \
-  --entry-id "E003"
-```
+For Usage Count increments and Status changes, use the Edit tool:
+1. Read `.context/EVOLUTION.md`
+2. Find the target entry by ID (e.g., E003) in the target section
+3. Use Edit to replace the field value
 
-For Status changes (e.g., deprecation):
-```bash
-python3 .claude/skills/s_save-memory/scripts/locked_write.py \
-  --file .context/EVOLUTION.md \
-  --section "Capabilities Built" \
-  --set-field "Status" --value "deprecated" \
-  --entry-id "E003"
-```
+Example — increment Usage Count for E003:
+- Find line `- **Usage Count**: 1` under `### E003`
+- Edit to `- **Usage Count**: 2`
 
-These operations are atomic (file-locked read-modify-write) and safe for concurrent access.
+Example — deprecate E003:
+- Find line `- **Status**: active` under `### E003`
+- Edit to `- **Status**: deprecated`
+
+**Never use `python3 locked_write.py` via Bash** — this crashes in PyInstaller bundles.
 
 ### JSONL Changelog (mandatory — run immediately after every Edit)
 
@@ -375,7 +370,7 @@ After significant evolution events, append to `Knowledge/DailyActivity/YYYY-MM-D
 5. **Respect config toggles** — check before acting
 6. **Never install without checking `auto_approve_installs`**
 7. **Never create skills without checking `auto_approve_skills`**
-8. **Use Read + Edit for new entries, locked_write.py for field updates** — new entries need full-file context for ID generation; field updates (Usage Count, Status) use locked_write.py for atomicity
+8. **Use Read + Edit for all EVOLUTION.md writes** — never use `python3 locked_write.py` via Bash (crashes in PyInstaller bundles)
 9. **Proactive triggers are deferred** — never interrupt active work
 10. **Each attempt must be fundamentally different**
 11. **Corrections require novelty filter** — systematic gaps only
