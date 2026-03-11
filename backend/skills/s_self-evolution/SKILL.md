@@ -43,9 +43,17 @@ Always-active self-improvement. Detect triggers proactively — don't wait for u
 Detect: "不对", "应该是", "that's wrong", "actually it should be", user overrides.
 Systematic gap → C-entry. Skip: typos, formatting preferences, one-off context.
 
+**Mandatory check:** After EVERY user message that modifies or rejects your previous output,
+ask yourself: "Is this a systematic gap I'd repeat?" If yes → write a C-entry immediately,
+before continuing with the corrected approach.
+
 #### 🟣 Task Completion Review — Post-task reflection
 
 After 5+ tool calls: most efficient approach? Reusable insight? → O/K-entry if novel.
+
+**Mandatory check:** After completing any task that required 5+ tool calls, pause and ask:
+"Did I learn a reusable procedure (K-entry) or discover a better approach (O-entry)?"
+If yes → write the entry before responding to the user.
 
 ### Priority: Stuck > Reactive > Correction > Proactive
 
@@ -55,18 +63,24 @@ After 5+ tool calls: most efficient approach? Reusable insight? → O/K-entry if
 ### Trigger Counter (compaction-safe)
 
 The in-context trigger count is lost when the context window compacts.
-Persist it to a file so it survives:
+Persist it to a session-scoped file so it survives:
 
+- **Determine your session file** — use the session ID from the most recent
+  `session_start` SSE event (available as the current conversation's session):
+  ```bash
+  SESS_ID="${SESSION_ID:-default}"
+  TRIGGER_FILE="/tmp/swarm-evo-triggers-${SESS_ID}"
+  ```
 - **Before each evolution trigger:** read the counter file:
   ```bash
-  cat /tmp/swarm-evo-triggers 2>/dev/null || echo "0"
+  cat "$TRIGGER_FILE" 2>/dev/null || echo "0"
   ```
 - If count ≥ `max_triggers_per_session` (default 3) → **skip**, do not evolve.
 - **After each trigger fires:** increment and write back:
   ```bash
-  echo "$(($(cat /tmp/swarm-evo-triggers 2>/dev/null || echo 0) + 1))" > /tmp/swarm-evo-triggers
+  echo "$(($(cat "$TRIGGER_FILE" 2>/dev/null || echo 0) + 1))" > "$TRIGGER_FILE"
   ```
-- File is in `/tmp/` so it auto-cleans on reboot (session boundary).
+- Each session gets its own counter file. Files in `/tmp/` auto-clean on reboot.
 
 ### Drift Prevention (ADL Protocol)
 
@@ -140,6 +154,24 @@ cat ~/.swarm-ai/config.json 2>/dev/null | jq '.evolution // empty' 2>/dev/null |
 2. **Immediately** append JSONL changelog line (same tool-call batch, no other work in between)
 
 ### Append a new entry
+
+**Step 0 — Dedup check (mandatory before every new entry):**
+After reading EVOLUTION.md, scan all `active` entries in the target section.
+For each existing entry, compare against the proposed new entry:
+1. **Name match**: lowercase both Names. If identical → duplicate.
+2. **Description overlap**: lowercase both Descriptions, split into word sets,
+   compute `overlap = |intersection| / |smaller set|`. If overlap > 0.6 → duplicate.
+3. **Location match** (E-entries only): same file path → duplicate regardless of name.
+
+**If duplicate found → merge, don't create:**
+- Increment the existing entry's Usage Count via `locked_write.py`
+- If the new entry has additional context, append it as a note to the existing
+  entry's Description (use Edit tool: append ` | Also: {new_context}` to the
+  Description line)
+- Log a `use` action (not `add`) to JSONL changelog
+- **Skip** new ID creation entirely
+
+**If no duplicate → proceed with new entry:**
 
 1. `Read .context/EVOLUTION.md`
 2. Find the target section's last content
@@ -285,7 +317,7 @@ At 0.3 → `fading`. At 0.0 → `deprecated`.
 
 Emit markers for frontend rendering:
 ```
-<!-- EVOLUTION_EVENT: {"type": "evolution_start", "data": {"triggerType": "reactive", "description": "...", "strategySelected": "compose_existing", "attemptNumber": 1}} -->
+<!-- EVOLUTION_EVENT: {"event": "evolution_start", "data": {"triggerType": "reactive", "description": "...", "strategySelected": "compose_existing", "attemptNumber": 1}} -->
 ```
 
 Events: `evolution_start`, `evolution_result`, `evolution_stuck_detected`, `evolution_help_request`

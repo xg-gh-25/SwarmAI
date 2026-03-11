@@ -59,7 +59,7 @@ SwarmAI's self-evolution system enables the agent to detect capability gaps, lea
 │                                                                     │
 │  Priority: Stuck > Reactive > Correction > Proactive                │
 │  Limits: Max 3 triggers/session, 60s cooldown between same-type     │
-│  Counter persisted to /tmp/swarm-evo-triggers (survives compaction) │
+│  Counter persisted to /tmp/swarm-evo-triggers-{session_id} (survives compaction) │
 └─────────────────────────────────────────────────────────────────────┘
                               │
                               ▼
@@ -161,7 +161,7 @@ SwarmAI's self-evolution system enables the agent to detect capability gaps, lea
 | Evolution loop execution | `s_self-evolution/SKILL.md` instructions | Yes — prompt-dependent | Hard 3-attempt limit, per-session counter |
 | EVOLUTION.md writes | Agent uses Read+Edit / locked_write.py | Yes — prompt-dependent | Skill Rule #8 with explicit instructions |
 | JSONL changelog | Agent appends after every Edit | Yes — prompt-dependent | Skill Rule #14 (mandatory) |
-| Trigger counter | `/tmp/swarm-evo-triggers` file | No — persisted to filesystem | Survives context compaction |
+| Trigger counter | `/tmp/swarm-evo-triggers-{session_id}` file | No — persisted to filesystem | Survives context compaction, session-scoped |
 
 ---
 
@@ -412,6 +412,6 @@ desktop/src/
 
 3. **Evolution events not persisted to DB**: SSE evolution events exist only in the frontend's in-memory message array. On page reload, they're lost. The evolution results are persisted in EVOLUTION.md itself.
 
-4. **Trigger counter uses `/tmp/`**: The per-session counter at `/tmp/swarm-evo-triggers` survives context compaction but not OS restart. Multiple concurrent sessions share the same file (no session ID scoping). This is acceptable for the current single-user desktop app.
+4. **Trigger counter uses `/tmp/`**: The per-session counter at `/tmp/swarm-evo-triggers-{session_id}` survives context compaction but not OS restart. Each session gets its own counter file, preventing cross-session interference.
 
 5. **No backend validation of evolution entries**: The agent writes EVOLUTION.md entries directly. There's no schema validation — malformed entries won't crash anything but may not be matched correctly in future sessions.

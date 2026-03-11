@@ -384,23 +384,25 @@ async def lifespan(app: FastAPI):
     from hooks.daily_activity_hook import DailyActivityExtractionHook
     from hooks.auto_commit_hook import WorkspaceAutoCommitHook
     from hooks.distillation_hook import DistillationTriggerHook
+    from hooks.evolution_maintenance_hook import EvolutionMaintenanceHook
     from routers.memory import set_compliance_tracker
 
     summarization_pipeline = SummarizationPipeline()
     compliance_tracker = ComplianceTracker()
     hook_manager = SessionLifecycleHookManager(timeout_seconds=30.0)
 
-    # Order matters: extraction first, then commit, then distillation check
+    # Order matters: extraction first, then commit, then distillation check, then evolution maintenance
     hook_manager.register(DailyActivityExtractionHook(
         summarization_pipeline=summarization_pipeline,
         compliance_tracker=compliance_tracker,
     ))
     hook_manager.register(WorkspaceAutoCommitHook())
     hook_manager.register(DistillationTriggerHook())
+    hook_manager.register(EvolutionMaintenanceHook())
 
     agent_manager.set_hook_manager(hook_manager)
     set_compliance_tracker(compliance_tracker)
-    logger.info("Session lifecycle hooks registered (3 hooks)")
+    logger.info("Session lifecycle hooks registered (4 hooks)")
     # ─────────────────────────────────────────────────────────────────
 
     t_agent = time.monotonic()
