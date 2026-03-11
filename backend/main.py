@@ -576,8 +576,10 @@ async def shutdown():
     to ensure all Claude CLI child processes are properly terminated.
     """
     logger.info("Shutdown endpoint called - disconnecting all clients")
+    t0 = time.monotonic()
     await agent_manager.disconnect_all()
-    logger.info("All clients disconnected via shutdown endpoint")
+    elapsed = time.monotonic() - t0
+    logger.info("Shutdown endpoint completed in %.2fs", elapsed)
     return {"status": "shutting_down"}
 
 

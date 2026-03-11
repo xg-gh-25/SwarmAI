@@ -156,17 +156,26 @@ impl Default for BackendState {
     }
 }
 
+/// Maximum time (seconds) to wait for the backend to complete shutdown.
+/// Covers: HookContext build (~1s) + DailyActivity batch (~5s) + drain (~8s).
+/// The curl/PowerShell timeout is set to this value.
+const SHUTDOWN_GRACE_SECONDS: u64 = 10;
+
+/// Post-shutdown sleep (seconds) for the manual `stop_backend` command.
+/// Proportional to SHUTDOWN_GRACE_SECONDS for manual stop operations.
+const STOP_BACKEND_SLEEP_SECONDS: u64 = 5;
+
 // Send graceful shutdown request to backend via HTTP
 // This allows the backend to properly terminate Claude CLI child processes before being killed
 #[cfg(target_os = "windows")]
-fn send_shutdown_request(port: u16) {
+fn send_shutdown_request(port: u16) -> bool {
     // Use PowerShell to send HTTP POST request (Windows built-in, no dependencies needed)
     let result = std::process::Command::new("powershell")
         .args([
             "-NoProfile",
             "-Command",
             &format!(
-                "try {{ Invoke-WebRequest -Uri 'http://127.0.0.1:{}/shutdown' -Method POST -TimeoutSec 3 }} catch {{}}",
+                "try {{ Invoke-WebRequest -Uri 'http://127.0.0.1:{}/shutdown' -Method POST -TimeoutSec 10 }} catch {{}}",
                 port
             ),
         ])
@@ -177,12 +186,15 @@ fn send_shutdown_request(port: u16) {
         Ok(output) => {
             if output.status.success() {
                 println!("Sent shutdown request to backend on port {}", port);
+                true
             } else {
                 eprintln!("Shutdown request returned non-zero exit code on port {}", port);
+                false
             }
         }
         Err(e) => {
             eprintln!("Failed to send shutdown request to backend on port {}: {}", port, e);
+            false
         }
     }
 }
@@ -190,12 +202,12 @@ fn send_shutdown_request(port: u16) {
 // Send graceful shutdown request to backend via HTTP (macOS/Linux)
 // Uses curl which is available on most Unix systems
 #[cfg(not(target_os = "windows"))]
-fn send_shutdown_request(port: u16) {
+fn send_shutdown_request(port: u16) -> bool {
     let result = std::process::Command::new("curl")
         .args([
             "-s",                                          // Silent mode
             "-X", "POST",                                  // POST request
-            "-m", "3",                                     // 3 second timeout
+            "-m", "10",                                    // Timeout matches SHUTDOWN_GRACE_SECONDS
             &format!("http://127.0.0.1:{}/shutdown", port),
         ])
         .output();
@@ -204,12 +216,15 @@ fn send_shutdown_request(port: u16) {
         Ok(output) => {
             if output.status.success() {
                 println!("Sent shutdown request to backend on port {}", port);
+                true
             } else {
                 eprintln!("Shutdown request failed on port {}", port);
+                false
             }
         }
         Err(e) => {
             eprintln!("Failed to send shutdown request to backend on port {}: {}", port, e);
+            false
         }
     }
 }
@@ -299,7 +314,7 @@ pub struct BackendStatus {
 /// Mirrors the `stop_backend` command pattern:
 /// 1. Capture state under lock, mark as not running
 /// 2. Release lock before blocking I/O
-/// 3. If was running: send_shutdown_request → sleep 3s
+/// 3. If was running: send_shutdown_request (curl timeout = 10s IS the grace period)
 /// 4. Force kill process tree + child as safety net
 ///
 /// Double-fire safe: if `backend.running` is already false (set by a
@@ -321,8 +336,11 @@ fn graceful_shutdown_and_kill(state: SharedBackendState, context: &str) {
         // Graceful shutdown only if backend was actually running
         if was_running {
             println!("[{}] Attempting graceful shutdown on port {}", context, port);
+            // Fast-path: curl timeout (10s = SHUTDOWN_GRACE_SECONDS) serves as the
+            // grace period. If curl succeeds, backend already completed disconnect_all().
+            // If curl times out, 10s has already elapsed. No additional sleep needed.
+            // Return value intentionally ignored — both paths proceed to force-kill.
             send_shutdown_request(port);
-            std::thread::sleep(std::time::Duration::from_secs(3));
         }
 
         // Force kill as safety net (always, even if shutdown request succeeded)
@@ -477,9 +495,12 @@ async fn stop_backend(state: tauri::State<'_, SharedBackendState>) -> Result<(),
     // Step 2: Try graceful shutdown via HTTP request (all platforms)
     // This allows the backend to properly terminate Claude CLI child processes
     if was_running {
-        send_shutdown_request(port);
-        // Wait for backend to process shutdown and terminate child processes
-        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+        let success = send_shutdown_request(port);
+        if !success {
+            // Backend didn't respond — give it extra time before force-killing
+            tokio::time::sleep(tokio::time::Duration::from_secs(STOP_BACKEND_SLEEP_SECONDS)).await;
+        }
+        // Fast path: if shutdown request succeeded, skip sleep — backend already cleaned up
     }
 
     // Step 3: Kill the entire process tree (works on all platforms)
@@ -843,6 +864,8 @@ pub fn run() {
                 let app_handle = app.handle().clone();
                 window.on_window_event(move |event| {
                     if let tauri::WindowEvent::Destroyed = event {
+                        // Best-effort: emit before block_on freezes event loop
+                        let _ = app_handle.emit("shutdown-started", ());
                         // Graceful shutdown: send POST /shutdown, wait, then force-kill
                         let state = app_handle.state::<SharedBackendState>();
                         graceful_shutdown_and_kill(state.inner().clone(), "window_destroy");
@@ -857,6 +880,8 @@ pub fn run() {
         .run(|app_handle, event| {
             match event {
                 tauri::RunEvent::Exit => {
+                    // Best-effort: emit before block_on freezes event loop
+                    let _ = app_handle.emit("shutdown-started", ());
                     // Graceful shutdown: send POST /shutdown, wait, then force-kill
                     let state = app_handle.state::<SharedBackendState>();
                     graceful_shutdown_and_kill(state.inner().clone(), "exit");
@@ -865,6 +890,8 @@ pub fn run() {
                     // Don't prevent exit, but ensure cleanup
                     let _ = api; // Allow default exit behavior
 
+                    // Best-effort: emit before block_on freezes event loop
+                    let _ = app_handle.emit("shutdown-started", ());
                     // Graceful shutdown: send POST /shutdown, wait, then force-kill
                     let state = app_handle.state::<SharedBackendState>();
                     graceful_shutdown_and_kill(state.inner().clone(), "exit_requested");
