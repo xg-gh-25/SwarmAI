@@ -19,6 +19,7 @@ import { render, screen } from '@testing-library/react';
 import fc from 'fast-check';
 import { AssistantMessageView } from '../AssistantMessageView';
 import { ChatHeader } from '../ChatHeader';
+import { ToastProvider } from '../../../../contexts/ToastContext';
 import { RIGHT_SIDEBAR_IDS, type RightSidebarId } from '../../constants';
 import type { Message } from '../../../../types';
 
@@ -27,6 +28,14 @@ import type { Message } from '../../../../types';
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
     t: (key: string, fallback: string) => fallback,
+  }),
+}));
+
+// Mock useHealth to avoid needing HealthProvider in tests
+vi.mock('../../../../contexts/HealthContext', () => ({
+  useHealth: () => ({
+    health: { status: 'connected', lastCheckedAt: null, consecutiveFailures: 0 },
+    triggerHealthCheck: vi.fn(),
   }),
 }));
 
@@ -109,7 +118,7 @@ describe('Preservation Property Tests — Memory Save Button Relocation', () => 
       fc.property(messageTextArb, (text) => {
         const msg = makeAssistantMessage(text);
         const { unmount } = render(
-          <AssistantMessageView message={msg} isStreaming={false} />,
+          <ToastProvider><AssistantMessageView message={msg} isStreaming={false} /></ToastProvider>,
         );
 
         // Copy button should exist in the DOM (opacity-0 until hover)
@@ -139,7 +148,7 @@ describe('Preservation Property Tests — Memory Save Button Relocation', () => 
         const msg = makeAssistantMessage(text);
         // Render without isLastAssistant (or with isLastAssistant=false)
         const { unmount } = render(
-          <AssistantMessageView message={msg} isStreaming={isStreaming} />,
+          <ToastProvider><AssistantMessageView message={msg} isStreaming={isStreaming} /></ToastProvider>,
         );
 
         // No Save-to-Memory button should exist
@@ -198,7 +207,7 @@ describe('Preservation Property Tests — Memory Save Button Relocation', () => 
       fc.property(messageTextArb, (text) => {
         const msg = makeAssistantMessage(text);
         const { unmount } = render(
-          <AssistantMessageView message={msg} isStreaming={true} />,
+          <ToastProvider><AssistantMessageView message={msg} isStreaming={true} /></ToastProvider>,
         );
 
         // Copy button should NOT be present while streaming

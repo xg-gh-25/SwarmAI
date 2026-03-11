@@ -22,7 +22,7 @@
  *            3.1, 3.2, 3.3, 3.4, 3.5, 4.1, 4.2, 4.3, 4.4, 4.5, 4.6
  */
 
-import React, { useState, useCallback, useMemo } from 'react';
+import React, { useState, useCallback, useMemo, useEffect } from 'react';
 import clsx from 'clsx';
 import type { Message, ToolResultContent } from '../../../types';
 import type { ContextWarning } from '../../../hooks/useChatStreamingLifecycle';
@@ -31,7 +31,7 @@ import { AssistantHeader } from './AssistantHeader';
 import { useMemorySave } from '../../../hooks/useMemorySave';
 import { chatService } from '../../../services/chat';
 import type { MemorySaveStatus } from '../../../hooks/useMemorySave';
-import { Toast } from '../../../components/common/Toast';
+import { useToast } from '../../../contexts/ToastContext';
 
 export interface AssistantMessageViewProps {
   /** The assistant message to render */
@@ -69,6 +69,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
   contextWarning,
 }) => {
   const [copied, setCopied] = useState(false);
+  const { addToast } = useToast();
 
   // Per-session memory save state
   const { statusMap, toastMap, save: saveMemory, reset: resetMemory } = useMemorySave();
@@ -77,7 +78,6 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
 
   // Compact button local state
   const [compactStatus, setCompactStatus] = useState<'idle' | 'loading' | 'done'>('idle');
-  const [compactToast, setCompactToast] = useState<string | null>(null);
 
   const handleCompact = useCallback(async () => {
     if (!sessionId || compactStatus === 'loading') return;
@@ -85,17 +85,23 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
     try {
       const result = await chatService.compactSession(sessionId);
       setCompactStatus('done');
-      setCompactToast(
-        result.status === 'compacted'
+      addToast({
+        severity: 'success',
+        message: result.status === 'compacted'
           ? 'Context compacted successfully'
-          : result.message
-      );
+          : result.message,
+        autoDismiss: true,
+      });
       setTimeout(() => setCompactStatus('idle'), 3000);
     } catch {
       setCompactStatus('idle');
-      setCompactToast('Failed to compact session');
+      addToast({
+        severity: 'error',
+        message: 'Failed to compact session',
+        autoDismiss: true,
+      });
     }
-  }, [sessionId, compactStatus]);
+  }, [sessionId, compactStatus, addToast]);
 
   /** Extract plain text from all content blocks for clipboard copy. */
   const extractMessageText = useCallback((): string => {
@@ -127,6 +133,14 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
       saveMemory(sessionId);
     }
   }, [sessionId, memorySaveStatus, saveMemory]);
+
+  // Fire toast when memory save completes (replaces inline <Toast> JSX)
+  useEffect(() => {
+    if (!isLastAssistant || !sessionId || !memoryToastMessage) return;
+    const severity = memorySaveStatus === 'saved' ? 'success' : memorySaveStatus === 'error' ? 'error' : 'info';
+    addToast({ severity, message: memoryToastMessage, autoDismiss: true, durationMs: 4000 });
+    resetMemory(sessionId);
+  }, [memoryToastMessage, isLastAssistant, sessionId, memorySaveStatus, addToast, resetMemory]);
 
   // Compact button visibility: only on last assistant, not streaming, with active warning
   const showCompactButton = isLastAssistant
@@ -258,25 +272,6 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
         </div>
       )}
 
-      {/* Toast for memory save results — only on last assistant message */}
-      {isLastAssistant && sessionId && memoryToastMessage && (
-        <Toast
-          message={memoryToastMessage}
-          type={memorySaveStatus === 'saved' ? 'success' : memorySaveStatus === 'error' ? 'error' : 'info'}
-          duration={4000}
-          onDismiss={() => resetMemory(sessionId)}
-        />
-      )}
-
-      {/* Toast for compact results — only when compact button is visible */}
-      {showCompactButton && compactToast && (
-        <Toast
-          message={compactToast}
-          type={compactStatus === 'done' ? 'success' : 'error'}
-          duration={4000}
-          onDismiss={() => setCompactToast(null)}
-        />
-      )}
     </div>
   );
 };

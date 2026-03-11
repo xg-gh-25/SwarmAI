@@ -33,4 +33,3 @@ export { default as BackendStartupOverlay } from './BackendStartupOverlay';
 export { default as UpdateNotification } from './UpdateNotification';
 export { Toast } from './Toast';
 export type { ToastType } from './Toast';
-export { PolicyViolationToast } from './PolicyViolationToast';

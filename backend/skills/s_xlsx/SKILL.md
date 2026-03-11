@@ -6,7 +6,9 @@ description: >
   DO NOT USE: for plain text tables (just use markdown).
 ---
 
-# Requirements for Outputs
+# XLSX Editor
+
+## Requirements for Outputs
 
 ## All Excel files
 

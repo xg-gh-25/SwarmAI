@@ -41,6 +41,17 @@ import {
 } from './helpers/streamingTestUtils';
 
 // ---------------------------------------------------------------------------
+// Mock useToast — the hook now calls useToast() for reconnection toasts
+// ---------------------------------------------------------------------------
+vi.mock('../contexts/ToastContext', () => ({
+  useToast: () => ({
+    addToast: vi.fn(),
+    removeToast: vi.fn(),
+    toasts: [],
+  }),
+}));
+
+// ---------------------------------------------------------------------------
 // fast-check arbitraries for tab IDs
 // ---------------------------------------------------------------------------
 

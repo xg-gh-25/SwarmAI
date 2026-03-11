@@ -1,5 +1,25 @@
-import { useState } from 'react';
+/**
+ * Permission request modal with timeout and countdown.
+ *
+ * Displays a command permission request to the user for approval or denial.
+ * Includes a 5-minute auto-deny timeout with a visible countdown indicator
+ * when ≤ 60 seconds remain.
+ *
+ * Key exports:
+ * - `PermissionRequestModal` — modal component
+ *
+ * Validates: Requirements 7.1, 7.2, 7.3, 7.4, 7.5
+ */
+
+import { useState, useEffect, useRef, useCallback } from 'react';
 import type { PermissionRequest } from '../../types';
+import { useToast } from '../../contexts/ToastContext';
+import { useHealth } from '../../contexts/HealthContext';
+
+/** Total timeout in milliseconds (5 minutes). */
+const TIMEOUT_MS = 300_000;
+/** Show countdown when remaining time ≤ this value (ms). */
+const COUNTDOWN_THRESHOLD_MS = 60_000;
 
 interface Props {
   request: PermissionRequest;
@@ -9,18 +29,66 @@ interface Props {
 
 export function PermissionRequestModal({ request, onDecision, isLoading }: Props) {
   const [feedback, setFeedback] = useState('');
+  const { addToast } = useToast();
+  const { health } = useHealth();
+  const [remainingMs, setRemainingMs] = useState(TIMEOUT_MS);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const autoDeniedRef = useRef(false);
 
-  const handleApprove = () => {
+  // Start countdown timer on mount
+  useEffect(() => {
+    const startTime = Date.now();
+    timerRef.current = setInterval(() => {
+      const elapsed = Date.now() - startTime;
+      const remaining = Math.max(0, TIMEOUT_MS - elapsed);
+      setRemainingMs(remaining);
+
+      if (remaining <= 0 && !autoDeniedRef.current) {
+        autoDeniedRef.current = true;
+        if (timerRef.current) clearInterval(timerRef.current);
+        onDecision('deny', 'Auto-denied: permission request timed out');
+        addToast({
+          severity: 'info',
+          message: 'Permission request timed out and was automatically denied.',
+          autoDismiss: true,
+        });
+      }
+    }, 1000);
+
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+    };
+  }, [onDecision, addToast]);
+
+  // Dismiss if backend is disconnected (stale request).
+  // Guard with autoDeniedRef to prevent double-fire if timeout already denied.
+  useEffect(() => {
+    if (health.status === 'disconnected' && !autoDeniedRef.current) {
+      autoDeniedRef.current = true;
+      if (timerRef.current) clearInterval(timerRef.current);
+      onDecision('deny', 'Backend disconnected — request dismissed');
+      addToast({
+        severity: 'info',
+        message: 'Permission request dismissed — backend is no longer available.',
+        autoDismiss: true,
+      });
+    }
+  }, [health.status, onDecision, addToast]);
+
+  const showCountdown = remainingMs <= COUNTDOWN_THRESHOLD_MS && remainingMs > 0;
+  const remainingSec = Math.ceil(remainingMs / 1000);
+
+  const handleApprove = useCallback(() => {
     if (!isLoading) {
       onDecision('approve', feedback || undefined);
     }
-  };
+  }, [isLoading, onDecision, feedback]);
 
-  const handleDeny = () => {
+  const handleDeny = useCallback(() => {
     if (!isLoading) {
       onDecision('deny', feedback || undefined);
     }
-  };
+  }, [isLoading, onDecision, feedback]);
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
@@ -29,6 +97,11 @@ export function PermissionRequestModal({ request, onDecision, isLoading }: Props
         <div className="flex items-center gap-3 p-4 border-b border-[var(--color-border)]">
           <span className="material-symbols-outlined text-yellow-500 text-2xl">warning</span>
           <h3 className="text-lg font-semibold text-[var(--color-text)]">Permission Required</h3>
+          {showCountdown && (
+            <span className="ml-auto text-sm text-yellow-400 font-mono">
+              {remainingSec}s
+            </span>
+          )}
         </div>
 
         {/* Content */}

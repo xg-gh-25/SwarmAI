@@ -69,6 +69,9 @@ export function initTestTab(tabId: string, initialMessages?: Message[]): void {
     streamGen: 0,
     status: 'idle' as TabStatus,
     contextWarning: null,
+    isReconnecting: false,
+    reconnectionAttempt: 0,
+    hasReceivedData: false,
   });
   testActiveTabIdRef.current = tabId;
 }

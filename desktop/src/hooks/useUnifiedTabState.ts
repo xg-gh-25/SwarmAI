@@ -64,6 +64,14 @@ export interface UnifiedTab {
   contextWarning: ContextWarning | null;
   /** Per-tab expanded/compact mode for ChatInput (runtime-only, NOT serialized). */
   isExpanded?: boolean;
+  /** True while the SSE connection is being retried after a connection-phase failure. */
+  isReconnecting?: boolean;
+  /** Current reconnection attempt number (0 = not reconnecting). */
+  reconnectionAttempt?: number;
+  /** Set to true on the first non-heartbeat SSE event — used to distinguish connection-phase vs mid-stream failures. */
+  hasReceivedData?: boolean;
+  /** Retry function stored by ChatPage — called by reconnection logic to re-initiate the stream. */
+  retryStreamFn?: () => (() => void);
 }
 
 /** Fields persisted to ~/.swarm-ai/open_tabs.json (re-exported from tabPersistence service). */
@@ -132,6 +140,8 @@ function createDefaultTab(agentId: string): UnifiedTab {
     streamGen: 0,
     status: 'idle',
     contextWarning: null,
+    isReconnecting: false,
+    reconnectionAttempt: 0,
   };
 }
 
@@ -157,6 +167,8 @@ function hydrateTab(s: PersistedTab): UnifiedTab {
     streamGen: 0,
     status: 'idle',
     contextWarning: null,
+    isReconnecting: false,
+    reconnectionAttempt: 0,
   };
 }
 
