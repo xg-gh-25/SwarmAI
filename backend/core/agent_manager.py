@@ -584,16 +584,16 @@ class AgentManager:
         agent_config: dict,
         enable_mcp: bool,
     ) -> tuple[dict, list[str]]:
-        """Build MCP server configuration dict from agent's mcp_ids.
+        """Build MCP server configuration from DB mcp_ids + user-local file.
 
-        Iterates over the agent's ``mcp_ids``, looks up each MCP server record
-        from the database, and assembles the ``mcp_servers`` dict keyed by
-        server name (to keep tool names short for Bedrock's 64-char limit).
+        Two sources, merged in order:
+        1. Agent's ``mcp_ids`` → looked up in DB (system/plugin MCPs).
+        2. ``~/.swarm-ai/user-mcp-servers.json`` → read directly from file.
+           This is the canonical source for user-local MCP servers.
+           No DB roundtrip needed — the file IS the source of truth.
 
-        Per-server ``rejected_tools`` are collected and converted to the SDK's
-        global ``disallowed_tools`` format (``mcp__<ServerName>__<tool>``).
-
-        No workspace filtering — all agent MCPs are included.
+        Per-server ``rejected_tools`` are converted to the SDK's global
+        ``disallowed_tools`` format (``mcp__<ServerName>__<tool>``).
 
         Args:
             agent_config: Agent configuration dictionary.
@@ -605,62 +605,119 @@ class AgentManager:
         mcp_servers: dict = {}
         disallowed_tools: list[str] = []
 
-        if not (enable_mcp and agent_config.get("mcp_ids")):
+        if not enable_mcp:
             return mcp_servers, disallowed_tools
 
         used_names: set = set()  # Track used names to handle collisions
-        for mcp_id in agent_config["mcp_ids"]:
+
+        # --- Source 1: DB-registered MCPs (system, plugin) via mcp_ids ---
+        for mcp_id in agent_config.get("mcp_ids", []):
             mcp_config = await db.mcp_servers.get(mcp_id)
-            if mcp_config:
-                connection_type = mcp_config.get("connection_type", "stdio")
-                config = mcp_config.get("config", {})
+            if not mcp_config:
+                continue
+            self._add_mcp_server_to_dict(
+                mcp_config, mcp_servers, disallowed_tools, used_names,
+            )
 
-                # Use server name as the key for shorter tool names
-                # Handle name collisions by appending suffix
-                server_name = mcp_config.get("name", mcp_id)
-                base_name = server_name
-                suffix = 1
-                while server_name in used_names:
-                    server_name = f"{base_name}_{suffix}"
-                    suffix += 1
-                used_names.add(server_name)
-
-                if connection_type == "stdio":
-                    # Expand environment variables in args (e.g. $HOME → /Users/xxx)
-                    raw_args = config.get("args", [])
-                    expanded_args = [os.path.expandvars(a) for a in raw_args]
-                    mcp_servers[server_name] = {
-                        "type": "stdio",
-                        "command": config.get("command"),
-                        "args": expanded_args,
-                    }
-                    env = config.get("env")
-                    if env and isinstance(env, dict):
-                        mcp_servers[server_name]["env"] = env
-                elif connection_type == "sse":
-                    mcp_servers[server_name] = {
-                        "type": "sse",
-                        "url": config.get("url"),
-                    }
-                elif connection_type == "http":
-                    mcp_servers[server_name] = {
-                        "type": "http",
-                        "url": config.get("url"),
-                    }
-
-                # Collect per-server rejected_tools → global disallowed_tools.
-                # SDK uses mcp__<ServerName>__<tool_name> format.
-                #
-                # WHY: MCP servers may expose tools that overlap with built-in
-                # SDK tools (e.g. Filesystem MCP's read_text_file vs built-in
-                # Read). Blocking duplicates saves context tokens, prevents
-                # tool-choice ambiguity, and keeps file ops routed through
-                # security_hooks. See default-mcp-servers.json for details.
-                rejected = mcp_config.get("rejected_tools") or []
-                for tool in rejected:
-                    disallowed_tools.append(f"mcp__{server_name}__{tool}")
+        # --- Source 2: User-local MCPs from file (no DB needed) ---
+        self._merge_user_local_mcp_servers(
+            mcp_servers, disallowed_tools, used_names,
+        )
 
         return mcp_servers, disallowed_tools
+
+    def _add_mcp_server_to_dict(
+        self,
+        mcp_config: dict,
+        mcp_servers: dict,
+        disallowed_tools: list[str],
+        used_names: set,
+    ) -> None:
+        """Add a single MCP server entry to the mcp_servers dict.
+
+        Handles name collision, connection type dispatch, env expansion,
+        and rejected_tools → disallowed_tools conversion.
+        """
+        connection_type = mcp_config.get("connection_type", "stdio")
+        config = mcp_config.get("config", {})
+
+        # Deduplicate server names
+        server_name = mcp_config.get("name", mcp_config.get("id", "unknown"))
+        base_name = server_name
+        suffix = 1
+        while server_name in used_names:
+            server_name = f"{base_name}_{suffix}"
+            suffix += 1
+        used_names.add(server_name)
+
+        if connection_type == "stdio":
+            raw_args = config.get("args", [])
+            expanded_args = [os.path.expandvars(a) for a in raw_args]
+            mcp_servers[server_name] = {
+                "type": "stdio",
+                "command": config.get("command"),
+                "args": expanded_args,
+            }
+            env = config.get("env")
+            if env and isinstance(env, dict):
+                mcp_servers[server_name]["env"] = env
+        elif connection_type == "sse":
+            mcp_servers[server_name] = {
+                "type": "sse",
+                "url": config.get("url"),
+            }
+        elif connection_type == "http":
+            mcp_servers[server_name] = {
+                "type": "http",
+                "url": config.get("url"),
+            }
+
+        # Collect per-server rejected_tools → global disallowed_tools.
+        # SDK uses mcp__<ServerName>__<tool_name> format.
+        rejected = mcp_config.get("rejected_tools") or []
+        for tool in rejected:
+            disallowed_tools.append(f"mcp__{server_name}__{tool}")
+
+    def _merge_user_local_mcp_servers(
+        self,
+        mcp_servers: dict,
+        disallowed_tools: list[str],
+        used_names: set,
+    ) -> None:
+        """Read ~/.swarm-ai/user-mcp-servers.json and merge into mcp_servers.
+
+        File is the source of truth for user-local MCP servers.
+        Skips entries whose name is already in used_names (from DB source).
+        Errors are logged but never block session startup.
+        """
+        config_path = get_app_data_dir() / "user-mcp-servers.json"
+        if not config_path.exists():
+            return
+
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                mcp_configs = json.load(f)
+
+            if not isinstance(mcp_configs, list):
+                return
+
+            for entry in mcp_configs:
+                name = entry.get("name", entry.get("id"))
+                if not name:
+                    continue
+                # Skip if already added from DB source (avoid duplicates)
+                if name in used_names:
+                    logger.debug("User-local MCP '%s' already loaded, skipping", name)
+                    continue
+                self._add_mcp_server_to_dict(
+                    entry, mcp_servers, disallowed_tools, used_names,
+                )
+                logger.info("Loaded user-local MCP from file: %s", name)
+
+        except json.JSONDecodeError as e:
+            logger.error("Invalid JSON in user-mcp-servers.json: %s", e)
+        except Exception as e:
+            logger.error("Failed to load user-local MCP servers: %s", e)
 
     async def _build_hooks(
         self,
@@ -2899,35 +2956,173 @@ class AgentManager:
     async def disconnect_all(self):
         """Disconnect all active clients and long-lived sessions.
 
-        Two-phase shutdown:
-        1. **Fast phase** — Fire hooks as background tasks (non-blocking),
-           then immediately disconnect SDK clients and clean up resources.
-           This phase completes in ~100ms regardless of hook count.
-        2. **Drain phase** — Give background hooks up to 2s to finish.
-           Hooks that don't complete are cancelled — most are idempotent
-           (auto-commit, distillation, evolution) but DailyActivity
-           extraction is not (cancelled = session summary lost).
+        Four-phase shutdown optimised for the 10s Tauri grace period:
 
-        This design ensures the Tauri 3s grace period is sufficient for
-        the critical work (SDK disconnect), while hooks get best-effort
-        execution in the background.
+        **Phase 0 — Metrics snapshot**
+            Log session count, ``activity_extracted`` counts, and pending
+            hook tasks for post-mortem diagnostics.
+
+        **Phase 1a — Parallel HookContext construction**
+            Build all HookContexts concurrently via ``asyncio.gather``.
+            Failed builds are logged and excluded from subsequent phases.
+
+        **Phase 1b — Inline DailyActivity extraction**
+            Run DA extraction directly (NOT via BackgroundHookExecutor)
+            for every session that hasn't already been extracted.  Each
+            session gets a 5 s per-task timeout; the entire DA batch has
+            an 8 s global cap.  This mirrors ``_extract_activity_early``.
+
+        **Phase 1c — Idempotent hooks (fire-and-forget)**
+            Queue remaining hooks (auto-commit, distillation, evolution)
+            via the executor with ``skip_hooks=["daily_activity_extraction"]``.
+
+        **Phase 1d — Session resource cleanup**
+            ``_cleanup_session(skip_hooks=True)`` for every session.
+            Must happen AFTER DA extraction — cleanup pops sessions from
+            ``_active_sessions``, which would remove info hooks still need.
+
+        **Phase 2 — Drain**
+            ``drain(timeout=8.0)`` gives idempotent hooks best-effort
+            completion time.  With many sessions most will be cancelled;
+            all are idempotent so this is acceptable.
         """
-        # Phase 1: Fire hooks as background tasks (immediate return)
-        for session_id in list(self._active_sessions.keys()):
-            info = self._active_sessions.get(session_id)
-            if info and self._hook_executor:
-                try:
-                    context = await self._build_hook_context(session_id, info)
-                    skip_list = (
-                        ["daily_activity_extraction"]
-                        if info.get("activity_extracted")
-                        else None
+        t0 = time.monotonic()
+
+        # ── Phase 0: Snapshot & metrics ──────────────────────────────
+        sessions = list(self._active_sessions.items())
+        if not sessions:
+            logger.info("Shutdown: no active sessions — fast return")
+            # Still cancel the cleanup loop and clear transient clients
+            if self._cleanup_task and not self._cleanup_task.done():
+                self._cleanup_task.cancel()
+            self._clients.clear()
+            return
+
+        extracted_count = sum(
+            1 for _, info in sessions if info.get("activity_extracted")
+        )
+        pending_hooks = (
+            self._hook_executor.pending_count if self._hook_executor else 0
+        )
+        logger.info(
+            "Shutdown Phase 0: %d sessions (%d with activity_extracted), "
+            "%d pending hook tasks",
+            len(sessions),
+            extracted_count,
+            pending_hooks,
+        )
+
+        # ── Phase 1a: Parallel HookContext construction ──────────────
+        t1a = time.monotonic()
+        raw_contexts = await asyncio.gather(
+            *[self._build_hook_context(sid, info) for sid, info in sessions],
+            return_exceptions=True,
+        )
+
+        # Pair each result with its (session_id, info) and filter errors
+        ctx_pairs: list[tuple[str, dict, "HookContext"]] = []
+        for (sid, info), result in zip(sessions, raw_contexts):
+            if isinstance(result, BaseException):
+                logger.error(
+                    "Shutdown: HookContext build failed for %s: %s", sid, result
+                )
+            else:
+                ctx_pairs.append((sid, info, result))
+
+        logger.info(
+            "Shutdown Phase 1a: built %d/%d HookContexts in %.2fs",
+            len(ctx_pairs),
+            len(sessions),
+            time.monotonic() - t1a,
+        )
+
+        # ── Phase 1b: Inline DailyActivity extraction ────────────────
+        # Find the DA hook by name (same pattern as _extract_activity_early)
+        da_hook = None
+        if self._hook_executor:
+            for hook in self._hook_executor.hooks:
+                if getattr(hook, "name", "") == "daily_activity_extraction":
+                    da_hook = hook
+                    break
+        elif self._hook_manager:
+            for hook in self._hook_manager._hooks:
+                if getattr(hook, "name", "") == "daily_activity_extraction":
+                    da_hook = hook
+                    break
+
+        # Build DA task list for sessions not yet extracted
+        da_session_map: list[tuple[int, str, dict]] = []  # (index, sid, info)
+        da_tasks: list = []
+        if da_hook:
+            for i, (sid, info, ctx) in enumerate(ctx_pairs):
+                if not info.get("activity_extracted"):
+                    da_tasks.append(
+                        asyncio.wait_for(da_hook.execute(ctx), timeout=5.0)
                     )
-                    self._hook_executor.fire(context, skip_hooks=skip_list)
+                    da_session_map.append((i, sid, info))
+
+        if da_tasks:
+            t1b = time.monotonic()
+            logger.info(
+                "Shutdown Phase 1b: running DA extraction for %d sessions",
+                len(da_tasks),
+            )
+            try:
+                da_results = await asyncio.wait_for(
+                    asyncio.gather(*da_tasks, return_exceptions=True),
+                    timeout=8.0,
+                )
+                # Mark successful extractions
+                for (idx, sid, info), result in zip(da_session_map, da_results):
+                    if isinstance(result, BaseException):
+                        elapsed = time.monotonic() - t1b
+                        logger.warning(
+                            "Shutdown: DA extraction failed/timed-out for %s "
+                            "(%.2fs): %s",
+                            sid,
+                            elapsed,
+                            result,
+                        )
+                    else:
+                        info["activity_extracted"] = True
+            except asyncio.TimeoutError:
+                elapsed = time.monotonic() - t1b
+                logger.warning(
+                    "Shutdown Phase 1b: global 8s DA timeout reached after "
+                    "%.2fs — proceeding to Phase 1c",
+                    elapsed,
+                )
+            finally:
+                da_elapsed = time.monotonic() - t1b
+                logger.info("Shutdown Phase 1b: DA phase completed in %.2fs", da_elapsed)
+        else:
+            logger.info(
+                "Shutdown Phase 1b: no DA extractions needed "
+                "(all sessions already extracted or no DA hook)"
+            )
+
+        # ── Phase 1c: Fire idempotent hooks via executor ─────────────
+        if self._hook_executor:
+            for sid, info, ctx in ctx_pairs:
+                try:
+                    self._hook_executor.fire(
+                        ctx, skip_hooks=["daily_activity_extraction"]
+                    )
                 except Exception as exc:
-                    logger.error("Shutdown hook fire failed for %s: %s", session_id, exc)
-            # Resource cleanup only — hooks running in background
-            await self._cleanup_session(session_id, skip_hooks=True)
+                    logger.error(
+                        "Shutdown: idempotent hook fire failed for %s: %s",
+                        sid,
+                        exc,
+                    )
+
+        # ── Phase 1d: Session resource cleanup ───────────────────────
+        for sid, info, ctx in ctx_pairs:
+            await self._cleanup_session(sid, skip_hooks=True)
+        # Also clean up sessions that failed HookContext build
+        built_sids = {sid for sid, _, _ in ctx_pairs}
+        for sid, info in sessions:
+            if sid not in built_sids:
+                await self._cleanup_session(sid, skip_hooks=True)
 
         # Clean up any remaining transient clients
         for session_id, client in list(self._clients.items()):
@@ -2942,20 +3137,27 @@ class AgentManager:
         if self._cleanup_task and not self._cleanup_task.done():
             self._cleanup_task.cancel()
 
-        # Phase 2: Drain background hooks (best-effort, bounded timeout)
-        # 2s drain fits within Tauri's 3s grace period (PE Review Finding #3)
+        # ── Phase 2: Drain background hooks (idempotent only) ────────
         if self._hook_executor:
             pending = self._hook_executor.pending_count
-            logger.info("Shutdown: %d hook tasks in flight before drain", pending)
-            done, cancelled = await self._hook_executor.drain(timeout=2.0)
+            logger.info("Shutdown Phase 2: %d hook tasks in flight before drain", pending)
+            t2 = time.monotonic()
+            done, cancelled = await self._hook_executor.drain(timeout=8.0)
+            drain_elapsed = time.monotonic() - t2
             logger.info(
-                "Shutdown drain complete: %d done, %d cancelled", done, cancelled
+                "Shutdown Phase 2 drain: %d done, %d cancelled in %.2fs",
+                done,
+                cancelled,
+                drain_elapsed,
             )
             if cancelled:
                 logger.warning(
                     "Shutdown: %d hook tasks cancelled (DA extraction may be lost if incomplete)",
                     cancelled,
                 )
+
+        total_elapsed = time.monotonic() - t0
+        logger.info("Shutdown disconnect_all completed in %.2fs", total_elapsed)
 
     async def interrupt_session(self, session_id: str) -> dict:
         """Interrupt a running session.

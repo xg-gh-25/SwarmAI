@@ -11,7 +11,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ThemeProvider } from './contexts/ThemeContext';
 import { ToastProvider } from './contexts/ToastContext';
 import { HealthProvider } from './contexts/HealthContext';
-import { BackendStartupOverlay, UpdateNotification } from './components/common';
+import { BackendStartupOverlay, UpdateNotification, ShutdownOverlay } from './components/common';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { ToastStack } from './components/common/ToastStack';
 import ThreeColumnLayout from './components/layout/ThreeColumnLayout';
@@ -52,6 +52,7 @@ export default function App() {
           <HealthProvider>
           <ErrorBoundary variant="app">
           <ToastStack />
+          <ShutdownOverlay />
           {/* Backend startup overlay - only shown in production mode */}
           {/* onReady callback sets isBackendReady to true, allowing routes to mount */}
           {!isDev && <BackendStartupOverlay onReady={() => setIsBackendReady(true)} />}
