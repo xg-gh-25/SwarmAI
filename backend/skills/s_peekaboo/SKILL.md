@@ -6,9 +6,9 @@ description: >
   DO NOT USE: for terminal commands (use Bash), web scraping (use WebFetch), or non-macOS platforms.
 ---
 
-# Peekaboo - macOS UI Automation
+# Peekaboo
 
-**Why?** See what's on screen, identify UI elements, and interact with any macOS app programmatically. Enables "see and act" workflows -- screenshot analysis, form filling, app testing, and visual debugging.
+macOS UI automation: capture screenshots, inspect UI elements, click, type, and drive any app visually. Enables "see and act" workflows — screenshot analysis, form filling, app testing, and visual debugging.
 
 **Platform:** macOS only. Requires Screen Recording + Accessibility permissions.
 

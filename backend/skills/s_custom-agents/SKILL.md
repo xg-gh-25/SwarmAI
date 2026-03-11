@@ -8,7 +8,7 @@ version: 1.0.0
 tags: [skill, custom-agents, agent-configuration, mcp]
 ---
 
-# SwarmAI Custom Agents
+# Custom Agents
 
 ## Overview
 
