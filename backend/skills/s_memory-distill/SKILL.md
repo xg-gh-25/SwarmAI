@@ -40,17 +40,11 @@ KNOWLEDGE.md or other context files.
 
 Write distilled content to the appropriate sections of MEMORY.md:
 
-1. Use `python3 .claude/skills/s_save-memory/scripts/locked_write.py` for all MEMORY.md writes.
-   **Always prefix entries with the source DailyActivity date** (not today's date):
-   ```bash
-   python3 .claude/skills/s_save-memory/scripts/locked_write.py \
-     --file .context/MEMORY.md \
-     --section "Key Decisions" \
-     --prepend "- 2026-03-07: <distilled entry>"
-   ```
-   Use `--prepend` so newest entries appear at the top of each section.
-   If `--prepend` is not supported, use `--append` — the date prefix still
-   ensures entries are sortable.
+1. Use the **Edit tool** for all MEMORY.md writes — never use `python3 locked_write.py` via Bash (crashes in PyInstaller bundles).
+   **Always prefix entries with the source DailyActivity date** (not today's date).
+   Read `.context/MEMORY.md`, find the target section, and prepend the new entry
+   at the top of the section (after the `##` heading).
+   Format: `- YYYY-MM-DD: <distilled entry>`
 
 2. Map extracted content to MEMORY.md sections:
    - Key decisions → `## Key Decisions`
@@ -61,13 +55,7 @@ Write distilled content to the appropriate sections of MEMORY.md:
    - Current work status → `## Recent Context`
    - Open thread updates → `## Open Threads`
 3. **Fallback**: If a target section is not found (user may have renamed or removed it),
-   append content under a `## Distilled` fallback section at the end of the file:
-   ```bash
-   python3 .claude/skills/s_save-memory/scripts/locked_write.py \
-     --file .context/MEMORY.md \
-     --section "Distilled" \
-     --prepend "- 2026-03-07: <distilled entry>"
-   ```
+   add a new `## Distilled` section at the end of the file and write there.
 4. **Never remove** existing MEMORY.md content — only prepend or append to sections
 5. Keep entries concise: one line per decision/lesson, date-prefixed, grouped by theme
 6. **Deduplication**: Before writing, check if the same content (ignoring date prefix) already exists in the target section. Skip duplicates.
@@ -131,7 +119,7 @@ Cross-reference recent DailyActivity files for thread completions:
 2. Scan recent DailyActivity files for evidence that open threads have been completed
 3. Mark completed threads (e.g., prefix with `✅` or move to a "Completed" sub-section)
 4. Add any new open threads discovered during extraction
-5. Use `locked_write.py` for all MEMORY.md modifications
+5. Use `locked_write.py` for all MEMORY.md modifications via the Edit tool (never via `python3` subprocess)
 
 ### 7. Silence and Logging
 
@@ -146,7 +134,7 @@ Cross-reference recent DailyActivity files for thread completions:
 | Operation | Tool | Lock needed? |
 |---|---|---|
 | Read DailyActivity files | Standard file read | No |
-| Write to MEMORY.md | `python3 .claude/skills/s_save-memory/scripts/locked_write.py` | Yes (handled by script) |
+| Write to MEMORY.md | Edit tool (read → find section → prepend) | No (single writer) |
 | Mark DailyActivity frontmatter | Standard file write | No |
 | Append to DailyActivity | `>>` shell append | No |
 | Move files to Archives | `mv` | No |

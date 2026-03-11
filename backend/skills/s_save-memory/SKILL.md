@@ -42,28 +42,21 @@ Map the content to the appropriate MEMORY.md section:
 | Unfinished tasks, pending items | `Open Threads` |
 | General / unclear | `Key Decisions` (default) |
 
-#### Step 3: Write using locked_write.py
+#### Step 3: Write using the Edit tool
 
-Use the locked write script for concurrent-safe MEMORY.md modification.
+Use the Edit tool to modify MEMORY.md directly. The file is at `.context/MEMORY.md`
+relative to the workspace root.
 
-**Always prefix entries with today's date** in `YYYY-MM-DD` format:
+**Always prefix entries with today's date** in `YYYY-MM-DD` format.
 
-```bash
-python3 .claude/skills/s_save-memory/scripts/locked_write.py \
-  --file .context/MEMORY.md \
-  --section "Key Decisions" \
-  --prepend "- 2026-03-07: <content to save>"
-```
+1. Read `.context/MEMORY.md` to find the target section
+2. Use the Edit tool to prepend the new entry at the top of the section (after the `##` heading)
+3. Format: `- YYYY-MM-DD: <content to save>`
 
-Use `--prepend` (not `--append`) so newest entries appear at the top of each section.
-Replace the section name, date, and content as appropriate.
+Use prepend (add at top of section) so newest entries appear first.
 
-If the target section doesn't exist in MEMORY.md, the script automatically
-appends under a `## Distilled` fallback section.
-
-**If `--prepend` is not supported by locked_write.py**, use `--append` and note
-that entries will be in chronological order (oldest first) instead. The date
-prefix still ensures entries are sortable.
+If the target section doesn't exist in MEMORY.md, add it as a new `## <Section Name>`
+heading at the end of the file.
 
 #### Step 4: Confirm silently
 
@@ -75,7 +68,7 @@ Keep confirmation to one line. Don't repeat the content back.
 
 ### Rules
 
-- **Always use `locked_write.py`** via `python3` — never write MEMORY.md directly with file tools
+- **Always use the Edit tool** — never use `python3 locked_write.py` via Bash (crashes in PyInstaller bundles)
 - **Always date-prefix** — every entry must start with `YYYY-MM-DD:` (today's date)
 - **Newest first** — use `--prepend` so the most recent entries are at the top of each section
 - **Append only** — never remove or replace existing MEMORY.md content
