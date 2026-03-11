@@ -43,6 +43,7 @@ import { useTSCCState } from '../hooks/useTSCCState';
 import { useUnifiedTabState, MAX_OPEN_TABS } from '../hooks/useUnifiedTabState';
 import { useChatStreamingLifecycle, formatElapsed, ELAPSED_DISPLAY_THRESHOLD_MS } from '../hooks/useChatStreamingLifecycle';
 import { ChatHeader, ChatInput, ChatHistorySidebar, FileBrowserSidebar, MessageBubble, SwarmRadar, WelcomeScreen } from './chat/components';
+import { deriveEvolutionCounts } from './chat/components/radar/EvolutionBadge';
 
 import { groupSessionsByTime } from './chat/utils';
 import { RIGHT_SIDEBAR_WIDTH_CONFIGS } from './chat/constants';
@@ -233,6 +234,14 @@ export default function ChatPage() {
     () => messages.reduce((lastIdx, m, i) => m.role === 'assistant' ? i : lastIdx, -1),
     [messages],
   );
+
+  // Evolution session counts — derived from evolution_result messages in the stream (P7 fix)
+  const evolutionCounts = useMemo(() => {
+    const resultEvents = messages
+      .filter((m) => m.evolutionEvent?.eventType === 'evolution_result')
+      .map((m) => ({ data: m.evolutionEvent!.data }));
+    return deriveEvolutionCounts(resultEvents);
+  }, [messages]);
 
   // Refs for frequently-changing values — stabilizes useCallback identity for
   // handleSendMessage (Req 7.1, 7.3). Without these, the callback would need
@@ -1452,6 +1461,7 @@ export default function ChatPage() {
             pendingQuestion={pendingQuestion}
             pendingPermission={pendingPermission}
             activeSessionId={sessionId}
+            evolutionCounts={evolutionCounts}
           />
         )}
 

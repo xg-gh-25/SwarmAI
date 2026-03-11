@@ -53,6 +53,8 @@ from claude_agent_sdk import (
     HookMatcher,
 )
 
+from hooks.evolution_trigger_hook import ToolFailureTracker, check_tool_result_for_failure
+
 from database import db
 from config import settings, get_bedrock_model_id, get_app_data_dir
 from utils.bundle_paths import get_python_executable
@@ -1421,6 +1423,16 @@ class AgentManager:
             }
             return
 
+        # --- Inject pending evolution nudge into the query context ---
+        # If the ToolFailureTracker emitted a nudge on the previous turn,
+        # prepend it to the user message so the agent sees it as context.
+        # The nudge is consumed (cleared) after injection.
+        if is_resuming and session_id:
+            session_info = self._active_sessions.get(session_id, {})
+            pending_nudge = session_info.pop("pending_evolution_nudge", None)
+            if pending_nudge and isinstance(query_content, str):
+                query_content = f"[System context: {pending_nudge}]\n\n{query_content}"
+
         # Get agent config
         agent_config = await db.agents.get(agent_id)
         if not agent_config:
@@ -1822,6 +1834,7 @@ class AgentManager:
                         "created_at": time.time(),
                         "last_used": time.time(),
                         "activity_extracted": False,
+                        "failure_tracker": ToolFailureTracker(),
                     }
                     logger.info(f"Stored long-lived client for session {effective_session_id}")
 
@@ -2271,6 +2284,46 @@ class AgentManager:
                             assistant_model = formatted.get('model')
 
                         yield formatted
+
+                        # --- Evolution trigger: check tool results for repeated failures ---
+                        if formatted.get('type') == 'assistant' and formatted.get('content'):
+                            eff_sid = (
+                                session_context.get("app_session_id")
+                                or session_context.get("sdk_session_id")
+                            )
+                            tracker = (
+                                self._active_sessions.get(eff_sid, {}).get("failure_tracker")
+                                if eff_sid else None
+                            )
+                            if tracker:
+                                # Build tool_use_id → tool_name map from this message's blocks
+                                # and merge into session-level map for cross-message lookups
+                                if eff_sid and eff_sid in self._active_sessions:
+                                    _session_tool_names = self._active_sessions[eff_sid].setdefault("_tool_name_map", {})
+                                else:
+                                    _session_tool_names = {}
+                                for b in formatted['content']:
+                                    if b.get('type') == 'tool_use' and b.get('id') and b.get('name'):
+                                        _session_tool_names[b['id']] = b['name']
+                                for blk in formatted['content']:
+                                    if blk.get('type') == 'tool_result' and blk.get('is_error'):
+                                        tool_name = _session_tool_names.get(blk.get('tool_use_id'), 'unknown')
+                                        error_text = str(blk.get('content', ''))[:200]
+                                        nudge = check_tool_result_for_failure(
+                                            tool_name, error_text, True, tracker
+                                        )
+                                        if nudge:
+                                            # Store nudge for injection into next turn's query
+                                            if eff_sid and eff_sid in self._active_sessions:
+                                                self._active_sessions[eff_sid]["pending_evolution_nudge"] = nudge
+                                            yield {
+                                                "type": "system_nudge",
+                                                "content": nudge,
+                                                "nudge_type": "evolution_trigger",
+                                            }
+                                    elif blk.get('type') == 'tool_result' and not blk.get('is_error'):
+                                        tool_name = _session_tool_names.get(blk.get('tool_use_id'), 'unknown')
+                                        tracker.reset_tool(tool_name)
 
                         # Early-return events: ask_user_question and cmd_permission_request both
                         # pause the conversation to wait for external input. We persist any
@@ -3089,6 +3142,7 @@ Create the skill in the `.claude/skills/` directory within the current workspace
                                 "created_at": time.time(),
                                 "last_used": time.time(),
                                 "activity_extracted": False,
+                                "failure_tracker": ToolFailureTracker(),
                             }
                             logger.info(f"Stored long-lived client for skill creator session {effective_session_id}")
 

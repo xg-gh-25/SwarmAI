@@ -285,7 +285,7 @@ Extracted events are frontend-only — NOT persisted separately to DB.
 ### Configuration Boundaries
 
 - `auto_approve_skills/scripts/installs: false` — user must approve by default. NEVER change defaults to `true`.
-- `max_triggers_per_session: 3` — hard cap via `/tmp/swarm-evo-triggers`
+- `max_triggers_per_session: 3` — hard cap via `/tmp/swarm-evo-triggers-{session_id}`
 - `max_retries: 3` — per-trigger attempt limit
 - ADL priority: Stability > Interpretability > Reusability > Extensibility > Novelty
 

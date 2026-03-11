@@ -19,10 +19,14 @@ Priority ordering (ADL Protocol): Stability > Interpretability > Reusability > E
 | EVOLUTION.md provisioning | `ensure_directory()` | Code-enforced |
 | SSE event marker parsing | `_extract_evolution_events()` regex in `chat.py` | Code-enforced |
 | Frontend evolution rendering | `useChatStreamingLifecycle` + `EvolutionMessage` | Code-enforced |
+| EvolutionBadge wiring | `deriveEvolutionCounts` in ChatPage → SwarmRadar prop | Code-enforced |
 | Config defaults | `AppConfigManager` `evolution` key | Code-enforced |
-| Trigger detection | `s_self-evolution/SKILL.md` instructions | Prompt-dependent |
+| Entry deprecation + pruning | `EvolutionMaintenanceHook` at session close | Code-enforced |
+| Tool failure trigger nudge | `ToolFailureTracker` in message loop | Code-enforced |
+| Trigger detection | `s_self-evolution/SKILL.md` instructions | Prompt-dependent (code-assisted) |
 | Evolution loop execution | `s_self-evolution/SKILL.md` instructions | Prompt-dependent |
 | EVOLUTION.md writes | Agent uses Read+Edit / `locked_write.py` | Prompt-dependent |
+| Entry dedup before write | `s_self-evolution/SKILL.md` Step 0 procedure | Prompt-dependent |
 | JSONL changelog | Agent appends after every Edit | Prompt-dependent |
 
 ## SSE Event Flow — Do Not Break the Chain
@@ -55,7 +59,7 @@ All evolution config lives under `config.json["evolution"]`, read via `AppConfig
 
 - `enabled: true` — master switch. `false` disables ALL evolution.
 - `auto_approve_skills/scripts/installs: false` — user must approve capability creation by default
-- `max_triggers_per_session: 3` — hard cap, enforced by `/tmp/swarm-evo-triggers` counter
+- `max_triggers_per_session: 3` — hard cap, enforced by `/tmp/swarm-evo-triggers-{session_id}` counter
 - `max_retries: 3` — per-trigger attempt limit
 - `max_active_entries: 30` — soft cap on EVOLUTION.md entries
 
@@ -63,7 +67,7 @@ When modifying config defaults, NEVER change `auto_approve_*` to `true` — this
 
 ## Trigger Counter Isolation
 
-The per-session trigger counter at `/tmp/swarm-evo-triggers` has a known limitation: multiple concurrent sessions share the same file (no session ID scoping). This is acceptable for the current single-user desktop app but would need per-session scoping if multi-user support is added.
+The per-session trigger counter uses session-scoped files at `/tmp/swarm-evo-triggers-{session_id}`. Each session gets its own counter file, preventing cross-session interference. Files in `/tmp/` auto-clean on OS reboot.
 
 ## Regression Checklist
 
