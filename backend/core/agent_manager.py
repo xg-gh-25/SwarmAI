@@ -308,6 +308,8 @@ class AgentManager:
         self._credential_validator: CredentialValidator | None = credential_validator
         # Session lifecycle hook manager (set at startup via set_hook_manager)
         self._hook_manager = None  # type: SessionLifecycleHookManager | None
+        # Background hook executor — fire-and-forget, never blocks chat path
+        self._hook_executor = None  # type: BackgroundHookExecutor | None
         # Per-session user turn counter for context monitoring.
         # Key: effective session_id, Value: cumulative user turns.
         self._user_turn_counts: dict[str, int] = {}
@@ -333,6 +335,20 @@ class AgentManager:
     def set_hook_manager(self, hook_manager) -> None:
         """Inject the session lifecycle hook manager at startup."""
         self._hook_manager = hook_manager
+
+    def set_hook_executor(self, executor) -> None:
+        """Inject the background hook executor at startup.
+
+        The executor wraps the hook manager and runs hooks as
+        fire-and-forget background tasks, fully decoupled from the
+        chat path.
+        """
+        self._hook_executor = executor
+
+    @property
+    def hook_executor(self):
+        """Public read access to the background hook executor."""
+        return self._hook_executor
 
     @property
     def hook_manager(self):
@@ -409,13 +425,16 @@ class AgentManager:
         but has not yet reached the full TTL.  The session stays alive so
         the user can resume.  The ``activity_extracted`` flag prevents
         re-extraction on subsequent loop iterations.
+
+        Fires as a background task via ``_hook_executor`` so the cleanup
+        loop is never blocked by slow LLM calls or I/O.
         """
-        if not self._hook_manager:
-            return
+        executor = self._hook_executor
+        hooks = executor.hooks if executor else (self._hook_manager._hooks if self._hook_manager else [])
 
         # Find the DailyActivity extraction hook by name
         extraction_hook = None
-        for hook in self._hook_manager._hooks:
+        for hook in hooks:
             if getattr(hook, "name", "") == "daily_activity_extraction":
                 extraction_hook = hook
                 break
@@ -424,23 +443,30 @@ class AgentManager:
             return
 
         try:
-            # Set flag BEFORE execution to prevent re-entry from the next
+            # Set flag BEFORE firing to prevent re-entry from the next
             # loop iteration and narrow the race window with _get_active_client
             # (which resets the flag when the user sends a new message).
             info["activity_extracted"] = True
             context = await self._build_hook_context(session_id, info)
-            await asyncio.wait_for(
-                extraction_hook.execute(context),
-                timeout=30.0,
-            )
-            logger.info(
-                "Early DailyActivity extraction for idle session %s (idle %ds)",
-                session_id,
-                int(time.time() - info.get("last_used", info["created_at"])),
-            )
-        except asyncio.TimeoutError:
-            info["activity_extracted"] = False  # Allow retry on next cycle
-            logger.error("Early activity extraction timed out for session %s", session_id)
+
+            if executor:
+                # Fire-and-forget — cleanup loop is not blocked
+                executor.fire_single(extraction_hook, context, timeout=30.0)
+                logger.info(
+                    "Early DailyActivity extraction queued (background) for idle session %s",
+                    session_id,
+                )
+            else:
+                # Fallback: inline execution (should not happen in production)
+                await asyncio.wait_for(
+                    extraction_hook.execute(context),
+                    timeout=30.0,
+                )
+                logger.info(
+                    "Early DailyActivity extraction for idle session %s (idle %ds)",
+                    session_id,
+                    int(time.time() - info.get("last_used", info["created_at"])),
+                )
         except Exception as exc:
             info["activity_extracted"] = False  # Allow retry on next cycle
             logger.error("Early activity extraction failed for session %s: %s", session_id, exc)
@@ -448,29 +474,37 @@ class AgentManager:
     async def _cleanup_session(self, session_id: str, skip_hooks: bool = False):
         """Disconnect and remove a stored session client.
 
+        Hooks are fired as **background tasks** via ``_hook_executor``
+        so session cleanup (and thus the chat path) is never blocked
+        by slow hook execution (LLM calls, git operations, etc.).
+
         Args:
             session_id: The session to clean up.
             skip_hooks: If True, skip firing lifecycle hooks. Used by
                 error-recovery paths and ``disconnect_all()`` (which
                 fires hooks in its own outer loop).
         """
-        # get BEFORE hooks — hooks need session info to build HookContext
+        # Build hook context BEFORE popping — hooks need session info
         info = self._active_sessions.get(session_id)
-        if info and self._hook_manager and not skip_hooks:
+        if info and not skip_hooks:
             try:
                 context = await self._build_hook_context(session_id, info)
-                if info.get("activity_extracted"):
-                    # Activity already captured by idle-trigger — run
-                    # remaining hooks (auto-commit, distillation) only.
-                    for hook in self._hook_manager._hooks:
-                        if getattr(hook, "name", "") == "daily_activity_extraction":
-                            continue
-                        try:
-                            await asyncio.wait_for(hook.execute(context), timeout=30.0)
-                        except Exception as exc:
-                            logger.error("Hook '%s' failed for %s: %s", getattr(hook, "name", "?"), session_id, exc)
-                else:
-                    await self._hook_manager.fire_post_session_close(context)
+                skip_list = (
+                    ["daily_activity_extraction"]
+                    if info.get("activity_extracted")
+                    else None
+                )
+
+                if self._hook_executor:
+                    # Fire-and-forget — cleanup continues immediately
+                    self._hook_executor.fire(context, skip_hooks=skip_list)
+                elif self._hook_manager:
+                    # Fallback: fire as background task so cleanup is never blocked.
+                    # Even without BackgroundHookExecutor, hooks must not block chat.
+                    asyncio.create_task(
+                        self._hook_manager.fire_post_session_close(context),
+                        name=f"hooks-fallback-{session_id[:8]}",
+                    )
             except Exception as exc:
                 logger.error("Hook context build failed for %s: %s", session_id, exc)
         # NOW pop and clean up resources
@@ -1000,26 +1034,9 @@ class AgentManager:
             "message": msg,
         }
 
-    async def _auto_commit_workspace(self, title: str) -> None:
-        """Auto-commit workspace changes at session end. Runs in background thread."""
-        ws_path = initialization_manager.get_cached_workspace_path()
-        def _commit():
-            try:
-                r = subprocess.run(
-                    ["git", "status", "--porcelain"], cwd=ws_path,
-                    capture_output=True, text=True,
-                )
-                if not r.stdout.strip():
-                    return  # Nothing changed (tracked + untracked)
-                subprocess.run(["git", "add", "-A"], cwd=ws_path, capture_output=True)
-                subprocess.run(
-                    ["git", "commit", "-m", f"Session: {title[:50]}"],
-                    cwd=ws_path, capture_output=True,
-                )
-                logger.info("Auto-committed workspace changes: %s", title[:50])
-            except Exception as exc:
-                logger.warning("Auto-commit failed: %s", exc)
-        await asyncio.to_thread(_commit)
+    # NOTE: _auto_commit_workspace() was removed — replaced by
+    # WorkspaceAutoCommitHook (hooks/auto_commit_hook.py) which runs
+    # as a fire-and-forget background task via BackgroundHookExecutor.
 
     async def _build_system_prompt(
         self,
@@ -2204,13 +2221,17 @@ class AgentManager:
                             # --- Stale-result detection ---
                             # During --resume the SDK may return the *previous* turn's
                             # cached ResultMessage before it processes the new query.
-                            # Heuristic: stale if resuming, no tool_use seen, num_turns<=1.
+                            # Heuristic: stale if resuming, no tool_use seen, no new
+                            # text blocks from AssistantMessage, and num_turns<=1.
+                            # A genuine text-only response will have _saw_new_text_block=True
+                            # from the preceding AssistantMessage — only stale replays skip that.
                             # If retries remain, bump generation and re-send query.
                             # If retries exhausted, discard the stale result silently.
                             _num_turns = getattr(message, 'num_turns', 0) or 0
                             _looks_stale = (
                                 is_resuming
                                 and not _saw_tool_use
+                                and not _saw_new_text_block
                                 and _num_turns <= 1
                             )
 
@@ -2262,21 +2283,21 @@ class AgentManager:
 
                             if _looks_stale and _stale_retry_count >= _MAX_STALE_RETRIES:
                                 # Retry budget exhausted but result still looks stale.
-                                # Yield an error so the frontend shows a message instead
-                                # of silently ending with an empty assistant bubble.
+                                # This is likely a false positive: after re-sending
+                                # the query, the SDK may return the valid response as
+                                # a bare ResultMessage without a preceding
+                                # AssistantMessage TextBlock, making it look stale.
+                                # Accept the result instead of discarding it — the
+                                # re-sent query's answer IS the valid response.
                                 _result_preview = (message.result or "")[:80]
                                 logger.warning(
-                                    "Stale ResultMessage discarded after exhausting retries "
-                                    "(retry_count=%d, num_turns=%d, saw_tool_use=%s): %s",
+                                    "Stale ResultMessage after exhausting retries "
+                                    "(retry_count=%d, num_turns=%d, saw_tool_use=%s): %s "
+                                    "— accepting as valid response (false-positive guard)",
                                     _stale_retry_count, _num_turns, _saw_tool_use, _result_preview,
                                 )
-                                session_context["had_error"] = True
-                                yield _build_error_event(
-                                    code="STALE_SESSION",
-                                    message="Session could not resume — please start a new conversation.",
-                                    suggested_action="Your previous messages are saved. Start a new chat to continue.",
-                                )
-                                continue
+                                # Fall through to normal result handling below
+                                # instead of discarding.
 
                             # --- Normal (non-stale) result handling ---
                             result_text = message.result
@@ -2878,32 +2899,36 @@ class AgentManager:
     async def disconnect_all(self):
         """Disconnect all active clients and long-lived sessions.
 
-        Fires lifecycle hooks in the outer loop first, then calls
-        ``_cleanup_session(skip_hooks=True)`` for resource cleanup only.
-        This prevents double hook execution on shutdown.
+        Two-phase shutdown:
+        1. **Fast phase** — Fire hooks as background tasks (non-blocking),
+           then immediately disconnect SDK clients and clean up resources.
+           This phase completes in ~100ms regardless of hook count.
+        2. **Drain phase** — Give background hooks up to 2s to finish.
+           Hooks that don't complete are cancelled — most are idempotent
+           (auto-commit, distillation, evolution) but DailyActivity
+           extraction is not (cancelled = session summary lost).
+
+        This design ensures the Tauri 3s grace period is sufficient for
+        the critical work (SDK disconnect), while hooks get best-effort
+        execution in the background.
         """
-        # Fire hooks for each active session before cleanup
+        # Phase 1: Fire hooks as background tasks (immediate return)
         for session_id in list(self._active_sessions.keys()):
-            if self._hook_manager:
-                info = self._active_sessions.get(session_id)
-                if info:
-                    try:
-                        context = await self._build_hook_context(session_id, info)
-                        if info.get("activity_extracted"):
-                            # Already extracted — skip extraction, run rest
-                            for hook in self._hook_manager._hooks:
-                                if getattr(hook, "name", "") == "daily_activity_extraction":
-                                    continue
-                                try:
-                                    await asyncio.wait_for(hook.execute(context), timeout=30.0)
-                                except Exception as exc:
-                                    logger.error("Hook '%s' failed for %s: %s", getattr(hook, "name", "?"), session_id, exc)
-                        else:
-                            await self._hook_manager.fire_post_session_close(context)
-                    except Exception as exc:
-                        logger.error("Shutdown hook failed for %s: %s", session_id, exc)
-            # Resource cleanup only — hooks already fired above
+            info = self._active_sessions.get(session_id)
+            if info and self._hook_executor:
+                try:
+                    context = await self._build_hook_context(session_id, info)
+                    skip_list = (
+                        ["daily_activity_extraction"]
+                        if info.get("activity_extracted")
+                        else None
+                    )
+                    self._hook_executor.fire(context, skip_hooks=skip_list)
+                except Exception as exc:
+                    logger.error("Shutdown hook fire failed for %s: %s", session_id, exc)
+            # Resource cleanup only — hooks running in background
             await self._cleanup_session(session_id, skip_hooks=True)
+
         # Clean up any remaining transient clients
         for session_id, client in list(self._clients.items()):
             try:
@@ -2912,9 +2937,25 @@ class AgentManager:
             except Exception as e:
                 logger.error(f"Error disconnecting client {session_id}: {e}")
         self._clients.clear()
+
         # Cancel the cleanup loop
         if self._cleanup_task and not self._cleanup_task.done():
             self._cleanup_task.cancel()
+
+        # Phase 2: Drain background hooks (best-effort, bounded timeout)
+        # 2s drain fits within Tauri's 3s grace period (PE Review Finding #3)
+        if self._hook_executor:
+            pending = self._hook_executor.pending_count
+            logger.info("Shutdown: %d hook tasks in flight before drain", pending)
+            done, cancelled = await self._hook_executor.drain(timeout=2.0)
+            logger.info(
+                "Shutdown drain complete: %d done, %d cancelled", done, cancelled
+            )
+            if cancelled:
+                logger.warning(
+                    "Shutdown: %d hook tasks cancelled (DA extraction may be lost if incomplete)",
+                    cancelled,
+                )
 
     async def interrupt_session(self, session_id: str) -> dict:
         """Interrupt a running session.
