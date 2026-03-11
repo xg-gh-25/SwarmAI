@@ -213,7 +213,7 @@ export default function ChatPage() {
     createErrorHandler,
     contextWarning,
     setContextWarning,
-    clearContextWarning,
+    clearContextWarning: _clearContextWarning,
   } = useChatStreamingLifecycle({
     queryClient,
     getTabState,
@@ -1344,11 +1344,11 @@ export default function ChatPage() {
                         <ChatErrorMessage
                           key={msg.id}
                           error={{
-                            code: (msg as Record<string, unknown>).errorCode as string | undefined,
+                            code: (msg as unknown as Record<string, unknown>).errorCode as string | undefined,
                             message: errorText,
-                            detail: (msg as Record<string, unknown>).errorDetail as string | undefined,
-                            suggestedAction: (msg as Record<string, unknown>).suggestedAction as string | undefined,
-                            retryAfter: (msg as Record<string, unknown>).retryAfter as number | undefined,
+                            detail: (msg as unknown as Record<string, unknown>).errorDetail as string | undefined,
+                            suggestedAction: (msg as unknown as Record<string, unknown>).suggestedAction as string | undefined,
+                            retryAfter: (msg as unknown as Record<string, unknown>).retryAfter as number | undefined,
                           }}
                           onRetry={handleRetryLastMessage}
                         />

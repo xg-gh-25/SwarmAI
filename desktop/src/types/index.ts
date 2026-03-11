@@ -863,14 +863,6 @@ export type ThreadLifecycleState = 'new' | 'active' | 'paused' | 'failed' | 'can
 /** Operational scope: workspace-level or project-level. */
 export type ScopeType = 'workspace' | 'project';
 
-/** The five telemetry event types emitted via SSE. */
-export type TelemetryEventType =
-  | 'agent_activity'
-  | 'tool_invocation'
-  | 'capability_activated'
-  | 'sources_updated'
-  | 'summary_updated';
-
 /** Scope and thread metadata for the Current Context module. */
 export interface TSCCContext {
   scopeLabel: string;
@@ -891,7 +883,7 @@ export interface TSCCSource {
   origin: string;
 }
 
-/** Live cognitive state for a single thread (all five modules). */
+/** Live cognitive state for a single thread. */
 export interface TSCCLiveState {
   context: TSCCContext;
   activeAgents: string[];
@@ -982,6 +974,8 @@ export interface RateLimitEntry {
 export interface FieldErrorMap {
   [fieldName: string]: string;
 }
+
+
 
 // ============== Radar Types (Swarm Radar Redesign) ==============
 
