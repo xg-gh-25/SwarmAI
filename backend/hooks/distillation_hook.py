@@ -54,9 +54,9 @@ class DistillationTriggerHook:
     """Checks undistilled DailyActivity count and runs direct distillation.
 
     Unlike the previous flag-based approach, this hook distills directly
-    using ``locked_write.py`` via subprocess.  If direct distillation
-    fails, it falls back to writing a ``.needs_distillation`` flag for
-    the next agent session.
+    using ``locked_read_modify_write()`` via direct function call.
+    If direct distillation fails, it falls back to writing a
+    ``.needs_distillation`` flag for the next agent session.
     """
 
     name = "distillation_trigger"
