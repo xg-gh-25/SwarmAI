@@ -63,7 +63,8 @@ from .initialization_manager import initialization_manager
 
 logger = logging.getLogger(__name__)
 
-# Agent defaults extracted to agent_defaults.py — re-exported for backward compatibility
+# Agent defaults extracted to agent_defaults.py — re-exported for consumers
+# (routers/agents.py, routers/system.py, initialization_manager.py, tests)
 from .agent_defaults import (  # noqa: F401
     DEFAULT_AGENT_ID,
     SWARM_AGENT_NAME,
@@ -73,20 +74,23 @@ from .agent_defaults import (  # noqa: F401
 )
 
 
-# Claude environment extracted to claude_environment.py — re-exported for backward compatibility
-from .claude_environment import _ClaudeClientWrapper, _configure_claude_environment, AuthenticationNotConfiguredError, _env_lock  # noqa: F401
+# Claude environment extracted to claude_environment.py
+from .claude_environment import (
+    _ClaudeClientWrapper,
+    _configure_claude_environment,
+    AuthenticationNotConfiguredError,
+    _env_lock,
+)
 
 
-# PermissionManager extracted to permission_manager.py — re-exported for backward compatibility
+# PermissionManager extracted to permission_manager.py — re-exported for
+# consumers (routers/chat.py, security_hooks.py)
 from .permission_manager import permission_manager as _pm
 
 approve_command = _pm.approve_command
 is_command_approved = _pm.is_command_approved
 set_permission_decision = _pm.set_permission_decision
 wait_for_permission_decision = _pm.wait_for_permission_decision
-
-# Re-export the permission request queue for backward compatibility
-_permission_request_queue = _pm.get_permission_queue()
 
 # Keep clear_session_approvals and hash_command accessible
 clear_session_approvals = _pm.clear_session_approvals
@@ -102,14 +106,14 @@ from .credential_validator import CredentialValidator
 from .app_config_manager import AppConfigManager
 
 
-# ContentBlockAccumulator extracted to content_accumulator.py — re-exported for backward compatibility
-from .content_accumulator import ContentBlockAccumulator  # noqa: F401
+# ContentBlockAccumulator extracted to content_accumulator.py
+from .content_accumulator import ContentBlockAccumulator  # noqa: F401 — used internally
 
 
 
 
-# Security hooks extracted to security_hooks.py — re-exported for backward compatibility
-from .security_hooks import (  # noqa: F401
+# Security hooks extracted to security_hooks.py — used internally by _build_hooks()
+from .security_hooks import (
     DANGEROUS_PATTERNS,
     check_dangerous_command,
     pre_tool_logger,

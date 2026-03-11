@@ -224,28 +224,4 @@ export function ApiError({ error, onRetry, onDismiss, compact = false }: ApiErro
   );
 }
 
-// Toast-style error notification
-/** @deprecated Use useToast() from contexts/ToastContext instead */
-interface ErrorToastProps {
-  error: ErrorResponse;
-  onDismiss: () => void;
-  autoHideDuration?: number;
-}
-
-/** @deprecated Use useToast() from contexts/ToastContext instead */
-export function ErrorToast({ error, onDismiss, autoHideDuration = 5000 }: ErrorToastProps): React.ReactElement {
-  React.useEffect(() => {
-    if (autoHideDuration > 0) {
-      const timer = setTimeout(onDismiss, autoHideDuration);
-      return () => clearTimeout(timer);
-    }
-  }, [autoHideDuration, onDismiss]);
-
-  return (
-    <div className="fixed bottom-4 right-4 z-50 animate-in slide-in-from-bottom-2 fade-in duration-200">
-      <ApiError error={error} onDismiss={onDismiss} compact />
-    </div>
-  );
-}
-
 export default ErrorBoundary;

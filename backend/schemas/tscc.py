@@ -70,31 +70,30 @@ class TSCCLiveState(BaseModel):
     """Live cognitive state for a single thread.
 
     After TSCC simplification (Req 6.3-6.4), only ``context`` is actively
-    populated.  The remaining fields are retained for API backward
-    compatibility but are always empty/default.
+    populated.  The remaining fields are retained for API compatibility
+    but are always empty/default.
     """
 
     context: TSCCContext = Field(..., description="Scope and thread metadata")
-    # ── Deprecated fields (always empty after TSCC simplification) ──
     active_agents: list[str] = Field(
-        default_factory=list, description="[Deprecated] Always empty"
+        default_factory=list, description="Always empty — retained for API compat"
     )
     active_capabilities: TSCCActiveCapabilities = Field(
         default_factory=TSCCActiveCapabilities,
-        description="[Deprecated] Always empty",
+        description="Always empty — retained for API compat",
     )
     what_ai_doing: list[str] = Field(
         default_factory=list,
         max_length=4,
-        description="[Deprecated] Always empty",
+        description="Always empty — retained for API compat",
     )
     active_sources: list[TSCCSource] = Field(
-        default_factory=list, description="[Deprecated] Always empty"
+        default_factory=list, description="Always empty — retained for API compat"
     )
     key_summary: list[str] = Field(
         default_factory=list,
         max_length=5,
-        description="[Deprecated] Always empty",
+        description="Always empty — retained for API compat",
     )
 
 
