@@ -5,6 +5,8 @@ description: >
   Orchestrates evolution loops with up to 3 attempts per trigger.
   Persists results to EVOLUTION.md for cross-session growth.
   Captures corrections and competence. Auto-promotes recurring patterns.
+  TRIGGER: always-active — auto-detects capability gaps, stuck states, and user corrections. Not user-invoked.
+  DO NOT USE: manually — this skill runs automatically in the background.
 ---
 
 # Self-Evolution Engine

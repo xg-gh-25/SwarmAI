@@ -1,5 +1,5 @@
 ---
-name: s_sonos
+name: Sonos Speaker Control
 description: >
   Control Sonos speakers via the `sonos` CLI: playback, volume, grouping, queue, search & play music, favorites, scenes.
   TRIGGER: "sonos", "play music", "play song", "what's playing", "set volume", "pause music", "skip track", "next song", "stop music", "group speakers", "party mode".

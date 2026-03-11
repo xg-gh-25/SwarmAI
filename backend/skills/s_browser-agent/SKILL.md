@@ -9,7 +9,10 @@ description: >
   or API calls (use Bash/curl directly).
 ---
 
-# Browser Agent — DOM-Based Web Automation
+# Browser Agent
+
+DOM-based web automation: navigate websites, read compressed page content, click elements,
+fill forms, extract data, and take screenshots using Playwright.
 
 ## MCP + Skill Routing
 
