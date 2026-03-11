@@ -314,6 +314,7 @@ class InitializationManager:
         Each step is independent — failure in one does not block others.
 
         Steps:
+            0. Clean stale git index.lock (safe at startup — no git ops in flight)
             1. Re-scan skills (populates cache with latest built-in skills)
             2. Re-project skill symlinks (creates/removes symlinks based on cache)
             3. Refresh built-in context files (overwrites with latest source)
@@ -323,6 +324,20 @@ class InitializationManager:
         from pathlib import Path
 
         workspace_path = self.get_cached_workspace_path()
+
+        # Step 0: Clean stale git index.lock from previous crash/restart.
+        # Safe at startup because no git operations from our app can be
+        # in-flight when the backend is just booting.
+        try:
+            lock_file = Path(workspace_path) / ".git" / "index.lock"
+            if lock_file.exists():
+                lock_file.unlink()
+                logger.warning(
+                    "Removed stale .git/index.lock from %s (left by previous crash)",
+                    workspace_path,
+                )
+        except Exception as e:
+            logger.warning("Failed to clean stale git index.lock: %s", e)
 
         # Step 1: Re-scan skills (MUST run before projection)
         _sm = None

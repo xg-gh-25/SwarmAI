@@ -1991,8 +1991,51 @@ class AgentManager:
             _saw_tool_use = False
             _saw_new_text_block = False  # True once an AssistantMessage TextBlock arrives
 
+            # Watchdog: detect dead SDK subprocess.
+            # If the CLI subprocess dies after init but before sending any
+            # response, the stdout stream hangs forever (anyio TextReceiveStream
+            # doesn't detect broken pipe reliably). This timeout surfaces an
+            # error to the user instead of infinite "Thinking...".
+            # - 120s for the first message after init (model may be slow)
+            # - 300s between subsequent messages (tool use can be slow)
+            _WATCHDOG_INITIAL_TIMEOUT = 120   # seconds before first real message
+            _WATCHDOG_INTER_MSG_TIMEOUT = 300  # seconds between messages during tool use
+            _got_first_real_message = False
+
             while True:
-                item = await combined_queue.get()
+                watchdog_timeout = (
+                    _WATCHDOG_INTER_MSG_TIMEOUT if _got_first_real_message
+                    else _WATCHDOG_INITIAL_TIMEOUT
+                )
+                try:
+                    item = await asyncio.wait_for(
+                        combined_queue.get(), timeout=watchdog_timeout
+                    )
+                except asyncio.TimeoutError:
+                    # Check if the SDK reader task is still alive
+                    if sdk_reader_task and sdk_reader_task.done():
+                        logger.error(
+                            "Watchdog: SDK reader task finished but no sdk_done received "
+                            "(subprocess likely crashed). Timeout after %ds.",
+                            watchdog_timeout,
+                        )
+                    else:
+                        logger.error(
+                            "Watchdog: No SDK message received in %ds. "
+                            "CLI subprocess may be dead or unresponsive.",
+                            watchdog_timeout,
+                        )
+                    session_context["had_error"] = True
+                    yield _build_error_event(
+                        code="SDK_SUBPROCESS_TIMEOUT",
+                        message=(
+                            "The AI backend stopped responding. "
+                            "This usually means the backend process restarted "
+                            "or the connection to the AI service was lost."
+                        ),
+                        suggested_action="Please try sending your message again.",
+                    )
+                    break
 
                 # Generation filter: discard items from old SDK reader generations.
                 # Permission items (no "gen" key) pass through unconditionally.
@@ -2011,6 +2054,37 @@ class AgentManager:
 
                 if item["source"] == "error":
                     logger.error(f"Error from SDK reader: {item['error']}")
+                    session_context["had_error"] = True
+                    # Persist any partial assistant content accumulated before
+                    # the error — prevents message loss on SDK crash / restart.
+                    eff_session = (
+                        session_context["app_session_id"]
+                        if session_context.get("app_session_id") is not None
+                        else session_context.get("sdk_session_id")
+                    )
+                    if assistant_content and eff_session:
+                        try:
+                            await self._save_message(
+                                session_id=eff_session,
+                                role="assistant",
+                                content=assistant_content.blocks,
+                                model=assistant_model,
+                            )
+                            logger.info(f"Saved partial assistant content ({len(assistant_content.blocks)} blocks) before error")
+                        except Exception:
+                            logger.warning("Failed to save partial assistant content on error", exc_info=True)
+                    # TSCC: mark lifecycle as failed (best-effort)
+                    try:
+                        sid = session_context.get("sdk_session_id")
+                        if sid:
+                            await _tscc_state_manager.set_lifecycle_state(sid, "failed")
+                    except Exception:
+                        logger.debug("TSCC: failed lifecycle update failed", exc_info=True)
+                    yield _build_error_event(
+                        code="SDK_STREAM_ERROR",
+                        message=str(item["error"]),
+                        detail=item.get("detail"),
+                    )
                     break
 
                 if item["source"] == "sdk":
@@ -2040,14 +2114,24 @@ class AgentManager:
                                     await _tscc_state_manager.set_lifecycle_state(sid, "failed")
                             except Exception:
                                 logger.debug("TSCC: failed lifecycle update failed", exc_info=True)
-                            # Remove broken session from reuse pool
-                            # Use effective_session_id so we find the entry
-                            # even after resume-fallback remapping.
+                            # Persist partial assistant content before error
                             eff_sid = (
                                 session_context["app_session_id"]
                                 if session_context.get("app_session_id") is not None
                                 else session_context.get("sdk_session_id")
                             )
+                            if assistant_content and eff_sid:
+                                try:
+                                    await self._save_message(
+                                        session_id=eff_sid,
+                                        role="assistant",
+                                        content=assistant_content.blocks,
+                                        model=assistant_model,
+                                    )
+                                    logger.info(f"Saved partial assistant content ({len(assistant_content.blocks)} blocks) before error_during_execution")
+                                except Exception:
+                                    logger.warning("Failed to save partial assistant content on error_during_execution", exc_info=True)
+                            # Remove broken session from reuse pool
                             if eff_sid and eff_sid in self._active_sessions:
                                 await self._cleanup_session(eff_sid, skip_hooks=True)
                                 logger.info(f"Removed broken session {eff_sid} from active sessions pool")
@@ -2094,6 +2178,23 @@ class AgentManager:
                                     await _tscc_state_manager.set_lifecycle_state(sid, "failed")
                             except Exception:
                                 logger.debug("TSCC: failed lifecycle update failed", exc_info=True)
+                            # Persist partial assistant content before error
+                            eff_sid = (
+                                session_context["app_session_id"]
+                                if session_context.get("app_session_id") is not None
+                                else session_context.get("sdk_session_id")
+                            )
+                            if assistant_content and eff_sid:
+                                try:
+                                    await self._save_message(
+                                        session_id=eff_sid,
+                                        role="assistant",
+                                        content=assistant_content.blocks,
+                                        model=assistant_model,
+                                    )
+                                    logger.info(f"Saved partial assistant content ({len(assistant_content.blocks)} blocks) before SDK error")
+                                except Exception:
+                                    logger.warning("Failed to save partial assistant content on SDK error", exc_info=True)
                             yield _build_error_event(
                                 code="SDK_ERROR",
                                 message=error_msg,
@@ -2161,13 +2262,19 @@ class AgentManager:
 
                             if _looks_stale and _stale_retry_count >= _MAX_STALE_RETRIES:
                                 # Retry budget exhausted but result still looks stale.
-                                # Discard it — do NOT yield stale text to the frontend.
-                                # The loop will continue to sdk_done and exit cleanly.
+                                # Yield an error so the frontend shows a message instead
+                                # of silently ending with an empty assistant bubble.
                                 _result_preview = (message.result or "")[:80]
                                 logger.warning(
                                     "Stale ResultMessage discarded after exhausting retries "
                                     "(retry_count=%d, num_turns=%d, saw_tool_use=%s): %s",
                                     _stale_retry_count, _num_turns, _saw_tool_use, _result_preview,
+                                )
+                                session_context["had_error"] = True
+                                yield _build_error_event(
+                                    code="STALE_SESSION",
+                                    message="Session could not resume — please start a new conversation.",
+                                    suggested_action="Your previous messages are saved. Start a new chat to continue.",
                                 )
                                 continue
 
@@ -2261,6 +2368,7 @@ class AgentManager:
                     # blocks, which indicate the SDK is doing real work (not
                     # just replaying the previous turn's cached result).
                     if isinstance(message, AssistantMessage):
+                        _got_first_real_message = True
                         for _blk in message.content:
                             if isinstance(_blk, ToolUseBlock):
                                 _saw_tool_use = True
