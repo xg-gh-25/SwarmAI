@@ -8,7 +8,7 @@ version: 1.0.0
 tags: [skill, estimate-tokens, tokens, word-count, ai, context-window]
 ---
 
-# Estimate Tokens
+# Token Estimator
 
 ## Overview
 

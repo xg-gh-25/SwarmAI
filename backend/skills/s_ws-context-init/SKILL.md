@@ -7,7 +7,7 @@ description: >
 version: 1.0.0
 ---
 
-# Workspace Context Creator
+# Workspace Init
 
 Bootstraps a workspace context file so SwarmAI agents can be productive in this project faster.
 
