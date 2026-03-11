@@ -3037,7 +3037,10 @@ class AgentManager:
         )
 
         # ── Phase 1b: Inline DailyActivity extraction ────────────────
-        # Find the DA hook by name (same pattern as _extract_activity_early)
+        # Find the DA hook by name (same pattern as _extract_activity_early).
+        # Prefer _hook_executor.hooks (public attr); fall back to
+        # _hook_manager._hooks only if executor is absent (defensive,
+        # should not happen after hook-execution-decoupling spec).
         da_hook = None
         if self._hook_executor:
             for hook in self._hook_executor.hooks:
@@ -3084,6 +3087,9 @@ class AgentManager:
                             result,
                         )
                     else:
+                        # Safe to mutate: gather() has returned, so this is
+                        # sequential.  Phase 1c/1d read the same info refs
+                        # but run strictly after this loop completes.
                         info["activity_extracted"] = True
             except asyncio.TimeoutError:
                 elapsed = time.monotonic() - t1b
