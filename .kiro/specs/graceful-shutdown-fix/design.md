@@ -78,10 +78,11 @@ sequenceDiagram
 
 **New behavior**:
 1. Emit `shutdown-started` Tauri event to the frontend **before entering `block_on()`**. This is critical because `block_on()` blocks the Tauri event loop — any event emitted inside `block_on()` cannot be delivered to the frontend until the block completes, defeating the purpose of the overlay.
-2. Call `send_shutdown_request(port)` which now returns `bool` (success/failure).
-3. **Fast path**: If `send_shutdown_request` returned `true`, skip the grace period sleep — the backend has already completed `disconnect_all()` and responded.
-4. **Timeout path**: If `send_shutdown_request` returned `false` (curl timed out or failed), the 10s curl timeout has already elapsed, so no additional sleep is needed.
-5. Call `kill_process_tree(pid)` as safety net (always).
+2. Call `send_shutdown_request(port)` (returns `bool`, but return value is intentionally ignored here — see note below).
+3. **No grace period sleep at all.** The old `thread::sleep(3s)` is eliminated entirely. The curl/PowerShell timeout (10s) serves as the implicit grace period: if the backend responds quickly, `send_shutdown_request` returns quickly (fast path). If it times out, 10s has already elapsed (timeout path). Either way, no additional sleep is needed.
+4. Call `kill_process_tree(pid)` as safety net (always).
+
+**Note on return value:** Unlike `stop_backend` (which uses the return value to conditionally sleep), `graceful_shutdown_and_kill` ignores the return value because the grace period sleep was eliminated entirely. Both success and timeout paths proceed directly to force-kill. This is simpler than a conditional fast-path and achieves the same result.
 
 **Event loop blocking limitation:** `graceful_shutdown_and_kill()` runs inside `tauri::async_runtime::block_on()`, which blocks the Tauri event loop for the duration of the shutdown request (up to 10s). The `shutdown-started` event must be emitted in the calling handler (e.g., `on_window_event` closure) BEFORE calling `graceful_shutdown_and_kill()`. The event may still not be delivered if the event loop is already congested, but this is best-effort — the overlay is a UX improvement, not a correctness requirement.
 
@@ -121,6 +122,8 @@ const STOP_BACKEND_SLEEP_SECONDS: u64 = 5;
 **Current behavior**: `send_shutdown_request(port)` → sleep 2s → `kill_process_tree`.
 
 **New behavior**: `send_shutdown_request(port)` → if returned false, sleep `STOP_BACKEND_SLEEP_SECONDS` (5s) → `kill_process_tree`. If returned true, skip sleep (fast path).
+
+**Note:** Unlike `graceful_shutdown_and_kill` (which eliminated the sleep entirely because curl timeout IS the grace period), `stop_backend` is an async Tauri command that uses `tokio::time::sleep` — it needs the conditional sleep because the `send_shutdown_request` call returns immediately on success (the backend may still be shutting down child processes).
 
 ### 4. Frontend — `ShutdownOverlay` component
 
@@ -251,9 +254,9 @@ In the common case (1–3 sessions, no slow git ops), the backend responds in 2�
 
 **Validates: Requirements 1.3, 6.5, 8.6**
 
-### Property 2: Fast path skips grace period sleep
+### Property 2: No grace period sleep exists
 
-*For any* shutdown execution where `send_shutdown_request(port)` returns `true` (HTTP request succeeded), `graceful_shutdown_and_kill()` SHALL NOT sleep for the grace period before calling `kill_process_tree`. The backend has already completed `disconnect_all()` and responded, so additional waiting is unnecessary.
+*For any* shutdown execution of `graceful_shutdown_and_kill()`, regardless of whether `send_shutdown_request(port)` returns `true` or `false`, no `thread::sleep` for the grace period SHALL occur. The curl/PowerShell timeout (10s) serves as the implicit grace period — if the backend responds quickly, `send_shutdown_request` returns quickly; if it times out, 10s has already elapsed. The old `thread::sleep(3s)` is eliminated entirely rather than conditionally skipped.
 
 **Validates: Requirements 5.5, 6.1, 9.3**
 
@@ -418,7 +421,7 @@ This design uses both unit tests (specific examples, edge cases) and property-ba
 
 Properties 1, 2, and 11 are validated through code review of the Rust changes:
 - **Property 1**: Verify `kill_process_tree` is called unconditionally after the shutdown request path.
-- **Property 2**: Verify that when `send_shutdown_request` returns `true`, no `thread::sleep` occurs.
+- **Property 2**: Verify that no `thread::sleep` for the grace period exists in `graceful_shutdown_and_kill`. The curl timeout IS the grace period.
 - **Property 11**: Verify the `was_running` guard prevents double shutdown requests.
 - Verify `SHUTDOWN_GRACE_SECONDS` constant is used consistently.
 - Verify `send_shutdown_request` returns `bool` on both Unix and Windows implementations.
