@@ -6,7 +6,7 @@ description: >
   DO NOT USE: for plain text or markdown documents.
 ---
 
-# DOCX creation, editing, and analysis
+# DOCX Editor
 
 ## Overview
 

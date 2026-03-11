@@ -17,11 +17,48 @@ Tauri macOS Bundle Structure:
     │               ├── default-mcp-servers.json
     │               └── default-skills/
 """
+import shutil
 from pathlib import Path
 import sys
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+def get_python_executable() -> str:
+    """Return the Python interpreter path, safe for PyInstaller bundles.
+
+    In development, ``sys.executable`` is the Python interpreter.
+    In a frozen (PyInstaller) bundle, ``sys.executable`` is the bundled
+    binary (e.g. ``python-backend``), **not** a Python interpreter.
+    Spawning ``python-backend some_script.py`` fails because the binary's
+    argparser rejects the unknown arguments.
+
+    Resolution order:
+    1. If not frozen → ``sys.executable`` (standard Python interpreter).
+    2. ``sys._base_executable`` — set by venv/virtualenv to the real Python.
+    3. ``shutil.which("python3")`` → system Python.
+    4. ``shutil.which("python")`` → fallback.
+    5. ``"python3"`` → last resort (will fail loudly if missing).
+    """
+    if not getattr(sys, "frozen", False):
+        return sys.executable
+
+    # In frozen bundle, try known alternatives
+    base = getattr(sys, "_base_executable", None)
+    if base and Path(base).exists():
+        return base
+
+    for name in ("python3", "python"):
+        found = shutil.which(name)
+        if found:
+            return found
+
+    logger.warning(
+        "Cannot find Python interpreter in frozen bundle — "
+        "subprocess calls to .py scripts will likely fail"
+    )
+    return "python3"
 
 
 def _get_tauri_bundle_resource_candidates(exe_dir: Path) -> list[Path]:

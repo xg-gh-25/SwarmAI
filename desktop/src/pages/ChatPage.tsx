@@ -32,11 +32,13 @@ import { mcpService } from '../services/mcp';
 import { pluginsService } from '../services/plugins';
 import { workspaceService } from '../services/workspace';
 import { tasksService } from '../services/tasks';
-import { Spinner, ConfirmDialog, AgentFormModal, Toast } from '../components/common';
-import { PermissionRequestModal, EvolutionMessage } from '../components/chat';
+import { Spinner, ConfirmDialog, AgentFormModal, ErrorBoundary } from '../components/common';
+import { useToast } from '../contexts/ToastContext';
+import { useHealth } from '../contexts/HealthContext';
+import { PermissionRequestModal, EvolutionMessage, ChatErrorMessage } from '../components/chat';
 import type { EvolutionEventType } from '../services/evolution';
 import { FilePreviewModal } from '../components/workspace/FilePreviewModal';
-import { useFileAttachment, useRightSidebarGroup } from '../hooks';
+import { useFileAttachment, useRightSidebarGroup, useRateLimiter, useRateLimitCountdown } from '../hooks';
 import { useTSCCState } from '../hooks/useTSCCState';
 import { useUnifiedTabState, MAX_OPEN_TABS } from '../hooks/useUnifiedTabState';
 import { useChatStreamingLifecycle, formatElapsed, ELAPSED_DISPLAY_THRESHOLD_MS } from '../hooks/useChatStreamingLifecycle';
@@ -69,6 +71,10 @@ export default function ChatPage() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
+  const { addToast } = useToast();
+  const { health } = useHealth();
+  const { isLimited, getRemainingSeconds } = useRateLimiter();
+  const chatRateLimitCountdown = useRateLimitCountdown({ getRemainingSeconds, endpoint: '/chat' });
 
   // Core chat state — streaming lifecycle delegated to extracted hook
   const [inputValue, setInputValue] = useState('');
@@ -326,8 +332,6 @@ export default function ChatPage() {
     // Note: Sidebar visibility is now managed by toggle buttons, no need to collapse
   }, []);
 
-  // Tab limit toast state (Fix 7)
-  const [tabLimitToast, setTabLimitToast] = useState<string | null>(null);
 
   // Handle new session - creates new tab with "New Session" title (Req 2.2, 2.3)
   // Fix 6: Save current tab state before creating new tab, initialize new tab in per-tab map
@@ -335,7 +339,7 @@ export default function ChatPage() {
   const handleNewSession = useCallback(() => {
     if (!selectedAgentId) return;
     if (tabMapRef.current.size >= MAX_OPEN_TABS) {
-      setTabLimitToast('Maximum tabs reached. Close a tab to open a new one.');
+      addToast({ severity: 'info', message: 'Maximum tabs reached. Close a tab to open a new one.', autoDismiss: true });
       return;
     }
     // Save current React state into the active tab's map entry before switching
@@ -707,6 +711,19 @@ export default function ChatPage() {
     }
   }, [sessionId, isStreaming, refetchSessions]);
 
+  // Fire a persistent error toast when context warning reaches critical level.
+  // Replaces the old declarative <Toast> JSX that was rendered inline.
+  useEffect(() => {
+    if (contextWarning && contextWarning.level === 'critical') {
+      addToast({
+        severity: 'error',
+        message: contextWarning.message,
+        autoDismiss: false,
+        id: 'context-warning-critical',
+      });
+    }
+  }, [contextWarning, addToast]);
+
   // Validate tabs against sessions - filter out tabs referencing deleted sessions (Req 3.4)
   // Guard: skip during initial restore — sessions query may return stale data
   // before the full session list is loaded, causing valid tabs to be invalidated.
@@ -1026,8 +1043,31 @@ export default function ChatPage() {
     // Store abort function in the tab map for per-tab stop isolation.
     // Only the .abort() method is used by handleStop — no signal needed.
     if (currentActiveTabId) {
+      // Build a retry function for reconnection logic — re-initiates the
+      // same streamChat call with the same request and fresh handlers.
+      const streamRequest = {
+        agentId: selectedAgentId,
+        ...(hasAttachments ? { content } : { message: messageText }),
+        sessionId: sessionIdRef.current,
+        enableSkills,
+        enableMCP,
+      };
+      const capturedTabIdForRetry = currentActiveTabId;
+      const retryStreamFn = () => {
+        return chatService.streamChat(
+          { ...streamRequest, sessionId: tabMapRef.current.get(capturedTabIdForRetry)?.sessionId ?? streamRequest.sessionId },
+          wrappedCreateStreamHandler(assistantMessageId),
+          createErrorHandler(assistantMessageId, capturedTabIdForRetry),
+          createCompleteHandler(capturedTabIdForRetry),
+        );
+      };
+
       updateTabState(currentActiveTabId, {
         abortController: { abort: () => { abort(); }, signal: { aborted: false } } as unknown as AbortController,
+        hasReceivedData: false,
+        isReconnecting: false,
+        reconnectionAttempt: 0,
+        retryStreamFn,
       });
     }
   }, [selectedAgentId, enableSkills, enableMCP, handlePluginCommand, buildContentArray, clearAttachments, resetUserScroll, incrementStreamGen, setIsStreaming, setMessages, setInputValue, updateTabStatus, updateTabTitle, setTabIsNew, initTabState, wrappedCreateStreamHandler, createErrorHandler, createCompleteHandler, activeTabIdRef, tabMapRef, pendingStreamTabs, queryClient, t]);
@@ -1058,8 +1098,21 @@ export default function ChatPage() {
     // Store abort function in the tab map for per-tab stop isolation.
     // Only the .abort() method is used by handleStop — no signal needed.
     if (tabId) {
+      const capturedTabIdForRetry = tabId;
+      const retryStreamFn = () => {
+        return chatService.streamAnswerQuestion(
+          { agentId: selectedAgentId, sessionId: tabMapRef.current.get(capturedTabIdForRetry)?.sessionId ?? tabSessionId, toolUseId, answers, enableSkills, enableMCP },
+          wrappedCreateStreamHandler(assistantMessageId),
+          createErrorHandler(assistantMessageId, capturedTabIdForRetry),
+          createCompleteHandler(capturedTabIdForRetry),
+        );
+      };
       updateTabState(tabId, {
         abortController: { abort: () => { abort(); }, signal: { aborted: false } } as unknown as AbortController,
+        hasReceivedData: false,
+        isReconnecting: false,
+        reconnectionAttempt: 0,
+        retryStreamFn,
       });
     }
   };
@@ -1116,6 +1169,9 @@ export default function ChatPage() {
     if (tabId) {
       updateTabState(tabId, {
         abortController: { abort: () => { abort(); }, signal: { aborted: false } } as unknown as AbortController,
+        hasReceivedData: false,
+        isReconnecting: false,
+        reconnectionAttempt: 0,
       });
     }
   };
@@ -1135,7 +1191,30 @@ export default function ChatPage() {
         }
       }
       await chatService.stopSession(tabSessionId);
-      setMessages((prev) => [...prev, { id: Date.now().toString(), role: 'assistant', content: [{ type: 'text', text: '⏹️ Generation stopped by user.' }], timestamp: new Date().toISOString() }]);
+      // Preserve partial content: append stop indicator to the last assistant
+      // message instead of creating a separate message (Requirement 3.3).
+      setMessages((prev) => {
+        const lastAssistantIndex = prev.reduce(
+          (lastIdx, m, i) => m.role === 'assistant' ? i : lastIdx, -1,
+        );
+        if (lastAssistantIndex >= 0) {
+          const updated = [...prev];
+          const lastMsg = { ...updated[lastAssistantIndex] };
+          lastMsg.content = [
+            ...lastMsg.content,
+            { type: 'text' as const, text: '⏹️ Generation stopped by user.' },
+          ];
+          updated[lastAssistantIndex] = lastMsg;
+          return updated;
+        }
+        // Edge case: no assistant message exists — fall back to appending a new one
+        return [...prev, {
+          id: Date.now().toString(),
+          role: 'assistant' as const,
+          content: [{ type: 'text' as const, text: '⏹️ Generation stopped by user.' }],
+          timestamp: new Date().toISOString(),
+        }];
+      });
     } catch (error) {
       console.error('Failed to stop session:', error);
     } finally {
@@ -1144,6 +1223,21 @@ export default function ChatPage() {
       if (currentTabId) updateTabStatus(currentTabId, 'idle');
     }
   };
+
+  // Handle retry last user message (for ChatErrorMessage onRetry)
+  const handleRetryLastMessage = useCallback(() => {
+    const lastUserMsg = messagesRef.current.slice().reverse().find(m => m.role === 'user');
+    if (!lastUserMsg) return;
+    const textBlock = lastUserMsg.content.find(b => b.type === 'text');
+    if (textBlock && 'text' in textBlock) {
+      setInputValue(textBlock.text);
+      // Trigger send on next tick after input is set
+      setTimeout(() => {
+        inputValueRef.current = textBlock.text;
+        handleSendMessage();
+      }, 0);
+    }
+  }, [handleSendMessage]);
 
   // Handle agent save
   const handleSaveAgent = async (agent: Agent | AgentCreateRequest) => {
@@ -1182,6 +1276,7 @@ export default function ChatPage() {
 
         {/* Main Chat Area */}
         <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+          <ErrorBoundary variant="tab">
           {agentLoadError ? (
             <div className="flex-1 flex items-center justify-center">
               <div className="text-center max-w-md">
@@ -1241,6 +1336,24 @@ export default function ChatPage() {
                         />
                       );
                     }
+                    // Error messages get the structured error renderer
+                    if (msg.isError) {
+                      const textBlock = msg.content.find(b => b.type === 'text');
+                      const errorText = textBlock && 'text' in textBlock ? textBlock.text : 'An error occurred';
+                      return (
+                        <ChatErrorMessage
+                          key={msg.id}
+                          error={{
+                            code: (msg as Record<string, unknown>).errorCode as string | undefined,
+                            message: errorText,
+                            detail: (msg as Record<string, unknown>).errorDetail as string | undefined,
+                            suggestedAction: (msg as Record<string, unknown>).suggestedAction as string | undefined,
+                            retryAfter: (msg as Record<string, unknown>).retryAfter as number | undefined,
+                          }}
+                          onRetry={handleRetryLastMessage}
+                        />
+                      );
+                    }
                     // Only pass isStreaming to the last assistant message
                     const isLastAssistantForStreaming = isStreaming
                       && msg.role === 'assistant'
@@ -1258,6 +1371,13 @@ export default function ChatPage() {
                       />
                     );
                   })
+                )}
+                {/* Reconnecting indicator — reads from tabMapRef (authoritative) for the active tab */}
+                {activeTabIdRef.current && tabMapRef.current.get(activeTabIdRef.current)?.isReconnecting && (
+                  <div className="flex items-center gap-2 text-[var(--color-text-muted)]">
+                    <Spinner size="sm" />
+                    <span className="text-sm">{t('chat.reconnecting', 'Reconnecting...')}</span>
+                  </div>
                 )}
                 {isStreaming && (
                   <div className="flex items-center gap-2 text-[var(--color-text-muted)]">
@@ -1287,6 +1407,14 @@ export default function ChatPage() {
                 <div ref={messagesEndRef} />
               </div>
 
+              {/* Rate limit countdown indicator */}
+              {isLimited('/chat') && chatRateLimitCountdown > 0 && (
+                <div className="px-4 py-2 text-sm text-yellow-400 flex items-center gap-2">
+                  <span className="material-symbols-outlined text-base">schedule</span>
+                  Rate limited — resuming in {chatRateLimitCountdown}s
+                </div>
+              )}
+
               {/* Input Area */}
               <ChatInput
                 inputValue={inputValue}
@@ -1308,9 +1436,11 @@ export default function ChatPage() {
                 sessionId={sessionId}
                 promptMetadata={promptMetadata}
                 contextPct={contextWarning?.pct ?? null}
+                disabled={health.status === 'disconnected' || isLimited('/chat')}
               />
             </>
           )}
+          </ErrorBoundary>
         </div>
 
         {/* Right Sidebars - Order: TodoRadar, ChatHistory, FileBrowser */}
@@ -1358,21 +1488,6 @@ export default function ChatPage() {
       <FilePreviewModal isOpen={!!previewFile} onClose={() => setPreviewFile(null)} agentId={selectedAgentId || ''} file={previewFile} basePath={effectiveBasePath} />
       {pendingPermission && <PermissionRequestModal request={pendingPermission} onDecision={handlePermissionDecision} isLoading={isPermissionLoading} />}
       <AgentFormModal isOpen={isEditAgentOpen} onClose={() => setIsEditAgentOpen(false)} onSave={handleSaveAgent} agent={selectedAgent} />
-
-      {/* Tab Limit Toast - Fix 7 (Req 2.16) */}
-      {tabLimitToast && (
-        <Toast message={tabLimitToast} type="info" onDismiss={() => setTabLimitToast(null)} />
-      )}
-
-      {/* Context Window Warning / Compaction notification — only critical level gets a Toast */}
-      {contextWarning && contextWarning.level === 'critical' && (
-        <Toast
-          message={contextWarning.message}
-          type="error"
-          duration={0}
-          onDismiss={clearContextWarning}
-        />
-      )}
     </div>
   );
 }

@@ -114,7 +114,7 @@ This plan implements a session lifecycle hook framework and its three consumers 
     - Generate metrics across 40+ distinct dates, verify `get_metrics()` returns at most 30 most recent dates
     - **Validates: Requirements 8.5**
 
-- [ ] 5. Checkpoint — Verify core infrastructure
+- [x] 5. Checkpoint — Verify core infrastructure
   - Ensure all tests pass, ask the user if questions arise.
 
 
@@ -272,7 +272,7 @@ This plan implements a session lifecycle hook framework and its three consumers 
     - _Requirements: 3.3, 3.4_
 
 
-- [ ] 12. Checkpoint — Verify integration points and regression prevention
+- [x] 12. Checkpoint — Verify integration points and regression prevention
   - Ensure all tests pass, ask the user if questions arise.
   - Specifically verify: `_cleanup_session` get-before-pop ordering, all 3 error-path calls use `skip_hooks=True`, `delete_session` reordering, `disconnect_all` single-fire, `_auto_commit_workspace` removal from per-turn path.
 
@@ -336,7 +336,7 @@ This plan implements a session lifecycle hook framework and its three consumers 
     - Confirm no changes to `s_memory-distill` skill files
     - _Requirements: 5.2_
 
-- [ ] 16. Checkpoint — Verify all hooks, skills, and integration
+- [x] 16. Checkpoint — Verify all hooks, skills, and integration
   - Ensure all tests pass, ask the user if questions arise.
 
 
@@ -382,7 +382,7 @@ This plan implements a session lifecycle hook framework and its three consumers 
     - Verify: DailyActivity file has correct `sessions_count`, all 5 session entries are present, no corruption from concurrent `fcntl.flock` writes
     - _Requirements: 7.6_
 
-- [ ] 18. Final checkpoint — Ensure all tests pass
+- [x] 18. Final checkpoint — Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
   - Run full test suite: `cd backend && pytest`
   - Run property tests only: `cd backend && pytest -m hypothesis`

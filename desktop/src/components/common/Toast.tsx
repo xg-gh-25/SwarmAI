@@ -1,3 +1,4 @@
+/** @deprecated Use useToast() from contexts/ToastContext instead. This component will be removed in a future cleanup. */
 import { useEffect, useState } from 'react';
 import clsx from 'clsx';
 

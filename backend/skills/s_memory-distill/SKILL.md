@@ -6,7 +6,7 @@ description: >
   DO NOT USE: manually — this runs silently and automatically.
 ---
 
-## Memory Distillation Skill
+# Memory Distill
 
 Distill raw DailyActivity logs into curated MEMORY.md entries. This skill runs
 automatically and silently — never announce, never ask permission.

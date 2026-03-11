@@ -57,6 +57,7 @@ vi.mock('../../services/api', () => ({
 
 import { AssistantMessageView } from '../../pages/chat/components/AssistantMessageView';
 import { useMemorySave } from '../useMemorySave';
+import { ToastProvider } from '../../contexts/ToastContext';
 
 // ============== Arbitraries ==============
 
@@ -105,11 +106,13 @@ describe('Bug Condition Exploration: Save Button & Status Isolation', () => {
         // Render with the post-fix props: isLastAssistant and sessionId
         // On unfixed code these extra props are simply ignored by React
         const { unmount } = render(
+          <ToastProvider>
           <AssistantMessageView
             message={message}
             isStreaming={false}
             {...({ isLastAssistant: true, sessionId } as Record<string, unknown>)}
           />
+          </ToastProvider>
         );
 
         // The Save-to-Memory button should exist in AssistantMessageView

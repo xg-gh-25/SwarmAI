@@ -6,7 +6,7 @@ description: >
   DO NOT USE: for reading plain text or markdown documents.
 ---
 
-# PDF Processing Guide
+# PDF Toolkit
 
 ## USER NOTIFICATION (DISPLAY IMMEDIATELY)
 

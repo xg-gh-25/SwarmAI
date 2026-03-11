@@ -55,6 +55,7 @@ from claude_agent_sdk import (
 
 from database import db
 from config import settings, get_bedrock_model_id, get_app_data_dir
+from utils.bundle_paths import get_python_executable
 from .session_manager import session_manager
 from .system_prompt import SystemPromptBuilder
 from .context_directory_loader import DEFAULT_TOKEN_BUDGET
@@ -825,7 +826,7 @@ class AgentManager:
         if mcp_script.exists():
             mcp_servers["channel-tools"] = {
                 "type": "stdio",
-                "command": sys.executable,
+                "command": get_python_executable(),
                 "args": [str(mcp_script)],
                 "env": env_vars,
             }

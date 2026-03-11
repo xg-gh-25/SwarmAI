@@ -8,7 +8,7 @@ description: >
   SIBLINGS: save-memory = permanent facts/decisions -> MEMORY.md | save-activity = session log -> DailyActivity/ | save-context = handoff doc for next session.
 ---
 
-## Save Memory Skill
+# Save Memory
 
 Write user-specified content directly to MEMORY.md. This is the **only user-triggered**
 memory operation — all other memory management (DailyActivity, distillation, archiving)

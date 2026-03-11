@@ -25,6 +25,14 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 
+// Mock useHealth to avoid needing HealthProvider in tests
+vi.mock('../../../contexts/HealthContext', () => ({
+  useHealth: () => ({
+    health: { status: 'connected', lastCheckedAt: null, consecutiveFailures: 0 },
+    triggerHealthCheck: vi.fn(),
+  }),
+}));
+
 // Default props for ChatHeader
 const createDefaultProps = (activeSidebar: RightSidebarId) => ({
   openTabs: [],

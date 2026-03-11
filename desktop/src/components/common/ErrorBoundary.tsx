@@ -5,6 +5,7 @@ import { ErrorCodes } from '../../types';
 
 interface Props {
   children: ReactNode;
+  variant?: 'tab' | 'app' | 'default';
   fallback?: ReactNode;
   onError?: (error: Error, errorInfo: ErrorInfo) => void;
   onRetry?: () => void;
@@ -34,10 +35,8 @@ export class ErrorBoundary extends Component<Props, State> {
     this.setState({ errorInfo });
     this.props.onError?.(error, errorInfo);
 
-    // Log to console in development
-    if (import.meta.env.DEV) {
-      console.error('ErrorBoundary caught an error:', error, errorInfo);
-    }
+    // Always log error details for debugging
+    console.error('ErrorBoundary caught an error:', error, errorInfo);
   }
 
   handleRetry = (): void => {
@@ -47,6 +46,47 @@ export class ErrorBoundary extends Component<Props, State> {
 
   render(): ReactNode {
     if (this.state.hasError) {
+      const variant = this.props.variant ?? 'default';
+
+      if (variant === 'tab') {
+        return (
+          <div className="flex items-center gap-3 p-4 m-4 rounded-lg bg-red-500/10 border border-red-500/20">
+            <span className="material-symbols-outlined text-red-500">error</span>
+            <div className="flex-1">
+              <p className="text-sm font-medium text-[var(--color-text)]">This tab encountered an error</p>
+              <p className="text-xs text-[var(--color-text-muted)]">{this.state.error?.message}</p>
+            </div>
+            <button
+              onClick={this.handleRetry}
+              className="px-3 py-1.5 text-sm bg-primary text-[var(--color-text)] rounded-lg hover:bg-primary/80"
+            >
+              Reload Tab
+            </button>
+          </div>
+        );
+      }
+
+      if (variant === 'app') {
+        return (
+          <div className="flex flex-col items-center justify-center min-h-screen p-8 text-center bg-[var(--color-bg)]">
+            <div className="w-20 h-20 mb-6 rounded-full bg-red-500/10 flex items-center justify-center">
+              <span className="material-symbols-outlined text-red-500 text-4xl">error</span>
+            </div>
+            <h1 className="text-2xl font-bold text-[var(--color-text)] mb-2">Something went wrong</h1>
+            <p className="text-[var(--color-text-muted)] mb-6 max-w-md">
+              {this.state.error?.message || 'An unexpected error occurred'}
+            </p>
+            <button
+              onClick={() => window.location.reload()}
+              className="px-6 py-3 bg-primary text-[var(--color-text)] rounded-lg hover:bg-primary/80"
+            >
+              Reload App
+            </button>
+          </div>
+        );
+      }
+
+      // variant === 'default': existing behavior
       if (this.props.fallback) {
         return this.props.fallback;
       }
@@ -185,12 +225,14 @@ export function ApiError({ error, onRetry, onDismiss, compact = false }: ApiErro
 }
 
 // Toast-style error notification
+/** @deprecated Use useToast() from contexts/ToastContext instead */
 interface ErrorToastProps {
   error: ErrorResponse;
   onDismiss: () => void;
   autoHideDuration?: number;
 }
 
+/** @deprecated Use useToast() from contexts/ToastContext instead */
 export function ErrorToast({ error, onDismiss, autoHideDuration = 5000 }: ErrorToastProps): React.ReactElement {
   React.useEffect(() => {
     if (autoHideDuration > 0) {
