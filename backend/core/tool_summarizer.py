@@ -9,6 +9,7 @@ functions only transform content for the UI replay path (SSE + SQLite).
 - ``get_tool_category``        — Returns category string for icon mapping on frontend
 - ``truncate_tool_result``     — Truncates content to configurable limit, sets flag
 - ``_sanitize_command``        — Redacts sensitive tokens from bash command strings
+- ``_extract_mcp_tool_name``   — Extracts server/tool from ``mcp__Server__tool`` names
 - ``MAX_SUMMARY_LENGTH``       — 200 characters
 - ``DEFAULT_TRUNCATION_LIMIT`` — 500 characters
 - ``SENSITIVE_PATTERNS``       — Compiled regexes for token redaction
@@ -86,6 +87,56 @@ def _sanitize_command(command: str) -> str:
         return command
 
 
+def _extract_mcp_tool_name(name: str) -> tuple[str | None, str]:
+    """Extract server name and tool name from MCP tool name format.
+
+    MCP tools follow the ``mcp__ServerName__tool_name`` pattern.
+    Returns ``(server_name, tool_name)`` for MCP tools, or
+    ``(None, name)`` for non-MCP tools.
+
+    Edge cases:
+    - Empty name → ``(None, "")``
+    - ``"mcp__"`` only → ``(None, "mcp__")``
+    - 4+ segments → last segment as tool_name, second as server_name
+    """
+    segments = name.split("__")
+    if segments[0].lower() == "mcp" and len(segments) >= 3:
+        return (segments[1], segments[-1])
+    return (None, name)
+
+
+# All category sets collected for token-based matching
+_CATEGORY_SETS: list[tuple[str, set[str]]] = [
+    ("bash", _BASH_NAMES),
+    ("read", _READ_NAMES),
+    ("write", _WRITE_NAMES),
+    ("search", _SEARCH_NAMES),
+    ("web_fetch", _WEB_FETCH_NAMES),
+    ("web_search", _WEB_SEARCH_NAMES),
+    ("list_dir", _LIST_DIR_NAMES),
+    ("todowrite", _TODOWRITE_NAMES),
+]
+
+
+def _match_last_token_category(tool_name: str) -> str | None:
+    """Match the LAST underscore-delimited token of *tool_name* against
+    category sets.
+
+    Only the last token is checked to avoid collisions (e.g.,
+    ``bash_runner`` → ``runner`` → no match, NOT ``bash``).
+
+    Returns the category string if matched, else ``None``.
+    """
+    tokens = tool_name.lower().split("_")
+    last_token = tokens[-1] if tokens else ""
+    if not last_token:
+        return None
+    for category, name_set in _CATEGORY_SETS:
+        if last_token in name_set:
+            return category
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -143,20 +194,47 @@ def summarize_tool_use(name: str, input_data: Optional[dict]) -> str:
         todos = data.get("todos", [])
         summary = f"Writing {len(todos)} todos"
     else:
-        category = "fallback"
-        # Smart fallback: try to extract useful context from common input fields
-        context = (
-            data.get("query")
-            or data.get("url")
-            or data.get("path")
-            or data.get("file_path")
-            or data.get("command")
-            or data.get("name")
-        )
-        if context:
-            summary = f"{name}: {context}"
+        # --- MCP detection + last-token category matching ---
+        server_name, tool_name_extracted = _extract_mcp_tool_name(name)
+
+        if server_name is not None:
+            # MCP tool detected — try last-token category matching
+            matched_category = _match_last_token_category(tool_name_extracted)
+
+            if matched_category is not None:
+                category = matched_category
+            else:
+                category = "fallback"
+
+            # MCP labels always use the clean tool_name format
+            context = (
+                data.get("query")
+                or data.get("url")
+                or data.get("path")
+                or data.get("file_path")
+                or data.get("command")
+                or data.get("name")
+                or data.get("title")
+            )
+            if context:
+                summary = f"mcp: {tool_name_extracted} \u2014 {context}"
+            else:
+                summary = f"mcp: {tool_name_extracted}"
         else:
-            summary = f"Using {name}"
+            # Non-MCP fallback (existing behavior unchanged)
+            category = "fallback"
+            context = (
+                data.get("query")
+                or data.get("url")
+                or data.get("path")
+                or data.get("file_path")
+                or data.get("command")
+                or data.get("name")
+            )
+            if context:
+                summary = f"{name}: {context}"
+            else:
+                summary = f"Using {name}"
 
     logger.debug("Summarizer: %s → category=%s", name, category)
 
@@ -195,6 +273,12 @@ def get_tool_category(name: str) -> str:
         return "list_dir"
     if lower_name in _TODOWRITE_NAMES:
         return "todowrite"
+    # MCP detection + last-token category matching
+    server_name, tool_name_extracted = _extract_mcp_tool_name(name)
+    if server_name is not None:
+        matched = _match_last_token_category(tool_name_extracted)
+        if matched is not None:
+            return matched
     return "fallback"
 
 
