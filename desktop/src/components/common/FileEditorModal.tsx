@@ -30,6 +30,7 @@ import type { FileTreeItem } from '../workspace-explorer/FileTreeNode';
 import { fileIcon, fileIconColor, gitStatusBadge } from '../../utils/fileUtils';
 import { computeLineDiff } from '../../utils/lineDiff';
 import type { DiffLine } from '../../utils/lineDiff';
+import api from '../../services/api';
 
 export interface FileEditorModalProps {
   isOpen: boolean;
@@ -730,6 +731,32 @@ export default function FileEditorModal({
               {showDiff ? 'Back to Edit' : 'Show Changes'}
             </button>
             {/* Attach to Chat button (Task 5.4) */}
+            {/* Open in Browser button — for HTML, PDF, SVG, XML files */}
+            {(() => {
+              const ext = fileName.split('.').pop()?.toLowerCase() ?? '';
+              const browserRenderable = ['html', 'htm', 'pdf', 'svg', 'xml'];
+              if (!browserRenderable.includes(ext)) return null;
+              return (
+                <button
+                  onClick={async () => {
+                    try {
+                      const configResp = await api.get<{ file_path?: string; filePath?: string }>('/workspace');
+                      const wsRoot = configResp.data.file_path ?? configResp.data.filePath ?? '';
+                      const absolutePath = wsRoot ? `${wsRoot}/${filePath}` : filePath;
+                      const { open } = await import('@tauri-apps/plugin-shell');
+                      await open(absolutePath);
+                    } catch {
+                      window.open(filePath, '_blank');
+                    }
+                  }}
+                  className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)] transition-colors"
+                  data-testid="open-in-browser-btn"
+                >
+                  <span className="material-symbols-outlined text-sm">open_in_browser</span>
+                  Open in Browser
+                </button>
+              );
+            })()}
             {onAttachToChat && (
               <button
                 onClick={handleAttachToChat}
