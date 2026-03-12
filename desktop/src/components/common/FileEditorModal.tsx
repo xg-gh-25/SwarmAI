@@ -436,6 +436,7 @@ export default function FileEditorModal({
   const [activeLineNumber, setActiveLineNumber] = useState<number | undefined>(undefined);
   const [attachFeedback, setAttachFeedback] = useState(false);
   const [scrollTop, setScrollTop] = useState(0);
+  const [isFullscreen, setIsFullscreen] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const highlightRef = useRef<HTMLPreElement>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
@@ -669,7 +670,10 @@ export default function FileEditorModal({
   return (
     <div
       ref={overlayRef}
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm"
+      className={clsx(
+        "fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm",
+        isFullscreen ? 'p-0' : 'p-4'
+      )}
       onMouseDown={(e) => {
         if (e.target === overlayRef.current) {
           handleCloseAttempt();
@@ -679,8 +683,10 @@ export default function FileEditorModal({
     >
       <div
         className={clsx(
-          'w-full h-[85vh] bg-[var(--color-card)] border border-[var(--color-border)] rounded-xl shadow-2xl flex flex-col',
-          showDiff ? 'max-w-7xl' : 'max-w-5xl'
+          'bg-[var(--color-card)] border border-[var(--color-border)] shadow-2xl flex flex-col',
+          isFullscreen
+            ? 'w-full h-full rounded-none'
+            : 'w-[95vw] h-[90vh] max-w-[1600px] rounded-xl',
         )}
         onMouseDown={(e) => e.stopPropagation()}
       >
@@ -797,6 +803,17 @@ export default function FileEditorModal({
                 {isAttached || attachFeedback ? 'Attached ✓' : 'Attach to Chat'}
               </button>
             )}
+            {/* Fullscreen toggle */}
+            <button
+              onClick={() => setIsFullscreen((p) => !p)}
+              className="p-1 rounded-lg text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)] transition-colors"
+              aria-label={isFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+              data-testid="fullscreen-toggle"
+            >
+              <span className="material-symbols-outlined text-lg">
+                {isFullscreen ? 'fullscreen_exit' : 'fullscreen'}
+              </span>
+            </button>
             <button
               onClick={handleCloseAttempt}
               className="p-1 rounded-lg text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)] transition-colors"
@@ -840,7 +857,7 @@ export default function FileEditorModal({
           ) : showMarkdownPreview ? (
             /* Rendered markdown preview — replaces editor when active */
             <div className="flex-1 relative overflow-auto p-6 bg-[var(--color-background)]">
-              <MarkdownRenderer content={content} className="max-w-3xl mx-auto" />
+              <MarkdownRenderer content={content} className="max-w-4xl mx-auto" />
             </div>
           ) : (
             <>
