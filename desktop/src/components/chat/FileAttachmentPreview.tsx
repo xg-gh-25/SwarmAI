@@ -1,15 +1,15 @@
-import type { FileAttachment } from '../../types';
+import type { UnifiedAttachment } from '../../types';
 import { AttachmentPreviewCard } from './AttachmentPreviewCard';
 
 interface FileAttachmentPreviewProps {
-  attachments: FileAttachment[];
+  attachments: UnifiedAttachment[];
   onRemove: (id: string) => void;
 }
 
 /**
  * Calculate total size of attachments
  */
-const formatTotalSize = (attachments: FileAttachment[]): string => {
+const formatTotalSize = (attachments: UnifiedAttachment[]): string => {
   const total = attachments.reduce((sum, a) => sum + a.size, 0);
   if (total < 1024) return `${total} B`;
   if (total < 1024 * 1024) return `${(total / 1024).toFixed(1)} KB`;

@@ -72,6 +72,7 @@ export function initTestTab(tabId: string, initialMessages?: Message[]): void {
     isReconnecting: false,
     reconnectionAttempt: 0,
     hasReceivedData: false,
+    attachments: [],
   });
   testActiveTabIdRef.current = tabId;
 }

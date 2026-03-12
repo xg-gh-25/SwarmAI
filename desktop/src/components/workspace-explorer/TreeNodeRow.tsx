@@ -25,6 +25,7 @@
 
 import React, { useCallback } from 'react';
 import type { TreeNode } from '../../types';
+import type { FileTreeItem } from './FileTreeNode';
 import { fileIcon, fileIconColor, gitStatusColor, gitStatusBadge } from '../../utils/fileUtils';
 
 /* ------------------------------------------------------------------ */
@@ -85,6 +86,42 @@ const TreeNodeRow: React.FC<TreeNodeRowProps> = React.memo(function TreeNodeRow(
   style,
 }) {
   const isDirectory = node.type === 'directory';
+
+  /* ---- drag handler ---- */
+
+  const handleDragStart = useCallback((e: React.DragEvent) => {
+    if (isDirectory) {
+      e.preventDefault();
+      return;
+    }
+    const payload: FileTreeItem = {
+      id: node.path,
+      name: node.name,
+      type: node.type as 'file',
+      path: node.path,
+      workspaceId: '',
+      workspaceName: '',
+      gitStatus: node.gitStatus,
+    };
+    e.dataTransfer.setData('application/json', JSON.stringify(payload));
+    e.dataTransfer.effectAllowed = 'copy';
+
+    // Custom drag ghost using textContent (not innerHTML) to prevent XSS
+    const ghost = document.createElement('div');
+    ghost.style.cssText = 'display:flex;align-items:center;gap:6px;padding:4px 10px;' +
+      'background:var(--color-card);border:1px solid var(--color-border);' +
+      'border-radius:6px;font-size:13px;color:var(--color-text);' +
+      'position:absolute;top:-1000px;';
+    const iconSpan = document.createElement('span');
+    iconSpan.className = 'material-symbols-outlined';
+    iconSpan.style.fontSize = '16px';
+    iconSpan.textContent = fileIcon(node.name);
+    ghost.appendChild(iconSpan);
+    ghost.appendChild(document.createTextNode(node.name));
+    document.body.appendChild(ghost);
+    e.dataTransfer.setDragImage(ghost, 0, 0);
+    requestAnimationFrame(() => document.body.removeChild(ghost));
+  }, [isDirectory, node]);
 
   /* ---- event handlers ---- */
 
@@ -186,6 +223,8 @@ const TreeNodeRow: React.FC<TreeNodeRowProps> = React.memo(function TreeNodeRow(
       aria-selected={isSelected}
       tabIndex={isSelected ? 0 : -1}
       className="tree-node-row"
+      draggable={!isDirectory}
+      onDragStart={handleDragStart}
       style={{
         ...style,
         paddingLeft,

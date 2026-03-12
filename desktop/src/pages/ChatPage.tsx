@@ -36,9 +36,11 @@ import { Spinner, ConfirmDialog, AgentFormModal, ErrorBoundary } from '../compon
 import { useToast } from '../contexts/ToastContext';
 import { useHealth } from '../contexts/HealthContext';
 import { PermissionRequestModal, EvolutionMessage, ChatErrorMessage } from '../components/chat';
+import { ChatDropZone } from '../components/chat/ChatDropZone';
 import type { EvolutionEventType } from '../services/evolution';
 import { FilePreviewModal } from '../components/workspace/FilePreviewModal';
-import { useFileAttachment, useRightSidebarGroup, useRateLimiter, useRateLimitCountdown } from '../hooks';
+import { useRightSidebarGroup, useRateLimiter, useRateLimitCountdown } from '../hooks';
+import { useUnifiedAttachments } from '../hooks/useUnifiedAttachments';
 import { useTSCCState } from '../hooks/useTSCCState';
 import { useUnifiedTabState, MAX_OPEN_TABS } from '../hooks/useUnifiedTabState';
 import { useChatStreamingLifecycle, formatElapsed, ELAPSED_DISPLAY_THRESHOLD_MS } from '../hooks/useChatStreamingLifecycle';
@@ -47,7 +49,6 @@ import { deriveEvolutionCounts } from './chat/components/radar/EvolutionBadge';
 
 import { groupSessionsByTime } from './chat/utils';
 import { RIGHT_SIDEBAR_WIDTH_CONFIGS } from './chat/constants';
-import { useLayout } from '../contexts/LayoutContext';
 
 /**
  * Re-export ``deriveStreamingActivity`` and ``MAX_OPEN_TABS`` from the
@@ -100,10 +101,6 @@ export default function ChatPage() {
   const [deleteConfirmSession, setDeleteConfirmSession] = useState<ChatSession | null>(null);
   const [isEditAgentOpen, setIsEditAgentOpen] = useState(false);
 
-  // File attachment
-  const { attachments, addFiles, removeFile, clearAll: clearAttachments, isProcessing: isProcessingFiles, 
-    error: fileError, canAddMore } = useFileAttachment();
-
   // File preview state
   const [previewFile, setPreviewFile] = useState<{ path: string; name: string } | null>(null);
 
@@ -113,8 +110,7 @@ export default function ChatPage() {
     widthConfigs: RIGHT_SIDEBAR_WIDTH_CONFIGS,
   });
 
-  // Get attached files from LayoutContext for ChatInput
-  const { attachedFiles, removeAttachedFile } = useLayout();
+  // LayoutContext — attachment state removed (now in useUnifiedAttachments)
 
   // Data queries
   const { data: agents = [] } = useQuery({
@@ -185,6 +181,12 @@ export default function ChatPage() {
     initTabState,
     restoreFromFile,
   } = useUnifiedTabState(selectedAgentId || 'default');
+
+  // File attachment — unified hook replaces both useFileAttachment and LayoutContext.attachedFiles
+  const { attachments, addFiles, addWorkspaceFiles, removeAttachment, clearAll: clearAttachments,
+    isProcessing: isProcessingFiles, error: fileError, canAddMore } = useUnifiedAttachments(
+    activeTabIdRef.current, tabMapRef
+  );
 
   // Streaming lifecycle hook — owns messages, sessionId, pendingQuestion,
   // isStreaming, refs, and stream handler factories (Phase 0 extraction).
@@ -830,7 +832,7 @@ export default function ChatPage() {
     }
   }, [sessionId, activeTabId, updateTabSessionId, tabMapRef]);
 
-  // Build content array from text and attachments
+  // Build content array from text and attachments using delivery strategy
   const buildContentArray = useCallback(
     async (text: string, fileAttachments: typeof attachments): Promise<ContentBlock[]> => {
       const content: ContentBlock[] = [];
@@ -840,29 +842,68 @@ export default function ChatPage() {
       }
 
       for (const att of fileAttachments) {
-        if (!att.base64) continue;
+        if (att.error || att.isLoading) continue;
 
-        if (att.type === 'image') {
-          content.push({
-            type: 'image',
-            source: { type: 'base64', media_type: att.mediaType, data: att.base64 },
-          } as unknown as ContentBlock);
-        } else if (att.type === 'pdf') {
-          content.push({
-            type: 'document',
-            source: { type: 'base64', media_type: 'application/pdf', data: att.base64 },
-          } as unknown as ContentBlock);
-        } else if ((att.type === 'text' || att.type === 'csv') && selectedAgentId) {
-          try {
-            const result = await workspaceService.uploadFile(selectedAgentId, att.name, att.base64);
+        switch (att.deliveryStrategy) {
+          case 'base64_image':
+            content.push({
+              type: 'image',
+              source: { type: 'base64', media_type: att.mediaType, data: att.base64! },
+              _filename: att.name,
+            } as unknown as ContentBlock);
+            break;
+          case 'base64_document':
+            content.push({
+              type: 'document',
+              source: { type: 'base64', media_type: 'application/pdf', data: att.base64! },
+              _filename: att.name,
+            } as unknown as ContentBlock);
+            break;
+          case 'inline_text': {
+            // Workspace files: read content at send time (fresh read)
+            // File Picker files: textContent was set at attach time
+            let textContent = att.textContent;
+            if (!textContent && att.workspacePath && selectedAgentId) {
+              try {
+                const raw = await workspaceService.readFile(selectedAgentId, att.workspacePath);
+                // Only use inline text if the file is UTF-8 text
+                if (raw.encoding === 'utf-8') {
+                  textContent = raw.content;
+                } else {
+                  // Binary file — fall back to path hint
+                  content.push({
+                    type: 'text',
+                    text: `[Attached file: ${att.name}] saved at ${att.workspacePath} - use Read tool to access`,
+                  } as ContentBlock);
+                  continue;
+                }
+              } catch (err) {
+                console.error(`Failed to read workspace file: ${att.name}`, err);
+                content.push({ type: 'text', text: `[Failed to read file: ${att.name}]` } as ContentBlock);
+                continue;
+              }
+            }
             content.push({
               type: 'text',
-              text: `[Attached file: ${att.name}] saved at ${result.path} - use Read tool to access`,
+              text: `--- File: ${att.name} ---\n${textContent}\n--- End: ${att.name} ---`,
             } as ContentBlock);
-          } catch (err) {
-            console.error('Failed to upload file:', err);
-            content.push({ type: 'text', text: `[Failed to attach file: ${att.name}]` } as ContentBlock);
+            break;
           }
+          case 'path_hint':
+            // File Picker files with path_hint have textContent but no workspacePath.
+            // Fall back to inline_text delivery for these (content already read at attach time).
+            if (att.textContent && !att.workspacePath) {
+              content.push({
+                type: 'text',
+                text: `--- File: ${att.name} ---\n${att.textContent}\n--- End: ${att.name} ---`,
+              } as ContentBlock);
+            } else {
+              content.push({
+                type: 'text',
+                text: `[Attached file: ${att.name}] saved at ${att.workspacePath} - use Read tool to access`,
+              } as ContentBlock);
+            }
+            break;
         }
       }
 
@@ -1004,7 +1045,7 @@ export default function ChatPage() {
     const messageText = inputValueRef.current;
     const currentAttachments = attachmentsRef.current;
     const hasText = messageText.trim().length > 0;
-    const hasAttachments = currentAttachments.some((a) => a.base64);
+    const hasAttachments = currentAttachments.some((a) => !a.error && !a.isLoading);
 
     if ((!hasText && !hasAttachments) || !selectedAgentId) return;
 
@@ -1292,6 +1333,7 @@ export default function ChatPage() {
 
   // Render
   return (
+    <ChatDropZone addFiles={addFiles} addWorkspaceFiles={addWorkspaceFiles}>
     <div className="flex-1 flex flex-col min-h-0">
       <ChatHeader
         openTabs={openTabs}
@@ -1470,12 +1512,10 @@ export default function ChatPage() {
                 selectedAgentId={selectedAgentId}
                 attachments={attachments}
                 onAddFiles={addFiles}
-                onRemoveFile={removeFile}
+                onRemoveFile={removeAttachment}
                 isProcessingFiles={isProcessingFiles}
                 fileError={fileError}
                 canAddMore={canAddMore}
-                attachedContextFiles={attachedFiles}
-                onRemoveContextFile={removeAttachedFile}
                 sessionId={sessionId}
                 promptMetadata={promptMetadata}
                 contextPct={contextWarning?.pct ?? null}
@@ -1533,5 +1573,6 @@ export default function ChatPage() {
       {pendingPermission && <PermissionRequestModal request={pendingPermission} onDecision={handlePermissionDecision} isLoading={isPermissionLoading} />}
       <AgentFormModal isOpen={isEditAgentOpen} onClose={() => setIsEditAgentOpen(false)} onSave={handleSaveAgent} agent={selectedAgent} />
     </div>
+    </ChatDropZone>
   );
 }

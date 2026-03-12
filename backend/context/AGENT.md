@@ -169,15 +169,35 @@ Use git before filesystem exploration.
 
 **File routing — where things go:**
 
-| Content type | Destination |
-|---|---|
-| Quick notes, scratch | `Knowledge/Notes/` |
-| Research, analysis reports | `Knowledge/Reports/` |
-| Meeting summaries | `Knowledge/Meetings/` |
-| Reference materials, guides | `Knowledge/Library/` |
-| Daily session logs | `Knowledge/DailyActivity/YYYY-MM-DD.md` (auto) |
-| Archived daily files | `Knowledge/Archives/` (auto, 90-day prune) |
-| Project files | `Projects/<ProjectName>/` |
+Route files based on user intent. When the user says "save this", match the closest phrase below.
+
+| User says | Route to | Filename convention |
+|---|---|---|
+| "save as a note", "jot this down" | `Knowledge/Notes/` | `YYYY-MM-DD-<topic>.md` |
+| "save this report", "write up analysis" | `Knowledge/Reports/` | `YYYY-MM-DD-<topic>.md` |
+| "save meeting notes", "meeting summary" | `Knowledge/Meetings/` | `YYYY-MM-DD-<meeting-name>.md` |
+| "save to library", "reference material" | `Knowledge/Library/` | `YYYY-MM-DD-<topic>.md` |
+| "save context", "handoff" | `Knowledge/Handoffs/` | `YYYY-MM-DD-HHMM.md` |
+| "save activity", "log today" | `Knowledge/DailyActivity/` | `YYYY-MM-DD.md` (append) |
+| "remember this", "save to memory" | `.context/MEMORY.md` | (prepend via `locked_write.py`) |
+| "new project X" | `Projects/X/` | `README.md` + update `PROJECTS.md` |
+| "save to project X" | `Projects/X/` | `YYYY-MM-DD-<topic>.md` |
+| Attachments, downloads, exports | `Attachments/` | Original filename or `YYYY-MM-DD-<desc>.<ext>` |
+
+**Auto-managed (don't create manually):**
+
+| Content | Destination | Managed by |
+|---|---|---|
+| Daily session logs | `Knowledge/DailyActivity/YYYY-MM-DD.md` | DailyActivityExtractionHook |
+| Archived daily files | `Knowledge/Archives/` | 90-day auto-prune |
+
+**Rules:**
+- Always use `YYYY-MM-DD-` prefix for filenames (sortable, discoverable)
+- Create directories with `mkdir -p` if they don't exist
+- Update `KNOWLEDGE.md` when creating files in `Knowledge/`
+- Update `PROJECTS.md` when creating or updating in `Projects/`
+- Never create top-level files in SwarmWS root
+- When ambiguous, prefer `Knowledge/Notes/` — it's the catch-all
 
 **System directories — don't create files here manually:**
 

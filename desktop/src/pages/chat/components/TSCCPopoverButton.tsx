@@ -89,8 +89,8 @@ export function TSCCPopoverButton({ sessionId, metadata }: TSCCPopoverButtonProp
           w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0
           transition-colors
           ${isDisabled
-            ? 'bg-[var(--color-hover)]/50 text-[var(--color-text-muted)]/50 cursor-not-allowed'
-            : 'bg-[var(--color-hover)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-border)] cursor-pointer'
+            ? 'text-[var(--color-text-muted)]/50 cursor-not-allowed'
+            : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)] cursor-pointer'
           }
         `}
       >

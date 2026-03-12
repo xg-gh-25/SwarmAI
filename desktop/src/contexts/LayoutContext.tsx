@@ -1,5 +1,4 @@
 import { createContext, useContext, useEffect, useState, useCallback, ReactNode } from 'react';
-import type { FileTreeItem } from '../components/workspace-explorer/FileTreeNode';
 
 // Modal types that can be opened from the left sidebar
 export type ModalType = 'workspaces' | 'swarmcore' | 'skills' | 'mcp' | 'agents' | 'settings' | 'file-editor' | 'workspace-settings';
@@ -22,12 +21,6 @@ export interface LayoutContextValue {
   // Workspace scope validation - Requirement 10.2
   // Call this with workspace IDs to validate stored scope on startup
   validateWorkspaceScope: (workspaceIds: string[]) => void;
-  
-  // Attached files for chat context - Requirements 3.12, 6.2
-  attachedFiles: FileTreeItem[];
-  attachFile: (file: FileTreeItem) => void;
-  removeAttachedFile: (file: FileTreeItem) => void;
-  clearAttachedFiles: () => void;
   
   // Modal management
   activeModal: ModalType | null;
@@ -116,9 +109,6 @@ export function LayoutProvider({ children }: LayoutProviderProps) {
   // Workspace settings modal target ID
   const [workspaceSettingsId, setWorkspaceSettingsId] = useState<string>('');
 
-  // Attached files for chat context - Requirements 3.12, 6.2
-  const [attachedFiles, setAttachedFiles] = useState<FileTreeItem[]>([]);
-
   // Persist collapsed state to localStorage
   const setWorkspaceExplorerCollapsed = useCallback((collapsed: boolean) => {
     setWorkspaceExplorerCollapsedState(collapsed);
@@ -140,27 +130,6 @@ export function LayoutProvider({ children }: LayoutProviderProps) {
   const setSelectedWorkspaceScope = useCallback((scope: WorkspaceScope) => {
     setSelectedWorkspaceScopeState(scope);
     localStorage.setItem(STORAGE_KEYS.LAST_WORKSPACE_SCOPE, scope);
-  }, []);
-
-  // Attach a file to chat context - Requirements 3.12, 6.2, 6.6
-  const attachFile = useCallback((file: FileTreeItem) => {
-    setAttachedFiles((prev) => {
-      // Prevent duplicates by checking file id
-      if (prev.some((f) => f.id === file.id)) {
-        return prev;
-      }
-      return [...prev, file];
-    });
-  }, []);
-
-  // Remove a file from chat context - Requirement 6.8
-  const removeAttachedFile = useCallback((file: FileTreeItem) => {
-    setAttachedFiles((prev) => prev.filter((f) => f.id !== file.id));
-  }, []);
-
-  // Clear all attached files
-  const clearAttachedFiles = useCallback(() => {
-    setAttachedFiles([]);
   }, []);
 
   // Modal management
@@ -232,10 +201,6 @@ export function LayoutProvider({ children }: LayoutProviderProps) {
     selectedWorkspaceScope,
     setSelectedWorkspaceScope,
     validateWorkspaceScope,
-    attachedFiles,
-    attachFile,
-    removeAttachedFile,
-    clearAttachedFiles,
     activeModal,
     openModal,
     closeModal,
