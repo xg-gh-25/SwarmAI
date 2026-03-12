@@ -5,13 +5,12 @@ that is automatically created on first launch and updated on subsequent startups
 
 Bootstrap flow:
 1. ``ensure_default_agent`` is called by ``initialization_manager`` at startup.
-2. Default MCP servers are registered from ``desktop/resources/default-mcp-servers.json``.
-3. User-local MCP servers are registered from ``~/.swarm-ai/user-mcp-servers.json``.
-4. All MCPs (system + active user-local) are bound to the default agent record.
-5. If the agent already exists, new MCP resources are merged (user additions preserved).
-
-User-local MCPs use ``.kiro/settings/mcp.json``-compatible format (``mcpServers``
-object keyed by server name). This file is user-owned and never shipped with the app.
+2. Default (system) MCP servers are registered in DB from
+   ``desktop/resources/default-mcp-servers.json``. These are the only MCPs
+   stored in DB and bound to the agent's ``mcp_ids``.
+3. User-local MCP servers (``~/.swarm-ai/user-mcp-servers.json``) are loaded
+   directly from file at session start by ``AgentManager._build_mcp_config()``.
+   They bypass the DB entirely — the file IS the source of truth.
 
 Skills are now filesystem-based (see ``skill_manager.py``). Built-in skills live
 in ``backend/skills/`` and are always available without explicit listing. The
@@ -32,7 +31,6 @@ import json
 import logging
 
 from database import db
-from config import settings, get_app_data_dir
 from utils.bundle_paths import get_resources_dir
 
 logger = logging.getLogger(__name__)
@@ -81,116 +79,79 @@ async def ensure_default_agent(skip_registration: bool = False) -> dict:
     """
     resources_dir = _get_resources_dir()
     
+    # --- Register system MCP servers in DB (the only MCPs that use DB) ---
+    system_mcp_ids: list[str] = []
     if not skip_registration:
-        # Register default MCP servers (only during full initialization)
         mcp_config_path = resources_dir / "default-mcp-servers.json"
         if mcp_config_path.exists():
-            mcp_ids = await _register_default_mcp_servers(mcp_config_path)
-            if mcp_ids:
-                logger.info(f"Ensured {len(mcp_ids)} default MCP servers are registered")
+            system_mcp_ids = await _register_default_mcp_servers(mcp_config_path)
+            if system_mcp_ids:
+                logger.info(f"Ensured {len(system_mcp_ids)} system MCP servers are registered")
         else:
             logger.warning(f"Default MCP servers config not found: {mcp_config_path}")
-    
-    # Register user-local MCP servers from ~/.swarm-ai/user-mcp-servers.json.
-    # Runs every startup — syncs config changes, deactivates removed entries.
-    user_local_mcp_ids = await _register_user_local_mcp_servers()
-    if user_local_mcp_ids:
-        active_count = sum(
-            1 for mid in user_local_mcp_ids
-            if (await db.mcp_servers.get(mid) or {}).get("is_active")
-        )
-        logger.info(
-            "User-local MCPs: %d registered, %d active",
-            len(user_local_mcp_ids), active_count,
-        )
 
-    # Query active system MCP servers from database.
-    # After _register_default_mcp_servers runs, stale system MCPs have
-    # is_system=False, so list_by_system() only returns current ones.
-    all_system_mcps = await db.mcp_servers.list_by_system()
-    system_mcp_ids = set(mcp["id"] for mcp in all_system_mcps)
-
-    # Merge: system MCPs + active user-local MCPs
-    active_user_local_ids = set()
-    for mid in user_local_mcp_ids:
-        record = await db.mcp_servers.get(mid)
-        if record and record.get("is_active"):
-            active_user_local_ids.add(mid)
-
-    all_mcp_ids = system_mcp_ids | active_user_local_ids
-    logger.info(
-        "MCPs to bind: %d system + %d user-local = %d total",
-        len(system_mcp_ids), len(active_user_local_ids), len(all_mcp_ids),
-    )
+    # NOTE: User-local MCPs (user-mcp-servers.json) are NOT registered here.
+    # They are loaded directly from file by AgentManager._build_mcp_config()
+    # at session start. The file is the source of truth — no DB indirection.
 
     # Check if default agent already exists
     existing = await db.agents.get(DEFAULT_AGENT_ID)
     if existing:
         existing_mcp_ids = set(existing.get("mcp_ids", []))
+        updated_mcp_ids = list(existing_mcp_ids | set(system_mcp_ids))
 
-        # Merge: add new MCPs (system + user-local), remove deactivated ones,
-        # preserve user-added (via UI).
-        # all_mcp_ids = system + active user-local (computed above).
-        # For existing IDs not in all_mcp_ids: if DB record is inactive → remove.
-        updated_mcp_ids_set = set(existing_mcp_ids) | all_mcp_ids
-        for mcp_id in list(updated_mcp_ids_set):
-            if mcp_id not in all_mcp_ids:
-                record = await db.mcp_servers.get(mcp_id)
-                if record and not record.get("is_active", True):
-                    updated_mcp_ids_set.discard(mcp_id)
-                    logger.info(f"Removed deactivated MCP from agent: {mcp_id}")
-        updated_mcp_ids = list(updated_mcp_ids_set)
-        
-        # Check if we need to update MCPs or system agent properties
+        # Remove deactivated system MCPs
+        for mcp_id in list(updated_mcp_ids):
+            record = await db.mcp_servers.get(mcp_id)
+            if record and not record.get("is_active", True):
+                updated_mcp_ids.remove(mcp_id)
+                logger.info(f"Removed deactivated MCP from agent: {mcp_id}")
+
         needs_update = (
             set(updated_mcp_ids) != existing_mcp_ids or
             existing.get("name") != SWARM_AGENT_NAME or
             not existing.get("is_system_agent")
         )
-        
+
         if needs_update:
             await db.agents.update(DEFAULT_AGENT_ID, {
                 "mcp_ids": updated_mcp_ids,
-                "name": SWARM_AGENT_NAME,  # Ensure hardcoded name
-                "is_system_agent": True,  # Ensure system agent flag
+                "name": SWARM_AGENT_NAME,
+                "is_system_agent": True,
             })
-            logger.info(f"Updated default agent with new MCPs: mcps={len(updated_mcp_ids)}")
-            # Refresh the existing agent data
+            logger.info(f"Updated default agent: mcps={len(updated_mcp_ids)}")
             existing = await db.agents.get(DEFAULT_AGENT_ID)
         else:
-            logger.info(f"Default agent already exists: {existing.get('name')}")
-        
+            logger.info(f"Default agent up to date: {existing.get('name')}")
+
         return existing
-    
+
     logger.info("Creating default agent...")
-    
+
     # Load default agent configuration
     config_path = resources_dir / "default-agent.json"
     if not config_path.exists():
         logger.error(f"Default agent config not found: {config_path}")
         raise FileNotFoundError(f"Default agent configuration missing: {config_path}")
-    
+
     with open(config_path, "r", encoding="utf-8") as f:
         agent_config = json.load(f)
-    
-    # System prompt is now loaded from ~/.swarm-ai/.context/SWARMAI.md
-    # at session start by ContextDirectoryLoader — not stored in DB.
-    
-    # Create the default agent (mcp_ids already collected above)
+
+    # System prompt loaded from .context/SWARMAI.md at session start — not stored in DB.
     now = datetime.now().isoformat()
     agent_data = {
         "id": DEFAULT_AGENT_ID,
-        "name": SWARM_AGENT_NAME,  # Hardcoded system agent name
+        "name": SWARM_AGENT_NAME,
         "description": agent_config.get("description", "Your AI Team, 24/7"),
-        "model": None,  # Model resolved at runtime from config.json, not stored in DB
+        "model": None,  # Resolved at runtime from config.json
         "permission_mode": agent_config.get("permission_mode", "default"),
         "max_turns": agent_config.get("max_turns", 100),
-        "system_prompt": "",  # Loaded from .context/SWARMAI.md at session start
+        "system_prompt": "",
         "is_default": True,
-        "is_system_agent": True,  # Mark as protected system agent
-        "allowed_skills": [],  # Built-in skills always available without explicit listing
+        "is_system_agent": True,
+        "allowed_skills": [],
         "allow_all_skills": agent_config.get("allow_all_skills", True),
-        "mcp_ids": list(all_mcp_ids),
+        "mcp_ids": system_mcp_ids,  # Only system MCPs; user-local loaded from file
         "enable_bash_tool": agent_config.get("enable_bash_tool", True),
         "enable_file_tools": agent_config.get("enable_file_tools", True),
         "enable_web_tools": agent_config.get("enable_web_tools", True),
@@ -201,11 +162,10 @@ async def ensure_default_agent(skip_registration: bool = False) -> dict:
         "created_at": now,
         "updated_at": now,
     }
-    
-    # Save to database
+
     await db.agents.put(agent_data)
     logger.info(f"Default agent created: {agent_data['name']}")
-    
+
     return agent_data
 
 
@@ -287,98 +247,6 @@ async def _register_default_mcp_servers(config_path: Path) -> list[str]:
 
     except Exception as e:
         logger.error(f"Failed to register MCP servers: {e}")
-
-    return mcp_ids
-
-
-async def _register_user_local_mcp_servers() -> list[str]:
-    """Register user-local MCP servers from ~/.swarm-ai/user-mcp-servers.json.
-
-    Same array format as ``default-mcp-servers.json`` — no format translation.
-    Each entry has ``id``, ``name``, ``description``, ``connection_type``,
-    ``config``, and ``rejected_tools``.  This file is user-owned and never
-    shipped with the app.
-
-    Existing records are synced on every startup (config, rejected_tools).
-    Records that disappear from the file are deactivated.
-
-    Returns:
-        List of registered user-local MCP server IDs.
-    """
-    config_path = get_app_data_dir() / "user-mcp-servers.json"
-    if not config_path.exists():
-        return []
-
-    mcp_ids: list[str] = []
-    try:
-        with open(config_path, "r", encoding="utf-8") as f:
-            mcp_configs = json.load(f)
-
-        if not isinstance(mcp_configs, list) or not mcp_configs:
-            return []
-
-        for mcp_config in mcp_configs:
-            mcp_id = mcp_config.get("id")
-            if not mcp_id:
-                logger.warning("Skipping user-local MCP entry without 'id'")
-                continue
-
-            existing = await db.mcp_servers.get(mcp_id)
-            if existing:
-                # Sync fields from file on every startup
-                updates: dict = {}
-                new_rejected = mcp_config.get("rejected_tools", [])
-                if existing.get("rejected_tools") != new_rejected:
-                    updates["rejected_tools"] = new_rejected
-                new_cfg = mcp_config.get("config", {})
-                if existing.get("config") != new_cfg:
-                    updates["config"] = new_cfg
-                if not existing.get("is_active", True):
-                    updates["is_active"] = True
-                if updates:
-                    await db.mcp_servers.update(mcp_id, updates)
-                    logger.debug(
-                        "Synced user-local MCP: %s → %s",
-                        mcp_id, list(updates.keys()),
-                    )
-                mcp_ids.append(mcp_id)
-                continue
-
-            # Create new record
-            now = datetime.now().isoformat()
-            mcp_data = {
-                "id": mcp_id,
-                "name": mcp_config.get("name", mcp_id),
-                "description": mcp_config.get("description", ""),
-                "connection_type": mcp_config.get("connection_type", "stdio"),
-                "config": mcp_config.get("config", {}),
-                "rejected_tools": mcp_config.get("rejected_tools", []),
-                "source_type": "user-local",
-                "is_system": False,
-                "is_active": True,
-                "created_at": now,
-                "updated_at": now,
-            }
-            await db.mcp_servers.put(mcp_data)
-            mcp_ids.append(mcp_id)
-            logger.info("Registered user-local MCP: %s", mcp_data["name"])
-
-        # Deactivate user-local MCPs removed from the file
-        all_mcps = await db.mcp_servers.list()
-        active_ids = set(mcp_ids)
-        for mcp in all_mcps:
-            if (
-                mcp.get("source_type") == "user-local"
-                and mcp["id"] not in active_ids
-                and mcp.get("is_active")
-            ):
-                await db.mcp_servers.update(mcp["id"], {"is_active": False})
-                logger.info("Deactivated removed user-local MCP: %s", mcp["id"])
-
-    except json.JSONDecodeError as e:
-        logger.error("Invalid JSON in user-mcp-servers.json: %s", e)
-    except Exception as e:
-        logger.error("Failed to register user-local MCP servers: %s", e)
 
     return mcp_ids
 

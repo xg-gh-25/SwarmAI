@@ -81,3 +81,6 @@ coverage/
 
 # Git worktrees
 .worktrees/
+
+# User-local MCP config (machine-specific, contains absolute paths)
+desktop/resources/user-mcp-servers.json

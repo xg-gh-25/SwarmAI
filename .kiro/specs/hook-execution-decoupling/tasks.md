@@ -89,7 +89,7 @@ The `BackgroundHookExecutor` infrastructure is already fully implemented and wir
 - [x] 5. Checkpoint - Verify all code changes
   - Ensure all tests pass, ask the user if questions arise.
 
-- [~] 6. Property-based tests for pending set tracking and skip semantics
+- [ ] 6. Property-based tests for pending set tracking and skip semantics
   - [ ]* 6.1 Write property test: Pending task set tracking (Property 8)
     - **Property 8: Pending task set tracks and auto-cleans tasks**
     - Generate random sequences of fire/complete events, verify pending_count is always correct
@@ -108,7 +108,7 @@ The `BackgroundHookExecutor` infrastructure is already fully implemented and wir
     - Test file: `backend/tests/test_property_hook_context_identity.py`
     - **Validates: Requirements 8.3**
 
-- [~] 7. Property-based tests for concurrency and idle loop
+- [ ] 7. Property-based tests for concurrency and idle loop
   - [ ]* 7.1 Write property test: Git lock serialization (Property 13)
     - **Property 13: Git operations serialized via git_lock**
     - Generate random concurrent hook executions, verify git operations never overlap in time
