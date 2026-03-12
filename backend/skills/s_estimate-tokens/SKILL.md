@@ -36,18 +36,18 @@ You **MUST** use the bundled script for all token estimation requests. You **MUS
 
 1. Run the script with the file path:
    ```bash
-   ./scripts/estimate-tokens.sh <filepath>
+   .claude/skills/s_estimate-tokens/scripts/estimate-tokens.sh <filepath>
    ```
 
 2. **Preferred**: For command output, pipe directly from the source command:
    ```bash
-   ls ~/.swarm-ai/skills/ | ./scripts/estimate-tokens.sh
-   command | ./scripts/estimate-tokens.sh
+   ls ~/.swarm-ai/skills/ | .claude/skills/s_estimate-tokens/scripts/estimate-tokens.sh
+   command | .claude/skills/s_estimate-tokens/scripts/estimate-tokens.sh
    ```
 
 3. Alternative: Use echo only when direct piping isn't feasible:
    ```bash
-   echo "content" | ./scripts/estimate-tokens.sh
+   echo "content" | .claude/skills/s_estimate-tokens/scripts/estimate-tokens.sh
    ```
 
 4. Present the script output directly to the user
@@ -99,19 +99,19 @@ Context usage: 1.11% of 200,000 tokens
 
 | Operation | Command |
 |-----------|---------|
-| Estimate tokens | `./scripts/estimate-tokens.sh file.txt` |
-| Piped input | `command \| ./scripts/estimate-tokens.sh` |
+| Estimate tokens | `.claude/skills/s_estimate-tokens/scripts/estimate-tokens.sh file.txt` |
+| Piped input | `command \| .claude/skills/s_estimate-tokens/scripts/estimate-tokens.sh` |
 
 ## Common Mistakes
 
 ### Using Echo Instead of Source Commands
 **Problem:** Using `echo` to recreate command output instead of running the source command
-**Preferred:** `ls ~/.swarm-ai/skills/ | ./scripts/estimate-tokens.sh`
-**Acceptable:** `echo "content" | ./scripts/estimate-tokens.sh` (when source unavailable)
+**Preferred:** `ls ~/.swarm-ai/skills/ | .claude/skills/s_estimate-tokens/scripts/estimate-tokens.sh`
+**Acceptable:** `echo "content" | .claude/skills/s_estimate-tokens/scripts/estimate-tokens.sh` (when source unavailable)
 
 ### Manual Calculation
 **Problem:** Agent performs math instead of using script
-**Fix:** Always run `./scripts/estimate-tokens.sh` - never calculate manually
+**Fix:** Always run `.claude/skills/s_estimate-tokens/scripts/estimate-tokens.sh` - never calculate manually
 
 ### Guessing Token Counts
 **Problem:** Providing estimates without running the script
