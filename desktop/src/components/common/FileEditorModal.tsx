@@ -31,6 +31,7 @@ import { fileIcon, fileIconColor, gitStatusBadge } from '../../utils/fileUtils';
 import { computeLineDiff } from '../../utils/lineDiff';
 import type { DiffLine } from '../../utils/lineDiff';
 import api from '../../services/api';
+import MarkdownRenderer from './MarkdownRenderer';
 
 export interface FileEditorModalProps {
   isOpen: boolean;
@@ -428,6 +429,7 @@ export default function FileEditorModal({
   const [isSaving, setIsSaving] = useState(false);
   const [showUnsavedWarning, setShowUnsavedWarning] = useState(false);
   const [showDiff, setShowDiff] = useState(false);
+  const [showMarkdownPreview, setShowMarkdownPreview] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [currentMatchIndex, setCurrentMatchIndex] = useState(0);
@@ -445,6 +447,7 @@ export default function FileEditorModal({
   // only trigger on manual edits, not on pre-existing git changes.
   const hasUnsavedEdits = isDirtyState(content, initialContent);
   const language = detectLanguage(fileName);
+  const isMarkdown = /\.md$/i.test(fileName);
 
   // --- Handlers (defined before useEffects that reference them) ---
 
@@ -494,6 +497,7 @@ export default function FileEditorModal({
       setOriginalContent(committedContent ?? initialContent);
       setShowUnsavedWarning(false);
       setShowDiff(false);
+      setShowMarkdownPreview(false);
       setShowSearch(false);
       setSearchQuery('');
       setCurrentMatchIndex(0);
@@ -712,6 +716,24 @@ export default function FileEditorModal({
             )}
           </div>
           <div className="flex items-center gap-1 shrink-0 ml-2">
+            {/* Markdown Preview toggle — only for .md files */}
+            {isMarkdown && (
+              <button
+                onClick={() => { setShowMarkdownPreview((p) => !p); if (showDiff) setShowDiff(false); }}
+                className={clsx(
+                  'flex items-center gap-1 px-2 py-1 rounded-lg text-xs transition-colors',
+                  showMarkdownPreview
+                    ? 'bg-blue-500/20 text-[var(--color-primary)] font-medium'
+                    : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)]'
+                )}
+                data-testid="markdown-preview-toggle"
+              >
+                <span className="material-symbols-outlined text-sm">
+                  {showMarkdownPreview ? 'edit' : 'visibility'}
+                </span>
+                {showMarkdownPreview ? 'Edit' : 'Preview'}
+              </button>
+            )}
             {/* Show Changes / Back to Edit toggle */}
             <button
               onClick={handleToggleDiff}
@@ -814,6 +836,11 @@ export default function FileEditorModal({
             /* DiffView replaces editor when active (Task 8.1/8.2) */
             <div className="flex-1 relative overflow-hidden">
               <DiffView lines={diffLines} />
+            </div>
+          ) : showMarkdownPreview ? (
+            /* Rendered markdown preview — replaces editor when active */
+            <div className="flex-1 relative overflow-auto p-6 bg-[var(--color-background)]">
+              <MarkdownRenderer content={content} className="max-w-3xl mx-auto" />
             </div>
           ) : (
             <>
