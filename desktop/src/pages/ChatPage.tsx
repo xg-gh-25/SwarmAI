@@ -358,6 +358,7 @@ export default function ChatPage() {
         messages: messagesRef.current,
         sessionId: sessionIdRef.current,
         pendingQuestion: null,
+        scrollPosition: messagesContainerRef.current?.scrollTop ?? undefined,
         // isStreaming is already authoritative in tabMapRef — no need to write it back
       });
     }
@@ -385,6 +386,7 @@ export default function ChatPage() {
         sessionId: sessionIdRef.current,
         pendingQuestion: pendingQuestion,
         isExpanded: isExpandedRef.current,
+        scrollPosition: messagesContainerRef.current?.scrollTop ?? undefined,
         // isStreaming is already authoritative in tabMapRef — no need to write it back
       });
       inputValueMapRef.current.set(currentTabId, inputValueRef.current);
@@ -415,6 +417,11 @@ export default function ChatPage() {
           loadSessionMessages(tabState.sessionId);
           return;
         }
+        // Guard 1: Suppress auto-scroll during tab switch — prevents the
+        // [messages] effect from calling scrollToBottom() before the
+        // double-rAF scroll restore fires.
+        userScrolledUpRef.current = true;
+
         setMessages(tabState.messages);
         setSessionId(tabState.sessionId);
         setPendingQuestion(tabState.pendingQuestion);
@@ -425,6 +432,33 @@ export default function ChatPage() {
         // from tabMapRef — no need to call setIsStreaming which would corrupt
         // the source tab's streaming state. Just bump to re-derive.
         bumpStreamingDerivation();
+
+        // Guard 2: Double-rAF scroll restore — ensures React has committed
+        // new messages to the DOM before setting scrollTop.
+        const savedScrollPosition = tabState.scrollPosition;
+        const restoreTabId = tabId; // capture for closure
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            // Async guard: if user switched tabs during rAF delay, no-op
+            if (activeTabIdRef.current !== restoreTabId) return;
+
+            const container = messagesContainerRef.current;
+            if (!container) return;
+
+            if (savedScrollPosition !== undefined) {
+              container.scrollTop = savedScrollPosition;
+            } else {
+              // New tab or no saved position — scroll to bottom
+              messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
+            }
+
+            // Guard 4: Recompute userScrolledUpRef based on restored position
+            // to avoid stale auto-scroll suppression from the previous tab.
+            const threshold = 100;
+            const isNearBottom = container.scrollTop + container.clientHeight >= container.scrollHeight - threshold;
+            userScrolledUpRef.current = !isNearBottom;
+          });
+        });
       }
       // Clear permission state — it's not per-tab in the map, but it
       // should not carry over from the previous tab.

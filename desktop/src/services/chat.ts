@@ -71,10 +71,49 @@ const toMessageCamelCase = (data: Record<string, unknown>): ChatMessage => {
     sessionId: data.session_id as string,
     role: data.role as 'user' | 'assistant',
     // Content can be various block types - cast to unknown first then to ContentBlock[]
-    content: data.content as unknown as ChatMessage['content'],
+    content: toCamelCaseContent(data.content as unknown[]) as unknown as ChatMessage['content'],
     model: (data.model as string) || undefined,
     createdAt: data.created_at as string,
   };
+};
+
+/** Convert snake_case fields in a content block to camelCase.
+ * Only transforms known snake_case fields on tool_result blocks:
+ * - tool_use_id → toolUseId
+ * - is_error → isError
+ * Defensively handles all block types — passes non-tool_result blocks through unchanged.
+ */
+export const toCamelCaseContentBlock = (block: Record<string, unknown>): Record<string, unknown> => {
+  if (block.type === 'tool_result') {
+    const converted: Record<string, unknown> = { ...block };
+    if ('tool_use_id' in converted) {
+      converted.toolUseId = converted.tool_use_id;
+      delete converted.tool_use_id;
+    }
+    if ('is_error' in converted) {
+      converted.isError = converted.is_error;
+      delete converted.is_error;
+    }
+    return converted;
+  }
+  return block;
+};
+
+/** Convert snake_case fields in an array of content blocks to camelCase. */
+export const toCamelCaseContent = (content: unknown[]): unknown[] => {
+  return content.map((block) => toCamelCaseContentBlock(block as Record<string, unknown>));
+};
+
+/** Parse an SSE data string into a StreamEvent, converting content block fields from snake_case to camelCase.
+ * This ensures tool_result blocks have toolUseId (not tool_use_id) and isError (not is_error)
+ * so the frontend resultMap lookup works correctly.
+ */
+export const parseSSEEvent = (data: string): StreamEvent => {
+  const event: StreamEvent = JSON.parse(data);
+  if (event.content && Array.isArray(event.content)) {
+    event.content = toCamelCaseContent(event.content) as StreamEvent['content'];
+  }
+  return event;
 };
 
 export const chatService = {
@@ -187,7 +226,7 @@ export const chatService = {
                 return;
               }
               try {
-                const event: StreamEvent = JSON.parse(data);
+                const event = parseSSEEvent(data);
                 // Ignore heartbeat messages - they're just for keeping the connection alive
                 if (event.type === 'heartbeat') {
                   continue;
@@ -373,7 +412,7 @@ export const chatService = {
                 return;
               }
               try {
-                const event: StreamEvent = JSON.parse(data);
+                const event = parseSSEEvent(data);
                 // Ignore heartbeat messages - they're just for keeping the connection alive
                 if (event.type === 'heartbeat') {
                   continue;
@@ -510,7 +549,7 @@ export const chatService = {
                 return;
               }
               try {
-                const event: StreamEvent = JSON.parse(data);
+                const event = parseSSEEvent(data);
                 // Ignore heartbeat messages - they're just for keeping the connection alive
                 if (event.type === 'heartbeat') {
                   continue;
