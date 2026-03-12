@@ -86,6 +86,13 @@ def _format_session_entry(summary: StructuredSummary, context: HookContext) -> s
 
     Header format: ``## Session — HH:MM | session_id[:8] | Title``
     This groups by time + session ID + title for traceability.
+
+    Core sections (always present): What Happened, Key Decisions,
+    Files Modified, Open Questions.
+
+    Enriched sections (only when LLM enrichment produced content):
+    Actions Taken, Reasoning, Rejected Approaches, Continue From,
+    Validation Status.  Empty enriched sections are omitted entirely.
     """
     lines: list[str] = []
     short_id = context.session_id[:8] if context.session_id else "unknown"
@@ -110,6 +117,28 @@ def _format_session_entry(summary: StructuredSummary, context: HookContext) -> s
         lines.append("(none)")
     lines.append("")
 
+    # --- Enriched sections (omit if empty) ---
+
+    if summary.actions_taken:
+        lines.append("### Actions Taken")
+        for a in summary.actions_taken:
+            lines.append(f"- {a}")
+        lines.append("")
+
+    if summary.reasoning:
+        lines.append("### Reasoning")
+        for r in summary.reasoning:
+            lines.append(f"- {r}")
+        lines.append("")
+
+    if summary.rejected_approaches:
+        lines.append("### Rejected Approaches")
+        for r in summary.rejected_approaches:
+            lines.append(f"- {r}")
+        lines.append("")
+
+    # --- Core sections (always present) ---
+
     lines.append("### Files Modified")
     if summary.files_modified:
         for f in summary.files_modified:
@@ -125,6 +154,18 @@ def _format_session_entry(summary: StructuredSummary, context: HookContext) -> s
     else:
         lines.append("(none)")
     lines.append("")
+
+    # --- Enriched tail sections (omit if empty) ---
+
+    if summary.validation_status:
+        lines.append("### Validation Status")
+        lines.append(summary.validation_status)
+        lines.append("")
+
+    if summary.continue_from:
+        lines.append("### Continue From")
+        lines.append(summary.continue_from)
+        lines.append("")
 
     return "\n".join(lines)
 

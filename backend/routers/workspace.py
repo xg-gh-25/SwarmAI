@@ -5,6 +5,11 @@ written to the workspace filesystem (Requirement 34.2):
 
 - ``project_files_version`` — for any file write inside the workspace
 - ``memory_version``        — specifically when Memory/ files are written
+
+Additional security:
+
+- ``_validate_workspace_path`` — realpath-based traversal guard for the
+  file attachment pipeline (Requirements 14.3, 14.4)
 """
 
 import base64
@@ -188,6 +193,37 @@ def validate_path(workspace_root: Path, requested_path: str) -> Path:
             status_code=403, detail="Access denied: path traversal detected"
         )
 
+    return full_path
+
+
+def _validate_workspace_path(path: str, workspace_dir: str) -> str:
+    """Validate that a file path resolves within the workspace directory.
+
+    This is an additional defense-in-depth check for the file attachment
+    pipeline (Requirement 14.3, 14.4).  It uses ``os.path.realpath`` to
+    resolve symlinks and ``..`` segments, then verifies the result stays
+    inside *workspace_dir*.
+
+    Args:
+        path: The relative file path to validate.
+        workspace_dir: The workspace root directory.
+
+    Returns:
+        The resolved absolute path as a string.
+
+    Raises:
+        HTTPException(400): If the path escapes the workspace.
+    """
+    import os
+
+    full_path = os.path.realpath(os.path.join(workspace_dir, path))
+    workspace_real = os.path.realpath(workspace_dir)
+
+    if not full_path.startswith(workspace_real + os.sep) and full_path != workspace_real:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Path traversal not allowed: {path}",
+        )
     return full_path
 
 
@@ -410,6 +446,9 @@ async def read_file(
 
     # Validate and resolve the path
     file_path = validate_path(workspace_root, path)
+
+    # Additional realpath-based traversal check (Requirement 14.3, 14.4)
+    _validate_workspace_path(path, str(workspace_root))
 
     # Check if file exists and is a file
     if not file_path.exists():

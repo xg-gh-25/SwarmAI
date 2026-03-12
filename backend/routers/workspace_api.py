@@ -33,9 +33,11 @@ Helper models (request bodies):
 - ``FolderRenameRequest``  — ``old_path: str``, ``new_path: str``
 """
 
+import base64
 import hashlib
 import json
 import logging
+import mimetypes
 import os
 import shutil
 import subprocess
@@ -59,6 +61,8 @@ from schemas.workspace_config import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["workspace-api"])
+
+MAX_PREVIEW_SIZE = 50 * 1024 * 1024  # 50 MB
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -453,15 +457,17 @@ def _is_readonly_context_file(relative_path: str) -> bool:
 async def get_workspace_file(
     path: str = Query(..., description="Relative path within the workspace"),
 ):
-    """Read a file's text content by its workspace-relative path.
+    """Read a file's content by its workspace-relative path.
 
-    Used by the explorer's file editor modal to open files for viewing
-    and editing.  The ``path`` parameter is the same relative path
-    returned by ``GET /workspace/tree``.
+    Used by the explorer's file editor modal and binary preview modal.
+    The ``path`` parameter is the same relative path returned by
+    ``GET /workspace/tree``.
 
-    Returns ``{ "content": "<utf-8 text>" }`` on success.
+    Returns ``{ "content": "...", "encoding": "utf-8" }`` for text files.
+    Returns ``{ "content": "<base64>", "encoding": "base64", "mime_type": "...", "size": N }`` for binary files.
     Returns 404 if the file does not exist or is outside the workspace.
     Returns 400 if the path attempts directory traversal.
+    Returns 413 if the file exceeds 50 MB.
     """
     # Reject obvious traversal attempts
     if ".." in path.split("/"):
@@ -498,16 +504,43 @@ async def get_workspace_file(
     if not target.is_file():
         raise HTTPException(status_code=404, detail=f"File not found: {path}")
 
+    # Check file size BEFORE reading (prevents loading huge files into memory)
+    file_size = target.stat().st_size
+    if file_size > MAX_PREVIEW_SIZE:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File too large to preview ({file_size // (1024 * 1024)} MB). Maximum is 50 MB.",
+        )
+
     try:
         content = target.read_text(encoding="utf-8")
     except UnicodeDecodeError:
-        raise HTTPException(status_code=400, detail="File is not valid UTF-8 text")
+        # Binary fallback: base64 encode
+        logger.info("Binary file fallback for %s (size=%d, not valid UTF-8)", path, file_size)
+        raw = target.read_bytes()
+        mime_type, _ = mimetypes.guess_type(target.name)
+        if mime_type is None:
+            mime_type = "application/octet-stream"
+        return {
+            "content": base64.b64encode(raw).decode("ascii"),
+            "path": path,
+            "name": target.name,
+            "encoding": "base64",
+            "mime_type": mime_type,
+            "size": file_size,
+        }
     except OSError as exc:
         raise HTTPException(status_code=500, detail=f"Failed to read file: {exc}")
 
     # Projected skill files are always readonly (managed by the system)
     is_readonly = _is_readonly_context_file(path) or is_skill_file
-    return {"content": content, "path": path, "name": target.name, "readonly": is_readonly}
+    return {
+        "content": content,
+        "path": path,
+        "name": target.name,
+        "readonly": is_readonly,
+        "encoding": "utf-8",
+    }
 
 
 @router.get("/workspace/file/committed")

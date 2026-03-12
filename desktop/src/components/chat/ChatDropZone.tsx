@@ -1,46 +1,52 @@
 import { useState, useCallback, ReactNode } from 'react';
 import clsx from 'clsx';
-import { useLayout } from '../../contexts/LayoutContext';
 import type { FileTreeItem } from '../workspace-explorer/FileTreeNode';
 
 interface ChatDropZoneProps {
   /** Child content (the chat panel) */
   children: ReactNode;
+  /** Add native File objects (from OS drop) to the unified attachment pipeline */
+  addFiles: (files: File[]) => Promise<void>;
+  /** Add workspace files by path (from Workspace Explorer drag) */
+  addWorkspaceFiles: (files: FileTreeItem[]) => Promise<void>;
 }
 
 /**
- * ChatDropZone - Wrapper component that handles drag-drop file attachment
- * 
- * Requirements:
- * - 3.12: Drag files from file tree to chat to attach as context
- * - 6.2: Drag-drop files from Workspace Explorer to attach to chat context
- * 
- * Property 11: Drag-Drop File Attachment
- * For any file dragged from Workspace_Explorer and dropped on Main_Chat_Panel,
- * that file SHALL be added to the Chat_Context attachments list.
+ * ChatDropZone — Drop target wrapper for the chat panel.
+ *
+ * Accepts files from two drag sources and routes them through the
+ * unified attachment pipeline via props supplied by ChatPage:
+ *
+ *   Path 1 – Workspace Explorer: JSON payload (`application/json`) containing
+ *            a FileTreeItem.  Routed to `addWorkspaceFiles`.
+ *   Path 2 – Native OS drop (Finder / Explorer / Nautilus): `DataTransfer.files`
+ *            containing native File objects.  Routed to `addFiles`.
+ *
+ * A visual drop overlay is shown for both drag types.
+ *
+ * Requirements: 3.1, 4.1, 4.2, 4.3
  */
-export function ChatDropZone({ children }: ChatDropZoneProps) {
-  const { attachFile } = useLayout();
+export function ChatDropZone({ children, addFiles, addWorkspaceFiles }: ChatDropZoneProps) {
   const [isDragOver, setIsDragOver] = useState(false);
 
-  // Handle drag enter - show visual feedback
+  // Handle drag enter - show visual feedback for workspace JSON or native files
   const handleDragEnter = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
     
-    // Check if the drag contains our file data
-    if (e.dataTransfer.types.includes('application/json')) {
+    // Show overlay for workspace explorer JSON drags OR native OS file drags
+    if (e.dataTransfer.types.includes('application/json') || e.dataTransfer.types.includes('Files')) {
       setIsDragOver(true);
     }
   }, []);
 
-  // Handle drag over - required to allow drop
+  // Handle drag over - required to allow drop for both drag types
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
     
-    // Set the drop effect to copy
-    if (e.dataTransfer.types.includes('application/json')) {
+    // Set the drop effect to copy for workspace JSON or native file drags
+    if (e.dataTransfer.types.includes('application/json') || e.dataTransfer.types.includes('Files')) {
       e.dataTransfer.dropEffect = 'copy';
     }
   }, []);
@@ -60,29 +66,31 @@ export function ChatDropZone({ children }: ChatDropZoneProps) {
     }
   }, []);
 
-  // Handle drop - attach the file to chat context
+  // Handle drop - route to unified attachment pipeline via props
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
     setIsDragOver(false);
 
-    try {
-      // Get the file data from the drag event
-      const jsonData = e.dataTransfer.getData('application/json');
-      if (!jsonData) {
-        return;
+    // Path 1: Workspace explorer (JSON data from FileTreeNode drag)
+    const jsonData = e.dataTransfer.getData('application/json');
+    if (jsonData) {
+      try {
+        const fileData: FileTreeItem = JSON.parse(jsonData);
+        if (fileData.type === 'file') {
+          addWorkspaceFiles([fileData]);
+        }
+      } catch (err) {
+        console.error('Failed to parse dropped file data:', err);
       }
-
-      const fileData: FileTreeItem = JSON.parse(jsonData);
-      
-      // Only attach files, not directories
-      if (fileData.type === 'file') {
-        attachFile(fileData);
-      }
-    } catch (error) {
-      console.error('Failed to parse dropped file data:', error);
+      return;
     }
-  }, [attachFile]);
+
+    // Path 2: Native OS file drop (Finder/Explorer/Nautilus)
+    if (e.dataTransfer.files.length > 0) {
+      addFiles(Array.from(e.dataTransfer.files));
+    }
+  }, [addFiles, addWorkspaceFiles]);
 
   return (
     <div

@@ -1,8 +1,8 @@
 import clsx from 'clsx';
-import type { FileAttachment } from '../../types';
+import type { UnifiedAttachment } from '../../types';
 
 interface AttachmentPreviewCardProps {
-  attachment: FileAttachment;
+  attachment: UnifiedAttachment;
   onRemove: (id: string) => void;
 }
 
@@ -18,7 +18,7 @@ const formatFileSize = (bytes: number): string => {
 /**
  * Get icon for file type
  */
-const getFileIcon = (type: FileAttachment['type']): string => {
+const getFileIcon = (type: UnifiedAttachment['type']): string => {
   switch (type) {
     case 'image':
       return 'image';

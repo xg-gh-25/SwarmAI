@@ -804,43 +804,10 @@ export function useChatStreamingLifecycle(
     return () => clearInterval(intervalId);
   }, [isStreaming, streamingActivity]); // eslint-disable-line react-hooks/exhaustive-deps — elapsedSeconds intentionally omitted to avoid restarting the interval on every tick
 
-  // --- Long-stream timeout warning (Requirement 3.4) ---
-  // Fires a warning toast after 120 seconds of active streaming, suggesting
-  // the user may cancel. Timer is per-tab: stored in a ref keyed by the
-  // active tab at stream start, and cleared on stream end, abort, or tab close.
-  const longStreamTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => {
-    if (isStreaming) {
-      // Clear any existing timer before starting a new one
-      if (longStreamTimerRef.current) {
-        clearTimeout(longStreamTimerRef.current);
-      }
-      longStreamTimerRef.current = setTimeout(() => {
-        longStreamTimerRef.current = null;
-        addToast({
-          severity: 'warning',
-          message: 'This operation is taking a while. You can stop it using the Stop button.',
-          autoDismiss: true,
-          durationMs: 10000,
-          id: 'long-stream-warning',
-        });
-      }, 120_000);
-    } else {
-      // Stream ended — clear the timer
-      if (longStreamTimerRef.current) {
-        clearTimeout(longStreamTimerRef.current);
-        longStreamTimerRef.current = null;
-      }
-    }
-
-    return () => {
-      if (longStreamTimerRef.current) {
-        clearTimeout(longStreamTimerRef.current);
-        longStreamTimerRef.current = null;
-      }
-    };
-  }, [isStreaming, addToast]);
+  // Long-stream timeout warning removed — the elapsed timer (Fix 9) already
+  // shows "Thinking… Xs" when the agent hasn't produced content yet. A blanket
+  // 120s toast false-alarmed on normal multi-tool workflows (deep-research,
+  // code analysis, etc.) and trained users to ignore it.
 
   // --- Fix 5: Mount-time restore from sessionStorage ---
   // On mount, check if there's a persisted pending state for the current

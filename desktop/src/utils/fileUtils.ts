@@ -160,3 +160,35 @@ export function fileIconColor(name: string): string {
       return 'var(--color-icon-default)';
   }
 }
+
+// ---------------------------------------------------------------------------
+// File preview classification
+// ---------------------------------------------------------------------------
+
+export type FilePreviewType = 'image' | 'pdf' | 'text' | 'unsupported';
+
+const IMAGE_EXTENSIONS = new Set([
+  'png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'ico'
+]);
+
+const PDF_EXTENSIONS = new Set(['pdf']);
+
+const UNSUPPORTED_BINARY = new Set([
+  'mp4', 'mp3', 'wav', 'avi', 'mov', 'mkv', 'flac', 'ogg',
+  'docx', 'xlsx', 'pptx', 'doc', 'xls', 'ppt',
+  'zip', 'tar', 'gz', 'rar', '7z', 'dmg', 'iso',
+  'exe', 'dll', 'so', 'dylib', 'wasm',
+]);
+
+/**
+ * Classify a file for preview routing based on its extension.
+ * Returns 'image' for viewable images, 'pdf' for PDFs,
+ * 'unsupported' for known binary formats, and 'text' for everything else.
+ */
+export function classifyFileForPreview(fileName: string): FilePreviewType {
+  const ext = fileName.split('.').pop()?.toLowerCase() ?? '';
+  if (IMAGE_EXTENSIONS.has(ext)) return 'image';
+  if (PDF_EXTENSIONS.has(ext)) return 'pdf';
+  if (UNSUPPORTED_BINARY.has(ext)) return 'unsupported';
+  return 'text';
+}

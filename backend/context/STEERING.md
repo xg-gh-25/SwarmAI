@@ -48,4 +48,34 @@ _These extend the base memory rules in AGENT.md with distillation and two-tier d
 
 ---
 
+## Post-Task Code Quality & Security Scans
+
+After completing any code modification task, scan modified files before moving on. **Skip entirely** if the only changes are documentation (*.md, docs/), config files, or context files (.context/).
+
+### Code Quality Scan
+
+Scan all modified source files for issues by severity:
+
+| Severity | Action | Categories |
+|----------|--------|------------|
+| 🔴 High | **Auto-fix** | Dead code, duplicate logic, missing error handling, type safety violations, memory leaks, SOLID violations |
+| 🟡 Medium | **Auto-fix** | Magic numbers, complex conditionals (>3 branches), unclear naming, tight coupling, inefficient algorithms, missing abstractions |
+| 🟢 Low | **Note only** | Minor readability, formatting, optional comments |
+
+**Process:** List findings briefly → fix 🔴 and 🟡 in-place → note what was fixed. Maintain existing functionality — refactors only, not feature changes. If nothing found, one line and move on.
+
+### Security Scan
+
+Scan all modified source files for security issues:
+
+| Severity | Action | What to Look For |
+|----------|--------|-----------------|
+| 🔴 Critical | **Auto-fix** | Hardcoded API keys/tokens/credentials, private keys, encryption keys, exposed passwords/secrets, DB connection strings with credentials |
+| 🟡 Warning | **Note only** | Hardcoded internal URLs, insecure defaults, missing input validation, overly permissive file permissions |
+| 🟢 Info | **Note only** | IP addresses in code, verbose error messages leaking internals |
+
+**Process:** Replace 🔴 Critical with env vars, config refs, or placeholders. **Never commit hardcoded secrets** — this is a blocking rule.
+
+---
+
 _Edit this file anytime. Standing rules stay until you remove them. Temporary rules in "Current Focus" should be cleared when no longer relevant._

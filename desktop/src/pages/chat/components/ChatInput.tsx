@@ -1,12 +1,11 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import clsx from 'clsx';
-import type { FileAttachment, SystemPromptMetadata } from '../../../types';
-import { FileAttachmentButton, FileAttachmentPreview, AttachedFileChips } from '../../../components/chat';
+import type { UnifiedAttachment, SystemPromptMetadata } from '../../../types';
+import { FileAttachmentButton, FileAttachmentPreview } from '../../../components/chat';
 import { TSCCPopoverButton } from './TSCCPopoverButton';
 import { ContextUsageRing } from './ContextUsageRing';
 import { SLASH_COMMANDS } from '../constants';
-import type { FileTreeItem } from '../../../components/workspace-explorer/FileTreeNode';
 
 interface ChatInputProps {
   inputValue: string;
@@ -15,16 +14,12 @@ interface ChatInputProps {
   onStop: () => void;
   isStreaming: boolean;
   selectedAgentId: string | null;
-  attachments: FileAttachment[];
+  attachments: UnifiedAttachment[];
   onAddFiles: (files: File[]) => void;
   onRemoveFile: (id: string) => void;
   isProcessingFiles: boolean;
   fileError: string | null;
   canAddMore: boolean;
-  /** Files attached from Workspace Explorer (context files) */
-  attachedContextFiles?: FileTreeItem[];
-  /** Callback to remove a context file */
-  onRemoveContextFile?: (file: FileTreeItem) => void;
   /** TSCC session ID for the popover button */
   sessionId?: string | null;
   /** System prompt metadata for the popover button */
@@ -57,8 +52,6 @@ export function ChatInput({
   isProcessingFiles,
   fileError,
   canAddMore,
-  attachedContextFiles,
-  onRemoveContextFile,
   sessionId,
   promptMetadata,
   contextPct,
@@ -291,7 +284,7 @@ export function ChatInput({
     }
   }, [onSend, isExpanded, onExpandedChange, applyTransition]);
 
-  const hasAttachments = attachments.some((a) => a.base64);
+  const hasAttachments = attachments.some((a) => !a.error && !a.isLoading);
   const canSend = (inputValue.trim() || hasAttachments) && selectedAgentId;
 
   return (
@@ -328,10 +321,6 @@ export function ChatInput({
             </div>
           )}
 
-          {/* Attached Context Files (from Workspace Explorer) */}
-          {attachedContextFiles && attachedContextFiles.length > 0 && onRemoveContextFile && (
-            <AttachedFileChips files={attachedContextFiles} onRemoveFile={onRemoveContextFile} />
-          )}
 
           {/* Input Row */}
           <div className="relative flex items-center gap-3">

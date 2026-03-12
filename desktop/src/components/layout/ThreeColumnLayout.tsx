@@ -3,10 +3,12 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { LayoutProvider, useLayout, LAYOUT_CONSTANTS, ModalType } from '../../contexts/LayoutContext';
 import { ExplorerProvider, useTreeData } from '../../contexts/ExplorerContext';
 import { WorkspaceExplorer } from '../workspace-explorer';
-import { ChatDropZone } from '../chat';
 import GlobalSearchBar from './GlobalSearchBar';
 import FileEditorModal from '../common/FileEditorModal';
+import BinaryPreviewModal from '../common/BinaryPreviewModal';
 import SwarmWorkspaceWarningDialog from '../common/SwarmWorkspaceWarningDialog';
+import { classifyFileForPreview } from '../../utils/fileUtils';
+import type { FilePreviewType } from '../../utils/fileUtils';
 import SkillsModal from '../modals/SkillsModal';
 import MCPServersModal from '../modals/MCPServersModal';
 import AgentsModal from '../modals/AgentsModal';
@@ -190,10 +192,8 @@ function MainChatPanel({ children }: MainChatPanelProps) {
       className="flex-1 overflow-hidden bg-[var(--color-bg)] flex flex-col"
       style={{ minWidth: MIN_MAIN_CHAT_PANEL_WIDTH }}
     >
-      {/* Drop zone wrapper for drag-drop file attachment */}
-      <ChatDropZone>
-        {children}
-      </ChatDropZone>
+      {/* ChatDropZone moved to ChatPage for direct prop access to useUnifiedAttachments */}
+      {children}
     </main>
   );
 }
@@ -209,7 +209,7 @@ function RefreshTreeBridge({ refreshTreeRef }: { refreshTreeRef: React.MutableRe
 
 // Inner layout component that uses the context
 function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
-  const { activeModal, closeModal, workspaceSettingsId, attachFile, attachedFiles } = useLayout();
+  const { activeModal, closeModal, workspaceSettingsId } = useLayout();
 
   /** Ref to hold the ExplorerContext refreshTree function (set by bridge component inside provider). */
   const refreshTreeRef = useRef<(() => void) | null>(null);
@@ -225,6 +225,14 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
     gitStatus?: GitStatus;
     readonly?: boolean;
     committedContent?: string;
+  } | null>(null);
+
+  // Binary preview state for images, PDFs, and unsupported files
+  const [binaryPreviewState, setBinaryPreviewState] = useState<{
+    isOpen: boolean;
+    fileName: string;
+    filePath: string;
+    mode: 'image' | 'pdf' | 'unsupported';
   } | null>(null);
 
   // Swarm workspace warning state - Requirement 4.3
@@ -274,7 +282,7 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
     }
   }, []);
 
-  // Handle file double-click - Requirement 9.1
+  // Handle file double-click - Requirement 9.1, 1.1–1.5, 7.1–7.2
   const handleFileDoubleClick = useCallback(async (file: FileTreeItem) => {
     // Check if this is a Swarm Workspace file - Requirement 4.3
     if (file.isSwarmWorkspace) {
@@ -282,8 +290,20 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
       return;
     }
 
-    // Open the file editor
-    await openFileEditor(file, file.gitStatus);
+    const previewType: FilePreviewType = classifyFileForPreview(file.name);
+
+    if (previewType === 'text') {
+      // Existing path — open FileEditorModal
+      await openFileEditor(file, file.gitStatus);
+    } else {
+      // New path — open BinaryPreviewModal for image, pdf, or unsupported
+      setBinaryPreviewState({
+        isOpen: true,
+        fileName: file.name,
+        filePath: file.path,
+        mode: previewType,
+      });
+    }
   }, [openFileEditor]);
 
   // Handle Swarm workspace warning confirmation - Requirement 4.3, 4.5
@@ -337,12 +357,23 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
           <LeftSidebar />
 
           {/* Workspace Explorer - 280px default, resizable 200-500px, collapsible */}
-          <WorkspaceExplorer onFileDoubleClick={handleFileDoubleClick} onAttachToChat={attachFile} />
+          <WorkspaceExplorer onFileDoubleClick={handleFileDoubleClick} />
 
           {/* Main Chat Panel - flex-1 (remaining space) */}
           <MainChatPanel>{children}</MainChatPanel>
         </div>
       </ExplorerProvider>
+
+      {/* Binary Preview Modal - Requirement 1.2, 1.3, 1.5 */}
+      {binaryPreviewState && (
+        <BinaryPreviewModal
+          isOpen={binaryPreviewState.isOpen}
+          fileName={binaryPreviewState.fileName}
+          filePath={binaryPreviewState.filePath}
+          mode={binaryPreviewState.mode}
+          onClose={() => setBinaryPreviewState(null)}
+        />
+      )}
 
       {/* File Editor Modal - Requirement 9.1, 9.2 */}
       {fileEditorState && (
@@ -355,8 +386,6 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
           onSave={handleFileSave}
           onClose={handleFileEditorClose}
           gitStatus={fileEditorState.gitStatus}
-          onAttachToChat={attachFile}
-          isAttached={attachedFiles.some(f => f.id === fileEditorState.filePath)}
           readonly={fileEditorState.readonly}
           committedContent={fileEditorState.committedContent}
         />

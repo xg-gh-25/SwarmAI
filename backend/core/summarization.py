@@ -1,15 +1,17 @@
-"""Improved rule-based conversation summarization pipeline.
+"""Hybrid rule-based + LLM conversation summarization pipeline.
 
 Converts conversation logs into structured summaries for DailyActivity
-files.  Extraction is rule-based (no LLM call) for speed and
-determinism, with improved heuristics for topic extraction, decision
-detection, and title generation.
+files.  Short sessions use rule-based extraction (fast, deterministic).
+Substantial sessions (>8 messages) use LLM enrichment to capture
+handoff-level detail: reasoning, rejected approaches, next steps,
+and validation status.
 
 Key public symbols:
 
 - ``StructuredSummary``       — Dataclass holding extracted topics,
-                                decisions, files modified, and open
-                                questions.
+                                decisions, files modified, open questions,
+                                and enriched fields (actions, reasoning,
+                                rejected approaches, continue-from).
 - ``SummarizationPipeline``   — Stateless pipeline that accepts a list
                                 of message dicts and returns a
                                 ``StructuredSummary``.
@@ -20,13 +22,18 @@ on-demand ``s_save-activity`` skill to ensure consistent extraction.
 
 from __future__ import annotations
 
+import asyncio
 import re
 import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Any
 
 logger = logging.getLogger(__name__)
+
+# Threshold: sessions with more messages than this get LLM enrichment
+LLM_ENRICHMENT_THRESHOLD = 8
 
 # Decision-indicator patterns (case-insensitive)
 _DECISION_PATTERNS = re.compile(
@@ -52,45 +59,98 @@ _WRITE_TOOL_NAMES = {"Write", "Edit"}
 
 @dataclass
 class StructuredSummary:
-    """Output of the summarization pipeline."""
+    """Output of the summarization pipeline.
+
+    Core fields (always populated by rule-based extraction):
+    - topics, decisions, files_modified, open_questions
+
+    Enriched fields (populated by LLM when session is substantial):
+    - actions_taken: what the agent actually did (not just files)
+    - reasoning: why key decisions were made
+    - rejected_approaches: what was proposed and turned down, with reason
+    - continue_from: specific next step for the next session
+    - validation_status: what was tested vs untested
+    """
 
     topics: list[str] = field(default_factory=list)
     decisions: list[str] = field(default_factory=list)
     files_modified: list[str] = field(default_factory=list)
     open_questions: list[str] = field(default_factory=list)
+    # Enriched fields (LLM-powered, empty for short/rule-based sessions)
+    actions_taken: list[str] = field(default_factory=list)
+    reasoning: list[str] = field(default_factory=list)
+    rejected_approaches: list[str] = field(default_factory=list)
+    continue_from: str = ""
+    validation_status: str = ""
     session_title: str = ""
     timestamp: str = ""  # HH:MM format
 
     def word_count(self) -> int:
         """Total word count across all text fields."""
         text = " ".join(
-            self.topics + self.decisions + self.files_modified + self.open_questions
+            self.topics + self.decisions + self.files_modified
+            + self.open_questions + self.actions_taken
+            + self.reasoning + self.rejected_approaches
         )
+        if self.continue_from:
+            text += " " + self.continue_from
+        if self.validation_status:
+            text += " " + self.validation_status
         return len(text.split())
+
+
+_ENRICHMENT_PROMPT = """\
+You are summarizing a chat session for a DailyActivity log. The log helps \
+the next agent session pick up where this one left off.
+
+## Conversation:
+{conversation}
+
+## Already extracted (rule-based):
+- Topics: {topics}
+- Decisions: {decisions}
+- Files modified: {files}
+
+## Your task:
+Enrich the summary with context that rule-based extraction misses. \
+Be concise — each entry max 120 chars. Only include sections with real content.
+
+## Output (valid JSON only, no markdown fences):
+{{
+  "actions_taken": ["what the agent did beyond file edits — e.g. diagnosed X, proposed Y, ran tests"],
+  "reasoning": ["why key decisions were made — e.g. chose X over Y because Z"],
+  "rejected_approaches": ["what was proposed and turned down — e.g. user rejected X because Y"],
+  "continue_from": "specific next step for the next session (one sentence)",
+  "validation_status": "what was tested vs untested (one sentence)"
+}}"""
+
+# Max chars of conversation to send to LLM for enrichment
+_ENRICHMENT_MAX_CHARS = 25_000
 
 
 class SummarizationPipeline:
     """Converts conversation logs into structured summaries.
 
-    Improved extraction rules:
-    - Topics: meaningful user statements (filtered for noise, merged
-      consecutive short messages, sentence-boundary aware).
-    - Decisions: assistant message sentences matching decision-indicator
-      regex patterns with deduplication.
-    - Files: file paths parsed from tool_use content blocks, split into
-      files read vs files modified.
-    - Open questions: from ask_user_question tool blocks.
-    - Title: derived from the longest substantive user message, not
-      just the first.
+    Two-tier extraction:
+    - Rule-based (all sessions): topics, decisions, files, open questions.
+      Fast and deterministic.
+    - LLM-enriched (sessions > LLM_ENRICHMENT_THRESHOLD messages): adds
+      actions taken, reasoning, rejected approaches, continue-from, and
+      validation status. Falls back to rule-based on LLM failure.
 
     Deduplication: topics and files are deduplicated by exact string match.
     Ordering: all lists preserve chronological order.
     """
 
-    MAX_WORDS_PER_ENTRY = 500
+    MAX_WORDS_PER_ENTRY = 700  # Increased from 500 to accommodate enriched fields
 
     async def summarize(self, messages: list[dict]) -> StructuredSummary:
-        """Full summarization for conversations with 3+ messages."""
+        """Full summarization for conversations with 3+ messages.
+
+        If the session has more than LLM_ENRICHMENT_THRESHOLD messages,
+        attempts LLM enrichment for handoff-level detail. Falls back to
+        rule-based summary on LLM failure.
+        """
         topics = self._extract_topics(messages)
         decisions = self._extract_decisions(messages)
         files = self._extract_files_modified(messages)
@@ -104,6 +164,22 @@ class SummarizationPipeline:
             session_title=self._derive_title(messages),
             timestamp=datetime.now().strftime("%H:%M"),
         )
+
+        # LLM enrichment for substantial sessions.
+        # Only catches Exception — CancelledError (BaseException) must propagate
+        # for proper asyncio task cancellation (Python 3.12+ re-cancels if
+        # swallowed).  The tight LLM timeouts (5s connect + 15s read = 20s max)
+        # ensure this fits within the 30s hook budget in normal operation.
+        # On shutdown cancellation, the entry is lost — same as before this
+        # change, just with a slightly larger window.
+        if len(messages) > LLM_ENRICHMENT_THRESHOLD:
+            try:
+                summary = await self._enrich_with_llm(summary, messages)
+            except Exception as exc:
+                logger.warning(
+                    "LLM enrichment failed, using rule-based summary: %s", exc
+                )
+
         return self._enforce_word_limit(summary)
 
     def minimal_summary(self, messages: list[dict]) -> StructuredSummary:
@@ -405,11 +481,14 @@ class SummarizationPipeline:
     def _enforce_word_limit(self, summary: StructuredSummary) -> StructuredSummary:
         """Trim fields to stay within MAX_WORDS_PER_ENTRY."""
         while summary.word_count() > self.MAX_WORDS_PER_ENTRY:
-            # Trim from longest list first
+            # Trim from longest list first (include enriched fields)
             lists = [
                 ("topics", summary.topics),
                 ("decisions", summary.decisions),
                 ("open_questions", summary.open_questions),
+                ("actions_taken", summary.actions_taken),
+                ("reasoning", summary.reasoning),
+                ("rejected_approaches", summary.rejected_approaches),
             ]
             longest = max(lists, key=lambda x: len(x[1]))
             if longest[1]:
@@ -417,3 +496,171 @@ class SummarizationPipeline:
             else:
                 break
         return summary
+
+    async def _enrich_with_llm(
+        self, summary: StructuredSummary, messages: list[dict]
+    ) -> StructuredSummary:
+        """Enrich a rule-based summary with LLM-extracted context.
+
+        Calls Bedrock (same pattern as memory_extractor) to extract
+        reasoning, rejected approaches, continue-from, and validation
+        status. On failure, returns the original summary unchanged.
+        """
+        conversation = self._format_conversation_for_llm(messages)
+        if not conversation.strip():
+            return summary
+
+        prompt = _ENRICHMENT_PROMPT.format(
+            conversation=conversation,
+            topics="; ".join(summary.topics[:10]) or "(none)",
+            decisions="; ".join(summary.decisions[:5]) or "(none)",
+            files="; ".join(summary.files_modified[:10]) or "(none)",
+        )
+
+        raw = await asyncio.to_thread(self._call_enrichment_llm, prompt)
+        if not raw or raw == "{}":
+            return summary
+
+        enriched = self._parse_enrichment(raw)
+        if not enriched:
+            return summary
+
+        # Merge enriched fields into summary
+        summary.actions_taken = enriched.get("actions_taken", [])
+        summary.reasoning = enriched.get("reasoning", [])
+        summary.rejected_approaches = enriched.get("rejected_approaches", [])
+        summary.continue_from = enriched.get("continue_from", "")
+        summary.validation_status = enriched.get("validation_status", "")
+
+        return summary
+
+    @staticmethod
+    def _format_conversation_for_llm(messages: list[dict]) -> str:
+        """Format messages into a readable conversation for the LLM prompt.
+
+        Truncates from the beginning if over _ENRICHMENT_MAX_CHARS
+        (keeps recent messages which are most relevant for continue-from).
+        """
+        lines: list[str] = []
+        for msg in messages:
+            role = msg.get("role", "unknown")
+            content = msg.get("content", "")
+
+            if isinstance(content, list):
+                text_parts: list[str] = []
+                for block in content:
+                    if isinstance(block, dict):
+                        if block.get("type") == "text":
+                            text_parts.append(block.get("text", ""))
+                        elif block.get("type") == "tool_use":
+                            text_parts.append(f"[Tool: {block.get('name', '?')}]")
+                    elif isinstance(block, str):
+                        text_parts.append(block)
+                content = "\n".join(text_parts)
+
+            if not content or not content.strip():
+                continue
+
+            prefix = "User" if role == "user" else "Assistant"
+            lines.append(f"{prefix}: {content.strip()}")
+
+        result = "\n\n".join(lines)
+
+        if len(result) > _ENRICHMENT_MAX_CHARS:
+            result = (
+                "...[truncated older messages]...\n\n"
+                + result[-_ENRICHMENT_MAX_CHARS:]
+            )
+
+        return result
+
+    @staticmethod
+    def _call_enrichment_llm(prompt: str) -> str:
+        """Make a Bedrock API call for enrichment extraction.
+
+        Budget constraint: This runs inside DailyActivityExtractionHook
+        which has a 30s timeout.  The DB query + rule-based extraction
+        take ~1-2s, file write ~0.1s.  So the LLM call has ~20s budget.
+
+        Timeouts are set conservatively:
+        - connect_timeout=5s, read_timeout=15s → worst case 20s per attempt
+        - Single attempt (no retry) — enrichment is best-effort, rule-based
+          summary is the safety net
+        - boto3 adaptive retry handles transient AWS errors internally
+
+        Uses Sonnet for quality. Only runs for sessions >8 messages.
+        """
+        import boto3
+        from botocore.config import Config as BotoConfig
+
+        model_id = "us.anthropic.claude-sonnet-4-6"
+        region = "us-east-1"
+
+        boto_config = BotoConfig(
+            retries={"max_attempts": 1, "mode": "adaptive"},
+            connect_timeout=5,
+            read_timeout=15,
+        )
+
+        try:
+            client = boto3.client(
+                "bedrock-runtime",
+                region_name=region,
+                config=boto_config,
+            )
+            response = client.invoke_model(
+                modelId=model_id,
+                contentType="application/json",
+                accept="application/json",
+                body=json.dumps({
+                    "anthropic_version": "bedrock-2023-05-31",
+                    "max_tokens": 512,
+                    "temperature": 0,
+                    "messages": [
+                        {"role": "user", "content": prompt}
+                    ],
+                }),
+            )
+            result = json.loads(response["body"].read())
+            content = result.get("content", [])
+            if content and isinstance(content, list):
+                return content[0].get("text", "{}")
+            return "{}"
+        except Exception as e:
+            logger.warning("Enrichment LLM call failed: %s", e)
+            return "{}"
+
+    @staticmethod
+    def _parse_enrichment(raw: str) -> dict[str, Any]:
+        """Parse the LLM enrichment JSON response."""
+        text = raw.strip()
+        if text.startswith("```"):
+            text = text.split("\n", 1)[1] if "\n" in text else text[3:]
+        if text.endswith("```"):
+            text = text[:-3]
+        text = text.strip()
+
+        start = text.find("{")
+        end = text.rfind("}") + 1
+        if start == -1 or end == 0:
+            return {}
+
+        try:
+            data = json.loads(text[start:end])
+        except json.JSONDecodeError as e:
+            logger.warning("Failed to parse enrichment JSON: %s", e)
+            return {}
+
+        result: dict[str, Any] = {}
+        for key in ("actions_taken", "reasoning", "rejected_approaches"):
+            entries = data.get(key, [])
+            if isinstance(entries, list):
+                result[key] = [e for e in entries if isinstance(e, str) and e.strip()]
+            else:
+                result[key] = []
+
+        for key in ("continue_from", "validation_status"):
+            val = data.get(key, "")
+            result[key] = val if isinstance(val, str) else ""
+
+        return result
