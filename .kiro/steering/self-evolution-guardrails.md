@@ -1,6 +1,6 @@
 ---
 inclusion: fileMatch
-fileMatchPattern: "backend/skills/s_self-evolution/*,backend/context/EVOLUTION.md,backend/context/EVOLUTION_CHANGELOG.jsonl,backend/routers/chat.py,desktop/src/hooks/useChatStreamingLifecycle.ts,desktop/src/services/evolution.ts"
+fileMatchPattern: "backend/skills/s_self-evolution/*,backend/context/EVOLUTION.md,backend/context/EVOLUTION_CHANGELOG.jsonl,backend/routers/chat.py,backend/hooks/evolution_maintenance_hook.py,backend/hooks/evolution_trigger_hook.py,desktop/src/hooks/useChatStreamingLifecycle.ts,desktop/src/services/evolution.ts"
 ---
 
 # Self-Evolution Guardrails
@@ -53,6 +53,17 @@ Rules:
 - Soft cap: 30 active entries. Oldest + lowest usage deprecated first.
 - Salience decay: -0.1/week idle, usage resets to 1.0. At 0.3 → `fading`, at 0.0 → `deprecated`.
 
+### EvolutionMaintenanceHook (Code-Enforced Lifecycle)
+
+`EvolutionMaintenanceHook` runs as the 4th session lifecycle hook and performs code-enforced EVOLUTION.md housekeeping that was previously prompt-dependent:
+
+- Scans `Capabilities Built` and `Competence Learned` sections for entries with Status + Usage Count fields
+- Deprecation: entries with `status=active`, idle >30 days, `usage_count=0` → set to `deprecated`
+- Pruning: entries with `status=deprecated`, `usage_count=0`, idle >30 days → removed from file
+- All actions logged to `EVOLUTION_CHANGELOG.jsonl` with `source: "maintenance_hook"`
+- Uses `locked_write.py` functions for atomic field updates (imported as library, not shelled out)
+- Configurable `deprecation_days` (default 30)
+
 ## Configuration Boundaries
 
 All evolution config lives under `config.json["evolution"]`, read via `AppConfigManager.get("evolution")`:
@@ -69,6 +80,19 @@ When modifying config defaults, NEVER change `auto_approve_*` to `true` — this
 
 The per-session trigger counter uses session-scoped files at `/tmp/swarm-evo-triggers-{session_id}`. Each session gets its own counter file, preventing cross-session interference. Files in `/tmp/` auto-clean on OS reboot.
 
+## Tool Failure Tracker (Code-Assisted Trigger Detection)
+
+`ToolFailureTracker` is instantiated per-session (stored in `_active_sessions[sid]["failure_tracker"]`) and watches for repeated tool failures:
+
+- Tracks failure signatures: `tool_name.lower() + ":" + first_100_chars_of_error`
+- After `FAILURE_THRESHOLD` (2) consecutive failures with same signature → emits evolution nudge
+- Nudge cooldown: 120s per signature, max 3 nudges per session (`_max_nudges_per_session`)
+- On tool success → `reset_tool()` clears all failure signatures for that tool
+- Nudge is a system-level hint injected into agent context, not user-visible
+- No shared mutable state — each session has its own tracker instance
+
+Anti-pattern: Making `ToolFailureTracker` a module-level singleton — this would leak failure state between sessions.
+
 ## Regression Checklist
 
 When modifying self-evolution code:
@@ -81,3 +105,6 @@ When modifying self-evolution code:
 - [ ] Config defaults in `AppConfigManager` match the documented defaults above
 - [ ] `auto_approve_*` defaults remain `false`
 - [ ] Evolution markers in assistant text are HTML comments (invisible in rendered markdown)
+- [ ] `EvolutionMaintenanceHook` registered as 4th hook in lifespan (after DistillationTriggerHook)
+- [ ] `ToolFailureTracker` is per-session (stored in `_active_sessions`), not module-level
+- [ ] `ToolFailureTracker.reset_tool()` called on tool success to clear stale failure counts

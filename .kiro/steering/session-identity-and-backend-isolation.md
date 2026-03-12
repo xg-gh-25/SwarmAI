@@ -92,12 +92,13 @@ Sessions are cleaned up via `_cleanup_session()` triggered by:
 - Explicit delete (user closes session)
 - Backend shutdown (`disconnect_all()`)
 
-Cleanup fires `SessionLifecycleHookManager.fire_post_session_close()` which runs 3 hooks in order:
+Cleanup fires `SessionLifecycleHookManager.fire_post_session_close()` via `BackgroundHookExecutor` which runs 4 hooks in order:
 1. `DailyActivityExtractionHook` — extracts conversation summary
-2. `WorkspaceAutoCommitHook` — git auto-commit
+2. `WorkspaceAutoCommitHook` — git auto-commit (uses shared `git_lock`)
 3. `DistillationTriggerHook` — memory distillation check
+4. `EvolutionMaintenanceHook` — deprecate/prune idle EVOLUTION.md entries
 
-Each hook is error-isolated with 30s timeout. A failing hook does NOT block subsequent hooks.
+Hooks run as fire-and-forget `asyncio.Task`s via `BackgroundHookExecutor` — they never block the chat path. Each hook is error-isolated with 30s timeout. A failing hook does NOT block subsequent hooks.
 
 ## Regression Checklist
 
