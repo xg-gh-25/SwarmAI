@@ -194,14 +194,24 @@ export default function BinaryPreviewModal({
     setImageDimensions({ w: img.naturalWidth, h: img.naturalHeight });
   }, []);
 
-  const handleRevealInFinder = useCallback(() => {
-    // Use Tauri 2.0 shell plugin to reveal file in OS file manager
-    import('@tauri-apps/plugin-shell')
-      .then(({ open }) => open(filePath))
-      .catch(() => {
-        // Fallback if Tauri shell plugin not available
+  const handleRevealInFinder = useCallback(async () => {
+    // Resolve absolute path by fetching workspace root
+    try {
+      const configResp = await api.get<{ file_path?: string; filePath?: string }>('/workspace');
+      const wsRoot = configResp.data.file_path ?? configResp.data.filePath ?? '';
+      const absolutePath = wsRoot ? `${wsRoot}/${filePath}` : filePath;
+
+      const { open } = await import('@tauri-apps/plugin-shell');
+      await open(absolutePath);
+    } catch {
+      // Fallback: try relative path or window.open
+      try {
+        const { open } = await import('@tauri-apps/plugin-shell');
+        await open(filePath);
+      } catch {
         window.open(filePath, '_blank');
-      });
+      }
+    }
   }, [filePath]);
 
   const handlePdfLoadSuccess = useCallback(({ numPages: n }: { numPages: number }) => {
