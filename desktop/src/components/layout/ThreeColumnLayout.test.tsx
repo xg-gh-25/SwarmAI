@@ -302,60 +302,31 @@ describe('ThreeColumnLayout - ChatContextBar Removal', () => {
    * Test: ChatDropZone still wraps the main content
    * **Validates: Requirement 1.5**
    *
-   * THE ChatDropZone component SHALL continue to wrap the chat content area
-   * for drag-drop file attachment
+   * ChatDropZone was moved from ThreeColumnLayout to ChatPage so it has
+   * direct prop access to useUnifiedAttachments.  ThreeColumnLayout now
+   * renders children directly inside MainChatPanel without a drop zone
+   * wrapper.  The drop zone is tested at the ChatPage level instead.
    */
-  describe('Requirement 1.5: ChatDropZone wraps main content', () => {
-    it('should render ChatDropZone in the main chat panel', () => {
+  describe('Requirement 1.5: ChatDropZone moved to ChatPage', () => {
+    it('should render children directly inside main panel without ChatDropZone wrapper', () => {
       renderThreeColumnLayout(
         <div data-testid="test-chat-content">Test Chat Content</div>
       );
 
-      // ChatDropZone should be present
-      const dropZone = screen.getByTestId('chat-drop-zone');
-      expect(dropZone).toBeInTheDocument();
-    });
-
-    it('should wrap children content inside ChatDropZone', () => {
-      renderThreeColumnLayout(
-        <div data-testid="test-chat-content">Test Chat Content</div>
-      );
-
-      // Find the drop zone
-      const dropZone = screen.getByTestId('chat-drop-zone');
-      expect(dropZone).toBeInTheDocument();
-
-      // Children should be inside the drop zone
+      // Children should be rendered inside the main panel
+      const mainPanel = document.querySelector('main.flex-1');
+      expect(mainPanel).not.toBeNull();
       const chatContent = screen.getByTestId('test-chat-content');
-      expect(dropZone.contains(chatContent)).toBe(true);
+      expect(mainPanel?.contains(chatContent)).toBe(true);
     });
 
-    it('should have ChatDropZone inside the main panel', () => {
+    it('should not render ChatDropZone at the ThreeColumnLayout level', () => {
       renderThreeColumnLayout(
         <div data-testid="test-chat-content">Test Chat Content</div>
       );
 
-      // Find the main element (MainChatPanel)
-      const mainPanel = document.querySelector('main.flex-1');
-      expect(mainPanel).not.toBeNull();
-
-      // ChatDropZone should be inside the main panel
-      const dropZone = screen.getByTestId('chat-drop-zone');
-      expect(mainPanel?.contains(dropZone)).toBe(true);
-    });
-
-    it('should render ChatDropZone as the direct child of main panel', () => {
-      renderThreeColumnLayout(
-        <div data-testid="test-chat-content">Test Chat Content</div>
-      );
-
-      // Find the main element (MainChatPanel)
-      const mainPanel = document.querySelector('main.flex-1');
-      expect(mainPanel).not.toBeNull();
-
-      // ChatDropZone should be a direct child of main panel
-      const dropZone = screen.getByTestId('chat-drop-zone');
-      expect(dropZone.parentElement).toBe(mainPanel);
+      // ChatDropZone is now inside ChatPage, not ThreeColumnLayout
+      expect(screen.queryByTestId('chat-drop-zone')).not.toBeInTheDocument();
     });
   });
 
