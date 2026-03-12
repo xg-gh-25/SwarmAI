@@ -278,8 +278,8 @@ fn send_shutdown_request(port: u16) -> bool {
             "-NoProfile",
             "-Command",
             &format!(
-                "try {{ Invoke-WebRequest -Uri 'http://127.0.0.1:{}/shutdown' -Method POST -TimeoutSec 10 }} catch {{}}",
-                port
+                "try {{ Invoke-WebRequest -Uri 'http://127.0.0.1:{}/shutdown' -Method POST -TimeoutSec {} }} catch {{}}",
+                port, SHUTDOWN_GRACE_SECONDS
             ),
         ])
         .creation_flags(0x08000000) // CREATE_NO_WINDOW
@@ -306,11 +306,12 @@ fn send_shutdown_request(port: u16) -> bool {
 // Uses curl which is available on most Unix systems
 #[cfg(not(target_os = "windows"))]
 fn send_shutdown_request(port: u16) -> bool {
+    let timeout = SHUTDOWN_GRACE_SECONDS.to_string();
     let result = std::process::Command::new("curl")
         .args([
             "-s",                                          // Silent mode
             "-X", "POST",                                  // POST request
-            "-m", "10",                                    // Timeout matches SHUTDOWN_GRACE_SECONDS
+            "-m", &timeout,                                // Timeout = SHUTDOWN_GRACE_SECONDS
             &format!("http://127.0.0.1:{}/shutdown", port),
         ])
         .output();
