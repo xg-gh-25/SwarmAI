@@ -1,6 +1,6 @@
 # Skill Validation Checklist
 
-Complete 58-point checklist for validating skills before deployment.
+Complete 64-point checklist for validating skills before deployment.
 
 ---
 
@@ -11,7 +11,7 @@ Complete 58-point checklist for validating skills before deployment.
 3. Fix any unchecked items
 4. Re-validate until all items pass
 
-**Passing threshold:** All 58 items must be checked for 100/100 score.
+**Passing threshold:** All 64 items must be checked for 100/100 score.
 
 ---
 
@@ -64,6 +64,7 @@ head -20 SKILL.md | grep -E "^(---|name:|description:)"
 - [ ] **3.4** Description is specific (not vague like "helps with stuff")
 - [ ] **3.5** Description is under 1024 characters
 - [ ] **3.6** Description doesn't contain XML tags
+- [ ] **3.7** `VERIFY_WITH:` considered (required for generator/code/document skills, optional for others)
 
 ### Pattern
 
@@ -238,25 +239,51 @@ DATA_DIR = "/Users/specific/path/data"
 
 ---
 
-## Section 12: Maintainability & Standards (4 items)
+## Section 12: Guardrails (5 items)
 
-### Future-Proofing
+### Anti-Skip Rules
 
-- [ ] **12.1** Skill follows Agent Skills spec (frontmatter, folder structure)
-- [ ] **12.2** Modular design—sections can be updated independently
-- [ ] **12.3** No hardcoded assumptions that will break with workflow changes
-- [ ] **12.4** Documentation is clear enough for someone else to maintain
+- [ ] **12.1** Dedicated `## Guardrails` section exists
+- [ ] **12.2** Contains 3-5 "DO NOT" rules (not "please verify" suggestions)
+- [ ] **12.3** Each guardrail targets a specific failure mode (not generic)
+- [ ] **12.4** Guardrails cover: skipping validation, false assumptions, missing evidence
+- [ ] **12.5** Guardrails are testable (you can tell if one was violated)
+
+### What Good Guardrails Look Like
+
+```markdown
+# GOOD — Specific, testable, targets real failure mode
+- DO NOT synthesize conclusions from fewer than 3 sources.
+- DO NOT skip the build step. Check exit code even if output looks correct.
+- DO NOT generate IAM policies without reading the existing role first.
+
+# BAD — Vague, untestable, generic
+- Be careful with the output.
+- Please verify your work.
+- Try to be accurate.
+```
 
 ---
 
-## Section 13: Safety & Security (4 items)
+## Section 13: Maintainability & Standards (4 items)
+
+### Future-Proofing
+
+- [ ] **13.1** Skill follows Agent Skills spec (frontmatter, folder structure)
+- [ ] **13.2** Modular design—sections can be updated independently
+- [ ] **13.3** No hardcoded assumptions that will break with workflow changes
+- [ ] **13.4** Documentation is clear enough for someone else to maintain
+
+---
+
+## Section 14: Safety & Security (4 items)
 
 ### Security Review
 
-- [ ] **13.1** Skill only accesses data it actually needs (least privilege)
-- [ ] **13.2** No arbitrary shell/code execution without input validation
-- [ ] **13.3** Sensitive data (credentials, PII) handled appropriately or avoided
-- [ ] **13.4** Reviewed for potential misuse vectors (e.g., prompt injection via skill)
+- [ ] **14.1** Skill only accesses data it actually needs (least privilege)
+- [ ] **14.2** No arbitrary shell/code execution without input validation
+- [ ] **14.3** Sensitive data (credentials, PII) handled appropriately or avoided
+- [ ] **14.4** Reviewed for potential misuse vectors (e.g., prompt injection via skill)
 
 ---
 
@@ -264,7 +291,7 @@ DATA_DIR = "/Users/specific/path/data"
 
 After completing all sections:
 
-- [ ] **FINAL** All 58 items are checked
+- [ ] **FINAL** All 64 items are checked
 
 ---
 
@@ -328,7 +355,7 @@ echo "Basic validation complete"
 |---------|-------|-------|
 | Frontmatter | 5 | YAML validity |
 | Name Field | 5 | Format compliance |
-| Description | 6 | Discoverability |
+| Description | 7 | Discoverability + VERIFY_WITH |
 | Structure | 6 | Organization |
 | Workflow | 8 | Clarity |
 | Examples | 5 | Teaching |
@@ -337,6 +364,7 @@ echo "Basic validation complete"
 | Consistency | 5 | Polish |
 | Testing | 5 | Validation |
 | Quality Rules | 3 | Guidance |
+| **Guardrails** | **5** | **Anti-skip enforcement** |
 | Maintainability | 4 | Future-proofing |
 | Safety & Security | 4 | Risk mitigation |
-| **Total** | **58** | |
+| **Total** | **64** | |

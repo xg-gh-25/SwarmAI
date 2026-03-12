@@ -236,6 +236,29 @@ Explicit guidance on quality standards.
 
 ---
 
+## Category 7b: Guardrails (5 points, bonus — adds to Structure total)
+
+Explicit "DO NOT" anti-skip rules that prevent common execution failures.
+
+| Points | Criteria |
+|--------|----------|
+| 0 | No guardrails section |
+| 2 | Has guardrails but they're vague ("be careful") or generic |
+| 3 | 2-3 specific "DO NOT" rules targeting real failure modes |
+| 4 | 3-5 specific, testable guardrails covering: skip, assume, evidence |
+| 5 | Complete guardrails + `VERIFY_WITH` in frontmatter for generator/code skills |
+
+**What makes a guardrail effective:**
+- Uses "DO NOT" (hard constraint), not "please verify" (suggestion)
+- Targets a specific failure mode observed in practice
+- Is testable — you can determine if it was violated
+- Covers three categories: skipping validation, false assumptions, missing evidence
+
+> [!IMPORTANT]
+> **This is a bonus category.** A skill can score 100/100 Structure without it, but guardrails are the single most effective pattern for preventing agent execution failures. Skills with guardrails are measurably more reliable.
+
+---
+
 ## Category 8: Consistency (5 points)
 
 Terminology and formatting consistency throughout.
@@ -332,6 +355,13 @@ Use this worksheet when evaluating a skill:
 - [ ] Validation requirements
 - [ ] Anti-patterns listed
 **Score: __/10**
+
+### Guardrails (5 points, bonus)
+- [ ] Dedicated `## Guardrails` section exists
+- [ ] 3-5 "DO NOT" rules (not vague suggestions)
+- [ ] Each targets a specific, testable failure mode
+- [ ] `VERIFY_WITH:` in frontmatter (for generator/code skills)
+**Score: __/5**
 
 ### Consistency (5 points)
 - [ ] Consistent terminology

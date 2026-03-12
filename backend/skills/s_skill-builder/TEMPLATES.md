@@ -23,6 +23,7 @@ description: >
   [What it does in one sentence].
   TRIGGER: "[phrase 1]", "[phrase 2]", "[phrase 3]".
   DO NOT USE: [when a different skill or approach is better] (use [alternative] instead).
+  VERIFY_WITH: [validator-skill-name] (optional — which skill validates output).
 ---
 
 # [Skill Title]
@@ -45,6 +46,12 @@ description: >
 
 ### Step 3: [Final Action]
 [Instructions for step 3]
+
+## Guardrails
+
+- DO NOT [skip specific validation]. [Run/verify] even if output looks correct.
+- DO NOT [assume X]. Verify by [method].
+- DO NOT [produce output] without [evidence/checkpoint].
 
 ## Examples
 
@@ -86,6 +93,7 @@ description: >
   [What it does in one sentence].
   TRIGGER: "[phrase 1]", "[phrase 2]", "[phrase 3]".
   DO NOT USE: [when condition] (use [alternative] instead).
+  VERIFY_WITH: [validator-skill-name] (optional — which skill validates output).
 ---
 
 # [Workflow Name]
@@ -135,6 +143,13 @@ command --with-args
 ### 4. [Validation Step]
 
 [How to verify success]
+
+## Guardrails
+
+- DO NOT [skip specific validation step]. [Run/verify] even if output looks correct.
+- DO NOT [assume X]. Verify by [method].
+- DO NOT [produce output] without [evidence/checkpoint].
+- DO NOT [proceed past step N] without confirming [condition].
 
 ## Reference
 
@@ -458,6 +473,7 @@ description: >
   Generate [artifact type] by [method].
   TRIGGER: "[phrase 1]", "[phrase 2]", "[phrase 3]".
   DO NOT USE: [when condition] (use [alternative] instead).
+  VERIFY_WITH: [validator-skill-name] (recommended for all generator skills).
 ---
 
 # [Artifact Type] Generator
@@ -494,6 +510,13 @@ Check against:
 ### 4. Output
 
 [How to present the final result]
+
+## Guardrails
+
+- DO NOT generate output without first reading [relevant source material/context].
+- DO NOT skip the validation step (Step 3). Run every check even if the draft looks correct.
+- DO NOT declare the artifact complete without [specific evidence of correctness].
+- DO NOT [common shortcut that produces low-quality artifacts].
 
 ## Template
 
@@ -610,6 +633,7 @@ For multi-step processes with validation loops.
 - Numbered steps (1, 2, 3...)
 - Callouts for warnings/tips
 - Checkpoints between major phases
+- **Guardrails section** with "DO NOT skip" rules for each checkpoint
 - Troubleshooting table at the end
 
 ### Pattern: Reference Skill
@@ -618,6 +642,7 @@ For API documentation or domain knowledge.
 - Detailed reference in REFERENCE.md
 - Examples organized by use case
 - Search-friendly headings
+- **Guardrails section** with "DO NOT assume" rules for common misinterpretations
 
 ### Pattern: Generator Skill
 For creating artifacts (commits, PRs, reports).
@@ -625,6 +650,8 @@ For creating artifacts (commits, PRs, reports).
 - Input/output examples
 - Validation rules
 - Format specifications
+- **Guardrails section** with "DO NOT generate without" evidence rules
+- **VERIFY_WITH** in frontmatter pointing to an independent validator skill
 
 ---
 
