@@ -1245,7 +1245,7 @@ export default function ChatPage() {
           const lastMsg = { ...updated[lastAssistantIndex] };
           lastMsg.content = [
             ...lastMsg.content,
-            { type: 'text' as const, text: '⏹️ Generation stopped by user.' },
+            { type: 'text' as const, text: '\n\n---\n*Stopped*' },
           ];
           updated[lastAssistantIndex] = lastMsg;
           return updated;
@@ -1254,7 +1254,7 @@ export default function ChatPage() {
         return [...prev, {
           id: Date.now().toString(),
           role: 'assistant' as const,
-          content: [{ type: 'text' as const, text: '⏹️ Generation stopped by user.' }],
+          content: [{ type: 'text' as const, text: '\n\n---\n*Stopped*' }],
           timestamp: new Date().toISOString(),
         }];
       });

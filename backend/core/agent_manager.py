@@ -1947,13 +1947,22 @@ class AgentManager:
                 if session_context.get("app_session_id") is not None
                 else session_context.get("sdk_session_id")
             )
-            if eff_sid and eff_sid in self._active_sessions:
+            # Check if this error was caused by a user-initiated interrupt.
+            # If so, preserve the session for reuse instead of cleaning up.
+            _exc_session_info = self._active_sessions.get(eff_sid) if eff_sid else None
+            _was_interrupted = _exc_session_info and _exc_session_info.get("interrupted")
+            if _was_interrupted:
+                logger.info(f"Exception after interrupt for {eff_sid}, preserving session")
+                if _exc_session_info:
+                    _exc_session_info.pop("interrupted", None)
+            elif eff_sid and eff_sid in self._active_sessions:
                 await self._cleanup_session(eff_sid, skip_hooks=True)
-            yield _build_error_event(
-                code="CONVERSATION_ERROR",
-                message=str(e),
-                detail=error_traceback,
-            )
+            if not _was_interrupted:
+                yield _build_error_event(
+                    code="CONVERSATION_ERROR",
+                    message=str(e),
+                    detail=error_traceback,
+                )
 
     async def _run_query_on_client(
         self,
@@ -1973,6 +1982,20 @@ class AgentManager:
         This is the shared message-processing loop used by both new and resumed sessions.
         The client is NOT disconnected after the response completes (caller manages lifecycle).
         """
+        # Clear any stale interrupted flag from a previous turn so it doesn't
+        # leak into the current turn's error handling. If interrupt_session()
+        # is called during THIS turn's streaming, it will re-set the flag
+        # after this point, and the error handler will see it correctly.
+        _clear_eff_sid = (
+            session_context["app_session_id"]
+            if session_context.get("app_session_id") is not None
+            else session_context.get("sdk_session_id")
+        )
+        if _clear_eff_sid:
+            _clear_info = self._active_sessions.get(_clear_eff_sid)
+            if _clear_info:
+                _clear_info.pop("interrupted", None)
+
         # --- TSCC state tracking (best-effort) ---
         thread_id = session_context.get("sdk_session_id") or agent_id
 
@@ -2151,6 +2174,28 @@ class AgentManager:
                     continue
 
                 if item["source"] == "error":
+                    # Check if this error was caused by a user-initiated interrupt.
+                    _err_eff_sid = (
+                        session_context["app_session_id"]
+                        if session_context.get("app_session_id") is not None
+                        else session_context.get("sdk_session_id")
+                    )
+                    _err_session_info = self._active_sessions.get(_err_eff_sid) if _err_eff_sid else None
+                    if _err_session_info and _err_session_info.get("interrupted"):
+                        logger.info(f"SDK reader error after interrupt for {_err_eff_sid}, treating as user stop")
+                        _err_session_info.pop("interrupted", None)
+                        # Save partial content before exiting
+                        if assistant_content and _err_eff_sid:
+                            try:
+                                await self._save_message(
+                                    session_id=_err_eff_sid,
+                                    role="assistant",
+                                    content=assistant_content.blocks,
+                                    model=assistant_model,
+                                )
+                            except Exception:
+                                logger.warning("Failed to save partial content after interrupt error", exc_info=True)
+                        break  # Exit the combined_queue loop cleanly
                     logger.error(f"Error from SDK reader: {item['error']}")
                     session_context["had_error"] = True
                     # Persist any partial assistant content accumulated before
@@ -2202,41 +2247,62 @@ class AgentManager:
                         logger.info(f"ResultMessage: {message}")
 
                         if message.subtype == 'error_during_execution':
-                            error_text = message.result or "Session failed. This may be a stale session — please start a new conversation."
-                            logger.warning(f"SDK error_during_execution: {error_text}")
-                            session_context["had_error"] = True
-                            # TSCC: mark lifecycle as failed
-                            try:
-                                sid = session_context.get("sdk_session_id")
-                                if sid:
-                                    await _tscc_state_manager.set_lifecycle_state(sid, "failed")
-                            except Exception:
-                                logger.debug("TSCC: failed lifecycle update failed", exc_info=True)
-                            # Persist partial assistant content before error
                             eff_sid = (
                                 session_context["app_session_id"]
                                 if session_context.get("app_session_id") is not None
                                 else session_context.get("sdk_session_id")
                             )
-                            if assistant_content and eff_sid:
+                            session_info = self._active_sessions.get(eff_sid)
+
+                            if session_info and session_info.get("interrupted"):
+                                # ── User-initiated interrupt — preserve client, suppress error ──
+                                logger.info(f"Session {eff_sid} interrupted by user, preserving client")
+                                session_info.pop("interrupted", None)  # Clear for next turn
+                                # Save partial assistant content (user may want to see what was generated)
+                                if assistant_content and eff_sid:
+                                    try:
+                                        await self._save_message(
+                                            session_id=eff_sid,
+                                            role="assistant",
+                                            content=assistant_content.blocks,
+                                            model=assistant_model,
+                                        )
+                                        logger.info(f"Saved partial assistant content ({len(assistant_content.blocks)} blocks) after user interrupt")
+                                    except Exception:
+                                        logger.warning("Failed to save partial content after interrupt", exc_info=True)
+                                # Do NOT: set had_error, call _cleanup_session, set TSCC "failed", yield error event
+                            else:
+                                # ── Genuine error — existing behavior unchanged ──
+                                error_text = message.result or "Session failed. This may be a stale session — please start a new conversation."
+                                logger.warning(f"SDK error_during_execution: {error_text}")
+                                session_context["had_error"] = True
+                                # TSCC: mark lifecycle as failed
                                 try:
-                                    await self._save_message(
-                                        session_id=eff_sid,
-                                        role="assistant",
-                                        content=assistant_content.blocks,
-                                        model=assistant_model,
-                                    )
-                                    logger.info(f"Saved partial assistant content ({len(assistant_content.blocks)} blocks) before error_during_execution")
+                                    sid = session_context.get("sdk_session_id")
+                                    if sid:
+                                        await _tscc_state_manager.set_lifecycle_state(sid, "failed")
                                 except Exception:
-                                    logger.warning("Failed to save partial assistant content on error_during_execution", exc_info=True)
-                            # Remove broken session from reuse pool
-                            if eff_sid and eff_sid in self._active_sessions:
-                                await self._cleanup_session(eff_sid, skip_hooks=True)
-                                logger.info(f"Removed broken session {eff_sid} from active sessions pool")
-                            yield _build_error_event(
-                                code="ERROR_DURING_EXECUTION",
-                                message=error_text,
-                            )
+                                    logger.debug("TSCC: failed lifecycle update failed", exc_info=True)
+                                # Persist partial assistant content before error
+                                if assistant_content and eff_sid:
+                                    try:
+                                        await self._save_message(
+                                            session_id=eff_sid,
+                                            role="assistant",
+                                            content=assistant_content.blocks,
+                                            model=assistant_model,
+                                        )
+                                        logger.info(f"Saved partial assistant content ({len(assistant_content.blocks)} blocks) before error_during_execution")
+                                    except Exception:
+                                        logger.warning("Failed to save partial assistant content on error_during_execution", exc_info=True)
+                                # Remove broken session from reuse pool
+                                if eff_sid and eff_sid in self._active_sessions:
+                                    await self._cleanup_session(eff_sid, skip_hooks=True)
+                                    logger.info(f"Removed broken session {eff_sid} from active sessions pool")
+                                yield _build_error_event(
+                                    code="ERROR_DURING_EXECUTION",
+                                    message=error_text,
+                                )
 
                         elif message.is_error:
                             # is_error=True but subtype is NOT 'error_during_execution':
@@ -3208,6 +3274,16 @@ class AgentManager:
 
         try:
             logger.info(f"Interrupting session {session_id}")
+            # Set interrupted flag BEFORE calling interrupt() so the error handler
+            # in _run_query_on_client can distinguish user-initiated stops from
+            # genuine errors. We match by client reference (not key) because
+            # _active_sessions may be keyed by app_session_id while _clients
+            # is keyed by the session_id passed from the frontend.
+            for sid, info in self._active_sessions.items():
+                if info.get("client") is client:
+                    info["interrupted"] = True
+                    logger.info(f"Set interrupted flag on _active_sessions[{sid}]")
+                    break
             await client.interrupt()
             logger.info(f"Session {session_id} interrupted successfully")
             return {
