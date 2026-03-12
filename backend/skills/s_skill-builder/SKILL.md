@@ -185,10 +185,12 @@ Use templates from TEMPLATES.md. Ensure:
      One-line purpose sentence.
      TRIGGER: "phrase1", "phrase2", "phrase3".
      DO NOT USE: when condition (use alternative-skill instead).
+     VERIFY_WITH: skill-name (optional — which skill independently validates this skill's output).
    ```
    - First line: what the skill does (one sentence)
    - `TRIGGER:` — quoted phrases the user would say to invoke this skill
    - `DO NOT USE:` — when a similar skill should be used instead, with explicit boundary
+   - `VERIFY_WITH:` — (optional) names a skill that can independently validate output quality. After this skill completes, the agent should suggest running the verifier. Defeats self-assessment bias (generators grading their own output are generous).
 3. **"Why?" line** — one sentence after title explaining the problem this solves
 4. **Workflow** — clear, numbered steps
 5. **Progressive disclosure** — link to supporting files (only if needed)
@@ -196,6 +198,40 @@ Use templates from TEMPLATES.md. Ensure:
 > [!TIP]
 > The `TRIGGER:` and `DO NOT USE:` lines are critical for skill discovery and disambiguation.
 > Without them, the agent guesses — and guesses wrong on similar skills.
+
+### Step 4.5: Write Guardrails Section
+
+> [!CRITICAL]
+> **Every skill MUST have a Guardrails section.** This is the single most effective pattern for preventing agent execution failures. Without explicit prohibitions, LLMs take the shortest path and skip validation.
+
+Add a `## Guardrails` section with 3-5 "DO NOT" rules specific to this skill's failure modes. These are **hard constraints**, not suggestions.
+
+**Pattern:**
+```markdown
+## Guardrails
+
+- DO NOT [skip specific validation step]. [Run/check] it even if output looks correct.
+- DO NOT [assume common incorrect assumption]. Verify by [specific method].
+- DO NOT [produce output without specific evidence/checkpoint].
+- DO NOT [common shortcut that causes quality problems].
+```
+
+**How to identify guardrails:**
+1. Ask: "What would a lazy execution of this skill look like?" → prohibit each shortcut
+2. Ask: "What does this skill assume that might not be true?" → require verification
+3. Ask: "When this skill fails, what's the root cause?" → prohibit the root cause behavior
+
+**Examples by skill type:**
+
+| Skill Type | Example Guardrails |
+|------------|-------------------|
+| Research | DO NOT synthesize conclusions from fewer than 3 sources. DO NOT cite a source without reading its full content via WebFetch. |
+| Code generation | DO NOT skip the build/test step. DO NOT generate code without reading the existing codebase patterns first. |
+| Document generation | DO NOT produce output without verifying all data points against source material. DO NOT use placeholder text in final output. |
+| Data analysis | DO NOT report statistics without showing the underlying data. DO NOT skip outlier analysis. |
+
+> [!TIP]
+> **"DO NOT" is more reliable than "please verify"** for controlling LLM behavior. Positive instructions ("verify the output") are treated as suggestions. Negative constraints ("DO NOT skip verification") create hard boundaries. This is empirically validated across multi-agent systems.
 
 ### Step 5: Save and Notify User
 
@@ -268,6 +304,8 @@ Before declaring complete:
 - [ ] `name` in frontmatter matches folder name
 - [ ] `description` has: purpose sentence + `TRIGGER:` phrases + `DO NOT USE:` boundary
 - [ ] **"Why?" line** present after title
+- [ ] **Guardrails section** present with 3-5 "DO NOT" rules
+- [ ] `VERIFY_WITH:` considered (required for generator/code/document skills)
 - [ ] SKILL.md under 500 lines
 - [ ] Structure matches complexity (not over-engineered)
 - [ ] Examples show concrete input/output
@@ -294,4 +332,4 @@ Full checklist: **CHECKLIST.md**
 - **SCORING.md** — Structure + Efficacy rubrics with worksheets
 - **TEMPLATES.md** — Starter templates and common patterns
 - **EXAMPLES.md** — Before/after improvement examples
-- **CHECKLIST.md** — 50-point validation checklist
+- **CHECKLIST.md** — 64-point validation checklist
