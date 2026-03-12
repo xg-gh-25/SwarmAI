@@ -574,6 +574,37 @@ class SummarizationPipeline:
 
         return result
 
+    # Cached boto3 bedrock-runtime client (thread-safe for invoke_model).
+    # Created lazily on first enrichment call, reused across sessions.
+    _bedrock_client = None
+    _bedrock_client_region: str | None = None
+
+    @classmethod
+    def _get_bedrock_client(cls, region: str):
+        """Return a cached boto3 bedrock-runtime client.
+
+        Creates a new client only if the region changed or no client exists.
+        boto3 clients are thread-safe for ``invoke_model`` calls.
+        """
+        import boto3
+        from botocore.config import Config as BotoConfig
+
+        if cls._bedrock_client is not None and cls._bedrock_client_region == region:
+            return cls._bedrock_client
+
+        boto_config = BotoConfig(
+            retries={"max_attempts": 1, "mode": "adaptive"},
+            connect_timeout=5,
+            read_timeout=15,
+        )
+        cls._bedrock_client = boto3.client(
+            "bedrock-runtime",
+            region_name=region,
+            config=boto_config,
+        )
+        cls._bedrock_client_region = region
+        return cls._bedrock_client
+
     @staticmethod
     def _call_enrichment_llm(prompt: str) -> str:
         """Make a Bedrock API call for enrichment extraction.
@@ -588,26 +619,27 @@ class SummarizationPipeline:
           summary is the safety net
         - boto3 adaptive retry handles transient AWS errors internally
 
+        Reads model and region from the user's AppConfigManager so
+        enrichment works regardless of the user's configured region.
         Uses Sonnet for quality. Only runs for sessions >8 messages.
         """
-        import boto3
-        from botocore.config import Config as BotoConfig
-
-        model_id = "us.anthropic.claude-sonnet-4-6"
-        region = "us-east-1"
-
-        boto_config = BotoConfig(
-            retries={"max_attempts": 1, "mode": "adaptive"},
-            connect_timeout=5,
-            read_timeout=15,
-        )
+        # Read region and model from user config (same source of truth
+        # as the main agent).  Falls back to defaults if config not loaded.
+        try:
+            from core.app_config_manager import AppConfigManager
+            cfg = AppConfigManager()
+            cfg.load()
+            region = cfg.get("aws_region") or "us-east-1"
+            bedrock_map = cfg.get("bedrock_model_map") or {}
+            model_id = bedrock_map.get(
+                "claude-sonnet-4-6", "us.anthropic.claude-sonnet-4-6"
+            )
+        except Exception:
+            region = "us-east-1"
+            model_id = "us.anthropic.claude-sonnet-4-6"
 
         try:
-            client = boto3.client(
-                "bedrock-runtime",
-                region_name=region,
-                config=boto_config,
-            )
+            client = SummarizationPipeline._get_bedrock_client(region)
             response = client.invoke_model(
                 modelId=model_id,
                 contentType="application/json",

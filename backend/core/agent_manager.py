@@ -199,17 +199,17 @@ async def _convert_unsupported_blocks_to_path_hints(
                 # Fallback if workspace path not available yet
                 attach_dir = Path.home() / ".swarm-ai" / "SwarmWS" / "Attachments"
             attach_dir.mkdir(parents=True, exist_ok=True)
-            # Use original filename if provided by frontend, else UUID
+            # Use original filename if provided by frontend, else UUID.
+            # Always include a UUID suffix to avoid TOCTOU races when
+            # concurrent requests target the same filename.
             original_name = block.get("_filename", "")
             if original_name:
                 # Sanitize: keep only the filename, no path components
                 safe_name = Path(original_name).name
-                # Deduplicate: if file exists, append UUID suffix
-                candidate = attach_dir / safe_name
-                if candidate.exists():
-                    stem = candidate.stem
-                    candidate = attach_dir / f"{stem}_{uuid4().hex[:6]}{ext}"
-                file_path = candidate
+                stem = Path(safe_name).stem
+                # Preserve the original file extension (not the MIME-derived one)
+                orig_ext = Path(safe_name).suffix or ext
+                file_path = attach_dir / f"{stem}_{uuid4().hex[:6]}{orig_ext}"
             else:
                 file_path = attach_dir / f"{uuid4()}{ext}"
 
