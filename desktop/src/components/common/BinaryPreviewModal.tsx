@@ -14,18 +14,30 @@
  * - ``BinaryPreviewModal``      — The modal React component
  * - ``BinaryPreviewModalProps`` — Props interface
  */
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { Document, Page, pdfjs } from 'react-pdf';
-import 'react-pdf/dist/Page/AnnotationLayer.css';
-import 'react-pdf/dist/Page/TextLayer.css';
+import { useState, useEffect, useRef, useCallback, useMemo, lazy, Suspense } from 'react';
 import clsx from 'clsx';
 import api from '../../services/api';
 
-// Configure pdf.js worker
-pdfjs.GlobalWorkerOptions.workerSrc = new URL(
-  'pdfjs-dist/build/pdf.worker.min.mjs',
-  import.meta.url,
-).toString();
+// Lazy-load react-pdf so pdfjs-dist (which requires DOMMatrix) is never
+// imported at module scope.  This prevents test suites that transitively
+// import this file from crashing in jsdom/happy-dom environments.
+const LazyPdfDocument = lazy(async () => {
+  const mod = await import('react-pdf');
+  // Side-effect imports for annotation/text layers
+  await import('react-pdf/dist/Page/AnnotationLayer.css');
+  await import('react-pdf/dist/Page/TextLayer.css');
+  // Configure worker once
+  mod.pdfjs.GlobalWorkerOptions.workerSrc = new URL(
+    'pdfjs-dist/build/pdf.worker.min.mjs',
+    import.meta.url,
+  ).toString();
+  return { default: mod.Document };
+});
+
+const LazyPdfPage = lazy(async () => {
+  const mod = await import('react-pdf');
+  return { default: mod.Page };
+});
 
 export interface BinaryPreviewModalProps {
   isOpen: boolean;
@@ -326,21 +338,23 @@ export default function BinaryPreviewModal({
           className="flex-1 overflow-y-auto flex flex-col items-center gap-2 p-2"
           aria-label={`${fileName} PDF document`}
         >
-          <Document
-            file={{ data: pdfData }}
-            onLoadSuccess={handlePdfLoadSuccess}
-            onLoadError={() => setError('Failed to load PDF. The file may be corrupted or password-protected.')}
-            loading={renderLoading()}
-          >
-            {Array.from({ length: numPages }, (_, i) => (
-              <Page
-                key={i + 1}
-                pageNumber={i + 1}
-                width={Math.min(800, window.innerWidth * 0.8)}
-                className="shadow-md mb-2"
-              />
-            ))}
-          </Document>
+          <Suspense fallback={renderLoading()}>
+            <LazyPdfDocument
+              file={{ data: pdfData }}
+              onLoadSuccess={handlePdfLoadSuccess}
+              onLoadError={() => setError('Failed to load PDF. The file may be corrupted or password-protected.')}
+              loading={renderLoading()}
+            >
+              {Array.from({ length: numPages }, (_, i) => (
+                <LazyPdfPage
+                  key={i + 1}
+                  pageNumber={i + 1}
+                  width={Math.min(800, window.innerWidth * 0.8)}
+                  className="shadow-md mb-2"
+                />
+              ))}
+            </LazyPdfDocument>
+          </Suspense>
         </div>
       </div>
     );

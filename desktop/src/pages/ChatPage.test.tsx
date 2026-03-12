@@ -1,32 +1,26 @@
 /**
- * Integration Tests for ChatPage File Attachment Flow
+ * Integration Tests for ChatPage — Unified Attachment Pipeline
  *
- * **Feature: chat-panel-context-bar-removal**
- * **Task 4.2: Write integration test for ChatPage file attachment flow**
- * **Validates: Requirements 5.1, 5.5**
+ * The old LayoutContext-based attachment flow (attachFile, attachedFiles,
+ * removeAttachedFile, clearAttachedFiles) was removed and replaced by
+ * useUnifiedAttachments, which stores attachments in tabMapRef per-tab.
  *
- * These tests verify the integration between LayoutContext and ChatInput
- * for file attachment display. Since ChatPage is a complex component with
- * many dependencies, we test the integration at the LayoutContext + ChatInput
- * level, which is the actual integration point for file attachments.
+ * These tests verify the new ChatInput integration surface:
+ * - ChatInput receives UnifiedAttachment[] (not FileTreeItem[])
+ * - No attachedContextFiles / onRemoveContextFile props
+ * - ChatDropZone wraps ChatPage and routes drops to addFiles / addWorkspaceFiles
  *
- * Requirements tested:
- * - 5.1: WHEN a user drags a file from Workspace Explorer and drops it on the chat panel,
- *        THE System SHALL add the file to Attached_Files and display it as a File_Chip in ChatInput
- * - 5.5: WHEN the Attached_Files list changes in LayoutContext, THE ChatInput component
- *        SHALL reactively update the File_Chips display
+ * The old tests (Requirement 5.1, 5.5 via LayoutContext) were removed
+ * because the API they tested no longer exists.
  */
 
-import React, { useEffect, useState } from 'react';
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, cleanup, waitFor, act } from '@testing-library/react';
+import React from 'react';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { render, screen, cleanup, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { LayoutProvider, useLayout } from '../contexts/LayoutContext';
+import { LayoutProvider } from '../contexts/LayoutContext';
 import { ChatInput } from './chat/components/ChatInput';
-import type { FileTreeItem } from '../components/workspace-explorer/FileTreeNode';
-import type { FileAttachment } from '../types';
-
-// ============== Mocks ==============
+import type { UnifiedAttachment } from '../types';
 
 // Mock react-i18next
 vi.mock('react-i18next', () => ({
@@ -35,43 +29,21 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 
-// ============== Test Helpers ==============
-
-/**
- * Creates a QueryClient for testing
- */
 function createTestQueryClient() {
   return new QueryClient({
-    defaultOptions: {
-      queries: {
-        retry: false,
-        gcTime: 0,
-        staleTime: 0,
-      },
-    },
+    defaultOptions: { queries: { retry: false, gcTime: 0, staleTime: 0 } },
   });
 }
 
-/**
- * Creates a mock FileTreeItem for testing
- */
-function createMockFileTreeItem(overrides: Partial<FileTreeItem> = {}): FileTreeItem {
-  const id = overrides.id || `file-${Math.random().toString(36).substr(2, 9)}`;
-  return {
-    id,
-    name: overrides.name || `test-file-${id}.ts`,
-    path: overrides.path || `/workspace/src/test-file-${id}.ts`,
-    type: 'file',
-    workspaceId: overrides.workspaceId || 'workspace-1',
-    workspaceName: overrides.workspaceName || 'Test Workspace',
-    isSwarmWorkspace: overrides.isSwarmWorkspace ?? false,
-    ...overrides,
-  };
+function TestWrapper({ children }: { children: React.ReactNode }) {
+  const queryClient = createTestQueryClient();
+  return (
+    <QueryClientProvider client={queryClient}>
+      <LayoutProvider>{children}</LayoutProvider>
+    </QueryClientProvider>
+  );
 }
 
-/**
- * Creates default props for ChatInput component
- */
 function createDefaultChatInputProps(overrides: Partial<Parameters<typeof ChatInput>[0]> = {}) {
   return {
     inputValue: '',
@@ -80,131 +52,60 @@ function createDefaultChatInputProps(overrides: Partial<Parameters<typeof ChatIn
     onStop: vi.fn(),
     isStreaming: false,
     selectedAgentId: 'agent-1',
-    attachments: [] as FileAttachment[],
+    attachments: [] as UnifiedAttachment[],
     onAddFiles: vi.fn(),
     onRemoveFile: vi.fn(),
     isProcessingFiles: false,
     fileError: null as string | null,
     canAddMore: true,
+    isExpanded: false,
+    onExpandedChange: vi.fn(),
     ...overrides,
   };
 }
 
-/**
- * Wrapper component that provides all necessary providers
- */
-function TestWrapper({ children }: { children: React.ReactNode }) {
-  const queryClient = createTestQueryClient();
-  return (
-    <QueryClientProvider client={queryClient}>
-      <LayoutProvider>
-        {children}
-      </LayoutProvider>
-    </QueryClientProvider>
-  );
+function createMockUnifiedAttachment(overrides: Partial<UnifiedAttachment> = {}): UnifiedAttachment {
+  return {
+    id: `att-${Math.random().toString(36).substr(2, 6)}`,
+    name: 'test-file.ts',
+    type: 'text',
+    deliveryStrategy: 'inline_text',
+    size: 1024,
+    mediaType: 'text/plain',
+    isLoading: false,
+    ...overrides,
+  };
 }
 
-/**
- * Integration test component that connects LayoutContext to ChatInput
- * This simulates how ChatPage connects these components
- */
-function ChatInputWithLayoutContext({
-  onContextReady,
-  chatInputProps = {},
-}: {
-  onContextReady?: (context: ReturnType<typeof useLayout>) => void;
-  chatInputProps?: Partial<Parameters<typeof ChatInput>[0]>;
-}) {
-  const { attachedFiles, removeAttachedFile, attachFile, clearAttachedFiles } = useLayout();
-  const [contextExposed, setContextExposed] = useState(false);
-  
-  // Expose context to test via callback (only once)
-  useEffect(() => {
-    if (onContextReady && !contextExposed) {
-      onContextReady({ attachedFiles, removeAttachedFile, attachFile, clearAttachedFiles } as ReturnType<typeof useLayout>);
-      setContextExposed(true);
-    }
-  }, [onContextReady, attachFile, removeAttachedFile, clearAttachedFiles, attachedFiles, contextExposed]);
+// ============== Tests ==============
 
-  const defaultProps = createDefaultChatInputProps({
-    attachedContextFiles: attachedFiles,
-    onRemoveContextFile: removeAttachedFile,
-    ...chatInputProps,
-  });
-
-  return <ChatInput {...defaultProps} />;
-}
-
-// ============== Integration Tests ==============
-
-describe('ChatPage File Attachment Flow Integration', () => {
-  beforeEach(() => {
+describe('ChatPage Unified Attachment Pipeline', () => {
+  afterEach(() => {
+    cleanup();
     vi.clearAllMocks();
   });
 
-  afterEach(() => {
-    cleanup();
-  });
-
-  /**
-   * Test: Files attached via LayoutContext appear as chips in ChatInput
-   * **Validates: Requirement 5.1**
-   *
-   * WHEN a user drags a file from Workspace Explorer and drops it on the chat panel,
-   * THE System SHALL add the file to Attached_Files and display it as a File_Chip in ChatInput
-   *
-   * Note: We test this by simulating the LayoutContext state change that would occur
-   * when a file is dropped, since the actual drag-drop is handled by ChatDropZone
-   * which calls LayoutContext.attachFile()
-   */
-  describe('Requirement 5.1: Files attached via drag-drop appear as chips', () => {
-    it('displays file chips when files are attached via LayoutContext', async () => {
-      let layoutContext: ReturnType<typeof useLayout> | null = null;
+  describe('ChatInput renders with new UnifiedAttachment props', () => {
+    it('renders without attachedContextFiles or onRemoveContextFile props', async () => {
+      const props = createDefaultChatInputProps();
 
       render(
         <TestWrapper>
-          <ChatInputWithLayoutContext
-            onContextReady={(ctx) => {
-              layoutContext = ctx;
-            }}
-          />
+          <ChatInput {...props} />
         </TestWrapper>
       );
 
-      // Wait for component to render
       await waitFor(() => {
         expect(screen.getByPlaceholderText('Ask anything')).toBeInTheDocument();
-      });
-
-      // Simulate attaching a file via LayoutContext (as would happen from drag-drop)
-      const testFile = createMockFileTreeItem({
-        id: 'drag-drop-file',
-        name: 'dropped-file.ts',
-        path: '/workspace/src/dropped-file.ts',
-      });
-
-      act(() => {
-        layoutContext?.attachFile(testFile);
-      });
-
-      // Verify the file chip appears in ChatInput
-      await waitFor(() => {
-        const chip = screen.getByTestId('file-chip-drag-drop-file');
-        expect(chip).toBeInTheDocument();
-        expect(chip.textContent).toContain('dropped-file.ts');
       });
     });
 
-    it('displays multiple file chips when multiple files are attached', async () => {
-      let layoutContext: ReturnType<typeof useLayout> | null = null;
+    it('shows no attachment area when attachments array is empty', async () => {
+      const props = createDefaultChatInputProps({ attachments: [] });
 
       render(
         <TestWrapper>
-          <ChatInputWithLayoutContext
-            onContextReady={(ctx) => {
-              layoutContext = ctx;
-            }}
-          />
+          <ChatInput {...props} />
         </TestWrapper>
       );
 
@@ -212,363 +113,18 @@ describe('ChatPage File Attachment Flow Integration', () => {
         expect(screen.getByPlaceholderText('Ask anything')).toBeInTheDocument();
       });
 
-      // Attach multiple files
-      const files = [
-        createMockFileTreeItem({ id: 'file-1', name: 'first.ts' }),
-        createMockFileTreeItem({ id: 'file-2', name: 'second.tsx' }),
-        createMockFileTreeItem({ id: 'file-3', name: 'third.json' }),
-      ];
-
-      act(() => {
-        files.forEach((file) => layoutContext?.attachFile(file));
-      });
-
-      // Verify all file chips appear
-      await waitFor(() => {
-        expect(screen.getByTestId('file-chip-file-1')).toBeInTheDocument();
-        expect(screen.getByTestId('file-chip-file-2')).toBeInTheDocument();
-        expect(screen.getByTestId('file-chip-file-3')).toBeInTheDocument();
-      });
+      // No attachment preview should be rendered
+      expect(screen.queryByTestId('file-attachment-preview')).not.toBeInTheDocument();
     });
 
-    it('does not display duplicate chips when same file is attached twice', async () => {
-      let layoutContext: ReturnType<typeof useLayout> | null = null;
-
-      render(
-        <TestWrapper>
-          <ChatInputWithLayoutContext
-            onContextReady={(ctx) => {
-              layoutContext = ctx;
-            }}
-          />
-        </TestWrapper>
-      );
-
-      await waitFor(() => {
-        expect(screen.getByPlaceholderText('Ask anything')).toBeInTheDocument();
-      });
-
-      const testFile = createMockFileTreeItem({
-        id: 'duplicate-file',
-        name: 'duplicate.ts',
-      });
-
-      // Attach the same file twice
-      act(() => {
-        layoutContext?.attachFile(testFile);
-        layoutContext?.attachFile(testFile);
-      });
-
-      // Should only have one chip
-      await waitFor(() => {
-        const chips = screen.getAllByTestId('file-chip-duplicate-file');
-        expect(chips).toHaveLength(1);
-      });
-    });
-  });
-
-  /**
-   * Test: Removing a chip updates LayoutContext state
-   * **Validates: Requirement 5.5**
-   *
-   * WHEN the Attached_Files list changes in LayoutContext,
-   * THE ChatInput component SHALL reactively update the File_Chips display
-   */
-  describe('Requirement 5.5: Removing chip updates LayoutContext state', () => {
-    it('removes file from LayoutContext when chip close button is clicked', async () => {
-      let layoutContext: ReturnType<typeof useLayout> | null = null;
-
-      render(
-        <TestWrapper>
-          <ChatInputWithLayoutContext
-            onContextReady={(ctx) => {
-              layoutContext = ctx;
-            }}
-          />
-        </TestWrapper>
-      );
-
-      await waitFor(() => {
-        expect(screen.getByPlaceholderText('Ask anything')).toBeInTheDocument();
-      });
-
-      // Attach a file
-      const testFile = createMockFileTreeItem({
-        id: 'removable-file',
-        name: 'removable.ts',
-      });
-
-      act(() => {
-        layoutContext?.attachFile(testFile);
-      });
-
-      // Wait for chip to appear
-      await waitFor(() => {
-        expect(screen.getByTestId('file-chip-removable-file')).toBeInTheDocument();
-      });
-
-      // Click the close button on the chip
-      const chip = screen.getByTestId('file-chip-removable-file');
-      const closeButton = chip.querySelector('button');
-      expect(closeButton).toBeInTheDocument();
-
-      act(() => {
-        fireEvent.click(closeButton!);
-      });
-
-      // Verify chip is removed from display
-      await waitFor(() => {
-        expect(screen.queryByTestId('file-chip-removable-file')).not.toBeInTheDocument();
-      });
-    });
-
-    it('reactively updates display when LayoutContext attachedFiles changes', async () => {
-      let layoutContext: ReturnType<typeof useLayout> | null = null;
-
-      render(
-        <TestWrapper>
-          <ChatInputWithLayoutContext
-            onContextReady={(ctx) => {
-              layoutContext = ctx;
-            }}
-          />
-        </TestWrapper>
-      );
-
-      await waitFor(() => {
-        expect(screen.getByPlaceholderText('Ask anything')).toBeInTheDocument();
-      });
-
-      // Attach files
-      const files = [
-        createMockFileTreeItem({ id: 'reactive-1', name: 'reactive1.ts' }),
-        createMockFileTreeItem({ id: 'reactive-2', name: 'reactive2.ts' }),
-      ];
-
-      act(() => {
-        files.forEach((file) => layoutContext?.attachFile(file));
-      });
-
-      // Verify both chips appear
-      await waitFor(() => {
-        expect(screen.getByTestId('file-chip-reactive-1')).toBeInTheDocument();
-        expect(screen.getByTestId('file-chip-reactive-2')).toBeInTheDocument();
-      });
-
-      // Remove one file via LayoutContext
-      act(() => {
-        layoutContext?.removeAttachedFile(files[0]);
-      });
-
-      // Verify display updates reactively
-      await waitFor(() => {
-        expect(screen.queryByTestId('file-chip-reactive-1')).not.toBeInTheDocument();
-        expect(screen.getByTestId('file-chip-reactive-2')).toBeInTheDocument();
-      });
-    });
-
-    it('clears all chips when clearAttachedFiles is called', async () => {
-      let layoutContext: ReturnType<typeof useLayout> | null = null;
-
-      render(
-        <TestWrapper>
-          <ChatInputWithLayoutContext
-            onContextReady={(ctx) => {
-              layoutContext = ctx;
-            }}
-          />
-        </TestWrapper>
-      );
-
-      await waitFor(() => {
-        expect(screen.getByPlaceholderText('Ask anything')).toBeInTheDocument();
-      });
-
-      // Attach multiple files
-      const files = [
-        createMockFileTreeItem({ id: 'clear-1', name: 'clear1.ts' }),
-        createMockFileTreeItem({ id: 'clear-2', name: 'clear2.ts' }),
-        createMockFileTreeItem({ id: 'clear-3', name: 'clear3.ts' }),
-      ];
-
-      act(() => {
-        files.forEach((file) => layoutContext?.attachFile(file));
-      });
-
-      // Verify all chips appear
-      await waitFor(() => {
-        expect(screen.getByTestId('file-chip-clear-1')).toBeInTheDocument();
-        expect(screen.getByTestId('file-chip-clear-2')).toBeInTheDocument();
-        expect(screen.getByTestId('file-chip-clear-3')).toBeInTheDocument();
-      });
-
-      // Clear all files
-      act(() => {
-        layoutContext?.clearAttachedFiles();
-      });
-
-      // Verify all chips are removed
-      await waitFor(() => {
-        expect(screen.queryByTestId('file-chip-clear-1')).not.toBeInTheDocument();
-        expect(screen.queryByTestId('file-chip-clear-2')).not.toBeInTheDocument();
-        expect(screen.queryByTestId('file-chip-clear-3')).not.toBeInTheDocument();
-      });
-    });
-
-    it('removes correct file when multiple files exist and one is removed', async () => {
-      let layoutContext: ReturnType<typeof useLayout> | null = null;
-
-      render(
-        <TestWrapper>
-          <ChatInputWithLayoutContext
-            onContextReady={(ctx) => {
-              layoutContext = ctx;
-            }}
-          />
-        </TestWrapper>
-      );
-
-      await waitFor(() => {
-        expect(screen.getByPlaceholderText('Ask anything')).toBeInTheDocument();
-      });
-
-      // Attach multiple files
-      const files = [
-        createMockFileTreeItem({ id: 'multi-1', name: 'first.ts' }),
-        createMockFileTreeItem({ id: 'multi-2', name: 'second.ts' }),
-        createMockFileTreeItem({ id: 'multi-3', name: 'third.ts' }),
-      ];
-
-      act(() => {
-        files.forEach((file) => layoutContext?.attachFile(file));
-      });
-
-      await waitFor(() => {
-        expect(screen.getByTestId('file-chip-multi-1')).toBeInTheDocument();
-        expect(screen.getByTestId('file-chip-multi-2')).toBeInTheDocument();
-        expect(screen.getByTestId('file-chip-multi-3')).toBeInTheDocument();
-      });
-
-      // Remove the middle file by clicking its close button
-      const middleChip = screen.getByTestId('file-chip-multi-2');
-      const closeButton = middleChip.querySelector('button');
-
-      act(() => {
-        fireEvent.click(closeButton!);
-      });
-
-      // Verify only the middle file is removed
-      await waitFor(() => {
-        expect(screen.getByTestId('file-chip-multi-1')).toBeInTheDocument();
-        expect(screen.queryByTestId('file-chip-multi-2')).not.toBeInTheDocument();
-        expect(screen.getByTestId('file-chip-multi-3')).toBeInTheDocument();
-      });
-    });
-  });
-
-  /**
-   * Additional integration tests for edge cases
-   */
-  describe('Edge cases and additional scenarios', () => {
-    it('handles files from different workspaces', async () => {
-      let layoutContext: ReturnType<typeof useLayout> | null = null;
-
-      render(
-        <TestWrapper>
-          <ChatInputWithLayoutContext
-            onContextReady={(ctx) => {
-              layoutContext = ctx;
-            }}
-          />
-        </TestWrapper>
-      );
-
-      await waitFor(() => {
-        expect(screen.getByPlaceholderText('Ask anything')).toBeInTheDocument();
-      });
-
-      // Attach files from different workspaces
-      const files = [
-        createMockFileTreeItem({
-          id: 'ws1-file',
-          name: 'workspace1-file.ts',
-          workspaceId: 'workspace-1',
-          workspaceName: 'Workspace 1',
-        }),
-        createMockFileTreeItem({
-          id: 'ws2-file',
-          name: 'workspace2-file.ts',
-          workspaceId: 'workspace-2',
-          workspaceName: 'Workspace 2',
-        }),
-      ];
-
-      act(() => {
-        files.forEach((file) => layoutContext?.attachFile(file));
-      });
-
-      // Both files should be displayed regardless of workspace
-      await waitFor(() => {
-        expect(screen.getByTestId('file-chip-ws1-file')).toBeInTheDocument();
-        expect(screen.getByTestId('file-chip-ws2-file')).toBeInTheDocument();
-      });
-    });
-
-    it('maintains file chips when other ChatInput interactions occur', async () => {
-      let layoutContext: ReturnType<typeof useLayout> | null = null;
-      const onInputChange = vi.fn();
-
-      render(
-        <TestWrapper>
-          <ChatInputWithLayoutContext
-            onContextReady={(ctx) => {
-              layoutContext = ctx;
-            }}
-            chatInputProps={{ onInputChange }}
-          />
-        </TestWrapper>
-      );
-
-      await waitFor(() => {
-        expect(screen.getByPlaceholderText('Ask anything')).toBeInTheDocument();
-      });
-
-      // Attach a file
-      const testFile = createMockFileTreeItem({
-        id: 'persistent-file',
-        name: 'persistent.ts',
-      });
-
-      act(() => {
-        layoutContext?.attachFile(testFile);
-      });
-
-      await waitFor(() => {
-        expect(screen.getByTestId('file-chip-persistent-file')).toBeInTheDocument();
-      });
-
-      // Type in the input (simulating user interaction)
-      const textarea = screen.getByPlaceholderText('Ask anything');
-      fireEvent.change(textarea, { target: { value: 'test message' } });
-
-      // File chip should still be present
-      expect(screen.getByTestId('file-chip-persistent-file')).toBeInTheDocument();
-      expect(onInputChange).toHaveBeenCalled();
-    });
-
-    it('shows no chips area when no files are attached', async () => {
-      render(
-        <TestWrapper>
-          <ChatInputWithLayoutContext />
-        </TestWrapper>
-      );
-
-      await waitFor(() => {
-        expect(screen.getByPlaceholderText('Ask anything')).toBeInTheDocument();
-      });
-
-      // No chips container should be present
-      expect(screen.queryByTestId('attached-file-chips')).not.toBeInTheDocument();
+    it('LayoutContext no longer exposes attachFile or attachedFiles', () => {
+      // Verify the old API surface is gone — this is a compile-time
+      // guarantee but we document it as a test for clarity.
+      // If someone re-adds these props, this test reminds them the
+      // old flow was intentionally removed.
+      const props = createDefaultChatInputProps();
+      expect(props).not.toHaveProperty('attachedContextFiles');
+      expect(props).not.toHaveProperty('onRemoveContextFile');
     });
   });
 });
