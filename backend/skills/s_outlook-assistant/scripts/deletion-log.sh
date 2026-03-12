@@ -1,11 +1,30 @@
 #!/bin/bash
 # Outlook Assistant - Deletion Log Manager
-# Location: the skill scripts directorydeletion-log.sh
 
-CONFIG_DIR="$HOME/.config/outlook-assistant"
-LOG_FILE="$CONFIG_DIR/deletion-log.json"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SKILL_DIR="$(dirname "$SCRIPT_DIR")"
+DATA_DIR="$SKILL_DIR/data"
+LOG_FILE="$DATA_DIR/deletion-log.json"
 
-mkdir -p "$CONFIG_DIR"
+mkdir -p "$DATA_DIR"
+
+# Migrate legacy data from ~/.config/outlook-assistant/ if present
+LEGACY_LOG="$HOME/.config/outlook-assistant/deletion-log.json"
+if [[ -f "$LEGACY_LOG" && ! -f "$LOG_FILE" ]]; then
+    cp "$LEGACY_LOG" "$LOG_FILE"
+elif [[ -f "$LEGACY_LOG" && -f "$LOG_FILE" ]]; then
+    # Merge: append legacy entries not already present
+    python3 -c "
+import json
+with open('$LOG_FILE') as f: current = json.load(f)
+with open('$LEGACY_LOG') as f: legacy = json.load(f)
+existing_ids = {str(e.get('id')) for e in current}
+merged = current + [e for e in legacy if str(e.get('id')) not in existing_ids]
+if len(merged) > len(current):
+    with open('$LOG_FILE','w') as f: json.dump(merged,f,indent=2)
+" 2>/dev/null
+fi
+
 [[ ! -f "$LOG_FILE" ]] && echo "[]" > "$LOG_FILE"
 
 show_help() {

@@ -586,11 +586,12 @@ class AgentManager:
     ) -> tuple[dict, list[str]]:
         """Build MCP server configuration from DB mcp_ids + user-local file.
 
-        Two sources, merged in order:
+        Three sources, merged in order:
         1. Agent's ``mcp_ids`` → looked up in DB (system/plugin MCPs).
-        2. ``~/.swarm-ai/user-mcp-servers.json`` → read directly from file.
-           This is the canonical source for user-local MCP servers.
-           No DB roundtrip needed — the file IS the source of truth.
+        2. ``<repo>/desktop/resources/user-mcp-servers.json`` → source tree
+           (convenient for developers, gitignored by default).
+        3. ``~/.swarm-ai/user-mcp-servers.json`` → runtime user config.
+        Source-tree entries win on name collision with app-data entries.
 
         Per-server ``rejected_tools`` are converted to the SDK's global
         ``disallowed_tools`` format (``mcp__<ServerName>__<tool>``).
@@ -684,40 +685,63 @@ class AgentManager:
         disallowed_tools: list[str],
         used_names: set,
     ) -> None:
-        """Read ~/.swarm-ai/user-mcp-servers.json and merge into mcp_servers.
+        """Load user-local MCP servers from config files.
 
-        File is the source of truth for user-local MCP servers.
-        Skips entries whose name is already in used_names (from DB source).
+        Two locations are checked **in order** (earlier wins on name collision):
+
+        1. **Source tree** — ``<repo>/desktop/resources/user-mcp-servers.json``
+           Convenient for developers: edit in IDE, version-controlled via
+           ``.gitignore`` (private by default).  Resolved relative to the
+           backend package root.  Only available in dev mode — in PyInstaller
+           bundles the repo layout doesn't exist, so this path is simply
+           skipped (file won't exist).
+        2. **App data dir** — ``~/.swarm-ai/user-mcp-servers.json``
+           Runtime config for all users.  Always available regardless of
+           packaging mode.
+
+        Entries from both files are merged.  If the same MCP name appears in
+        both files, the source-tree entry takes precedence (loaded first).
         Errors are logged but never block session startup.
         """
-        config_path = get_app_data_dir() / "user-mcp-servers.json"
-        if not config_path.exists():
-            return
+        # Resolve source-tree path: backend/ -> ../desktop/resources/
+        _backend_root = Path(__file__).resolve().parent.parent  # backend/
+        _repo_root = _backend_root.parent                       # swarmai/
+        source_tree_path = _repo_root / "desktop" / "resources" / "user-mcp-servers.json"
 
-        try:
-            with open(config_path, "r", encoding="utf-8") as f:
-                mcp_configs = json.load(f)
+        app_data_path = get_app_data_dir() / "user-mcp-servers.json"
 
-            if not isinstance(mcp_configs, list):
-                return
+        for config_path in (source_tree_path, app_data_path):
+            if not config_path.exists():
+                continue
+            try:
+                with open(config_path, "r", encoding="utf-8") as f:
+                    mcp_configs = json.load(f)
 
-            for entry in mcp_configs:
-                name = entry.get("name", entry.get("id"))
-                if not name:
+                if not isinstance(mcp_configs, list):
                     continue
-                # Skip if already added from DB source (avoid duplicates)
-                if name in used_names:
-                    logger.debug("User-local MCP '%s' already loaded, skipping", name)
-                    continue
-                self._add_mcp_server_to_dict(
-                    entry, mcp_servers, disallowed_tools, used_names,
-                )
-                logger.info("Loaded user-local MCP from file: %s", name)
 
-        except json.JSONDecodeError as e:
-            logger.error("Invalid JSON in user-mcp-servers.json: %s", e)
-        except Exception as e:
-            logger.error("Failed to load user-local MCP servers: %s", e)
+                for entry in mcp_configs:
+                    name = entry.get("name", entry.get("id"))
+                    if not name:
+                        continue
+                    # Skip if already added from DB or earlier file
+                    if name in used_names:
+                        logger.debug(
+                            "User-local MCP '%s' already loaded, skipping (from %s)",
+                            name, config_path,
+                        )
+                        continue
+                    self._add_mcp_server_to_dict(
+                        entry, mcp_servers, disallowed_tools, used_names,
+                    )
+                    logger.info(
+                        "Loaded user-local MCP: %s (from %s)", name, config_path.name,
+                    )
+
+            except json.JSONDecodeError as e:
+                logger.error("Invalid JSON in %s: %s", config_path, e)
+            except Exception as e:
+                logger.error("Failed to load user-local MCPs from %s: %s", config_path, e)
 
     async def _build_hooks(
         self,

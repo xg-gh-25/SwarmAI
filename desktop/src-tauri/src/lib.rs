@@ -9,8 +9,103 @@ use tokio::sync::Mutex;
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 
-// Get enhanced PATH that includes common installation locations for the sidecar
+/// Resolve the user's full PATH by spawning a login shell.
+///
+/// macOS GUI apps launched from Finder/Dock inherit a minimal PATH from launchd
+/// (~`/usr/bin:/bin:/usr/sbin:/sbin`).  The user's real PATH — including tools
+/// installed via Homebrew, nvm, pyenv, Toolbox, AIM, mise, etc. — is only
+/// available after `.zprofile` / `.bash_profile` / `.profile` have been sourced.
+///
+/// Strategy:
+///   1. Spawn a **login** shell (`zsh -lc` / `bash -lc`) and print `$PATH`.
+///      This sources profile files where PATH is configured.  Non-interactive
+///      to avoid compinit/oh-my-zsh overhead.  Timeout: 3 seconds.
+///   2. If that fails (no shell, timeout, parse error), fall back to a
+///      hardcoded list of well-known tool directories so the app still works.
 fn get_enhanced_path() -> String {
+    // --- Try login-shell resolution first (macOS / Linux) ---
+    #[cfg(not(target_os = "windows"))]
+    {
+        if let Some(shell_path) = resolve_path_from_login_shell() {
+            return shell_path;
+        }
+    }
+
+    // --- Fallback: build PATH from well-known directories ---
+    get_fallback_path()
+}
+
+/// Spawn a login shell and read the resulting PATH.
+///
+/// Uses `-lc` (login, non-interactive) to source `.zprofile`/`.zshenv`/`.profile`
+/// where PATH is typically configured, without triggering interactive overhead
+/// (compinit, oh-my-zsh plugins, conda activate prompts, etc.).
+///
+/// A 3-second timeout prevents hung shell configs from blocking app startup.
+///
+/// Returns `Some(path_string)` on success, `None` on any failure (timeout,
+/// parse error, missing shell).
+#[cfg(not(target_os = "windows"))]
+fn resolve_path_from_login_shell() -> Option<String> {
+    use std::process::Command;
+    use std::time::{Duration, Instant};
+    use std::thread;
+
+    let timeout = Duration::from_secs(3);
+
+    // Detect user's default shell; fall back to zsh (macOS default since Catalina).
+    let shell = env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
+
+    // `-l` = login (sources profile files where PATH is set).
+    // `-c` = execute command.  No `-i` to avoid interactive overhead.
+    let mut child = match Command::new(&shell)
+        .args(["-lc", "echo __SWARM_PATH_START__${PATH}__SWARM_PATH_END__"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(_) => return None,
+    };
+
+    // Poll for completion with timeout to avoid blocking on hung .zshrc/.zprofile.
+    let start = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_status)) => break,       // child exited
+            Ok(None) => {                      // still running
+                if start.elapsed() >= timeout {
+                    let _ = child.kill();
+                    let _ = child.wait();      // reap zombie
+                    return None;
+                }
+                thread::sleep(Duration::from_millis(50));
+            }
+            Err(_) => return None,
+        }
+    }
+
+    let output = child.wait_with_output().ok()?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // Extract PATH between markers to avoid shell motd / prompts
+    if let Some(start) = stdout.find("__SWARM_PATH_START__") {
+        if let Some(end) = stdout.find("__SWARM_PATH_END__") {
+            let path = &stdout[start + "__SWARM_PATH_START__".len()..end];
+            if !path.is_empty() && path.contains('/') {
+                return Some(path.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Hardcoded fallback PATH for when login-shell resolution fails.
+///
+/// This covers the common tool installation directories across platforms.
+/// It is intentionally broad — duplicate or non-existent entries are harmless.
+fn get_fallback_path() -> String {
     let current_path = env::var("PATH").unwrap_or_default();
 
     #[cfg(target_os = "windows")]
@@ -27,30 +122,26 @@ fn get_enhanced_path() -> String {
 
     let mut paths = Vec::new();
 
-    // Platform-specific common paths
     #[cfg(target_os = "macos")]
     {
         paths.extend_from_slice(&[
-            "/opt/homebrew/bin".to_string(),           // Homebrew on Apple Silicon
+            "/opt/homebrew/bin".to_string(),
             "/opt/homebrew/sbin".to_string(),
-            "/usr/local/bin".to_string(),              // Homebrew on Intel Mac
+            "/usr/local/bin".to_string(),
             "/usr/local/sbin".to_string(),
             "/usr/bin".to_string(),
             "/bin".to_string(),
             "/usr/sbin".to_string(),
             "/sbin".to_string(),
-            format!("{}/Library/pnpm", home),          // macOS-specific pnpm location
+            format!("{}/Library/pnpm", home),
         ]);
 
-        // Scan Homebrew's versioned package paths for node (e.g., node@20, node@22, node@24)
-        // These packages are installed to /opt/homebrew/opt/node@XX/bin/ on Apple Silicon
-        // or /usr/local/opt/node@XX/bin/ on Intel Mac
+        // Scan Homebrew's versioned package paths (node@XX, python@XX)
         for homebrew_opt in &["/opt/homebrew/opt", "/usr/local/opt"] {
             if let Ok(entries) = std::fs::read_dir(homebrew_opt) {
                 for entry in entries.flatten() {
                     let name = entry.file_name();
                     let name_str = name.to_string_lossy();
-                    // Match node, node@XX, python, python@XX patterns
                     if name_str.starts_with("node") || name_str.starts_with("python") {
                         let bin_path = entry.path().join("bin");
                         if bin_path.exists() {
@@ -76,7 +167,6 @@ fn get_enhanced_path() -> String {
 
     #[cfg(target_os = "windows")]
     {
-        // Windows common installation locations
         if let Ok(programfiles) = env::var("ProgramFiles") {
             paths.push(format!(r"{}\nodejs", programfiles));
             paths.push(format!(r"{}\Git\cmd", programfiles));
@@ -94,7 +184,6 @@ fn get_enhanced_path() -> String {
         }
     }
 
-    // Cross-platform user-local paths (Volta, nvm, fnm, pyenv, etc.)
     #[cfg(not(target_os = "windows"))]
     {
         paths.extend_from_slice(&[
@@ -104,9 +193,26 @@ fn get_enhanced_path() -> String {
             format!("{}/.pyenv/bin", home),
             format!("{}/.npm-global/bin", home),
             format!("{}/.local/bin", home),
+            format!("{}/.toolbox/bin", home),
+            format!("{}/.aim/mcp-servers", home),
         ]);
 
-        // For nvm, we need to find actual node version directories
+        // mise (formerly rtx) managed runtimes
+        let mise_dir = format!("{}/.local/share/mise/installs", home);
+        if let Ok(tools) = std::fs::read_dir(&mise_dir) {
+            for tool in tools.flatten() {
+                if let Ok(versions) = std::fs::read_dir(tool.path()) {
+                    for version in versions.flatten() {
+                        let bin_path = version.path().join("bin");
+                        if bin_path.exists() {
+                            paths.push(bin_path.to_string_lossy().to_string());
+                        }
+                    }
+                }
+            }
+        }
+
+        // nvm managed node versions
         let nvm_dir = format!("{}/.nvm/versions/node", home);
         if let Ok(entries) = std::fs::read_dir(&nvm_dir) {
             for entry in entries.flatten() {
@@ -120,11 +226,8 @@ fn get_enhanced_path() -> String {
 
     #[cfg(target_os = "windows")]
     {
-        // Windows user-local paths
         paths.push(format!(r"{}\AppData\Roaming\npm", home));
         paths.push(format!(r"{}\.volta\bin", home));
-
-        // nvm for Windows
         if let Ok(nvm_home) = env::var("NVM_HOME") {
             paths.push(nvm_home);
         }
