@@ -1,6 +1,6 @@
 ---
 inclusion: fileMatch
-fileMatchPattern: "backend/core/context_directory_loader.py,backend/core/system_prompt.py,backend/core/agent_manager.py,backend/core/memory_extractor.py,backend/core/daily_activity_writer.py,backend/hooks/*.py,backend/scripts/locked_write.py,backend/context/*.md"
+fileMatchPattern: "backend/core/context_directory_loader.py,backend/core/context_injector.py,backend/core/system_prompt.py,backend/core/agent_manager.py,backend/core/memory_extractor.py,backend/core/daily_activity_writer.py,backend/hooks/*.py,backend/scripts/locked_write.py,backend/context/*.md"
 ---
 
 # Context and Memory Safety Principles
@@ -62,9 +62,12 @@ Conversation → DailyActivity (hook) → Distillation (hook) → MEMORY.md → 
 - DailyActivity extraction: `DailyActivityExtractionHook` at session close
 - Workspace auto-commit: `WorkspaceAutoCommitHook` at session close
 - Distillation trigger: `DistillationTriggerHook` at session close
+- Evolution maintenance: `EvolutionMaintenanceHook` at session close (deprecation + pruning)
+- Tool failure evolution nudge: `ToolFailureTracker` in message processing loop
 - MEMORY.md loading: `CONTEXT_FILES` P7 in `ContextDirectoryLoader`
 - EVOLUTION.md loading: `CONTEXT_FILES` P8 in `ContextDirectoryLoader`
 - DailyActivity loading: `_build_system_prompt()` directory scan
+- Resume context injection: `context_injector.build_resume_context()` on session resume
 
 ### Prompt-Dependent (By Design)
 - Self-evolution trigger detection (agent self-monitoring)
@@ -106,6 +109,8 @@ When modifying context or memory code:
 - [ ] L1 cache includes budget header and validates on load
 - [ ] DailyActivity files are never modified on disk during loading
 - [ ] `locked_write.py` is used for all MEMORY.md writes
-- [ ] Session lifecycle hooks still fire in correct order (DailyActivity → AutoCommit → Distillation)
+- [ ] Session lifecycle hooks still fire in correct order (DailyActivity → AutoCommit → Distillation → EvolutionMaintenance)
 - [ ] Each hook is error-isolated (failure doesn't block subsequent hooks)
+- [ ] BackgroundHookExecutor used for fire-and-forget execution (hooks never block chat path)
+- [ ] Resume context injection (`context_injector.build_resume_context()`) drops last assistant message
 - [ ] New context files added to CONTEXT_FILES get correct priority, truncation direction, and ownership

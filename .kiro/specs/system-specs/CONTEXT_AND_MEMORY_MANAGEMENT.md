@@ -360,7 +360,8 @@ The memory system forms a closed loop: conversations produce DailyActivity → D
 │                                                                     │
 │  Triggers: TTL expiry (12h) │ explicit delete │ backend shutdown    │
 │                                                                     │
-│  [CODE-ENFORCED] SessionLifecycleHookManager fires 3 hooks:        │
+│  [CODE-ENFORCED] SessionLifecycleHookManager fires 4 hooks          │
+│  via BackgroundHookExecutor (fire-and-forget asyncio.Task):         │
 │                                                                     │
 │    Hook 1: DailyActivityExtractionHook                              │
 │       → Retrieves conversation log from DB (limit=500 messages)     │
@@ -371,6 +372,7 @@ The memory system forms a closed loop: conversations produce DailyActivity → D
 │    Hook 2: WorkspaceAutoCommitHook                                  │
 │       → git diff --stat → categorize files → conventional commit    │
 │       → One commit per session (not per-turn)                       │
+│       → Uses shared git_lock to prevent .git/index.lock contention  │
 │                                                                     │
 │    Hook 3: DistillationTriggerHook                                  │
 │       → Scans DailyActivity/*.md frontmatter (last 30 days)        │
@@ -378,6 +380,12 @@ The memory system forms a closed loop: conversations produce DailyActivity → D
 │         → Extracts decisions/lessons → locked_write.py → MEMORY.md  │
 │         → Marks files as distilled: true                            │
 │       → If direct distillation fails: writes .needs_distillation    │
+│                                                                     │
+│    Hook 4: EvolutionMaintenanceHook                                 │
+│       → Scans EVOLUTION.md Capabilities + Competence sections       │
+│       → Deprecates: active entries idle >30d with 0 usage           │
+│       → Prunes: deprecated entries with 0 usage idle >30d           │
+│       → Logs all actions to EVOLUTION_CHANGELOG.jsonl               │
 │                                                                     │
 │  All hooks error-isolated — failures don't block cleanup            │
 │  Per-hook timeout: 30 seconds                                       │
@@ -401,10 +409,13 @@ The memory system forms a closed loop: conversations produce DailyActivity → D
 | DailyActivity extraction | `SessionLifecycleHookManager` → `DailyActivityExtractionHook` | No — code-enforced |
 | Workspace auto-commit | `SessionLifecycleHookManager` → `WorkspaceAutoCommitHook` | No — code-enforced |
 | Distillation (primary) | `SessionLifecycleHookManager` → `DistillationTriggerHook` | No — code-enforced |
+| Evolution maintenance | `SessionLifecycleHookManager` → `EvolutionMaintenanceHook` | No — code-enforced |
+| Tool failure nudge | `ToolFailureTracker` in message loop | No — code-enforced |
 | Distillation (fallback) | `.needs_distillation` flag → system prompt injection | Yes — prompt-dependent |
 | MEMORY.md loading | `CONTEXT_FILES` P7 → `ContextDirectoryLoader` | No — code-enforced |
 | EVOLUTION.md loading | `CONTEXT_FILES` P8 → `ContextDirectoryLoader` | No — code-enforced |
 | DailyActivity loading | `_build_system_prompt()` directory scan | No — code-enforced |
+| Resume context injection | `context_injector.build_resume_context()` | No — code-enforced |
 | One-click 🧠 save | `POST /api/memory/save-session` → `memory_extractor.py` | No — backend API |
 | User "save memory" | Agent invokes `s_save-memory` skill | Yes — but user-initiated |
 | User "save activity" | Agent invokes `s_save-activity` skill | Yes — but user-initiated |
@@ -619,7 +630,9 @@ backend/
 ├── hooks/
 │   ├── daily_activity_hook.py       # DailyActivityExtractionHook
 │   ├── auto_commit_hook.py          # WorkspaceAutoCommitHook
-│   └── distillation_hook.py         # DistillationTriggerHook
+│   ├── distillation_hook.py         # DistillationTriggerHook
+│   ├── evolution_maintenance_hook.py# EvolutionMaintenanceHook
+│   └── evolution_trigger_hook.py    # ToolFailureTracker
 ├── routers/
 │   └── memory.py                    # /api/memory-compliance, /api/memory/save-session
 ├── context/                         # Default templates

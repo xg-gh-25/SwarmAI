@@ -87,8 +87,8 @@ The following areas have dedicated steering files with detailed invariants and r
 |------|--------------|-----------|
 | Multi-tab chat isolation | `multi-tab-isolation-principles.md` | ChatPage.tsx, useChatStreamingLifecycle.ts, useUnifiedTabState.ts |
 | Session identity & backend isolation | `session-identity-and-backend-isolation.md` | agent_manager.py, session_manager.py, permission_manager.py, chat.py |
-| Context & memory safety | `context-and-memory-safety.md` | context_directory_loader.py, system_prompt.py, hooks/*.py, locked_write.py |
-| Self-evolution guardrails | `self-evolution-guardrails.md` | s_self-evolution/*, EVOLUTION.md, chat.py (SSE parsing) |
+| Context & memory safety | `context-and-memory-safety.md` | context_directory_loader.py, context_injector.py, system_prompt.py, hooks/*.py, locked_write.py |
+| Self-evolution guardrails | `self-evolution-guardrails.md` | s_self-evolution/*, EVOLUTION.md, chat.py (SSE parsing), evolution_maintenance_hook.py, evolution_trigger_hook.py |
 
 ## Global Anti-Patterns
 
