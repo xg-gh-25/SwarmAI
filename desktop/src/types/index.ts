@@ -1,3 +1,21 @@
+/**
+ * Shared TypeScript type definitions and constants for the SwarmAI desktop app.
+ *
+ * Key exports:
+ * - ``UnifiedAttachment``   — Unified file attachment representation (all input sources)
+ * - ``AttachmentType``      — Classified file type ('image' | 'pdf' | 'text' | 'csv')
+ * - ``DeliveryStrategy``    — How a file is delivered to the backend/Claude SDK
+ * - ``SIZE_LIMITS``         — Per-type maximum file size in bytes
+ * - ``SIZE_THRESHOLD``      — Text size threshold for inline vs path_hint delivery
+ * - ``MAX_ATTACHMENTS``     — Maximum attachments per message (10)
+ * - ``SUPPORTED_FILE_TYPES``— Recognized MIME types and file extensions
+ * - ``FileAttachment``      — (deprecated) Legacy attachment type, use UnifiedAttachment
+ * - ``FILE_SIZE_LIMITS``    — (deprecated) Alias for SIZE_LIMITS
+ *
+ * Also exports interfaces for agents, chat sessions, messages, content blocks,
+ * workspaces, plugins, channels, tasks, projects, and various API types.
+ */
+
 // Sandbox Configuration Types (Built-in SDK bash sandboxing)
 export interface SandboxNetworkConfig {
   allowLocalBinding: boolean;
@@ -256,18 +274,45 @@ export interface ChatRequest {
   enableMCP?: boolean;
 }
 
-// File Attachment Types
+// ============== File Attachment Types ==============
+
+/** Classified file type for attachment processing. */
 export type AttachmentType = 'image' | 'pdf' | 'text' | 'csv';
 
+/** How a file is delivered to the backend/Claude SDK. */
+export type DeliveryStrategy = 'base64_image' | 'base64_document' | 'inline_text' | 'path_hint';
+
+/**
+ * Unified attachment representation used by the useUnifiedAttachments hook.
+ * Replaces the split FileAttachment / LayoutContext.attachedFiles state with
+ * a single type that covers all input sources (File Picker, Workspace Explorer,
+ * OS Finder drop, clipboard paste).
+ */
+export interface UnifiedAttachment {
+  id: string;
+  name: string;
+  type: AttachmentType;
+  deliveryStrategy: DeliveryStrategy;
+  size: number;
+  mediaType: string;
+  base64?: string;
+  textContent?: string;
+  workspacePath?: string;
+  preview?: string;
+  isLoading: boolean;
+  error?: string;
+}
+
+/** @deprecated Use UnifiedAttachment instead. Kept for backward compatibility. */
 export interface FileAttachment {
   id: string;
   file: File;
   name: string;
   type: AttachmentType;
   size: number;
-  preview?: string;  // Data URL for image preview
-  base64?: string;   // Base64 encoded data (without prefix)
-  mediaType: string; // MIME type
+  preview?: string;
+  base64?: string;
+  mediaType: string;
   error?: string;
   isLoading: boolean;
 }
@@ -275,7 +320,7 @@ export interface FileAttachment {
 // Multimodal Content Block Types for API
 export interface ImageSourceBase64 {
   type: 'base64';
-  media_type: string;  // "image/png", "image/jpeg", etc.
+  media_type: string;
   data: string;
 }
 
@@ -286,7 +331,7 @@ export interface ImageContentBlock {
 
 export interface DocumentSourceBase64 {
   type: 'base64';
-  media_type: string;  // "application/pdf"
+  media_type: string;
   data: string;
 }
 
@@ -295,22 +340,50 @@ export interface DocumentContentBlock {
   source: DocumentSourceBase64;
 }
 
-// File size limits
-export const FILE_SIZE_LIMITS = {
-  image: 5 * 1024 * 1024,    // 5MB for images
-  pdf: 10 * 1024 * 1024,     // 10MB for PDF
-  text: 10 * 1024 * 1024,    // 10MB for TXT
-  csv: 10 * 1024 * 1024,     // 10MB for CSV
+// ============== Attachment Size Limits ==============
+
+/** Per-type maximum file size in bytes. */
+export const SIZE_LIMITS = {
+  image: 5 * 1024 * 1024,   // 5MB
+  pdf: 10 * 1024 * 1024,    // 10MB
+  text: 1 * 1024 * 1024,    // 1MB
+  csv: 1 * 1024 * 1024,     // 1MB
 } as const;
 
-export const MAX_ATTACHMENTS = 5;
+/** @deprecated Use SIZE_LIMITS instead. */
+export const FILE_SIZE_LIMITS = SIZE_LIMITS;
 
-// Supported file types for attachment
+/** Text files above this threshold use path_hint instead of inline_text. */
+export const SIZE_THRESHOLD = 50 * 1024; // 50KB
+
+/** Maximum number of attachments per message. */
+export const MAX_ATTACHMENTS = 10;
+
+// ============== Supported File Types ==============
+
+/**
+ * Recognized MIME types and file extensions for attachment classification.
+ * Extensions cover common code, config, data, and document formats.
+ */
 export const SUPPORTED_FILE_TYPES = {
   image: ['image/png', 'image/jpeg', 'image/gif', 'image/webp'],
   pdf: ['application/pdf'],
-  text: ['text/plain'],
+  text: ['text/plain', 'text/html'],
   csv: ['text/csv', 'application/csv'],
+  /** Recognized code/config file extensions (classified as 'text'). */
+  codeExtensions: [
+    '.py', '.ts', '.tsx', '.js', '.jsx',
+    '.rs', '.go', '.java', '.c', '.cpp', '.h', '.rb', '.sh',
+    '.md', '.txt', '.log', '.env', '.cfg', '.ini', '.conf',
+    '.json', '.yaml', '.yml', '.toml',
+    '.sql', '.html', '.css', '.scss', '.xml',
+  ],
+  /** Recognized image file extensions. */
+  imageExtensions: ['.png', '.jpg', '.jpeg', '.gif', '.webp'],
+  /** Recognized document file extensions. */
+  pdfExtensions: ['.pdf'],
+  /** Recognized data file extensions (classified as 'csv'). */
+  csvExtensions: ['.csv'],
 } as const;
 
 export interface StreamEvent {

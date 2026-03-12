@@ -15,7 +15,7 @@
  */
 
 import { useState, useRef, useMemo, useCallback, useEffect } from 'react';
-import type { Message } from '../types/index';
+import type { Message, UnifiedAttachment } from '../types/index';
 import type { PendingQuestion, OpenTab } from '../pages/chat/types';
 import type { ContextWarning } from './useChatStreamingLifecycle';
 import {
@@ -76,6 +76,8 @@ export interface UnifiedTab {
   hasReceivedData?: boolean;
   /** Retry function stored by ChatPage — called by reconnection logic to re-initiate the stream. */
   retryStreamFn?: () => (() => void);
+  /** Per-tab attachment list managed by useUnifiedAttachments (runtime-only, NOT serialized). */
+  attachments: UnifiedAttachment[];
 }
 
 /** Fields persisted to ~/.swarm-ai/open_tabs.json (re-exported from tabPersistence service). */
@@ -146,6 +148,7 @@ function createDefaultTab(agentId: string): UnifiedTab {
     contextWarning: null,
     isReconnecting: false,
     reconnectionAttempt: 0,
+    attachments: [],
   };
 }
 
@@ -173,6 +176,7 @@ function hydrateTab(s: PersistedTab): UnifiedTab {
     contextWarning: null,
     isReconnecting: false,
     reconnectionAttempt: 0,
+    attachments: [],
   };
 }
 
@@ -410,6 +414,7 @@ export function useUnifiedTabState(
         streamGen: 0,
         status: 'idle',
         contextWarning: null,
+        attachments: [],
       };
       tabMapRef.current.set(tabId, tab);
       bump();

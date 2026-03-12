@@ -1,3 +1,5 @@
+/** @deprecated Use useUnifiedAttachments instead. This hook is no longer used. */
+
 import { useState, useCallback } from 'react';
 import type { FileAttachment, AttachmentType } from '../types';
 import { FILE_SIZE_LIMITS, MAX_ATTACHMENTS, SUPPORTED_FILE_TYPES } from '../types';

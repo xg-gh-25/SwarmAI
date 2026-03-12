@@ -14,7 +14,12 @@ Key endpoints on ``chat_threads_router``:
 - ``GET  /api/threads/global``                  — list global (unassociated) threads
 - ``POST /api/chat_threads/{thread_id}/bind``   — mid-session thread binding
 
-Requirements: 26.1, 26.4, 26.5, 35.1, 35.6
+Content validation helpers (multimodal attachment safety net):
+
+- ``validate_content``       — Enforces block count (20) and payload size (25 MB) limits
+- ``_estimate_block_size``   — Estimates byte size of a single content block
+
+Requirements: 26.1, 26.4, 26.5, 35.1, 35.6, 8.1, 8.2, 8.3, 8.4, 8.5, 10.1, 10.2, 10.3, 10.4
 """
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
@@ -103,6 +108,52 @@ chat_threads_router = APIRouter()
 
 # SSE heartbeat interval in seconds (keeps connection alive during long operations)
 SSE_HEARTBEAT_INTERVAL = 15
+
+# ---------------------------------------------------------------------------
+# Content validation constants and helpers
+# ---------------------------------------------------------------------------
+
+MAX_CONTENT_BLOCKS = 20
+MAX_TOTAL_PAYLOAD_SIZE = 25 * 1024 * 1024  # 25MB
+
+
+def _estimate_block_size(block: dict) -> int:
+    """Estimate the wire size of a content block in bytes.
+
+    For base64 blocks (image/document): returns ``len(data)`` which is the
+    base64-encoded string length — already ~4/3× the raw file size.  This is
+    the actual size that will appear in the JSON payload on the wire.
+
+    For text blocks: UTF-8 encoded length of the text content.
+    """
+    block_type = block.get("type")
+    if block_type in ("image", "document"):
+        data = block.get("source", {}).get("data", "")
+        return len(data)
+    elif block_type == "text":
+        return len(block.get("text", "").encode("utf-8"))
+    return 0
+
+
+def validate_content(content: list[dict]) -> list[dict]:
+    """Validate content blocks before forwarding to SDK.
+
+    Raises HTTPException(413) if limits are exceeded.
+    """
+    if len(content) > MAX_CONTENT_BLOCKS:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Too many content blocks: {len(content)}, max {MAX_CONTENT_BLOCKS}",
+        )
+
+    total_size = sum(_estimate_block_size(block) for block in content)
+    if total_size > MAX_TOTAL_PAYLOAD_SIZE:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Payload too large: {total_size} bytes, max {MAX_TOTAL_PAYLOAD_SIZE}",
+        )
+
+    return content
 
 
 def create_sse_error(code: str, message: str, detail: str = None, suggested_action: str = None) -> str:
@@ -210,6 +261,10 @@ async def chat_stream(request: Request):
             message="Invalid request data",
             detail=str(e),
         )
+
+    # Validate multimodal content blocks if present
+    if chat_request.content:
+        validate_content(chat_request.content)
 
     # Verify agent exists
     agent = await db.agents.get(chat_request.agent_id)

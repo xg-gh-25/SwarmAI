@@ -133,10 +133,115 @@ _tscc_state_manager = TSCCStateManager()
 # Populated by _build_system_prompt() and read by the TSCC API endpoint.
 _system_prompt_metadata: dict[str, dict] = {}
 
+# ── SDK multimodal support flag ────────────────────────────────────
+# False = always convert image/document blocks to path hints.
+# Claude Code CLI does not currently support image/document content blocks
+# via stdin JSON. When SDK support lands, flip this to True.
+_SDK_SUPPORTS_MULTIMODAL: bool = False
+
 # ── DailyActivity token cap constants ──────────────────────────────
 # Applied ephemerally at prompt-assembly time; disk files are never modified.
 TOKEN_CAP_PER_DAILY_FILE = 2000
 TRUNCATION_MARKER = "[Truncated: kept newest ~2000 tokens]"
+
+
+async def _convert_unsupported_blocks_to_path_hints(
+    content: list[dict],
+    session_id: str | None,
+) -> list[dict]:
+    """Convert image/document content blocks to path hints when SDK doesn't support multimodal.
+
+    Saves base64 data to the agent's workspace under
+    ``Attachments/{date}/{uuid}.{ext}`` so files are visible in the
+    Workspace Explorer and persist across sessions.  The user controls
+    cleanup — files are NOT auto-deleted.
+
+    Text blocks are passed through unchanged.
+
+    Args:
+        content: List of content block dicts (image, document, or text).
+        session_id: The effective session ID for directory scoping.
+
+    Returns:
+        A new list of content blocks with image/document blocks replaced by
+        text path hints pointing to the saved files.
+    """
+    import base64
+    from uuid import uuid4
+
+    converted: list[dict] = []
+    for block in content:
+        block_type = block.get("type")
+        if block_type in ("image", "document"):
+            source = block.get("source", {})
+            data = source.get("data", "")
+            media_type = source.get("media_type", "")
+
+            # Determine file extension from media type
+            ext_map = {
+                "image/png": ".png",
+                "image/jpeg": ".jpg",
+                "image/gif": ".gif",
+                "image/webp": ".webp",
+                "application/pdf": ".pdf",
+            }
+            ext = ext_map.get(media_type, ".bin")
+
+            # Save to SwarmWS/Attachments/{date}/ so files are visible
+            # in the Workspace Explorer and persist for the user.
+            from datetime import date as _date
+            from core.initialization_manager import initialization_manager
+            ws_path = initialization_manager.get_cached_workspace_path()
+            if ws_path:
+                date_str = _date.today().isoformat()
+                attach_dir = Path(ws_path) / "Attachments" / date_str
+            else:
+                # Fallback if workspace path not available yet
+                attach_dir = Path.home() / ".swarm-ai" / "SwarmWS" / "Attachments"
+            attach_dir.mkdir(parents=True, exist_ok=True)
+            # Use original filename if provided by frontend, else UUID
+            original_name = block.get("_filename", "")
+            if original_name:
+                # Sanitize: keep only the filename, no path components
+                safe_name = Path(original_name).name
+                # Deduplicate: if file exists, append UUID suffix
+                candidate = attach_dir / safe_name
+                if candidate.exists():
+                    stem = candidate.stem
+                    candidate = attach_dir / f"{stem}_{uuid4().hex[:6]}{ext}"
+                file_path = candidate
+            else:
+                file_path = attach_dir / f"{uuid4()}{ext}"
+
+            try:
+                decoded = base64.b64decode(data)
+                # Use thread pool for sync file write to avoid blocking event loop
+                import asyncio
+                await asyncio.to_thread(file_path.write_bytes, decoded)
+                logger.warning(
+                    "SDK multimodal fallback: saved %s block to %s (session %s)",
+                    block_type,
+                    file_path,
+                    session_id or "unknown",
+                )
+                # Use relative path from workspace root for the hint
+                rel_path = file_path.relative_to(ws_path) if ws_path else file_path
+                converted.append({
+                    "type": "text",
+                    "text": (
+                        f"[Attached {block_type}: {file_path.name}] "
+                        f"saved at {rel_path} - use Read tool to access"
+                    ),
+                })
+            except Exception as e:
+                logger.error("Failed to save attachment for fallback: %s", e)
+                converted.append({
+                    "type": "text",
+                    "text": f"[Failed to save {block_type} attachment for fallback delivery]",
+                })
+        else:
+            converted.append(block)
+    return converted
 
 
 def _truncate_daily_content(content: str, cap: int = TOKEN_CAP_PER_DAILY_FILE) -> str:
@@ -1791,9 +1896,14 @@ class AgentManager:
         # Default: no context injection needed for non-resuming requests
         agent_config["needs_context_injection"] = False
 
+        # _need_fresh_client: set by PATH B on failure to trigger automatic
+        # retry via PATH A within the same SSE stream.  The user sees a brief
+        # "reconnecting" indicator instead of a scary error.
+        _need_fresh_client = False
+
         try:
+            # ── PATH B: Reuse existing long-lived client ──────────────
             if reused_client and session_id:
-                # PATH B: Reuse existing long-lived client
                 agent_config["needs_context_injection"] = False
                 client = reused_client
                 logger.info(f"Reusing long-lived client for session {session_id}")
@@ -1815,6 +1925,8 @@ class AgentManager:
                         role="user",
                         content=deferred_user_content,
                     )
+                    # Mark as saved so PATH A auto-retry won't double-save
+                    deferred_user_content = None
 
                 async for event in self._run_query_on_client(
                     client=client,
@@ -1830,12 +1942,63 @@ class AgentManager:
                 ):
                     yield event
 
-            else:
-                # PATH A: Create new client (manually managed, not async with)
+                # PATH B post-run: if the reused client hit an error (e.g.
+                # watchdog timeout, SDK crash), evict it and signal auto-retry
+                # via PATH A instead of returning an error to the user.
+                if session_context.get("had_error") and session_id:
+                    logger.info(
+                        f"PATH B: reused client for {session_id} had error, "
+                        f"evicting and auto-retrying with fresh client"
+                    )
+                    evicted = self._active_sessions.pop(session_id, None)
+                    if evicted and evicted.get("wrapper"):
+                        try:
+                            await asyncio.wait_for(
+                                evicted["wrapper"].__aexit__(None, None, None),
+                                timeout=5.0,
+                            )
+                        except (asyncio.TimeoutError, Exception):
+                            logger.warning(
+                                f"PATH B: wrapper disconnect timed out or failed "
+                                f"for {session_id}, proceeding with retry"
+                            )
+                    self._clients.pop(session_id, None)
+
+                    # Signal auto-retry: reset error state, fresh accumulator
+                    _need_fresh_client = True
+                    session_context["had_error"] = False
+                    assistant_content = ContentBlockAccumulator()
+
+                    # Visual indicator in the chat stream — appears as a
+                    # natural continuation in the assistant message bubble.
+                    yield {
+                        "type": "assistant",
+                        "content": [{
+                            "type": "text",
+                            "text": (
+                                "\n\n---\n\n"
+                                "⚠️ *Connection to AI service was interrupted. "
+                                "Reconnecting automatically...*\n\n"
+                            ),
+                        }],
+                    }
+
+            # ── PATH A: Create new client ─────────────────────────────
+            # Enters when: no reused client exists, OR auto-retry after
+            # PATH B failure (_need_fresh_client=True).
+            if _need_fresh_client or not (reused_client and session_id):
+                if _need_fresh_client:
+                    # Auto-retry from PATH B: force resume-fallback behavior
+                    # (fresh SDK client with conversation context injection).
+                    logger.info(
+                        f"Auto-retry: creating fresh client for session "
+                        f"{session_id} after PATH B failure"
+                    )
+                    is_resuming = True  # Triggers resume-fallback below
+
                 # If resuming but no active client exists (server restart, TTL
-                # expiry), the long-lived CLI subprocess is gone and --resume
-                # cannot work (SDK 0.1.34+ doesn't persist transcripts to disk).
-                # Start a fresh session instead.
+                # expiry, or PATH B failure), the long-lived CLI subprocess is
+                # gone and --resume cannot work.  Start a fresh session instead.
                 if is_resuming:
                     logger.info(f"No active client for session {session_id}, starting fresh session instead of --resume")
                     options = await self._build_options(
@@ -2012,10 +2175,29 @@ class AgentManager:
             # but a plain string for simple text queries.
             if isinstance(query_content, list):
                 async def multimodal_message_generator():
-                    """Async generator for multimodal content."""
+                    """Async generator for multimodal content.
+
+                    Image/document blocks are converted to path hints since
+                    Claude Code CLI does not support them via stdin JSON.
+                    """
+                    processed = query_content
+                    if not _SDK_SUPPORTS_MULTIMODAL:
+                        eff_sid = (
+                            session_context.get("app_session_id")
+                            or session_context.get("sdk_session_id")
+                        )
+                        processed = await _convert_unsupported_blocks_to_path_hints(
+                            query_content, eff_sid
+                        )
+                    # Strip internal _filename metadata before sending to SDK
+                    cleaned = []
+                    for blk in processed:
+                        if "_filename" in blk:
+                            blk = {k: v for k, v in blk.items() if k != "_filename"}
+                        cleaned.append(blk)
                     msg = {
                         "type": "user",
-                        "message": {"role": "user", "content": query_content},
+                        "message": {"role": "user", "content": cleaned},
                         "parent_tool_use_id": None,
                     }
                     yield msg
@@ -2117,10 +2299,9 @@ class AgentManager:
             # response, the stdout stream hangs forever (anyio TextReceiveStream
             # doesn't detect broken pipe reliably). This timeout surfaces an
             # error to the user instead of infinite "Thinking...".
-            # - 120s for the first message after init (model may be slow)
-            # - 300s between subsequent messages (tool use can be slow)
+            # Both timeouts set to 120s — a 5-minute hang is never acceptable UX.
             _WATCHDOG_INITIAL_TIMEOUT = 120   # seconds before first real message
-            _WATCHDOG_INTER_MSG_TIMEOUT = 300  # seconds between messages during tool use
+            _WATCHDOG_INTER_MSG_TIMEOUT = 120  # seconds between messages during tool use
             _got_first_real_message = False
 
             while True:
@@ -2150,11 +2331,12 @@ class AgentManager:
                     yield _build_error_event(
                         code="SDK_SUBPROCESS_TIMEOUT",
                         message=(
-                            "The AI backend stopped responding. "
-                            "This usually means the backend process restarted "
-                            "or the connection to the AI service was lost."
+                            "The connection to the AI service timed out."
                         ),
-                        suggested_action="Please try sending your message again.",
+                        suggested_action=(
+                            "Your conversation is saved. "
+                            "Please send your message again to continue."
+                        ),
                     )
                     break
 
@@ -3517,6 +3699,26 @@ Create the skill in the `.claude/skills/` directory within the current workspace
                             if event.get("type") == "result":
                                 event["skill_name"] = skill_name
                             yield event
+
+                        # PATH B cleanup (same pattern as _execute_on_session)
+                        if session_context.get("had_error") and session_id:
+                            logger.info(
+                                f"PATH B (skill-creator): reused client for {session_id} "
+                                f"had error, evicting from active sessions"
+                            )
+                            info = self._active_sessions.pop(session_id, None)
+                            if info and info.get("wrapper"):
+                                try:
+                                    await asyncio.wait_for(
+                                        info["wrapper"].__aexit__(None, None, None),
+                                        timeout=5.0,
+                                    )
+                                except (asyncio.TimeoutError, Exception):
+                                    logger.warning(
+                                        f"PATH B (skill-creator): wrapper disconnect "
+                                        f"timed out or failed for {session_id}"
+                                    )
+                            self._clients.pop(session_id, None)
                     else:
                         # No active client — start fresh (--resume won't work with SDK 0.1.34+)
                         if is_resuming:
