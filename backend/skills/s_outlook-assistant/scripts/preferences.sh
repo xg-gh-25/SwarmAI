@@ -1,12 +1,18 @@
 #!/bin/bash
 # Outlook Assistant - Preferences Manager
-# Location: the skill scripts directorypreferences.sh
 
-PREFS_DIR="$HOME/.config/outlook-assistant"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SKILL_DIR="$(dirname "$SCRIPT_DIR")"
+PREFS_DIR="$SKILL_DIR/data"
 PREFS_FILE="$PREFS_DIR/user-preferences.md"
 
-# Ensure directory exists
 mkdir -p "$PREFS_DIR"
+
+# Migrate legacy preferences from ~/.config/outlook-assistant/ if present
+LEGACY_PREFS="$HOME/.config/outlook-assistant/user-preferences.md"
+if [[ -f "$LEGACY_PREFS" && ! -f "$PREFS_FILE" ]]; then
+    cp "$LEGACY_PREFS" "$PREFS_FILE"
+fi
 
 show_help() {
     cat << EOF

@@ -1,12 +1,20 @@
 #!/bin/bash
 # Outlook Assistant - Restore Helper
-# Location: the skill scripts directoryrestore.sh
 #
-# This script helps find deleted emails and provides instructions
+# Helps find deleted emails and provides instructions
 # for restoring them via Outlook MCP's move_email tool.
 
-CONFIG_DIR="$HOME/.config/outlook-assistant"
-LOG_FILE="$CONFIG_DIR/deletion-log.json"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SKILL_DIR="$(dirname "$SCRIPT_DIR")"
+DATA_DIR="$SKILL_DIR/data"
+LOG_FILE="$DATA_DIR/deletion-log.json"
+
+# Migrate legacy data from ~/.config/outlook-assistant/ if present
+LEGACY_LOG="$HOME/.config/outlook-assistant/deletion-log.json"
+if [[ -f "$LEGACY_LOG" && ! -f "$LOG_FILE" ]]; then
+    mkdir -p "$DATA_DIR"
+    cp "$LEGACY_LOG" "$LOG_FILE"
+fi
 
 show_help() {
     cat << EOF
