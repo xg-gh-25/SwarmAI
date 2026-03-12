@@ -157,7 +157,9 @@ SwarmAI's self-evolution system enables the agent to detect capability gaps, lea
 | SSE event parsing | `_extract_evolution_events()` in `chat.py` | No — code-enforced | — |
 | Frontend rendering | `useChatStreamingLifecycle` + `EvolutionMessage` | No — code-enforced | — |
 | Config defaults | `AppConfigManager` `evolution` key | No — code-enforced | — |
-| Trigger detection | `s_self-evolution/SKILL.md` instructions | Yes — prompt-dependent | Always-active skill, loaded every session |
+| Entry deprecation + pruning | `EvolutionMaintenanceHook` at session close | No — code-enforced | 4th lifecycle hook |
+| Tool failure nudge | `ToolFailureTracker` in message loop | No — code-enforced | Per-session, 2-failure threshold |
+| Trigger detection | `s_self-evolution/SKILL.md` instructions | Yes — prompt-dependent (code-assisted) | Always-active skill + ToolFailureTracker nudges |
 | Evolution loop execution | `s_self-evolution/SKILL.md` instructions | Yes — prompt-dependent | Hard 3-attempt limit, per-session counter |
 | EVOLUTION.md writes | Agent uses Read+Edit / locked_write.py | Yes — prompt-dependent | Skill Rule #8 with explicit instructions |
 | JSONL changelog | Agent appends after every Edit | Yes — prompt-dependent | Skill Rule #14 (mandatory) |
@@ -406,7 +408,7 @@ desktop/src/
 
 ## Known Limitations
 
-1. **Trigger detection is prompt-dependent**: The agent may not detect all triggers, especially under heavy context pressure or after context compaction. The trigger counter in `/tmp/` mitigates over-triggering but can't force under-triggering.
+1. **Trigger detection is prompt-dependent (code-assisted)**: The agent may not detect all triggers, especially under heavy context pressure or after context compaction. `ToolFailureTracker` provides code-assisted nudges for repeated tool failures (reactive triggers), but proactive and stuck triggers remain fully prompt-dependent. The trigger counter in `/tmp/` mitigates over-triggering but can't force under-triggering.
 
 2. **JSONL changelog compliance is prompt-dependent**: Rule #14 mandates changelog writes, but the agent may skip it. The changelog is an audit trail, not a functional dependency — EVOLUTION.md is the source of truth.
 

@@ -143,12 +143,13 @@ Frontend sends chat_stream with session_id (app_session_id)
 
 Triggers: TTL expiry (12h) | explicit delete | backend shutdown
 
-`SessionLifecycleHookManager.fire_post_session_close()` runs 3 hooks in order:
+`SessionLifecycleHookManager.fire_post_session_close()` runs 4 hooks in order:
 1. `DailyActivityExtractionHook` — conversation summary extraction
-2. `WorkspaceAutoCommitHook` — git auto-commit
+2. `WorkspaceAutoCommitHook` — git auto-commit (uses shared `git_lock`)
 3. `DistillationTriggerHook` — memory distillation check
+4. `EvolutionMaintenanceHook` — deprecate/prune idle EVOLUTION.md entries
 
-Each hook error-isolated with 30s timeout. Failure does NOT block subsequent hooks.
+Hooks run as fire-and-forget `asyncio.Task`s via `BackgroundHookExecutor` — they never block the chat path. Each hook error-isolated with 30s timeout. Failure does NOT block subsequent hooks.
 
 ### Key Files
 
@@ -197,12 +198,21 @@ Models <32K: KNOWLEDGE.md and PROJECTS.md excluded entirely.
 ```
 ContextDirectoryLoader.ensure_directory()     → Provision/update .context/ files
 ContextDirectoryLoader.load_all()             → L1 cache or assemble from sources
-_build_system_prompt()                        → Add BOOTSTRAP.md, DailyActivity, metadata
+_build_system_prompt()                        → Add BOOTSTRAP.md, DailyActivity, resume context, metadata
 SystemPromptBuilder.build()                   → Add identity, safety, workspace, datetime, runtime
 → Final system prompt sent to Claude SDK
 ```
 
 Context loading failures NEVER block agent startup — entire pipeline wrapped in try/except.
+
+### Resume Context Injection
+
+When a session resumes after backend restart, `context_injector.build_resume_context()` loads recent messages from SQLite and injects them as read-only history in the system prompt:
+
+- Fetches last 30 messages, filters tool-only turns, keeps last 10 human-readable
+- Drops last assistant message to prevent re-answer duplication
+- 2,000-token budget with oldest-first truncation
+- Wrapped in `## Previous Conversation Context` with explicit RULES (no re-execute, no re-answer)
 
 ### L0/L1 Cache
 
@@ -222,9 +232,12 @@ Conversation → DailyActivity (code-enforced hook) → Distillation (code-enfor
 | DailyActivity extraction | SessionLifecycleHookManager | No — code-enforced |
 | Distillation (primary) | DistillationTriggerHook | No — code-enforced |
 | Distillation (fallback) | `.needs_distillation` flag | Yes — prompt-dependent |
+| Evolution maintenance | EvolutionMaintenanceHook | No — code-enforced |
+| Tool failure nudge | ToolFailureTracker | No — code-enforced |
 | MEMORY.md loading | CONTEXT_FILES P7 | No — code-enforced |
 | EVOLUTION.md loading | CONTEXT_FILES P8 | No — code-enforced |
 | DailyActivity loading | `_build_system_prompt()` scan | No — code-enforced |
+| Resume context injection | `context_injector.build_resume_context()` | No — code-enforced |
 
 ### File Locking Rules
 
@@ -261,7 +274,9 @@ Conversation → DailyActivity (code-enforced hook) → Distillation (code-enfor
 | SSE event marker parsing (`_extract_evolution_events()`) | Code-enforced |
 | Frontend evolution rendering | Code-enforced |
 | Config defaults (`AppConfigManager`) | Code-enforced |
-| Trigger detection | Prompt-dependent |
+| Entry deprecation + pruning (`EvolutionMaintenanceHook`) | Code-enforced |
+| Tool failure trigger nudge (`ToolFailureTracker`) | Code-enforced |
+| Trigger detection | Prompt-dependent (code-assisted) |
 | Evolution loop execution | Prompt-dependent |
 | EVOLUTION.md writes | Prompt-dependent |
 
@@ -280,7 +295,7 @@ Extracted events are frontend-only — NOT persisted separately to DB.
 
 ### EVOLUTION.md Format
 
-5 sections with sequential IDs: E-entries (Capabilities), O-entries (Optimizations), C-entries (Corrections), K-entries (Competence), F-entries (Failed). Soft cap: 30 active entries. Lifecycle: active → deprecated (30 days idle) → superseded.
+5 sections with sequential IDs: E-entries (Capabilities), O-entries (Optimizations), C-entries (Corrections), K-entries (Competence), F-entries (Failed). Soft cap: 30 active entries. Lifecycle: active → deprecated (30 days idle) → superseded. `EvolutionMaintenanceHook` code-enforces deprecation (idle >30d, 0 usage) and pruning (deprecated + 0 usage + idle >30d) at session close, logging all actions to `EVOLUTION_CHANGELOG.jsonl`.
 
 ### Configuration Boundaries
 
@@ -359,7 +374,9 @@ All code files MUST include module-level documentation:
 - [ ] L1 cache includes budget header
 - [ ] DailyActivity files never modified on disk during loading
 - [ ] `locked_write.py` used for all MEMORY.md writes
-- [ ] Lifecycle hooks fire in order and are error-isolated
+- [ ] Lifecycle hooks fire in order and are error-isolated (4 hooks)
+- [ ] `BackgroundHookExecutor` used for fire-and-forget execution
+- [ ] Resume context injection drops last assistant message
 
 ### Self-Evolution Changes
 - [ ] `_extract_evolution_events()` regex matches skill marker format
@@ -367,6 +384,8 @@ All code files MUST include module-level documentation:
 - [ ] Frontend `startsWith('evolution_')` catches all event types
 - [ ] EVOLUTION.md at P8 with `truncate_from="head"`, `user_customized=True`
 - [ ] `auto_approve_*` defaults remain `false`
+- [ ] `EvolutionMaintenanceHook` registered as 4th hook (after DistillationTriggerHook)
+- [ ] `ToolFailureTracker` is per-session, not module-level singleton
 
 ---
 
@@ -380,6 +399,7 @@ backend/
 │   ├── permission_manager.py        # Per-session HITL permission queues
 │   ├── cmd_permission_manager.py    # Global filesystem-backed command approvals
 │   ├── context_directory_loader.py  # 11 context files, token budget, L0/L1 cache
+│   ├── context_injector.py          # Resume context injection (recent messages → system prompt)
 │   ├── system_prompt.py             # Non-file prompt sections (identity, safety, etc.)
 │   ├── session_hooks.py             # SessionLifecycleHookManager framework
 │   ├── daily_activity_writer.py     # Append-only DailyActivity writes
@@ -388,7 +408,9 @@ backend/
 ├── hooks/
 │   ├── daily_activity_hook.py       # DailyActivityExtractionHook
 │   ├── auto_commit_hook.py          # WorkspaceAutoCommitHook
-│   └── distillation_hook.py         # DistillationTriggerHook
+│   ├── distillation_hook.py         # DistillationTriggerHook
+│   ├── evolution_maintenance_hook.py# EvolutionMaintenanceHook (deprecation + pruning)
+│   └── evolution_trigger_hook.py    # ToolFailureTracker (code-assisted evolution nudges)
 ├── routers/chat.py                  # SSE streaming, evolution event parsing
 ├── scripts/locked_write.py          # Locked MEMORY.md/EVOLUTION.md modification
 ├── context/*.md                     # Default templates for 11 context files

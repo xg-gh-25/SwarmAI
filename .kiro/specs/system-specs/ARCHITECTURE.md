@@ -1,6 +1,6 @@
 # SwarmAI Architecture
 
-**Version:** 6.0
+**Version:** 7.0
 **Last Updated:** March 2026
 **Status:** Production
 
@@ -92,6 +92,10 @@ Three-column layout with embedded cognitive context:
 | `useRightSidebarGroup` | Mutual exclusion for right sidebar panels |
 | `useFileAttachment` | File upload processing for chat input |
 | `useRunningTaskCount` | Track active background task count |
+| `useHealthMonitor` | Backend health polling and reconnection detection |
+| `useMemorySave` | One-click memory save (🧠 button) via LLM extraction |
+| `useRateLimiter` | Rate limit state tracking for API calls |
+| `useRateLimitCountdown` | Countdown timer UI for rate limit cooldown |
 
 ### Tab State Model
 
@@ -127,7 +131,11 @@ desktop/src/
 │   ├── useTSCCState.ts           # Cognitive context state
 │   ├── useRightSidebarGroup.ts   # Sidebar mutual exclusion
 │   ├── useFileAttachment.ts      # File upload processing
-│   └── useRunningTaskCount.ts    # Background task tracking
+│   ├── useRunningTaskCount.ts    # Background task tracking
+│   ├── useHealthMonitor.ts       # Backend health polling + reconnection
+│   ├── useMemorySave.ts          # One-click memory save (🧠 button)
+│   ├── useRateLimiter.ts         # Rate limit state tracking
+│   └── useRateLimitCountdown.ts  # Rate limit cooldown timer UI
 ├── services/
 │   ├── api.ts                    # Axios client with dynamic port
 │   ├── tauri.ts                  # Tauri IPC bridge
@@ -223,6 +231,7 @@ backend/
 │   ├── initialization_manager.py  # Startup orchestration, workspace caching
 │   ├── swarm_workspace_manager.py # SwarmWS filesystem (verify_integrity, projects)
 │   ├── context_directory_loader.py# Centralized .context/ loader (10 files, L0/L1)
+│   ├── context_injector.py        # Resume context injection (recent messages → system prompt)
 │   ├── system_prompt.py           # Non-file prompt sections (safety, datetime, runtime)
 │   ├── claude_environment.py      # SDK env config, credential validation
 │   ├── app_config_manager.py      # In-memory config cache (config.json)
@@ -230,6 +239,7 @@ backend/
 │   ├── content_accumulator.py     # O(1) content block deduplication
 │   ├── security_hooks.py          # 4-layer PreToolUse defense chain
 │   ├── skill_manager.py           # Filesystem skill discovery (3-tier)
+│   ├── skill_migration.py        # skill_ids (UUIDs) → allowed_skills (folder names) migration
 │   ├── projection_layer.py        # Skill symlink projection into .claude/skills/
 │   ├── plugin_manager.py          # Plugin marketplace, install/uninstall
 │   ├── tool_summarizer.py         # Tool call summarization for UI
@@ -243,6 +253,7 @@ backend/
 │   ├── audit_manager.py           # Audit logging
 │   ├── frontmatter.py             # YAML frontmatter parse/write
 │   ├── agent_defaults.py          # Default agent configurations
+│   ├── project_schema_migrations.py # Semver-based .project.json schema migrations
 │   └── exceptions.py              # Custom exception hierarchy
 ├── routers/
 │   ├── agents.py                  # Agent CRUD
@@ -423,13 +434,33 @@ MEMORY.md is the curated long-term memory file:
 
 ### 5.7.1 Session Lifecycle Hooks (Code-Enforced Memory Pipeline)
 
-Three hooks fire sequentially on every session close (TTL expiry, explicit delete, backend shutdown):
+Four hooks fire via `BackgroundHookExecutor` on every session close (TTL expiry, explicit delete, backend shutdown):
 
 1. `DailyActivityExtractionHook` — extracts conversation summary → `Knowledge/DailyActivity/YYYY-MM-DD.md`
-2. `WorkspaceAutoCommitHook` — smart git commit with conventional prefixes
+2. `WorkspaceAutoCommitHook` — smart git commit with conventional prefixes (uses shared `git_lock` to prevent `.git/index.lock` contention)
 3. `DistillationTriggerHook` — checks undistilled count, runs direct regex distillation if threshold (>3) exceeded
+4. `EvolutionMaintenanceHook` — deprecates idle EVOLUTION.md entries (>30 days, 0 usage), prunes deprecated entries, logs to `EVOLUTION_CHANGELOG.jsonl`
 
-All hooks are error-isolated (failing hook doesn't block others) with 30s per-hook timeout.
+`BackgroundHookExecutor` wraps `SessionLifecycleHookManager` to run hooks as fire-and-forget `asyncio.Task`s — hooks never block the chat path. Each hook is error-isolated with 30s timeout. A shared `asyncio.Lock` (`git_lock`) prevents concurrent git operations between `WorkspaceAutoCommitHook` and other git-touching code.
+
+### 5.7.2 Resume Context Injection
+
+When a session resumes after a backend restart, `context_injector.build_resume_context()` loads recent messages from SQLite and injects them into the system prompt as read-only history:
+
+- Fetches last 30 messages from DB, filters tool-only turns, keeps last 10 human-readable messages
+- Drops the last assistant message to prevent re-answer duplication
+- Enforces a 2,000-token budget (oldest-first truncation)
+- Wraps in `## Previous Conversation Context` section with explicit RULES telling the agent not to re-execute or re-answer
+
+### 5.7.3 Tool Failure Evolution Trigger
+
+`ToolFailureTracker` (per-session, stored in `_active_sessions[sid]["failure_tracker"]`) watches for repeated tool failures and injects evolution nudges:
+
+- Tracks failure signatures (tool_name + first 100 chars of error)
+- After `FAILURE_THRESHOLD` (2) consecutive failures with same signature → emits evolution nudge
+- Nudge cooldown: 120s per signature, max 3 nudges per session
+- On tool success → resets all failure signatures for that tool
+- Nudge is a system-level hint for the self-evolution skill, not user-visible
 
 ### 5.8 Knowledge Directory
 
@@ -556,6 +587,7 @@ Default config includes: `use_bedrock`, `aws_region`, `default_model`, `availabl
 | POST | `/api/chat/answer` | Answer ask_user_question |
 | POST | `/api/chat/permission` | Respond to permission request |
 | POST | `/api/chat/stop` | Stop active session |
+| POST | `/api/chat/compact` | Compact session context window (/compact) |
 | GET | `/api/chat/sessions` | List chat sessions |
 | GET | `/api/chat/sessions/{id}/messages` | Get session messages |
 | GET/POST | `/api/chat_threads/*` | ChatThread CRUD + binding |
