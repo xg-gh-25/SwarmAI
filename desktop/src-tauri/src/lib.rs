@@ -23,16 +23,23 @@ use std::os::windows::process::CommandExt;
 ///   2. If that fails (no shell, timeout, parse error), fall back to a
 ///      hardcoded list of well-known tool directories so the app still works.
 fn get_enhanced_path() -> String {
-    // --- Try login-shell resolution first (macOS / Linux) ---
+    // Start with fallback paths (well-known tool directories).
+    // These are ALWAYS included because shell profile configs are unreliable
+    // (e.g. toolbox/aim PATH may be in .zshrc which login shells don't source).
+    let fallback = get_fallback_path();
+
+    // Try login-shell resolution to pick up user-specific PATH entries
+    // (e.g. from .zprofile, .zshenv, conda, nvm, etc.).
     #[cfg(not(target_os = "windows"))]
     {
         if let Some(shell_path) = resolve_path_from_login_shell() {
-            return shell_path;
+            // Merge: login-shell PATH first (user preference), then fallback dirs.
+            // Duplicates are harmless — the OS deduplicates on lookup.
+            return format!("{}:{}", shell_path, fallback);
         }
     }
 
-    // --- Fallback: build PATH from well-known directories ---
-    get_fallback_path()
+    fallback
 }
 
 /// Spawn a login shell and read the resulting PATH.
