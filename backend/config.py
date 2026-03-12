@@ -103,6 +103,7 @@ class Settings(BaseSettings):
     sandbox_auto_allow_bash: bool = True  # Auto-approve bash when sandboxed
     sandbox_excluded_commands: str = "docker"  # Comma-separated commands to bypass sandbox (e.g., "git,docker")
     sandbox_allow_unsandboxed: bool = False  # Allow model to bypass sandbox
+    sandbox_additional_write_paths: str = ""  # Comma-separated additional writable paths
 
     class Config:
         env_file = ".env"
