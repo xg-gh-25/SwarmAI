@@ -61,7 +61,9 @@ _WRITE_NAMES: set[str] = {"write", "writefile", "create", "edit"}
 _SEARCH_NAMES: set[str] = {"grep", "search", "find", "glob"}
 _TODOWRITE_NAMES: set[str] = {"todowrite"}
 _WEB_FETCH_NAMES: set[str] = {"webfetch", "fetch", "httpget", "urlget"}
-_WEB_SEARCH_NAMES: set[str] = {"websearch", "toolsearch"}
+_WEB_SEARCH_NAMES: set[str] = {"websearch"}
+_TOOL_SEARCH_NAMES: set[str] = {"toolsearch"}
+_SKILL_NAMES: set[str] = {"skill"}
 _LIST_DIR_NAMES: set[str] = {"listdirectory", "ls", "listdir"}
 
 
@@ -113,6 +115,8 @@ _CATEGORY_SETS: list[tuple[str, set[str]]] = [
     ("search", _SEARCH_NAMES),
     ("web_fetch", _WEB_FETCH_NAMES),
     ("web_search", _WEB_SEARCH_NAMES),
+    ("tool_search", _TOOL_SEARCH_NAMES),
+    ("skill", _SKILL_NAMES),
     ("list_dir", _LIST_DIR_NAMES),
     ("todowrite", _TODOWRITE_NAMES),
 ]
@@ -185,6 +189,32 @@ def summarize_tool_use(name: str, input_data: Optional[dict]) -> str:
         category = "web_search"
         query = data.get("query") or data.get("search_query") or data.get("q", "")
         summary = f"Searching web for {query}" if query else f"Using {name}"
+    elif lower_name in _TOOL_SEARCH_NAMES:
+        category = "tool_search"
+        raw_query = data.get("query") or ""
+        # Strip the "select:" prefix the SDK prepends to tool selection queries
+        # e.g. "select:Bash,Read,Grep" → "Bash, Read, Grep"
+        if raw_query.startswith("select:"):
+            tools_csv = raw_query[len("select:"):]
+            display_query = ", ".join(t.strip() for t in tools_csv.split(",") if t.strip())
+        else:
+            display_query = raw_query
+        summary = f"Loading tools: {display_query}" if display_query else f"Using {name}"
+    elif lower_name in _SKILL_NAMES:
+        category = "skill"
+        skill_name = (
+            data.get("skill_name")
+            or data.get("skillName")
+            or data.get("skill_folder")
+            or ""
+        )
+        if not skill_name:
+            # Fallback: try "name" but only if it doesn't look like a generic
+            # tool name (the SDK sets name="Skill" which is unhelpful).
+            raw_name = data.get("name", "")
+            if raw_name and raw_name.lower() != "skill":
+                skill_name = raw_name
+        summary = f"Using skill: {skill_name}" if skill_name else f"Using {name}"
     elif lower_name in _LIST_DIR_NAMES:
         category = "list_dir"
         path = data.get("path") or data.get("directory", "")
@@ -269,6 +299,10 @@ def get_tool_category(name: str) -> str:
         return "web_fetch"
     if lower_name in _WEB_SEARCH_NAMES:
         return "web_search"
+    if lower_name in _TOOL_SEARCH_NAMES:
+        return "tool_search"
+    if lower_name in _SKILL_NAMES:
+        return "skill"
     if lower_name in _LIST_DIR_NAMES:
         return "list_dir"
     if lower_name in _TODOWRITE_NAMES:
