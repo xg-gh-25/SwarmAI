@@ -1,66 +1,35 @@
-"""Security hooks implementing the 4-layer defense model.
+"""Security hooks for the agent execution environment.
 
-Layer 1: Workspace Isolation (per-agent dirs in <app_data_dir>/workspaces/{agent_id}/)
-Layer 2: Skill Access Control (PreToolUse hook validates authorized skills)
-Layer 3: File Tool Access Control (can_use_tool permission handler validates file paths)
-Layer 4: Bash Command Protection (dangerous command blocking + human approval)
+This module provides hook factory functions used by AgentManager to enforce
+security policies during agent execution.  Each hook is composed into the
+Claude Agent SDK's hook system via HookMatcher configurations.
 
-This module contains hook factory functions and constants used by AgentManager
-to enforce security policies during agent execution. Each hook is composed into
-the Claude Agent SDK's hook system via HookMatcher configurations.
-
-The human approval hook now delegates dangerous-command detection and approval
-storage to ``CmdPermissionManager`` (filesystem-backed, shared across sessions)
-while retaining the ``PermissionManager`` for the asyncio-based permission
-request/response flow (SSE event signaling).
+Public symbols
+--------------
+- ``pre_tool_logger``                        — logs every tool invocation
+- ``DEFAULT_DANGEROUS_PATTERNS``             — default glob patterns for dangerous commands
+- ``load_dangerous_patterns``                — load patterns from ~/.swarm-ai/dangerous_commands.json
+- ``create_dangerous_command_gate``          — single PreToolUse gate for Bash commands
+- ``create_file_access_permission_handler``  — workspace file-path sandbox
+- ``create_skill_access_checker``            — skill allow-list enforcement
 """
 
+import fnmatch
 import json
 import logging
 import os
 import re
 from datetime import datetime
-from typing import Any, Callable, Optional
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Callable
 from uuid import uuid4
 
-from database import db
-from .permission_manager import PermissionManager
-from .cmd_permission_manager import CmdPermissionManager
+from config import get_app_data_dir
+
+if TYPE_CHECKING:
+    from .permission_manager import PermissionManager
 
 logger = logging.getLogger(__name__)
-
-
-# Dangerous command patterns for human approval (more comprehensive than auto-block)
-DANGEROUS_PATTERNS: list[tuple[str, str]] = [
-    (r'rm\s+(-[rfRf]+\s+)?/', "Recursive deletion from root"),
-    (r'rm\s+(-[rfRf]+\s+)?~', "Recursive deletion from home"),
-    (r'rm\s+-[rfRf]+', "Recursive file deletion"),
-    (r'dd\s+if=/dev/(zero|random|urandom)', "Disk overwrite command"),
-    (r'mkfs', "Filesystem format command"),
-    (r'>\s*/dev/(sda|hda|nvme|vda)', "Direct disk write"),
-    (r':()\{:\|:&\};:', "Fork bomb"),
-    (r'chmod\s+(-R\s+)?777\s+/', "Dangerous permission change"),
-    (r'chown\s+-R\s+.*\s+/', "Recursive ownership change from root"),
-    (r'curl\s+.*\|\s*(bash|sh)', "Piping remote script to shell"),
-    (r'wget\s+.*\|\s*(bash|sh)', "Piping remote script to shell"),
-    (r'sudo\s+rm', "Sudo removal command"),
-    (r'>\s*/etc/', "Writing to /etc directory"),
-]
-
-
-def check_dangerous_command(command: str) -> Optional[str]:
-    """Check if command matches dangerous patterns.
-
-    Args:
-        command: The bash command to check
-
-    Returns:
-        Reason string if dangerous, None otherwise
-    """
-    for pattern, reason in DANGEROUS_PATTERNS:
-        if re.search(pattern, command, re.IGNORECASE):
-            return reason
-    return None
 
 
 async def pre_tool_logger(
@@ -75,172 +44,162 @@ async def pre_tool_logger(
     return {}
 
 
-async def dangerous_command_blocker(
-    input_data: dict[str, Any],
-    tool_use_id: str | None,
-    context: Any
-) -> dict[str, Any]:
-    """Block dangerous bash commands."""
-    if input_data.get('tool_name') == 'Bash':
-        command = input_data.get('tool_input', {}).get('command', '')
-        reason = check_dangerous_command(command)
-        if reason:
-            logger.warning(f"[BLOCKED] Dangerous command detected: {reason}")
-            return {
-                'hookSpecificOutput': {
-                    'hookEventName': 'PreToolUse',
-                    'permissionDecision': 'deny',
-                    'permissionDecisionReason': f'Dangerous command blocked: {reason}'
-                }
-            }
-    return {}
+# ---------------------------------------------------------------------------
+# Dangerous command gate — single permission layer
+# ---------------------------------------------------------------------------
+
+DEFAULT_DANGEROUS_PATTERNS: list[str] = [
+    "rm -rf *",
+    "rm -rf /*",
+    "rm -rf ~*",
+    "sudo *",
+    "chmod 777 *",
+    "chmod -R 777 *",
+    "chown -R * /",
+    "kill -9 *",
+    "mkfs.*",
+    "dd if=*",
+    "curl *|bash*",
+    "curl *|sh*",
+    "wget *|bash*",
+    "wget *|sh*",
+    "> /dev/sda*",
+    "> /dev/hda*",
+    "> /dev/nvme*",
+    "> /dev/vda*",
+    "> /etc/*",
+    ":()*{*:*|*:*&*}*;*:*",
+]
 
 
-def create_human_approval_hook(
+def load_dangerous_patterns() -> list[str]:
+    """Load glob patterns from ``~/.swarm-ai/dangerous_commands.json``.
+
+    Creates the file with ``DEFAULT_DANGEROUS_PATTERNS`` if missing.
+    Falls back to defaults on invalid JSON or missing ``"patterns"`` key.
+    Public API — also called by ``main.py`` for ``permissions.json`` generation.
+    """
+    patterns_path = get_app_data_dir() / "dangerous_commands.json"
+    try:
+        raw = patterns_path.read_text(encoding="utf-8").strip()
+        if not raw:
+            raise ValueError("empty file")
+        data = json.loads(raw)
+        if not isinstance(data, dict) or "patterns" not in data:
+            raise ValueError("missing 'patterns' key")
+        patterns = list(data["patterns"])
+        logger.info("Loaded %d dangerous patterns from %s", len(patterns), patterns_path)
+        return patterns
+    except FileNotFoundError:
+        logger.info("dangerous_commands.json not found — seeding defaults")
+        patterns_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {"patterns": list(DEFAULT_DANGEROUS_PATTERNS)}
+        patterns_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        return list(DEFAULT_DANGEROUS_PATTERNS)
+    except (json.JSONDecodeError, ValueError) as exc:
+        logger.warning("Invalid dangerous_commands.json (%s) — using defaults", exc)
+        return list(DEFAULT_DANGEROUS_PATTERNS)
+    except OSError as exc:
+        logger.warning("Cannot read dangerous_commands.json (%s) — using defaults", exc)
+        return list(DEFAULT_DANGEROUS_PATTERNS)
+
+
+def create_dangerous_command_gate(
     session_context: dict[str, Any],
     session_key: str,
-    enable_human_approval: bool,
-    permission_mgr: PermissionManager,
-    cmd_permission_mgr: CmdPermissionManager | None = None,
+    permission_mgr: "PermissionManager",
+    enable_human_approval: bool = True,
 ) -> Callable[..., Any]:
-    """Create a human approval hook for dangerous commands.
+    """Factory: returns an async PreToolUse hook for Bash commands.
 
-    Uses ``CmdPermissionManager`` (filesystem-backed, shared across sessions)
-    for dangerous-command detection and approval storage.  Falls back to the
-    old ``PermissionManager`` per-session dict when ``cmd_permission_mgr`` is
-    ``None`` (backward compatibility during migration).
+    Loads patterns once at gate creation time (not per-invocation).
+    Uses *permission_mgr* for HITL flow and session approval tracking.
 
-    The ``PermissionManager`` is still used for the asyncio-based permission
-    request/response flow (queue + event signaling for the SSE dialog).
-
-    Args:
-        session_context: Dict with {"sdk_session_id": ...} that gets updated with actual SDK session
-        session_key: The session key for tracking approved commands (agent_id or resume_session_id)
-        enable_human_approval: Whether human approval is enabled for this agent
-        permission_mgr: PermissionManager instance for permission request/response flow (queue + events)
-        cmd_permission_mgr: CmdPermissionManager for dangerous detection + approval storage
-
-    Returns:
-        Async hook function that checks for dangerous commands and requests approval
+    When *enable_human_approval* is ``False`` (per-agent config), dangerous
+    commands are auto-denied without prompting.
     """
-    async def human_approval_hook(
+    patterns = load_dangerous_patterns()
+
+    async def dangerous_command_gate(
         input_data: dict[str, Any],
         tool_use_id: str | None,
-        context: Any
+        context: Any,
     ) -> dict[str, Any]:
-        """Check for dangerous commands and request human approval if needed."""
-        if input_data.get('tool_name') != 'Bash':
+        if input_data.get("tool_name") != "Bash":
             return {}
 
-        command = input_data.get('tool_input', {}).get('command', '')
+        command = input_data.get("tool_input", {}).get("command", "")
         if not command:
             return {}
 
-        # Check if command is dangerous — prefer CmdPermissionManager (glob-based,
-        # filesystem-backed) over legacy regex DANGEROUS_PATTERNS
-        if cmd_permission_mgr is not None:
-            is_dangerous = cmd_permission_mgr.is_dangerous(command)
-            danger_reason = "Matches dangerous command pattern" if is_dangerous else None
-        else:
-            # Legacy fallback: regex-based check
-            danger_reason = check_dangerous_command(command)
-
-        if not danger_reason:
+        # Check if command matches any dangerous pattern (glob)
+        is_dangerous = any(fnmatch.fnmatch(command, p) for p in patterns)
+        if not is_dangerous:
             return {}
 
-        # If human approval is disabled, just block it
+        # Auto-deny when human approval is disabled
         if not enable_human_approval:
-            logger.warning(f"[BLOCKED] Dangerous command (no human approval): {command}")
+            logger.warning("[BLOCKED] Dangerous command (no human approval): %s", command[:80])
             return {
-                'hookSpecificOutput': {
-                    'hookEventName': 'PreToolUse',
-                    'permissionDecision': 'deny',
-                    'permissionDecisionReason': f'Dangerous command blocked: {danger_reason}'
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": "Dangerous command blocked (human approval disabled)",
                 }
             }
 
-        # Check if this command was previously approved — prefer CmdPermissionManager
-        # (shared across all sessions, persisted to filesystem)
-        if cmd_permission_mgr is not None:
-            if cmd_permission_mgr.is_approved(command):
-                logger.info(f"[APPROVED] CmdPermissionManager approved: {command[:50]}...")
-                return {}  # Allow execution
-        else:
-            # Legacy fallback: per-session in-memory check
-            if permission_mgr.is_command_approved(session_key, command):
-                logger.info(f"[APPROVED] Previously approved command: {command[:50]}...")
-                return {}  # Allow execution
+        # Check session approvals
+        if permission_mgr.is_command_approved(session_key, command):
+            logger.info("[APPROVED] Session-approved command: %s", command[:50])
+            return {}
 
-        # Get the actual SDK session_id (may have been updated after init message)
+        # --- HITL prompt flow ---
         actual_session_id = session_context.get("sdk_session_id")
-        logger.info(f"Hook firing with session_key={session_key}, actual_session_id={actual_session_id}")
-
-        # Create permission request
         request_id = f"perm_{uuid4().hex[:12]}"
-        tool_input_data = input_data.get('tool_input', {})
+        tool_input_data = input_data.get("tool_input", {})
+
         permission_request = {
             "id": request_id,
-            "session_id": actual_session_id,  # Use actual SDK session_id (not session_key/agent_id)
+            "session_id": actual_session_id,
             "tool_name": "Bash",
             "tool_input": json.dumps(tool_input_data),
-            "reason": danger_reason,
+            "reason": "Matches dangerous command pattern",
             "status": "pending",
-            "created_at": datetime.now().isoformat()
+            "created_at": datetime.now().isoformat(),
         }
-
-        # Store in memory via PermissionManager (replaces DB storage)
         permission_mgr.store_pending_request(permission_request)
 
-        # Put permission request in the session's dedicated queue for SSE streaming.
-        # Uses per-session queue (not a global queue) so parallel sessions never
-        # compete or busy-loop when forwarding permission requests.
         await permission_mgr.enqueue_permission_request(actual_session_id, {
             "sessionId": actual_session_id,
             "requestId": request_id,
             "toolName": "Bash",
             "toolInput": tool_input_data,
-            "reason": danger_reason,
+            "reason": "Matches dangerous command pattern",
             "options": ["approve", "deny"],
         })
 
-        logger.warning(f"[PERMISSION_REQUEST] Dangerous command requires approval: {command[:50]}... (request_id: {request_id})")
-        logger.info(f"Waiting for user decision on request {request_id}...")
+        logger.warning(
+            "[PERMISSION_REQUEST] Dangerous command requires approval: %s (request_id: %s)",
+            command[:50], request_id,
+        )
 
-        # Suspend execution and wait for user decision
         decision = await permission_mgr.wait_for_permission_decision(request_id)
-
-        logger.info(f"User decision received for request {request_id}: {decision}")
-
-        # Clean up the pending request now that a decision has been made.
-        # This prevents unbounded growth of _pending_requests over time.
+        logger.info("User decision for %s: %s", request_id, decision)
         permission_mgr.remove_pending_request(request_id)
 
-        # Return the decision to the SDK
         if decision == "approve":
-            # Store approval in CmdPermissionManager (shared, persistent)
-            if cmd_permission_mgr is not None:
-                try:
-                    cmd_permission_mgr.approve(command)
-                    logger.info(f"Command approved via CmdPermissionManager: {command[:50]}...")
-                except ValueError as exc:
-                    # Overly broad pattern rejected — still allow this one execution
-                    logger.warning(f"CmdPermissionManager rejected pattern: {exc}")
-                    # Fall back to legacy per-session approval
-                    permission_mgr.approve_command(session_key, command)
-            else:
-                permission_mgr.approve_command(session_key, command)
+            permission_mgr.approve_command(session_key, command)
             return {}
-        else:
-            # Deny the command
-            return {
-                'hookSpecificOutput': {
-                    'hookEventName': 'PreToolUse',
-                    'permissionDecision': 'deny',
-                    'permissionDecisionReason': f'User denied: {danger_reason}'
-                }
-            }
 
-    return human_approval_hook
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": "User denied: Matches dangerous command pattern",
+            }
+        }
+
+    return dangerous_command_gate
 
 
 def create_file_access_permission_handler(allowed_directories: list[str]) -> Callable[..., Any]:

@@ -31,6 +31,7 @@ logger = logging.getLogger(__name__)
 COMMIT_CATEGORIES: dict[str, str] = {
     ".context/": "framework",
     ".claude/skills/": "skills",
+    ".claude/settings/": "config",
     "Knowledge/": "content",
     "Projects/": "project",
 }

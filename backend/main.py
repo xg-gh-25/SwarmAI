@@ -28,6 +28,30 @@ from database import initialize_database
 # This is different from initialization_complete in DB which persists across restarts
 _startup_complete = False
 
+
+def _generate_permissions_json(workspace_path: Path, dangerous_patterns: list[str]) -> None:
+    """Write read-only ``permissions.json`` for user visibility.
+
+    Shows only the dangerous command patterns — all other tools are
+    auto-approved via ``bypassPermissions``, so listing them adds no value.
+    The file is regenerated at each startup; editing it has no effect.
+    """
+    import json as _json
+    settings_dir = workspace_path / ".claude" / "settings"
+    settings_dir.mkdir(parents=True, exist_ok=True)
+    content = {
+        "description": (
+            "Commands matching these glob patterns require user approval "
+            "per session. All other commands are auto-approved. "
+            "Edit ~/.swarm-ai/dangerous_commands.json to customize."
+        ),
+        "dangerous_commands": dangerous_patterns,
+    }
+    (settings_dir / "permissions.json").write_text(
+        _json.dumps(content, indent=2) + "\n", encoding="utf-8"
+    )
+
+
 # Startup timing instrumentation (populated by lifespan, read by system status endpoint).
 # ``_startup_time_ms`` holds the total wall-clock time from lifespan entry to
 # ``_startup_complete = True``.  ``_phase_timings`` holds per-phase durations
@@ -339,7 +363,6 @@ async def lifespan(app: FastAPI):
     # created at import time in agent_manager.py.
     # Requirements: 1.2, 4.7, 4.8, 9.3
     from core.app_config_manager import AppConfigManager
-    from core.cmd_permission_manager import CmdPermissionManager
     from core.credential_validator import CredentialValidator
     from routers.settings import set_config_manager
 
@@ -347,9 +370,10 @@ async def lifespan(app: FastAPI):
     app_config.load()
     logger.info("AppConfigManager loaded (config.json)")
 
-    cmd_perm = CmdPermissionManager()
-    cmd_perm.load()
-    logger.info("CmdPermissionManager loaded (cmd_permissions/)")
+    # Load dangerous command patterns (creates ~/.swarm-ai/dangerous_commands.json if missing)
+    from core.security_hooks import load_dangerous_patterns
+    dangerous_patterns = load_dangerous_patterns()
+    logger.info("Dangerous command patterns loaded (%d patterns)", len(dangerous_patterns))
 
     cred_validator = CredentialValidator()
     logger.info("CredentialValidator initialized")
@@ -372,10 +396,20 @@ async def lifespan(app: FastAPI):
     # Wire into AgentManager (replaces module-level singletons)
     agent_manager.configure(
         config_manager=app_config,
-        cmd_permission_manager=cmd_perm,
         credential_validator=cred_validator,
     )
     logger.info("AgentManager configured with injected components")
+
+    # Generate permissions.json for user visibility
+    try:
+        ws_path = getattr(initialization_manager, '_cached_workspace_path', None)
+        if ws_path:
+            _generate_permissions_json(Path(ws_path), dangerous_patterns)
+            logger.info("permissions.json generated at %s/.claude/settings/", ws_path)
+        else:
+            logger.warning("Workspace path not available — skipping permissions.json generation")
+    except Exception as exc:
+        logger.warning("Failed to generate permissions.json (non-critical): %s", exc)
 
     # ── Session lifecycle hooks ──────────────────────────────────────
     from core.session_hooks import SessionLifecycleHookManager, BackgroundHookExecutor
