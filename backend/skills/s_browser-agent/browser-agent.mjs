@@ -44,9 +44,23 @@
  *   pdf [path]                  Save page as PDF
  */
 
-import { chromium } from 'playwright';
 import { writeFileSync, readFileSync, existsSync, mkdirSync } from 'fs';
 import { execSync } from 'child_process';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
+
+// ─── Self-contained dependency resolution ──────────────────────────
+// Install playwright in the skill's own directory, not the user's CWD.
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const skillNodeModules = join(__dirname, 'node_modules');
+
+if (!existsSync(join(skillNodeModules, 'playwright'))) {
+  console.error('[browser-agent] Installing playwright (one-time setup)...');
+  execSync('npm install --no-fund --no-audit', { cwd: __dirname, stdio: 'inherit' });
+}
+
+const { chromium } = await import(join(skillNodeModules, 'playwright', 'index.mjs'));
 
 const STATE_FILE = '/tmp/.browser-agent-state.json';
 const ELEMENT_MAP_FILE = '/tmp/.browser-agent-elements.json';

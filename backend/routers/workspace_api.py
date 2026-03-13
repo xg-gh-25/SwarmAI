@@ -187,14 +187,26 @@ async def update_workspace(request: WorkspaceConfigUpdate):
 # .git is excluded because its internals are not useful to browse.
 _HIDDEN_DIRS = frozenset({"chats", ".git"})
 
+# Root-level files that are infrastructure/tooling artifacts — hidden from the
+# explorer tree but fully functional on disk (git-tracked, used by tools, etc.).
+_HIDDEN_ROOT_FILES = frozenset({
+    ".gitignore",
+    ".legacy_cleaned",
+    "package-lock.json",
+    "package.json",
+})
 
-def _should_include(name: str) -> bool:
+
+def _should_include(name: str, *, is_root: bool = False) -> bool:
     """Return True if a file/directory name should appear in the tree.
 
     Shows all files and directories including dot-files (like Kiro IDE).
-    Only excludes internal runtime directories listed in ``_HIDDEN_DIRS``.
+    Only excludes internal runtime directories listed in ``_HIDDEN_DIRS``
+    and infrastructure files at the workspace root listed in ``_HIDDEN_ROOT_FILES``.
     """
     if name in _HIDDEN_DIRS:
+        return False
+    if is_root and name in _HIDDEN_ROOT_FILES:
         return False
     return True
 
@@ -294,10 +306,11 @@ def _build_tree(
         return []
 
     # Partition into dirs and files, filtering hidden entries
+    is_root = root == workspace_root
     dirs: list[Path] = []
     files: list[Path] = []
     for entry in entries:
-        if not _should_include(entry.name):
+        if not _should_include(entry.name, is_root=is_root):
             continue
         if entry.is_dir():
             dirs.append(entry)

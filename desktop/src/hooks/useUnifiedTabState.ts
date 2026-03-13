@@ -76,6 +76,10 @@ export interface UnifiedTab {
   hasReceivedData?: boolean;
   /** Retry function stored by ChatPage — called by reconnection logic to re-initiate the stream. */
   retryStreamFn?: () => (() => void);
+  /** Per-tab stream start timestamp — persists across tab switches so elapsed timer resumes correctly. */
+  streamStartTime?: number;
+  /** Active pending permission request ID for inline approval (null = no pending). */
+  pendingPermissionRequestId?: string | null;
   /** Per-tab attachment list managed by useUnifiedAttachments (runtime-only, NOT serialized). */
   attachments: UnifiedAttachment[];
 }

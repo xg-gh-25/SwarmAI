@@ -6,6 +6,7 @@ import { FileAttachmentButton, FileAttachmentPreview } from '../../../components
 import { TSCCPopoverButton } from './TSCCPopoverButton';
 import { ContextUsageRing } from './ContextUsageRing';
 import { SLASH_COMMANDS } from '../constants';
+import type { DropPayload } from './RightSidebar/types';
 
 interface ChatInputProps {
   inputValue: string;
@@ -32,6 +33,12 @@ interface ChatInputProps {
   onExpandedChange: (expanded: boolean) => void;
   /** External disabled flag (e.g. backend disconnected). Disables input and action buttons. */
   disabled?: boolean;
+  /** Ref to the currently active tab ID — read synchronously at drop time for tab-scoped isolation. */
+  activeTabIdRef?: React.RefObject<string | null>;
+  /** Per-tab draft text storage — drop operations write to the entry keyed by active tab ID. */
+  inputValueMapRef?: React.MutableRefObject<Map<string, string>>;
+  /** Callback to propagate draft text changes to the per-tab storage layer. */
+  onInputValueChange?: (tabId: string, value: string) => void;
 }
 
 const MAX_ROWS = 20;
@@ -58,6 +65,9 @@ export function ChatInput({
   isExpanded,
   onExpandedChange,
   disabled = false,
+  activeTabIdRef,
+  inputValueMapRef,
+  onInputValueChange,
 }: ChatInputProps) {
   const { t } = useTranslation();
   const [showCommandSuggestions, setShowCommandSuggestions] = useState(false);
@@ -206,14 +216,14 @@ export function ChatInput({
 
   // Drag handlers
   const handleDragOver = useCallback((e: React.DragEvent) => {
-    if (e.dataTransfer.types.includes('Files')) {
+    if (e.dataTransfer.types.includes('Files') || e.dataTransfer.types.includes('application/json')) {
       e.preventDefault();
       setIsDragging(true);
     }
   }, []);
 
   const handleDragLeave = useCallback((e: React.DragEvent) => {
-    if (e.dataTransfer.types.includes('Files')) {
+    if (e.dataTransfer.types.includes('Files') || e.dataTransfer.types.includes('application/json')) {
       e.preventDefault();
       setIsDragging(false);
     }
@@ -223,12 +233,77 @@ export function ChatInput({
     (e: React.DragEvent) => {
       e.preventDefault();
       setIsDragging(false);
+
+      // 1. Existing file-drop behavior — unchanged
       const files = Array.from(e.dataTransfer.files);
       if (files.length > 0) {
         onAddFiles(files);
+        return;
       }
+
+      // 2. Radar DropPayload (application/json) processing
+      const jsonData = e.dataTransfer.getData('application/json');
+      if (!jsonData) return;
+
+      let payload: DropPayload;
+      try {
+        const parsed = JSON.parse(jsonData);
+        // Validate discriminator and required fields before casting
+        if (!parsed || typeof parsed !== 'object' || typeof parsed.type !== 'string') {
+          console.warn('[ChatInput] Drop payload missing type discriminator');
+          return;
+        }
+        payload = parsed as DropPayload;
+      } catch {
+        console.warn('[ChatInput] Invalid JSON in drop payload');
+        return;
+      }
+
+      if (payload.type !== 'radar-todo' && payload.type !== 'radar-artifact') return;
+
+      // Build the text to insert based on payload type
+      let text: string;
+      if (payload.type === 'radar-todo') {
+        text = payload.context
+          ? `[ToDo] ${payload.title}\n${payload.context}`
+          : `[ToDo] ${payload.title}`;
+      } else {
+        text = `[Artifact] ${payload.title} (${payload.path})`;
+      }
+
+      // --- SYNCHRONOUS read-and-write: no await, no setTimeout, no setState callback ---
+      // Read active tab ID from ref at drop time (Principle 2 & 13: never from React state)
+      const activeTabId = activeTabIdRef?.current ?? null;
+
+      if (activeTabId && inputValueMapRef && onInputValueChange) {
+        // Read existing draft for this tab, initialize if missing
+        const existing = inputValueMapRef.current.get(activeTabId) ?? '';
+        const newValue = existing ? `${existing}\n${text}` : text;
+        // Write to per-tab draft storage keyed by active tab ID
+        inputValueMapRef.current.set(activeTabId, newValue);
+        // Notify parent of the change for this specific tab
+        onInputValueChange(activeTabId, newValue);
+      }
+
+      // Only update the visible textarea if the drop-time tab matches the currently rendered tab
+      // (inputValue is the display mirror for the active tab, so we update it directly)
+      if (activeTabId && activeTabIdRef?.current === activeTabId) {
+        const existing = inputValue;
+        const newValue = existing ? `${existing}\n${text}` : text;
+        onInputChange(newValue);
+      }
+
+      // Focus the input cursor after population
+      requestAnimationFrame(() => {
+        textareaRef.current?.focus();
+        const el = textareaRef.current;
+        if (el) {
+          el.selectionStart = el.value.length;
+          el.selectionEnd = el.value.length;
+        }
+      });
     },
-    [onAddFiles]
+    [onAddFiles, activeTabIdRef, inputValueMapRef, onInputValueChange, inputValue, onInputChange]
   );
 
   const handleKeyDown = (e: React.KeyboardEvent) => {

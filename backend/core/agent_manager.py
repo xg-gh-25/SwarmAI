@@ -1886,12 +1886,18 @@ class AgentManager:
         session_context["app_session_id"] = app_session_id
 
         # Build options - use resume parameter if continuing an existing session
+        _t_build_start = time.monotonic()
         options = await self._build_options(
             agent_config, enable_skills, enable_mcp,
             session_id if is_resuming else None,
             session_context, channel_context,
         )
-        logger.info(f"Built options - allowed_tools: {options.allowed_tools}, permission_mode: {options.permission_mode}, resume: {session_id if is_resuming else None}")
+        _t_build_elapsed = time.monotonic() - _t_build_start
+        logger.info(
+            "Built options in %.1fs - allowed_tools: %s, permission_mode: %s, resume: %s",
+            _t_build_elapsed, options.allowed_tools, options.permission_mode,
+            session_id if is_resuming else None,
+        )
         logger.info(f"MCP servers: {list(options.mcp_servers.keys()) if options.mcp_servers else None}")
         logger.info(f"Working directory: {options.cwd}")
 
@@ -1968,10 +1974,16 @@ class AgentManager:
                                 evicted["wrapper"].__aexit__(None, None, None),
                                 timeout=5.0,
                             )
-                        except (asyncio.TimeoutError, Exception):
+                        except asyncio.TimeoutError:
                             logger.warning(
-                                f"PATH B: wrapper disconnect timed out or failed "
-                                f"for {session_id}, proceeding with retry"
+                                f"PATH B: wrapper disconnect timed out for "
+                                f"{session_id} — orphan subprocess may linger "
+                                f"until Tauri kill_process_tree at app close"
+                            )
+                        except Exception as exc:
+                            logger.warning(
+                                f"PATH B: wrapper disconnect failed for "
+                                f"{session_id}: {exc}"
                             )
                     self._clients.pop(session_id, None)
 
@@ -1979,6 +1991,12 @@ class AgentManager:
                     _need_fresh_client = True
                     session_context["had_error"] = False
                     assistant_content = ContentBlockAccumulator()
+
+                    # Tell the frontend to re-enter streaming state.
+                    # The prior `error` event set isStreaming=false; without
+                    # this the frontend stays in "idle/error" while PATH A
+                    # streams new events on the same SSE connection.
+                    yield {"type": "reconnecting"}
 
                     # Visual indicator in the chat stream — appears as a
                     # natural continuation in the assistant message bubble.
@@ -2051,7 +2069,8 @@ class AgentManager:
                     # Clear deferred content so it's not saved again
                     deferred_user_content = None
 
-                logger.info(f"Creating new ClaudeSDKClient...")
+                _t_client_start = time.monotonic()
+                logger.info("Creating new ClaudeSDKClient...")
                 wrapper = _ClaudeClientWrapper(options=options)
                 # Hold _env_lock during client creation so the spawned
                 # subprocess inherits the correct os.environ values.
@@ -2059,7 +2078,11 @@ class AgentManager:
                 async with _env_lock:
                     _configure_claude_environment(self._config)
                     client = await wrapper.__aenter__()
-                logger.info(f"ClaudeSDKClient created, is_resuming={is_resuming}")
+                _t_client_elapsed = time.monotonic() - _t_client_start
+                logger.info(
+                    "ClaudeSDKClient created in %.1fs, is_resuming=%s",
+                    _t_client_elapsed, is_resuming,
+                )
 
                 try:
                     async for event in self._run_query_on_client(
@@ -2111,6 +2134,9 @@ class AgentManager:
                             await wrapper.__aexit__(None, None, None)
                         except Exception:
                             pass
+
+                        # Re-enter streaming state on the frontend
+                        yield {"type": "reconnecting"}
 
                         # Visual indicator
                         yield {
@@ -2382,9 +2408,10 @@ class AgentManager:
             # response, the stdout stream hangs forever (anyio TextReceiveStream
             # doesn't detect broken pipe reliably). This timeout surfaces an
             # error to the user instead of infinite "Thinking...".
-            _WATCHDOG_INITIAL_TIMEOUT = 90    # seconds before first real message
-            _WATCHDOG_INTER_MSG_TIMEOUT = 90  # seconds between messages during tool use
+            _WATCHDOG_INITIAL_TIMEOUT = 180   # seconds before first real message
+            _WATCHDOG_INTER_MSG_TIMEOUT = 180  # seconds between messages during tool use
             _got_first_real_message = False
+            _query_sent_at = time.monotonic()  # Track time from query to first message
 
             while True:
                 watchdog_timeout = (
@@ -2396,30 +2423,32 @@ class AgentManager:
                         combined_queue.get(), timeout=watchdog_timeout
                     )
                 except asyncio.TimeoutError:
+                    _watchdog_elapsed = time.monotonic() - _query_sent_at
                     # Check if the SDK reader task is still alive
                     if sdk_reader_task and sdk_reader_task.done():
                         logger.error(
                             "Watchdog: SDK reader task finished but no sdk_done received "
-                            "(subprocess likely crashed). Timeout after %ds.",
-                            watchdog_timeout,
+                            "(subprocess likely crashed). Total elapsed: %.1fs, timeout: %ds.",
+                            _watchdog_elapsed, watchdog_timeout,
                         )
                     else:
                         logger.error(
-                            "Watchdog: No SDK message received in %ds. "
+                            "Watchdog: No SDK message received in %ds "
+                            "(total elapsed: %.1fs, got_first_msg: %s). "
                             "CLI subprocess may be dead or unresponsive.",
-                            watchdog_timeout,
+                            watchdog_timeout, _watchdog_elapsed, _got_first_real_message,
                         )
                     session_context["had_error"] = True
                     yield _build_error_event(
                         code="SDK_SUBPROCESS_TIMEOUT",
                         message=(
-                            "The AI service didn't respond within 90 seconds. "
+                            f"The AI service didn't respond within {watchdog_timeout}s. "
                             "This usually means the Claude backend is temporarily "
                             "overloaded or the request was too complex."
                         ),
                         suggested_action=(
                             "Your conversation is saved. "
-                            "Click Retry or send your message again to continue."
+                            "Send your message again to continue."
                         ),
                     )
                     break
@@ -2735,7 +2764,11 @@ class AgentManager:
                         # in the DB, so we only capture the ID for later reference.
                         if message.subtype == 'init':
                             session_context["sdk_session_id"] = message.data.get('session_id')
-                            logger.info(f"Captured SDK session_id from init: {session_context['sdk_session_id']}")
+                            _init_elapsed = time.monotonic() - _query_sent_at
+                            logger.info(
+                                "SDK init received in %.1fs, session_id: %s",
+                                _init_elapsed, session_context['sdk_session_id'],
+                            )
 
                             # Update thread_id now that we have the real session ID
                             try:
@@ -2802,6 +2835,11 @@ class AgentManager:
                     # blocks, which indicate the SDK is doing real work (not
                     # just replaying the previous turn's cached result).
                     if isinstance(message, AssistantMessage):
+                        if not _got_first_real_message:
+                            _ttfm = time.monotonic() - _query_sent_at
+                            logger.info(
+                                "Time to first AssistantMessage: %.1fs", _ttfm
+                            )
                         _got_first_real_message = True
                         for _blk in message.content:
                             if isinstance(_blk, ToolUseBlock):

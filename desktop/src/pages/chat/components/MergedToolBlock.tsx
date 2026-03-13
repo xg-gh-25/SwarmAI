@@ -10,7 +10,7 @@
  * 2. Short result (≤200 chars, not truncated) — summary + inline result
  * 3. Long/truncated result — summary + collapsible section
  * 4. Error — summary + error icon + inline error content
- * 5. Orphaned (no result, not streaming) — summary + neutral indicator
+ * 5. Implicitly complete (no result, not streaming) — summary + check icon
  *
  * @exports MergedToolBlock      — The merged component
  * @exports INLINE_RESULT_LIMIT  — 200 chars threshold for inline display
@@ -51,8 +51,7 @@ interface MergedToolBlockProps {
   resultTruncated?: boolean;
   resultIsError?: boolean;
   isPending: boolean;
-  /** Whether the parent message is still streaming. Used to distinguish
-   *  "implicitly complete" (result not yet received) from "genuinely orphaned". */
+  /** @deprecated No longer used — kept for backward compatibility. */
   isStreaming?: boolean;
 }
 
@@ -65,7 +64,6 @@ export function MergedToolBlock({
   resultTruncated,
   resultIsError,
   isPending,
-  isStreaming,
 }: MergedToolBlockProps) {
   const [isExpanded, setIsExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -78,27 +76,23 @@ export function MergedToolBlock({
     !resultTruncated &&
     (resultContent?.length ?? 0) <= INLINE_RESULT_LIMIT;
   const isLongResult = hasResult && !isShortResult && !isError;
-  // Genuinely orphaned: no result AND streaming has ended.
-  // During streaming, tools without results are "implicitly complete" —
-  // the result just hasn't arrived in the SSE stream yet.
-  const isOrphaned = !isPending && !hasResult && !isStreaming;
 
-  // Status icon on the summary line
+  // Status icon on the summary line.
+  // Tool results are not reliably streamed by the Claude Code SDK —
+  // the agentic loop executes tools internally and may not emit
+  // ToolResultBlock for every ToolUseBlock. So "no result" after
+  // streaming ends means implicitly complete, not orphaned.
   const statusIcon = isPending
     ? 'progress_activity'
     : resultIsError
       ? 'error'
-      : isOrphaned
-        ? 'remove'
-        : 'check_circle';
+      : 'check_circle';
 
   const statusColor = isPending
     ? 'text-[var(--color-text-muted)] animate-spin'
     : resultIsError
       ? 'text-red-500'
-      : isOrphaned
-        ? 'text-[var(--color-text-muted)]'
-        : 'text-status-online';
+      : 'text-status-online';
 
   const handleCopy = () => {
     if (resultContent) {

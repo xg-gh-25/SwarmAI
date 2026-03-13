@@ -11,8 +11,8 @@ centralized directory.  It is responsible for:
                                   metadata (filename, priority, section_name,
                                   truncatable, user_customized, truncate_from)
 - ``CONTEXT_FILES``             — Ordered list of all 10 ContextFileSpec entries
-- ``DEFAULT_TOKEN_BUDGET``      — Default token budget constant (25,000)
-- ``BUDGET_LARGE_MODEL``        — Token budget for >= 200K models (40,000)
+- ``DEFAULT_TOKEN_BUDGET``      — Default token budget constant (30,000)
+- ``BUDGET_LARGE_MODEL``        — Token budget for >= 200K models (50,000)
 - ``L1_CACHE_FILENAME``         — Filename for the full L1 cache
 - ``L0_CACHE_FILENAME``         — Filename for the compact L0 cache
 - ``THRESHOLD_USE_L1``          — Context window threshold for L1 usage (64K)
@@ -45,7 +45,7 @@ logger = logging.getLogger(__name__)
 
 # ── Constants ──────────────────────────────────────────────────────────
 
-DEFAULT_TOKEN_BUDGET = 25_000
+DEFAULT_TOKEN_BUDGET = 30_000
 """Maximum tokens for assembled context output (default)."""
 
 L1_CACHE_FILENAME = "L1_SYSTEM_PROMPTS.md"
@@ -60,8 +60,8 @@ THRESHOLD_USE_L1 = 64_000
 THRESHOLD_SKIP_LOW_PRIORITY = 32_000
 """Model context window < this value excludes KNOWLEDGE + PROJECTS."""
 
-BUDGET_LARGE_MODEL = 40_000
-"""Token budget for models with >= 200K context window (20% of 200K)."""
+BUDGET_LARGE_MODEL = 50_000
+"""Token budget for models with >= 200K context window (25% of 200K)."""
 
 GROUP_CHANNEL_EXCLUDE: frozenset[str] = frozenset({"MEMORY.md", "USER.md"})
 """Files excluded from group channel prompts to prevent personal data leakage."""
@@ -141,7 +141,7 @@ class ContextDirectoryLoader:
 
         Args:
             context_dir:   Path to ``~/.swarm-ai/.context/``.
-            token_budget:  Max tokens for assembled output (default 25,000).
+            token_budget:  Max tokens for assembled output (default 30,000).
             templates_dir: Path to ``backend/context/`` for initialization.
                            If *None*, template copying is skipped.
         """
@@ -344,12 +344,12 @@ class ContextDirectoryLoader:
 
         Scales the token budget to the model's capacity:
 
-        - >= 200K tokens → 40,000 (``BUDGET_LARGE_MODEL``)
-        - >= 64K and < 200K → 25,000 (``DEFAULT_TOKEN_BUDGET``)
+        - >= 200K tokens → 50,000 (``BUDGET_LARGE_MODEL``)
+        - >= 64K and < 200K → 30,000 (``DEFAULT_TOKEN_BUDGET``)
         - < 64K → ``self.token_budget`` (instance default, L0 path)
 
         When *model_context_window* is ``None`` or ``0``, falls back to
-        ``DEFAULT_TOKEN_BUDGET`` (25,000).
+        ``DEFAULT_TOKEN_BUDGET`` (30,000).
 
         This is a public method — also used by ``_build_system_prompt()``
         for metadata reporting.

@@ -242,13 +242,24 @@ export interface AskUserQuestionContent {
   questions: AskUserQuestion[];
 }
 
+export interface CmdPermissionContent {
+  type: 'cmd_permission_request';
+  requestId: string;
+  toolName: string;
+  toolInput: Record<string, unknown>;
+  reason: string;
+  options?: string[];
+  /** Set after user makes a decision — renders decided state inline. */
+  decision?: 'approve' | 'deny';
+}
+
 export interface TodoItem {
   content: string;
   status: 'pending' | 'in_progress' | 'completed';
   activeForm: string;
 }
 
-export type ContentBlock = TextContent | ToolUseContent | ToolResultContent | AskUserQuestionContent;
+export type ContentBlock = TextContent | ToolUseContent | ToolResultContent | AskUserQuestionContent | CmdPermissionContent;
 
 export interface Message {
   id: string;
@@ -387,7 +398,7 @@ export const SUPPORTED_FILE_TYPES = {
 } as const;
 
 export interface StreamEvent {
-  type: 'assistant' | 'tool_use' | 'tool_result' | 'result' | 'error' | 'ask_user_question' | 'session_start' | 'session_cleared' | 'cmd_permission_request' | 'cmd_permission_decision' | 'cmd_permission_acknowledged' | 'heartbeat' | 'agent_activity' | 'tool_invocation' | 'capability_activated' | 'sources_updated' | 'summary_updated' | 'context_warning' | 'context_compacted' | (string & {});
+  type: 'assistant' | 'tool_use' | 'tool_result' | 'result' | 'error' | 'reconnecting' | 'ask_user_question' | 'session_start' | 'session_cleared' | 'cmd_permission_request' | 'cmd_permission_decision' | 'cmd_permission_acknowledged' | 'heartbeat' | 'agent_activity' | 'tool_invocation' | 'capability_activated' | 'sources_updated' | 'summary_updated' | 'context_warning' | 'context_compacted' | (string & {});
   content?: ContentBlock[];
   model?: string;
   sessionId?: string;

@@ -190,4 +190,4 @@ class AgentTimeoutException(AgentExecutionException):
 
     code = "AGENT_TIMEOUT"
     message = "Agent response timed out. Your conversation has been saved."
-    suggested_action = "Please try again"
+    suggested_action = "Your conversation is saved. Send your message again to continue."

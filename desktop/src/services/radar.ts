@@ -5,16 +5,18 @@
  * Follows the same HTTP client pattern as tasks.ts.
  *
  * Exports:
- * - radarService              — Object with ToDo + Task + Job fetch/action methods
+ * - radarService              — Object with ToDo + Task + Job + Artifact fetch/action methods
  * - toCamelCase               — Converts backend snake_case ToDo response to frontend camelCase
  * - toSnakeCase               — Converts frontend camelCase request to backend snake_case
  * - taskToCamelCase           — Converts backend snake_case task to RadarWipTask
  * - completedTaskToCamelCase  — Converts backend snake_case task to RadarCompletedTask
  * - jobToCamelCase            — Converts backend snake_case job to RadarAutonomousJob
+ * - artifactToCamelCase       — Converts backend snake_case artifact to RadarArtifact
  */
 
 import api from './api';
 import type { RadarTodo, RadarWipTask, RadarCompletedTask, RadarAutonomousJob } from '../types';
+import type { RadarArtifact } from '../pages/chat/components/RightSidebar/types';
 
 /** Convert backend snake_case ToDo response to frontend camelCase RadarTodo. */
 export function toCamelCase(todo: Record<string, unknown>): RadarTodo {
@@ -114,6 +116,20 @@ export function jobToCamelCase(job: Record<string, unknown>): RadarAutonomousJob
   };
 }
 
+// ---------------------------------------------------------------------------
+// Artifact conversion helper (Spec — Right Sidebar Redesign)
+// ---------------------------------------------------------------------------
+
+/** Convert backend snake_case artifact response to frontend camelCase RadarArtifact. */
+export function artifactToCamelCase(a: Record<string, unknown>): RadarArtifact {
+  return {
+    path: a.path as string,
+    title: a.title as string,
+    type: a.type as RadarArtifact['type'],
+    modifiedAt: a.modified_at as string,
+  };
+}
+
 export const radarService = {
   /** Fetch active ToDos (pending + overdue) for a workspace. */
   async fetchActiveTodos(workspaceId: string): Promise<RadarTodo[]> {
@@ -185,5 +201,14 @@ export const radarService = {
   async fetchAutonomousJobs(): Promise<RadarAutonomousJob[]> {
     const response = await api.get('/autonomous-jobs');
     return response.data.map(jobToCamelCase);
+  },
+
+  /** Fetch recently modified artifacts from the workspace git tree. */
+  async fetchRecentArtifacts(workspaceId: string, limit?: number): Promise<RadarArtifact[]> {
+    const params = new URLSearchParams();
+    params.append('workspace_id', workspaceId);
+    params.append('limit', String(limit ?? 20));
+    const response = await api.get(`/artifacts/recent?${params.toString()}`);
+    return response.data.map(artifactToCamelCase);
   },
 };

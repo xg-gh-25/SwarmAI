@@ -27,7 +27,9 @@ import { AssistantMessageView } from './AssistantMessageView';
 export interface MessageBubbleProps {
   message: Message;
   onAnswerQuestion?: (toolUseId: string, answers: Record<string, string>) => void;
+  onPermissionDecision?: (requestId: string, decision: 'approve' | 'deny') => void;
   pendingToolUseId?: string;
+  pendingPermissionRequestId?: string;
   isStreaming?: boolean;
   sessionId?: string;
   isLastAssistant?: boolean;
@@ -37,7 +39,9 @@ export interface MessageBubbleProps {
 export function MessageBubble({
   message,
   onAnswerQuestion,
+  onPermissionDecision,
   pendingToolUseId,
+  pendingPermissionRequestId,
   isStreaming,
   sessionId,
   isLastAssistant,
@@ -51,7 +55,9 @@ export function MessageBubble({
     <AssistantMessageView
       message={message}
       onAnswerQuestion={onAnswerQuestion}
+      onPermissionDecision={onPermissionDecision}
       pendingToolUseId={pendingToolUseId}
+      pendingPermissionRequestId={pendingPermissionRequestId}
       isStreaming={isStreaming}
       sessionId={sessionId}
       isLastAssistant={isLastAssistant}

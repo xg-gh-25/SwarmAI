@@ -510,6 +510,9 @@ export interface ChatStreamingLifecycle {
   setSessionId: React.Dispatch<React.SetStateAction<string | undefined>>;
   pendingQuestion: PendingQuestion | null;
   setPendingQuestion: React.Dispatch<React.SetStateAction<PendingQuestion | null>>;
+  /** Active pending permission request ID (null = no pending permission). */
+  pendingPermissionRequestId: string | null;
+  setPendingPermissionRequestId: React.Dispatch<React.SetStateAction<string | null>>;
   isStreaming: boolean;
   setIsStreaming: (streaming: boolean, tabId?: string) => void;
   streamingActivity: StreamingActivity | null;
@@ -636,6 +639,8 @@ export function useChatStreamingLifecycle(
   // Pending states
   const [pendingQuestion, setPendingQuestion] =
     useState<PendingQuestion | null>(null);
+  const [pendingPermissionRequestId, setPendingPermissionRequestId] =
+    useState<string | null>(null);
 
   // --- Fix 9: Elapsed time counter during initial wait ---
   const [elapsedSeconds, setElapsedSeconds] = useState<number>(0);
@@ -778,15 +783,36 @@ export function useChatStreamingLifecycle(
   }, [streamingActivity, isStreaming]);
 
   // --- Fix 9: Elapsed time — record start time when streaming begins ---
+  // On tab switch, isStreaming flips false→true but the stream was already
+  // running in the background. Check the per-tab state to see if the tab
+  // was already streaming — if so, restore the existing start time instead
+  // of resetting. This prevents "Thinking..." from restarting on switch back.
   useEffect(() => {
     if (isStreaming) {
-      streamStartTimeRef.current = Date.now();
-      setElapsedSeconds(0);
+      const tabId = activeTabIdRef.current;
+      const tabState = tabId ? tabMapRef.current.get(tabId) : undefined;
+      // If the tab already has a stream start time (was streaming in bg),
+      // restore it instead of resetting to now.
+      if (tabState?.streamStartTime) {
+        streamStartTimeRef.current = tabState.streamStartTime;
+        // Re-derive elapsed from the stored start time
+        setElapsedSeconds(Math.floor((Date.now() - tabState.streamStartTime) / 1000));
+      } else {
+        // New stream — record start time and store in tab state
+        const now = Date.now();
+        streamStartTimeRef.current = now;
+        setElapsedSeconds(0);
+        if (tabState) tabState.streamStartTime = now;
+      }
     } else {
+      // Clear per-tab start time when streaming stops
+      const tabId = activeTabIdRef.current;
+      const tabState = tabId ? tabMapRef.current.get(tabId) : undefined;
+      if (tabState) tabState.streamStartTime = undefined;
       streamStartTimeRef.current = null;
       setElapsedSeconds(0);
     }
-  }, [isStreaming]);
+  }, [isStreaming]); // eslint-disable-line react-hooks/exhaustive-deps — refs are stable
 
   // --- Fix 9: Tick elapsed counter every second while waiting for first content ---
   useEffect(() => {
@@ -1027,13 +1053,38 @@ export function useChatStreamingLifecycle(
         } else if (event.type === 'cmd_permission_request') {
           const raw = event as unknown as Record<string, unknown>;
           const sid = event.sessionId || (raw.session_id as string);
+          const requestId = (event.requestId || raw.request_id) as string;
+          const toolName = (event.toolName || raw.tool_name) as string;
+          const toolInput = (event.toolInput || raw.tool_input) as Record<string, unknown>;
 
-          if (tabState && sid) {
-            tabState.sessionId = sid;
+          // Append cmd_permission_request content block to assistant message
+          // (same pattern as ask_user_question — inline in chat stream)
+          const permBlock = {
+            type: 'cmd_permission_request' as const,
+            requestId: requestId,
+            toolName: toolName,
+            toolInput: toolInput,
+            reason: event.reason || '',
+            options: event.options || ['approve', 'deny'],
+          };
+          const currentMsgs = tabState?.messages ?? messagesRef.current;
+          const permMessages = currentMsgs.map((msg) =>
+            msg.id === assistantMessageId
+              ? { ...msg, content: [...msg.content, permBlock] }
+              : msg,
+          );
+
+          // Update per-tab map
+          if (tabState) {
+            tabState.messages = permMessages;
+            if (sid) tabState.sessionId = sid;
+            tabState.pendingPermissionRequestId = requestId;
           }
 
           if (isActiveTab) {
+            setMessages(permMessages);
             if (sid) setSessionId(sid);
+            setPendingPermissionRequestId(requestId);
           }
           setIsStreaming(false, capturedTabId ?? undefined);
           incrementStreamGen();
@@ -1144,6 +1195,19 @@ export function useChatStreamingLifecycle(
           // Fix 8: Update tab status to 'error'
           if (capturedTabId) {
             updateTabStatus(capturedTabId, 'error');
+          }
+        }
+        // Backend auto-retry: the prior `error` event set isStreaming=false and
+        // tabStatus='error'. The backend is now retrying with a fresh client on
+        // the SAME SSE connection, so we need to re-enter streaming state.
+        else if (event.type === 'reconnecting') {
+          setIsStreaming(true, capturedTabId ?? undefined);
+          if (capturedTabId) {
+            updateTabStatus(capturedTabId, 'streaming');
+          }
+          // Reset stream start time for the elapsed counter
+          if (streamStartTimeRef.current === null) {
+            streamStartTimeRef.current = Date.now();
           }
         }
         // Context compacted — backend emits when the SDK compacts the context window
@@ -1422,6 +1486,8 @@ export function useChatStreamingLifecycle(
     setSessionId,
     pendingQuestion,
     setPendingQuestion,
+    pendingPermissionRequestId,
+    setPendingPermissionRequestId,
     isStreaming,
     setIsStreaming,
     streamingActivity,

@@ -272,7 +272,7 @@ class TestFullShutdownFlow:
         """drain() is called on the hook executor during shutdown.
 
         After firing hooks and cleaning up sessions, ``disconnect_all()``
-        must call ``drain()`` with a bounded timeout (2.0s) to give
+        must call ``drain()`` with a bounded timeout (8.0s) to give
         hooks a best-effort chance to complete.
 
         **Validates: Requirements 3.3**
@@ -302,13 +302,13 @@ class TestFullShutdownFlow:
             # drain() must have been called
             mock_executor.drain.assert_awaited_once()
 
-            # drain() must be called with timeout=2.0
+            # drain() must be called with timeout=8.0
             call_kwargs = mock_executor.drain.call_args
             if call_kwargs[1]:
-                assert call_kwargs[1].get("timeout") == 2.0
+                assert call_kwargs[1].get("timeout") == 8.0
             else:
                 # positional arg
-                assert call_kwargs[0][0] == 2.0
+                assert call_kwargs[0][0] == 8.0
         finally:
             _restore_agent_manager(originals)
 
@@ -356,8 +356,8 @@ class TestFullShutdownFlow:
     def test_shutdown_with_no_active_sessions(self, test_client):
         """Shutdown with zero sessions completes cleanly.
 
-        When no sessions are active, ``disconnect_all()`` should still
-        return successfully and ``drain()`` should return ``(0, 0)``.
+        When no sessions are active, ``disconnect_all()`` fast-returns
+        without reaching the drain phase. No hooks are fired.
 
         **Validates: Requirements 3.1, 3.4**
         """
@@ -377,8 +377,8 @@ class TestFullShutdownFlow:
             # No sessions → fire() never called
             mock_executor.fire.assert_not_called()
 
-            # drain() still called (executor exists)
-            mock_executor.drain.assert_awaited_once()
+            # No sessions → fast-return before drain phase
+            mock_executor.drain.assert_not_awaited()
         finally:
             _restore_agent_manager(originals)
 

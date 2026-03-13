@@ -15,7 +15,7 @@
  * Workspace files store only the path at attach time — content is read at
  * send time inside ``buildContentArray`` to avoid stale data.
  */
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import type { UnifiedAttachment, AttachmentType } from '../types';
 import { MAX_ATTACHMENTS } from '../types';
 import type { UnifiedTab } from './useUnifiedTabState';
@@ -120,6 +120,11 @@ export function useUnifiedAttachments(
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Ref mirror of tabId — read inside async callbacks to avoid stale
+  // closure captures when the user switches tabs during file encoding.
+  const tabIdRef = useRef(tabId);
+  tabIdRef.current = tabId;
+
   // Sync display mirror when tabId changes
   useEffect(() => {
     if (!tabId) {
@@ -149,10 +154,12 @@ export function useUnifiedAttachments(
 
   const addFiles = useCallback(
     async (files: File[]): Promise<void> => {
-      if (!tabId) return;
+      // Read tabId from ref (not closure) to get the current value at call time
+      const tid = tabIdRef.current;
+      if (!tid) return;
       setError(null);
 
-      const tab = tabMapRef.current.get(tabId);
+      const tab = tabMapRef.current.get(tid);
       if (!tab) return;
 
       const currentCount = tab.attachments.length;
@@ -205,7 +212,7 @@ export function useUnifiedAttachments(
           };
 
           // Add placeholder immediately so UI shows loading chip
-          updateAttachments(tabId, (prev) => [...prev, attachment]);
+          updateAttachments(tid, (prev) => [...prev, attachment]);
 
           // 5. Encode content based on strategy
           try {
@@ -228,8 +235,15 @@ export function useUnifiedAttachments(
               textContent = text;
             }
 
-            // 6. Update attachment with encoded data
-            updateAttachments(tabId, (prev) =>
+            // 6. Update attachment with encoded data — re-read tabId from ref
+            //    in case user switched tabs during the async encode above
+            const currentTid = tabIdRef.current;
+            if (currentTid !== tid) {
+              // Tab switched during encoding — attachment was added to the
+              // original tab's map entry (via placeholder), which is correct.
+              // Continue using tid (the originating tab) for the update.
+            }
+            updateAttachments(tid, (prev) =>
               prev.map((a) =>
                 a.id === id
                   ? { ...a, base64, textContent, preview, isLoading: false }
@@ -239,7 +253,7 @@ export function useUnifiedAttachments(
           } catch (encodeErr) {
             // Mark attachment as errored
             console.error('Failed to encode attachment:', encodeErr);
-            updateAttachments(tabId, (prev) =>
+            updateAttachments(tid, (prev) =>
               prev.map((a) =>
                 a.id === id
                   ? { ...a, isLoading: false, error: 'Failed to process file' }
@@ -256,17 +270,18 @@ export function useUnifiedAttachments(
         setIsProcessing(false);
       }
     },
-    [tabId, tabMapRef, updateAttachments],
+    [tabIdRef, tabMapRef, updateAttachments],
   );
 
   // ---- addWorkspaceFiles: workspace explorer drag-drop --------------------
 
   const addWorkspaceFiles = useCallback(
     async (files: FileTreeItem[]): Promise<void> => {
-      if (!tabId) return;
+      const tid = tabIdRef.current;
+      if (!tid) return;
       setError(null);
 
-      const tab = tabMapRef.current.get(tabId);
+      const tab = tabMapRef.current.get(tid);
       if (!tab) return;
 
       const currentCount = tab.attachments.length;
@@ -326,33 +341,35 @@ export function useUnifiedAttachments(
             isLoading: false,
           };
 
-          updateAttachments(tabId, (prev) => [...prev, attachment]);
+          updateAttachments(tid, (prev) => [...prev, attachment]);
         }
       } finally {
         setIsProcessing(false);
       }
     },
-    [tabId, tabMapRef, updateAttachments],
+    [tabIdRef, tabMapRef, updateAttachments],
   );
 
   // ---- removeAttachment ---------------------------------------------------
 
   const removeAttachment = useCallback(
     (id: string): void => {
-      if (!tabId) return;
-      updateAttachments(tabId, (prev) => prev.filter((a) => a.id !== id));
+      const tid = tabIdRef.current;
+      if (!tid) return;
+      updateAttachments(tid, (prev) => prev.filter((a) => a.id !== id));
       setError(null);
     },
-    [tabId, updateAttachments],
+    [tabIdRef, updateAttachments],
   );
 
   // ---- clearAll -----------------------------------------------------------
 
   const clearAll = useCallback((): void => {
-    if (!tabId) return;
-    updateAttachments(tabId, () => []);
+    const tid = tabIdRef.current;
+    if (!tid) return;
+    updateAttachments(tid, () => []);
     setError(null);
-  }, [tabId, updateAttachments]);
+  }, [tabIdRef, updateAttachments]);
 
   // ---- Computed values ----------------------------------------------------
 

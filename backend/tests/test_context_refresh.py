@@ -44,7 +44,7 @@ def _create_context_dir(tmp_path: Path) -> Path:
     return ctx
 
 
-def _make_loader(context_dir: Path, budget: int = 25_000) -> ContextDirectoryLoader:
+def _make_loader(context_dir: Path, budget: int = 30_000) -> ContextDirectoryLoader:
     """Create a ContextDirectoryLoader without templates_dir."""
     return ContextDirectoryLoader(
         context_dir=context_dir,

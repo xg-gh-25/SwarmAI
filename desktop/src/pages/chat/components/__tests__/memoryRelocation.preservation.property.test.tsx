@@ -8,7 +8,6 @@
  *
  * Preservation A: Copy button always present on non-streaming assistant messages
  * Preservation B: No Save-to-Memory button in non-last assistant messages
- * Preservation C: ChatHeader sidebar buttons maintain correct highlight/muted state
  * Preservation D: Streaming hides action buttons
  *
  * **Validates: Requirements 3.1, 3.2, 3.5, 3.6**
@@ -18,9 +17,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import fc from 'fast-check';
 import { AssistantMessageView } from '../AssistantMessageView';
-import { ChatHeader } from '../ChatHeader';
 import { ToastProvider } from '../../../../contexts/ToastContext';
-import { RIGHT_SIDEBAR_IDS, type RightSidebarId } from '../../constants';
 import type { Message } from '../../../../types';
 
 // ============== Mocks ==============
@@ -54,48 +51,11 @@ function makeAssistantMessage(text = 'Hello from the assistant'): Message {
   };
 }
 
-/** Create default ChatHeader props for a given activeSidebar. */
-const createHeaderProps = (activeSidebar: RightSidebarId) => ({
-  openTabs: [],
-  activeTabId: null,
-  onTabSelect: vi.fn(),
-  onTabClose: vi.fn(),
-  onNewSession: vi.fn(),
-  activeSidebar,
-  onOpenSidebar: vi.fn(),
-});
-
-/** Sidebar button config for label lookups. */
-const SIDEBAR_BUTTON_CONFIG: Record<RightSidebarId, { label: string }> = {
-  todoRadar: { label: 'ToDo Radar' },
-  chatHistory: { label: 'Chat History' },
-  fileBrowser: { label: 'File Browser' },
-};
-
-/** Check if a button has highlighted styling. */
-function isButtonHighlighted(button: HTMLElement): boolean {
-  const cls = button.className;
-  return cls.includes('text-primary') && cls.includes('bg-primary/10');
-}
-
-/** Check if a button has muted styling. */
-function isButtonMuted(button: HTMLElement): boolean {
-  const cls = button.className;
-  return cls.includes('text-[var(--color-text-muted)]');
-}
-
 // ============== Arbitraries ==============
 
 /** Arbitrary for non-empty assistant message text. */
 const messageTextArb = fc.string({ minLength: 1, maxLength: 200 })
   .filter((s) => s.trim().length > 0);
-
-/** Arbitrary for sidebar IDs. */
-const sidebarIdArb = fc.constantFrom<RightSidebarId>(
-  'todoRadar',
-  'chatHistory',
-  'fileBrowser',
-);
 
 // ============== Preservation Tests ==============
 
@@ -154,39 +114,6 @@ describe('Preservation Property Tests — Memory Save Button Relocation', () => 
         // No Save-to-Memory button should exist
         const saveBtn = screen.queryByTitle('Save to Memory');
         expect(saveBtn).toBeNull();
-
-        unmount();
-      }),
-      { numRuns: 50 },
-    );
-  });
-
-  /**
-   * Preservation C: ChatHeader sidebar buttons maintain correct highlight/muted state
-   *
-   * For any activeSidebar value from RIGHT_SIDEBAR_IDS, the corresponding
-   * button should be highlighted and others muted. Reuses the pattern from
-   * existing ChatHeader.property.test.tsx.
-   *
-   * **Validates: Requirements 3.6**
-   */
-  it('Preservation C: ChatHeader sidebar buttons highlight/muted state is correct', () => {
-    fc.assert(
-      fc.property(sidebarIdArb, (activeSidebar) => {
-        const props = createHeaderProps(activeSidebar);
-        const { unmount } = render(<ChatHeader {...props} />);
-
-        for (const id of RIGHT_SIDEBAR_IDS) {
-          const label = SIDEBAR_BUTTON_CONFIG[id].label;
-          const button = screen.getByLabelText(label);
-
-          const shouldBeHighlighted = id === activeSidebar;
-          expect(isButtonHighlighted(button)).toBe(shouldBeHighlighted);
-
-          if (!shouldBeHighlighted) {
-            expect(isButtonMuted(button)).toBe(true);
-          }
-        }
 
         unmount();
       }),
