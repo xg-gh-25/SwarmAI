@@ -98,9 +98,6 @@ wait_for_permission_decision = _pm.wait_for_permission_decision
 clear_session_approvals = _pm.clear_session_approvals
 _hash_command = _pm.hash_command
 
-# CmdPermissionManager — filesystem-backed, shared across all sessions.
-from .cmd_permission_manager import CmdPermissionManager
-
 # CredentialValidator — pre-flight STS check for Bedrock credentials.
 from .credential_validator import CredentialValidator
 
@@ -116,10 +113,7 @@ from .content_accumulator import ContentBlockAccumulator  # noqa: F401 — used 
 
 # Security hooks extracted to security_hooks.py — used internally by hook_builder
 from .security_hooks import (
-    DANGEROUS_PATTERNS,
-    check_dangerous_command,
     pre_tool_logger,
-    create_human_approval_hook,
     create_file_access_permission_handler,
     create_skill_access_checker,
 )
@@ -401,7 +395,6 @@ class AgentManager:
     def __init__(
         self,
         config_manager: AppConfigManager | None = None,
-        cmd_permission_manager: CmdPermissionManager | None = None,
         credential_validator: CredentialValidator | None = None,
     ):
         # NOTE: self._clients was removed — _active_sessions is the single
@@ -417,7 +410,6 @@ class AgentManager:
         self._session_locks: dict[str, asyncio.Lock] = {}
         # Injected components (set at startup via main.py)
         self._config: AppConfigManager | None = config_manager
-        self._cmd_pm: CmdPermissionManager | None = cmd_permission_manager
         self._credential_validator: CredentialValidator | None = credential_validator
         # Session lifecycle hook manager (set at startup via set_hook_manager)
         self._hook_manager = None  # type: SessionLifecycleHookManager | None
@@ -430,7 +422,6 @@ class AgentManager:
     def configure(
         self,
         config_manager: AppConfigManager,
-        cmd_permission_manager: CmdPermissionManager,
         credential_validator: CredentialValidator,
     ) -> None:
         """Wire injected components after construction.
@@ -442,7 +433,6 @@ class AgentManager:
         import).
         """
         self._config = config_manager
-        self._cmd_pm = cmd_permission_manager
         self._credential_validator = credential_validator
 
     def set_hook_manager(self, hook_manager) -> None:
@@ -732,7 +722,7 @@ class AgentManager:
         return await _build_hooks_fn(
             agent_config, enable_skills, enable_mcp,
             resume_session_id, session_context,
-            _pm, self._cmd_pm,
+            _pm,
         )
 
 
@@ -3074,15 +3064,9 @@ class AgentManager:
         # Format decision as a user message
         if decision == "approve":
             decision_message = f"User APPROVED the command. Please proceed with executing: {command}"
-            # Store approval in CmdPermissionManager (shared, persistent, filesystem-backed)
-            # Falls back to legacy per-session PermissionManager if CmdPermissionManager
-            # rejects the pattern as overly broad.
-            try:
-                self._cmd_pm.approve(command)
-                logger.info(f"Command approved via CmdPermissionManager: {command[:50]}...")
-            except ValueError as exc:
-                logger.warning(f"CmdPermissionManager rejected pattern: {exc}, falling back to per-session approval")
-                _pm.approve_command(perm_session_id, command)
+            # Store approval in per-session PermissionManager (in-memory only)
+            _pm.approve_command(perm_session_id, command)
+            logger.info(f"Command approved for session {perm_session_id}: {command[:50]}...")
         else:
             reason = feedback if feedback else "User denied the command"
             decision_message = f"User DENIED the command '{command}'. Reason: {reason}. Please acknowledge this and continue without executing that command."

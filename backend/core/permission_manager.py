@@ -10,11 +10,10 @@ State managed:
     - _permission_results: request ID → decision string ("approve" or "deny")
     - _session_queues: session ID → per-session asyncio.Queue for permission requests
 
-Per-session queue design (replaces the previous global queue):
+Per-session queue design:
     Each active session gets its own ``asyncio.Queue`` via ``get_session_queue()``.
     The security hook writes directly to the session's queue using the SDK session ID.
-    This eliminates the cross-session busy-loop that occurred when multiple sessions
-    competed for a single shared queue, re-enqueuing non-matching requests.
+    Each session's queue is isolated, preventing cross-session contention.
 """
 
 import asyncio
@@ -170,19 +169,6 @@ class PermissionManager:
             session_id,
         )
 
-    # Backward compatibility — deprecated, prefer get_session_queue()
-    def get_permission_queue(self) -> asyncio.Queue[dict[str, Any]]:
-        """Return a legacy global queue (DEPRECATED).
-
-        .. deprecated::
-            Use ``get_session_queue(session_id)`` instead for proper
-            per-session isolation.  This method creates a throwaway queue
-            so legacy callers don't crash, but new code should never use it.
-        """
-        logger.warning(
-            "get_permission_queue() is deprecated — use get_session_queue(session_id)"
-        )
-        return asyncio.Queue()
 
 
 # Module-level singleton

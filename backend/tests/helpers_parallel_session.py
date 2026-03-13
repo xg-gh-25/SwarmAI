@@ -47,7 +47,6 @@ def build_mock_agent_manager() -> AgentManager:
     mock_config.get = MagicMock(return_value=False)
     return AgentManager(
         config_manager=mock_config,
-        cmd_permission_manager=MagicMock(),
         credential_validator=MagicMock(),
     )
 
