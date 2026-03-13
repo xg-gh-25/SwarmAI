@@ -38,8 +38,12 @@ export interface AssistantMessageViewProps {
   message: Message;
   /** Callback when the user answers an ask_user_question block */
   onAnswerQuestion?: (toolUseId: string, answers: Record<string, string>) => void;
+  /** Callback when the user approves/denies a permission request */
+  onPermissionDecision?: (requestId: string, decision: 'approve' | 'deny') => void;
   /** The tool_use ID currently awaiting a user answer */
   pendingToolUseId?: string;
+  /** The request ID of the currently pending permission */
+  pendingPermissionRequestId?: string;
   /** Whether the assistant message is still streaming */
   isStreaming?: boolean;
   /** The current session ID for the save API call */
@@ -62,7 +66,9 @@ const MEMORY_ICON_MAP: Record<MemorySaveStatus, string> = {
 export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
   message,
   onAnswerQuestion,
+  onPermissionDecision,
   pendingToolUseId,
+  pendingPermissionRequestId,
   isStreaming,
   sessionId,
   isLastAssistant,
@@ -176,7 +182,9 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
         resultMap={resultMap}
         allBlocks={message.content}
         onAnswerQuestion={onAnswerQuestion}
+        onPermissionDecision={onPermissionDecision}
         pendingToolUseId={pendingToolUseId}
+        pendingPermissionRequestId={pendingPermissionRequestId}
         isStreaming={isStreaming}
         lastPendingToolUseId={lastPendingToolUseId}
       />

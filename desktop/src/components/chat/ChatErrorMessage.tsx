@@ -1,21 +1,20 @@
 /**
  * Structured chat error message component.
  *
- * Renders SSE error events in the chat area with a red accent left border,
- * visually distinct from normal assistant messages. Displays error code,
- * message, detail, and an optional `suggestedAction` as a highlighted
- * element. Supports error-code-specific behaviors:
+ * Renders SSE error events in the chat area with a visually distinct
+ * background and red accent left border, clearly separated from normal
+ * assistant messages. Displays error code, message, detail, and an
+ * optional `suggestedAction` as a highlighted tip.
  *
- * - `AGENT_TIMEOUT`        — "Retry" button re-sends last user message
- * - `SDK_SUBPROCESS_TIMEOUT` — "Retry" button re-sends last user message
- * - `RATE_LIMIT_EXCEEDED`  — countdown timer, auto-re-enables on expiry
- * - `SERVICE_UNAVAILABLE`  — triggers immediate health check
+ * Error-code-specific behaviors:
+ * - `AGENT_TIMEOUT`         — informational (user can send a message to resume)
+ * - `SDK_SUBPROCESS_TIMEOUT` — informational (user can send a message to resume)
+ * - `RATE_LIMIT_EXCEEDED`   — countdown timer, auto-re-enables on expiry
+ * - `SERVICE_UNAVAILABLE`   — triggers immediate health check
  *
  * Key exports:
- * - `ChatErrorMessage`     — React component
- * - `ChatErrorMessageProps` — prop interface
- *
- * Validates: Requirements 9.1, 9.2, 9.3, 9.4, 9.5
+ * - `ChatErrorMessage`      — React component
+ * - `ChatErrorMessageProps`  — prop interface
  */
 
 import { useEffect, useState } from 'react';
@@ -29,13 +28,12 @@ export interface ChatErrorMessageProps {
     suggestedAction?: string;
     retryAfter?: number;
   };
-  onRetry?: () => void;
 }
 
-export function ChatErrorMessage({ error, onRetry }: ChatErrorMessageProps) {
+export function ChatErrorMessage({ error }: ChatErrorMessageProps) {
   const { triggerHealthCheck } = useHealth();
 
-  // Task 13.2: SERVICE_UNAVAILABLE triggers immediate health check
+  // SERVICE_UNAVAILABLE triggers immediate health check
   useEffect(() => {
     if (error.code === 'SERVICE_UNAVAILABLE') {
       triggerHealthCheck();
@@ -44,7 +42,7 @@ export function ChatErrorMessage({ error, onRetry }: ChatErrorMessageProps) {
 
   return (
     <div
-      className="border-l-4 border-red-500 bg-red-500/10 rounded-r-lg p-4 my-2"
+      className="border-l-4 border-red-500 bg-red-950/40 rounded-r-lg p-4 my-2"
       role="alert"
     >
       {/* Error header */}
@@ -82,20 +80,9 @@ export function ChatErrorMessage({ error, onRetry }: ChatErrorMessageProps) {
 
       {/* Suggested action */}
       {error.suggestedAction && (
-        <div className="bg-yellow-500/10 border border-yellow-500/30 rounded px-3 py-2 text-yellow-200 text-sm mb-2">
+        <div className="bg-yellow-500/10 border border-yellow-500/30 rounded px-3 py-2 text-yellow-200 text-sm">
           💡 {error.suggestedAction}
         </div>
-      )}
-
-      {/* Task 13.2: Error-code-specific behaviors */}
-      {(error.code === 'AGENT_TIMEOUT' || error.code === 'SDK_SUBPROCESS_TIMEOUT') && onRetry && (
-        <button
-          onClick={onRetry}
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-primary hover:bg-primary-hover text-white text-sm rounded-lg transition-colors mt-1"
-        >
-          <span className="material-symbols-outlined text-sm">refresh</span>
-          Retry
-        </button>
       )}
 
       {error.code === 'RATE_LIMIT_EXCEEDED' && error.retryAfter && (
@@ -133,14 +120,14 @@ function RateLimitCountdownInline({ retryAfterSec }: { retryAfterSec: number }) 
 
   if (remaining <= 0) {
     return (
-      <p className="text-green-400 text-sm mt-1">
+      <p className="text-green-400 text-sm mt-2">
         ✓ Rate limit expired — you may resume.
       </p>
     );
   }
 
   return (
-    <p className="text-yellow-400 text-sm mt-1">
+    <p className="text-yellow-400 text-sm mt-2">
       ⏳ Rate limited — resuming in {remaining}s
     </p>
   );

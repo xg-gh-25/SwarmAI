@@ -259,3 +259,51 @@ Adapt your style based on the active channel. In group channels, MEMORY.md is NO
 - Offer interactive suggestions and next steps
 
 If the channel is unknown, default to Web behavior.
+
+## Post-Task Code Quality & Security Scans
+
+After completing any code modification task, scan modified files before moving on. **Skip entirely** if the only changes are documentation (*.md, docs/), config files, or context files (.context/).
+
+### Code Quality Scan
+
+Scan all modified source files for issues by severity:
+
+| Severity | Action | Categories |
+|----------|--------|------------|
+| 🔴 High | **Auto-fix** | Dead code, duplicate logic, missing error handling, type safety violations, memory leaks, SOLID violations |
+| 🟡 Medium | **Auto-fix** | Magic numbers, complex conditionals (>3 branches), unclear naming, tight coupling, inefficient algorithms, missing abstractions |
+| 🟢 Low | **Note only** | Minor readability, formatting, optional comments |
+
+**Process:** List findings briefly → fix 🔴 and 🟡 in-place → note what was fixed. Maintain existing functionality — refactors only, not feature changes. If nothing found, one line and move on.
+
+### Security Scan
+
+Scan all modified source files for security issues:
+
+| Severity | Action | What to Look For |
+|----------|--------|-----------------|
+| 🔴 Critical | **Auto-fix** | Hardcoded API keys/tokens/credentials, private keys, encryption keys, exposed passwords/secrets, DB connection strings with credentials |
+| 🟡 Warning | **Note only** | Hardcoded internal URLs, insecure defaults, missing input validation, overly permissive file permissions |
+| 🟢 Info | **Note only** | IP addresses in code, verbose error messages leaking internals |
+
+**Process:** Replace 🔴 Critical with env vars, config refs, or placeholders. **Never commit hardcoded secrets** — this is a blocking rule.
+
+## Environment & Platform Rules
+
+_These apply to the Tauri desktop app and its sidecar processes._
+
+1. **macOS GUI PATH isolation**: Apps launched from Finder/Dock do NOT inherit `.zshrc` PATH. The sidecar sees only `/usr/bin:/bin:/usr/sbin:/sbin`. Solution: spawn a login shell (`zsh -lic 'echo $PATH'`) to discover the real PATH. Use marker strings to avoid motd/banner contamination.
+
+2. **PyInstaller sys.executable trap**: In bundled Python, `sys.executable` points to the bundled binary (e.g. `python-backend`), NOT a Python interpreter. `subprocess.run([sys.executable, script.py])` will fail. Use direct function import (preferred) or `get_python_executable()` from `utils/bundle_paths.py`.
+
+3. **MCP full PATH chain**: AIM-installed MCP servers use wrapper scripts (`~/.aim/mcp-servers/`) that call `aim mcp start-server`. Both the wrapper script AND the `aim` CLI must be on PATH. Missing either = silent MCP connection failure. Verify both exist before declaring MCP "configured."
+
+4. **Sandbox write paths for skills**: Skills that generate output files (wireframes, prototypes, reports) need write access. If the sandbox blocks writes to Knowledge/ or other workspace paths, the fix is in `_build_sandbox_config` — add `sandbox_additional_write_paths` to config, not ad-hoc sandbox overrides.
+
+## UX Development Rules
+
+1. **Mockup before code**: For UI redesigns or new UX features (SwarmRadar, sidebar, new modals), create a wireframe or HTML mockup first. Don't jump to React code until the user approves the visual direction.
+
+2. **Graceful file handling**: Binary and unsupported files must never show blank screens. Open with system app (PDF, docx, xlsx, pptx). Show friendly "unsupported format" message for unknown types. Markdown preview ↔ edit toggle must preserve content state.
+
+3. **Error UX hierarchy**: Elapsed timer > toast notification > modal dialog. Prefer the lightest-weight indicator. Remove redundant notifications (e.g., don't show both a toast AND a timer for the same operation).
