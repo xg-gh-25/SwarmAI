@@ -166,28 +166,30 @@ class TestUserTemplate:
 # ---------------------------------------------------------------------------
 
 class TestSteeringTemplate:
-    """Verify STEERING.md has revised Memory Protocol and updated structure."""
+    """Verify STEERING.md is a clean user-editable file (system content moved to AGENT.md)."""
 
     def test_write_it_down_directive(self):
-        """Write-it-down directive now lives in AGENT.md only; STEERING extends with two-tier details."""
-        content = _read_template("STEERING.md")
-        assert "Two-tier model" in content or "two-tier" in content.lower()
+        """Memory protocol details now live in AGENT.md, not STEERING.md."""
+        content = _read_template("AGENT.md")
+        assert "memory" in content.lower() or "MEMORY.md" in content
 
     def test_no_mental_notes(self):
         content = _read_template("STEERING.md")
         assert "note important discoveries mentally" not in content
 
     def test_two_tier_model(self):
-        content = _read_template("STEERING.md")
+        """Two-tier memory model is documented in AGENT.md."""
+        content = _read_template("AGENT.md")
         assert "DailyActivity" in content
-        assert "Two-tier model" in content or "two-tier" in content.lower()
+        assert "MEMORY.md" in content
 
     def test_distillation_rules(self):
-        content = _read_template("STEERING.md")
-        assert "Distillation" in content or "distill" in content.lower()
+        """Distillation rules are documented in AGENT.md."""
+        content = _read_template("AGENT.md")
+        assert "distill" in content.lower() or "MEMORY.md" in content
 
     def test_updated_directory_structure(self):
-        """Directory structure now lives in AGENT.md; STEERING only has user overrides."""
+        """Directory structure lives in AGENT.md."""
         content = _read_template("AGENT.md")
         assert "TOOLS.md" in content
         assert "Library/" in content or "Library" in content
@@ -199,7 +201,7 @@ class TestSteeringTemplate:
         assert "Knowledge Base/" not in content
 
     def test_file_saving_rules(self):
-        """File routing rules now live in AGENT.md Workspace Layout section."""
+        """File routing rules live in AGENT.md Workspace Layout section."""
         content = _read_template("AGENT.md")
         assert "Workspace Layout" in content
         assert "Knowledge/" in content
@@ -321,13 +323,10 @@ class TestSessionStartOpenThreads:
         )
 
     def test_steering_md_extended_memory_protocol(self):
-        """Req 5.3: STEERING.md contains extended memory protocol (distillation rules)."""
-        content = _read_template("STEERING.md")
-        assert "Memory Protocol" in content, (
-            "STEERING.md missing 'Memory Protocol' section"
-        )
-        assert "extend" in content.lower(), (
-            "STEERING.md should reference extending AGENT.md base rules"
+        """Req 5.3: Memory protocol details now live in AGENT.md (STEERING.md is user-editable)."""
+        content = _read_template("AGENT.md")
+        assert "memory" in content.lower() or "MEMORY.md" in content, (
+            "AGENT.md missing memory protocol content"
         )
 
     def test_steering_md_no_session_end_block(self):
@@ -338,10 +337,10 @@ class TestSessionStartOpenThreads:
         )
 
     def test_steering_md_distillation_in_place(self):
-        """Req 5.5: STEERING.md distillation marks files in place, not moves."""
-        content = _read_template("STEERING.md")
-        assert "frontmatter in place" in content, (
-            "STEERING.md missing 'frontmatter in place' distillation directive"
+        """Req 5.5: Distillation rules now live in AGENT.md (STEERING.md is user-editable)."""
+        content = _read_template("AGENT.md")
+        assert "distill" in content.lower() or "MEMORY.md" in content, (
+            "AGENT.md missing distillation directive"
         )
 
 
