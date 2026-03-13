@@ -1,19 +1,21 @@
-"""In-memory cached application configuration backed by ~/.swarm-ai/config.json.
+"""In-memory cached application configuration backed by SwarmWS/config.json.
 
 Single source of truth for non-secret application settings (Bedrock toggle,
 AWS region, model selection, available models, model mapping, base URL,
-experimental betas flag).
+experimental betas flag, sandbox settings).
 
 Key design decisions:
 
-- **Single source of truth**: ``config.json`` is the ONLY place config lives.
-  No DB storage, no env var defaults, no migration from other sources.
+- **Single source of truth**: ``SwarmWS/config.json`` is the ONLY place config
+  lives.  No DB storage, no env var defaults, no migration from other sources.
 - **Zero IO on reads**: The config file is loaded into an in-memory dict at
   startup.  All ``get()`` calls return from the cache.
 - **Secret filtering on writes**: ``update()`` strips AWS credentials, API keys,
   and bearer tokens before persisting to disk.
 - **Graceful fallback**: If the config file is missing, empty, or contains
   invalid JSON, the manager falls back to ``DEFAULT_CONFIG``.
+- **Legacy migration**: On first load, if the new path doesn't exist but the
+  legacy ``~/.swarm-ai/config.json`` does, the file is moved automatically.
 - **File permissions**: The config file is created with ``0o600`` (owner
   read/write only) for privacy.
 
@@ -96,12 +98,13 @@ DEFAULT_CONFIG: dict[str, Any] = {
 
 
 class AppConfigManager:
-    """In-memory cached config backed by ``~/.swarm-ai/config.json``.
+    """In-memory cached config backed by ``SwarmWS/config.json``.
 
     **Single source of truth** — config.json is the ONLY place settings
     live.  No DB storage, no env var defaults, no migration from other
     sources.  If the file doesn't exist, it's created from
-    ``DEFAULT_CONFIG``.
+    ``DEFAULT_CONFIG``.  Legacy ``~/.swarm-ai/config.json`` is migrated
+    automatically on first load.
 
     Typical lifecycle::
 
@@ -112,7 +115,7 @@ class AppConfigManager:
     """
 
     def __init__(self, config_path: Path | None = None) -> None:
-        self._config_path: Path = config_path or (get_app_data_dir() / "config.json")
+        self._config_path: Path = config_path or (get_app_data_dir() / "SwarmWS" / "config.json")
         self._cache: dict[str, Any] | None = None
 
     # -- public API --------------------------------------------------------
@@ -120,13 +123,26 @@ class AppConfigManager:
     def load(self) -> dict[str, Any]:
         """Load config from file into the in-memory cache.
 
-        Called once at startup.  If the file is missing, empty, or contains
-        invalid JSON the cache is populated with ``DEFAULT_CONFIG`` and
-        written to disk.
+        Called once at startup.  Migrates from the legacy location
+        (``~/.swarm-ai/config.json``) if the new path doesn't exist yet.
+        If the file is missing, empty, or contains invalid JSON the cache
+        is populated with ``DEFAULT_CONFIG`` and written to disk.
 
         Returns:
             The loaded (or default) configuration dict.
         """
+        # One-time migration: move legacy ~/.swarm-ai/config.json → SwarmWS/config.json
+        if not self._config_path.exists():
+            legacy = get_app_data_dir() / "config.json"
+            if legacy.is_file() and not legacy.is_symlink():
+                try:
+                    self._config_path.parent.mkdir(parents=True, exist_ok=True)
+                    import shutil
+                    shutil.move(str(legacy), str(self._config_path))
+                    logger.info("Migrated config.json from %s → %s", legacy, self._config_path)
+                except OSError as exc:
+                    logger.warning("Failed to migrate legacy config.json: %s", exc)
+
         try:
             raw = self._config_path.read_text(encoding="utf-8").strip()
             if not raw:

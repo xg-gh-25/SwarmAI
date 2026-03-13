@@ -398,20 +398,8 @@ class InitializationManager:
         except Exception as e:
             logger.error("Context refresh failed during refresh (non-fatal): %s", e)
 
-        # Step 4: Symlink config.json into SwarmWS root for explorer visibility
-        # Placed at SwarmWS/config.json (same level as .context/ and .claude/)
-        try:
-            from config import get_app_data_dir
-            config_source = get_app_data_dir() / "config.json"
-            ws_link = Path(workspace_path) / "config.json"
-            if config_source.is_file():
-                # Remove stale symlink or file, then create fresh symlink
-                if ws_link.is_symlink() or ws_link.exists():
-                    ws_link.unlink()
-                ws_link.symlink_to(config_source)
-                logger.debug("Symlinked config.json into SwarmWS root")
-        except Exception as e:
-            logger.warning("Failed to symlink config.json into SwarmWS (non-fatal): %s", e)
+        # Step 4 (removed): config.json symlink no longer needed — config.json
+        # now lives directly in SwarmWS/ via AppConfigManager.
 
         # Step 5: Check CLI tool availability (non-fatal, report-only)
         # Actual installation is deferred to user consent or explicit request.
