@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import clsx from 'clsx';
 import Modal from '../common/Modal';
 import SkillsTab from '../workspace-settings/SkillsTab';
-import McpsTab from '../workspace-settings/McpsTab';
+import MCPSettingsPanel from '../workspace-settings/MCPSettingsPanel';
 import KnowledgebasesTab from '../workspace-settings/KnowledgebasesTab';
 
 type SettingsTab = 'skills' | 'mcps' | 'knowledgebases';
@@ -57,7 +57,7 @@ export default function WorkspaceSettingsModal({
       {/* Tab Content */}
       <div className="min-h-[300px]">
         {activeTab === 'skills' && <SkillsTab workspaceId={workspaceId} />}
-        {activeTab === 'mcps' && <McpsTab workspaceId={workspaceId} />}
+        {activeTab === 'mcps' && <MCPSettingsPanel />}
         {activeTab === 'knowledgebases' && <KnowledgebasesTab workspaceId={workspaceId} />}
       </div>
     </Modal>

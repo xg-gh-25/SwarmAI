@@ -12,10 +12,10 @@ from .skill import (
     SkillGenerateWithAgentRequest,
 )
 from .mcp import (
-    MCPConfig,
-    MCPCreateRequest,
-    MCPUpdateRequest,
-    MCPResponse,
+    CatalogUpdateRequest,
+    DevCreateRequest,
+    DevUpdateRequest,
+    ConfigEntryResponse,
 )
 from .message import (
     ChatRequest,
@@ -86,10 +86,10 @@ __all__ = [
     "SkillUpdateRequest",
     "SkillResponse",
     "SkillGenerateWithAgentRequest",
-    "MCPConfig",
-    "MCPCreateRequest",
-    "MCPUpdateRequest",
-    "MCPResponse",
+    "CatalogUpdateRequest",
+    "DevCreateRequest",
+    "DevUpdateRequest",
+    "ConfigEntryResponse",
     "ChatRequest",
     "TextContent",
     "ToolUseContent",

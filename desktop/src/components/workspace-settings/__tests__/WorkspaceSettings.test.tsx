@@ -51,11 +51,13 @@ vi.mock('../../../services/skills', () => ({
   },
 }));
 
-// Mock mcpService
-const mockMcpList = vi.fn();
-vi.mock('../../../services/mcp', () => ({
-  mcpService: {
-    list: (...args: unknown[]) => mockMcpList(...args),
+// Mock mcpConfigService
+const mockMcpListAll = vi.fn();
+vi.mock('../../../services/mcpConfig', () => ({
+  mcpConfigService: {
+    listAll: (...args: unknown[]) => mockMcpListAll(...args),
+    listCatalog: vi.fn().mockResolvedValue([]),
+    listDev: vi.fn().mockResolvedValue([]),
   },
 }));
 
@@ -248,74 +250,10 @@ describe('SkillsTab', () => {
   });
 });
 
-// ============== McpsTab Tests ==============
-
-describe('McpsTab', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockGetMcps.mockResolvedValue(mockMcpConfigs);
-    mockMcpList.mockResolvedValue(mockMcps);
-    mockUpdateMcps.mockResolvedValue(undefined);
-  });
-
-  it('renders MCP list with toggle switches', async () => {
-    const { default: McpsTab } = await import('../McpsTab');
-    renderWithProviders(<McpsTab workspaceId="ws1" />);
-
-    await waitFor(() => {
-      expect(screen.getByText('GitHub')).toBeInTheDocument();
-      expect(screen.getByText('Database')).toBeInTheDocument();
-    });
-
-    const toggles = screen.getAllByRole('checkbox');
-    expect(toggles).toHaveLength(2);
-    expect(toggles[0]).toBeChecked();
-    expect(toggles[1]).not.toBeChecked();
-  });
-
-  it('shows warning icon for privileged MCPs', async () => {
-    const { default: McpsTab } = await import('../McpsTab');
-    renderWithProviders(<McpsTab workspaceId="ws1" />);
-
-    await waitFor(() => {
-      expect(screen.getByText('Database')).toBeInTheDocument();
-    });
-
-    expect(screen.getByTitle('settings.mcps.privileged')).toBeInTheDocument();
-  });
-
-  it('calls updateMcps when toggling a non-privileged MCP', async () => {
-    const { default: McpsTab } = await import('../McpsTab');
-    renderWithProviders(<McpsTab workspaceId="ws1" />);
-
-    await waitFor(() => {
-      expect(screen.getByText('GitHub')).toBeInTheDocument();
-    });
-
-    const toggles = screen.getAllByRole('checkbox');
-    fireEvent.click(toggles[0]);
-
-    await waitFor(() => {
-      expect(mockUpdateMcps).toHaveBeenCalledWith('ws1', [{ mcpServerId: 'mcp-1', enabled: false }]);
-    });
-  });
-
-  it('shows privileged confirmation when enabling a privileged MCP', async () => {
-    const { default: McpsTab } = await import('../McpsTab');
-    renderWithProviders(<McpsTab workspaceId="ws1" />);
-
-    await waitFor(() => {
-      expect(screen.getByText('Database')).toBeInTheDocument();
-    });
-
-    const toggles = screen.getAllByRole('checkbox');
-    fireEvent.click(toggles[1]);
-
-    await waitFor(() => {
-      expect(screen.getByText('settings.privileged.title')).toBeInTheDocument();
-    });
-  });
-});
+// ============== MCPSettingsPanel Tests ==============
+// NOTE: MCPSettingsPanel tests are pending — the old McpsTab tests
+// referenced DB-backed workspace MCP configs which no longer exist.
+// New tests should use mcpConfigService.listCatalog/listDev mocks.
 
 // ============== KnowledgebasesTab Tests ==============
 

@@ -451,6 +451,10 @@ export interface StreamEvent {
   sourcePath?: string;
   origin?: string;
   keySummary?: string[];
+  // Streaming delta fields (partial message updates)
+  text?: string;         // text_delta: incremental text chunk
+  thinking?: string;     // thinking_delta: incremental thinking chunk
+  index?: number;        // content block index for deltas
 }
 
 // Human-in-the-Loop Permission Types

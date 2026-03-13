@@ -61,15 +61,26 @@ _WRITE_TOOL_NAMES = {"Write", "Edit"}
 class StructuredSummary:
     """Output of the summarization pipeline.
 
+    Designed around three questions:
+    1. **What did we accomplish?** (deliverables — outcomes, not activities)
+    2. **Where are the outputs?** (key_outputs — file paths, recipients)
+    3. **What did we learn?** (lessons — highlights, lowlights, insights)
+
+    Plus COE signaling for complex debugging sessions, and continuation
+    context for the next session.
+
     Core fields (always populated by rule-based extraction):
     - topics, decisions, files_modified, open_questions
 
     Enriched fields (populated by LLM when session is substantial):
-    - actions_taken: what the agent actually did (not just files)
-    - reasoning: why key decisions were made
+    - deliverables: concrete outcomes (not "what happened" but "what was delivered")
+    - key_outputs: file paths + what they contain, or "sent to <person>"
+    - lessons: insights, highlights, lowlights — things worth remembering
     - rejected_approaches: what was proposed and turned down, with reason
     - continue_from: specific next step for the next session
     - validation_status: what was tested vs untested
+    - coe_signal: "" | "candidate" | "resolution" — for COE detection
+    - coe_topic: the problem being investigated (for cross-session clustering)
     """
 
     topics: list[str] = field(default_factory=list)
@@ -77,11 +88,18 @@ class StructuredSummary:
     files_modified: list[str] = field(default_factory=list)
     open_questions: list[str] = field(default_factory=list)
     # Enriched fields (LLM-powered, empty for short/rule-based sessions)
-    actions_taken: list[str] = field(default_factory=list)
-    reasoning: list[str] = field(default_factory=list)
+    deliverables: list[str] = field(default_factory=list)
+    key_outputs: list[str] = field(default_factory=list)
+    lessons: list[str] = field(default_factory=list)
     rejected_approaches: list[str] = field(default_factory=list)
     continue_from: str = ""
     validation_status: str = ""
+    # COE signal fields (LLM-detected)
+    coe_signal: str = ""      # "" | "candidate" | "resolution"
+    coe_topic: str = ""       # Problem topic for cross-session clustering
+    # Legacy fields (kept for backward compat, will be empty for new sessions)
+    actions_taken: list[str] = field(default_factory=list)
+    reasoning: list[str] = field(default_factory=list)
     session_title: str = ""
     timestamp: str = ""  # HH:MM format
 
@@ -89,8 +107,9 @@ class StructuredSummary:
         """Total word count across all text fields."""
         text = " ".join(
             self.topics + self.decisions + self.files_modified
-            + self.open_questions + self.actions_taken
-            + self.reasoning + self.rejected_approaches
+            + self.open_questions + self.deliverables + self.key_outputs
+            + self.lessons + self.rejected_approaches
+            + self.actions_taken + self.reasoning  # legacy
         )
         if self.continue_from:
             text += " " + self.continue_from
@@ -100,8 +119,9 @@ class StructuredSummary:
 
 
 _ENRICHMENT_PROMPT = """\
-You are summarizing a chat session for a DailyActivity log. The log helps \
-the next agent session pick up where this one left off.
+You are extracting a high-signal activity summary from a chat session. \
+This is NOT a transcript — it's a decision log for future reference. \
+Focus on outcomes, outputs, and lessons — skip routine activities.
 
 ## Conversation:
 {conversation}
@@ -112,16 +132,28 @@ the next agent session pick up where this one left off.
 - Files modified: {files}
 
 ## Your task:
-Enrich the summary with context that rule-based extraction misses. \
-Be concise — each entry max 120 chars. Only include sections with real content.
+Answer three questions about this session. Be concise — max 120 chars per entry. \
+Only include sections with real content. Empty arrays for sections with nothing notable.
+
+1. **What was delivered?** (deliverables — concrete outcomes, not "what happened")
+2. **Where are the outputs?** (key_outputs — "file: path → description" or "sent X to person")
+3. **What did we learn?** (lessons — insights, highlights, mistakes, things worth remembering)
+
+Also assess:
+- Was this a debugging/investigation session? If yes, set coe_signal.
+- coe_signal: "" if routine, "candidate" if investigating a bug/issue, "resolution" if root cause was found and fixed
+- coe_topic: the problem being investigated (e.g., "streaming not working", "context files silently dropped")
 
 ## Output (valid JSON only, no markdown fences):
 {{
-  "actions_taken": ["what the agent did beyond file edits — e.g. diagnosed X, proposed Y, ran tests"],
-  "reasoning": ["why key decisions were made — e.g. chose X over Y because Z"],
-  "rejected_approaches": ["what was proposed and turned down — e.g. user rejected X because Y"],
+  "deliverables": ["Built X feature", "Fixed Y bug — root cause was Z", "Diagnosed P issue"],
+  "key_outputs": ["code: agent_manager.py → StreamEvent handling", "sent: summary email to person@email"],
+  "lessons": ["SDK has include_partial_messages flag (default False)", "Never trust char-count estimation for tokens"],
+  "rejected_approaches": ["Tried X but rejected because Y"],
   "continue_from": "specific next step for the next session (one sentence)",
-  "validation_status": "what was tested vs untested (one sentence)"
+  "validation_status": "what was tested vs untested (one sentence)",
+  "coe_signal": "",
+  "coe_topic": ""
 }}"""
 
 # Max chars of conversation to send to LLM for enrichment
@@ -479,16 +511,22 @@ class SummarizationPipeline:
         return title.rstrip(".")
 
     def _enforce_word_limit(self, summary: StructuredSummary) -> StructuredSummary:
-        """Trim fields to stay within MAX_WORDS_PER_ENTRY."""
+        """Trim fields to stay within MAX_WORDS_PER_ENTRY.
+
+        Trims from lowest-value lists first: topics (raw user messages),
+        then open_questions, then other fields. Preserves deliverables,
+        lessons, and key_outputs as long as possible.
+        """
         while summary.word_count() > self.MAX_WORDS_PER_ENTRY:
-            # Trim from longest list first (include enriched fields)
+            # Trim from longest list first, lowest-value lists preferred
             lists = [
                 ("topics", summary.topics),
-                ("decisions", summary.decisions),
                 ("open_questions", summary.open_questions),
-                ("actions_taken", summary.actions_taken),
-                ("reasoning", summary.reasoning),
                 ("rejected_approaches", summary.rejected_approaches),
+                ("decisions", summary.decisions),
+                ("key_outputs", summary.key_outputs),
+                ("deliverables", summary.deliverables),
+                ("lessons", summary.lessons),
             ]
             longest = max(lists, key=lambda x: len(x[1]))
             if longest[1]:
@@ -526,11 +564,14 @@ class SummarizationPipeline:
             return summary
 
         # Merge enriched fields into summary
-        summary.actions_taken = enriched.get("actions_taken", [])
-        summary.reasoning = enriched.get("reasoning", [])
+        summary.deliverables = enriched.get("deliverables", [])
+        summary.key_outputs = enriched.get("key_outputs", [])
+        summary.lessons = enriched.get("lessons", [])
         summary.rejected_approaches = enriched.get("rejected_approaches", [])
         summary.continue_from = enriched.get("continue_from", "")
         summary.validation_status = enriched.get("validation_status", "")
+        summary.coe_signal = enriched.get("coe_signal", "")
+        summary.coe_topic = enriched.get("coe_topic", "")
 
         return summary
 
@@ -684,15 +725,21 @@ class SummarizationPipeline:
             return {}
 
         result: dict[str, Any] = {}
-        for key in ("actions_taken", "reasoning", "rejected_approaches"):
+        for key in ("deliverables", "key_outputs", "lessons",
+                     "rejected_approaches",
+                     "actions_taken", "reasoning"):  # legacy
             entries = data.get(key, [])
             if isinstance(entries, list):
                 result[key] = [e for e in entries if isinstance(e, str) and e.strip()]
             else:
                 result[key] = []
 
-        for key in ("continue_from", "validation_status"):
+        for key in ("continue_from", "validation_status", "coe_signal", "coe_topic"):
             val = data.get(key, "")
             result[key] = val if isinstance(val, str) else ""
+
+        # Validate coe_signal
+        if result.get("coe_signal") not in ("", "candidate", "resolution"):
+            result["coe_signal"] = ""
 
         return result
