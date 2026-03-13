@@ -119,7 +119,6 @@ from .security_hooks import (
     DANGEROUS_PATTERNS,
     check_dangerous_command,
     pre_tool_logger,
-    dangerous_command_blocker,
     create_human_approval_hook,
     create_file_access_permission_handler,
     create_skill_access_checker,
@@ -891,39 +890,17 @@ class AgentManager:
                 HookMatcher(hooks=[pre_tool_logger])
             ]
 
-        if agent_config.get("enable_safety_checks", True):
-            if "PreToolUse" not in hooks:
-                hooks["PreToolUse"] = []
-            hooks["PreToolUse"].append(
-                HookMatcher(matcher="Bash", hooks=[dangerous_command_blocker])
-            )
-
-        # Add human approval hook for dangerous commands
-        # Use resume_session_id for resumed sessions, or agent_id for new sessions
-        # The session_key is used for tracking approved commands - must match what's
-        # stored in the permission_request and used in continue_with_cmd_permission
+        # Human approval hook for dangerous commands (~13 patterns).
+        # This is the ONLY permission gate — all other commands run freely
+        # (permission_mode="bypassPermissions").  Dangerous commands get an
+        # inline approval prompt in the chat stream (not a modal popup).
+        # Always enabled regardless of sandbox — sandbox constrains filesystem
+        # access but the user still wants to see and approve destructive commands.
+        # The old dangerous_command_blocker (silent auto-deny) is removed —
+        # we always ask the user instead of silently blocking.
         agent_id = agent_config.get("id", 'default')
         session_key = resume_session_id or agent_id or "unknown"
-
-        # Enable human approval hook if configured.
-        # When sandbox is enabled, the SDK sandbox already constrains Bash at
-        # the OS level (filesystem/network restrictions).  The human approval
-        # prompt is redundant friction — skip it for efficiency.  The
-        # dangerous_command_blocker (instant auto-deny, zero UX cost) still
-        # fires as a last-resort safety net.
-        # On platforms without sandbox (Windows) or when sandbox is explicitly
-        # disabled, human approval remains the primary safety layer.
-        sandbox_enabled = agent_config.get(
-            "sandbox_enabled", settings.sandbox_enabled_default
-        )
-        if sandbox_enabled and platform.system() != "Windows":
-            enable_human_approval = False
-            logger.info(
-                "Sandbox enabled — skipping human approval hook "
-                "(sandbox is the safety layer)"
-            )
-        else:
-            enable_human_approval = agent_config.get("enable_human_approval", True)
+        enable_human_approval = agent_config.get("enable_human_approval", True)
         if enable_human_approval:
             if "PreToolUse" not in hooks:
                 hooks["PreToolUse"] = []
@@ -3593,12 +3570,10 @@ class AgentManager:
     async def interrupt_session(self, session_id: str) -> dict:
         """Interrupt a running session.
 
-        Looks up the client from ``_active_sessions`` (persistent between
-        turns) rather than ``_clients`` (transient, only exists during
-        active streaming and is popped in the finally block of
-        ``_run_query_on_client``).  Falls back to ``_clients`` for
-        backward compatibility with sessions that haven't been stored
-        in ``_active_sessions`` yet (e.g. mid-init).
+        Looks up the client from ``_active_sessions`` which is the single
+        source of truth for client tracking.  For resumed sessions, the
+        client is registered at creation time (early registration) so it's
+        available during streaming.
 
         Args:
             session_id: The session ID to interrupt
