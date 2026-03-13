@@ -208,7 +208,7 @@ class SeedDatabaseGenerator:
         """Insert app_settings with initialization_complete=true.
         
         Only id, initialization_complete, created_at, updated_at are stored.
-        All other config moved to ~/.swarm-ai/config.json (AppConfigManager).
+        All other config moved to SwarmWS/config.json (AppConfigManager).
         Credentials delegated to AWS credential chain.
         """
         settings = {

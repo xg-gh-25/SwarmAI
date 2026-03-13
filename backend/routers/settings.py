@@ -1,7 +1,7 @@
 """Settings API endpoints backed by file-based AppConfigManager.
 
 This module was refactored from a DB-backed settings store to use
-``AppConfigManager`` (``~/.swarm-ai/config.json``) for all non-secret
+``AppConfigManager`` (``SwarmWS/config.json``) for all non-secret
 application configuration.  Credential fields have been removed from
 request/response models — AWS credentials are resolved via the standard
 AWS credential chain.

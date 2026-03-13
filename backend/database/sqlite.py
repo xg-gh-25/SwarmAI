@@ -1185,7 +1185,7 @@ class SQLiteDatabase(BaseDatabase):
     );
 
     -- App settings table (single row for app-wide settings)
-    -- Non-credential config moved to ~/.swarm-ai/config.json (AppConfigManager)
+    -- Non-credential config moved to SwarmWS/config.json (AppConfigManager)
     -- Credentials delegated to AWS credential chain (never stored in DB)
     CREATE TABLE IF NOT EXISTS app_settings (
         id TEXT PRIMARY KEY DEFAULT 'default',

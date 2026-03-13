@@ -36,7 +36,7 @@ def _isolated_config(tmp_path):
 
     This fixture MUST run before the ``client`` fixture so that the
     settings router reads from the isolated config, not the real
-    ``~/.swarm-ai/config.json``.
+    ``SwarmWS/config.json``.
     """
     cfg_path = tmp_path / "config.json"
     mgr = AppConfigManager(config_path=cfg_path)
