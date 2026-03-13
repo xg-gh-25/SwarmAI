@@ -85,86 +85,90 @@ def _format_session_entry(summary: StructuredSummary, context: HookContext) -> s
     """Format a StructuredSummary into a markdown session entry.
 
     Header format: ``## Session — HH:MM | session_id[:8] | Title``
-    This groups by time + session ID + title for traceability.
 
-    Core sections (always present): What Happened, Key Decisions,
-    Files Modified, Open Questions.
+    The format is designed around three questions:
+    1. What was delivered? (deliverables)
+    2. Where are the outputs? (key outputs)
+    3. What did we learn? (lessons)
 
-    Enriched sections (only when LLM enrichment produced content):
-    Actions Taken, Reasoning, Rejected Approaches, Continue From,
-    Validation Status.  Empty enriched sections are omitted entirely.
+    Plus COE signal, decisions, and continuation context.
+    Routine/low-signal sections are omitted entirely when empty.
     """
     lines: list[str] = []
     short_id = context.session_id[:8] if context.session_id else "unknown"
     title = summary.session_title or context.session_title or "Untitled"
     ts = summary.timestamp or datetime.now().strftime("%H:%M")
-    lines.append(f"## Session — {ts} | {short_id} | {title}")
+
+    # COE badge in header when applicable
+    coe_badge = ""
+    if summary.coe_signal == "resolution":
+        coe_badge = " 🔴 COE-RESOLUTION"
+    elif summary.coe_signal == "candidate":
+        coe_badge = " 🟡 COE-CANDIDATE"
+
+    lines.append(f"## {ts} | {short_id} | {title}{coe_badge}")
     lines.append("")
 
-    lines.append("### What Happened")
-    if summary.topics:
-        for t in summary.topics:
+    # --- Deliverables (what was accomplished — the headline) ---
+    if summary.deliverables:
+        lines.append("**Delivered:**")
+        for d in summary.deliverables:
+            lines.append(f"- {d}")
+        lines.append("")
+    elif summary.topics:
+        # Fallback: use topics if no LLM enrichment
+        lines.append("**What happened:**")
+        for t in summary.topics[:5]:
             lines.append(f"- {t}")
-    else:
-        lines.append("(none)")
-    lines.append("")
+        lines.append("")
 
-    lines.append("### Key Decisions")
+    # --- Key Outputs (where things went) ---
+    if summary.key_outputs:
+        lines.append("**Outputs:**")
+        for o in summary.key_outputs:
+            lines.append(f"- {o}")
+        lines.append("")
+    elif summary.files_modified:
+        # Fallback: show files modified
+        lines.append("**Files:** " + ", ".join(
+            f"`{f.split('/')[-1]}`" for f in summary.files_modified[:8]
+        ))
+        lines.append("")
+
+    # --- Decisions (only when substantive) ---
     if summary.decisions:
+        lines.append("**Decisions:**")
         for d in summary.decisions:
             lines.append(f"- {d}")
-    else:
-        lines.append("(none)")
-    lines.append("")
-
-    # --- Enriched sections (omit if empty) ---
-
-    if summary.actions_taken:
-        lines.append("### Actions Taken")
-        for a in summary.actions_taken:
-            lines.append(f"- {a}")
         lines.append("")
 
-    if summary.reasoning:
-        lines.append("### Reasoning")
-        for r in summary.reasoning:
-            lines.append(f"- {r}")
+    # --- Lessons (the highest-value content) ---
+    if summary.lessons:
+        lines.append("**Lessons:**")
+        for l in summary.lessons:
+            lines.append(f"- {l}")
         lines.append("")
 
+    # --- Rejected approaches (what NOT to do) ---
     if summary.rejected_approaches:
-        lines.append("### Rejected Approaches")
+        lines.append("**Rejected:**")
         for r in summary.rejected_approaches:
             lines.append(f"- {r}")
         lines.append("")
 
-    # --- Core sections (always present) ---
-
-    lines.append("### Files Modified")
-    if summary.files_modified:
-        for f in summary.files_modified:
-            lines.append(f"- {f}")
-    else:
-        lines.append("(none)")
-    lines.append("")
-
-    lines.append("### Open Questions")
-    if summary.open_questions:
-        for q in summary.open_questions:
-            lines.append(f"- {q}")
-    else:
-        lines.append("(none)")
-    lines.append("")
-
-    # --- Enriched tail sections (omit if empty) ---
-
-    if summary.validation_status:
-        lines.append("### Validation Status")
-        lines.append(summary.validation_status)
+    # --- COE context (when investigating a problem) ---
+    if summary.coe_signal and summary.coe_topic:
+        lines.append(f"**COE:** `{summary.coe_signal}` — {summary.coe_topic}")
         lines.append("")
 
+    # --- Continuation context ---
+    tail_parts: list[str] = []
+    if summary.validation_status:
+        tail_parts.append(f"**Validation:** {summary.validation_status}")
     if summary.continue_from:
-        lines.append("### Continue From")
-        lines.append(summary.continue_from)
+        tail_parts.append(f"**Next:** {summary.continue_from}")
+    if tail_parts:
+        lines.extend(tail_parts)
         lines.append("")
 
     return "\n".join(lines)
@@ -184,12 +188,16 @@ def _atomic_read_modify_write(file_path: Path, summary: StructuredSummary, conte
             if not content.strip():
                 # New file — create with frontmatter
                 today = date.today().isoformat()
-                fm = {"date": today, "sessions_count": 1, "distilled": False}
+                fm: dict[str, Any] = {"date": today, "sessions_count": 1, "distilled": False}
+                if summary.coe_signal:
+                    fm["has_coe"] = True
                 new_content = write_frontmatter(fm, _format_session_entry(summary, context))
             else:
                 # Existing file — parse, increment, append
                 fm, body = parse_frontmatter(content)
                 fm["sessions_count"] = fm.get("sessions_count", 0) + 1
+                if summary.coe_signal:
+                    fm["has_coe"] = True
                 new_body = body.rstrip("\n") + "\n\n" + _format_session_entry(summary, context)
                 new_content = write_frontmatter(fm, new_body)
 

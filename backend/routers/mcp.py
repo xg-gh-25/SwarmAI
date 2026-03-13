@@ -1,19 +1,41 @@
-"""MCP Server CRUD API endpoints."""
+"""MCP file-based configuration validation endpoints.
+
+Replaces the DB-backed CRUD router with thin file-based endpoints.
+All mutations go through server-side validation before writing to
+``.claude/mcps/mcp-catalog.json`` or ``.claude/mcps/mcp-dev.json``.
+
+Endpoints:
+- ``GET  /mcp``                — Merged view from both layers
+- ``GET  /mcp/catalog``        — Raw catalog layer entries
+- ``PATCH /mcp/catalog/{id}``  — Toggle enabled / update env
+- ``GET  /mcp/dev``            — Raw dev layer entries
+- ``POST /mcp/dev``            — Create dev entry
+- ``PUT  /mcp/dev/{id}``       — Update dev entry
+- ``DELETE /mcp/dev/{id}``     — Delete non-plugin dev entry
+"""
+
 import json
 import logging
-import sys
-from datetime import datetime
+import os
 from pathlib import Path
 
 from fastapi import APIRouter
-from pydantic import BaseModel
 
-from schemas.mcp import MCPCreateRequest, MCPUpdateRequest, MCPResponse
-from config import get_app_data_dir
-from database import db
-from core.exceptions import (
-    MCPServerNotFoundException,
-    ValidationException,
+from core.mcp_config_loader import (
+    get_mcp_file_paths,
+    read_layer,
+    merge_layers,
+)
+from core.exceptions import ValidationException
+from schemas.mcp import (
+    CatalogUpdateRequest,
+    DevCreateRequest,
+    DevUpdateRequest,
+    ConfigEntryResponse,
+)
+from utils.mcp_validation import (
+    validate_env_no_system_db,
+    validate_config_entry,
 )
 
 logger = logging.getLogger(__name__)
@@ -21,295 +43,232 @@ router = APIRouter()
 
 
 # ---------------------------------------------------------------------------
-# Protected-path guard — prevent MCP env vars from targeting system DB
+# Helpers
 # ---------------------------------------------------------------------------
 
-def _validate_env_no_system_db(env: dict[str, str]) -> None:
-    """Reject env vars whose values resolve to SwarmAI's internal database.
+def _get_workspace_path() -> Path:
+    """Resolve the SwarmWS workspace path."""
+    from config import get_app_data_dir
+    return get_app_data_dir() / "SwarmWS"
 
-    Checks every value that looks like a filesystem path (contains ``/``
-    or ``\\``).  Resolves via ``Path.expanduser().resolve()`` and blocks:
 
-    1. Exact match to ``~/.swarm-ai/data.db`` (or WAL/SHM companions).
-    2. Any ``.db`` file anywhere inside ``~/.swarm-ai/``.
+def _atomic_write_json(path: Path, data: list[dict]) -> None:
+    """Write JSON list to file using atomic tmp+replace pattern."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    try:
+        tmp.write_text(
+            json.dumps(data, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        os.replace(str(tmp), str(path))
+    except OSError:
+        if tmp.exists():
+            tmp.unlink(missing_ok=True)
+        raise
 
-    This prevents users from accidentally pointing the SQLite MCP (or any
-    future MCP) at the live system database, which would cause write-lock
-    contention and allow unrestricted SQL (including DROP TABLE).
-    """
-    if not env:
-        return
 
-    app_dir = get_app_data_dir().resolve()
-    protected_files = {
-        (app_dir / "data.db"),
-        (app_dir / "data.db-wal"),
-        (app_dir / "data.db-shm"),
+def _entry_to_response(entry: dict, layer: str) -> dict:
+    """Convert a raw Config_Entry dict to ConfigEntryResponse fields."""
+    return {
+        "id": entry.get("id", ""),
+        "name": entry.get("name", ""),
+        "description": entry.get("description"),
+        "connection_type": entry.get("connection_type", "stdio"),
+        "config": entry.get("config", {}),
+        "enabled": entry.get("enabled", layer == "dev"),
+        "rejected_tools": entry.get("rejected_tools"),
+        "category": entry.get("category"),
+        "source": entry.get("source"),
+        "plugin_id": entry.get("plugin_id"),
+        "layer": layer,
+        "required_env": entry.get("required_env"),
+        "optional_env": entry.get("optional_env"),
+        "presets": entry.get("presets"),
     }
 
-    for key, value in env.items():
-        # Skip values that don't look like paths
-        if "/" not in value and "\\" not in value:
-            continue
-        try:
-            resolved = Path(value).expanduser().resolve()
-        except (OSError, ValueError):
-            continue
-
-        # Block exact match to system DB files
-        if resolved in protected_files:
-            raise ValidationException(
-                message="Protected path",
-                detail=(
-                    f"'{key}' points to SwarmAI's system database. "
-                    f"Use a separate database file instead."
-                ),
-                fields=[{
-                    "field": f"env.{key}",
-                    "error": "Cannot target SwarmAI system database",
-                }],
-            )
-
-        # Block any .db inside ~/.swarm-ai/
-        if resolved.suffix == ".db":
-            try:
-                is_inside = resolved.is_relative_to(app_dir)
-            except (ValueError, TypeError):
-                is_inside = False
-            if is_inside:
-                raise ValidationException(
-                    message="Protected path",
-                    detail=(
-                        f"'{key}' points to a database inside SwarmAI's data "
-                        f"directory ({app_dir}). Use a path outside this directory."
-                    ),
-                    fields=[{
-                        "field": f"env.{key}",
-                        "error": "Cannot use databases inside SwarmAI data directory",
-                    }],
-                )
-
 
 # ---------------------------------------------------------------------------
-# Optional MCP catalog (loaded once from bundled resource)
+# GET endpoints
 # ---------------------------------------------------------------------------
 
-def _load_optional_catalog() -> list[dict]:
-    """Load the optional-mcp-servers.json catalog from resources."""
-    if getattr(sys, "frozen", False):
-        base = Path(sys._MEIPASS)
-        catalog_path = base / "optional-mcp-servers.json"
-    else:
-        # Dev mode: backend/ is sibling of desktop/
-        catalog_path = (
-            Path(__file__).resolve().parent.parent.parent
-            / "desktop" / "resources" / "optional-mcp-servers.json"
-        )
-    if not catalog_path.exists():
-        logger.debug("Optional MCP catalog not found at %s", catalog_path)
-        return []
-    try:
-        with open(catalog_path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception as exc:
-        logger.warning("Failed to load optional MCP catalog: %s", exc)
-        return []
+@router.get("")
+async def list_merged_mcps() -> list[ConfigEntryResponse]:
+    """Return all entries from both layers, merged (dev overrides catalog)."""
+    ws = _get_workspace_path()
+    cat_path, dev_path = get_mcp_file_paths(ws)
+    cat = read_layer(cat_path, default_enabled=False)
+    dev = read_layer(dev_path, default_enabled=True)
+    merged = merge_layers(cat, dev)
+
+    # Tag each entry with its layer for the response
+    dev_ids = {e.get("id") for e in dev}
+    result = []
+    for entry in merged:
+        eid = entry.get("id")
+        layer = "dev" if eid in dev_ids else "catalog"
+        result.append(_entry_to_response(entry, layer))
+    return result
 
 
 @router.get("/catalog")
-async def list_optional_mcp_catalog():
-    """Return the catalog of optional MCP servers users can enable.
-
-    Each entry includes required_env, optional_env, presets, and
-    setup hints so the frontend can render a guided setup flow.
-    Entries already registered in the DB are annotated with
-    ``installed: true``.
-    """
-    catalog = _load_optional_catalog()
-    installed_ids = {s["id"] for s in await db.mcp_servers.list()}
-    for entry in catalog:
-        entry["installed"] = entry["id"] in installed_ids
-    return catalog
+async def list_catalog() -> list[ConfigEntryResponse]:
+    """Return raw catalog layer entries."""
+    ws = _get_workspace_path()
+    cat_path, _ = get_mcp_file_paths(ws)
+    entries = read_layer(cat_path, default_enabled=False)
+    return [_entry_to_response(e, "catalog") for e in entries]
 
 
-class MCPInstallRequest(BaseModel):
-    """Request to install an optional MCP from the catalog."""
-    catalog_id: str
-    env: dict[str, str] = {}
+@router.get("/dev")
+async def list_dev() -> list[ConfigEntryResponse]:
+    """Return raw dev layer entries."""
+    ws = _get_workspace_path()
+    _, dev_path = get_mcp_file_paths(ws)
+    entries = read_layer(dev_path, default_enabled=True)
+    return [_entry_to_response(e, "dev") for e in entries]
 
 
-@router.post("/catalog/install", response_model=MCPResponse, status_code=201)
-async def install_optional_mcp(request: MCPInstallRequest):
-    """Install an optional MCP server from the catalog.
+# ---------------------------------------------------------------------------
+# PATCH catalog
+# ---------------------------------------------------------------------------
 
-    Looks up the catalog entry by ``catalog_id``, merges user-provided
-    ``env`` vars into the config, and registers it in the database.
-    """
-    catalog = _load_optional_catalog()
-    entry = next((e for e in catalog if e["id"] == request.catalog_id), None)
-    if not entry:
+@router.patch("/catalog/{entry_id}")
+async def update_catalog_entry(
+    entry_id: str, update: CatalogUpdateRequest,
+) -> ConfigEntryResponse:
+    """Update enabled/env on a catalog entry."""
+    ws = _get_workspace_path()
+    cat_path, _ = get_mcp_file_paths(ws)
+    entries = read_layer(cat_path, default_enabled=False)
+
+    target = None
+    for entry in entries:
+        if entry.get("id") == entry_id:
+            target = entry
+            break
+
+    if target is None:
         raise ValidationException(
-            message="Unknown catalog entry",
-            detail=f"No optional MCP with id '{request.catalog_id}' in catalog",
-            fields=[{"field": "catalog_id", "error": "Not found in catalog"}],
+            message="Not found",
+            detail=f"Catalog entry '{entry_id}' not found",
+            fields=[{"field": "entry_id", "error": "Not found in catalog"}],
         )
 
-    # Check not already installed
-    existing = await db.mcp_servers.get(entry["id"])
-    if existing:
+    if update.enabled is not None:
+        target["enabled"] = update.enabled
+
+    if update.env is not None:
+        validate_env_no_system_db(update.env)
+        if "config" not in target or not isinstance(target.get("config"), dict):
+            target["config"] = {}
+        target["config"]["env"] = update.env
+
+    _atomic_write_json(cat_path, entries)
+    return ConfigEntryResponse(**_entry_to_response(target, "catalog"))
+
+
+# ---------------------------------------------------------------------------
+# Dev CRUD
+# ---------------------------------------------------------------------------
+
+@router.post("/dev", status_code=201)
+async def create_dev_entry(request: DevCreateRequest) -> ConfigEntryResponse:
+    """Create a new dev entry."""
+    ws = _get_workspace_path()
+    _, dev_path = get_mcp_file_paths(ws)
+
+    entry = request.model_dump()
+    entry["source"] = "user"
+
+    errors = validate_config_entry(entry)
+    if errors:
         raise ValidationException(
-            message="Already installed",
-            detail=f"MCP server '{entry['name']}' is already installed",
-            fields=[{"field": "catalog_id", "error": "Already installed"}],
+            message="Invalid MCP entry",
+            detail="; ".join(errors),
+            fields=[{"field": "config", "error": e} for e in errors],
         )
 
-    # Validate env vars don't target system DB
-    _validate_env_no_system_db(request.env)
+    entries = read_layer(dev_path, default_enabled=True)
 
-    # Build config with env vars
-    config = dict(entry.get("config", {}))
-    if request.env:
-        config["env"] = request.env
-
-    now = datetime.now().isoformat()
-    server_data = {
-        "id": entry["id"],
-        "name": entry["name"],
-        "description": entry.get("description", ""),
-        "connection_type": entry.get("connection_type", "stdio"),
-        "config": config,
-        "source_type": "marketplace",
-        "is_system": False,
-        "is_active": True,
-        "created_at": now,
-        "updated_at": now,
-    }
-    server = await db.mcp_servers.put(server_data)
-    logger.info("Installed optional MCP: %s", entry["name"])
-    return server
-
-
-@router.get("", response_model=list[MCPResponse])
-async def list_mcp_servers():
-    """List all MCP servers."""
-    return await db.mcp_servers.list()
-
-
-@router.get("/{mcp_id}", response_model=MCPResponse)
-async def get_mcp_server(mcp_id: str):
-    """Get a specific MCP server by ID."""
-    server = await db.mcp_servers.get(mcp_id)
-    if not server:
-        raise MCPServerNotFoundException(
-            detail=f"MCP server with ID '{mcp_id}' does not exist",
-            suggested_action="Please check the MCP server ID and try again"
-        )
-    return server
-
-
-@router.post("", response_model=MCPResponse, status_code=201)
-async def create_mcp_server(request: MCPCreateRequest):
-    """Create a new MCP server configuration."""
-    # Validate env vars don't target system DB
-    if request.config.get("env"):
-        _validate_env_no_system_db(request.config["env"])
-
-    # Validate config based on connection type
-    if request.connection_type == "stdio":
-        if not request.config.get("command"):
-            raise ValidationException(
-                message="Invalid MCP server configuration",
-                detail="stdio connection type requires 'command' in config",
-                fields=[{"field": "config.command", "error": "This field is required for stdio connection"}]
-            )
-    elif request.connection_type in ("sse", "http"):
-        if not request.config.get("url"):
-            raise ValidationException(
-                message="Invalid MCP server configuration",
-                detail=f"{request.connection_type} connection type requires 'url' in config",
-                fields=[{"field": "config.url", "error": f"This field is required for {request.connection_type} connection"}]
-            )
-
-    # Generate endpoint based on connection type
-    endpoint = ""
-    if request.connection_type == "stdio":
-        command = request.config.get("command", "")
-        args = request.config.get("args", [])
-        endpoint = f"{command} {' '.join(args)}"
-    else:
-        url = request.config.get("url", "")
-        endpoint = url.replace("http://", "").replace("https://", "")
-
-    server_data = {
-        "name": request.name,
-        "description": request.description,
-        "connection_type": request.connection_type,
-        "config": request.config,
-        "allowed_tools": request.allowed_tools,
-        "rejected_tools": request.rejected_tools,
-        "endpoint": endpoint,
-        "version": "v1.0.0",
-        "is_active": True,
-    }
-    server = await db.mcp_servers.put(server_data)
-    return server
-
-
-@router.put("/{mcp_id}", response_model=MCPResponse)
-async def update_mcp_server(mcp_id: str, request: MCPUpdateRequest):
-    """Update an existing MCP server configuration."""
-    existing = await db.mcp_servers.get(mcp_id)
-    if not existing:
-        raise MCPServerNotFoundException(
-            detail=f"MCP server with ID '{mcp_id}' does not exist",
-            suggested_action="Please check the MCP server ID and try again"
+    # Check for duplicate id
+    if any(e.get("id") == entry["id"] for e in entries):
+        raise ValidationException(
+            message="Duplicate ID",
+            detail=f"Dev entry with id '{entry['id']}' already exists",
+            fields=[{"field": "id", "error": "Already exists"}],
         )
 
-    updates = request.model_dump(exclude_unset=True)
-
-    # Validate env vars don't target system DB
-    if "config" in updates and updates["config"].get("env"):
-        _validate_env_no_system_db(updates["config"]["env"])
-
-    # Validate config if being updated
-    if "config" in updates:
-        connection_type = updates.get("connection_type") or existing.get("connection_type")
-        if connection_type == "stdio":
-            if "command" in updates["config"] and not updates["config"]["command"]:
-                raise ValidationException(
-                    message="Invalid MCP server configuration",
-                    detail="stdio connection type requires 'command' in config",
-                    fields=[{"field": "config.command", "error": "This field cannot be empty for stdio connection"}]
-                )
-        elif connection_type in ("sse", "http"):
-            if "url" in updates["config"] and not updates["config"]["url"]:
-                raise ValidationException(
-                    message="Invalid MCP server configuration",
-                    detail=f"{connection_type} connection type requires 'url' in config",
-                    fields=[{"field": "config.url", "error": f"This field cannot be empty for {connection_type} connection"}]
-                )
-
-    # Update endpoint if config changed
-    if "config" in updates:
-        connection_type = updates.get("connection_type") or existing.get("connection_type")
-        if connection_type == "stdio":
-            command = updates["config"].get("command", "")
-            args = updates["config"].get("args", [])
-            updates["endpoint"] = f"{command} {' '.join(args)}"
-        else:
-            url = updates["config"].get("url", "")
-            updates["endpoint"] = url.replace("http://", "").replace("https://", "")
-
-    server = await db.mcp_servers.update(mcp_id, updates)
-    return server
+    entries.append(entry)
+    _atomic_write_json(dev_path, entries)
+    return ConfigEntryResponse(**_entry_to_response(entry, "dev"))
 
 
-@router.delete("/{mcp_id}", status_code=204)
-async def delete_mcp_server(mcp_id: str):
-    """Delete an MCP server configuration."""
-    deleted = await db.mcp_servers.delete(mcp_id)
-    if not deleted:
-        raise MCPServerNotFoundException(
-            detail=f"MCP server with ID '{mcp_id}' does not exist",
-            suggested_action="Please check the MCP server ID and try again"
+@router.put("/dev/{entry_id}")
+async def update_dev_entry(
+    entry_id: str, update: DevUpdateRequest,
+) -> ConfigEntryResponse:
+    """Update an existing dev entry."""
+    ws = _get_workspace_path()
+    _, dev_path = get_mcp_file_paths(ws)
+    entries = read_layer(dev_path, default_enabled=True)
+
+    target = None
+    for entry in entries:
+        if entry.get("id") == entry_id:
+            target = entry
+            break
+
+    if target is None:
+        raise ValidationException(
+            message="Not found",
+            detail=f"Dev entry '{entry_id}' not found",
+            fields=[{"field": "entry_id", "error": "Not found"}],
         )
+
+    # Apply partial updates
+    updates = update.model_dump(exclude_unset=True)
+    for key, value in updates.items():
+        target[key] = value
+
+    errors = validate_config_entry(target)
+    if errors:
+        raise ValidationException(
+            message="Invalid MCP entry",
+            detail="; ".join(errors),
+            fields=[{"field": "config", "error": e} for e in errors],
+        )
+
+    _atomic_write_json(dev_path, entries)
+    return ConfigEntryResponse(**_entry_to_response(target, "dev"))
+
+
+@router.delete("/dev/{entry_id}", status_code=204)
+async def delete_dev_entry(entry_id: str):
+    """Delete a dev entry (non-plugin only)."""
+    ws = _get_workspace_path()
+    _, dev_path = get_mcp_file_paths(ws)
+    entries = read_layer(dev_path, default_enabled=True)
+
+    target = None
+    for entry in entries:
+        if entry.get("id") == entry_id:
+            target = entry
+            break
+
+    if target is None:
+        raise ValidationException(
+            message="Not found",
+            detail=f"Dev entry '{entry_id}' not found",
+            fields=[{"field": "entry_id", "error": "Not found"}],
+        )
+
+    if target.get("source") == "plugin":
+        raise ValidationException(
+            message="Cannot delete plugin MCP",
+            detail="Cannot delete plugin-installed MCP. Uninstall the plugin instead.",
+            fields=[{"field": "source", "error": "Plugin entries cannot be deleted directly"}],
+        )
+
+    entries.remove(target)
+    _atomic_write_json(dev_path, entries)

@@ -134,15 +134,22 @@ class DistillationTriggerHook:
     def _distill_files(self, files: list[Path], ws_path: Path) -> int:
         """Extract entries from DailyActivity files and write to MEMORY.md.
 
+        Extracts three categories:
+        - Decisions → MEMORY.md "Key Decisions"
+        - Lessons → MEMORY.md "Lessons Learned"
+        - COE signals → MEMORY.md "COE Registry" (cross-session problem tracking)
+
         Returns the number of files successfully distilled.
         """
         memory_path = ws_path / ".context" / "MEMORY.md"
 
         distilled_count = 0
+        coe_entries: list[tuple[str, str, str]] = []  # (date, signal, topic)
+
         for da_file in files:
             try:
                 content = da_file.read_text(encoding="utf-8")
-                _, body = parse_frontmatter(content)
+                fm, body = parse_frontmatter(content)
                 file_date = da_file.stem  # YYYY-MM-DD
 
                 # Extract decisions and lessons
@@ -164,11 +171,16 @@ class DistillationTriggerHook:
                         f"- {file_date}: {lesson}",
                     )
 
+                # Collect COE signals for cross-session clustering
+                if fm.get("has_coe"):
+                    coe_items = self._extract_coe_entries(body)
+                    for signal, topic in coe_items:
+                        coe_entries.append((file_date, signal, topic))
+
                 # Mark file as distilled
-                fm, body_text = parse_frontmatter(content)
                 fm["distilled"] = True
                 fm["distilled_date"] = date.today().isoformat()
-                new_content = write_frontmatter(fm, body_text)
+                new_content = write_frontmatter(fm, body)
                 da_file.write_text(new_content, encoding="utf-8")
 
                 distilled_count += 1
@@ -178,23 +190,36 @@ class DistillationTriggerHook:
                 logger.warning("Failed to distill %s: %s", da_file.name, exc)
                 continue
 
+        # Write COE registry entries
+        if coe_entries:
+            self._write_coe_registry(memory_path, coe_entries)
+
         return distilled_count
 
     @staticmethod
     def _extract_decisions(body: str) -> list[str]:
-        """Extract decision-worthy lines from DailyActivity body."""
+        """Extract decision-worthy lines from DailyActivity body.
+
+        Handles both old format (### Key Decisions) and new format
+        (**Decisions:**) section headers.
+        """
         decisions = []
         in_decisions_section = False
         for line in body.splitlines():
             stripped = line.strip()
-            # Track Key Decisions subsections
-            if stripped.startswith("### Key Decisions"):
+            # Track Decisions sections — both old and new format
+            if stripped.startswith("### Key Decisions") or stripped == "**Decisions:**":
                 in_decisions_section = True
                 continue
-            if stripped.startswith("### "):
+            # Exit section on next header (### or **bold:**)
+            if in_decisions_section and (
+                stripped.startswith("### ")
+                or stripped.startswith("## ")
+                or (stripped.startswith("**") and stripped.endswith(":**"))
+            ):
                 in_decisions_section = False
                 continue
-            # Lines in Key Decisions sections
+            # Lines in Decisions sections
             if in_decisions_section and stripped.startswith("- ") and stripped != "- (none)":
                 entry = stripped[2:].strip()
                 if len(entry) > 15:  # Skip trivially short entries
@@ -208,10 +233,33 @@ class DistillationTriggerHook:
 
     @staticmethod
     def _extract_lessons(body: str) -> list[str]:
-        """Extract lesson-worthy lines from DailyActivity body."""
+        """Extract lesson-worthy lines from DailyActivity body.
+
+        Two extraction modes:
+        1. Section-based: all items under **Lessons:** section (new format)
+        2. Pattern-based: any line matching lesson patterns (both formats)
+        """
         lessons = []
+        in_lessons_section = False
         for line in body.splitlines():
             stripped = line.strip()
+            # Track Lessons section (new format)
+            if stripped == "**Lessons:**":
+                in_lessons_section = True
+                continue
+            if in_lessons_section and (
+                stripped.startswith("## ")
+                or (stripped.startswith("**") and stripped.endswith(":**"))
+            ):
+                in_lessons_section = False
+                continue
+            # All items in Lessons section are lessons
+            if in_lessons_section and stripped.startswith("- "):
+                entry = stripped[2:].strip()
+                if len(entry) > 15 and entry != "(none)":
+                    lessons.append(entry[:200])
+                continue
+            # Pattern-based extraction (works on any format)
             if stripped.startswith("- ") and _LESSON_PATTERNS.search(stripped):
                 entry = stripped[2:].strip()
                 if len(entry) > 15 and entry != "(none)":
@@ -235,6 +283,66 @@ class DistillationTriggerHook:
             logger.warning("locked_write failed for section %s: exit code %s", section, e.code)
         except Exception as e:
             logger.warning("locked_write failed for section %s: %s", section, e)
+
+    @staticmethod
+    def _extract_coe_entries(body: str) -> list[tuple[str, str]]:
+        """Extract COE signal and topic from DailyActivity body.
+
+        Looks for lines like: ``**COE:** `resolution` — streaming not working``
+        Returns list of (signal, topic) tuples.
+        """
+        entries = []
+        for line in body.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("**COE:**"):
+                # Parse: **COE:** `signal` — topic
+                rest = stripped[len("**COE:**"):].strip()
+                # Extract signal from backticks
+                if "`" in rest:
+                    signal_start = rest.index("`") + 1
+                    signal_end = rest.index("`", signal_start)
+                    signal = rest[signal_start:signal_end]
+                    # Extract topic after " — " or " - "
+                    topic_part = rest[signal_end + 1:].strip()
+                    topic_part = topic_part.lstrip("—-").strip()
+                    if signal in ("candidate", "resolution") and topic_part:
+                        entries.append((signal, topic_part))
+        return entries
+
+    def _write_coe_registry(
+        self,
+        memory_path: Path,
+        entries: list[tuple[str, str, str]],
+    ) -> None:
+        """Write COE entries to MEMORY.md under '## COE Registry'.
+
+        Groups by topic. If a topic has both candidate + resolution entries,
+        marks it as resolved.
+        """
+        # Group by topic
+        by_topic: dict[str, list[tuple[str, str]]] = {}
+        for file_date, signal, topic in entries:
+            key = topic.lower().strip()
+            if key not in by_topic:
+                by_topic[key] = []
+            by_topic[key].append((file_date, signal))
+
+        for topic_key, events in by_topic.items():
+            # Use the original casing from the first entry
+            original_topic = next(
+                t for _, _, t in entries if t.lower().strip() == topic_key
+            )
+            dates = sorted(set(d for d, _ in events))
+            has_resolution = any(s == "resolution" for _, s in events)
+            status = "✅ Resolved" if has_resolution else "🔍 Investigating"
+
+            entry = (
+                f"- {dates[0]}: **{original_topic}** — {status}. "
+                f"Sessions: {', '.join(dates)}"
+            )
+            self._run_locked_write(memory_path, "COE Registry", entry)
+
+        logger.info("Wrote %d COE registry entries to MEMORY.md", len(by_topic))
 
     @staticmethod
     def _write_flag(da_dir: Path, count: int) -> None:

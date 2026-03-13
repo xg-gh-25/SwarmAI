@@ -75,7 +75,7 @@ vi.mock('../modals/SkillsModal', () => ({
     isOpen ? <div data-testid="skills-modal"><button onClick={onClose}>Close</button></div> : null,
 }));
 
-vi.mock('../modals/MCPServersModal', () => ({
+vi.mock('../modals/MCPSettingsModal', () => ({
   default: ({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) => 
     isOpen ? <div data-testid="mcp-modal"><button onClick={onClose}>Close</button></div> : null,
 }));
@@ -100,9 +100,9 @@ vi.mock('../../services/skills', () => ({
   },
 }));
 
-vi.mock('../../services/mcp', () => ({
-  mcpService: {
-    list: vi.fn().mockResolvedValue([]),
+vi.mock('../../services/mcpConfig', () => ({
+  mcpConfigService: {
+    listAll: vi.fn().mockResolvedValue([]),
   },
 }));
 

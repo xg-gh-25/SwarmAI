@@ -51,6 +51,7 @@ from claude_agent_sdk import (
     ResultMessage,
     HookMatcher,
 )
+from claude_agent_sdk.types import StreamEvent
 
 from hooks.evolution_trigger_hook import ToolFailureTracker, check_tool_result_for_failure
 
@@ -118,8 +119,8 @@ from .security_hooks import (
 )
 
 # MCP config and hook building extracted to dedicated modules
-from .mcp_config_builder import (
-    build_mcp_config as _build_mcp_config_fn,
+from .mcp_config_loader import (
+    load_mcp_config as _load_mcp_config_fn,
     inject_channel_mcp as _inject_channel_mcp_fn,
 )
 from .hook_builder import build_hooks as _build_hooks_fn
@@ -680,13 +681,19 @@ class AgentManager:
 
         return allowed_tools
 
-    async def _build_mcp_config(
+    def _build_mcp_config(
         self,
-        agent_config: dict,
+        workspace_path: str,
         enable_mcp: bool,
     ) -> tuple[dict, list[str]]:
-        """Build MCP server configuration. Delegates to mcp_config_builder."""
-        return await _build_mcp_config_fn(agent_config, enable_mcp)
+        """Build MCP server configuration from file-based layers.
+
+        Delegates to ``mcp_config_loader.load_mcp_config()`` which reads
+        ``.claude/mcps/mcp-catalog.json`` and ``.claude/mcps/mcp-dev.json``.
+        Synchronous — no DB access.
+        """
+        from pathlib import Path
+        return _load_mcp_config_fn(Path(workspace_path), enable_mcp)
 
     def _add_mcp_server_to_dict(
         self,
@@ -695,8 +702,8 @@ class AgentManager:
         disallowed_tools: list[str],
         used_names: set,
     ) -> None:
-        """Add a single MCP server entry. Delegates to mcp_config_builder."""
-        from .mcp_config_builder import add_mcp_server_to_dict
+        """Add a single MCP server entry. Delegates to mcp_config_loader."""
+        from .mcp_config_loader import add_mcp_server_to_dict
         add_mcp_server_to_dict(mcp_config, mcp_servers, disallowed_tools, used_names)
 
     def _merge_user_local_mcp_servers(
@@ -705,9 +712,8 @@ class AgentManager:
         disallowed_tools: list[str],
         used_names: set,
     ) -> None:
-        """Load user-local MCP servers. Delegates to mcp_config_builder."""
-        from .mcp_config_builder import merge_user_local_mcp_servers
-        merge_user_local_mcp_servers(mcp_servers, disallowed_tools, used_names)
+        """Load user-local MCP servers. DEPRECATED — kept for backward compat."""
+        pass
 
     async def _build_hooks(
         self,
@@ -757,7 +763,10 @@ class AgentManager:
             "autoAllowBashIfSandboxed": settings.sandbox_auto_allow_bash,
             "excludedCommands": excluded_commands,
             "allowUnsandboxedCommands": settings.sandbox_allow_unsandboxed,
-            "network": {"allowLocalBinding": True}
+            "network": {
+                "allowLocalBinding": True,
+                "allowedHosts": [h.strip() for h in settings.sandbox_allowed_hosts.split(",") if h.strip()],
+            }
         }
         logger.info(f"Sandbox enabled: {sandbox_settings}")
         return sandbox_settings
@@ -768,7 +777,7 @@ class AgentManager:
         channel_context: Optional[dict],
         working_directory: str,
     ) -> dict:
-        """Inject channel-specific MCP servers. Delegates to mcp_config_builder."""
+        """Inject channel-specific MCP servers. Delegates to mcp_config_loader."""
         return _inject_channel_mcp_fn(mcp_servers, channel_context, working_directory)
 
 
@@ -1166,16 +1175,13 @@ class AgentManager:
         # 1. Resolve allowed tools
         allowed_tools = self._resolve_allowed_tools(agent_config)
 
-        # 2. Build MCP server configuration (no workspace_id)
-        mcp_servers, mcp_disallowed_tools = await self._build_mcp_config(agent_config, enable_mcp)
-
-        # 3. Build hooks
+        # 2. Build hooks
         hooks, effective_allowed_skills, allow_all_skills = await self._build_hooks(
             agent_config, enable_skills, enable_mcp,
             resume_session_id, session_context,
         )
 
-        # 4. Resolve working directory and file access (inlined, no _resolve_workspace_mode)
+        # 3. Resolve working directory and file access (inlined, no _resolve_workspace_mode)
         working_directory = initialization_manager.get_cached_workspace_path()
         
         # setting_sources tells Claude SDK where to discover skills/config.
@@ -1200,6 +1206,9 @@ class AgentManager:
             if extra_dirs:
                 allowed_directories.extend(extra_dirs)
             file_access_handler = create_file_access_permission_handler(allowed_directories)
+
+        # 4. Build MCP server configuration (file-based, no DB)
+        mcp_servers, mcp_disallowed_tools = self._build_mcp_config(working_directory, enable_mcp)
 
         # 5. Build sandbox configuration
         sandbox_settings = self._build_sandbox_config(agent_config)
@@ -1238,6 +1247,10 @@ class AgentManager:
             can_use_tool=file_access_handler,
             max_buffer_size=max_buffer_size,
             add_dirs=None,
+            # Enable partial message streaming so the SDK yields StreamEvent
+            # objects with token-level deltas (content_block_delta, etc.)
+            # instead of buffering the entire response into one AssistantMessage.
+            include_partial_messages=True,
         )
 
     async def _save_message(
@@ -2267,6 +2280,55 @@ class AgentManager:
                 if item["source"] == "sdk":
                     message = item["message"]
                     message_count += 1
+
+                    # --- StreamEvent: partial message deltas (token streaming) ---
+                    # When include_partial_messages=True, the SDK yields StreamEvent
+                    # objects with raw Anthropic API streaming events (content_block_delta,
+                    # content_block_start, content_block_stop, etc.).  These are
+                    # lightweight and should be forwarded to the frontend immediately
+                    # for real-time text rendering — NOT accumulated into the DB.
+                    # The full AssistantMessage is still yielded at the end for DB persistence.
+                    if isinstance(message, StreamEvent):
+                        _got_first_real_message = True
+                        event_data = message.event
+                        event_type = event_data.get("type", "")
+
+                        if event_type == "content_block_delta":
+                            delta = event_data.get("delta", {})
+                            if delta.get("type") == "text_delta" and delta.get("text"):
+                                yield {
+                                    "type": "text_delta",
+                                    "text": delta["text"],
+                                    "index": event_data.get("index", 0),
+                                }
+                            elif delta.get("type") == "thinking_delta" and delta.get("thinking"):
+                                yield {
+                                    "type": "thinking_delta",
+                                    "thinking": delta["thinking"],
+                                    "index": event_data.get("index", 0),
+                                }
+                        elif event_type == "content_block_start":
+                            block = event_data.get("content_block", {})
+                            block_type = block.get("type", "")
+                            if block_type == "thinking":
+                                yield {
+                                    "type": "thinking_start",
+                                    "index": event_data.get("index", 0),
+                                }
+                            elif block_type == "text":
+                                yield {
+                                    "type": "text_start",
+                                    "index": event_data.get("index", 0),
+                                }
+                        elif event_type == "content_block_stop":
+                            yield {
+                                "type": "content_block_stop",
+                                "index": event_data.get("index", 0),
+                            }
+                        # All other stream events (message_start, message_delta, etc.)
+                        # are silently consumed — they don't carry renderable content.
+                        continue
+
                     logger.info(f"Received message {message_count}: {type(message).__name__}")
 
                     # --- SDK message dispatch ---

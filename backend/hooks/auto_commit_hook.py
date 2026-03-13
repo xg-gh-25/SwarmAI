@@ -32,6 +32,7 @@ COMMIT_CATEGORIES: dict[str, str] = {
     ".context/": "framework",
     ".claude/skills/": "skills",
     ".claude/settings/": "config",
+    ".claude/mcps/": "config",
     "Knowledge/": "content",
     "Projects/": "project",
 }

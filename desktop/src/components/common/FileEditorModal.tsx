@@ -873,22 +873,25 @@ export default function FileEditorModal({
                 <pre
                   ref={highlightRef}
                   className={clsx(
-                    'absolute inset-0 m-0 p-4 overflow-auto',
+                    'absolute inset-0 m-0 p-4 overflow-y-scroll overflow-x-hidden',
                     'font-mono text-sm leading-6 whitespace-pre-wrap break-words',
                     'pointer-events-none',
-                    'bg-[var(--color-background)]'
+                    'bg-[var(--color-background)]',
+                    '[word-break:break-all]'
                   )}
+                  style={{ tabSize: 4 }}
                   aria-hidden="true"
                 />
                 {/* Search highlight overlay (Task 9.3) */}
                 {showSearch && searchMatches.length > 0 && (
                   <pre
                     className={clsx(
-                      'absolute inset-0 m-0 p-4 overflow-auto',
-                      'font-mono text-sm leading-6 whitespace-pre-wrap break-words',
-                      'pointer-events-none z-[1]'
+                      'absolute inset-0 m-0 p-4 overflow-y-scroll overflow-x-hidden',
+                      'font-mono text-sm leading-6 whitespace-pre-wrap',
+                      'pointer-events-none z-[1]',
+                      '[word-break:break-all]'
                     )}
-                    style={{ scrollBehavior: 'auto' }}
+                    style={{ scrollBehavior: 'auto', tabSize: 4 }}
                     aria-hidden="true"
                   >
                     {content.split('\n').map((line, lineIdx) => {
@@ -933,13 +936,15 @@ export default function FileEditorModal({
                   onKeyUp={handleSelect}
                   readOnly={readonly}
                   className={clsx(
-                    'absolute inset-0 w-full h-full m-0 p-4 resize-none',
-                    'font-mono text-sm leading-6 whitespace-pre-wrap break-words',
+                    'absolute inset-0 w-full h-full m-0 p-4 resize-none appearance-none',
+                    'font-mono text-sm leading-6 whitespace-pre-wrap',
                     'bg-transparent text-transparent caret-[var(--color-text)]',
                     'border-none outline-none',
-                    'overflow-auto',
+                    'overflow-y-scroll overflow-x-hidden',
+                    '[word-break:break-all]',
                     readonly && 'cursor-default'
                   )}
+                  style={{ tabSize: 4 }}
                   spellCheck={false}
                   autoCapitalize="off"
                   autoCorrect="off"

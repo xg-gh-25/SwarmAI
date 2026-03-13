@@ -10,6 +10,5 @@
 export { default as WorkspacesModal } from './WorkspacesModal';
 export { default as SwarmCoreModal } from './SwarmCoreModal';
 export { default as SkillsModal } from './SkillsModal';
-export { default as MCPServersModal } from './MCPServersModal';
 export { default as AgentsModal } from './AgentsModal';
 export { default as SettingsModal } from './SettingsModal';

@@ -833,6 +833,17 @@ class PluginManager:
                         installed_mcp_servers.append(server_name)
                         logger.info(f"Found MCP server: {server_name}")
 
+                # Write plugin MCPs to mcp-dev.json (file-based config)
+                try:
+                    from core.mcp_config_loader import write_plugin_mcps
+                    write_plugin_mcps(
+                        workspace_path=self.base_dir.parent,  # .claude -> SwarmWS
+                        mcp_data=mcp_data,
+                        plugin_id=plugin_name,
+                    )
+                except Exception as mcp_err:
+                    logger.warning(f"Failed to write plugin MCPs: {mcp_err}")
+
             return InstallResult(
                 success=True,
                 name=metadata.name,
@@ -902,6 +913,18 @@ class PluginManager:
                 hook_path.unlink()
                 removed["hooks"].append(hook_name)
                 logger.info(f"Removed hook: {hook_name}")
+
+        # Remove plugin MCPs from mcp-dev.json
+        try:
+            from core.mcp_config_loader import remove_plugin_mcps
+            mcp_count = remove_plugin_mcps(
+                workspace_path=self.base_dir.parent,  # .claude -> SwarmWS
+                plugin_id=plugin_name,
+            )
+            if mcp_count:
+                removed["mcp_servers"] = mcp_count
+        except Exception as mcp_err:
+            logger.warning(f"Failed to remove plugin MCPs: {mcp_err}")
 
         return removed
 

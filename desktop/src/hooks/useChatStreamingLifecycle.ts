@@ -238,7 +238,13 @@ export function updateMessages(
     if (msg.id !== assistantMessageId) return msg;
     const existingKeys = new Set(msg.content.map(blockKey));
     const filteredContent = newContent.filter((b) => !existingKeys.has(blockKey(b)));
-    if (filteredContent.length === 0) return msg; // No new content — return same reference
+    if (filteredContent.length === 0) {
+      // No new content blocks — but model might still need updating
+      if (model && msg.model !== model) {
+        return { ...msg, model };
+      }
+      return msg; // No changes — return same reference
+    }
     return {
       ...msg,
       content: [...msg.content, ...filteredContent],
@@ -247,6 +253,37 @@ export function updateMessages(
       // auto-retry case where backend recovers after emitting an error event.
       ...(msg.isError ? { isError: false } : {}),
     };
+  });
+}
+
+/**
+ * Append a text delta (streaming token) to the last text block in an assistant message.
+ *
+ * If the assistant message has no text block yet, creates one.  If the last
+ * content block is already a text block, appends to it in-place (new object
+ * reference for React).  This is the hot path during streaming — called once
+ * per token, so it must be allocation-light.
+ */
+export function appendTextDelta(
+  currentMessages: Message[],
+  assistantMessageId: string,
+  text: string,
+): Message[] {
+  return currentMessages.map((msg) => {
+    if (msg.id !== assistantMessageId) return msg;
+    const content = [...msg.content];
+    const lastBlock = content[content.length - 1];
+    if (lastBlock && lastBlock.type === 'text') {
+      // Append to existing text block (new reference)
+      content[content.length - 1] = {
+        ...lastBlock,
+        text: (lastBlock.text ?? '') + text,
+      };
+    } else {
+      // First text token — create a new text block
+      content.push({ type: 'text', text } as ContentBlock);
+    }
+    return { ...msg, content };
   });
 }
 
@@ -988,7 +1025,35 @@ export function useChatStreamingLifecycle(
             }]);
             queryClient.invalidateQueries({ queryKey: ['chat-sessions'] });
           }
+        } else if (event.type === 'text_delta' && event.text) {
+          // --- Streaming text delta: append token incrementally ---
+          // This is the HOT PATH — called once per token for real-time rendering.
+          // Update tab status on first delta if not already streaming.
+          if (capturedTabId && tabState && tabState.status !== 'streaming') {
+            updateTabStatus(capturedTabId, 'streaming');
+          }
+
+          if (tabState) {
+            tabState.messages = appendTextDelta(
+              tabState.messages,
+              assistantMessageId,
+              event.text,
+            );
+          }
+
+          if (isActiveTab) {
+            setMessages((prev) => appendTextDelta(
+              prev,
+              assistantMessageId,
+              event.text!,
+            ));
+          }
         } else if (event.type === 'assistant' && event.content) {
+          // Full assistant message — the SDK's complete, authoritative content.
+          // When streaming is on, text was already rendered incrementally via
+          // text_delta events. This event reconciles with the final truth:
+          // tool_use/tool_result blocks are appended (they weren't streamed),
+          // and existing text blocks are left alone (deduped by blockKey).
           // Fix 8: Update tab status to 'streaming' on first assistant event
           if (capturedTabId && tabState && tabState.status !== 'streaming') {
             updateTabStatus(capturedTabId, 'streaming');
@@ -1487,9 +1552,48 @@ export function useChatStreamingLifecycle(
    * Force re-derivation of ``isStreaming`` by triggering a re-render via
    * ``setPendingStreamTabs``. Used by ChatPage on tab switch so the
    * derivation picks up the new active tab's state from ``tabMapRef``.
+   *
+   * Also **immediately** derives ``displayedActivity``, ``elapsedSeconds``,
+   * and ``streamStartTimeRef`` from the new active tab's authoritative state
+   * in ``tabMapRef``. Without this, those React states carry the *previous*
+   * tab's values for one render frame (useEffect runs AFTER render), causing
+   * the "Thinking…" indicator and elapsed timer to flash stale values on
+   * every tab switch.
    */
   const bumpStreamingDerivation = useCallback(() => {
     setPendingStreamTabs((prev) => new Set(prev));
+
+    // --- Immediate tab-switch state sync (eliminates useEffect lag) ---
+    const tabId = activeTabIdRef.current;
+    const tabState = tabId ? tabMapRef.current.get(tabId) : undefined;
+    const tabIsStreaming = tabState?.isStreaming ?? false;
+    const tabMessages = tabState?.messages ?? [];
+
+    // Derive streamingActivity for the new tab directly from tabMapRef
+    const activity = deriveStreamingActivity(tabIsStreaming, tabMessages);
+
+    // Clear any pending debounce timer to prevent it from overwriting
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+      debounceTimerRef.current = null;
+    }
+    setDisplayedActivity(activity);
+    lastActivityChangeTimeRef.current = Date.now();
+
+    // Derive elapsedSeconds and streamStartTimeRef for the new tab
+    if (tabIsStreaming && activity === null && tabState?.streamStartTime) {
+      // Still in "Thinking…" phase — restore elapsed from stored start time
+      streamStartTimeRef.current = tabState.streamStartTime;
+      setElapsedSeconds(Math.floor((Date.now() - tabState.streamStartTime) / 1000));
+    } else if (tabIsStreaming) {
+      // Content already arrived — elapsed not shown, but keep start time
+      streamStartTimeRef.current = tabState?.streamStartTime ?? null;
+      setElapsedSeconds(0);
+    } else {
+      // Not streaming — clear everything
+      streamStartTimeRef.current = null;
+      setElapsedSeconds(0);
+    }
   }, []);
 
   // --- Return lifecycle interface ---
