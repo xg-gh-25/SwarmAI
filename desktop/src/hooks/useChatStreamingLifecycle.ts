@@ -210,6 +210,11 @@ export function blockKey(block: ContentBlock): string {
       return `tool_result:${block.toolUseId}`;
     case 'text':
       return `text:${block.text}`;
+    case 'thinking':
+      // Thinking blocks are accumulated via thinking_delta and then reconciled
+      // by the assistant event. Use a type-only key so the streamed thinking
+      // block deduplicates against the SDK's final thinking block.
+      return `thinking:0`;
     default: {
       // Safe fallback — avoid JSON.stringify on potentially circular objects
       try {
@@ -239,10 +244,6 @@ export function updateMessages(
     const existingKeys = new Set(msg.content.map(blockKey));
     const filteredContent = newContent.filter((b) => !existingKeys.has(blockKey(b)));
     if (filteredContent.length === 0) {
-      // No new content blocks — but model might still need updating
-      if (model && msg.model !== model) {
-        return { ...msg, model };
-      }
       return msg; // No changes — return same reference
     }
     return {
@@ -282,6 +283,36 @@ export function appendTextDelta(
     } else {
       // First text token — create a new text block
       content.push({ type: 'text', text } as ContentBlock);
+    }
+    return { ...msg, content };
+  });
+}
+
+/**
+ * Append a thinking delta (streaming token) to the last thinking block in an assistant message.
+ *
+ * If the assistant message has no thinking block yet, creates one.  If the last
+ * content block is already a thinking block, appends to it in-place (new object
+ * reference for React).  Same pattern as ``appendTextDelta`` but for thinking content.
+ */
+export function appendThinkingDelta(
+  currentMessages: Message[],
+  assistantMessageId: string,
+  thinking: string,
+): Message[] {
+  return currentMessages.map((msg) => {
+    if (msg.id !== assistantMessageId) return msg;
+    const content = [...msg.content];
+    const lastBlock = content[content.length - 1];
+    if (lastBlock && lastBlock.type === 'thinking') {
+      // Append to existing thinking block (new reference)
+      content[content.length - 1] = {
+        ...lastBlock,
+        thinking: ((lastBlock as { thinking?: string }).thinking ?? '') + thinking,
+      } as ContentBlock;
+    } else {
+      // First thinking token — create a new thinking block
+      content.push({ type: 'thinking', thinking } as ContentBlock);
     }
     return { ...msg, content };
   });
@@ -1047,6 +1078,34 @@ export function useChatStreamingLifecycle(
               assistantMessageId,
               event.text!,
             ));
+          }
+        } else if (event.type === 'thinking_delta' && event.thinking) {
+          // --- Streaming thinking delta: append thinking token incrementally ---
+          // Same pattern as text_delta but for extended thinking content.
+          if (capturedTabId && tabState && tabState.status !== 'streaming') {
+            updateTabStatus(capturedTabId, 'streaming');
+          }
+
+          if (tabState) {
+            tabState.messages = appendThinkingDelta(
+              tabState.messages,
+              assistantMessageId,
+              event.thinking,
+            );
+          }
+
+          if (isActiveTab) {
+            setMessages((prev) => appendThinkingDelta(
+              prev,
+              assistantMessageId,
+              event.thinking!,
+            ));
+          }
+        } else if (event.type === 'thinking_start') {
+          // Thinking block started — update tab status to streaming.
+          // The actual content arrives via thinking_delta events.
+          if (capturedTabId && tabState && tabState.status !== 'streaming') {
+            updateTabStatus(capturedTabId, 'streaming');
           }
         } else if (event.type === 'assistant' && event.content) {
           // Full assistant message — the SDK's complete, authoritative content.

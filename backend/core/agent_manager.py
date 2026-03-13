@@ -2546,13 +2546,15 @@ class AgentManager:
                             result_text = message.result
                             if result_text:
                                 logger.debug(f"ResultMessage result_text: {result_text[:50]}...")
-                                # Emit the final text as an SSE assistant event so the frontend
-                                # can render it immediately, then accumulate it for DB persistence.
-                                yield {
-                                    "type": "assistant",
-                                    "content": [{"type": "text", "text": result_text}],
-                                    "model": agent_config.get("model", "claude-sonnet-4-20250514")
-                                }
+                                # With include_partial_messages=True, the text was already
+                                # delivered to the frontend via text_delta events (token-by-
+                                # token) and the AssistantMessage event (full blocks).
+                                # ResultMessage.result is a concatenation of ALL TextBlocks
+                                # from the final turn, so its blockKey ("text:<concat>")
+                                # differs from any individual TextBlock's key, causing
+                                # updateMessages to append it as a duplicate.
+                                # We still accumulate it for DB persistence (assistant_content)
+                                # but do NOT yield it as an SSE event.
                                 result_block = {"type": "text", "text": result_text}
                                 assistant_content.add(result_block)
 

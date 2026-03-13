@@ -115,7 +115,7 @@ describe('WorkspaceSettingsModal', () => {
     mockGetSkills.mockResolvedValue(mockSkillConfigs);
     mockSkillsList.mockResolvedValue(mockSkills);
     mockGetMcps.mockResolvedValue(mockMcpConfigs);
-    mockMcpList.mockResolvedValue(mockMcps);
+    mockMcpListAll.mockResolvedValue(mockMcps);
     mockGetKnowledgebases.mockResolvedValue(mockKnowledgebases);
   });
 
@@ -149,7 +149,8 @@ describe('WorkspaceSettingsModal', () => {
     // Switch to MCPs tab
     fireEvent.click(screen.getByText('settings.tabs.mcps'));
     await waitFor(() => {
-      expect(screen.getByText('GitHub')).toBeInTheDocument();
+      // MCPSettingsPanel renders its own title
+      expect(screen.getByText('mcp.title')).toBeInTheDocument();
     });
 
     // Switch to Knowledgebases tab

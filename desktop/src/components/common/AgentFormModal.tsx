@@ -423,7 +423,7 @@ export default function AgentFormModal({
             id: mcp.id,
             name: mcp.name,
             description: mcp.description,
-            isSystem: mcp.isSystem,
+            isSystem: mcp.layer === 'catalog' && mcp.source !== 'plugin',
           }))}
           selectedIds={mcpIds}
           onChange={setMcpIds}

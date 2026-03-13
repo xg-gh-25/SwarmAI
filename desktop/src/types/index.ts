@@ -242,6 +242,11 @@ export interface AskUserQuestionContent {
   questions: AskUserQuestion[];
 }
 
+export interface ThinkingContent {
+  type: 'thinking';
+  thinking: string;
+}
+
 export interface CmdPermissionContent {
   type: 'cmd_permission_request';
   requestId: string;
@@ -259,7 +264,7 @@ export interface TodoItem {
   activeForm: string;
 }
 
-export type ContentBlock = TextContent | ToolUseContent | ToolResultContent | AskUserQuestionContent | CmdPermissionContent;
+export type ContentBlock = TextContent | ToolUseContent | ToolResultContent | AskUserQuestionContent | CmdPermissionContent | ThinkingContent;
 
 export interface Message {
   id: string;

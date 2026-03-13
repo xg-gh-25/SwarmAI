@@ -32,6 +32,23 @@ _(Correction of Errors — complex problems investigated across sessions. Auto-p
 
 ## Open Threads
 
+<!-- Open Threads format:
+### P0 — Blocking
+- 🔴 **<title>** (reported Nx: session1, session2)
+  Status: <current status>. COE: <link if exists>.
+
+### P1 — Important
+- 🟡 **<title>** (reported Nx: session1)
+  Status: <current status>.
+
+### P2 — Nice to have
+- 🔵 **<title>**
+  Status: <current status>.
+
+Rules: report_count auto-increments when same issue appears in DailyActivity.
+COE candidates auto-promote to P0. Resolved items get struck through.
+-->
+
 _(Things we started but haven't finished. I'll check these at the start of each session.)_
 
 ---
