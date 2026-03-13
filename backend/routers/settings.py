@@ -111,6 +111,26 @@ def _build_response(cfg: AppConfigManager) -> AppConfigResponse:
             "sandbox_additional_write_paths",
             DEFAULT_CONFIG["sandbox_additional_write_paths"],
         ),
+        sandbox_enabled_default=cfg.get(
+            "sandbox_enabled_default",
+            DEFAULT_CONFIG["sandbox_enabled_default"],
+        ),
+        sandbox_auto_allow_bash=cfg.get(
+            "sandbox_auto_allow_bash",
+            DEFAULT_CONFIG["sandbox_auto_allow_bash"],
+        ),
+        sandbox_excluded_commands=cfg.get(
+            "sandbox_excluded_commands",
+            DEFAULT_CONFIG["sandbox_excluded_commands"],
+        ),
+        sandbox_allow_unsandboxed=cfg.get(
+            "sandbox_allow_unsandboxed",
+            DEFAULT_CONFIG["sandbox_allow_unsandboxed"],
+        ),
+        sandbox_allowed_hosts=cfg.get(
+            "sandbox_allowed_hosts",
+            DEFAULT_CONFIG["sandbox_allowed_hosts"],
+        ),
         aws_credentials_configured=_probe_aws_credentials(),
         anthropic_api_key_configured=_probe_anthropic_api_key(),
     )
@@ -171,6 +191,21 @@ async def update_app_configuration(request: AppConfigRequest):
 
     if request.sandbox_additional_write_paths is not None:
         updates["sandbox_additional_write_paths"] = request.sandbox_additional_write_paths
+
+    if request.sandbox_enabled_default is not None:
+        updates["sandbox_enabled_default"] = request.sandbox_enabled_default
+
+    if request.sandbox_auto_allow_bash is not None:
+        updates["sandbox_auto_allow_bash"] = request.sandbox_auto_allow_bash
+
+    if request.sandbox_excluded_commands is not None:
+        updates["sandbox_excluded_commands"] = request.sandbox_excluded_commands
+
+    if request.sandbox_allow_unsandboxed is not None:
+        updates["sandbox_allow_unsandboxed"] = request.sandbox_allow_unsandboxed
+
+    if request.sandbox_allowed_hosts is not None:
+        updates["sandbox_allowed_hosts"] = request.sandbox_allowed_hosts
 
     if request.available_models is not None:
         updates["available_models"] = request.available_models

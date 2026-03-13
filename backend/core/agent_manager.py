@@ -732,11 +732,11 @@ class AgentManager:
 
 
     def _build_sandbox_config(self, agent_config: dict) -> Optional[dict]:
-        """Build the sandbox configuration dict from agent settings.
+        """Build the sandbox configuration dict from agent and app settings.
 
-        Reads ``sandbox_enabled`` from the agent config (falling back to the
-        global default) and constructs the SDK sandbox settings dict.  Returns
-        ``None`` when sandboxing is disabled or unsupported (Windows).
+        Reads sandbox settings from ``config.json`` via ``AppConfigManager``
+        (single source of truth), falling back to ``DEFAULT_CONFIG`` values.
+        Returns ``None`` when sandboxing is disabled or unsupported (Windows).
 
         Args:
             agent_config: Agent configuration dictionary.
@@ -744,7 +744,9 @@ class AgentManager:
         Returns:
             Sandbox settings dict or ``None`` if sandboxing is disabled.
         """
-        sandbox_enabled = agent_config.get("sandbox_enabled", settings.sandbox_enabled_default)
+        cfg = self._config
+        sandbox_default = cfg.get("sandbox_enabled_default", True) if cfg else True
+        sandbox_enabled = agent_config.get("sandbox_enabled", sandbox_default)
 
         # Sandbox only works on macOS/Linux, not Windows
         if sandbox_enabled and platform.system() == "Windows":
@@ -755,17 +757,22 @@ class AgentManager:
             return None
 
         excluded_commands = []
-        if settings.sandbox_excluded_commands:
-            excluded_commands = [cmd.strip() for cmd in settings.sandbox_excluded_commands.split(",") if cmd.strip()]
+        raw_excluded = cfg.get("sandbox_excluded_commands", "docker") if cfg else "docker"
+        if raw_excluded:
+            excluded_commands = [cmd.strip() for cmd in raw_excluded.split(",") if cmd.strip()]
+
+        auto_allow_bash = cfg.get("sandbox_auto_allow_bash", True) if cfg else True
+        allow_unsandboxed = cfg.get("sandbox_allow_unsandboxed", False) if cfg else False
+        allowed_hosts_raw = cfg.get("sandbox_allowed_hosts", "*") if cfg else "*"
 
         sandbox_settings = {
             "enabled": True,
-            "autoAllowBashIfSandboxed": settings.sandbox_auto_allow_bash,
+            "autoAllowBashIfSandboxed": auto_allow_bash,
             "excludedCommands": excluded_commands,
-            "allowUnsandboxedCommands": settings.sandbox_allow_unsandboxed,
+            "allowUnsandboxedCommands": allow_unsandboxed,
             "network": {
                 "allowLocalBinding": True,
-                "allowedHosts": [h.strip() for h in settings.sandbox_allowed_hosts.split(",") if h.strip()],
+                "allowedHosts": [h.strip() for h in allowed_hosts_raw.split(",") if h.strip()],
             }
         }
         logger.info(f"Sandbox enabled: {sandbox_settings}")
@@ -1170,7 +1177,6 @@ class AgentManager:
             channel_context: Optional channel context for channel-based execution.
         """
         logger.debug(f"agent_config:{agent_config}")
-        logger.debug(f"settings:{settings}")
 
         # 1. Resolve allowed tools
         allowed_tools = self._resolve_allowed_tools(agent_config)
