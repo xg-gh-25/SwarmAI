@@ -1738,13 +1738,6 @@ class AgentManager:
                 # gone and --resume cannot work.  Start a fresh session instead.
                 if is_resuming:
                     logger.info(f"No active client for session {session_id}, starting fresh session instead of --resume")
-                    options = await self._build_options(
-                        agent_config, enable_skills, enable_mcp,
-                        None, session_context, channel_context,
-                    )
-                    # Reset to behave as a new session
-                    is_resuming = False
-                    session_context["sdk_session_id"] = None
                     # Observability: log the resume-fallback path
                     if session_context.get("app_session_id") is not None:
                         logger.info(
@@ -1754,8 +1747,18 @@ class AgentManager:
                         )
                     # Flag for context injection: we lost the SDK client, so
                     # inject previous conversation context into the system prompt.
+                    # MUST be set BEFORE _build_options() which calls
+                    # _build_system_prompt() where the flag is consumed.
                     agent_config["needs_context_injection"] = True
                     agent_config["resume_app_session_id"] = app_session_id
+
+                    options = await self._build_options(
+                        agent_config, enable_skills, enable_mcp,
+                        None, session_context, channel_context,
+                    )
+                    # Reset to behave as a new session
+                    is_resuming = False
+                    session_context["sdk_session_id"] = None
 
                 # Deferred save for resumed conversations (PATH A):
                 # The resume failed (no active client), so we're creating a
@@ -1794,11 +1797,14 @@ class AgentManager:
 
                 # Early registration: store client in _active_sessions NOW
                 # so interrupt_session can find it during streaming.
-                # Only needed for resumed sessions where app_session_id is
-                # known — new sessions don't have a session_id yet so the
-                # frontend can't send a stop request until session_start.
-                # The post-stream code will overwrite with the final
-                # effective_session_id key after the stream completes.
+                # For resumed sessions: keyed by app_session_id (already known).
+                # For new sessions: keyed AFTER SDK init provides session_id
+                # (via _wrapper in session_context — see _run_query_on_client).
+                #
+                # IMPORTANT: The post-stream storage code (after the yield loop)
+                # may never run if the SSE consumer is cancelled. This early
+                # registration is the ONLY reliable path for client persistence.
+                session_context["_wrapper"] = wrapper  # For init-time registration in _run_query_on_client
                 if session_context.get("app_session_id"):
                     _early_key = session_context["app_session_id"]
                     self._active_sessions[_early_key] = {
@@ -2557,6 +2563,28 @@ class AgentManager:
                                     session_id=session_context["sdk_session_id"],
                                     role="user",
                                     content=user_content
+                                )
+
+                            # Early client registration for NEW sessions:
+                            # The post-stream storage code in _execute_on_session
+                            # may never run (SSE consumer cancellation race).
+                            # Register the client NOW so _get_active_client()
+                            # finds it on the next resume attempt.
+                            _init_sid = session_context["sdk_session_id"]
+                            _init_wrapper = session_context.get("_wrapper")
+                            if _init_sid and _init_wrapper and _init_sid not in self._active_sessions:
+                                self._active_sessions[_init_sid] = {
+                                    "client": client,
+                                    "wrapper": _init_wrapper,
+                                    "created_at": time.time(),
+                                    "last_used": time.time(),
+                                    "activity_extracted": False,
+                                    "failure_tracker": ToolFailureTracker(),
+                                }
+                                session_context["_early_active_key"] = _init_sid
+                                logger.info(
+                                    "Early client registration for new session %s",
+                                    _init_sid,
                                 )
 
                         # Forward task_started events so the frontend can show
