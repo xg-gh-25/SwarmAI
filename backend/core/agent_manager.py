@@ -2084,6 +2084,27 @@ class AgentManager:
                     _t_client_elapsed, is_resuming,
                 )
 
+                # Early registration: store client in _active_sessions NOW
+                # so interrupt_session can find it during streaming.
+                # The post-stream code will overwrite this with the final
+                # effective_session_id key after the stream completes.
+                _early_key = (
+                    session_context.get("app_session_id")
+                    or agent_id  # fallback for brand-new sessions before init
+                )
+                self._active_sessions[_early_key] = {
+                    "client": client,
+                    "wrapper": wrapper,
+                    "created_at": time.time(),
+                    "last_used": time.time(),
+                    "activity_extracted": False,
+                    "failure_tracker": ToolFailureTracker(),
+                }
+                # Track the early key so we can clean it up if the final
+                # effective_session_id differs (e.g. new session gets a
+                # different SDK session_id).
+                session_context["_early_active_key"] = _early_key
+
                 try:
                     async for event in self._run_query_on_client(
                         client=client,
@@ -2197,6 +2218,10 @@ class AgentManager:
                             await wrapper.__aexit__(None, None, None)
                         except Exception:
                             pass
+                        # Clean up early registration
+                        _early_key = session_context.get("_early_active_key")
+                        if _early_key:
+                            self._active_sessions.pop(_early_key, None)
                     elif effective_session_id:
                         self._active_sessions[effective_session_id] = {
                             "client": client,
@@ -2206,6 +2231,10 @@ class AgentManager:
                             "activity_extracted": False,
                             "failure_tracker": ToolFailureTracker(),
                         }
+                        # Clean up early key if it differs from the final key
+                        _early_key = session_context.get("_early_active_key")
+                        if _early_key and _early_key != effective_session_id:
+                            self._active_sessions.pop(_early_key, None)
                         logger.info(f"Stored long-lived client for session {effective_session_id}")
 
         except Exception as e:
@@ -3562,13 +3591,27 @@ class AgentManager:
     async def interrupt_session(self, session_id: str) -> dict:
         """Interrupt a running session.
 
+        Looks up the client from ``_active_sessions`` (persistent between
+        turns) rather than ``_clients`` (transient, only exists during
+        active streaming and is popped in the finally block of
+        ``_run_query_on_client``).  Falls back to ``_clients`` for
+        backward compatibility with sessions that haven't been stored
+        in ``_active_sessions`` yet (e.g. mid-init).
+
         Args:
             session_id: The session ID to interrupt
 
         Returns:
             Dict with status information
         """
-        client = self._clients.get(session_id)
+        # Primary lookup: _active_sessions (persistent, survives stream end)
+        client = None
+        info = self._active_sessions.get(session_id)
+        if info:
+            client = info.get("client")
+        # Fallback: _clients (transient, only during active streaming)
+        if not client:
+            client = self._clients.get(session_id)
         if not client:
             logger.warning(f"No active client found for session {session_id}")
             return {
