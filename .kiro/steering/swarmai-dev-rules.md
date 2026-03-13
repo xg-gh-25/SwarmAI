@@ -100,3 +100,27 @@ These anti-patterns apply across the entire codebase:
 4. **Global permission queue**: Never use `permission_manager.get_permission_queue()` (deprecated). Use `get_session_queue(session_id)`.
 5. **Direct MEMORY.md writes**: Never write to MEMORY.md without `locked_write.py`. Concurrent writes from hooks + skills can corrupt the file.
 6. **Heredoc file writes**: Never use `cat > file << 'EOF'` in bash — it hangs the agent process. Use `fsWrite` + `fsAppend`.
+
+## Session Lifecycle Invariants (CRITICAL)
+
+These rules govern the backend session lifecycle. Violations cause orphan processes, failed stops, lost messages, or unresumable sessions.
+
+1. **Transient vs persistent client stores**: `_clients` is transient (exists only during active streaming, popped in `_run_query_on_client` finally block). `_active_sessions` is persistent (survives between turns, 12h TTL). Any code that needs to find a client OUTSIDE the streaming loop (e.g. `interrupt_session`, `compact_session`) MUST check `_active_sessions` first, fall back to `_clients`.
+2. **Early registration before streaming**: Register the client in `_active_sessions` BEFORE entering `_run_query_on_client`, not after. The streaming loop can be interrupted at any point (user stop, tab switch, SSE abort, watchdog timeout). Resources registered only after the loop are invisible during it.
+3. **Abort-first, stop-second ordering**: The frontend aborts the fetch (triggering the `finally` block) THEN sends the stop request. The `finally` block pops `_clients` before the stop arrives. Design all interrupt/stop code for this ordering.
+4. **Deferred save pattern**: `session_start` events and user message saves are deferred until after the client path (PATH A vs PATH B) is determined. The `deferred_user_content = None` guard after save prevents double-save across PATH B → PATH A retry. Never save eagerly before the path is known.
+5. **`_env_lock` through subprocess spawn**: `os.environ` mutations must be held under `_env_lock` through `wrapper.__aenter__()` so the spawned subprocess inherits correct env vars. Release after spawn, not before.
+6. **Hooks must not block chat**: Lifecycle hooks (DailyActivity, auto-commit, distillation) fire via `BackgroundHookExecutor` (fire-and-forget). Never call hooks synchronously in the chat response path. Even the fallback path uses `asyncio.create_task`.
+
+## Frontend Tab Isolation Invariants
+
+7. **Capture tabId at call time, not closure time**: In async callbacks (especially `addFiles` with `await readFileAsBase64`), the closure-captured `tabId` goes stale if the user switches tabs during the await. Use a `useRef` mirror and read `.current` at each async boundary.
+8. **Stream handlers capture tabId at creation**: `createStreamHandler`, `createErrorHandler`, `createCompleteHandler` all capture `tabId` when created. Background tab events write to `tabMapRef` only. Only the active tab's events update `useState`.
+9. **setIsStreaming is synchronous**: `setIsStreaming(true)` synchronously mutates `tabMapRef.isStreaming` to close the race window between the guard check and the actual streaming start. The `pendingStreamTabs` Set covers the gap before `session_start`.
+
+## Code Hygiene Rules
+
+10. **Remove imports when removing usage**: When deleting a variable/function, always remove its import. TypeScript `noUnusedLocals` catches this at build time — never suppress, always fix.
+11. **Remove re-exports when replacing hooks**: When a hook is replaced (e.g. `useFileAttachment` → `useUnifiedAttachments`), remove the old export from `hooks/index.ts` and delete the file.
+12. **Bump test budgets when content grows**: Context files (AGENT.md) grow over time. Test assertions with hardcoded token limits must be updated when content legitimately grows. Guard against accidental bloat, not intentional growth.
+13. **L1 cache budget-tier matching**: The L1 cache header stores the budget tier. When budget constants change, tests with hardcoded cache budget values must match the new constants or the cache is rejected as stale.
