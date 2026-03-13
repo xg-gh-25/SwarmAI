@@ -114,7 +114,7 @@ from .content_accumulator import ContentBlockAccumulator  # noqa: F401 — used 
 
 
 
-# Security hooks extracted to security_hooks.py — used internally by _build_hooks()
+# Security hooks extracted to security_hooks.py — used internally by hook_builder
 from .security_hooks import (
     DANGEROUS_PATTERNS,
     check_dangerous_command,
@@ -123,6 +123,13 @@ from .security_hooks import (
     create_file_access_permission_handler,
     create_skill_access_checker,
 )
+
+# MCP config and hook building extracted to dedicated modules
+from .mcp_config_builder import (
+    build_mcp_config as _build_mcp_config_fn,
+    inject_channel_mcp as _inject_channel_mcp_fn,
+)
+from .hook_builder import build_hooks as _build_hooks_fn
 
 from .tscc_state_manager import TSCCStateManager
 
@@ -689,52 +696,8 @@ class AgentManager:
         agent_config: dict,
         enable_mcp: bool,
     ) -> tuple[dict, list[str]]:
-        """Build MCP server configuration from DB mcp_ids + user-local file.
-
-        Three sources, merged in order:
-        1. Agent's ``mcp_ids`` → looked up in DB (system/plugin MCPs).
-        2. ``<repo>/desktop/resources/user-mcp-servers.json`` → source tree
-           (convenient for developers, gitignored by default).
-        3. ``~/.swarm-ai/user-mcp-servers.json`` → runtime user config.
-        Source-tree entries win on name collision with app-data entries.
-
-        Per-server ``rejected_tools`` are converted to the SDK's global
-        ``disallowed_tools`` format (``mcp__<ServerName>__<tool>``).
-
-        Args:
-            agent_config: Agent configuration dictionary.
-            enable_mcp: Whether MCP servers are enabled.
-
-        Returns:
-            Tuple of (mcp_servers dict, disallowed_tools list).
-        """
-        mcp_servers: dict = {}
-        disallowed_tools: list[str] = []
-
-        if not enable_mcp:
-            return mcp_servers, disallowed_tools
-
-        used_names: set = set()  # Track used names to handle collisions
-
-        # --- Source 1: DB-registered MCPs (system, plugin) via mcp_ids ---
-        for mcp_id in agent_config.get("mcp_ids", []):
-            mcp_config = await db.mcp_servers.get(mcp_id)
-            if not mcp_config:
-                continue
-            # Skip disabled servers (DB or user-local config)
-            if mcp_config.get("disabled"):
-                logger.info("Skipping disabled MCP server: %s", mcp_config.get("name", mcp_id))
-                continue
-            self._add_mcp_server_to_dict(
-                mcp_config, mcp_servers, disallowed_tools, used_names,
-            )
-
-        # --- Source 2: User-local MCPs from file (no DB needed) ---
-        self._merge_user_local_mcp_servers(
-            mcp_servers, disallowed_tools, used_names,
-        )
-
-        return mcp_servers, disallowed_tools
+        """Build MCP server configuration. Delegates to mcp_config_builder."""
+        return await _build_mcp_config_fn(agent_config, enable_mcp)
 
     def _add_mcp_server_to_dict(
         self,
@@ -743,50 +706,9 @@ class AgentManager:
         disallowed_tools: list[str],
         used_names: set,
     ) -> None:
-        """Add a single MCP server entry to the mcp_servers dict.
-
-        Handles name collision, connection type dispatch, env expansion,
-        and rejected_tools → disallowed_tools conversion.
-        """
-        connection_type = mcp_config.get("connection_type", "stdio")
-        config = mcp_config.get("config", {})
-
-        # Deduplicate server names
-        server_name = mcp_config.get("name", mcp_config.get("id", "unknown"))
-        base_name = server_name
-        suffix = 1
-        while server_name in used_names:
-            server_name = f"{base_name}_{suffix}"
-            suffix += 1
-        used_names.add(server_name)
-
-        if connection_type == "stdio":
-            raw_args = config.get("args", [])
-            expanded_args = [os.path.expandvars(a) for a in raw_args]
-            mcp_servers[server_name] = {
-                "type": "stdio",
-                "command": config.get("command"),
-                "args": expanded_args,
-            }
-            env = config.get("env")
-            if env and isinstance(env, dict):
-                mcp_servers[server_name]["env"] = env
-        elif connection_type == "sse":
-            mcp_servers[server_name] = {
-                "type": "sse",
-                "url": config.get("url"),
-            }
-        elif connection_type == "http":
-            mcp_servers[server_name] = {
-                "type": "http",
-                "url": config.get("url"),
-            }
-
-        # Collect per-server rejected_tools → global disallowed_tools.
-        # SDK uses mcp__<ServerName>__<tool_name> format.
-        rejected = mcp_config.get("rejected_tools") or []
-        for tool in rejected:
-            disallowed_tools.append(f"mcp__{server_name}__{tool}")
+        """Add a single MCP server entry. Delegates to mcp_config_builder."""
+        from .mcp_config_builder import add_mcp_server_to_dict
+        add_mcp_server_to_dict(mcp_config, mcp_servers, disallowed_tools, used_names)
 
     def _merge_user_local_mcp_servers(
         self,
@@ -794,188 +716,24 @@ class AgentManager:
         disallowed_tools: list[str],
         used_names: set,
     ) -> None:
-        """Load user-local MCP servers from config files.
-
-        Two locations are checked **in order** (earlier wins on name collision):
-
-        1. **Source tree** — ``<repo>/desktop/resources/user-mcp-servers.json``
-           Convenient for developers: edit in IDE, version-controlled via
-           ``.gitignore`` (private by default).  Resolved relative to the
-           backend package root.  Only available in dev mode — in PyInstaller
-           bundles the repo layout doesn't exist, so this path is simply
-           skipped (file won't exist).
-        2. **App data dir** — ``~/.swarm-ai/user-mcp-servers.json``
-           Runtime config for all users.  Always available regardless of
-           packaging mode.
-
-        Entries from both files are merged.  If the same MCP name appears in
-        both files, the source-tree entry takes precedence (loaded first).
-        Errors are logged but never block session startup.
-        """
-        # Resolve source-tree path: backend/ -> ../desktop/resources/
-        _backend_root = Path(__file__).resolve().parent.parent  # backend/
-        _repo_root = _backend_root.parent                       # swarmai/
-        source_tree_path = _repo_root / "desktop" / "resources" / "user-mcp-servers.json"
-
-        app_data_path = get_app_data_dir() / "user-mcp-servers.json"
-
-        for config_path in (source_tree_path, app_data_path):
-            if not config_path.exists():
-                continue
-            try:
-                with open(config_path, "r", encoding="utf-8") as f:
-                    mcp_configs = json.load(f)
-
-                if not isinstance(mcp_configs, list):
-                    continue
-
-                for entry in mcp_configs:
-                    name = entry.get("name", entry.get("id"))
-                    if not name:
-                        continue
-                    # Skip disabled servers
-                    if entry.get("disabled"):
-                        logger.info(
-                            "Skipping disabled user-local MCP: %s (from %s)",
-                            name, config_path.name,
-                        )
-                        continue
-                    # Skip if already added from DB or earlier file
-                    if name in used_names:
-                        logger.debug(
-                            "User-local MCP '%s' already loaded, skipping (from %s)",
-                            name, config_path,
-                        )
-                        continue
-                    self._add_mcp_server_to_dict(
-                        entry, mcp_servers, disallowed_tools, used_names,
-                    )
-                    logger.info(
-                        "Loaded user-local MCP: %s (from %s)", name, config_path.name,
-                    )
-
-            except json.JSONDecodeError as e:
-                logger.error("Invalid JSON in %s: %s", config_path, e)
-            except Exception as e:
-                logger.error("Failed to load user-local MCPs from %s: %s", config_path, e)
+        """Load user-local MCP servers. Delegates to mcp_config_builder."""
+        from .mcp_config_builder import merge_user_local_mcp_servers
+        merge_user_local_mcp_servers(mcp_servers, disallowed_tools, used_names)
 
     async def _build_hooks(
         self,
         agent_config: dict,
         enable_skills: bool,
         enable_mcp: bool,
-        resume_session_id: Optional[str],
-        session_context: Optional[dict],
+        resume_session_id: Optional[str] = None,
+        session_context: Optional[dict] = None,
     ) -> tuple[dict, list[str], bool]:
-        """Build hook matchers and file access permission handler.
-
-        Composes security_hooks functions with the PermissionManager singleton
-        to produce the hooks configuration for ClaudeAgentOptions.
-
-        Args:
-            agent_config: Agent configuration dictionary.
-            enable_skills: Whether skills are enabled.
-            enable_mcp: Whether MCP servers are enabled.
-            resume_session_id: Optional session ID for resumed sessions.
-            session_context: Optional session context dict for hook tracking.
-
-        Returns:
-            A tuple of (hooks_config_dict, effective_allowed_skills, allow_all_skills).
-            The effective_allowed_skills list contains folder names (not UUIDs).
-        """
-        hooks: dict = {}
-
-        if agent_config.get("enable_tool_logging", True):
-            hooks["PreToolUse"] = [
-                HookMatcher(hooks=[pre_tool_logger])
-            ]
-
-        # Human approval hook for dangerous commands (~13 patterns).
-        # This is the ONLY permission gate — all other commands run freely
-        # (permission_mode="bypassPermissions").  Dangerous commands get an
-        # inline approval prompt in the chat stream (not a modal popup).
-        # Always enabled regardless of sandbox — sandbox constrains filesystem
-        # access but the user still wants to see and approve destructive commands.
-        # The old dangerous_command_blocker (silent auto-deny) is removed —
-        # we always ask the user instead of silently blocking.
-        agent_id = agent_config.get("id", 'default')
-        session_key = resume_session_id or agent_id or "unknown"
-        enable_human_approval = agent_config.get("enable_human_approval", True)
-        if enable_human_approval:
-            if "PreToolUse" not in hooks:
-                hooks["PreToolUse"] = []
-            # Use provided session_context or create a temporary one
-            hook_session_context = session_context if session_context is not None else {"sdk_session_id": resume_session_id or agent_id}
-            human_approval = create_human_approval_hook(hook_session_context, session_key, enable_human_approval, _pm, self._cmd_pm)
-            hooks["PreToolUse"].append(
-                HookMatcher(matcher="Bash", hooks=[human_approval])
-            )
-            logger.info(f"Human approval hook added for session_key: {session_key}")
-
-        # Skill access control - get allowed skill names for this agent
-        allowed_skills = agent_config.get("allowed_skills", [])
-        allow_all_skills = agent_config.get("allow_all_skills", False)
-        plugin_ids = agent_config.get("plugin_ids", [])
-        global_user_mode = agent_config.get("global_user_mode", True)
-
-        # Global User Mode requires allow_all_skills=True (skill restrictions not supported)
-        if global_user_mode:
-            allow_all_skills = True
-            allowed_skills = []  # Ignore allowed_skills in global mode
-            plugin_ids = []  # Not needed when all skills allowed
-            logger.info("Global User Mode: forcing allow_all_skills=True, ignoring allowed_skills")
-
-        # Expand allowed_skills with skills from selected plugins
-        effective_allowed_skills = await expand_allowed_skills_with_plugins(
-            allowed_skills, plugin_ids, allow_all_skills
+        """Build hook matchers. Delegates to hook_builder."""
+        return await _build_hooks_fn(
+            agent_config, enable_skills, enable_mcp,
+            resume_session_id, session_context,
+            _pm, self._cmd_pm,
         )
-
-        # In the filesystem-based architecture, allowed_skills are already folder names
-        # so they can be passed directly to the security hook (no UUID resolution needed)
-        allowed_skill_names = list(effective_allowed_skills)
-        logger.info(f"Agent skill access: allow_all={allow_all_skills}, {len(effective_allowed_skills)} skills ({len(allowed_skills)} explicit + {len(plugin_ids)} plugins)")
-        logger.debug(f"Skill details: allowed_skills={allowed_skills}, plugin_ids={plugin_ids}, effective_allowed_skills={effective_allowed_skills}")
-
-        # Add skill access checker hook (double protection with per-agent workspace)
-        # Skip adding the hook when allow_all_skills is True (no restrictions needed)
-        if enable_skills and not allow_all_skills:
-            if "PreToolUse" not in hooks:
-                hooks["PreToolUse"] = []
-
-            # Get built-in skill names so the hook always allows them
-            from core.skill_manager import skill_manager
-            cache = await skill_manager.get_cache()
-            builtin_names = [
-                name for name, info in cache.items()
-                if info.source_tier == "built-in"
-            ]
-
-            skill_checker = create_skill_access_checker(
-                allowed_skill_names,
-                builtin_skill_names=builtin_names,
-            )
-            hooks["PreToolUse"].append(
-                HookMatcher(matcher="Skill", hooks=[skill_checker])
-            )
-            logger.info(f"Skill access checker hook added for skills: {allowed_skill_names} (built-in: {builtin_names})")
-
-        # PreCompact hook — fires before the SDK compacts the context window.
-        # Sets flags on session_context so _run_query_on_client can emit an
-        # SSE event to the frontend after compaction completes.
-        if session_context is not None:
-            async def _pre_compact_hook(hook_input, tool_name, hook_context):
-                trigger = getattr(hook_input, 'trigger', 'auto')
-                logger.info(f"PreCompact hook fired — trigger={trigger}, session={session_context.get('sdk_session_id')}")
-                session_context["_compacted"] = True
-                session_context["_compact_trigger"] = trigger
-                return {}  # empty dict = continue normally
-
-            hooks.setdefault("PreCompact", [])
-            hooks["PreCompact"].append(
-                HookMatcher(hooks=[_pre_compact_hook])
-            )
-
-        return hooks, effective_allowed_skills, allow_all_skills
 
 
     def _build_sandbox_config(self, agent_config: dict) -> Optional[dict]:
@@ -1021,51 +779,8 @@ class AgentManager:
         channel_context: Optional[dict],
         working_directory: str,
     ) -> dict:
-        """Inject channel-specific MCP servers when running in a channel context.
-
-        When ``channel_context`` is provided, a ``channel-tools`` MCP server
-        entry is added to ``mcp_servers`` so the agent can interact with the
-        originating channel (e.g. Feishu).
-
-        Args:
-            mcp_servers: Current MCP server configuration dict (mutated in place).
-            channel_context: Optional channel context for channel-based execution.
-            working_directory: The resolved working directory for the agent.
-
-        Returns:
-            The (possibly updated) mcp_servers dict.
-        """
-        if not channel_context:
-            return mcp_servers
-
-        channel_type = channel_context.get("channel_type", "")
-        env_vars = {
-            "CHANNEL_TYPE": channel_type,
-            "WORKSPACE_DIR": working_directory,
-        }
-
-        if channel_type == "feishu":
-            env_vars.update({
-                "FEISHU_APP_ID": channel_context.get("app_id", ""),
-                "FEISHU_APP_SECRET": channel_context.get("app_secret", ""),
-                "CHAT_ID": channel_context.get("chat_id", ""),
-            })
-            reply_to = channel_context.get("reply_to_message_id")
-            if reply_to:
-                env_vars["REPLY_TO_MESSAGE_ID"] = reply_to
-
-        mcp_script = Path(__file__).resolve().parent.parent / "mcp_servers" / "channel_file_sender.py"
-        if mcp_script.exists():
-            mcp_servers["channel-tools"] = {
-                "type": "stdio",
-                "command": get_python_executable(),
-                "args": [str(mcp_script)],
-                "env": env_vars,
-            }
-        else:
-            logger.warning(f"Channel-tools MCP script not found: {mcp_script}")
-
-        return mcp_servers
+        """Inject channel-specific MCP servers. Delegates to mcp_config_builder."""
+        return _inject_channel_mcp_fn(mcp_servers, channel_context, working_directory)
 
 
     def _resolve_model(self, agent_config: dict) -> Optional[str]:
