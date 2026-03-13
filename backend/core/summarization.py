@@ -97,6 +97,8 @@ class StructuredSummary:
     # COE signal fields (LLM-detected)
     coe_signal: str = ""      # "" | "candidate" | "resolution"
     coe_topic: str = ""       # Problem topic for cross-session clustering
+    # Corrections: user corrected agent behavior (auto-captured for EVOLUTION.md)
+    corrections: list[str] = field(default_factory=list)
     # Legacy fields (kept for backward compat, will be empty for new sessions)
     actions_taken: list[str] = field(default_factory=list)
     reasoning: list[str] = field(default_factory=list)
@@ -108,7 +110,7 @@ class StructuredSummary:
         text = " ".join(
             self.topics + self.decisions + self.files_modified
             + self.open_questions + self.deliverables + self.key_outputs
-            + self.lessons + self.rejected_approaches
+            + self.lessons + self.rejected_approaches + self.corrections
             + self.actions_taken + self.reasoning  # legacy
         )
         if self.continue_from:
@@ -143,6 +145,10 @@ Also assess:
 - Was this a debugging/investigation session? If yes, set coe_signal.
 - coe_signal: "" if routine, "candidate" if investigating a bug/issue, "resolution" if root cause was found and fixed
 - coe_topic: the problem being investigated (e.g., "streaming not working", "context files silently dropped")
+- Did the user correct the agent's behavior? Look for patterns like: "don't ask me, just do it", \
+"I already told you", "stop repeating", "that's wrong", "not what I asked", user re-explaining \
+after agent misunderstood, user expressing frustration with agent approach. Each correction \
+should capture: what the agent did wrong + what the user wanted instead.
 
 ## Output (valid JSON only, no markdown fences):
 {{
@@ -150,6 +156,7 @@ Also assess:
   "key_outputs": ["code: agent_manager.py → StreamEvent handling", "sent: summary email to person@email"],
   "lessons": ["SDK has include_partial_messages flag (default False)", "Never trust char-count estimation for tokens"],
   "rejected_approaches": ["Tried X but rejected because Y"],
+  "corrections": ["Agent asked for confirmation on internal action — user said just do it", "Agent repeated user's words back — user said stop repeating"],
   "continue_from": "specific next step for the next session (one sentence)",
   "validation_status": "what was tested vs untested (one sentence)",
   "coe_signal": "",
@@ -211,6 +218,10 @@ class SummarizationPipeline:
                 logger.warning(
                     "LLM enrichment failed, using rule-based summary: %s", exc
                 )
+
+        # Mandatory continue_from — rule-based fallback if LLM didn't generate one
+        if not summary.continue_from:
+            summary.continue_from = self._derive_continue_from(summary)
 
         return self._enforce_word_limit(summary)
 
@@ -510,6 +521,26 @@ class SummarizationPipeline:
                 title = truncated
         return title.rstrip(".")
 
+    @staticmethod
+    def _derive_continue_from(summary: StructuredSummary) -> str:
+        """Rule-based fallback for continue_from when LLM doesn't generate one.
+
+        Priority chain:
+        1. If there are open questions → "Resolve: <first question>"
+        2. If validation_status mentions untested → "Verify: <validation>"
+        3. If COE candidate → "Investigate: <coe_topic>"
+        4. Fallback → "Ongoing: <session_title>"
+        """
+        if summary.open_questions:
+            return f"Resolve: {summary.open_questions[0][:100]}"
+        if summary.validation_status and "untest" in summary.validation_status.lower():
+            return f"Verify: {summary.validation_status[:100]}"
+        if summary.coe_signal == "candidate" and summary.coe_topic:
+            return f"Investigate: {summary.coe_topic[:100]}"
+        if summary.session_title and summary.session_title != "Untitled session":
+            return f"Ongoing: {summary.session_title[:100]}"
+        return ""
+
     def _enforce_word_limit(self, summary: StructuredSummary) -> StructuredSummary:
         """Trim fields to stay within MAX_WORDS_PER_ENTRY.
 
@@ -523,6 +554,7 @@ class SummarizationPipeline:
                 ("topics", summary.topics),
                 ("open_questions", summary.open_questions),
                 ("rejected_approaches", summary.rejected_approaches),
+                ("corrections", summary.corrections),
                 ("decisions", summary.decisions),
                 ("key_outputs", summary.key_outputs),
                 ("deliverables", summary.deliverables),
@@ -568,6 +600,7 @@ class SummarizationPipeline:
         summary.key_outputs = enriched.get("key_outputs", [])
         summary.lessons = enriched.get("lessons", [])
         summary.rejected_approaches = enriched.get("rejected_approaches", [])
+        summary.corrections = enriched.get("corrections", [])
         summary.continue_from = enriched.get("continue_from", "")
         summary.validation_status = enriched.get("validation_status", "")
         summary.coe_signal = enriched.get("coe_signal", "")
@@ -726,7 +759,7 @@ class SummarizationPipeline:
 
         result: dict[str, Any] = {}
         for key in ("deliverables", "key_outputs", "lessons",
-                     "rejected_approaches",
+                     "rejected_approaches", "corrections",
                      "actions_taken", "reasoning"):  # legacy
             entries = data.get(key, [])
             if isinstance(entries, list):

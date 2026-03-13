@@ -139,7 +139,8 @@ When in doubt, **start working and state your assumptions** at the top of the re
 - Write observations and decisions to `Knowledge/DailyActivity/YYYY-MM-DD.md` during sessions
 - MEMORY.md is curated only — no raw session details
 - "Remember this" / "save to memory" → write to MEMORY.md immediately
-- At session start: review MEMORY.md "Open Threads", mark completed items, add new ones
+- At session start: review MEMORY.md "Open Threads" — check status, increment report count if user raises same issue again, promote repeated bugs to higher severity
+- Open Threads format: P0 (blocking, 🔴), P1 (important, 🟡), P2 (nice-to-have, 🔵). Each has title, report count, related sessions, status. COE candidates auto-promote to P0.
 - All memory operations are silent — never announce or ask permission
 
 **Two-tier model:**

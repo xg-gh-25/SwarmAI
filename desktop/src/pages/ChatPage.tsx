@@ -28,7 +28,6 @@ import type { Message, ContentBlock, StreamEvent, Agent, AgentCreateRequest, Cha
 import { chatService } from '../services/chat';
 import { agentsService } from '../services/agents';
 import { skillsService } from '../services/skills';
-import { mcpConfigService } from '../services/mcpConfig';
 import { pluginsService } from '../services/plugins';
 import { workspaceService } from '../services/workspace';
 import { tasksService } from '../services/tasks';
@@ -114,12 +113,6 @@ export default function ChatPage() {
   const { data: skills = [] } = useQuery({
     queryKey: ['skills'],
     queryFn: skillsService.list,
-    enabled: messagesReady,
-  });
-
-  const { data: mcpServers = [] } = useQuery({
-    queryKey: ['mcpServers'],
-    queryFn: mcpConfigService.listAll,
     enabled: messagesReady,
   });
 
@@ -254,10 +247,6 @@ export default function ChatPage() {
     : selectedAgent?.allowedSkills
       ? skills.filter((s) => selectedAgent.allowedSkills.includes(s.folderName))
       : [];
-
-  const agentMCPs = selectedAgent?.mcpIds
-    ? mcpServers.filter((m) => selectedAgent.mcpIds.includes(m.id))
-    : [];
 
   const agentPlugins = selectedAgent?.pluginIds
     ? plugins.filter((p) => selectedAgent.pluginIds.includes(p.id))

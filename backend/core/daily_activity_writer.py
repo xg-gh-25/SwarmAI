@@ -156,6 +156,13 @@ def _format_session_entry(summary: StructuredSummary, context: HookContext) -> s
             lines.append(f"- {r}")
         lines.append("")
 
+    # --- Corrections (agent behavior corrected by user) ---
+    if summary.corrections:
+        lines.append("**Corrections:**")
+        for c in summary.corrections:
+            lines.append(f"- {c}")
+        lines.append("")
+
     # --- COE context (when investigating a problem) ---
     if summary.coe_signal and summary.coe_topic:
         lines.append(f"**COE:** `{summary.coe_signal}` — {summary.coe_topic}")
