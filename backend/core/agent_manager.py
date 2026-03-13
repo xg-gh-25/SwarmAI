@@ -1228,6 +1228,16 @@ class AgentManager:
         permission_mode = agent_config.get("permission_mode", "bypassPermissions")
         max_buffer_size = int(os.environ.get("MAX_BUFFER_SIZE", 10 * 1024 * 1024))
 
+        # Build add_dirs from sandbox_additional_write_paths config.
+        # This passes --add-dir to the CLI, granting write access to directories
+        # outside the working directory (e.g., the source tree for self-evolution).
+        add_dirs: list[str] = []
+        if settings.sandbox_additional_write_paths:
+            add_dirs = [
+                p.strip() for p in settings.sandbox_additional_write_paths.split(",")
+                if p.strip()
+            ]
+
         return ClaudeAgentOptions(
             system_prompt=system_prompt_config,
             allowed_tools=allowed_tools if allowed_tools else None,
@@ -1246,7 +1256,7 @@ class AgentManager:
             sandbox=sandbox_settings,
             can_use_tool=file_access_handler,
             max_buffer_size=max_buffer_size,
-            add_dirs=None,
+            add_dirs=add_dirs if add_dirs else None,
             # Enable partial message streaming so the SDK yields StreamEvent
             # objects with token-level deltas (content_block_delta, etc.)
             # instead of buffering the entire response into one AssistantMessage.
