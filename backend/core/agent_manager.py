@@ -2094,21 +2094,93 @@ class AgentManager:
                     else final_session_id
                 )
                 if session_context.get("had_error"):
-                    logger.info(f"Session had error, disconnecting instead of storing")
-                    try:
-                        await wrapper.__aexit__(None, None, None)
-                    except Exception:
-                        pass
-                elif effective_session_id:
-                    self._active_sessions[effective_session_id] = {
-                        "client": client,
-                        "wrapper": wrapper,
-                        "created_at": time.time(),
-                        "last_used": time.time(),
-                        "activity_extracted": False,
-                        "failure_tracker": ToolFailureTracker(),
-                    }
-                    logger.info(f"Stored long-lived client for session {effective_session_id}")
+                    # PATH A auto-retry: if this was the first attempt (not
+                    # already a retry from PATH B), try once more with a fresh
+                    # client. This handles the case where a brand-new session
+                    # hits a watchdog timeout — without this, the user sees a
+                    # dead 1-message session and must manually resend.
+                    if not _need_fresh_client and not session_context.get("_path_a_retried"):
+                        logger.info(
+                            "PATH A: fresh client had error, auto-retrying once "
+                            "with a new client"
+                        )
+                        session_context["had_error"] = False
+                        session_context["_path_a_retried"] = True
+                        assistant_content = ContentBlockAccumulator()
+                        try:
+                            await wrapper.__aexit__(None, None, None)
+                        except Exception:
+                            pass
+
+                        # Visual indicator
+                        yield {
+                            "type": "assistant",
+                            "content": [{
+                                "type": "text",
+                                "text": (
+                                    "\n\n---\n\n"
+                                    "⚠️ *AI service was slow to respond. "
+                                    "Retrying automatically...*\n\n"
+                                ),
+                            }],
+                        }
+
+                        # Create a fresh client for the retry
+                        options = await self._build_options(
+                            agent_config, enable_skills, enable_mcp,
+                            None, session_context, channel_context,
+                        )
+                        wrapper = _ClaudeClientWrapper(options=options)
+                        async with _env_lock:
+                            _configure_claude_environment(self._config)
+                            client = await wrapper.__aenter__()
+                        logger.info("PATH A retry: fresh client created")
+
+                        try:
+                            async for event in self._run_query_on_client(
+                                client=client,
+                                query_content=query_content,
+                                display_text=display_text,
+                                agent_config=agent_config,
+                                session_context=session_context,
+                                assistant_content=assistant_content,
+                                is_resuming=False,
+                                content=content,
+                                user_message=user_message,
+                                agent_id=agent_id,
+                            ):
+                                yield event
+                        except Exception:
+                            try:
+                                await wrapper.__aexit__(None, None, None)
+                            except Exception:
+                                pass
+                            raise
+
+                        # Re-evaluate after retry
+                        final_session_id = session_context["sdk_session_id"]
+                        effective_session_id = (
+                            session_context["app_session_id"]
+                            if session_context.get("app_session_id") is not None
+                            else final_session_id
+                        )
+
+                    if session_context.get("had_error"):
+                        logger.info("Session had error (after retry), disconnecting instead of storing")
+                        try:
+                            await wrapper.__aexit__(None, None, None)
+                        except Exception:
+                            pass
+                    elif effective_session_id:
+                        self._active_sessions[effective_session_id] = {
+                            "client": client,
+                            "wrapper": wrapper,
+                            "created_at": time.time(),
+                            "last_used": time.time(),
+                            "activity_extracted": False,
+                            "failure_tracker": ToolFailureTracker(),
+                        }
+                        logger.info(f"Stored long-lived client for session {effective_session_id}")
 
         except Exception as e:
             error_traceback = traceback.format_exc()
@@ -2310,9 +2382,8 @@ class AgentManager:
             # response, the stdout stream hangs forever (anyio TextReceiveStream
             # doesn't detect broken pipe reliably). This timeout surfaces an
             # error to the user instead of infinite "Thinking...".
-            # Both timeouts set to 120s — a 5-minute hang is never acceptable UX.
-            _WATCHDOG_INITIAL_TIMEOUT = 120   # seconds before first real message
-            _WATCHDOG_INTER_MSG_TIMEOUT = 120  # seconds between messages during tool use
+            _WATCHDOG_INITIAL_TIMEOUT = 90    # seconds before first real message
+            _WATCHDOG_INTER_MSG_TIMEOUT = 90  # seconds between messages during tool use
             _got_first_real_message = False
 
             while True:
