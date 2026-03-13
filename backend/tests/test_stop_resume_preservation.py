@@ -191,7 +191,7 @@ class TestGenuineErrorCleanup:
 
 class TestInterruptMissingClient:
     """Preservation: Calling interrupt_session() when no client exists
-    in _clients must return {"success": False} without side effects.
+    must return {"success": False} without side effects.
 
     This test MUST PASS on unfixed code — it captures existing behavior.
 
@@ -200,7 +200,7 @@ class TestInterruptMissingClient:
 
     @pytest.mark.asyncio
     async def test_interrupt_missing_client_returns_failure(self):
-        """interrupt_session() with no client in _clients must return
+        """interrupt_session() with no client must return
         failure without modifying _active_sessions.
 
         MUST PASS on unfixed code — this is the baseline behavior to preserve.

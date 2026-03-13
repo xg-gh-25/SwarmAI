@@ -83,7 +83,6 @@ def _setup_agent_manager(
     originals = {
         "executor": agent_manager._hook_executor,
         "sessions": agent_manager._active_sessions.copy(),
-        "clients": agent_manager._clients.copy(),
         "cleanup_task": agent_manager._cleanup_task,
     }
 
@@ -91,7 +90,6 @@ def _setup_agent_manager(
     agent_manager._active_sessions.clear()
     if session_map:
         agent_manager._active_sessions.update(session_map)
-    agent_manager._clients = {}
     agent_manager._cleanup_task = None
 
     return mock_executor, originals
@@ -103,7 +101,6 @@ def _restore_agent_manager(originals: dict):
 
     agent_manager._hook_executor = originals["executor"]
     agent_manager._active_sessions = originals["sessions"]
-    agent_manager._clients = originals["clients"]
     agent_manager._cleanup_task = originals["cleanup_task"]
 
 
@@ -132,20 +129,6 @@ class TestZeroSessionsFastReturn:
         finally:
             _restore_agent_manager(originals)
 
-    @pytest.mark.asyncio
-    async def test_zero_sessions_clears_clients(self):
-        """Even with zero sessions, transient clients are cleared."""
-        from core.agent_manager import agent_manager
-
-        mock_executor, originals = _setup_agent_manager(session_map=None)
-        # Add a transient client to verify it gets cleared
-        agent_manager._clients["transient-1"] = AsyncMock()
-        try:
-            await agent_manager.disconnect_all()
-
-            assert len(agent_manager._clients) == 0
-        finally:
-            _restore_agent_manager(originals)
 
 
 # ---------------------------------------------------------------------------

@@ -345,7 +345,7 @@ class TestSessionCleanupOnContextBuildFailure:
         1. Add a session to _active_sessions and seed per-session state.
         2. Patch _build_hook_context to raise.
         3. Call _cleanup_session(session_id).
-        4. Assert session_locks, _clients, and _user_turn_counts no
+        4. Assert session_locks and _user_turn_counts no
            longer contain the session_id.
         """
         from core.agent_manager import agent_manager
@@ -359,14 +359,12 @@ class TestSessionCleanupOnContextBuildFailure:
         original_executor = agent_manager._hook_executor
         original_sessions = agent_manager._active_sessions.copy()
         original_locks = agent_manager._session_locks.copy()
-        original_clients = agent_manager._clients.copy()
         original_turns = agent_manager._user_turn_counts.copy()
         try:
             agent_manager._hook_executor = mock_executor
             agent_manager._active_sessions[session_id] = info
             # Seed per-session state that cleanup should remove
             agent_manager._session_locks[session_id] = asyncio.Lock()
-            agent_manager._clients[session_id] = MagicMock()
             agent_manager._user_turn_counts[session_id] = 3
 
             with patch.object(
@@ -380,14 +378,12 @@ class TestSessionCleanupOnContextBuildFailure:
             # All per-session state must be cleaned up
             assert session_id not in agent_manager._active_sessions
             assert session_id not in agent_manager._session_locks
-            assert session_id not in agent_manager._clients
             assert session_id not in agent_manager._user_turn_counts
 
         finally:
             agent_manager._hook_executor = original_executor
             agent_manager._active_sessions = original_sessions
             agent_manager._session_locks = original_locks
-            agent_manager._clients = original_clients
             agent_manager._user_turn_counts = original_turns
 
 
