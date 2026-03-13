@@ -351,7 +351,7 @@ describe('useChatStreamingLifecycle', () => {
       expect(result.current.isStreaming).toBe(false);
     });
 
-    it('handles error event by replacing message content', () => {
+    it('handles error event by appending error to message content', () => {
       const msgId = 'msg-1';
       const { result } = renderHook(() =>
         useChatStreamingLifecycle(createMockDeps()),
@@ -374,9 +374,11 @@ describe('useChatStreamingLifecycle', () => {
       });
 
       const content = result.current.messages[0].content;
-      expect(content).toHaveLength(1);
+      expect(content).toHaveLength(2);
       expect(content[0].type).toBe('text');
-      expect((content[0] as { text: string }).text).toContain('Something broke');
+      expect((content[0] as { text: string }).text).toBe('partial');
+      expect(content[1].type).toBe('text');
+      expect((content[1] as { text: string }).text).toContain('Something broke');
     });
   });
 
@@ -1448,8 +1450,9 @@ describe('Fix 3: Error handling and visibility', () => {
       });
 
       const content = result.current.messages[0].content;
-      expect(content).toHaveLength(1);
-      expect((content[0] as { text: string }).text).toContain(
+      expect(content).toHaveLength(2);
+      expect((content[0] as { text: string }).text).toBe('partial response');
+      expect((content[1] as { text: string }).text).toContain(
         'Something went wrong',
       );
     });
