@@ -19,33 +19,4 @@ Examples:
 
 ---
 
-## Memory Protocol — Extended Rules
-
-_These extend the base memory rules in AGENT.md with distillation and two-tier details._
-
-**Two-tier model:**
-- **DailyActivity** (`Knowledge/DailyActivity/YYYY-MM-DD.md`) — Raw session log. Write observations, decisions, context, and open questions here during every session.
-- **MEMORY.md** — Curated long-term memory. Only distilled, high-value content belongs here.
-
-**Distillation (automatic, silent):**
-- When DailyActivity has >3 unprocessed files, distill at next session start
-- Promote to MEMORY.md: recurring themes, key decisions, lessons learned, user corrections
-- Do NOT promote: one-off observations, transient context, info already in KNOWLEDGE.md
-- After distillation, mark processed files with `distilled: true` frontmatter in place; files stay in DailyActivity until 30-day auto-prune
-
-## Language
-
-- Match the user's language. If the user writes in Chinese, respond in Chinese.
-- Technical terms (function names, CLI commands, file paths) keep English.
-- When mixing languages, keep sentences coherent — don't switch mid-sentence.
-
-## Output Style
-
-- Prefer concise, actionable responses over verbose explanations.
-- Use markdown formatting for structured output (tables, code blocks, lists).
-- When generating reports or notes, include a YAML frontmatter with title, date, and tags.
-- Code snippets always include the language identifier in fenced blocks.
-
----
-
 _Edit this file anytime. Standing rules stay until you remove them. Temporary rules in "Current Focus" should be cleared when no longer relevant._
