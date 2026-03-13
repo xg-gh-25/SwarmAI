@@ -14,8 +14,7 @@ Tauri macOS Bundle Structure:
     │           └── resources/
     │               ├── seed.db
     │               ├── default-agent.json
-    │               ├── default-mcp-servers.json
-    │               └── default-skills/
+    │               └── default-mcp-servers.json
 """
 import shutil
 from pathlib import Path
