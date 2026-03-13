@@ -251,15 +251,8 @@ def test_seed_db_generator_uses_correct_resource_paths():
         "default-agent.json should contain agent configuration"
     )
 
-    # Verify default-skills directory exists with .md files
-    skills_dir = resources_dir / "default-skills"
-    assert skills_dir.exists(), (
-        "default-skills/ directory not found in desktop/resources/"
-    )
-    skill_files = list(skills_dir.glob("*.md"))
-    assert len(skill_files) > 0, (
-        "No .md skill files found in desktop/resources/default-skills/"
-    )
+    # default-skills/ was removed — skills are discovered at runtime from
+    # backend/skills/ by SkillManager.  No seed DB seeding needed.
 
     # Verify default-mcp-servers.json exists
     mcp_config = resources_dir / "default-mcp-servers.json"
