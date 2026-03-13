@@ -4,9 +4,8 @@ This module contains the ``AgentManager`` class — the core execution engine th
 drives agent conversations via the Claude Agent SDK. After refactoring, it delegates
 to five focused modules for specific concerns:
 
-- ``security_hooks.py``      — 4-layer defense hook factories and dangerous command detection
+- ``security_hooks.py``      — Dangerous command gate, file access handler, skill access checker
 - ``permission_manager.py``  — PermissionManager singleton for command approval / HITL decisions
-- ``cmd_permission_manager.py`` — CmdPermissionManager for filesystem-backed command approvals
 - ``agent_defaults.py``      — Default agent bootstrap, skill/MCP registration
 - ``claude_environment.py``  — Claude SDK environment configuration and client wrapper
 - ``content_accumulator.py`` — O(1) content block deduplication (pure utility)
