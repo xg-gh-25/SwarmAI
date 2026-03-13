@@ -296,6 +296,29 @@ class InitializationManager:
             
             # Refresh built-in skills and context files
             await self.refresh_builtin_defaults()
+
+            # --- MCP file-based config: migration + catalog merge ---
+            try:
+                from pathlib import Path
+                ws_path = Path(workspace_path)
+
+                # One-time migration from DB + legacy JSON → mcp-dev.json
+                from core.mcp_migration import migrate_if_needed
+                await migrate_if_needed(ws_path)
+
+                # Merge bundled catalog template → mcp-catalog.json
+                from core.mcp_config_loader import merge_catalog_template
+                from utils.bundle_paths import get_resources_dir
+                _backend_dir = Path(__file__).resolve().parent.parent
+                _dev_resources = _backend_dir.parent / "desktop" / "resources"
+                resources_dir = get_resources_dir(_dev_resources)
+                template_path = resources_dir / "mcp-catalog.json"
+                merge_catalog_template(ws_path, template_path)
+
+                # Ensure .claude/mcps/ directory exists
+                (ws_path / ".claude" / "mcps").mkdir(parents=True, exist_ok=True)
+            except Exception as e:
+                logger.warning("MCP file config setup failed (non-critical): %s", e)
             
             # All critical steps succeeded - set the flag
             await self.set_initialization_complete(True)

@@ -6,7 +6,7 @@ import { SearchBar, StatusBadge, Button, SkeletonTable, ResizableTable, Resizabl
 import type { Agent, AgentCreateRequest, Skill, MCPServer } from '../types';
 import { agentsService } from '../services/agents';
 import { skillsService } from '../services/skills';
-import { mcpService } from '../services/mcp';
+import { mcpConfigService } from '../services/mcpConfig';
 
 export default function AgentsPage() {
   const navigate = useNavigate();
@@ -54,7 +54,7 @@ export default function AgentsPage() {
       try {
         const [skillsData, mcpsData] = await Promise.all([
           skillsService.list(),
-          mcpService.list(),
+          mcpConfigService.listAll(),
         ]);
         setSkills(skillsData);
         setMcpServers(mcpsData);

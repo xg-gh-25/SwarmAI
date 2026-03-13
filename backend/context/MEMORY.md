@@ -26,6 +26,10 @@ _(Decisions we've made together that I should remember.)_
 
 _(Things I've learned about how you work, what works well, what to avoid.)_
 
+## COE Registry
+
+_(Correction of Errors — complex problems investigated across sessions. Auto-populated from DailyActivity COE signals during distillation. Each entry links to the sessions involved and tracks resolution status.)_
+
 ## Open Threads
 
 _(Things we started but haven't finished. I'll check these at the start of each session.)_

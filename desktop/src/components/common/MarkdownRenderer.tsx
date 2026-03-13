@@ -698,7 +698,7 @@ const MarkdownRenderer = memo(function MarkdownRenderer({
   className = '',
 }: MarkdownRendererProps) {
   return (
-    <div className={`markdown-content min-w-0 overflow-hidden ${className}`}>
+    <div className={`markdown-content min-w-0 ${className}`}>
       <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} components={markdownComponents}>
         {content}
       </ReactMarkdown>

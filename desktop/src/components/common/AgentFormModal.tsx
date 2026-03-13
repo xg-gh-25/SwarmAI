@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next';
 import clsx from 'clsx';
 import type { Agent, AgentCreateRequest } from '../../types';
 import { skillsService } from '../../services/skills';
-import { mcpService } from '../../services/mcp';
+import { mcpConfigService } from '../../services/mcpConfig';
 import { pluginsService } from '../../services/plugins';
 import { settingsService } from '../../services/settings';
 import Modal from './Modal';
@@ -84,7 +84,7 @@ export default function AgentFormModal({
   // Fetch MCP servers
   const { data: mcpServers = [], isLoading: loadingMCPs } = useQuery({
     queryKey: ['mcpServers', isOpen],
-    queryFn: mcpService.list,
+    queryFn: mcpConfigService.listAll,
     enabled: isOpen,
     staleTime: 0,
   });

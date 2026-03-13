@@ -97,7 +97,7 @@ export function SessionsSection({
   return (
     <div>
       <ul className="space-y-1">
-        {openTabs.map((tab) => {
+        {[...openTabs].reverse().map((tab) => {
           const status: TabStatus = tabStatuses[tab.id] ?? 'idle';
           const indicator = STATUS_INDICATOR[status];
           const needsAttention =

@@ -28,7 +28,7 @@ import type { Message, ContentBlock, StreamEvent, Agent, AgentCreateRequest, Cha
 import { chatService } from '../services/chat';
 import { agentsService } from '../services/agents';
 import { skillsService } from '../services/skills';
-import { mcpService } from '../services/mcp';
+import { mcpConfigService } from '../services/mcpConfig';
 import { pluginsService } from '../services/plugins';
 import { workspaceService } from '../services/workspace';
 import { tasksService } from '../services/tasks';
@@ -119,7 +119,7 @@ export default function ChatPage() {
 
   const { data: mcpServers = [] } = useQuery({
     queryKey: ['mcpServers'],
-    queryFn: mcpService.list,
+    queryFn: mcpConfigService.listAll,
     enabled: messagesReady,
   });
 
@@ -264,7 +264,10 @@ export default function ChatPage() {
     : [];
 
   const enableSkills = selectedAgent?.allowAllSkills || agentSkills.length > 0 || agentPlugins.length > 0;
-  const enableMCP = agentMCPs.length > 0;
+  // Always enable MCP — the backend discovers MCP servers from
+  // .claude/mcps/mcp-catalog.json and mcp-dev.json at session start.
+  // load_mcp_config() safely returns empty dict when no servers are configured.
+  const enableMCP = true;
 
   // Load session messages helper.
   // Uses a generation counter to discard stale results when multiple

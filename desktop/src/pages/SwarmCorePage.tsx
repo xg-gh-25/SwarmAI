@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { agentsService } from '../services/agents';
 import { skillsService } from '../services/skills';
-import { mcpService } from '../services/mcp';
+import { mcpConfigService } from '../services/mcpConfig';
 import { pluginsService } from '../services/plugins';
 import { tasksService } from '../services/tasks';
 import type { Agent, Skill } from '../types';
@@ -89,7 +89,7 @@ export default function SwarmCorePage() {
         const [agents, skills, mcpServers, plugins, tasks, runningTaskCount] = await Promise.all([
           agentsService.list(),
           skillsService.list(),
-          mcpService.list(),
+          mcpConfigService.listAll(),
           pluginsService.listPlugins(),
           tasksService.list(),
           tasksService.getRunningCount(),

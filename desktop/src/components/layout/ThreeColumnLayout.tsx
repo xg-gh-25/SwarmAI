@@ -10,7 +10,7 @@ import SwarmWorkspaceWarningDialog from '../common/SwarmWorkspaceWarningDialog';
 import { classifyFileForPreview } from '../../utils/fileUtils';
 import type { FilePreviewType } from '../../utils/fileUtils';
 import SkillsModal from '../modals/SkillsModal';
-import MCPServersModal from '../modals/MCPServersModal';
+import MCPSettingsModal from '../modals/MCPSettingsModal';
 import AgentsModal from '../modals/AgentsModal';
 import SettingsModal from '../modals/SettingsModal';
 import WorkspacesModal from '../modals/WorkspacesModal';
@@ -404,7 +404,7 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
       <WorkspacesModal isOpen={activeModal === 'workspaces'} onClose={closeModal} />
       <SwarmCoreModal isOpen={activeModal === 'swarmcore'} onClose={closeModal} />
       <SkillsModal isOpen={activeModal === 'skills'} onClose={closeModal} />
-      <MCPServersModal isOpen={activeModal === 'mcp'} onClose={closeModal} />
+      <MCPSettingsModal isOpen={activeModal === 'mcp'} onClose={closeModal} />
       <AgentsModal isOpen={activeModal === 'agents'} onClose={closeModal} />
       <SettingsModal isOpen={activeModal === 'settings'} onClose={closeModal} />
       {/* Workspace Settings Modal - Requirement 3.14 */}
