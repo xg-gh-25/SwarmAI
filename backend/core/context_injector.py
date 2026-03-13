@@ -179,7 +179,7 @@ async def build_resume_context(
     app_session_id: str,
     max_messages: int = 20,
     db_fetch_limit: int = 60,
-    token_budget: int = 4000,
+    token_budget: int = 6000,
 ) -> str:
     """Load recent messages and format them for system prompt injection.
 
