@@ -1399,7 +1399,7 @@ export default function ChatPage() {
                 onScroll={handleMessagesScroll}
                 className={messages.length === 0
                   ? 'flex-1 overflow-hidden flex flex-col'
-                  : 'flex-1 overflow-y-auto p-4 space-y-4 min-w-0'
+                  : 'flex-1 overflow-y-auto px-6 py-4 space-y-4 min-w-0'
                 }
               >
                 {isLoadingOlderMessages && (
