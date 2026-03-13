@@ -5,7 +5,7 @@ correctly under edge conditions, particularly:
 
 - **Double disconnect_all**: Calling ``disconnect_all()`` twice in
   succession completes without error.  The second call finds
-  ``_active_sessions`` empty, ``_clients`` empty, and the cleanup
+  ``_active_sessions`` empty, the cleanup
   loop already cancelled, so it is effectively a no-op.
 
 Testing methodology: async unit tests using ``pytest-asyncio`` with
@@ -67,7 +67,7 @@ class TestDoubleDisconnectAll:
 
     After the first ``disconnect_all()``:
     - ``_active_sessions`` is empty
-    - ``_clients`` is empty
+    
     - The cleanup loop is cancelled
     - ``drain()`` on empty ``_pending`` returns ``(0, 0)``
 
@@ -97,12 +97,10 @@ class TestDoubleDisconnectAll:
 
         original_executor = agent_manager._hook_executor
         original_sessions = agent_manager._active_sessions.copy()
-        original_clients = agent_manager._clients.copy()
         original_cleanup_task = agent_manager._cleanup_task
         try:
             agent_manager._hook_executor = mock_executor
             agent_manager._active_sessions[session_id] = info
-            agent_manager._clients = {}
             agent_manager._cleanup_task = None
 
             with patch.object(
@@ -122,12 +120,10 @@ class TestDoubleDisconnectAll:
 
             # Still empty after second call
             assert len(agent_manager._active_sessions) == 0
-            assert len(agent_manager._clients) == 0
 
         finally:
             agent_manager._hook_executor = original_executor
             agent_manager._active_sessions = original_sessions
-            agent_manager._clients = original_clients
             agent_manager._cleanup_task = original_cleanup_task
 
     @pytest.mark.asyncio
@@ -156,12 +152,10 @@ class TestDoubleDisconnectAll:
 
         original_executor = agent_manager._hook_executor
         original_sessions = agent_manager._active_sessions.copy()
-        original_clients = agent_manager._clients.copy()
         original_cleanup_task = agent_manager._cleanup_task
         try:
             agent_manager._hook_executor = mock_executor
             agent_manager._active_sessions[session_id] = info
-            agent_manager._clients = {}
             agent_manager._cleanup_task = None
 
             with patch.object(
@@ -185,7 +179,6 @@ class TestDoubleDisconnectAll:
         finally:
             agent_manager._hook_executor = original_executor
             agent_manager._active_sessions = original_sessions
-            agent_manager._clients = original_clients
             agent_manager._cleanup_task = original_cleanup_task
 
     @pytest.mark.asyncio
@@ -221,12 +214,10 @@ class TestDoubleDisconnectAll:
 
         original_executor = agent_manager._hook_executor
         original_sessions = agent_manager._active_sessions.copy()
-        original_clients = agent_manager._clients.copy()
         original_cleanup_task = agent_manager._cleanup_task
         try:
             agent_manager._hook_executor = mock_executor
             agent_manager._active_sessions[session_id] = info
-            agent_manager._clients = {}
             agent_manager._cleanup_task = None
 
             with patch.object(
@@ -248,5 +239,4 @@ class TestDoubleDisconnectAll:
         finally:
             agent_manager._hook_executor = original_executor
             agent_manager._active_sessions = original_sessions
-            agent_manager._clients = original_clients
             agent_manager._cleanup_task = original_cleanup_task

@@ -103,7 +103,6 @@ async def new_conversation_and_collect(
     """
     agent_manager = AgentManager()
     agent_manager._active_sessions = {}
-    agent_manager._clients = {}
     # Provide a mock config so _execute_on_session doesn't crash on
     # self._config.get("use_bedrock")
     mock_config = MagicMock()
@@ -227,7 +226,6 @@ async def in_memory_resume_and_collect(
             "last_used": 0,
         }
     }
-    agent_manager._clients = {}
 
     mock_options = MagicMock()
     mock_options.allowed_tools = []

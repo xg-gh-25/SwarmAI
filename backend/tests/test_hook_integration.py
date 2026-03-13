@@ -96,7 +96,6 @@ def _setup_agent_manager_with_sessions(session_ids: list[str]):
     originals = {
         "executor": agent_manager._hook_executor,
         "sessions": agent_manager._active_sessions.copy(),
-        "clients": agent_manager._clients.copy(),
         "cleanup_task": agent_manager._cleanup_task,
     }
 
@@ -110,7 +109,6 @@ def _setup_agent_manager_with_sessions(session_ids: list[str]):
         agent_manager._active_sessions[sid] = info
 
     agent_manager._hook_executor = mock_executor
-    agent_manager._clients = {}
     agent_manager._cleanup_task = None
 
     return mock_executor, session_infos, contexts, originals
@@ -122,7 +120,6 @@ def _restore_agent_manager(originals: dict):
 
     agent_manager._hook_executor = originals["executor"]
     agent_manager._active_sessions = originals["sessions"]
-    agent_manager._clients = originals["clients"]
     agent_manager._cleanup_task = originals["cleanup_task"]
 
 

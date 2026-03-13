@@ -101,7 +101,6 @@ async def run_conversation_and_collect(
     agent_manager = AgentManager()
     # Ensure _active_sessions is EMPTY (simulates backend restart)
     agent_manager._active_sessions = {}
-    agent_manager._clients = {}
     # Provide mock config so _execute_on_session doesn't crash on
     # self._config.get("use_bedrock") during Bedrock pre-flight check
     mock_config = MagicMock()
@@ -176,7 +175,6 @@ async def continue_with_answer_and_collect(
     """
     agent_manager = AgentManager()
     agent_manager._active_sessions = {}
-    agent_manager._clients = {}
     # Provide mock config so _execute_on_session doesn't crash on
     # self._config.get("use_bedrock") during Bedrock pre-flight check
     mock_config = MagicMock()
@@ -251,7 +249,6 @@ async def skill_creator_and_collect(
     """
     agent_manager = AgentManager()
     agent_manager._active_sessions = {}
-    agent_manager._clients = {}
 
     save_calls = []
 
