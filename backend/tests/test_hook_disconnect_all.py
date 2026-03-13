@@ -239,9 +239,10 @@ class TestDoubleDisconnectAll:
 
             await agent_manager.disconnect_all()
 
-            # drain() called twice (once per disconnect_all)
-            assert mock_executor.drain.call_count == 2
-            # Both returned (0, 0)
+            # drain() called once — second disconnect_all fast-returns
+            # because _active_sessions is empty after the first call
+            assert mock_executor.drain.call_count == 1
+            # Returned (0, 0)
             assert all(r == (0, 0) for r in drain_results)
 
         finally:

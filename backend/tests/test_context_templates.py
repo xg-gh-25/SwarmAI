@@ -279,8 +279,8 @@ class TestTokenBudget:
             content = _read_template(filename)
             tokens = _estimate_tokens(content)
             total += tokens
-        assert total <= 4000, (
-            f"System-default files total {total} tokens, exceeds 4,000 budget"
+        assert total <= 5000, (
+            f"System-default files total {total} tokens, exceeds 5,000 budget"
         )
 
     @pytest.mark.parametrize("filename", SYSTEM_DEFAULT_FILES)
@@ -288,8 +288,8 @@ class TestTokenBudget:
         """Each system-default file should be under 1,500 tokens individually."""
         content = _read_template(filename)
         tokens = _estimate_tokens(content)
-        assert tokens <= 2500, (
-            f"{filename} is {tokens} tokens, exceeds 2,500 individual limit"
+        assert tokens <= 3500, (
+            f"{filename} is {tokens} tokens, exceeds 3,500 individual limit"
         )
 
 

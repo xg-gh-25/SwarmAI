@@ -24,7 +24,7 @@ import { useState, useRef, useEffect, useCallback, useMemo, useLayoutEffect } fr
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
-import type { Message, ContentBlock, StreamEvent, PermissionRequest, Agent, AgentCreateRequest, ChatSession } from '../types';
+import type { Message, ContentBlock, StreamEvent, Agent, AgentCreateRequest, ChatSession } from '../types';
 import { chatService } from '../services/chat';
 import { agentsService } from '../services/agents';
 import { skillsService } from '../services/skills';
@@ -35,20 +35,19 @@ import { tasksService } from '../services/tasks';
 import { Spinner, ConfirmDialog, AgentFormModal, ErrorBoundary } from '../components/common';
 import { useToast } from '../contexts/ToastContext';
 import { useHealth } from '../contexts/HealthContext';
-import { PermissionRequestModal, EvolutionMessage, ChatErrorMessage } from '../components/chat';
+import { EvolutionMessage, ChatErrorMessage } from '../components/chat';
 import { ChatDropZone } from '../components/chat/ChatDropZone';
 import type { EvolutionEventType } from '../services/evolution';
 import { FilePreviewModal } from '../components/workspace/FilePreviewModal';
-import { useRightSidebarGroup, useRateLimiter, useRateLimitCountdown } from '../hooks';
+import { useRateLimiter, useRateLimitCountdown } from '../hooks';
 import { useUnifiedAttachments } from '../hooks/useUnifiedAttachments';
 import { useTSCCState } from '../hooks/useTSCCState';
 import { useUnifiedTabState, MAX_OPEN_TABS } from '../hooks/useUnifiedTabState';
 import { useChatStreamingLifecycle, formatElapsed, ELAPSED_DISPLAY_THRESHOLD_MS } from '../hooks/useChatStreamingLifecycle';
-import { ChatHeader, ChatInput, ChatHistorySidebar, FileBrowserSidebar, MessageBubble, SwarmRadar, WelcomeScreen } from './chat/components';
-import { deriveEvolutionCounts } from './chat/components/radar/EvolutionBadge';
+import { ChatHeader, ChatInput, MessageBubble, WelcomeScreen } from './chat/components';
+import { RadarSidebar } from './chat/components/RightSidebar';
 
 import { groupSessionsByTime } from './chat/utils';
-import { RIGHT_SIDEBAR_WIDTH_CONFIGS } from './chat/constants';
 
 /**
  * Re-export ``deriveStreamingActivity`` and ``MAX_OPEN_TABS`` from the
@@ -95,20 +94,14 @@ export default function ChatPage() {
   const [isLoadingOlderMessages, setIsLoadingOlderMessages] = useState(false);
   const [agentLoadError, setAgentLoadError] = useState<string | null>(null);
 
-  // Pending states (permission is ChatPage-only; question is in the hook)
-  const [pendingPermission, setPendingPermission] = useState<PermissionRequest | null>(null);
-  const [isPermissionLoading, setIsPermissionLoading] = useState(false);
+  // Per-tab permission loading guard — prevents double-click during API call.
+  // Keyed by tabId so parallel tabs don't block each other.
+  const permissionLoadingTabs = useRef(new Set<string>());
   const [deleteConfirmSession, setDeleteConfirmSession] = useState<ChatSession | null>(null);
   const [isEditAgentOpen, setIsEditAgentOpen] = useState(false);
 
   // File preview state
   const [previewFile, setPreviewFile] = useState<{ path: string; name: string } | null>(null);
-
-  // Right sidebar group with mutual exclusion
-  const rightSidebars = useRightSidebarGroup({
-    defaultActive: 'todoRadar',
-    widthConfigs: RIGHT_SIDEBAR_WIDTH_CONFIGS,
-  });
 
   // LayoutContext — attachment state removed (now in useUnifiedAttachments)
 
@@ -200,6 +193,8 @@ export default function ChatPage() {
     setSessionId,
     pendingQuestion,
     setPendingQuestion,
+    pendingPermissionRequestId,
+    setPendingPermissionRequestId,
     isStreaming,
     setIsStreaming,
     displayedActivity,
@@ -219,6 +214,7 @@ export default function ChatPage() {
     clearContextWarning: _clearContextWarning,
   } = useChatStreamingLifecycle({
     queryClient,
+    getSession: (sid: string) => chatService.getSession(sid),
     getTabState,
     updateTabState,
     updateTabStatus,
@@ -236,14 +232,6 @@ export default function ChatPage() {
     () => messages.reduce((lastIdx, m, i) => m.role === 'assistant' ? i : lastIdx, -1),
     [messages],
   );
-
-  // Evolution session counts — derived from evolution_result messages in the stream (P7 fix)
-  const evolutionCounts = useMemo(() => {
-    const resultEvents = messages
-      .filter((m) => m.evolutionEvent?.eventType === 'evolution_result')
-      .map((m) => ({ data: m.evolutionEvent!.data }));
-    return deriveEvolutionCounts(resultEvents);
-  }, [messages]);
 
   // Refs for frequently-changing values — stabilizes useCallback identity for
   // handleSendMessage (Req 7.1, 7.3). Without these, the callback would need
@@ -353,15 +341,16 @@ export default function ChatPage() {
       addToast({ severity: 'info', message: 'Maximum tabs reached. Close a tab to open a new one.', autoDismiss: true });
       return;
     }
-    // Save current React state into the active tab's map entry before switching
+    // Save current React state into the active tab's map entry before switching.
+    // Same streaming guard as handleTabSelect — don't overwrite authoritative tabMapRef.
     const currentTabId = activeTabIdRef.current;
     if (currentTabId && tabMapRef.current.has(currentTabId)) {
+      const currentTab = tabMapRef.current.get(currentTabId)!;
+      const isTabStreaming = currentTab.isStreaming;
       updateTabState(currentTabId, {
-        messages: messagesRef.current,
-        sessionId: sessionIdRef.current,
+        ...(!isTabStreaming ? { messages: messagesRef.current, sessionId: sessionIdRef.current } : {}),
         pendingQuestion: null,
         scrollPosition: messagesContainerRef.current?.scrollTop ?? undefined,
-        // isStreaming is already authoritative in tabMapRef — no need to write it back
       });
     }
     const newTab = addTab(selectedAgentId);
@@ -369,6 +358,7 @@ export default function ChatPage() {
     setMessages([]);
     setSessionId(undefined);
     setPendingQuestion(null);
+    setPendingPermissionRequestId(null);
     setContextWarning(null);
     setIsStreaming(false, newTab!.id); // New tab is not streaming
     setIsExpanded(false); // New tab always starts in compact mode
@@ -380,16 +370,22 @@ export default function ChatPage() {
     const tab = openTabs.find(t => t.id === tabId);
     if (!tab) return;
     
-    // Save current React state into the active tab's map entry before switching
+    // Save current React state into the active tab's map entry before switching.
+    // IMPORTANT: messages and sessionId are NOT written back — the stream handler
+    // updates tabMapRef synchronously (authoritative), while messagesRef lags
+    // behind React's async commit cycle. Overwriting would lose recent stream data.
     const currentTabId = activeTabIdRef.current;
     if (currentTabId && tabMapRef.current.has(currentTabId)) {
+      const currentTab = tabMapRef.current.get(currentTabId)!;
+      // Only write messages/sessionId for IDLE tabs (React state is authoritative).
+      // For streaming tabs, tabMapRef is already up-to-date from the stream handler.
+      const isTabStreaming = currentTab.isStreaming;
       updateTabState(currentTabId, {
-        messages: messagesRef.current,
-        sessionId: sessionIdRef.current,
+        ...(!isTabStreaming ? { messages: messagesRef.current, sessionId: sessionIdRef.current } : {}),
         pendingQuestion: pendingQuestion,
+        pendingPermissionRequestId: pendingPermissionRequestId,
         isExpanded: isExpandedRef.current,
         scrollPosition: messagesContainerRef.current?.scrollTop ?? undefined,
-        // isStreaming is already authoritative in tabMapRef — no need to write it back
       });
       inputValueMapRef.current.set(currentTabId, inputValueRef.current);
     }
@@ -412,7 +408,7 @@ export default function ChatPage() {
           setIsExpanded(tabState.isExpanded ?? false);
           setInputValue(inputValueMapRef.current.get(tabId) ?? '');
           bumpStreamingDerivation();
-          setPendingPermission(null);
+          setPendingPermissionRequestId(null);
           if (tabStatuses[tabId] === 'complete_unread') {
             updateTabStatus(tabId, 'idle');
           }
@@ -427,6 +423,7 @@ export default function ChatPage() {
         setMessages(tabState.messages);
         setSessionId(tabState.sessionId);
         setPendingQuestion(tabState.pendingQuestion);
+        setPendingPermissionRequestId(tabState.pendingPermissionRequestId ?? null);
         setContextWarning(tabState.contextWarning ?? null);
         setIsExpanded(tabState.isExpanded ?? false);
         setInputValue(inputValueMapRef.current.get(tabId) ?? '');
@@ -462,9 +459,9 @@ export default function ChatPage() {
           });
         });
       }
-      // Clear permission state — it's not per-tab in the map, but it
-      // should not carry over from the previous tab.
-      setPendingPermission(null);
+      // Restore per-tab pending permission state from tabMapRef
+      const targetTabState = getTabState(tabId);
+      setPendingPermissionRequestId(targetTabState?.pendingPermissionRequestId ?? null);
       // Fix 8: Clear unread indicator when switching to a tab with 'complete_unread' status
       if (tabStatuses[tabId] === 'complete_unread') {
         updateTabStatus(tabId, 'idle');
@@ -474,7 +471,7 @@ export default function ChatPage() {
     
     // Not in map — load from API or initialize fresh
     activeTabIdRef.current = tabId;
-    setPendingPermission(null);
+    setPendingPermissionRequestId(null);
     setContextWarning(null);
     bumpStreamingDerivation(); // re-derive isStreaming for new active tab
     if (tab.sessionId) {
@@ -545,7 +542,7 @@ export default function ChatPage() {
         setSessionId(undefined);
         setPendingQuestion(null);
         setContextWarning(null);
-        setPendingPermission(null);
+        setPendingPermissionRequestId(null);
         setIsExpanded(false);
       }
     }
@@ -912,31 +909,12 @@ export default function ChatPage() {
     [selectedAgentId]
   );
 
-  // Wrap the hook's createStreamHandler to add ChatPage-local cmd_permission_request handling.
-  // The hook handles sessionId/isStreaming; ChatPage adds setPendingPermission.
+  // Create tab-aware stream handler — permission handling is now fully inline
+  // in the hook (appends content block to messages). No ChatPage wrapper needed.
   // Fix 6: Pass activeTabIdRef.current as tabId for tab-aware streaming.
   const wrappedCreateStreamHandler = useCallback((assistantMessageId: string) => {
     const tabId = activeTabIdRef.current ?? undefined;
-    const hookHandler = createStreamHandler(assistantMessageId, tabId);
-    return (event: StreamEvent) => {
-      if (event.type === 'cmd_permission_request') {
-        // Extract permission fields (handle both camelCase and snake_case)
-        const raw = event as unknown as Record<string, unknown>;
-        const requestId = event.requestId || raw.request_id as string;
-        const toolName = event.toolName || raw.tool_name as string;
-        const toolInput = event.toolInput || raw.tool_input as Record<string, unknown>;
-        setPendingPermission({
-          requestId: requestId!,
-          toolName: toolName!,
-          toolInput: toolInput!,
-          reason: event.reason!,
-          options: event.options || ['approve', 'deny'],
-        });
-      }
-      // Delegate to hook handler for all events (including cmd_permission_request
-      // which also needs sessionId/isStreaming updates)
-      hookHandler(event);
-    };
+    return createStreamHandler(assistantMessageId, tabId);
   }, [createStreamHandler, activeTabIdRef]);
 
   // Handle plugin commands (Req 7.2 — memoized with useCallback)
@@ -1201,25 +1179,50 @@ export default function ChatPage() {
     }
   };
 
-  // Handle permission decision
-  const handlePermissionDecision = async (decision: 'approve' | 'deny', feedback?: string) => {
+  // Handle inline permission decision — called from InlinePermissionRequest component
+  // via ContentBlockRenderer → AssistantMessageView → MessageBubble prop chain.
+  const handlePermissionDecision = async (requestId: string, decision: 'approve' | 'deny') => {
     const tabId = activeTabIdRef.current ?? undefined;
     const tabSessionId = tabId ? tabMapRef.current.get(tabId)?.sessionId : undefined;
-    if (!pendingPermission || !tabSessionId || !selectedAgentId) return;
+    if (!tabSessionId || !selectedAgentId) return;
+    if (tabId && permissionLoadingTabs.current.has(tabId)) return; // per-tab double-click guard
 
-    setIsPermissionLoading(true);
-    setPendingPermission(null);
+    if (tabId) permissionLoadingTabs.current.add(tabId);
+    setPendingPermissionRequestId(null);
 
-    const decisionText = decision === 'approve' ? '✓ Command approved, executing...' : '✗ Command denied by user';
-    setMessages((prev) => [...prev, { id: Date.now().toString(), role: 'assistant', content: [{ type: 'text', text: decisionText }], timestamp: new Date().toISOString() }]);
+    // Update the content block's decision field so it renders decided state
+    setMessages((prev) => prev.map((msg) => ({
+      ...msg,
+      content: msg.content.map((block) =>
+        block.type === 'cmd_permission_request' && block.requestId === requestId
+          ? { ...block, decision }
+          : block,
+      ),
+    })));
+
+    // Also update tabMapRef messages (authoritative source)
+    if (tabId) {
+      const tabState = tabMapRef.current.get(tabId);
+      if (tabState) {
+        tabState.messages = tabState.messages.map((msg) => ({
+          ...msg,
+          content: msg.content.map((block) =>
+            block.type === 'cmd_permission_request' && block.requestId === requestId
+              ? { ...block, decision }
+              : block,
+          ),
+        }));
+        tabState.pendingPermissionRequestId = null;
+      }
+    }
 
     if (decision === 'deny') {
       try {
-        await chatService.submitCmdPermissionDecision({ sessionId: tabSessionId, requestId: pendingPermission.requestId, decision: 'deny', feedback });
+        await chatService.submitCmdPermissionDecision({ sessionId: tabSessionId, requestId, decision: 'deny' });
       } catch (error) {
         console.error('Failed to submit deny decision:', error);
       } finally {
-        setIsPermissionLoading(false);
+        if (tabId) permissionLoadingTabs.current.delete(tabId);
         setIsStreaming(false, tabId);
       }
       return;
@@ -1234,22 +1237,27 @@ export default function ChatPage() {
     const assistantMessageId = (Date.now() + 1).toString();
     setMessages((prev) => [...prev, { id: assistantMessageId, role: 'assistant', content: [], timestamp: new Date().toISOString() }]);
 
+    // Capture tabId for cleanup in async callbacks (closure safety).
+    // Create the stream handler ONCE now (captures tabId at creation time)
+    // instead of calling wrappedCreateStreamHandler on every SSE event
+    // (which would re-read activeTabIdRef.current and get the wrong tab).
+    const capturedTabId = tabId;
+    const streamHandler = createStreamHandler(assistantMessageId, capturedTabId);
     const abort = chatService.streamCmdPermissionContinue(
-      { sessionId: tabSessionId, requestId: pendingPermission.requestId, decision, feedback, enableSkills, enableMCP },
+      { sessionId: tabSessionId, requestId, decision, enableSkills, enableMCP },
       (event: StreamEvent) => {
         if (event.type === 'cmd_permission_acknowledged') {
           setMessages((prev) => prev.filter((msg) => msg.id !== assistantMessageId));
-          setIsStreaming(false, tabId);
+          setIsStreaming(false, capturedTabId);
         } else {
-          wrappedCreateStreamHandler(assistantMessageId)(event);
+          streamHandler(event);
         }
       },
-      (error) => { createErrorHandler(assistantMessageId, tabId)(error); setIsPermissionLoading(false); },
-      () => { createCompleteHandler(tabId)(); setIsPermissionLoading(false); }
+      (error) => { createErrorHandler(assistantMessageId, capturedTabId)(error); if (capturedTabId) permissionLoadingTabs.current.delete(capturedTabId); },
+      () => { createCompleteHandler(capturedTabId)(); if (capturedTabId) permissionLoadingTabs.current.delete(capturedTabId); }
     );
 
     // Store abort function in the tab map for per-tab stop isolation.
-    // Only the .abort() method is used by handleStop — no signal needed.
     if (tabId) {
       updateTabState(tabId, {
         abortController: { abort: () => { abort(); }, signal: { aborted: false } } as unknown as AbortController,
@@ -1308,20 +1316,6 @@ export default function ChatPage() {
     }
   };
 
-  // Handle retry last user message (for ChatErrorMessage onRetry)
-  const handleRetryLastMessage = useCallback(() => {
-    const lastUserMsg = messagesRef.current.slice().reverse().find(m => m.role === 'user');
-    if (!lastUserMsg) return;
-    const textBlock = lastUserMsg.content.find(b => b.type === 'text');
-    if (textBlock && 'text' in textBlock) {
-      setInputValue(textBlock.text);
-      // Trigger send on next tick after input is set
-      setTimeout(() => {
-        inputValueRef.current = textBlock.text;
-        handleSendMessage();
-      }, 0);
-    }
-  }, [handleSendMessage]);
 
   // Handle agent save
   const handleSaveAgent = async (agent: Agent | AgentCreateRequest) => {
@@ -1342,8 +1336,6 @@ export default function ChatPage() {
         onTabClose={handleTabClose}
         onNewSession={handleNewSession}
         tabStatuses={tabStatuses}
-        activeSidebar={rightSidebars.activeSidebar}
-        onOpenSidebar={rightSidebars.openSidebar}
       />
 
       <div className="flex flex-1 overflow-hidden">
@@ -1435,7 +1427,6 @@ export default function ChatPage() {
                             suggestedAction: (msg as unknown as Record<string, unknown>).suggestedAction as string | undefined,
                             retryAfter: (msg as unknown as Record<string, unknown>).retryAfter as number | undefined,
                           }}
-                          onRetry={handleRetryLastMessage}
                         />
                       );
                     }
@@ -1448,7 +1439,9 @@ export default function ChatPage() {
                         key={msg.id}
                         message={msg}
                         onAnswerQuestion={handleAnswerQuestion}
+                        onPermissionDecision={handlePermissionDecision}
                         pendingToolUseId={pendingQuestion?.toolUseId}
+                        pendingPermissionRequestId={pendingPermissionRequestId ?? undefined}
                         isStreaming={isLastAssistantForStreaming}
                         sessionId={sessionId}
                         isLastAssistant={idx === lastAssistantIdx}
@@ -1520,57 +1513,38 @@ export default function ChatPage() {
                 promptMetadata={promptMetadata}
                 contextPct={contextWarning?.pct ?? null}
                 disabled={health.status === 'disconnected' || isLimited('/chat')}
+                activeTabIdRef={activeTabIdRef}
+                inputValueMapRef={inputValueMapRef}
+                onInputValueChange={(tabId: string, value: string) => {
+                  inputValueMapRef.current.set(tabId, value);
+                }}
               />
             </>
           )}
           </ErrorBoundary>
         </div>
 
-        {/* Right Sidebars - Order: TodoRadar, ChatHistory, FileBrowser */}
-        {rightSidebars.isActive('todoRadar') && (
-          <SwarmRadar
-            width={rightSidebars.widths.todoRadar.width}
-            isResizing={rightSidebars.widths.todoRadar.isResizing}
-            onMouseDown={rightSidebars.widths.todoRadar.handleMouseDown}
-            pendingQuestion={pendingQuestion}
-            pendingPermission={pendingPermission}
-            activeSessionId={sessionId}
-            evolutionCounts={evolutionCounts}
-          />
-        )}
-
-        {/* Chat History Sidebar */}
-        {rightSidebars.isActive('chatHistory') && (
-          <ChatHistorySidebar
-            width={rightSidebars.widths.chatHistory.width}
-            isResizing={rightSidebars.widths.chatHistory.isResizing}
-            groupedSessions={groupedSessions}
-            currentSessionId={sessionId}
-            agents={agents}
-            selectedAgentId={selectedAgentId}
-            onNewChat={handleNewChat}
-            onSelectSession={handleSelectSession}
-            onDeleteSession={(session) => setDeleteConfirmSession(session)}
-            onMouseDown={rightSidebars.widths.chatHistory.handleMouseDown}
-          />
-        )}
-
-        {/* Right Sidebar - File Browser */}
-        {rightSidebars.isActive('fileBrowser') && (
-          <FileBrowserSidebar
-            width={rightSidebars.widths.fileBrowser.width}
-            isResizing={rightSidebars.widths.fileBrowser.isResizing}
-            selectedAgentId={selectedAgentId}
-            basePath={effectiveBasePath}
-            onFileSelect={setPreviewFile}
-            onMouseDown={rightSidebars.widths.fileBrowser.handleMouseDown}
-          />
-        )}
+        {/* Right Sidebar — persistent Radar panel */}
+        <RadarSidebar
+          tabMapRef={tabMapRef}
+          activeTabIdRef={activeTabIdRef}
+          openTabs={openTabs}
+          tabStatuses={tabStatuses}
+          onTabSelect={selectTab}
+          inputValueMapRef={inputValueMapRef}
+          onInputValueChange={(tabId: string, value: string) => {
+            inputValueMapRef.current.set(tabId, value);
+          }}
+          groupedSessions={groupedSessions}
+          agents={agents}
+          onSelectSession={handleSelectSession}
+          onDeleteSession={(session) => setDeleteConfirmSession(session)}
+          workspaceId={selectedAgentId}
+        />
       </div>
 
       {/* Modals */}
       <FilePreviewModal isOpen={!!previewFile} onClose={() => setPreviewFile(null)} agentId={selectedAgentId || ''} file={previewFile} basePath={effectiveBasePath} />
-      {pendingPermission && <PermissionRequestModal request={pendingPermission} onDecision={handlePermissionDecision} isLoading={isPermissionLoading} />}
       <AgentFormModal isOpen={isEditAgentOpen} onClose={() => setIsEditAgentOpen(false)} onSave={handleSaveAgent} agent={selectedAgent} />
     </div>
     </ChatDropZone>

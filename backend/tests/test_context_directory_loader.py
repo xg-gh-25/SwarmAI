@@ -284,27 +284,27 @@ class TestComputeTokenBudget:
         )
 
     def test_large_model_200k(self, tmp_dirs):
-        """>=200K context window → BUDGET_LARGE_MODEL (40,000)."""
+        """>=200K context window → BUDGET_LARGE_MODEL (50,000)."""
         loader = self._make_loader(tmp_dirs)
         assert loader.compute_token_budget(200_000) == BUDGET_LARGE_MODEL
 
     def test_large_model_500k(self, tmp_dirs):
-        """500K context window → BUDGET_LARGE_MODEL (40,000)."""
+        """500K context window → BUDGET_LARGE_MODEL (50,000)."""
         loader = self._make_loader(tmp_dirs)
         assert loader.compute_token_budget(500_000) == BUDGET_LARGE_MODEL
 
     def test_medium_model_64k(self, tmp_dirs):
-        """Exactly 64K → DEFAULT_TOKEN_BUDGET (25,000)."""
+        """Exactly 64K → DEFAULT_TOKEN_BUDGET (30,000)."""
         loader = self._make_loader(tmp_dirs)
         assert loader.compute_token_budget(64_000) == DEFAULT_TOKEN_BUDGET
 
     def test_medium_model_128k(self, tmp_dirs):
-        """128K context window → DEFAULT_TOKEN_BUDGET (25,000)."""
+        """128K context window → DEFAULT_TOKEN_BUDGET (30,000)."""
         loader = self._make_loader(tmp_dirs)
         assert loader.compute_token_budget(128_000) == DEFAULT_TOKEN_BUDGET
 
     def test_medium_model_199999(self, tmp_dirs):
-        """Just below 200K → DEFAULT_TOKEN_BUDGET (25,000)."""
+        """Just below 200K → DEFAULT_TOKEN_BUDGET (30,000)."""
         loader = self._make_loader(tmp_dirs)
         assert loader.compute_token_budget(199_999) == DEFAULT_TOKEN_BUDGET
 
@@ -668,7 +668,7 @@ class TestExcludeFilenames:
 
         # Pre-populate L1 cache with full content (includes MEMORY)
         full = loader._assemble_from_sources()
-        loader._write_l1_cache(full, budget=40000)
+        loader._write_l1_cache(full, budget=50000)
         loader._is_l1_fresh = lambda: True
 
         # Load with exclusion — should NOT use the cache
@@ -686,7 +686,7 @@ class TestExcludeFilenames:
         loader = ContextDirectoryLoader(context_dir=context_dir)
 
         # Write cache with known content
-        loader._write_l1_cache("cached content only", budget=40000)
+        loader._write_l1_cache("cached content only", budget=50000)
         loader._is_l1_fresh = lambda: True
 
         result = loader.load_all(model_context_window=200_000)

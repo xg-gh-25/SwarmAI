@@ -709,10 +709,10 @@ class TestE2EBudgetHeadroom:
 
     def test_effective_budget_reduced_by_headroom(self):
         """The loader receives a reduced budget to leave room for DailyActivity."""
-        base = DEFAULT_TOKEN_BUDGET  # 25000
+        base = DEFAULT_TOKEN_BUDGET  # 30000
         effective = max(base - EPHEMERAL_HEADROOM, base // 2)
-        assert effective == base - EPHEMERAL_HEADROOM  # 25000 - 6000 = 19000
-        assert effective == 19_000
+        assert effective == base - EPHEMERAL_HEADROOM  # 30000 - 6000 = 24000
+        assert effective == 24_000
 
     def test_headroom_never_below_half(self):
         """With a very small base budget, headroom doesn't go below 50%."""

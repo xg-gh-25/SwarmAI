@@ -12,6 +12,7 @@ import type { ContentBlock, ToolResultContent } from '../../../types';
 import { MarkdownRenderer, AskUserQuestion } from '../../../components/common';
 import { MergedToolBlock } from './MergedToolBlock';
 import { ToolResultBlock } from './ToolResultBlock';
+import { InlinePermissionRequest } from './InlinePermissionRequest';
 
 interface ContentBlockRendererProps {
   block: ContentBlock;
@@ -20,7 +21,11 @@ interface ContentBlockRendererProps {
   /** Full content array for orphaned tool_result check. */
   allBlocks: ContentBlock[];
   onAnswerQuestion?: (toolUseId: string, answers: Record<string, string>) => void;
+  /** Callback when user approves/denies a permission request. */
+  onPermissionDecision?: (requestId: string, decision: 'approve' | 'deny') => void;
   pendingToolUseId?: string;
+  /** The request ID of the currently pending permission (buttons enabled for this one). */
+  pendingPermissionRequestId?: string;
   isStreaming?: boolean;
   /** The ID of the last tool_use block without a result — only this one gets a spinner. */
   lastPendingToolUseId?: string | null;
@@ -31,7 +36,9 @@ export function ContentBlockRenderer({
   resultMap,
   allBlocks,
   onAnswerQuestion,
+  onPermissionDecision,
   pendingToolUseId,
+  pendingPermissionRequestId,
   isStreaming,
   lastPendingToolUseId,
 }: ContentBlockRendererProps) {
@@ -85,6 +92,20 @@ export function ContentBlockRenderer({
         toolUseId={block.toolUseId}
         onSubmit={onAnswerQuestion || (() => {})}
         disabled={isAnswered || !!isStreaming}
+      />
+    );
+  }
+
+  if (block.type === 'cmd_permission_request') {
+    return (
+      <InlinePermissionRequest
+        requestId={block.requestId}
+        toolName={block.toolName}
+        toolInput={block.toolInput}
+        reason={block.reason}
+        isPending={pendingPermissionRequestId === block.requestId}
+        decision={block.decision}
+        onDecision={onPermissionDecision}
       />
     );
   }
