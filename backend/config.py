@@ -87,7 +87,7 @@ class Settings(BaseSettings):
     # Rate Limiting
     rate_limit_per_minute: int = 100
 
-    # NOTE: The following settings have been moved to ~/.swarm-ai/config.json
+    # NOTE: The following settings have been moved to SwarmWS/config.json
     # (managed by AppConfigManager, single source of truth):
     #   - anthropic_api_key, anthropic_base_url, default_model
     #   - claude_code_use_bedrock, claude_code_disable_experimental_betas

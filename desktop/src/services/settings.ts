@@ -2,7 +2,7 @@
  * Settings service for SwarmAI desktop app.
  *
  * Communicates with the backend Settings API (GET/PUT /api/settings) to
- * read and update application configuration stored in ~/.swarm-ai/config.json.
+ * read and update application configuration stored in SwarmWS/config.json.
  *
  * Key exports:
  * - ``APIConfigurationResponse`` — Read-only config + credential status indicators
