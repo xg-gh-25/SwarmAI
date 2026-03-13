@@ -967,11 +967,25 @@ export function useChatStreamingLifecycle(
         } else if (event.type === 'session_cleared' && event.newSessionId) {
           if (tabState) {
             tabState.sessionId = event.newSessionId;
-            tabState.messages = [];
+            // Re-inject the assistant placeholder after clearing so subsequent
+            // 'assistant' events can find assistantMessageId via updateMessages().
+            // Without this, session_cleared wipes the placeholder synced by
+            // handleSendMessage, and all post-clear streaming content is dropped.
+            tabState.messages = [{
+              id: assistantMessageId,
+              role: 'assistant' as const,
+              content: [],
+              timestamp: new Date().toISOString(),
+            }];
           }
           if (isActiveTab) {
             setSessionId(event.newSessionId);
-            setMessages([]);
+            setMessages([{
+              id: assistantMessageId,
+              role: 'assistant' as const,
+              content: [],
+              timestamp: new Date().toISOString(),
+            }]);
             queryClient.invalidateQueries({ queryKey: ['chat-sessions'] });
           }
         } else if (event.type === 'assistant' && event.content) {
