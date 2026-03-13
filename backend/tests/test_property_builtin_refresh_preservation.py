@@ -306,10 +306,11 @@ class TestStaleSymlinkCleanup:
                 projection.project_skills(workspace, allow_all=True)
             )
 
-            # Assert: stale symlink removed, active symlink preserved
+            # Assert: stale symlink removed, active skill preserved (as copy, not symlink)
             assert not stale_link.exists() and not stale_link.is_symlink(), (
                 "Stale symlink 's_stale' should have been removed"
             )
-            assert active_link.is_symlink(), (
-                "Active symlink 's_active' should still exist"
+            assert active_link.exists() and active_link.is_dir(), (
+                "Active skill 's_active' should exist as a directory copy "
+                "(project_skills uses copytree, not symlinks)"
             )
