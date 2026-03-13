@@ -107,6 +107,10 @@ def _build_response(cfg: AppConfigManager) -> AppConfigResponse:
             "claude_code_disable_experimental_betas",
             DEFAULT_CONFIG["claude_code_disable_experimental_betas"],
         ),
+        sandbox_additional_write_paths=cfg.get(
+            "sandbox_additional_write_paths",
+            DEFAULT_CONFIG["sandbox_additional_write_paths"],
+        ),
         aws_credentials_configured=_probe_aws_credentials(),
         anthropic_api_key_configured=_probe_anthropic_api_key(),
     )
@@ -164,6 +168,9 @@ async def update_app_configuration(request: AppConfigRequest):
         updates["claude_code_disable_experimental_betas"] = (
             request.claude_code_disable_experimental_betas
         )
+
+    if request.sandbox_additional_write_paths is not None:
+        updates["sandbox_additional_write_paths"] = request.sandbox_additional_write_paths
 
     if request.available_models is not None:
         updates["available_models"] = request.available_models

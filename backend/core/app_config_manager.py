@@ -67,6 +67,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "anthropic_base_url": None,
     "claude_code_disable_experimental_betas": True,
+    "sandbox_additional_write_paths": "",
     "evolution": {
         "enabled": True,
         "max_retries": 3,

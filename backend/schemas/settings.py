@@ -24,6 +24,7 @@ class AppConfigRequest(BaseModel):
     available_models: Optional[list[str]] = None
     default_model: Optional[str] = None
     claude_code_disable_experimental_betas: Optional[bool] = None
+    sandbox_additional_write_paths: Optional[str] = None
 
 
 class AppConfigResponse(BaseModel):
@@ -35,6 +36,7 @@ class AppConfigResponse(BaseModel):
     available_models: list[str] = Field(default_factory=list)
     default_model: str = "claude-sonnet-4-5-20250929"
     claude_code_disable_experimental_betas: bool = True
+    sandbox_additional_write_paths: str = ""
     # Credential status (read-only, derived at GET time)
     aws_credentials_configured: bool = False
     anthropic_api_key_configured: bool = False
