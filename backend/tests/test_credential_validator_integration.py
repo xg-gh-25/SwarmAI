@@ -22,16 +22,13 @@ class TestCredentialValidatorWiring:
         from core.agent_manager import AgentManager
         from core.credential_validator import CredentialValidator
         from core.app_config_manager import AppConfigManager
-        from core.cmd_permission_manager import CmdPermissionManager
 
         mgr = AgentManager()
         validator = CredentialValidator()
         cfg = MagicMock(spec=AppConfigManager)
-        cmd = MagicMock(spec=CmdPermissionManager)
 
         mgr.configure(
             config_manager=cfg,
-            cmd_permission_manager=cmd,
             credential_validator=validator,
         )
         assert mgr._credential_validator is validator

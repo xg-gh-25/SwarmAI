@@ -627,22 +627,15 @@ async def handle_cmd_permission_response(request: PermissionResponseRequest):
         }
     )
 
-    # If approved, persist the command via CmdPermissionManager (filesystem-backed)
+    # If approved, store in per-session PermissionManager (in-memory only)
     if request.decision == "approve":
         tool_input = permission_request.get("tool_input", {})
-        # Handle both dict and JSON string (SQLite may have parsed it already)
         if isinstance(tool_input, str):
             tool_input = json.loads(tool_input)
         command = tool_input.get("command", "") if isinstance(tool_input, dict) else ""
         if command:
-            try:
-                agent_manager._cmd_pm.approve(command)
-                logger.info(f"Command approved via CmdPermissionManager: {command[:50]}...")
-            except (ValueError, AttributeError) as exc:
-                # Fallback: overly-broad pattern rejected or CmdPermissionManager not wired yet
-                logger.warning(f"CmdPermissionManager approval failed ({exc}), using per-session fallback")
-                from core.agent_manager import approve_command as _legacy_approve
-                _legacy_approve(request.session_id, command)
+            _pm.approve_command(request.session_id, command)
+            logger.info(f"Command approved for session {request.session_id}: {command[:50]}...")
 
     # Signal any waiting tasks
     set_permission_decision(request.request_id, request.decision)

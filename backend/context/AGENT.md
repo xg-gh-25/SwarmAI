@@ -316,13 +316,11 @@ _These apply to the Tauri desktop app and its sidecar processes._
 
 2. **PyInstaller sys.executable trap**: In bundled Python, `sys.executable` points to the bundled binary (e.g. `python-backend`), NOT a Python interpreter. `subprocess.run([sys.executable, script.py])` will fail. Use direct function import (preferred) or `get_python_executable()` from `utils/bundle_paths.py`.
 
-3. **MCP full PATH chain**: AIM-installed MCP servers use wrapper scripts (`~/.aim/mcp-servers/`) that call `aim mcp start-server`. Both the wrapper script AND the `aim` CLI must be on PATH. Missing either = silent MCP connection failure. Verify both exist before declaring MCP "configured."
-
-4. **Sandbox write paths for skills**: Skills that generate output files (wireframes, prototypes, reports) need write access. If the sandbox blocks writes to Knowledge/ or other workspace paths, the fix is in `_build_sandbox_config` — add `sandbox_additional_write_paths` to config, not ad-hoc sandbox overrides.
+3. **Sandbox write paths for skills**: Skills that generate output files (wireframes, prototypes, reports) need write access. If the sandbox blocks writes to Knowledge/ or other workspace paths, the fix is in `_build_sandbox_config` — add `sandbox_additional_write_paths` to config, not ad-hoc sandbox overrides.
 
 ## UX Development Rules
 
-1. **Mockup before code**: For UI redesigns or new UX features (SwarmRadar, sidebar, new modals), create a wireframe or HTML mockup first. Don't jump to React code until the user approves the visual direction.
+1. **Mockup before code**: For UI redesigns or new UX features, create a wireframe or HTML mockup first. Don't jump to React code until the user approves the visual direction.
 
 2. **Graceful file handling**: Binary and unsupported files must never show blank screens. Open with system app (PDF, docx, xlsx, pptx). Show friendly "unsupported format" message for unknown types. Markdown preview ↔ edit toggle must preserve content state.
 

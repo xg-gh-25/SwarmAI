@@ -37,8 +37,6 @@ REQUIRED_SYMBOLS = [
     "DEFAULT_AGENT_ID",
     "SWARM_AGENT_NAME",
     "AgentManager",
-    "DANGEROUS_PATTERNS",
-    "check_dangerous_command",
     "expand_allowed_skills_with_plugins",
     "ContentBlockAccumulator",
 ]

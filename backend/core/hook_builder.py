@@ -14,19 +14,16 @@ All symbols are re-exported by ``agent_manager.py`` as a method on
 """
 
 import logging
-import platform
 from typing import Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .permission_manager import PermissionManager
-    from .cmd_permission_manager import CmdPermissionManager
 
 from claude_agent_sdk import HookMatcher
-from config import settings
 
 from .security_hooks import (
     pre_tool_logger,
-    create_human_approval_hook,
+    create_dangerous_command_gate,
     create_skill_access_checker,
 )
 from .agent_defaults import expand_allowed_skills_with_plugins
@@ -41,7 +38,6 @@ async def build_hooks(
     resume_session_id: Optional[str],
     session_context: Optional[dict],
     permission_manager: "PermissionManager",
-    cmd_permission_manager: "CmdPermissionManager",
 ) -> tuple[dict, list[str], bool]:
     """Build hook matchers for ClaudeAgentOptions.
 
@@ -55,7 +51,6 @@ async def build_hooks(
         resume_session_id: Optional session ID for resumed sessions.
         session_context: Optional session context dict for hook tracking.
         permission_manager: The PermissionManager instance.
-        cmd_permission_manager: The CmdPermissionManager instance.
 
     Returns:
         Tuple of (hooks_dict, effective_allowed_skills, allow_all_skills).
@@ -67,40 +62,27 @@ async def build_hooks(
             HookMatcher(hooks=[pre_tool_logger])
         ]
 
-    # Human approval hook for dangerous commands.
-    # When sandbox is enabled, the SDK sandbox already constrains Bash at
-    # the OS level. The human approval prompt is redundant friction — skip
-    # it. The dangerous_command_blocker still fires as a safety net.
+    # Dangerous command gate — always attached, no sandbox conditional skip.
+    # The gate prompts inline when enable_human_approval=True (default),
+    # auto-denies when False.
     agent_id = agent_config.get("id", "default")
     session_key = resume_session_id or agent_id or "unknown"
+    enable_human_approval = agent_config.get("enable_human_approval", True)
 
-    sandbox_enabled = agent_config.get(
-        "sandbox_enabled", settings.sandbox_enabled_default
+    if "PreToolUse" not in hooks:
+        hooks["PreToolUse"] = []
+    hook_session_context = (
+        session_context if session_context is not None
+        else {"sdk_session_id": resume_session_id or agent_id}
     )
-    if sandbox_enabled and platform.system() != "Windows":
-        enable_human_approval = False
-        logger.info(
-            "Sandbox enabled — skipping human approval hook "
-            "(sandbox is the safety layer)"
-        )
-    else:
-        enable_human_approval = agent_config.get("enable_human_approval", True)
-
-    if enable_human_approval:
-        if "PreToolUse" not in hooks:
-            hooks["PreToolUse"] = []
-        hook_session_context = (
-            session_context if session_context is not None
-            else {"sdk_session_id": resume_session_id or agent_id}
-        )
-        human_approval = create_human_approval_hook(
-            hook_session_context, session_key, enable_human_approval,
-            permission_manager, cmd_permission_manager,
-        )
-        hooks["PreToolUse"].append(
-            HookMatcher(matcher="Bash", hooks=[human_approval])
-        )
-        logger.info(f"Human approval hook added for session_key: {session_key}")
+    gate = create_dangerous_command_gate(
+        hook_session_context, session_key, permission_manager,
+        enable_human_approval=enable_human_approval,
+    )
+    hooks["PreToolUse"].append(
+        HookMatcher(matcher="Bash", hooks=[gate])
+    )
+    logger.info(f"Dangerous command gate attached for session_key: {session_key}")
 
     # Skill access control
     allowed_skills = agent_config.get("allowed_skills", [])
