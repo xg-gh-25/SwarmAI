@@ -721,6 +721,10 @@ class AgentManager:
             mcp_config = await db.mcp_servers.get(mcp_id)
             if not mcp_config:
                 continue
+            # Skip disabled servers (DB or user-local config)
+            if mcp_config.get("disabled"):
+                logger.info("Skipping disabled MCP server: %s", mcp_config.get("name", mcp_id))
+                continue
             self._add_mcp_server_to_dict(
                 mcp_config, mcp_servers, disallowed_tools, used_names,
             )
@@ -828,6 +832,13 @@ class AgentManager:
                 for entry in mcp_configs:
                     name = entry.get("name", entry.get("id"))
                     if not name:
+                        continue
+                    # Skip disabled servers
+                    if entry.get("disabled"):
+                        logger.info(
+                            "Skipping disabled user-local MCP: %s (from %s)",
+                            name, config_path.name,
+                        )
                         continue
                     # Skip if already added from DB or earlier file
                     if name in used_names:
