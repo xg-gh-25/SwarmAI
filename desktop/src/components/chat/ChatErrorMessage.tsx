@@ -7,6 +7,7 @@
  * element. Supports error-code-specific behaviors:
  *
  * - `AGENT_TIMEOUT`        — "Retry" button re-sends last user message
+ * - `SDK_SUBPROCESS_TIMEOUT` — "Retry" button re-sends last user message
  * - `RATE_LIMIT_EXCEEDED`  — countdown timer, auto-re-enables on expiry
  * - `SERVICE_UNAVAILABLE`  — triggers immediate health check
  *
@@ -76,7 +77,7 @@ export function ChatErrorMessage({ error, onRetry }: ChatErrorMessageProps) {
       )}
 
       {/* Task 13.2: Error-code-specific behaviors */}
-      {error.code === 'AGENT_TIMEOUT' && onRetry && (
+      {(error.code === 'AGENT_TIMEOUT' || error.code === 'SDK_SUBPROCESS_TIMEOUT') && onRetry && (
         <button
           onClick={onRetry}
           className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-primary hover:bg-primary-hover text-white text-sm rounded-lg transition-colors mt-1"
