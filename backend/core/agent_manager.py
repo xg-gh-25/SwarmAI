@@ -398,7 +398,9 @@ class AgentManager:
         cmd_permission_manager: CmdPermissionManager | None = None,
         credential_validator: CredentialValidator | None = None,
     ):
-        self._clients: dict[str, ClaudeSDKClient] = {}
+        # NOTE: self._clients was removed — _active_sessions is the single
+        # source of truth for client tracking. See "Session Lifecycle
+        # Invariants" in swarmai-dev-rules.md.
         # Long-lived client storage for session reuse across HTTP requests.
         # Key: session_id, Value: {"client": ClaudeSDKClient, "wrapper": _ClaudeClientWrapper, "created_at": float, "last_used": float}
         self._active_sessions: dict[str, dict] = {}
@@ -622,7 +624,6 @@ class AgentManager:
                     logger.info(f"Disconnected long-lived client for session {session_id}")
             except Exception as e:
                 logger.warning(f"Error disconnecting session {session_id}: {e}")
-        self._clients.pop(session_id, None)
         # Clean up per-session permission queue and session lock
         _pm.remove_session_queue(session_id)
         self._session_locks.pop(session_id, None)
@@ -904,8 +905,25 @@ class AgentManager:
         agent_id = agent_config.get("id", 'default')
         session_key = resume_session_id or agent_id or "unknown"
 
-        # Enable human approval hook if configured
-        enable_human_approval = agent_config.get("enable_human_approval", True)
+        # Enable human approval hook if configured.
+        # When sandbox is enabled, the SDK sandbox already constrains Bash at
+        # the OS level (filesystem/network restrictions).  The human approval
+        # prompt is redundant friction — skip it for efficiency.  The
+        # dangerous_command_blocker (instant auto-deny, zero UX cost) still
+        # fires as a last-resort safety net.
+        # On platforms without sandbox (Windows) or when sandbox is explicitly
+        # disabled, human approval remains the primary safety layer.
+        sandbox_enabled = agent_config.get(
+            "sandbox_enabled", settings.sandbox_enabled_default
+        )
+        if sandbox_enabled and platform.system() != "Windows":
+            enable_human_approval = False
+            logger.info(
+                "Sandbox enabled — skipping human approval hook "
+                "(sandbox is the safety layer)"
+            )
+        else:
+            enable_human_approval = agent_config.get("enable_human_approval", True)
         if enable_human_approval:
             if "PreToolUse" not in hooks:
                 hooks["PreToolUse"] = []
@@ -1924,7 +1942,6 @@ class AgentManager:
                 agent_config["needs_context_injection"] = False
                 client = reused_client
                 logger.info(f"Reusing long-lived client for session {session_id}")
-                self._clients[session_id] = client
 
                 # Deferred save for resumed conversations (PATH B):
                 # Emit session_start and save user message now that we know
@@ -1985,7 +2002,6 @@ class AgentManager:
                                 f"PATH B: wrapper disconnect failed for "
                                 f"{session_id}: {exc}"
                             )
-                    self._clients.pop(session_id, None)
 
                     # Signal auto-retry: reset error state, fresh accumulator
                     _need_fresh_client = True
@@ -2086,24 +2102,22 @@ class AgentManager:
 
                 # Early registration: store client in _active_sessions NOW
                 # so interrupt_session can find it during streaming.
-                # The post-stream code will overwrite this with the final
+                # Only needed for resumed sessions where app_session_id is
+                # known — new sessions don't have a session_id yet so the
+                # frontend can't send a stop request until session_start.
+                # The post-stream code will overwrite with the final
                 # effective_session_id key after the stream completes.
-                _early_key = (
-                    session_context.get("app_session_id")
-                    or agent_id  # fallback for brand-new sessions before init
-                )
-                self._active_sessions[_early_key] = {
-                    "client": client,
-                    "wrapper": wrapper,
-                    "created_at": time.time(),
-                    "last_used": time.time(),
-                    "activity_extracted": False,
-                    "failure_tracker": ToolFailureTracker(),
-                }
-                # Track the early key so we can clean it up if the final
-                # effective_session_id differs (e.g. new session gets a
-                # different SDK session_id).
-                session_context["_early_active_key"] = _early_key
+                if session_context.get("app_session_id"):
+                    _early_key = session_context["app_session_id"]
+                    self._active_sessions[_early_key] = {
+                        "client": client,
+                        "wrapper": wrapper,
+                        "created_at": time.time(),
+                        "last_used": time.time(),
+                        "activity_extracted": False,
+                        "failure_tracker": ToolFailureTracker(),
+                    }
+                    session_context["_early_active_key"] = _early_key
 
                 try:
                     async for event in self._run_query_on_client(
@@ -2236,6 +2250,15 @@ class AgentManager:
                         if _early_key and _early_key != effective_session_id:
                             self._active_sessions.pop(_early_key, None)
                         logger.info(f"Stored long-lived client for session {effective_session_id}")
+                    else:
+                        # No effective_session_id — clean up early registration
+                        _early_key = session_context.get("_early_active_key")
+                        if _early_key:
+                            self._active_sessions.pop(_early_key, None)
+                            logger.warning(
+                                "No effective_session_id after stream, "
+                                "cleaned up early key %s", _early_key
+                            )
 
         except Exception as e:
             error_traceback = traceback.format_exc()
@@ -2819,7 +2842,6 @@ class AgentManager:
                                 # the SDK's internal ID for client registration
                                 # and persistence. session_start + user message
                                 # were already emitted by _execute_on_session.
-                                self._clients[session_context["app_session_id"]] = client
                                 # Observability: log the session ID mapping for debugging
                                 if session_context["sdk_session_id"] != session_context["app_session_id"]:
                                     logger.info(
@@ -2828,8 +2850,7 @@ class AgentManager:
                                         f"app session {session_context['app_session_id']}"
                                     )
                             elif not is_resuming:
-                                # Register the client for potential reuse by continue_with_answer
-                                self._clients[session_context["sdk_session_id"]] = client
+                                # New session — session_start + user message save
 
                                 yield {
                                     "type": "session_start",
@@ -3088,18 +3109,9 @@ class AgentManager:
                     pass
                 logger.debug("Forwarder task cancelled")
 
-            # Remove from _clients tracking so stale references aren't reused,
-            # but keep _active_sessions intact — the session may still be valid for
-            # future continue_with_answer calls via the SDK's resume mechanism.
-            # Use effective_session_id since the client may be registered under
-            # app_session_id (resume-fallback) or sdk_session_id (new conversation).
-            eff_sid = (
-                session_context["app_session_id"]
-                if session_context.get("app_session_id") is not None
-                else session_context.get("sdk_session_id")
-            )
-            if eff_sid:
-                self._clients.pop(eff_sid, None)
+            # _active_sessions is the single source of truth for client
+            # tracking. No _clients cleanup needed — it was eliminated.
+            # The session stays in _active_sessions for future resume.
 
     async def _format_message(self, message: Any, agent_config: dict, session_id: Optional[str] = None) -> Optional[dict]:
         """Format SDK message to API response format."""
@@ -3415,10 +3427,9 @@ class AgentManager:
         sessions = list(self._active_sessions.items())
         if not sessions:
             logger.info("Shutdown: no active sessions — fast return")
-            # Still cancel the cleanup loop and clear transient clients
+            # Still cancel the cleanup loop
             if self._cleanup_task and not self._cleanup_task.done():
                 self._cleanup_task.cancel()
-            self._clients.clear()
             return
 
         extracted_count = sum(
@@ -3553,15 +3564,6 @@ class AgentManager:
             if sid not in built_sids:
                 await self._cleanup_session(sid, skip_hooks=True)
 
-        # Clean up any remaining transient clients
-        for session_id, client in list(self._clients.items()):
-            try:
-                logger.info(f"Disconnecting client for session {session_id}")
-                await client.interrupt()
-            except Exception as e:
-                logger.error(f"Error disconnecting client {session_id}: {e}")
-        self._clients.clear()
-
         # Cancel the cleanup loop
         if self._cleanup_task and not self._cleanup_task.done():
             self._cleanup_task.cancel()
@@ -3604,14 +3606,11 @@ class AgentManager:
         Returns:
             Dict with status information
         """
-        # Primary lookup: _active_sessions (persistent, survives stream end)
+        # Single source of truth: _active_sessions (persistent, survives stream end)
         client = None
         info = self._active_sessions.get(session_id)
         if info:
             client = info.get("client")
-        # Fallback: _clients (transient, only during active streaming)
-        if not client:
-            client = self._clients.get(session_id)
         if not client:
             logger.warning(f"No active client found for session {session_id}")
             return {
@@ -3833,7 +3832,6 @@ Create the skill in the `.claude/skills/` directory within the current workspace
                         agent_config["needs_context_injection"] = False
                         client = reused_client
                         logger.info(f"Reusing long-lived client for skill creator, session {session_id}")
-                        self._clients[session_id] = client
 
                         # Deferred save for resumed conversations (reused client path):
                         if session_context.get("app_session_id") is not None:
@@ -3883,7 +3881,6 @@ Create the skill in the `.claude/skills/` directory within the current workspace
                                         f"PATH B (skill-creator): wrapper disconnect "
                                         f"timed out or failed for {session_id}"
                                     )
-                            self._clients.pop(session_id, None)
                     else:
                         # No active client — start fresh (--resume won't work with SDK 0.1.34+)
                         if is_resuming:

@@ -162,7 +162,6 @@ class TestInterruptPreservesClient:
         }
 
         # Register client in _clients (simulates active streaming)
-        agent_manager._clients[session_id] = mock_client
 
         # Step 1+2: Feed error_during_execution through _run_query_on_client.
         # The interrupted flag is set DURING streaming (after init message)
@@ -231,7 +230,6 @@ class TestNoErrorEventAfterInterrupt:
             "activity_extracted": False,
             "failure_tracker": MagicMock(),
         }
-        agent_manager._clients[session_id] = mock_client
 
         # Feed error_during_execution with interrupted flag set DURING streaming
         init_msg = make_init_system_message(session_id=session_id)
@@ -309,7 +307,6 @@ class TestResumeAfterInterruptUsesPathB:
             "activity_extracted": False,
             "failure_tracker": MagicMock(),
         }
-        agent_manager._clients[session_id] = mock_client
 
         # Feed error_during_execution with interrupted flag set DURING streaming
         init_msg = make_init_system_message(session_id=session_id)
@@ -381,7 +378,6 @@ class TestSDKReaderErrorAfterInterrupt:
             "activity_extracted": False,
             "failure_tracker": MagicMock(),
         }
-        agent_manager._clients[session_id] = mock_client
 
         # Simulate SDK reader raising an exception after interrupt.
         # We set the interrupted flag DURING receive_response (after init)
