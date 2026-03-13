@@ -25,6 +25,11 @@ class AppConfigRequest(BaseModel):
     default_model: Optional[str] = None
     claude_code_disable_experimental_betas: Optional[bool] = None
     sandbox_additional_write_paths: Optional[str] = None
+    sandbox_enabled_default: Optional[bool] = None
+    sandbox_auto_allow_bash: Optional[bool] = None
+    sandbox_excluded_commands: Optional[str] = None
+    sandbox_allow_unsandboxed: Optional[bool] = None
+    sandbox_allowed_hosts: Optional[str] = None
 
 
 class AppConfigResponse(BaseModel):
@@ -37,6 +42,11 @@ class AppConfigResponse(BaseModel):
     default_model: str = "claude-sonnet-4-5-20250929"
     claude_code_disable_experimental_betas: bool = True
     sandbox_additional_write_paths: str = ""
+    sandbox_enabled_default: bool = True
+    sandbox_auto_allow_bash: bool = True
+    sandbox_excluded_commands: str = "docker"
+    sandbox_allow_unsandboxed: bool = False
+    sandbox_allowed_hosts: str = "*"
     # Credential status (read-only, derived at GET time)
     aws_credentials_configured: bool = False
     anthropic_api_key_configured: bool = False

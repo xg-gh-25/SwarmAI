@@ -68,6 +68,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "anthropic_base_url": None,
     "claude_code_disable_experimental_betas": True,
     "sandbox_additional_write_paths": "",
+    "sandbox_enabled_default": True,
+    "sandbox_auto_allow_bash": True,
+    "sandbox_excluded_commands": "docker",
+    "sandbox_allow_unsandboxed": False,
+    "sandbox_allowed_hosts": "*",
     "evolution": {
         "enabled": True,
         "max_retries": 3,

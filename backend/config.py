@@ -58,8 +58,8 @@ class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
 
     # Application
-    app_name: str = "Agent Platform API"
-    app_version: str = "4.0.0"
+    app_name: str = "SwarmAI"
+    app_version: str = "1.0.0"
     debug: bool = False
 
     # Server
@@ -75,10 +75,8 @@ class Settings(BaseSettings):
     # SQLite configuration
     sqlite_db_path: str | None = None  # If None, uses default user data directory
 
-    # AWS (for Bedrock model access)
-    aws_region: str = "us-west-2"
-    aws_access_key_id: str = ""
-    aws_secret_access_key: str = ""
+    # AWS (credentials resolved via standard AWS credential chain, not stored here)
+    # aws_region is in config.json via AppConfigManager
 
     # JWT Authentication
     jwt_secret_key: str = ""  # Set via JWT_SECRET_KEY env var; auto-generated if empty
@@ -89,22 +87,13 @@ class Settings(BaseSettings):
     # Rate Limiting
     rate_limit_per_minute: int = 100
 
-    # Claude Agent SDK / Anthropic API Configuration
-    anthropic_api_key: str = ""
-    anthropic_base_url: str | None = None  # Custom API endpoint (optional)
-    default_model: str = "claude-opus-4-6"
-
-    # Claude Code Configuration
-    claude_code_use_bedrock: bool = True  # Use AWS Bedrock instead of Anthropic API
-    claude_code_disable_experimental_betas: bool = True  # Disable experimental features
-
-    # Built-in Sandbox Configuration (Claude Agent SDK native bash sandboxing)
-    sandbox_enabled_default: bool = True  # Default sandbox state for new agents (enabled for security)
-    sandbox_auto_allow_bash: bool = True  # Auto-approve bash when sandboxed
-    sandbox_excluded_commands: str = "docker"  # Comma-separated commands to bypass sandbox (e.g., "git,docker")
-    sandbox_allow_unsandboxed: bool = False  # Allow model to bypass sandbox
-    sandbox_additional_write_paths: str = ""  # Comma-separated additional writable paths
-    sandbox_allowed_hosts: str = "*"  # Network allowlist: "*" = all, or comma-separated hostnames (e.g., "wttr.in,api.github.com")
+    # NOTE: The following settings have been moved to ~/.swarm-ai/config.json
+    # (managed by AppConfigManager, single source of truth):
+    #   - anthropic_api_key, anthropic_base_url, default_model
+    #   - claude_code_use_bedrock, claude_code_disable_experimental_betas
+    #   - aws_region, available_models, bedrock_model_map
+    #   - sandbox_enabled_default, sandbox_auto_allow_bash, sandbox_excluded_commands
+    #   - sandbox_allow_unsandboxed, sandbox_additional_write_paths, sandbox_allowed_hosts
 
     class Config:
         env_file = ".env"
