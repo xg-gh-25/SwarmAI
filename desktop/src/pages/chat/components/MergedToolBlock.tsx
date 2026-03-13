@@ -30,6 +30,8 @@ const CATEGORY_ICONS: Record<string, string> = {
   search: 'search',
   web_fetch: 'language',
   web_search: 'travel_explore',
+  tool_search: 'extension',
+  skill: 'handyman',
   list_dir: 'folder_open',
   todowrite: 'checklist',
   fallback: 'build',
@@ -49,6 +51,9 @@ interface MergedToolBlockProps {
   resultTruncated?: boolean;
   resultIsError?: boolean;
   isPending: boolean;
+  /** Whether the parent message is still streaming. Used to distinguish
+   *  "implicitly complete" (result not yet received) from "genuinely orphaned". */
+  isStreaming?: boolean;
 }
 
 export function MergedToolBlock({
@@ -60,6 +65,7 @@ export function MergedToolBlock({
   resultTruncated,
   resultIsError,
   isPending,
+  isStreaming,
 }: MergedToolBlockProps) {
   const [isExpanded, setIsExpanded] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -72,7 +78,10 @@ export function MergedToolBlock({
     !resultTruncated &&
     (resultContent?.length ?? 0) <= INLINE_RESULT_LIMIT;
   const isLongResult = hasResult && !isShortResult && !isError;
-  const isOrphaned = !isPending && !hasResult;
+  // Genuinely orphaned: no result AND streaming has ended.
+  // During streaming, tools without results are "implicitly complete" —
+  // the result just hasn't arrived in the SSE stream yet.
+  const isOrphaned = !isPending && !hasResult && !isStreaming;
 
   // Status icon on the summary line
   const statusIcon = isPending

@@ -522,7 +522,7 @@ export default function FileEditorModal({
         highlightRef.current.textContent = content + '\n';
       }
     }
-  }, [content, language, isOpen, showDiff]);
+  }, [content, language, isOpen, showDiff, showMarkdownPreview]);
 
   // Handle escape key — close search first, then modal
   useEffect(() => {
@@ -771,8 +771,8 @@ export default function FileEditorModal({
                       const configResp = await api.get<{ file_path?: string; filePath?: string }>('/workspace');
                       const wsRoot = configResp.data.file_path ?? configResp.data.filePath ?? '';
                       const absolutePath = wsRoot ? `${wsRoot}/${filePath}` : filePath;
-                      const { open } = await import('@tauri-apps/plugin-shell');
-                      await open(absolutePath);
+                      const { openUrl } = await import('@tauri-apps/plugin-opener');
+                      await openUrl(`file://${absolutePath}`);
                     } catch {
                       window.open(filePath, '_blank');
                     }

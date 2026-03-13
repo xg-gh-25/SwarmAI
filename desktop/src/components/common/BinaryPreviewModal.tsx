@@ -68,6 +68,64 @@ function getExtension(fileName: string): string {
   return parts.length > 1 ? parts.pop()!.toUpperCase() : '';
 }
 
+/* ------------------------------------------------------------------ */
+/*  Unsupported file type metadata for friendly UX                     */
+/* ------------------------------------------------------------------ */
+
+interface FileTypeInfo {
+  icon: string;       // Material Symbols icon name
+  color: string;      // Accent color for the icon & badge
+  label: string;      // Human-readable type label (e.g. "Word Document")
+  message: string;    // Friendly explanation shown in the modal
+  action: string;     // CTA button label
+}
+
+const FILE_TYPE_MAP: Record<string, FileTypeInfo> = {
+  // Documents
+  doc:  { icon: 'description',   color: '#4285F4', label: 'Word Document',       message: 'Word documents can be opened in Microsoft Word or Pages.',             action: 'Open in Default App' },
+  docx: { icon: 'description',   color: '#4285F4', label: 'Word Document',       message: 'Word documents can be opened in Microsoft Word or Pages.',             action: 'Open in Default App' },
+  xls:  { icon: 'table_chart',   color: '#0F9D58', label: 'Excel Spreadsheet',   message: 'Spreadsheets can be opened in Microsoft Excel or Numbers.',            action: 'Open in Default App' },
+  xlsx: { icon: 'table_chart',   color: '#0F9D58', label: 'Excel Spreadsheet',   message: 'Spreadsheets can be opened in Microsoft Excel or Numbers.',            action: 'Open in Default App' },
+  ppt:  { icon: 'slideshow',     color: '#DB4437', label: 'PowerPoint',          message: 'Presentations can be opened in Microsoft PowerPoint or Keynote.',      action: 'Open in Default App' },
+  pptx: { icon: 'slideshow',     color: '#DB4437', label: 'PowerPoint',          message: 'Presentations can be opened in Microsoft PowerPoint or Keynote.',      action: 'Open in Default App' },
+  // Media — Audio
+  mp3:  { icon: 'music_note',    color: '#E91E63', label: 'Audio File',          message: 'Audio files can be played in your default music player.',              action: 'Open in Music Player' },
+  wav:  { icon: 'music_note',    color: '#E91E63', label: 'Audio File',          message: 'Audio files can be played in your default music player.',              action: 'Open in Music Player' },
+  flac: { icon: 'music_note',    color: '#E91E63', label: 'Audio File',          message: 'Audio files can be played in your default music player.',              action: 'Open in Music Player' },
+  ogg:  { icon: 'music_note',    color: '#E91E63', label: 'Audio File',          message: 'Audio files can be played in your default music player.',              action: 'Open in Music Player' },
+  // Media — Video
+  mp4:  { icon: 'movie',         color: '#9C27B0', label: 'Video File',          message: 'Video files can be played in your default video player.',              action: 'Open in Video Player' },
+  avi:  { icon: 'movie',         color: '#9C27B0', label: 'Video File',          message: 'Video files can be played in your default video player.',              action: 'Open in Video Player' },
+  mov:  { icon: 'movie',         color: '#9C27B0', label: 'Video File',          message: 'Video files can be played in your default video player.',              action: 'Open in Video Player' },
+  mkv:  { icon: 'movie',         color: '#9C27B0', label: 'Video File',          message: 'Video files can be played in your default video player.',              action: 'Open in Video Player' },
+  // Archives
+  zip:  { icon: 'folder_zip',    color: '#795548', label: 'Archive',             message: 'Archives can be extracted with your system\'s built-in tools.',        action: 'Reveal in Finder' },
+  tar:  { icon: 'folder_zip',    color: '#795548', label: 'Archive',             message: 'Archives can be extracted with your system\'s built-in tools.',        action: 'Reveal in Finder' },
+  gz:   { icon: 'folder_zip',    color: '#795548', label: 'Archive',             message: 'Archives can be extracted with your system\'s built-in tools.',        action: 'Reveal in Finder' },
+  rar:  { icon: 'folder_zip',    color: '#795548', label: 'Archive',             message: 'Archives can be extracted with your system\'s built-in tools.',        action: 'Reveal in Finder' },
+  '7z': { icon: 'folder_zip',    color: '#795548', label: 'Archive',             message: 'Archives can be extracted with your system\'s built-in tools.',        action: 'Reveal in Finder' },
+  // Disk images & executables
+  dmg:  { icon: 'save',          color: '#607D8B', label: 'Disk Image',          message: 'Disk images can be mounted by double-clicking in Finder.',            action: 'Reveal in Finder' },
+  iso:  { icon: 'save',          color: '#607D8B', label: 'Disk Image',          message: 'Disk images can be mounted by double-clicking in Finder.',            action: 'Reveal in Finder' },
+  exe:  { icon: 'settings',      color: '#607D8B', label: 'Executable',          message: 'This file type cannot be previewed here.',                            action: 'Reveal in Finder' },
+  dll:  { icon: 'settings',      color: '#607D8B', label: 'Library',             message: 'Binary libraries cannot be previewed.',                               action: 'Reveal in Finder' },
+  so:   { icon: 'settings',      color: '#607D8B', label: 'Shared Library',      message: 'Binary libraries cannot be previewed.',                               action: 'Reveal in Finder' },
+  dylib:{ icon: 'settings',      color: '#607D8B', label: 'Dynamic Library',     message: 'Binary libraries cannot be previewed.',                               action: 'Reveal in Finder' },
+  wasm: { icon: 'memory',        color: '#607D8B', label: 'WebAssembly',         message: 'WebAssembly binaries cannot be previewed.',                           action: 'Reveal in Finder' },
+};
+
+const FALLBACK_FILE_TYPE: FileTypeInfo = {
+  icon: 'draft',
+  color: '#9E9E9E',
+  label: 'Binary File',
+  message: 'This file type cannot be previewed in SwarmAI.',
+  action: 'Open in Default App',
+};
+
+function getFileTypeInfo(ext: string): FileTypeInfo {
+  return FILE_TYPE_MAP[ext] ?? FALLBACK_FILE_TYPE;
+}
+
 export default function BinaryPreviewModal({
   isOpen,
   fileName,
@@ -213,13 +271,13 @@ export default function BinaryPreviewModal({
       const wsRoot = configResp.data.file_path ?? configResp.data.filePath ?? '';
       const absolutePath = wsRoot ? `${wsRoot}/${filePath}` : filePath;
 
-      const { open } = await import('@tauri-apps/plugin-shell');
-      await open(absolutePath);
+      const { openPath } = await import('@tauri-apps/plugin-opener');
+      await openPath(absolutePath);
     } catch {
       // Fallback: try relative path or window.open
       try {
-        const { open } = await import('@tauri-apps/plugin-shell');
-        await open(filePath);
+        const { openPath } = await import('@tauri-apps/plugin-opener');
+        await openPath(filePath);
       } catch {
         window.open(filePath, '_blank');
       }
@@ -361,32 +419,47 @@ export default function BinaryPreviewModal({
   };
 
   const renderUnsupportedMode = () => {
-    const ext = getExtension(fileName);
+    const ext = getExtension(fileName).toLowerCase();
+    const fileTypeInfo = getFileTypeInfo(ext);
     return (
       <div className="flex flex-col items-center justify-center py-16 gap-4">
-        <span className="material-symbols-outlined text-5xl text-[var(--color-text-muted)]">
-          description
+        <span
+          className="material-symbols-outlined text-5xl"
+          style={{ color: fileTypeInfo.color }}
+        >
+          {fileTypeInfo.icon}
         </span>
         <div className="text-center">
           <p className="text-sm font-medium text-[var(--color-text)] mb-1">{fileName}</p>
-          {ext && (
-            <span className="inline-block px-2 py-0.5 text-xs rounded bg-[var(--color-hover)] text-[var(--color-text-muted)] mb-3">
-              .{ext.toLowerCase()}
-            </span>
-          )}
+          <div className="flex items-center justify-center gap-2 mb-3">
+            {ext && (
+              <span
+                className="inline-block px-2 py-0.5 text-xs font-medium rounded"
+                style={{ backgroundColor: `${fileTypeInfo.color}20`, color: fileTypeInfo.color }}
+              >
+                {fileTypeInfo.label}
+              </span>
+            )}
+            {fileSize > 0 && (
+              <span className="text-xs text-[var(--color-text-muted)]">
+                {formatFileSize(fileSize)}
+              </span>
+            )}
+          </div>
           <p
             className="text-sm text-[var(--color-text-muted)]"
             role="status"
             aria-live="polite"
           >
-            This file type cannot be previewed
+            {fileTypeInfo.message}
           </p>
         </div>
         <button
           onClick={handleRevealInFinder}
-          className="px-4 py-2 text-sm rounded-lg bg-[var(--color-primary)] text-white hover:opacity-90 transition-opacity"
+          className="flex items-center gap-2 px-4 py-2 text-sm rounded-lg bg-[var(--color-primary)] text-white hover:opacity-90 transition-opacity"
         >
-          Open in File Manager
+          <span className="material-symbols-outlined text-base">open_in_new</span>
+          {fileTypeInfo.action}
         </button>
       </div>
     );

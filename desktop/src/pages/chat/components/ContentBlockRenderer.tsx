@@ -22,6 +22,8 @@ interface ContentBlockRendererProps {
   onAnswerQuestion?: (toolUseId: string, answers: Record<string, string>) => void;
   pendingToolUseId?: string;
   isStreaming?: boolean;
+  /** The ID of the last tool_use block without a result — only this one gets a spinner. */
+  lastPendingToolUseId?: string | null;
 }
 
 export function ContentBlockRenderer({
@@ -31,6 +33,7 @@ export function ContentBlockRenderer({
   onAnswerQuestion,
   pendingToolUseId,
   isStreaming,
+  lastPendingToolUseId,
 }: ContentBlockRendererProps) {
   if (block.type === 'text') {
     return <MarkdownRenderer content={block.text || ''} />;
@@ -49,7 +52,8 @@ export function ContentBlockRenderer({
         resultContent={matchingResult?.content}
         resultTruncated={matchingResult?.truncated}
         resultIsError={matchingResult?.isError}
-        isPending={!matchingResult && !!isStreaming}
+        isPending={lastPendingToolUseId != null ? block.id === lastPendingToolUseId : (!matchingResult && !!isStreaming)}
+        isStreaming={isStreaming}
       />
     );
   }

@@ -4,7 +4,7 @@
   "description": "Post-task hook that runs in two steps: (1) scans modified code for quality issues and lists findings by severity, (2) automatically applies fixes for High and Medium severity issues, then continues to the next task.",
   "version": "3",
   "when": {
-    "type": "postTaskExecution"
+    "type": "userTriggered"
   },
   "then": {
     "type": "askAgent",

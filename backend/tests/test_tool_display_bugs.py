@@ -26,6 +26,8 @@ from core.tool_summarizer import (
     summarize_tool_use,
     get_tool_category,
     _WEB_SEARCH_NAMES,
+    _TOOL_SEARCH_NAMES,
+    _SKILL_NAMES,
 )
 
 PROPERTY_SETTINGS = settings(
@@ -162,6 +164,8 @@ from core.tool_summarizer import (
     _SEARCH_NAMES,
     _WEB_FETCH_NAMES,
     _WEB_SEARCH_NAMES,
+    _TOOL_SEARCH_NAMES,
+    _SKILL_NAMES,
     _LIST_DIR_NAMES,
     _TODOWRITE_NAMES,
 )
@@ -235,6 +239,53 @@ class TestSDKToolLabelPreservation:
         label = summarize_tool_use("read", {})
         assert label == "Using read"
 
+    def test_toolsearch_strips_select_prefix(self):
+        """ToolSearch tool strips 'select:' prefix and formats tool list."""
+        label = summarize_tool_use("ToolSearch", {"query": "select:Bash,Read,Grep"})
+        assert label == "Loading tools: Bash, Read, Grep"
+        assert get_tool_category("ToolSearch") == "tool_search"
+
+    def test_toolsearch_no_select_prefix(self):
+        """ToolSearch with non-select query passes through unchanged."""
+        label = summarize_tool_use("ToolSearch", {"query": "+slack send"})
+        assert label == "Loading tools: +slack send"
+
+    def test_toolsearch_empty_query(self):
+        """ToolSearch with no query falls back to 'Using {name}'."""
+        label = summarize_tool_use("ToolSearch", {})
+        assert label == "Using ToolSearch"
+
+    def test_toolsearch_select_single_tool(self):
+        """ToolSearch with single tool in select: prefix."""
+        label = summarize_tool_use("ToolSearch", {"query": "select:Skill"})
+        assert label == "Loading tools: Skill"
+
+    def test_skill_with_skill_name(self):
+        """Skill tool with skill_name field shows the skill name."""
+        label = summarize_tool_use("Skill", {"skill_name": "save-memory"})
+        assert label == "Using skill: save-memory"
+        assert get_tool_category("Skill") == "skill"
+
+    def test_skill_with_skillname_field(self):
+        """Skill tool with skillName field shows the skill name."""
+        label = summarize_tool_use("Skill", {"skillName": "save-context"})
+        assert label == "Using skill: save-context"
+
+    def test_skill_no_name_fallback(self):
+        """Skill tool with no name fields falls back to 'Using Skill'."""
+        label = summarize_tool_use("Skill", {})
+        assert label == "Using Skill"
+
+    def test_skill_name_field_ignored_when_generic(self):
+        """Skill tool ignores 'name' field when it equals 'Skill' (generic)."""
+        label = summarize_tool_use("Skill", {"name": "Skill"})
+        assert label == "Using Skill"
+
+    def test_skill_name_field_used_when_specific(self):
+        """Skill tool uses 'name' field when it's a specific skill name."""
+        label = summarize_tool_use("Skill", {"name": "memory-distill"})
+        assert label == "Using skill: memory-distill"
+
 
 # ---------------------------------------------------------------------------
 # Property-Based Tests — SDK Tool Label Preservation
@@ -248,6 +299,8 @@ _ALL_SDK_NAMES: list[str] = sorted(
     | _SEARCH_NAMES
     | _WEB_FETCH_NAMES
     | _WEB_SEARCH_NAMES
+    | _TOOL_SEARCH_NAMES
+    | _SKILL_NAMES
     | _LIST_DIR_NAMES
     | _TODOWRITE_NAMES
 )
@@ -308,6 +361,13 @@ class TestSDKToolLabelPreservationPBT:
         elif lower in _WEB_SEARCH_NAMES:
             input_data = {"query": context_value}
             expected_prefix = "Searching web for "
+        elif lower in _TOOL_SEARCH_NAMES:
+            # ToolSearch strips "select:" prefix, so test with raw query
+            input_data = {"query": context_value}
+            expected_prefix = "Loading tools: "
+        elif lower in _SKILL_NAMES:
+            input_data = {"skill_name": context_value}
+            expected_prefix = "Using skill: "
         elif lower in _LIST_DIR_NAMES:
             input_data = {"path": context_value}
             expected_prefix = "Listing "

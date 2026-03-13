@@ -58,6 +58,8 @@ function originalUpdateMessages(
       ...msg,
       content: [...msg.content, ...filteredContent],
       ...(model ? { model } : {}),
+      // Clear isError when new non-error content arrives (auto-retry recovery)
+      ...(msg.isError ? { isError: false } : {}),
     };
   });
 }

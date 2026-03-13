@@ -243,6 +243,9 @@ export function updateMessages(
       ...msg,
       content: [...msg.content, ...filteredContent],
       ...(model ? { model } : {}),
+      // Clear isError when new non-error content arrives — handles the
+      // auto-retry case where backend recovers after emitting an error event.
+      ...(msg.isError ? { isError: false } : {}),
     };
   });
 }
@@ -1095,16 +1098,16 @@ export function useChatStreamingLifecycle(
             { type: 'text' as const, text: `Error: ${fullError}` },
           ];
 
-          // Helper: replace assistant message content with error, or append
-          // a standalone error message if the assistant message isn't found
-          // (handles the case where error arrives before React syncs the
-          // assistant message added by handleSendMessage).
+          // Helper: APPEND error to assistant message content (preserving
+          // any tool_use / tool_result / text blocks already streamed), or
+          // add a standalone error message if the assistant message isn't
+          // found yet (error arrives before React syncs the optimistic msg).
           const applyError = (prev: Message[]): Message[] => {
             const found = prev.some((m) => m.id === assistantMessageId);
             if (found) {
               return prev.map((msg) =>
                 msg.id === assistantMessageId
-                  ? { ...msg, isError: true, content: errorContent }
+                  ? { ...msg, isError: true, content: [...msg.content, ...errorContent] }
                   : msg,
               );
             }
@@ -1298,17 +1301,31 @@ export function useChatStreamingLifecycle(
           { type: 'text' as const, text: `Connection error: ${error.message}` },
         ];
 
-        // Same pattern as createStreamHandler error path: if the assistant
-        // message isn't in the array yet (React batching), append standalone.
+        // Same pattern as createStreamHandler error path: APPEND error
+        // to preserve any partial tool_use / text content already streamed.
         const applyError = (prev: Message[]): Message[] => {
           const found = prev.some((m) => m.id === assistantMessageId);
           if (found) {
-            return prev.map((msg) =>
+            const updated = prev.map((msg) =>
               msg.id === assistantMessageId
-                ? { ...msg, content: errorContent, isError: true }
+                ? { ...msg, content: [...msg.content, ...errorContent], isError: true }
                 : msg,
             );
+            // Defensive: verify content was preserved, not replaced
+            const updatedMsg = updated.find((m) => m.id === assistantMessageId);
+            if (updatedMsg && updatedMsg.content.length < 2) {
+              console.warn('[ErrorHandler] BUG: assistant message content may have been lost during error merge', {
+                originalBlockCount: prev.find((m) => m.id === assistantMessageId)?.content.length,
+                updatedBlockCount: updatedMsg.content.length,
+              });
+            }
+            return updated;
           }
+          console.warn('[ErrorHandler] Assistant message not found — creating standalone error', {
+            assistantMessageId,
+            messageCount: prev.length,
+            messageIds: prev.map((m) => m.id),
+          });
           return [
             ...prev,
             {
@@ -1322,7 +1339,12 @@ export function useChatStreamingLifecycle(
         };
 
         if (tabState) {
+          const beforeCount = tabState.messages.find((m) => m.id === assistantMessageId)?.content.length ?? 0;
           tabState.messages = applyError(tabState.messages);
+          if (import.meta.env.DEV) {
+            const afterCount = tabState.messages.find((m) => m.id === assistantMessageId)?.content.length ?? 0;
+            console.log('[ErrorHandler] tabState message content:', { beforeCount, afterCount });
+          }
         }
 
         if (isActiveTab) {

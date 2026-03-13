@@ -122,6 +122,20 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
     return map;
   }, [message.content]);
 
+  // Only the LAST tool_use without a result should show a spinner.
+  // Earlier tools without results are implicitly complete — the SDK
+  // executes tools sequentially, so if tool N+1 exists, tool N finished.
+  const lastPendingToolUseId = useMemo(() => {
+    if (!isStreaming) return null;
+    for (let i = message.content.length - 1; i >= 0; i--) {
+      const block = message.content[i];
+      if (block.type === 'tool_use' && !resultMap.has(block.id)) {
+        return block.id;
+      }
+    }
+    return null;
+  }, [message.content, resultMap, isStreaming]);
+
   const handleCopy = useCallback(() => {
     navigator.clipboard.writeText(extractMessageText());
     setCopied(true);
@@ -164,6 +178,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
         onAnswerQuestion={onAnswerQuestion}
         pendingToolUseId={pendingToolUseId}
         isStreaming={isStreaming}
+        lastPendingToolUseId={lastPendingToolUseId}
       />
     );
   });
