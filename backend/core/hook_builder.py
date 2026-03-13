@@ -15,7 +15,11 @@ All symbols are re-exported by ``agent_manager.py`` as a method on
 
 import logging
 import platform
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .permission_manager import PermissionManager
+    from .cmd_permission_manager import CmdPermissionManager
 
 from claude_agent_sdk import HookMatcher
 from config import settings
@@ -36,8 +40,8 @@ async def build_hooks(
     enable_mcp: bool,
     resume_session_id: Optional[str],
     session_context: Optional[dict],
-    permission_manager,
-    cmd_permission_manager,
+    permission_manager: "PermissionManager",
+    cmd_permission_manager: "CmdPermissionManager",
 ) -> tuple[dict, list[str], bool]:
     """Build hook matchers for ClaudeAgentOptions.
 
