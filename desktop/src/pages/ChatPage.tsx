@@ -401,7 +401,10 @@ export default function ChatPage() {
         // If the tab has a sessionId but empty messages (e.g. after app restart,
         // hydrateTab sets messages=[]), load messages from the backend API
         // instead of displaying the empty array.
-        if (tabState.sessionId && tabState.messages.length === 0) {
+        // GUARD: Skip API reload for streaming tabs — their messages are being
+        // accumulated in tabMapRef by the stream handler. Reloading would
+        // overwrite in-flight content with stale DB data.
+        if (tabState.sessionId && tabState.messages.length === 0 && !tabState.isStreaming) {
           setSessionId(tabState.sessionId);
           setPendingQuestion(null);
           setContextWarning(tabState.contextWarning ?? null);
@@ -1080,13 +1083,26 @@ export default function ChatPage() {
     }
 
     const assistantMessageId = (Date.now() + 1).toString();
-    setMessages((prev) => [...prev, { id: assistantMessageId, role: 'assistant', content: [], timestamp: new Date().toISOString() }]);
+    const assistantPlaceholder: Message = { id: assistantMessageId, role: 'assistant', content: [], timestamp: new Date().toISOString() };
+    setMessages((prev) => [...prev, assistantPlaceholder]);
 
     // Ensure the active tab is registered in the per-tab state map BEFORE
     // creating the stream handler. Without this, capturedTabId would be null
     // and isActiveTab would become false once initTabState fires later.
     if (currentActiveTabId && !tabMapRef.current.has(currentActiveTabId)) {
       initTabState(currentActiveTabId, messagesRef.current);
+    }
+
+    // Sync user message + assistant placeholder to tabMapRef (authoritative store).
+    // Without this, the stream handler's updateMessages() can't find the
+    // assistantMessageId in tabState.messages, so streaming content is silently
+    // dropped for background tabs. When switching back, tabState.messages would
+    // be stale — missing the entire current conversation turn.
+    if (currentActiveTabId) {
+      const tabState = tabMapRef.current.get(currentActiveTabId);
+      if (tabState) {
+        tabState.messages = [...tabState.messages, userMessage, assistantPlaceholder];
+      }
     }
 
     const abort = chatService.streamChat(
@@ -1140,6 +1156,12 @@ export default function ChatPage() {
     const tabSessionId = tabId ? tabMapRef.current.get(tabId)?.sessionId : undefined;
     if (!selectedAgentId || !tabSessionId) return;
 
+    // Defensive guard: prevent double-submit if already streaming.
+    // The UI disables the button, but programmatic calls or rapid clicks
+    // could bypass it. Read tabMapRef directly (synchronous, authoritative).
+    const tabState = tabId ? tabMapRef.current.get(tabId) : undefined;
+    if (tabState?.isStreaming) return;
+
     setPendingQuestion(null);
     incrementStreamGen(); // Fix 1: new stream generation
     setIsStreaming(true, tabId);
@@ -1148,7 +1170,17 @@ export default function ChatPage() {
     if (tabId) updateTabStatus(tabId, 'streaming');
 
     const assistantMessageId = Date.now().toString();
-    setMessages((prev) => [...prev, { id: assistantMessageId, role: 'assistant', content: [], timestamp: new Date().toISOString() }]);
+    const assistantPlaceholder: Message = { id: assistantMessageId, role: 'assistant', content: [], timestamp: new Date().toISOString() };
+    setMessages((prev) => [...prev, assistantPlaceholder]);
+
+    // Sync assistant placeholder to tabMapRef so background stream handler
+    // can find assistantMessageId in tabState.messages (same fix as handleSendMessage).
+    if (tabId) {
+      const tabState = tabMapRef.current.get(tabId);
+      if (tabState) {
+        tabState.messages = [...tabState.messages, assistantPlaceholder];
+      }
+    }
 
     const abort = chatService.streamAnswerQuestion(
       { agentId: selectedAgentId, sessionId: tabSessionId, toolUseId, answers, enableSkills, enableMCP },
@@ -1186,6 +1218,11 @@ export default function ChatPage() {
     const tabSessionId = tabId ? tabMapRef.current.get(tabId)?.sessionId : undefined;
     if (!tabSessionId || !selectedAgentId) return;
     if (tabId && permissionLoadingTabs.current.has(tabId)) return; // per-tab double-click guard
+    // Defensive guard: prevent double-submit if already streaming.
+    // permissionLoadingTabs guards the API call, but a rapid approve click
+    // could race with a stream that just started. Read tabMapRef directly.
+    const currentTabState = tabId ? tabMapRef.current.get(tabId) : undefined;
+    if (currentTabState?.isStreaming) return;
 
     if (tabId) permissionLoadingTabs.current.add(tabId);
     setPendingPermissionRequestId(null);
@@ -1235,7 +1272,17 @@ export default function ChatPage() {
     if (tabId) updateTabStatus(tabId, 'streaming');
 
     const assistantMessageId = (Date.now() + 1).toString();
-    setMessages((prev) => [...prev, { id: assistantMessageId, role: 'assistant', content: [], timestamp: new Date().toISOString() }]);
+    const assistantPlaceholder: Message = { id: assistantMessageId, role: 'assistant', content: [], timestamp: new Date().toISOString() };
+    setMessages((prev) => [...prev, assistantPlaceholder]);
+
+    // Sync assistant placeholder to tabMapRef so background stream handler
+    // can find assistantMessageId in tabState.messages (same fix as handleSendMessage).
+    if (tabId) {
+      const tabState = tabMapRef.current.get(tabId);
+      if (tabState) {
+        tabState.messages = [...tabState.messages, assistantPlaceholder];
+      }
+    }
 
     // Capture tabId for cleanup in async callbacks (closure safety).
     // Create the stream handler ONCE now (captures tabId at creation time)
@@ -1247,6 +1294,14 @@ export default function ChatPage() {
       { sessionId: tabSessionId, requestId, decision, enableSkills, enableMCP },
       (event: StreamEvent) => {
         if (event.type === 'cmd_permission_acknowledged') {
+          // Sync removal to tabMapRef (authoritative store) so background
+          // tab switches don't restore the stale placeholder ghost.
+          if (capturedTabId) {
+            const tabState = tabMapRef.current.get(capturedTabId);
+            if (tabState) {
+              tabState.messages = tabState.messages.filter((msg) => msg.id !== assistantMessageId);
+            }
+          }
           setMessages((prev) => prev.filter((msg) => msg.id !== assistantMessageId));
           setIsStreaming(false, capturedTabId);
         } else {
