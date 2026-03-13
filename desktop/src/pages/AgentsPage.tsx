@@ -3,7 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { SearchBar, StatusBadge, Button, SkeletonTable, ResizableTable, ResizableTableCell, ConfirmDialog, AgentFormModal, Breadcrumb } from '../components/common';
-import type { Agent, AgentCreateRequest, Skill, MCPServer } from '../types';
+import type { Agent, AgentCreateRequest, Skill } from '../types';
+import type { ConfigEntry } from '../services/mcpConfig';
 import { agentsService } from '../services/agents';
 import { skillsService } from '../services/skills';
 import { mcpConfigService } from '../services/mcpConfig';
@@ -31,7 +32,7 @@ export default function AgentsPage() {
 
   // Skills, MCPs for table display
   const [skills, setSkills] = useState<Skill[]>([]);
-  const [mcpServers, setMcpServers] = useState<MCPServer[]>([]);
+  const [mcpServers, setMcpServers] = useState<ConfigEntry[]>([]);
 
   // Fetch agents on mount
   useEffect(() => {

@@ -132,19 +132,22 @@ class DistillationTriggerHook:
         return sorted(files, key=lambda f: f.stem)
 
     def _distill_files(self, files: list[Path], ws_path: Path) -> int:
-        """Extract entries from DailyActivity files and write to MEMORY.md.
+        """Extract entries from DailyActivity files and write to MEMORY.md + EVOLUTION.md.
 
-        Extracts three categories:
+        Extracts four categories:
         - Decisions → MEMORY.md "Key Decisions"
         - Lessons → MEMORY.md "Lessons Learned"
         - COE signals → MEMORY.md "COE Registry" (cross-session problem tracking)
+        - Corrections → EVOLUTION.md "Corrections Captured" (agent behavior fixes)
 
         Returns the number of files successfully distilled.
         """
         memory_path = ws_path / ".context" / "MEMORY.md"
+        evolution_path = ws_path / ".context" / "EVOLUTION.md"
 
         distilled_count = 0
         coe_entries: list[tuple[str, str, str]] = []  # (date, signal, topic)
+        all_corrections: list[tuple[str, str]] = []  # (date, correction)
 
         for da_file in files:
             try:
@@ -152,9 +155,10 @@ class DistillationTriggerHook:
                 fm, body = parse_frontmatter(content)
                 file_date = da_file.stem  # YYYY-MM-DD
 
-                # Extract decisions and lessons
+                # Extract decisions, lessons, and corrections
                 decisions = self._extract_decisions(body)
                 lessons = self._extract_lessons(body)
+                corrections = self._extract_corrections(body)
 
                 # Write to MEMORY.md via direct function call
                 for decision in decisions:
@@ -171,9 +175,13 @@ class DistillationTriggerHook:
                         f"- {file_date}: {lesson}",
                     )
 
-                # Collect COE signals for cross-session clustering
-                if fm.get("has_coe"):
-                    coe_items = self._extract_coe_entries(body)
+                # Collect corrections for EVOLUTION.md
+                for correction in corrections:
+                    all_corrections.append((file_date, correction))
+
+                # Collect COE signals — check both frontmatter flag and body content
+                coe_items = self._extract_coe_entries(body)
+                if coe_items:
                     for signal, topic in coe_items:
                         coe_entries.append((file_date, signal, topic))
 
@@ -184,8 +192,8 @@ class DistillationTriggerHook:
                 da_file.write_text(new_content, encoding="utf-8")
 
                 distilled_count += 1
-                logger.debug("Distilled %s: %d decisions, %d lessons",
-                             da_file.name, len(decisions), len(lessons))
+                logger.debug("Distilled %s: %d decisions, %d lessons, %d corrections",
+                             da_file.name, len(decisions), len(lessons), len(corrections))
             except Exception as exc:
                 logger.warning("Failed to distill %s: %s", da_file.name, exc)
                 continue
@@ -193,6 +201,14 @@ class DistillationTriggerHook:
         # Write COE registry entries
         if coe_entries:
             self._write_coe_registry(memory_path, coe_entries)
+
+        # Auto-manage Open Threads from COE signals (code-enforced)
+        if coe_entries:
+            self._update_open_threads(memory_path, coe_entries)
+
+        # Write corrections to EVOLUTION.md
+        if all_corrections:
+            self._write_corrections(evolution_path, all_corrections)
 
         return distilled_count
 
@@ -265,6 +281,64 @@ class DistillationTriggerHook:
                 if len(entry) > 15 and entry != "(none)":
                     lessons.append(entry[:200])
         return lessons[:5]  # Cap to prevent MEMORY.md bloat
+
+    @staticmethod
+    def _extract_corrections(body: str) -> list[str]:
+        """Extract user corrections of agent behavior from DailyActivity body.
+
+        Looks for the **Corrections:** section written by the enriched
+        DailyActivity format.
+        """
+        corrections = []
+        in_corrections_section = False
+        for line in body.splitlines():
+            stripped = line.strip()
+            if stripped == "**Corrections:**":
+                in_corrections_section = True
+                continue
+            if in_corrections_section and (
+                stripped.startswith("## ")
+                or (stripped.startswith("**") and stripped.endswith(":**"))
+            ):
+                in_corrections_section = False
+                continue
+            if in_corrections_section and stripped.startswith("- "):
+                entry = stripped[2:].strip()
+                if len(entry) > 10 and entry != "(none)":
+                    corrections.append(entry[:200])
+        return corrections[:10]  # Cap
+
+    def _write_corrections(
+        self,
+        evolution_path: Path,
+        corrections: list[tuple[str, str]],
+    ) -> None:
+        """Write correction entries to EVOLUTION.md under 'Corrections Captured'.
+
+        Each correction gets a C-prefixed sequential ID.
+        Format matches EVOLUTION.md convention.
+        """
+        # Read current EVOLUTION.md to find next C-ID
+        try:
+            content = evolution_path.read_text(encoding="utf-8")
+            existing_ids = re.findall(r"### C(\d+)", content)
+            next_id = max((int(x) for x in existing_ids), default=0) + 1
+        except Exception:
+            next_id = 1
+
+        for file_date, correction in corrections:
+            entry_id = f"C{next_id:03d}"
+            entry = (
+                f"### {entry_id} | {file_date}\n"
+                f"- **Correction**: {correction}\n"
+                f"- **Status**: active\n"
+            )
+            self._run_locked_write(evolution_path, "Corrections Captured", entry)
+            next_id += 1
+
+        logger.info(
+            "Wrote %d correction entries to EVOLUTION.md", len(corrections)
+        )
 
     @staticmethod
     def _run_locked_write(
@@ -343,6 +417,129 @@ class DistillationTriggerHook:
             self._run_locked_write(memory_path, "COE Registry", entry)
 
         logger.info("Wrote %d COE registry entries to MEMORY.md", len(by_topic))
+
+    def _update_open_threads(
+        self,
+        memory_path: Path,
+        coe_entries: list[tuple[str, str, str]],
+    ) -> None:
+        """Auto-manage Open Threads from COE signals (code-enforced).
+
+        For each COE topic:
+        - If a matching thread exists: increment report count
+        - If no match: create new P0 thread (COE candidates auto-promote)
+        - If signal is 'resolution': mark thread as resolved
+
+        Uses locked read-modify-write for the entire Open Threads section.
+        """
+        import fcntl
+
+        try:
+            # Read current content under lock
+            lock_path = Path(str(memory_path) + ".lock")
+            lock_path.touch(exist_ok=True)
+            with open(lock_path, "r") as lock_fh:
+                fcntl.flock(lock_fh, fcntl.LOCK_EX)
+                try:
+                    content = memory_path.read_text(encoding="utf-8")
+                    updated = self._apply_open_thread_updates(content, coe_entries)
+                    if updated != content:
+                        memory_path.write_text(updated, encoding="utf-8")
+                        logger.info("Updated Open Threads with %d COE entries", len(coe_entries))
+                finally:
+                    fcntl.flock(lock_fh, fcntl.LOCK_UN)
+        except Exception as exc:
+            logger.warning("Failed to update Open Threads: %s", exc)
+
+    @staticmethod
+    def _apply_open_thread_updates(
+        content: str,
+        coe_entries: list[tuple[str, str, str]],
+    ) -> str:
+        """Apply COE-driven updates to Open Threads section in MEMORY.md content.
+
+        Matching logic: case-insensitive substring match of COE topic
+        against existing thread titles.
+
+        Report count format: ``(reported Nx: session1, session2)``
+        """
+        lines = content.split("\n")
+        # Group COE entries by normalized topic
+        by_topic: dict[str, list[tuple[str, str]]] = {}
+        for file_date, signal, topic in coe_entries:
+            key = topic.lower().strip()
+            if key not in by_topic:
+                by_topic[key] = []
+            by_topic[key].append((file_date, signal))
+
+        matched_topics: set[str] = set()
+
+        for topic_key, events in by_topic.items():
+            # Try to find a matching thread line
+            found = False
+            for i, line in enumerate(lines):
+                # Match thread lines: "- 🔴 **title**" or "- 🟡 **title**"
+                if not re.match(r"^- [🔴🟡🔵] \*\*", line):
+                    continue
+                # Extract title between ** **
+                title_match = re.search(r"\*\*(.+?)\*\*", line)
+                if not title_match:
+                    continue
+                title = title_match.group(1).lower()
+                # Fuzzy match: any significant word overlap
+                topic_words = set(topic_key.split())
+                title_words = set(title.split())
+                overlap = topic_words & title_words
+                # Match if >50% of topic words appear in title, or substring match
+                if (len(overlap) >= max(1, len(topic_words) // 2)
+                        or topic_key in title
+                        or title in topic_key):
+                    # Found match — increment report count
+                    count_match = re.search(r"\(reported (\d+)x:", line)
+                    if count_match:
+                        old_count = int(count_match.group(1))
+                        new_count = old_count + len(events)
+                        lines[i] = line.replace(
+                            f"reported {old_count}x:",
+                            f"reported {new_count}x:",
+                        )
+                    # Check if resolution — update status line
+                    has_resolution = any(s == "resolution" for _, s in events)
+                    if has_resolution and i + 1 < len(lines):
+                        status_line = lines[i + 1]
+                        if "Status:" in status_line and "resolved" not in status_line.lower():
+                            lines[i + 1] = f"  Status: ~~{status_line.strip().removeprefix('Status:').strip()}~~ **RESOLVED**."
+                    found = True
+                    matched_topics.add(topic_key)
+                    break
+
+            if not found:
+                # Create new P0 thread
+                original_topic = next(
+                    t for _, _, t in coe_entries if t.lower().strip() == topic_key
+                )
+                dates = sorted(set(d for d, _ in events))
+                new_entry = (
+                    f"- 🔴 **{original_topic}** (reported {len(events)}x: {', '.join(dates)})\n"
+                    f"  Status: COE candidate — auto-promoted from DailyActivity."
+                )
+                # Find P0 section to insert
+                p0_idx = None
+                for i, line in enumerate(lines):
+                    if line.strip() == "### P0 — Blocking":
+                        p0_idx = i + 1
+                        break
+                if p0_idx is not None:
+                    lines.insert(p0_idx, new_entry)
+                else:
+                    # No P0 section — find Open Threads and add P0
+                    for i, line in enumerate(lines):
+                        if line.strip() == "## Open Threads":
+                            lines.insert(i + 1, f"\n### P0 — Blocking\n{new_entry}\n")
+                            break
+                matched_topics.add(topic_key)
+
+        return "\n".join(lines)
 
     @staticmethod
     def _write_flag(da_dir: Path, count: int) -> None:
