@@ -293,8 +293,8 @@ async def chat_stream(request: Request):
             yield {
                 "type": "error",
                 "code": "AGENT_TIMEOUT",
-                "message": "Agent response timed out. Your conversation has been saved.",
-                "suggested_action": "Please try again"
+                "message": "The AI agent took too long to respond. This can happen when the Claude API is under heavy load or processing a complex request.",
+                "suggested_action": "Your conversation is saved. Click Retry or send your message again."
             }
         except Exception as e:
             import traceback
@@ -307,8 +307,8 @@ async def chat_stream(request: Request):
                 yield {
                     "type": "error",
                     "code": "AGENT_TIMEOUT",
-                    "message": "Agent response timed out. Your conversation has been saved.",
-                    "suggested_action": "Please try again"
+                    "message": "The AI agent took too long to respond. This can happen when the Claude API is under heavy load or processing a complex request.",
+                    "suggested_action": "Your conversation is saved. Click Retry or send your message again."
                 }
             elif "connection" in error_message.lower() or "network" in error_message.lower():
                 yield _build_error_event(
@@ -385,8 +385,8 @@ async def answer_question(request: Request):
             yield {
                 "type": "error",
                 "code": "AGENT_TIMEOUT",
-                "message": "Agent response timed out. Your conversation has been saved.",
-                "suggested_action": "Please try again"
+                "message": "The AI agent took too long to respond. This can happen when the Claude API is under heavy load or processing a complex request.",
+                "suggested_action": "Your conversation is saved. Click Retry or send your message again."
             }
         except Exception as e:
             import traceback
@@ -721,8 +721,8 @@ async def cmd_permission_continue(request: Request):
             yield {
                 "type": "error",
                 "code": "AGENT_TIMEOUT",
-                "message": "Agent response timed out. Your conversation has been saved.",
-                "suggested_action": "Please try again"
+                "message": "The AI agent took too long to respond. This can happen when the Claude API is under heavy load or processing a complex request.",
+                "suggested_action": "Your conversation is saved. Click Retry or send your message again."
             }
         except Exception as e:
             import traceback

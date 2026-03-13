@@ -50,10 +50,21 @@ export function ChatErrorMessage({ error, onRetry }: ChatErrorMessageProps) {
       {/* Error header */}
       <div className="flex items-center gap-2 mb-1">
         <span className="material-symbols-outlined text-red-400 text-lg">
-          error
+          {error.code === 'SDK_SUBPROCESS_TIMEOUT' || error.code === 'AGENT_TIMEOUT'
+            ? 'schedule' : 'error'}
         </span>
         <span className="text-red-400 font-semibold text-sm">
-          {error.code ?? 'ERROR'}
+          {error.code === 'SDK_SUBPROCESS_TIMEOUT'
+            ? 'AI Service Timeout'
+            : error.code === 'AGENT_TIMEOUT'
+              ? 'Response Timeout'
+              : error.code === 'RATE_LIMIT_EXCEEDED'
+                ? 'Rate Limited'
+                : error.code === 'SERVICE_UNAVAILABLE'
+                  ? 'Service Unavailable'
+                  : error.code === 'CREDENTIALS_EXPIRED'
+                    ? 'Credentials Expired'
+                    : error.code ?? 'Error'}
         </span>
       </div>
 

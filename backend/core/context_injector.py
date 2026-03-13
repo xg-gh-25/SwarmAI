@@ -177,9 +177,9 @@ def _assemble_context(messages: list[str], was_truncated: bool) -> str:
 
 async def build_resume_context(
     app_session_id: str,
-    max_messages: int = 10,
-    db_fetch_limit: int = 30,
-    token_budget: int = 2000,
+    max_messages: int = 20,
+    db_fetch_limit: int = 60,
+    token_budget: int = 4000,
 ) -> str:
     """Load recent messages and format them for system prompt injection.
 
@@ -189,12 +189,12 @@ async def build_resume_context(
     Args:
         app_session_id: The stable tab-level session ID to query messages for.
         max_messages: Maximum number of human-readable messages in the final
-            output (default 10).
+            output (default 20).
         db_fetch_limit: Number of messages to fetch from DB before filtering
-            (default 30).  Set higher than max_messages to account for
+            (default 60).  Set higher than max_messages to account for
             tool-only messages being filtered out.
         token_budget: Maximum estimated tokens for the formatted output
-            (default 2000).
+            (default 4000).
 
     Returns:
         Formatted context string with section header, preamble, and message

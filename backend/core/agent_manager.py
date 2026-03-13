@@ -2413,11 +2413,13 @@ class AgentManager:
                     yield _build_error_event(
                         code="SDK_SUBPROCESS_TIMEOUT",
                         message=(
-                            "The connection to the AI service timed out."
+                            "The AI service didn't respond within 90 seconds. "
+                            "This usually means the Claude backend is temporarily "
+                            "overloaded or the request was too complex."
                         ),
                         suggested_action=(
                             "Your conversation is saved. "
-                            "Please send your message again to continue."
+                            "Click Retry or send your message again to continue."
                         ),
                     )
                     break
