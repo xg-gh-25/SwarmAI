@@ -1231,10 +1231,12 @@ class AgentManager:
         # Build add_dirs from sandbox_additional_write_paths config.
         # This passes --add-dir to the CLI, granting write access to directories
         # outside the working directory (e.g., the source tree for self-evolution).
+        # Read from config.json (single source of truth) via AppConfigManager.
         add_dirs: list[str] = []
-        if settings.sandbox_additional_write_paths:
+        raw_write_paths = self._config.get("sandbox_additional_write_paths", "") if self._config else ""
+        if raw_write_paths:
             add_dirs = [
-                p.strip() for p in settings.sandbox_additional_write_paths.split(",")
+                p.strip() for p in raw_write_paths.split(",")
                 if p.strip()
             ]
 
