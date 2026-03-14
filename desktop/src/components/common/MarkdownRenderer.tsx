@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, memo } from 'react';
+import { useEffect, useRef, useState, useMemo, memo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import type { PluggableList } from 'unified';
 import remarkGfm from 'remark-gfm';
@@ -8,11 +8,14 @@ import rehypeKatex from 'rehype-katex';
 import 'katex/dist/katex.min.css';
 import mermaid from 'mermaid';
 import hljs from 'highlight.js';
+import { convertFileSrc } from '@tauri-apps/api/core';
 import { useTheme } from '../../contexts/ThemeContext';
 
 interface MarkdownRendererProps {
   content: string;
   className?: string;
+  /** Absolute directory path of the file being rendered — used to resolve relative image paths. */
+  basePath?: string;
 }
 
 // Default SVG dimensions when not specified
@@ -560,10 +563,38 @@ const InlineCode = memo(function InlineCode({ children }: { children: React.Reac
   );
 });
 
+/**
+ * Resolves an image src to a Tauri asset URL so local filesystem images render
+ * in the webview. Handles absolute paths (/Users/...) and relative paths
+ * (images/foo.png) resolved against the optional basePath.
+ * Remote URLs (http://, https://, data:) pass through unchanged.
+ */
+function resolveImageSrc(src: string | undefined, basePath?: string): string | undefined {
+  if (!src) return src;
+  // Remote URLs and data URIs — pass through
+  if (/^(https?:|data:|blob:)/i.test(src)) return src;
+  // Already converted — pass through
+  if (src.startsWith('http://asset.localhost') || src.startsWith('https://asset.localhost')) return src;
+
+  let absolutePath = src;
+  if (!src.startsWith('/')) {
+    // Relative path — resolve against basePath
+    if (!basePath) return src; // can't resolve without a base
+    absolutePath = `${basePath.replace(/\/$/, '')}/${src}`;
+  }
+
+  try {
+    return convertFileSrc(absolutePath);
+  } catch {
+    // Non-Tauri environment (tests, storybook) — return as-is
+    return absolutePath;
+  }
+}
+
 // Memoized markdown components to prevent unnecessary re-renders
 // Using 'any' for props to avoid complex react-markdown type compatibility issues
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-const markdownComponents: Record<string, React.ComponentType<any>> = {
+const baseMarkdownComponents: Record<string, React.ComponentType<any>> = {
   // Headers
   h1: ({ children }) => (
     <h1 className="text-2xl font-bold text-[var(--color-text)] mt-4 mb-2 pb-1.5 border-b border-[var(--color-border)]">
@@ -654,12 +685,13 @@ const markdownComponents: Record<string, React.ComponentType<any>> = {
   // Horizontal rule
   hr: () => <hr className="my-3 border-[var(--color-border)]" />,
 
-  // Images
+  // Images — base version without path resolution; overridden per-instance with basePath
   img: ({ src, alt }) => (
     <img
       src={src}
       alt={alt || ''}
       className="max-w-full h-auto my-4 rounded-lg border border-[var(--color-border)]"
+      loading="lazy"
     />
   ),
 
@@ -696,10 +728,27 @@ const rehypePlugins: PluggableList = [[rehypeKatex, { strict: false }]];
 const MarkdownRenderer = memo(function MarkdownRenderer({
   content,
   className = '',
+  basePath,
 }: MarkdownRendererProps) {
+  // When basePath is provided, override the img component to resolve local paths
+  const components = useMemo(() => {
+    if (!basePath) return baseMarkdownComponents;
+    return {
+      ...baseMarkdownComponents,
+      img: ({ src, alt }: { src?: string; alt?: string }) => (
+        <img
+          src={resolveImageSrc(src, basePath)}
+          alt={alt || ''}
+          className="max-w-full h-auto my-4 rounded-lg border border-[var(--color-border)]"
+          loading="lazy"
+        />
+      ),
+    };
+  }, [basePath]);
+
   return (
     <div className={`markdown-content min-w-0 ${className}`}>
-      <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} components={markdownComponents}>
+      <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} components={components}>
         {content}
       </ReactMarkdown>
     </div>
