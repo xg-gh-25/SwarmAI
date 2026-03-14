@@ -185,6 +185,11 @@ async def _deferred_refresh_defaults(label: str) -> None:
     avoid duplicating the same closure.  Logs success/failure and records
     elapsed time into the module-level ``_phase_timings`` dict.
 
+    Also runs MCP migration (idempotent) to ensure legacy user-mcp-servers.json
+    entries are converted to the new .claude/mcps/mcp-dev.json format.
+    This was previously only in run_full_initialization — existing users who
+    already had initialization_complete=1 would never get their MCPs migrated.
+
     Args:
         label: Human-readable label for log messages (e.g. ``"fast path"``).
     """
@@ -193,6 +198,31 @@ async def _deferred_refresh_defaults(label: str) -> None:
         from core.initialization_manager import initialization_manager
         await initialization_manager.refresh_builtin_defaults()
         logger.info("Builtin defaults refreshed (deferred, %s)", label)
+
+        # Ensure MCP migration runs on every startup path (idempotent).
+        # Previously only ran in run_full_initialization, so returning users
+        # with initialization_complete=1 never got their MCPs migrated.
+        try:
+            from pathlib import Path
+            from core.mcp_migration import migrate_if_needed
+            from core.mcp_config_loader import merge_catalog_template
+            from utils.bundle_paths import get_resources_dir
+
+            ws_path = Path(initialization_manager.get_cached_workspace_path())
+            await migrate_if_needed(ws_path)
+
+            # Also merge catalog template (adds new entries from product updates)
+            _backend_dir = Path(__file__).resolve().parent
+            _dev_resources = _backend_dir.parent / "desktop" / "resources"
+            resources_dir = get_resources_dir(_dev_resources)
+            template_path = resources_dir / "mcp-catalog.json"
+            merge_catalog_template(ws_path, template_path)
+
+            # Ensure directory exists
+            (ws_path / ".claude" / "mcps").mkdir(parents=True, exist_ok=True)
+            logger.info("MCP config ensured (deferred, %s)", label)
+        except Exception:
+            logger.exception("MCP config setup failed (non-fatal, %s)", label)
     except Exception:
         logger.exception("Deferred refresh_builtin_defaults failed (non-fatal, %s)", label)
     finally:

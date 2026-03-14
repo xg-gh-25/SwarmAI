@@ -635,9 +635,12 @@ class SwarmWorkspaceManager:
                     append_text = "\n".join(missing_entries) + "\n"
                     if not content.endswith("\n"):
                         append_text = "\n" + append_text
-                    await anyio.to_thread.run_sync(
-                        lambda t=append_text: gitignore.open("a", encoding="utf-8").write(t)
-                    )
+
+                    def _append_gitignore(text: str = append_text) -> None:
+                        with gitignore.open("a", encoding="utf-8") as fh:
+                            fh.write(text)
+
+                    await anyio.to_thread.run_sync(_append_gitignore)
                     logger.info("Appended missing .gitignore entries: %s", missing_entries)
             except OSError as exc:
                 logger.warning("Failed to update .gitignore: %s", exc)

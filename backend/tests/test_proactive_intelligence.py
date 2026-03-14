@@ -668,6 +668,44 @@ class TestUpdateLearning:
         result = _update_learning_from_activity(state, da_dir)
         assert result.observations == []
 
+    def test_dedup_guard_prevents_reprocessing(self, tmp_path):
+        """Calling _update_learning twice with same file should only count once."""
+        da_dir = tmp_path / "DailyActivity"
+        da_dir.mkdir()
+        from datetime import datetime
+        today = datetime.now().strftime("%Y-%m-%d")
+        (da_dir / f"{today}.md").write_text(
+            "## 10:00 | abc | Session\n\n"
+            "**Delivered:**\n"
+            "- Fixed MCP servers not connecting\n"
+        )
+        state = LearningState()
+        state.last_briefing_suggested = ["MCP servers not connecting in app"]
+
+        # First call — should process
+        state = _update_learning_from_activity(state, da_dir)
+        assert len(state.observations) == 1
+        assert state.work_type_distribution.get("maintenance", 0) >= 1 or \
+               state.work_type_distribution.get("feature", 0) >= 1
+
+        # Second call with same file (unchanged mtime) — should skip
+        state = _update_learning_from_activity(state, da_dir)
+        assert len(state.observations) == 1  # still 1, not 2
+
+        # Third call after file modification — should process again
+        import time
+        time.sleep(0.05)  # ensure mtime changes
+        (da_dir / f"{today}.md").write_text(
+            "## 10:00 | abc | Session\n\n"
+            "**Delivered:**\n"
+            "- Fixed MCP servers not connecting\n"
+            "## 14:00 | def | Session 2\n\n"
+            "**Delivered:**\n"
+            "- Built new widget\n"
+        )
+        state = _update_learning_from_activity(state, da_dir)
+        assert len(state.observations) == 2  # now 2
+
 
 class TestApplyLearning:
     def test_skip_penalty_applied(self):

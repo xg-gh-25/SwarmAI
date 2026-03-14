@@ -290,17 +290,35 @@ const TreeNodeRow: React.FC<TreeNodeRowProps> = React.memo(function TreeNodeRow(
         <span style={{ width: '16px', flexShrink: 0 }} aria-hidden="true" />
       )}
 
-      {/* Node icon */}
+      {/* Node icon — with symlink overlay for linked directories */}
       <span
-        className="material-symbols-outlined"
+        style={{ position: 'relative', display: 'inline-flex', flexShrink: 0 }}
         aria-hidden="true"
-        style={{
-          fontSize: '16px',
-          flexShrink: 0,
-          color: iconColor,
-        }}
       >
-        {isDirectory ? (isExpanded ? 'folder_open' : 'folder') : fileIcon(node.name)}
+        <span
+          className="material-symbols-outlined"
+          style={{
+            fontSize: '16px',
+            color: iconColor,
+          }}
+        >
+          {isDirectory ? (isExpanded ? 'folder_open' : 'folder') : fileIcon(node.name)}
+        </span>
+        {node.isSymlink && (
+          <span
+            className="material-symbols-outlined"
+            title="Linked folder"
+            style={{
+              fontSize: '10px',
+              position: 'absolute',
+              bottom: '-2px',
+              right: '-4px',
+              color: 'var(--color-text-muted)',
+            }}
+          >
+            link
+          </span>
+        )}
       </span>
 
       {/* Node name */}

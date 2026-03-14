@@ -276,10 +276,12 @@ export default function ChatPage() {
       setHasMoreMessages(sessionMessages.length === 50);
       // Sync loaded messages back into the tab map so subsequent tab switches
       // don't see empty messages and re-fetch unnecessarily.
+      // GUARD: Never overwrite a streaming tab's messages — the stream handler
+      // has newer content than the backend fetch (which returns last-committed state).
       const currentTabId = activeTabIdRef.current;
       if (currentTabId) {
         const tab = tabMapRef.current.get(currentTabId);
-        if (tab && tab.sessionId === sid) {
+        if (tab && tab.sessionId === sid && !tab.isStreaming) {
           tab.messages = formattedMessages;
         }
       }
@@ -797,19 +799,30 @@ export default function ChatPage() {
     // Read tab metadata from the map (stable, not from openTabs which triggers re-renders)
     const activeTabState = tabMapRef.current.get(activeTabId);
     if (!activeTabState) return;
-    
-    // Only load if the tab has a persisted session we haven't loaded yet
+
+    // FIX (P0 tab-switch streaming content loss):
+    // If the tab already has messages in memory (from streaming or prior load),
+    // sync directly from tabState — do NOT fetch from backend.
+    // Backend fetch overwrites in-progress streaming content with stale data.
+    if (activeTabState.messages.length > 0) {
+      setMessages([...activeTabState.messages]);
+      setSessionId(activeTabState.sessionId);
+      setPendingQuestion(activeTabState.pendingQuestion ?? null);
+      return;
+    }
+
+    // Tab has no in-memory messages — load from backend if it has a session
     if (activeTabState.sessionId && activeTabState.sessionId !== sessionId) {
       loadSessionMessages(activeTabState.sessionId);
-    } else if (!activeTabState.sessionId && !isStreaming) {
-      // Tab has no session and we're not streaming — reset to welcome.
+    } else if (!activeTabState.sessionId) {
+      // Tab has no session — reset to welcome.
       // This covers both: switching to a fresh tab while another tab had
       // a session, AND the auto-created tab after closing the last one.
       setMessages([]);
       setSessionId(undefined);
       setPendingQuestion(null);
     }
-  }, [activeTabId, sessionId, isStreaming, isLoadingHistory, loadSessionMessages, tabMapRef]);
+  }, [activeTabId, sessionId, isStreaming, isLoadingHistory, loadSessionMessages, tabMapRef, setMessages, setSessionId, setPendingQuestion]);
 
 
 

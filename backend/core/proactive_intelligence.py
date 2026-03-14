@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 # Anchored to word boundary: lookbehind requires start-of-string, whitespace, or common
 # punctuation (colon, comma, open-paren) to avoid matching version numbers like "v2/3".
 _DATE_REF_RE = re.compile(
-    r"(?:^|(?<=[\s:,(]))(\d{1,2})/(\d{1,2})(?=[\s,)$])|(\d{4}-\d{2}-\d{2})"
+    r"(?:^|(?<=[\s:,(]))(\d{1,2})/(\d{1,2})(?=[\s,)]|$)|(\d{4}-\d{2}-\d{2})"
 )
 
 # ---------------------------------------------------------------------------
@@ -583,6 +583,10 @@ class LearningState:
         "feature": 0, "maintenance": 0, "investigation": 0, "design": 0,
     })
     observations: list[dict[str, Any]] = field(default_factory=list)
+    # Dedup guard: mtime of the DailyActivity file last processed by
+    # _update_learning_from_activity(). Prevents re-counting the same
+    # deliverables across multiple session starts within the same day.
+    last_processed_activity_mtime: float = 0.0
 
     def preferred_work_type(self) -> Optional[str]:
         """Return the work type with highest count, or None if no data."""
@@ -643,6 +647,7 @@ def _load_learning_state(workspace_dir: Path) -> LearningState:
                 "feature": 0, "maintenance": 0, "investigation": 0, "design": 0,
             }),
             observations=data.get("observations", []),
+            last_processed_activity_mtime=data.get("last_processed_activity_mtime", 0.0),
         )
         return state
     except (json.JSONDecodeError, KeyError, TypeError) as exc:
@@ -668,6 +673,7 @@ def _save_learning_state(workspace_dir: Path, state: LearningState) -> None:
         "item_history": state.item_history,
         "work_type_distribution": state.work_type_distribution,
         "observations": state.observations[-_OBSERVATIONS_CAP:],
+        "last_processed_activity_mtime": state.last_processed_activity_mtime,
     }
     tmp_path = path.with_suffix(".tmp")
     try:
@@ -748,9 +754,26 @@ def _update_learning_from_activity(
 
     Updates skip/follow counts and work type distribution.
     Only runs if there's a previous briefing to compare against.
+
+    Dedup guard: checks the most recent DailyActivity file's mtime against
+    ``state.last_processed_activity_mtime``. If unchanged, the file was already
+    processed by a prior session start — skip to avoid inflating counters.
     """
     if not state.last_briefing_suggested:
         return state  # no previous suggestions to compare
+
+    # --- Dedup guard: skip if DailyActivity file hasn't changed ---
+    if daily_dir.is_dir():
+        da_files = sorted(
+            [f for f in daily_dir.glob("*.md") if f.stem[:4].isdigit()],
+            key=lambda f: f.stem,
+            reverse=True,
+        )
+        if da_files:
+            current_mtime = da_files[0].stat().st_mtime
+            if current_mtime == state.last_processed_activity_mtime:
+                return state  # already processed this version
+            state.last_processed_activity_mtime = current_mtime
 
     deliverables = _extract_deliverables(daily_dir)
     if not deliverables:
