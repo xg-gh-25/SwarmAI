@@ -47,6 +47,7 @@ import { ChatHeader, ChatInput, MessageBubble, WelcomeScreen } from './chat/comp
 import { RadarSidebar } from './chat/components/RightSidebar';
 
 import { groupSessionsByTime } from './chat/utils';
+import { EXPLORER_ATTACH_FILE, EXPLORER_ASK_ABOUT_FILE } from '../constants/explorerEvents';
 
 /**
  * Re-export ``deriveStreamingActivity`` and ``MAX_OPEN_TABS`` from the
@@ -173,6 +174,32 @@ export default function ChatPage() {
     isProcessing: isProcessingFiles, error: fileError, canAddMore } = useUnifiedAttachments(
     activeTabIdRef.current, tabMapRef
   );
+
+  // ── Explorer → Chat custom event bridge ──────────────────────────────
+  // Handles "Attach to Chat" and "Ask Swarm about this" from context menu.
+  useEffect(() => {
+    const handleAttach = (e: Event) => {
+      const file = (e as CustomEvent).detail;
+      if (file) addWorkspaceFiles([file]);
+    };
+    const handleAsk = (e: Event) => {
+      const file = (e as CustomEvent).detail;
+      if (file) {
+        addWorkspaceFiles([file]);
+        // Focus the chat input after a tick (allow React state update)
+        requestAnimationFrame(() => {
+          const input = document.querySelector<HTMLTextAreaElement>('[data-testid="chat-input"]');
+          input?.focus();
+        });
+      }
+    };
+    window.addEventListener(EXPLORER_ATTACH_FILE, handleAttach);
+    window.addEventListener(EXPLORER_ASK_ABOUT_FILE, handleAsk);
+    return () => {
+      window.removeEventListener(EXPLORER_ATTACH_FILE, handleAttach);
+      window.removeEventListener(EXPLORER_ASK_ABOUT_FILE, handleAsk);
+    };
+  }, [addWorkspaceFiles]);
 
   // Streaming lifecycle hook — owns messages, sessionId, pendingQuestion,
   // isStreaming, refs, and stream handler factories (Phase 0 extraction).

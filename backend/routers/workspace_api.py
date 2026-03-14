@@ -663,6 +663,8 @@ async def get_workspace_file_raw(
     if not _is_path_under(target, workspace_root):
         if not _is_symlink_traversal(workspace_root, path):
             raise HTTPException(status_code=400, detail=f"Path outside workspace: {path}")
+        if not target.is_file():
+            raise HTTPException(status_code=400, detail=f"Not a regular file: {path}")
 
     if not target.is_file():
         raise HTTPException(status_code=404, detail=f"File not found: {path}")
@@ -838,6 +840,74 @@ async def delete_folder(request: FolderDeleteRequest):
     return Response(status_code=204)
 
 
+
+
+@router.post("/workspace/trash")
+async def trash_item(request: FolderDeleteRequest):
+    """Move a file or folder to the macOS Trash (recoverable via Finder).
+
+    Never falls back to permanent delete — if trashing fails, the error is
+    surfaced to the user so they can decide what to do.
+
+    Returns HTTP 403 if the target is a system-managed directory.
+    Returns HTTP 500 if trashing fails (osascript error, permissions, etc.).
+    """
+    expanded_path = await _get_workspace_path()
+    target = _validate_relative_path(request.path, expanded_path)
+
+    # Reject trash on system-managed folders
+    rel_path = request.path.replace("\\", "/").strip("/")
+    if rel_path in SYSTEM_MANAGED_FOLDERS:
+        raise HTTPException(
+            status_code=403,
+            detail=f"Cannot delete system-managed directory: {rel_path}",
+        )
+
+    if not target.exists():
+        raise HTTPException(status_code=404, detail="Path not found")
+
+    # macOS Trash via osascript (recoverable).
+    # For directories, Finder uses "delete POSIX file" for both files and
+    # folders — it resolves the type automatically.
+    #
+    # Escape backslashes and double-quotes for the AppleScript string literal
+    # to prevent injection via crafted filenames.
+    target_str = str(target).replace("\\", "\\\\").replace('"', '\\"')
+
+    applescript = (
+        'tell application "Finder"\n'
+        f'  delete POSIX file "{target_str}"\n'
+        'end tell'
+    )
+
+    try:
+        result = subprocess.run(
+            ["osascript", "-e", applescript],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except FileNotFoundError:
+        raise HTTPException(
+            status_code=500,
+            detail="osascript not found — macOS Trash requires osascript",
+        )
+    except subprocess.TimeoutExpired:
+        raise HTTPException(
+            status_code=500,
+            detail="Trash operation timed out (Finder not responding?)",
+        )
+
+    if result.returncode != 0:
+        error_msg = result.stderr.strip() or "Unknown osascript error"
+        logger.error("Trash failed for %s: %s", request.path, error_msg)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to trash: {error_msg}",
+        )
+
+    logger.info("Trashed (recoverable): %s", request.path)
+    return {"path": request.path, "trashed": True}
 
 
 @router.put("/workspace/rename")

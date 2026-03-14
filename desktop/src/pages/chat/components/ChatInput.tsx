@@ -448,6 +448,7 @@ export function ChatInput({
             {/* Text Input — disabled during streaming or when backend is disconnected */}
             <textarea
               ref={textareaRef}
+              data-testid="chat-input"
               value={inputValue}
               onChange={handleInputChange}
               onKeyDown={handleKeyDown}

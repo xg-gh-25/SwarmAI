@@ -425,4 +425,9 @@ export const folderService = {
   async renameItem(oldPath: string, newPath: string): Promise<void> {
     await api.put('/workspace/rename', { old_path: oldPath, new_path: newPath });
   },
+
+  /** Move item to Trash (recoverable on macOS). Falls back to permanent delete. */
+  async trashItem(path: string): Promise<void> {
+    await api.post('/workspace/trash', { path });
+  },
 };
