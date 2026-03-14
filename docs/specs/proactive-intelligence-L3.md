@@ -102,7 +102,7 @@ _update_learning_state()             <-- NEW, runs before briefing
 ### What We Track
 
 ```json
-// ~/.swarm-ai/proactive_state.json
+// SwarmWS/proactive_state.json (gitignored)
 {
   "version": 1,
   "last_updated": "2026-03-14T19:30:00",
@@ -216,7 +216,7 @@ backend/core/proactive_intelligence.py   <-- extend existing
 
 ### State File Location
 
-`~/.swarm-ai/proactive_state.json` — outside SwarmWS (not git-tracked). This is ephemeral learning data, not curated knowledge.
+`SwarmWS/proactive_state.json` — inside SwarmWS but `.gitignore`'d. Visible to the agent during sessions, part of the workspace context. This is ephemeral learning data, not curated knowledge.
 
 ### Integration Points
 
@@ -312,7 +312,7 @@ The `observations` array in the state file has a rolling window of **30 entries*
 
 ## Open Questions for Review
 
-1. **State file location:** `~/.swarm-ai/proactive_state.json` (outside SwarmWS, not git-tracked). Alternative: inside SwarmWS but `.gitignore`'d. Preference?
+1. **State file location:** ✅ Decided: `SwarmWS/proactive_state.json` (inside SwarmWS, `.gitignore`'d). Visible to agent during sessions.
 
 2. **Skip threshold:** Currently 2 skips to activate penalty. Should it be 3 (more lenient)?
 

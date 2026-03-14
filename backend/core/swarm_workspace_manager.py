@@ -622,6 +622,26 @@ class SwarmWorkspaceManager:
                 recreated = True
                 logger.info("Recreated missing folder: Knowledge/%s", subdir)
 
+        # Ensure .gitignore has required entries (migration for existing workspaces)
+        gitignore = root / ".gitignore"
+        if gitignore.exists():
+            try:
+                content = gitignore.read_text(encoding="utf-8")
+                missing_entries = []
+                for entry in ["proactive_state.json", "*.tmp"]:
+                    if entry not in content:
+                        missing_entries.append(entry)
+                if missing_entries:
+                    append_text = "\n".join(missing_entries) + "\n"
+                    if not content.endswith("\n"):
+                        append_text = "\n" + append_text
+                    await anyio.to_thread.run_sync(
+                        lambda t=append_text: gitignore.open("a", encoding="utf-8").write(t)
+                    )
+                    logger.info("Appended missing .gitignore entries: %s", missing_entries)
+            except OSError as exc:
+                logger.warning("Failed to update .gitignore: %s", exc)
+
         # Auto-prune old archived DailyActivity files (Req 7.6, 15.11)
         expanded = str(root)
         await anyio.to_thread.run_sync(lambda: self.prune_archives(expanded))
