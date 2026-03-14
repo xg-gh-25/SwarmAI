@@ -905,6 +905,8 @@ export interface TreeNode {
   children?: TreeNode[];
   /** Git status of this file/folder, if known. */
   gitStatus?: GitStatus;
+  /** True when this entry is a filesystem symlink (e.g., linked project). */
+  isSymlink?: boolean;
 }
 
 

@@ -515,7 +515,7 @@ export default function FileEditorModal({
           .catch(() => { /* non-critical — images just won't resolve */ });
       }
     }
-  }, [isOpen, initialContent, committedContent, isMarkdown, workspaceRoot]);
+  }, [isOpen, initialContent, committedContent, isMarkdown]);
 
   // Update syntax highlighting when content changes or returning from diff view
   useEffect(() => {

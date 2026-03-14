@@ -210,7 +210,9 @@ work-type preferences, applies skip penalties and affinity bonuses.
 
 ### Level 4: Proactive Interrupts
 
-Mid-session signals via SSE events. Non-blocking toast/banner in UI.
+Mid-session signals via dedicated SSE endpoint. Non-blocking toast in UI.
+
+**Design doc:** `docs/specs/proactive-intelligence-L4.md`
 
 | Trigger | Signal |
 |---|---|
@@ -219,7 +221,9 @@ Mid-session signals via SSE events. Non-blocking toast/banner in UI.
 | Long session >2h | "Good stopping point?" |
 | External event | "Meeting in 30min" |
 
-**Estimated effort:** Background monitor + SSE events + frontend renderer. ~6-8 hours.
+Architecture: `ProactiveMonitor` singleton with 30s tick, separate `/api/proactive/stream` SSE, rate-limited toasts (max 2 visible, 10min cooldown per category).
+
+**Estimated effort:** ~7 hours across 3 phases (core, frontend, opt-in signals).
 
 ### Level 5: Autonomous Preparation
 

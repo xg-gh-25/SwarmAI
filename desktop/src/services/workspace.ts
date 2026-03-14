@@ -168,6 +168,7 @@ export function treeNodeToCamelCase(data: Record<string, unknown>): TreeNode {
       ? (data.children as Record<string, unknown>[]).map(treeNodeToCamelCase)
       : undefined,
     gitStatus: (data.git_status ?? data.gitStatus) as TreeNode['gitStatus'],
+    isSymlink: (data.is_symlink ?? data.isSymlink) as boolean | undefined,
   };
 }
 
