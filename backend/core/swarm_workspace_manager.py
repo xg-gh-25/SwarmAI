@@ -87,8 +87,10 @@ __pycache__/
 .venv/
 node_modules/
 *.pyc
+*.tmp
 .DS_Store
 .claude/mcps/mcp-dev.json
+proactive_state.json
 """
 
 # ─────────────────────────────────────────────────────────────────────────────
