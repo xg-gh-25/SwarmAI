@@ -665,8 +665,7 @@ async def get_workspace_file_committed(
 
     # Verify the file exists on disk
     target = (workspace_root / path).resolve()
-    ws_resolved = str(workspace_root.resolve())
-    if not str(target).startswith(ws_resolved):
+    if not _is_path_under(target, workspace_root):
         if not _is_symlink_traversal(workspace_root, path):
             raise HTTPException(status_code=400, detail=f"Path outside workspace: {path}")
 
