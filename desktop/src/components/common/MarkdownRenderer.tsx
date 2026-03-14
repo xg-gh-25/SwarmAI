@@ -8,13 +8,13 @@ import rehypeKatex from 'rehype-katex';
 import 'katex/dist/katex.min.css';
 import mermaid from 'mermaid';
 import hljs from 'highlight.js';
-import { convertFileSrc } from '@tauri-apps/api/core';
+import { getBackendPort } from '../../services/tauri';
 import { useTheme } from '../../contexts/ThemeContext';
 
 interface MarkdownRendererProps {
   content: string;
   className?: string;
-  /** Absolute directory path of the file being rendered — used to resolve relative image paths. */
+  /** Workspace-relative directory path of the file being rendered — used to resolve relative image paths. */
   basePath?: string;
 }
 
@@ -564,31 +564,26 @@ const InlineCode = memo(function InlineCode({ children }: { children: React.Reac
 });
 
 /**
- * Resolves an image src to a Tauri asset URL so local filesystem images render
- * in the webview. Handles absolute paths (/Users/...) and relative paths
- * (images/foo.png) resolved against the optional basePath.
+ * Resolves an image src to a backend API URL so local workspace images render
+ * in the markdown preview. Handles relative paths (images/foo.png) resolved
+ * against the workspace-relative basePath.
  * Remote URLs (http://, https://, data:) pass through unchanged.
  */
 function resolveImageSrc(src: string | undefined, basePath?: string): string | undefined {
   if (!src) return src;
   // Remote URLs and data URIs — pass through
   if (/^(https?:|data:|blob:)/i.test(src)) return src;
-  // Already converted — pass through
-  if (src.startsWith('http://asset.localhost') || src.startsWith('https://asset.localhost')) return src;
 
-  let absolutePath = src;
+  // Build workspace-relative path
+  let relativePath = src;
   if (!src.startsWith('/')) {
-    // Relative path — resolve against basePath
-    if (!basePath) return src; // can't resolve without a base
-    absolutePath = `${basePath.replace(/\/$/, '')}/${src}`;
+    if (basePath === undefined) return src; // no base context — can't resolve
+    relativePath = basePath ? `${basePath.replace(/\/$/, '')}/${src}` : src;
   }
 
-  try {
-    return convertFileSrc(absolutePath);
-  } catch {
-    // Non-Tauri environment (tests, storybook) — return as-is
-    return absolutePath;
-  }
+  // Serve via backend raw file endpoint
+  const port = getBackendPort();
+  return `http://localhost:${port}/api/workspace/file/raw?path=${encodeURIComponent(relativePath)}`;
 }
 
 // Memoized markdown components to prevent unnecessary re-renders
@@ -732,7 +727,7 @@ const MarkdownRenderer = memo(function MarkdownRenderer({
 }: MarkdownRendererProps) {
   // When basePath is provided, override the img component to resolve local paths
   const components = useMemo(() => {
-    if (!basePath) return baseMarkdownComponents;
+    if (basePath === undefined) return baseMarkdownComponents;
     return {
       ...baseMarkdownComponents,
       img: ({ src, alt }: { src?: string; alt?: string }) => (

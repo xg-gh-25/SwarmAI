@@ -46,7 +46,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, Header, HTTPException, Query
-from fastapi.responses import Response
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
 from core.context_directory_loader import CONTEXT_FILES
@@ -631,7 +631,9 @@ async def get_workspace_file(
     except OSError as exc:
         raise HTTPException(status_code=500, detail=f"Failed to read file: {exc}")
 
-    # Projected skill files are always readonly (managed by the system)
+    # Projected skill files and context files are always readonly
+    path_parts = Path(path).parts
+    is_skill_file = len(path_parts) >= 2 and path_parts[0] == ".claude" and path_parts[1] == "skills"
     is_readonly = _is_readonly_context_file(path) or is_skill_file
     return {
         "content": content,
@@ -640,6 +642,38 @@ async def get_workspace_file(
         "readonly": is_readonly,
         "encoding": "utf-8",
     }
+
+
+@router.get("/workspace/file/raw")
+async def get_workspace_file_raw(
+    path: str = Query(..., description="Relative path within the workspace"),
+):
+    """Serve a workspace file as raw binary with proper Content-Type.
+
+    Used by the markdown preview to render local images directly via
+    ``<img src="http://localhost:{port}/api/workspace/file/raw?path=...">``.
+    """
+    if ".." in path.split("/"):
+        raise HTTPException(status_code=400, detail=f"Path traversal not allowed: {path}")
+
+    expanded_path = await _get_workspace_path()
+    workspace_root = Path(expanded_path)
+    target = (workspace_root / path).resolve()
+
+    if not _is_path_under(target, workspace_root):
+        if not _is_symlink_traversal(workspace_root, path):
+            raise HTTPException(status_code=400, detail=f"Path outside workspace: {path}")
+
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail=f"File not found: {path}")
+
+    # Limit to 50 MB
+    file_size = target.stat().st_size
+    if file_size > MAX_PREVIEW_SIZE:
+        raise HTTPException(status_code=413, detail="File too large")
+
+    mime_type, _ = mimetypes.guess_type(target.name)
+    return FileResponse(target, media_type=mime_type or "application/octet-stream")
 
 
 @router.get("/workspace/file/committed")
