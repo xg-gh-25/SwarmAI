@@ -31,6 +31,13 @@ _detect_blocking = _mod._detect_blocking
 _generate_reasoning = _mod._generate_reasoning
 _format_suggestions = _mod._format_suggestions
 ScoredItem = _mod.ScoredItem
+LearningState = _mod.LearningState
+_load_learning_state = _mod._load_learning_state
+_save_learning_state = _mod._save_learning_state
+_classify_work_type = _mod._classify_work_type
+_extract_deliverables = _mod._extract_deliverables
+_update_learning_from_activity = _mod._update_learning_from_activity
+_apply_learning = _mod._apply_learning
 
 
 # ── Fixtures ──
@@ -458,3 +465,247 @@ class TestBuildSessionBriefing:
         assert briefing is not None
         assert "Suggested focus" in briefing
         assert "Tab switching" in briefing  # P0 should be top
+
+
+# ── Level 3: Cross-Session Learning ──
+
+
+class TestWorkTypeClassification:
+    def test_feature_keywords(self):
+        assert _classify_work_type("Built Proactive Intelligence L2") == "feature"
+        assert _classify_work_type("Implemented new scoring engine") == "feature"
+        assert _classify_work_type("Added session briefing") == "feature"
+
+    def test_maintenance_keywords(self):
+        assert _classify_work_type("Fixed tab-switch streaming bug") == "maintenance"
+        assert _classify_work_type("Rebuilt app with latest changes") == "maintenance"
+        assert _classify_work_type("Verified MCP connection") == "maintenance"
+        assert _classify_work_type("Fixing broken MCP servers") == "maintenance"
+
+    def test_investigation_keywords(self):
+        assert _classify_work_type("Investigated MCP root cause") == "investigation"
+        assert _classify_work_type("Diagnosed zlib archive corruption") == "investigation"
+
+    def test_design_keywords(self):
+        assert _classify_work_type("Drafted L3 design doc") == "design"
+        assert _classify_work_type("wireframe for radar page") == "design"
+        assert _classify_work_type("Architecture review for new system") == "design"
+
+    def test_default_is_feature(self):
+        assert _classify_work_type("something unrecognizable") == "feature"
+
+
+class TestLearningState:
+    def test_round_trip(self, tmp_path):
+        state = LearningState()
+        state.work_type_distribution["feature"] = 5
+        state.last_briefing_suggested = ["Fix X", "Build Y"]
+        _save_learning_state(tmp_path, state)
+        loaded = _load_learning_state(tmp_path)
+        assert loaded.work_type_distribution["feature"] == 5
+        assert loaded.last_briefing_suggested == ["Fix X", "Build Y"]
+
+    def test_missing_file_returns_default(self, tmp_path):
+        state = _load_learning_state(tmp_path)
+        assert state.version == 1
+        assert state.last_briefing_suggested == []
+
+    def test_corrupt_file_returns_default(self, tmp_path):
+        (tmp_path / "proactive_state.json").write_text("not json{{{")
+        state = _load_learning_state(tmp_path)
+        assert state.version == 1
+
+    def test_preferred_work_type(self):
+        state = LearningState()
+        state.work_type_distribution = {
+            "feature": 5, "maintenance": 2, "investigation": 1, "design": 0,
+        }
+        assert state.preferred_work_type() == "feature"
+
+    def test_preferred_work_type_empty(self):
+        state = LearningState()
+        assert state.preferred_work_type() is None
+
+    def test_learning_summary_with_clear_preference(self):
+        state = LearningState()
+        state.work_type_distribution = {
+            "feature": 6, "maintenance": 1, "investigation": 1, "design": 0,
+        }
+        summary = state.learning_summary()
+        assert summary is not None
+        assert "feature" in summary
+        assert "75%" in summary
+
+    def test_learning_summary_insufficient_data(self):
+        state = LearningState()
+        state.work_type_distribution = {"feature": 1, "maintenance": 0, "investigation": 0, "design": 0}
+        assert state.learning_summary() is None  # < 3 sessions
+
+    def test_learning_summary_no_clear_preference(self):
+        state = LearningState()
+        state.work_type_distribution = {
+            "feature": 3, "maintenance": 3, "investigation": 2, "design": 2,
+        }
+        assert state.learning_summary() is None  # 30% < 40%
+
+    def test_get_item_history_fuzzy_match(self):
+        state = LearningState()
+        state.item_history["tab switching loses streaming"] = {"skipped_count": 3}
+        result = state.get_item_history("Tab switching loses streaming content")
+        assert result is not None
+        assert result["skipped_count"] == 3
+
+    def test_observations_capped(self, tmp_path):
+        state = LearningState()
+        state.observations = [{"date": f"2026-03-{i:02d}"} for i in range(1, 35)]
+        _save_learning_state(tmp_path, state)
+        loaded = _load_learning_state(tmp_path)
+        assert len(loaded.observations) == 30
+
+
+class TestExtractDeliverables:
+    def test_extracts_delivered_lines(self, tmp_path):
+        da_dir = tmp_path / "DailyActivity"
+        da_dir.mkdir()
+        from datetime import datetime
+        today = datetime.now().strftime("%Y-%m-%d")
+        (da_dir / f"{today}.md").write_text(
+            "## 10:00 | abc | Session\n\n"
+            "**Delivered:**\n"
+            "- Built Proactive Intelligence L2\n"
+            "- Fixed scoring bug\n\n"
+            "**Outputs:**\n"
+            "- code: something.py\n"
+        )
+        deliverables = _extract_deliverables(da_dir)
+        assert len(deliverables) == 2
+        assert "Built Proactive Intelligence L2" in deliverables
+        assert "Fixed scoring bug" in deliverables
+
+    def test_empty_dir(self, tmp_path):
+        assert _extract_deliverables(tmp_path / "nonexistent") == []
+
+
+class TestUpdateLearning:
+    def test_suggestion_followed(self, tmp_path):
+        da_dir = tmp_path / "DailyActivity"
+        da_dir.mkdir()
+        from datetime import datetime
+        today = datetime.now().strftime("%Y-%m-%d")
+        (da_dir / f"{today}.md").write_text(
+            "## 10:00 | abc | Session\n\n"
+            "**Delivered:**\n"
+            "- Fixed MCP servers not connecting\n"
+        )
+        state = LearningState()
+        state.last_briefing_suggested = ["MCP servers not connecting in app"]
+        state = _update_learning_from_activity(state, da_dir)
+        key = "mcp servers not connecting in app"[:50].lower()
+        assert key in state.item_history
+        assert state.item_history[key]["followed_count"] >= 1
+
+    def test_suggestion_skipped(self, tmp_path):
+        da_dir = tmp_path / "DailyActivity"
+        da_dir.mkdir()
+        from datetime import datetime
+        today = datetime.now().strftime("%Y-%m-%d")
+        (da_dir / f"{today}.md").write_text(
+            "## 10:00 | abc | Session\n\n"
+            "**Delivered:**\n"
+            "- Built something completely different\n"
+        )
+        state = LearningState()
+        state.last_briefing_suggested = ["Tab switching loses streaming content"]
+        state = _update_learning_from_activity(state, da_dir)
+        key = "tab switching loses streaming content"[:50].lower()
+        assert key in state.item_history
+        assert state.item_history[key]["skipped_count"] >= 1
+
+    def test_work_type_tracked(self, tmp_path):
+        da_dir = tmp_path / "DailyActivity"
+        da_dir.mkdir()
+        from datetime import datetime
+        today = datetime.now().strftime("%Y-%m-%d")
+        (da_dir / f"{today}.md").write_text(
+            "## 10:00 | abc | Session\n\n"
+            "**Delivered:**\n"
+            "- Built new feature X\n"
+            "- Implemented feature Y\n"
+        )
+        state = LearningState()
+        state.last_briefing_suggested = ["something"]
+        state = _update_learning_from_activity(state, da_dir)
+        assert state.work_type_distribution["feature"] >= 1
+
+    def test_no_previous_suggestions_no_update(self, tmp_path):
+        state = LearningState()
+        da_dir = tmp_path / "DailyActivity"
+        da_dir.mkdir()
+        result = _update_learning_from_activity(state, da_dir)
+        assert result.observations == []
+
+
+class TestApplyLearning:
+    def test_skip_penalty_applied(self):
+        state = LearningState()
+        state.item_history["tab switching loses streaming"] = {
+            "skipped_count": 3, "followed_count": 0,
+            "suggested_count": 3, "last_suggested": "2026-03-14",
+        }
+        item = ScoredItem(title="Tab switching loses streaming content", priority="P0", score=100)
+        _apply_learning(item, state)
+        assert item.score < 100  # penalty applied
+        assert item.score == 100 - 20  # (3 - 2 + 1) * 10 = 20
+
+    def test_skip_penalty_capped(self):
+        state = LearningState()
+        state.item_history["some item"] = {"skipped_count": 10}
+        item = ScoredItem(title="Some item that keeps getting skipped", priority="P1", score=40)
+        _apply_learning(item, state)
+        assert item.score == max(40 - 30, 0)  # capped at -30
+
+    def test_affinity_boost(self):
+        state = LearningState()
+        state.work_type_distribution = {
+            "feature": 5, "maintenance": 1, "investigation": 0, "design": 0,
+        }
+        item = ScoredItem(
+            title="Build new feature", priority="P1", score=40,
+            status="implement new capability",
+        )
+        _apply_learning(item, state)
+        assert item.score == 40 + 15  # affinity bonus
+
+    def test_no_affinity_for_non_preferred(self):
+        state = LearningState()
+        state.work_type_distribution = {
+            "feature": 5, "maintenance": 1, "investigation": 0, "design": 0,
+        }
+        # "diagnosed" → investigation, user prefers feature → no boost
+        item = ScoredItem(title="Diagnosed root cause of crash", priority="P1", score=40, status="investigating")
+        _apply_learning(item, state)
+        assert item.score == 40  # investigation item, user prefers feature — no boost
+
+    def test_no_state_no_change(self):
+        state = LearningState()
+        item = ScoredItem(title="Something", priority="P1", score=40)
+        _apply_learning(item, state)
+        assert item.score == 40
+
+    def test_staleness_recovers_skipped_items(self):
+        """High staleness + high skip penalty should roughly cancel out."""
+        state = LearningState()
+        state.item_history["old bug with many skips"] = {"skipped_count": 5}
+        # P1(40) + staleness(30) - skip_penalty(30) = 40
+        item = ScoredItem(title="Old bug with many skips", priority="P1", score=70, days_open=6)
+        _apply_learning(item, state)
+        # Skip penalty: (5-2+1)*10 = 40, capped at 30 → -30
+        # Score: 70 - 30 = 40
+        assert item.score == 40
+
+    def test_score_never_negative(self):
+        state = LearningState()
+        state.item_history["tiny item"] = {"skipped_count": 10}
+        item = ScoredItem(title="Tiny item", priority="P2", score=10)
+        _apply_learning(item, state)
+        assert item.score >= 0

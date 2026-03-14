@@ -178,17 +178,35 @@ Top items shown as "Suggested focus" with template-generated reasoning.
 
 **Design doc:** `docs/specs/proactive-intelligence-L2.md`
 
-### Level 3: Cross-Session Learning
+### Level 3: Cross-Session Learning — SHIPPED
 
-Track suggestions vs. actual user behavior. Learn preferences.
+Closes the feedback loop: tracks suggestions vs actual deliverables, learns
+work-type preferences, applies skip penalties and affinity bonuses.
 
-```
-Suggested: "rebuild app"
-User did: worked on Proactive Intelligence (3 sessions in a row)
-Learning: User prefers feature work over maintenance. Adjust threshold.
-```
+**Components (added to `proactive_intelligence.py`):**
+- `LearningState` dataclass — persistent state across sessions
+- `_load_learning_state()` / `_save_learning_state()` — JSON I/O with atomic writes
+- `_classify_work_type()` — weighted keyword classification (feature/maintenance/investigation/design)
+- `_extract_deliverables()` — parse `**Delivered:**` from DailyActivity
+- `_update_learning_from_activity()` — compare suggestions vs outcomes
+- `_apply_learning()` — adjust scores (skip penalty + affinity bonus)
+- `LearningState.learning_summary()` — surfaces pattern in briefing
 
-**Estimated effort:** New `proactive_learning.py` + EVOLUTION.md integration. ~4-6 hours.
+**Score adjustments:**
+- Skip penalty: -10/skip after 2 skips (cap -30)
+- Work type affinity: +15 for items matching preferred type
+- Staleness naturally recovers skipped items
+
+**State file:** `SwarmWS/proactive_state.json` (gitignored)
+
+**Properties:**
+- No LLM calls — keyword classification + counters
+- Graceful degradation: missing/corrupt state → pure L2
+- Observations window: 30 entries (~1 month)
+- Surfaces learning: "Pattern: feature work preferred (6/6 sessions, 100%)"
+- 79 tests, all passing
+
+**Design doc:** `docs/specs/proactive-intelligence-L3.md`
 
 ### Level 4: Proactive Interrupts
 
@@ -237,7 +255,7 @@ All levels share:                 | MEMORY.md, DailyActivity, EVOLUTION.md
 | 0 (done) | MVP: static briefing | None | Unit tests (19 pass) |
 | 1 (done) | Temporal signals | Rebuild + app test | Unit tests (25 pass) |
 | 2 (done) | Actionable suggestions | Level 1 verified | 51 tests pass, real workspace verified |
-| 3 | Cross-session learning | Level 2 stable | 1 week of data |
+| 3 (done) | Cross-session learning | Level 2 stable | 79 tests pass, state file verified |
 | 4 | Mid-session interrupts | Frontend SSE handler | E2E in app |
 | 5 | Autonomous prep | Safety review by XG | Controlled pilot |
 
@@ -250,3 +268,4 @@ For Level 1+: design doc update first, XG review, then implement. Each level is 
 - 2026-03-14: v1.0 — Initial spec. Level 0 (MVP) shipped. Levels 1-5 designed.
 - 2026-03-14: v1.1 — Level 1 (Temporal Awareness) shipped. 25 tests total.
 - 2026-03-14: v1.2 — Level 2 (Actionable Suggestions) shipped. 51 tests total. Design doc: proactive-intelligence-L2.md.
+- 2026-03-14: v1.3 — Level 3 (Cross-Session Learning) shipped. 79 tests total. State file: proactive_state.json. Design doc: proactive-intelligence-L3.md.
