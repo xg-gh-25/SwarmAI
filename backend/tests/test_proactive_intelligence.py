@@ -582,6 +582,30 @@ class TestExtractDeliverables:
         assert "Built Proactive Intelligence L2" in deliverables
         assert "Fixed scoring bug" in deliverables
 
+    def test_multi_session_deliverables(self, tmp_path):
+        """Multiple **Delivered:** sections in one file should all be captured."""
+        da_dir = tmp_path / "DailyActivity"
+        da_dir.mkdir()
+        from datetime import datetime
+        today = datetime.now().strftime("%Y-%m-%d")
+        (da_dir / f"{today}.md").write_text(
+            "## 10:00 | abc | Morning session\n\n"
+            "**Delivered:**\n"
+            "- Built feature A\n"
+            "- Fixed bug B\n\n"
+            "**Outputs:**\n"
+            "- code: something.py\n\n"
+            "## 15:00 | def | Afternoon session\n\n"
+            "**Delivered:**\n"
+            "- Implemented feature C\n"
+            "- Diagnosed issue D\n\n"
+            "**Next:** Continue work on E.\n"
+        )
+        deliverables = _extract_deliverables(da_dir)
+        assert len(deliverables) == 4
+        assert "Built feature A" in deliverables
+        assert "Implemented feature C" in deliverables
+
     def test_empty_dir(self, tmp_path):
         assert _extract_deliverables(tmp_path / "nonexistent") == []
 

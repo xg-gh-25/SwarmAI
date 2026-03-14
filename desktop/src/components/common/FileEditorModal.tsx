@@ -437,6 +437,7 @@ export default function FileEditorModal({
   const [attachFeedback, setAttachFeedback] = useState(false);
   const [scrollTop, setScrollTop] = useState(0);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [workspaceRoot, setWorkspaceRoot] = useState<string>('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const highlightRef = useRef<HTMLPreElement>(null);
   const overlayRef = useRef<HTMLDivElement>(null);
@@ -504,8 +505,17 @@ export default function FileEditorModal({
       setCurrentMatchIndex(0);
       setActiveLineNumber(undefined);
       setAttachFeedback(false);
+      // Fetch workspace root for resolving relative image paths in markdown preview
+      if (isMarkdown && !workspaceRoot) {
+        api.get<{ file_path?: string; filePath?: string }>('/workspace')
+          .then((resp) => {
+            const root = resp.data.file_path ?? resp.data.filePath ?? '';
+            if (root) setWorkspaceRoot(root);
+          })
+          .catch(() => { /* non-critical — images just won't resolve */ });
+      }
     }
-  }, [isOpen, initialContent, committedContent]);
+  }, [isOpen, initialContent, committedContent, isMarkdown, workspaceRoot]);
 
   // Update syntax highlighting when content changes or returning from diff view
   useEffect(() => {
@@ -857,7 +867,13 @@ export default function FileEditorModal({
           ) : showMarkdownPreview ? (
             /* Rendered markdown preview — replaces editor when active */
             <div className="flex-1 relative overflow-auto p-6 bg-[var(--color-background)]">
-              <MarkdownRenderer content={content} className="max-w-4xl mx-auto" />
+              <MarkdownRenderer
+                content={content}
+                className="max-w-4xl mx-auto"
+                basePath={workspaceRoot
+                  ? (filePath.includes('/') ? `${workspaceRoot}/${filePath.replace(/\/[^/]*$/, '')}` : workspaceRoot)
+                  : undefined}
+              />
             </div>
           ) : (
             <>

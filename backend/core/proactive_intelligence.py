@@ -28,6 +28,13 @@ from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
+# Module-level compiled regex — used by _detect_temporal_signals and _estimate_thread_age.
+# Anchored to word boundary: lookbehind requires start-of-string, whitespace, or common
+# punctuation (colon, comma, open-paren) to avoid matching version numbers like "v2/3".
+_DATE_REF_RE = re.compile(
+    r"(?:^|(?<=[\s:,(]))(\d{1,2})/(\d{1,2})(?=[\s,)$])|(\d{4}-\d{2}-\d{2})"
+)
+
 # ---------------------------------------------------------------------------
 # Open Threads parser
 # ---------------------------------------------------------------------------
@@ -253,15 +260,12 @@ def _detect_temporal_signals(
                 signals.append("First session today — full briefing")
 
     # ── Stale P0 detection ──
-    # Look for date references (e.g. "3/13", "2026-03-13") in thread titles/status.
-    # Anchored to word boundary to avoid matching version numbers like "v2/3".
-    _date_ref_re = re.compile(r"(?:^|(?<=\s))(\d{1,2})/(\d{1,2})(?=\s|,|$)|(\d{4}-\d{2}-\d{2})")
     for t in threads:
         if t["priority"] != "P0":
             continue
         # Search title + status for earliest date reference
         search_text = f"{t['title']} {t.get('status', '')}"
-        dates_found = _date_ref_re.findall(search_text)
+        dates_found = _DATE_REF_RE.findall(search_text)
         earliest = None
         for m, d, full in dates_found:
             try:
@@ -328,12 +332,12 @@ def _score_item(item: ScoredItem) -> int:
 def _estimate_thread_age(thread: dict) -> int:
     """Estimate days open from date references in thread title/status.
 
-    Anchored to word boundary to avoid matching version numbers like 'v2/3'.
+    Uses module-level _DATE_REF_RE (anchored to word boundary) to avoid
+    matching version numbers like 'v2/3'.
     """
     now = datetime.now()
-    date_ref_re = re.compile(r"(?:^|(?<=\s))(\d{1,2})/(\d{1,2})(?=\s|,|$)|(\d{4}-\d{2}-\d{2})")
     search_text = f"{thread.get('title', '')} {thread.get('status', '')}"
-    dates_found = date_ref_re.findall(search_text)
+    dates_found = _DATE_REF_RE.findall(search_text)
     earliest = None
     for m, d, full in dates_found:
         try:
@@ -450,10 +454,8 @@ def _build_suggestions(
     # 2. Add continue hints that aren't already threads
     for hint in continue_hints:
         hint_lower = hint.lower()
-        # Skip if already covered by a thread
-        if any(hint_lower[:30] in t for t in seen_titles):
-            continue
-        if any(t in hint_lower for t in seen_titles):
+        # Skip if already covered by a thread (same 30-char prefix match as momentum)
+        if any(hint_lower[:30] in t or t[:30] in hint_lower for t in seen_titles):
             continue
 
         item = ScoredItem(
