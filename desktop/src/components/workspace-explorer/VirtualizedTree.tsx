@@ -29,6 +29,8 @@ import type { TreeNode } from '../../types';
 import type { FileTreeItem } from './FileTreeNode';
 import { useTreeData, useSelection } from '../../contexts/ExplorerContext';
 import { toFileTreeItem } from './toFileTreeItem';
+import { folderService } from '../../services/workspace';
+import { EXPLORER_ATTACH_FILE, EXPLORER_ASK_ABOUT_FILE } from '../../constants/explorerEvents';
 import TreeNodeRow from './TreeNodeRow';
 import ZoneSeparator from './ZoneSeparator';
 import FileContextMenu from './FileContextMenu';
@@ -254,11 +256,14 @@ export function flattenTree(
 interface RowCustomProps {
   rows: FlattenedRow[];
   selectedPath: string | null;
+  renamingPath: string | null;
   toggleExpand: (path: string) => void;
   setSelectedPath: (path: string | null) => void;
   onFileDoubleClick?: (node: FileTreeItem) => void;
   onContextMenu: (e: React.MouseEvent, node: TreeNode) => void;
   onAttachToChat?: (item: FileTreeItem) => void;
+  onRenameSubmit: (oldPath: string, newName: string) => void;
+  onRenameCancel: () => void;
 }
 
 /**
@@ -272,7 +277,7 @@ function RowRenderer(props: {
   index: number;
   style: React.CSSProperties;
 } & RowCustomProps) {
-  const { index, style, rows, selectedPath, toggleExpand, setSelectedPath, onFileDoubleClick, onContextMenu } = props;
+  const { index, style, rows, selectedPath, renamingPath, toggleExpand, setSelectedPath, onFileDoubleClick, onContextMenu, onRenameSubmit, onRenameCancel } = props;
   const row = rows[index];
 
   if (!row) return null;
@@ -297,6 +302,11 @@ function RowRenderer(props: {
     [onContextMenu, node],
   );
 
+  const handleRenameSubmit = useCallback(
+    (newName: string) => onRenameSubmit(node.path, newName),
+    [onRenameSubmit, node.path],
+  );
+
   return (
     <TreeNodeRow
       node={node}
@@ -304,10 +314,13 @@ function RowRenderer(props: {
       isExpanded={isExpanded}
       isSelected={selectedPath === node.path}
       isMatched={isMatched}
+      isRenaming={renamingPath === node.path}
       onToggle={handleToggle}
       onSelect={handleSelect}
       onContextMenu={handleContextMenu}
       onDoubleClick={handleDoubleClick}
+      onRenameSubmit={handleRenameSubmit}
+      onRenameCancel={onRenameCancel}
       style={style}
     />
   );
@@ -318,7 +331,7 @@ function RowRenderer(props: {
 // ─────────────────────────────────────────────────────────────────────────────
 
 const VirtualizedTree: React.FC<VirtualizedTreeProps> = ({ height, width, onFileDoubleClick, onAttachToChat }) => {
-  const { treeData } = useTreeData();
+  const { treeData, refreshTree } = useTreeData();
   const { expandedPaths, matchedPaths, selectedPath, toggleExpand, setSelectedPath } =
     useSelection();
 
@@ -329,6 +342,9 @@ const VirtualizedTree: React.FC<VirtualizedTreeProps> = ({ height, width, onFile
     y: 0,
     item: null,
   });
+
+  // ── Rename state ────────────────────────────────────────────────────────
+  const [renamingPath, setRenamingPath] = useState<string | null>(null);
 
   /** Ref to the element that had focus when the context menu opened. */
   const returnFocusRef = useRef<HTMLElement | null>(null);
@@ -362,6 +378,71 @@ const VirtualizedTree: React.FC<VirtualizedTreeProps> = ({ height, width, onFile
     return () => window.removeEventListener('scroll', handleScroll, true);
   }, [contextMenu.isOpen, closeContextMenu]);
 
+  // ── Rename handlers ─────────────────────────────────────────────────────
+
+  /** Context menu "Rename" → activate inline rename on the tree node. */
+  const handleRenameRequest = useCallback((item: FileTreeItem) => {
+    setRenamingPath(item.path);
+  }, []);
+
+  /** Inline input submitted → call backend rename → refresh tree. */
+  const handleRenameSubmit = useCallback(
+    async (oldPath: string, newName: string) => {
+      const oldName = oldPath.split('/').pop() ?? '';
+      if (newName === oldName || !newName.trim()) {
+        setRenamingPath(null);
+        return;
+      }
+      const parentDir = oldPath.includes('/') ? oldPath.substring(0, oldPath.lastIndexOf('/')) : '';
+      const newPath = parentDir ? `${parentDir}/${newName}` : newName;
+      try {
+        await folderService.renameItem(oldPath, newPath);
+        refreshTree();
+      } catch (err) {
+        console.error('Rename failed:', err);
+      }
+      setRenamingPath(null);
+    },
+    [refreshTree],
+  );
+
+  /** Inline input cancelled → clear rename state. */
+  const handleRenameCancel = useCallback(() => {
+    setRenamingPath(null);
+  }, []);
+
+  // ── Delete handler ──────────────────────────────────────────────────────
+
+  /** Delete confirmed in context menu → trash via backend → refresh tree. */
+  const handleDelete = useCallback(
+    async (item: FileTreeItem) => {
+      try {
+        await folderService.trashItem(item.path);
+        refreshTree();
+      } catch (err) {
+        console.error('Trash failed:', err);
+      }
+    },
+    [refreshTree],
+  );
+
+  // ── Ask Swarm handler ───────────────────────────────────────────────────
+
+  /** "Ask Swarm about this file" → dispatch custom event for ChatPage. */
+  const handleAskAbout = useCallback((item: FileTreeItem) => {
+    window.dispatchEvent(new CustomEvent(EXPLORER_ASK_ABOUT_FILE, { detail: item }));
+  }, []);
+
+  /** "Attach to Chat" → dispatch custom event for ChatPage. */
+  const handleAttachToChat = useCallback((item: FileTreeItem) => {
+    if (onAttachToChat) {
+      onAttachToChat(item);
+    } else {
+      // Fallback: dispatch event for ChatPage to handle
+      window.dispatchEvent(new CustomEvent(EXPLORER_ATTACH_FILE, { detail: item }));
+    }
+  }, [onAttachToChat]);
+
   // Flatten tree into rows — recomputed when tree data or expand state changes
   const rows = useMemo(
     () => flattenTree(treeData, expandedPaths, matchedPaths),
@@ -370,8 +451,12 @@ const VirtualizedTree: React.FC<VirtualizedTreeProps> = ({ height, width, onFile
 
   // Stable rowProps object for the row renderer
   const rowProps = useMemo<RowCustomProps>(
-    () => ({ rows, selectedPath, toggleExpand, setSelectedPath, onFileDoubleClick, onContextMenu: handleContextMenu, onAttachToChat }),
-    [rows, selectedPath, toggleExpand, setSelectedPath, onFileDoubleClick, handleContextMenu, onAttachToChat],
+    () => ({
+      rows, selectedPath, renamingPath, toggleExpand, setSelectedPath,
+      onFileDoubleClick, onContextMenu: handleContextMenu, onAttachToChat: handleAttachToChat,
+      onRenameSubmit: handleRenameSubmit, onRenameCancel: handleRenameCancel,
+    }),
+    [rows, selectedPath, renamingPath, toggleExpand, setSelectedPath, onFileDoubleClick, handleContextMenu, handleAttachToChat, handleRenameSubmit, handleRenameCancel],
   );
 
   return (
@@ -392,7 +477,11 @@ const VirtualizedTree: React.FC<VirtualizedTreeProps> = ({ height, width, onFile
           y={contextMenu.y}
           onClose={closeContextMenu}
           onOpenFile={onFileDoubleClick}
-          onAttachToChat={onAttachToChat}
+          onAttachToChat={handleAttachToChat}
+          onRename={handleRenameRequest}
+          onDelete={handleDelete}
+          onFileSystemChange={refreshTree}
+          onAskAbout={handleAskAbout}
           returnFocusRef={returnFocusRef}
         />,
         document.body,
