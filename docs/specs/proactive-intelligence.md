@@ -136,18 +136,47 @@ Added time-based signals. Still no LLM call.
 
 **Implemented:** `_detect_temporal_signals()` added to `proactive_intelligence.py`. 6 new tests (25 total). Signals: session gap, first session of day, stale P0.
 
-### Level 2: Actionable Suggestions
+### Level 2: Actionable Suggestions — SHIPPED
 
-Rule engine that ranks actions by priority + effort + staleness.
+Deterministic scoring engine that ranks all Open Threads + continue hints by
+priority, staleness, report frequency, blocking relationships, and momentum.
+Top items shown as "Suggested focus" with template-generated reasoning.
 
+**Components (added to `proactive_intelligence.py`):**
+- `ScoredItem` dataclass — candidate action with computed score
+- `_score_item()` — deterministic scoring: priority weight + staleness + frequency + blocking + momentum
+- `_detect_blocking()` — cross-reference threads for blocking relationships
+- `_build_suggestions()` — merge threads + hints, score, rank
+- `_generate_reasoning()` — template-based "why this order" explanation
+- `_format_suggestions()` — format top-N focus + background sections
+
+**Scoring weights:**
+- Priority: P0=100, P1=40, P2=10
+- Staleness: +5/day (cap 30)
+- Frequency: +8/report (cap 40)
+- Blocking bonus: +30
+- Momentum: +15 (from continue hint)
+
+**Properties:**
+- No LLM, no state file — pure deterministic like L0/L1
+- Replaces raw P0/P1 listing with ranked suggestions
+- Falls back to L0+L1 format on any failure
+- 51 tests, all passing
+
+**Sample output:**
 ```
-**Suggested focus:**
-  1. Rebuild app (3 fixes waiting, 2+ days stale)
-  2. Verify MCP + streaming in-app
-  3. Tab-switch bug needs architecture fix — consider Session State Machine
+## Session Briefing
+**Suggested focus for this session:**
+  1. Tab switching loses streaming content (4x)
+  2. MCP servers not connecting in app (3x)
+
+**Why this order:** Tab switching: reported 4x. MCP: reported 3x.
+**Also in the background:**
+  - Investigate tab switch streaming...
+  - Move forward on Proactive Intelligence POC...
 ```
 
-**Estimated effort:** New `proactive_suggestions.py` module. ~2-3 hours.
+**Design doc:** `docs/specs/proactive-intelligence-L2.md`
 
 ### Level 3: Cross-Session Learning
 
@@ -207,7 +236,7 @@ All levels share:                 | MEMORY.md, DailyActivity, EVOLUTION.md
 |---|---|---|---|
 | 0 (done) | MVP: static briefing | None | Unit tests (19 pass) |
 | 1 (done) | Temporal signals | Rebuild + app test | Unit tests (25 pass) |
-| 2 | Actionable suggestions | Level 1 verified | User feedback |
+| 2 (done) | Actionable suggestions | Level 1 verified | 51 tests pass, real workspace verified |
 | 3 | Cross-session learning | Level 2 stable | 1 week of data |
 | 4 | Mid-session interrupts | Frontend SSE handler | E2E in app |
 | 5 | Autonomous prep | Safety review by XG | Controlled pilot |
@@ -220,3 +249,4 @@ For Level 1+: design doc update first, XG review, then implement. Each level is 
 
 - 2026-03-14: v1.0 — Initial spec. Level 0 (MVP) shipped. Levels 1-5 designed.
 - 2026-03-14: v1.1 — Level 1 (Temporal Awareness) shipped. 25 tests total.
+- 2026-03-14: v1.2 — Level 2 (Actionable Suggestions) shipped. 51 tests total. Design doc: proactive-intelligence-L2.md.

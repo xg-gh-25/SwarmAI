@@ -6,6 +6,11 @@ Makes the agent *aware* at session start — no user prompt needed.
 
 No LLM calls. Pure text parsing. Target: 200-400 tokens.
 
+Levels:
+- L0: Session briefing (parse threads + continue hints + pattern signals)
+- L1: Temporal awareness (session gaps, stale P0s, first-session-of-day)
+- L2: Actionable suggestions (score + rank items, suggest focus with reasoning)
+
 Key exports:
 - build_session_briefing()  — main entry point, returns briefing string or None
 """
@@ -14,6 +19,7 @@ from __future__ import annotations
 
 import re
 import logging
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
@@ -284,6 +290,256 @@ def _detect_temporal_signals(
 
 
 # ---------------------------------------------------------------------------
+# Level 2: Actionable Suggestions — scoring engine
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ScoredItem:
+    """A candidate action with a computed priority score."""
+    title: str
+    priority: str  # P0, P1, P2
+    score: int = 0
+    report_count: int = 1
+    days_open: int = 0
+    blocks_others: bool = False
+    blocked_count: int = 0
+    from_continue_hint: bool = False
+    status: str = ""
+    source: str = ""  # "thread" or "hint"
+
+
+# Score weights — tuned per design doc
+_PRIORITY_WEIGHT = {"P0": 100, "P1": 40, "P2": 10}
+_STALENESS_PER_DAY = 5
+_STALENESS_CAP = 30
+_FREQUENCY_PER_REPORT = 8
+_FREQUENCY_CAP = 40
+_BLOCKING_BONUS = 30
+_MOMENTUM_BONUS = 15
+
+
+def _score_item(item: ScoredItem) -> int:
+    """Compute priority score for a single item. Pure, deterministic."""
+    score = _PRIORITY_WEIGHT.get(item.priority, 10)
+    score += min(item.days_open * _STALENESS_PER_DAY, _STALENESS_CAP)
+    score += min((item.report_count - 1) * _FREQUENCY_PER_REPORT, _FREQUENCY_CAP)
+    if item.blocks_others:
+        score += _BLOCKING_BONUS
+    if item.from_continue_hint:
+        score += _MOMENTUM_BONUS
+    return max(score, 0)
+
+
+def _estimate_thread_age(thread: dict) -> int:
+    """Estimate days open from date references in thread title/status."""
+    now = datetime.now()
+    date_ref_re = re.compile(r"(\d{1,2})/(\d{1,2})|(\d{4}-\d{2}-\d{2})")
+    search_text = f"{thread.get('title', '')} {thread.get('status', '')}"
+    dates_found = date_ref_re.findall(search_text)
+    earliest = None
+    for m, d, full in dates_found:
+        try:
+            if full:
+                dt = datetime.strptime(full, "%Y-%m-%d")
+            else:
+                dt = datetime(now.year, int(m), int(d))
+            if earliest is None or dt < earliest:
+                earliest = dt
+        except (ValueError, TypeError):
+            continue
+    # Clamp to 0 — future dates (e.g. 12/20 referenced in January) shouldn't go negative
+    return max((now - earliest).days, 0) if earliest else 0
+
+
+def _detect_blocking(threads: list[dict]) -> tuple[dict[str, bool], dict[str, int]]:
+    """Detect which threads block others.
+
+    Returns {title: True} for threads that block other work.
+    Heuristics:
+    - Status contains "blocking", "blocks"
+    - Multiple other threads have "Needs rebuild" and this is rebuild-related
+    - P0 thread and 2+ P1s reference same subsystem keywords
+    """
+    blocking: dict[str, bool] = {}
+    blocked_counts: dict[str, int] = {}
+
+    # Keyword-based blocking detection
+    block_keywords = ["blocking", "blocks", "blocked by"]
+    rebuild_statuses = [
+        t for t in threads
+        if any(kw in t.get("status", "").lower()
+               for kw in ["needs rebuild", "pending rebuild", "not yet run"])
+    ]
+
+    for t in threads:
+        title = t.get("title", "")
+        status = t.get("status", "").lower()
+
+        # Direct blocking language in status
+        if any(kw in status for kw in block_keywords):
+            blocking[title] = True
+            blocked_counts[title] = blocked_counts.get(title, 0) + 1
+            continue
+
+        # If 2+ items need rebuild, any rebuild-blocking thread is a blocker
+        if len(rebuild_statuses) >= 2:
+            title_lower = title.lower()
+            if any(kw in title_lower for kw in ["rebuild", "build", "deploy"]):
+                blocking[title] = True
+                blocked_counts[title] = len(rebuild_statuses)
+                continue
+
+        # P0 with multiple P1s referencing similar keywords
+        if t["priority"] == "P0":
+            p0_words = set(title.lower().split())
+            related_p1s = 0
+            for other in threads:
+                if other["priority"] == "P1" and other.get("title") != title:
+                    other_words = set(other.get("title", "").lower().split())
+                    if p0_words & other_words:  # any shared keyword
+                        related_p1s += 1
+            if related_p1s >= 2:
+                blocking[title] = True
+                blocked_counts[title] = related_p1s
+
+    return blocking, blocked_counts
+
+
+def _build_suggestions(
+    threads: list[dict],
+    continue_hints: list[str],
+    signals: list[str],
+) -> list[ScoredItem]:
+    """Build scored and ranked suggestion list from all sources.
+
+    Merges Open Threads + continue hints into ScoredItems, scores each,
+    sorts descending. Returns full ranked list (caller takes top N).
+    """
+    items: list[ScoredItem] = []
+    seen_titles: set[str] = set()
+
+    # Detect blocking relationships
+    blocking_map, blocked_counts = _detect_blocking(threads)
+
+    # 1. Convert threads to scored items
+    for t in threads:
+        title = t.get("title", "")
+        if not title:
+            continue
+
+        # Check if any continue hint references this thread
+        title_lower = title.lower()
+        has_momentum = any(
+            title_lower[:30] in h.lower() or h.lower()[:30] in title_lower
+            for h in continue_hints
+        )
+
+        item = ScoredItem(
+            title=title,
+            priority=t.get("priority", "P2"),
+            report_count=t.get("report_count", 1),
+            days_open=_estimate_thread_age(t),
+            blocks_others=blocking_map.get(title, False),
+            blocked_count=blocked_counts.get(title, 0),
+            from_continue_hint=has_momentum,
+            status=t.get("status", ""),
+            source="thread",
+        )
+        item.score = _score_item(item)
+        items.append(item)
+        seen_titles.add(title_lower)
+
+    # 2. Add continue hints that aren't already threads
+    for hint in continue_hints:
+        hint_lower = hint.lower()
+        # Skip if already covered by a thread
+        if any(hint_lower[:30] in t for t in seen_titles):
+            continue
+        if any(t in hint_lower for t in seen_titles):
+            continue
+
+        item = ScoredItem(
+            title=hint[:100],
+            priority="P1",  # continue hints are implicitly important
+            from_continue_hint=True,
+            source="hint",
+        )
+        item.score = _score_item(item)
+        items.append(item)
+
+    # Sort by score descending, tiebreak: P0 > P1 > P2, then alphabetical
+    priority_order = {"P0": 0, "P1": 1, "P2": 2}
+    items.sort(key=lambda x: (-x.score, priority_order.get(x.priority, 3), x.title))
+
+    return items
+
+
+def _generate_reasoning(ranked: list[ScoredItem]) -> str:
+    """Generate a short "why this order" explanation from top-ranked items.
+
+    Template-based, not LLM-generated. Returns empty string if no
+    interesting reasons to surface.
+    """
+    reasons: list[str] = []
+    for item in ranked[:3]:
+        parts: list[str] = []
+        if item.blocks_others:
+            parts.append(f"blocks {item.blocked_count} other item(s)")
+        if item.report_count >= 3:
+            parts.append(f"reported {item.report_count}x")
+        if item.days_open >= 3:
+            parts.append(f"open {item.days_open} days")
+        if item.from_continue_hint and not parts:
+            parts.append("momentum from last session")
+        if parts:
+            # Use short title (first 50 chars)
+            short_title = item.title[:50] + ("..." if len(item.title) > 50 else "")
+            reasons.append(f"{short_title}: {', '.join(parts)}")
+
+    return ". ".join(reasons) + "." if reasons else ""
+
+
+def _format_suggestions(ranked: list[ScoredItem], max_focus: int = 3) -> tuple[str, str]:
+    """Format ranked items into briefing sections.
+
+    Returns (focus_section, background_section).
+    focus_section: top N items as numbered list with reasoning.
+    background_section: remaining items as compact bullets.
+    """
+    if not ranked:
+        return "", ""
+
+    # Dynamic top-N: if score gap between #1 and #2 > 30, just show #1
+    focus_count = max_focus
+    if len(ranked) >= 2 and (ranked[0].score - ranked[1].score) > 30:
+        focus_count = min(2, max_focus)  # show top 2 at most when dominant
+    focus_items = ranked[:focus_count]
+    background_items = ranked[focus_count:]
+
+    # Focus section
+    focus_lines: list[str] = []
+    for i, item in enumerate(focus_items, 1):
+        count_suffix = f" ({item.report_count}x)" if item.report_count > 1 else ""
+        focus_lines.append(f"  {i}. {item.title}{count_suffix}")
+
+    reasoning = _generate_reasoning(focus_items)
+
+    focus_section = "**Suggested focus for this session:**\n" + "\n".join(focus_lines)
+    if reasoning:
+        focus_section += f"\n\n**Why this order:** {reasoning}"
+
+    # Background section
+    background_section = ""
+    if background_items:
+        bg_lines = []
+        for item in background_items[:5]:  # cap at 5
+            bg_lines.append(f"  - {item.title}")
+        background_section = "**Also in the background:**\n" + "\n".join(bg_lines)
+
+    return focus_section, background_section
+
+
+# ---------------------------------------------------------------------------
 # Briefing builder — main entry point
 # ---------------------------------------------------------------------------
 
@@ -312,57 +568,48 @@ def build_session_briefing(
         continue_hints = _parse_continue_hints(daily_dir)
         signals = _detect_patterns(threads, daily_dir, memory_text)
 
-        # ── Build briefing ──
+        # ── Build briefing (L2: ranked suggestions) ──
+        ranked = _build_suggestions(threads, continue_hints, signals)
+
+        if not ranked and not signals:
+            return None
+
+        focus_section, background_section = _format_suggestions(ranked)
+
         sections: list[str] = []
 
-        # 1. Blockers first (P0)
-        p0_threads = [t for t in threads if t["priority"] == "P0"]
-        if p0_threads:
-            items = []
-            for t in p0_threads:
-                count_suffix = f" ({t['report_count']}x)" if t.get("report_count", 1) > 1 else ""
-                items.append(f"  - BLOCKING: {t['title']}{count_suffix}")
-            sections.append("**Blockers:**\n" + "\n".join(items))
+        if focus_section:
+            sections.append(focus_section)
 
-        # 2. Pattern signals
-        if signals:
-            items = [f"  - {s}" for s in signals]
+        # Include temporal/pattern signals that aren't about specific threads
+        # (e.g. "First session today", "2 days since last session")
+        non_thread_signals = [
+            s for s in signals
+            if not (s.startswith('"') or s.startswith("P0 "))
+            and "reported" not in s.lower()
+            and "pending rebuild" not in s.lower()
+        ]
+        if non_thread_signals:
+            items = [f"  - {s}" for s in non_thread_signals]
             sections.append("**Signals:**\n" + "\n".join(items))
 
-        # 3. Continue-from (max 3 most recent)
-        if continue_hints:
-            # Truncate long hints
-            truncated = []
-            for h in continue_hints[:3]:
-                if len(h) > 120:
-                    h = h[:117] + "..."
-                truncated.append(f"  - {h}")
-            sections.append("**Continue from last session:**\n" + "\n".join(truncated))
-
-        # 4. Important threads (P1) — just titles, compact
-        p1_threads = [t for t in threads if t["priority"] == "P1"]
-        if p1_threads:
-            items = []
-            for t in p1_threads:
-                count_suffix = f" ({t['report_count']}x)" if t.get("report_count", 1) > 1 else ""
-                items.append(f"  - {t['title']}{count_suffix}")
-            sections.append("**Also pending (P1):**\n" + "\n".join(items))
+        if background_section:
+            sections.append(background_section)
 
         if not sections:
             return None
 
         briefing = "## Session Briefing\n" + "\n".join(sections)
 
-        # Token estimate sanity check — if too long, trim P1 section
-        token_est = len(briefing) // 4  # rough estimate
+        # Token estimate sanity check
+        token_est = len(briefing) // 4
         if token_est > 500 and len(sections) > 2:
-            # Drop the P1 section to stay compact
-            sections = [s for s in sections if not s.startswith("**Also pending")]
+            sections = [s for s in sections if not s.startswith("**Also in")]
             briefing = "## Session Briefing\n" + "\n".join(sections)
 
         logger.info(
-            "Proactive briefing built: %d chars, ~%d tokens, %d threads, %d signals, %d hints",
-            len(briefing), len(briefing) // 4, len(threads), len(signals), len(continue_hints),
+            "Proactive briefing (L2): %d chars, ~%d tokens, %d ranked items, %d signals",
+            len(briefing), len(briefing) // 4, len(ranked), len(signals),
         )
         return briefing
 
