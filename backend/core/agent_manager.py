@@ -1058,6 +1058,18 @@ class AgentManager:
                         f"`{flag_path}`."
                     )
 
+            # ── Proactive Intelligence briefing (ephemeral) ──
+            # Injects a compact session briefing (~200-400 tokens) built from
+            # Open Threads, DailyActivity continue-from hints, and pattern signals.
+            # No LLM call — pure text parsing. Never blocks agent startup.
+            try:
+                from .proactive_intelligence import build_session_briefing
+                briefing = build_session_briefing(working_directory)
+                if briefing:
+                    context_text += f"\n\n{briefing}"
+            except Exception as exc:
+                logger.warning("Proactive intelligence injection failed: %s", exc)
+
             # ── Resume context injection (ephemeral, for resumed sessions) ──
             if agent_config.get("needs_context_injection") and agent_config.get("resume_app_session_id"):
                 from .context_injector import build_resume_context
