@@ -11,7 +11,7 @@ so the next agent session can pick it up.
 Key public symbols:
 
 - ``DistillationTriggerHook``  — Implements ``SessionLifecycleHook``.
-- ``UNDISTILLED_THRESHOLD``    — Minimum undistilled files to trigger (3).
+- ``UNDISTILLED_THRESHOLD``    — Minimum undistilled files to trigger (2).
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ from scripts.locked_write import locked_read_modify_write
 
 logger = logging.getLogger(__name__)
 
-UNDISTILLED_THRESHOLD = 3
+UNDISTILLED_THRESHOLD = 2
 FLAG_FILENAME = ".needs_distillation"
 SCAN_DAYS = 30  # Only check files from last 30 days
 
@@ -46,6 +46,15 @@ _LESSON_PATTERNS = re.compile(
     r"(?:lesson learned|learned that|mistake was|fixed by \w+|root cause (?:was|is)|"
     r"workaround[: ]|should have \w+|next time \w+|"
     r"bug was \w+|issue was \w+|problem was \w+|important to \w+ before)",
+    re.IGNORECASE,
+)
+# Competence patterns: "now I know how to X" — positive capability acquisition.
+# Distinct from lessons ("next time avoid X") which are corrective/negative.
+_COMPETENCE_PATTERNS = re.compile(
+    r"(?:(?:now )?(?:know|knows|understand|understands) (?:how to|that|about)|"
+    r"(?:can now|is able to|figured out how to|discovered that|"
+    r"the (?:way|trick|method|pattern|technique) (?:is|to)|"
+    r"(?:works by|achieved by|accomplished via|done with|built using)))",
     re.IGNORECASE,
 )
 
@@ -148,6 +157,7 @@ class DistillationTriggerHook:
         distilled_count = 0
         coe_entries: list[tuple[str, str, str]] = []  # (date, signal, topic)
         all_corrections: list[tuple[str, str]] = []  # (date, correction)
+        all_competence: list[tuple[str, str]] = []  # (date, competence)
 
         for da_file in files:
             try:
@@ -155,10 +165,11 @@ class DistillationTriggerHook:
                 fm, body = parse_frontmatter(content)
                 file_date = da_file.stem  # YYYY-MM-DD
 
-                # Extract decisions, lessons, and corrections
+                # Extract decisions, lessons, corrections, and competence
                 decisions = self._extract_decisions(body)
                 lessons = self._extract_lessons(body)
                 corrections = self._extract_corrections(body)
+                competence = self._extract_competence(body)
 
                 # Write to MEMORY.md via direct function call
                 for decision in decisions:
@@ -175,9 +186,11 @@ class DistillationTriggerHook:
                         f"- {file_date}: {lesson}",
                     )
 
-                # Collect corrections for EVOLUTION.md
+                # Collect corrections and competence for EVOLUTION.md
                 for correction in corrections:
                     all_corrections.append((file_date, correction))
+                for comp in competence:
+                    all_competence.append((file_date, comp))
 
                 # Collect COE signals — check both frontmatter flag and body content
                 coe_items = self._extract_coe_entries(body)
@@ -192,8 +205,8 @@ class DistillationTriggerHook:
                 da_file.write_text(new_content, encoding="utf-8")
 
                 distilled_count += 1
-                logger.debug("Distilled %s: %d decisions, %d lessons, %d corrections",
-                             da_file.name, len(decisions), len(lessons), len(corrections))
+                logger.debug("Distilled %s: %d decisions, %d lessons, %d corrections, %d competence",
+                             da_file.name, len(decisions), len(lessons), len(corrections), len(competence))
             except Exception as exc:
                 logger.warning("Failed to distill %s: %s", da_file.name, exc)
                 continue
@@ -206,9 +219,11 @@ class DistillationTriggerHook:
         if coe_entries:
             self._update_open_threads(memory_path, coe_entries)
 
-        # Write corrections to EVOLUTION.md
+        # Write corrections and competence to EVOLUTION.md
         if all_corrections:
             self._write_corrections(evolution_path, all_corrections)
+        if all_competence:
+            self._write_competence(evolution_path, all_competence)
 
         return distilled_count
 
@@ -307,6 +322,74 @@ class DistillationTriggerHook:
                 if len(entry) > 10 and entry != "(none)":
                     corrections.append(entry[:200])
         return corrections[:10]  # Cap
+
+    @staticmethod
+    def _extract_competence(body: str) -> list[str]:
+        """Extract competence entries from DailyActivity body.
+
+        Competence = "now I know how to X" — positive capability knowledge.
+        Sources: **Lessons:** section items matching competence patterns,
+        plus any line in the body matching competence patterns.
+
+        Excludes items that also match lesson patterns (corrective/negative)
+        to avoid double-counting.
+        """
+        competence = []
+        in_lessons_section = False
+        for line in body.splitlines():
+            stripped = line.strip()
+            if stripped == "**Lessons:**":
+                in_lessons_section = True
+                continue
+            if in_lessons_section and (
+                stripped.startswith("## ")
+                or (stripped.startswith("**") and stripped.endswith(":**"))
+            ):
+                in_lessons_section = False
+                continue
+            if not stripped.startswith("- "):
+                continue
+            entry = stripped[2:].strip()
+            if len(entry) <= 15 or entry == "(none)":
+                continue
+            # Must match competence pattern
+            if not _COMPETENCE_PATTERNS.search(entry):
+                continue
+            # Must NOT match lesson pattern (avoid double-counting)
+            if _LESSON_PATTERNS.search(entry):
+                continue
+            competence.append(entry[:200])
+        return competence[:5]  # Cap
+
+    def _write_competence(
+        self,
+        evolution_path: Path,
+        competence_entries: list[tuple[str, str]],
+    ) -> None:
+        """Write competence entries to EVOLUTION.md under 'Competence Learned'.
+
+        Each entry gets a K-prefixed sequential ID.
+        """
+        try:
+            content = evolution_path.read_text(encoding="utf-8")
+            existing_ids = re.findall(r"### K(\d+)", content)
+            next_id = max((int(x) for x in existing_ids), default=0) + 1
+        except Exception:
+            next_id = 1
+
+        for file_date, entry in competence_entries:
+            entry_id = f"K{next_id:03d}"
+            text = (
+                f"### {entry_id} | {file_date}\n"
+                f"- **Competence**: {entry}\n"
+                f"- **Status**: active\n"
+            )
+            self._run_locked_write(evolution_path, "Competence Learned", text)
+            next_id += 1
+
+        logger.info(
+            "Wrote %d competence entries to EVOLUTION.md", len(competence_entries)
+        )
 
     def _write_corrections(
         self,
