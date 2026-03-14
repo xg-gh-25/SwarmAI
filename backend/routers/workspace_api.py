@@ -325,20 +325,35 @@ def _build_tree(
 
     for d in dirs:
         rel_path = str(d.relative_to(workspace_root)).replace("\\", "/")
-        children = _build_tree(d, workspace_root, depth - 1, git_status) if depth > 1 else None
+
+        # Detect symlinked directories that are separate git repos.
+        # The parent workspace's git status won't cover files inside these —
+        # we need to run git status from the symlink target's own repo root.
+        child_git_status = git_status
+        resolved = d.resolve()
+        git_path = resolved / ".git"
+        if d.is_symlink() and (git_path.is_dir() or git_path.is_file()):
+            sub_status = _get_git_status(resolved)
+            # Re-key sub-repo paths relative to the workspace root
+            child_git_status = dict(git_status) if git_status else {}
+            for sub_path, sub_st in sub_status.items():
+                child_git_status[f"{rel_path}/{sub_path}"] = sub_st
+
+        children = _build_tree(d, workspace_root, depth - 1, child_git_status) if depth > 1 else None
 
         # Directory git status: check direct match first, then inherit from children
         dir_status = None
-        if git_status:
+        effective_status = child_git_status or git_status
+        if effective_status:
             # Check if this directory itself has a git status entry (e.g., symlink flat-path)
-            if rel_path in git_status:
-                dir_status = git_status[rel_path]
+            if rel_path in effective_status:
+                dir_status = effective_status[rel_path]
             # Also check if any child file has a git status (prefix scan).
             # Note: if children have status, we upgrade to "modified" even if
             # the directory itself had a more specific status (e.g., "untracked").
             # This is intentional — "modified" is the correct aggregate indicator.
             prefix = rel_path + "/"
-            for gpath, gstatus in git_status.items():
+            for gpath, gstatus in effective_status.items():
                 if gpath.startswith(prefix):
                     dir_status = "modified"
                     break
@@ -349,6 +364,8 @@ def _build_tree(
             "type": "directory",
             "children": children,
         }
+        if d.is_symlink():
+            node["is_symlink"] = True
         if dir_status:
             node["git_status"] = dir_status
         result.append(node)
@@ -366,6 +383,27 @@ def _build_tree(
         result.append(node)
 
     return result
+
+
+def _collect_subrepo_status(
+    entry: Path, rel_prefix: str, items: list[tuple[str, str]]
+) -> None:
+    """If *entry* is a symlink pointing to a separate git repo, run git status
+    on that repo and append results (re-keyed under *rel_prefix*) to *items*.
+
+    Handles both standard repos (.git is a directory) and worktrees (.git is
+    a file containing ``gitdir: ...``).
+    """
+    if entry.is_symlink() and entry.is_dir():
+        try:
+            resolved = entry.resolve()
+            git_path = resolved / ".git"
+            if git_path.is_dir() or git_path.is_file():
+                sub_status = _get_git_status(resolved)
+                for sp, ss in sub_status.items():
+                    items.append((f"{rel_prefix}/{sp}", ss))
+        except OSError:
+            pass
 
 
 @router.get("/workspace/tree")
@@ -403,7 +441,23 @@ async def get_workspace_tree(
     # Compute ETag from git status + filesystem structure
     # Git status captures modifications; file listing captures adds/deletes
     git_status = _get_git_status(workspace_root)
-    git_hash = hashlib.md5(json.dumps(sorted(git_status.items())).encode()).hexdigest()
+
+    # Also include git status from symlinked sub-repos (e.g., Projects/AIDLC)
+    # so ETag changes when files in those repos are modified.
+    # Scans up to 2 levels (root and one level down, e.g., Projects/*).
+    all_status_items = list(git_status.items())
+    try:
+        for entry in workspace_root.iterdir():
+            _collect_subrepo_status(entry, entry.name, all_status_items)
+            if entry.is_dir():
+                try:
+                    for child in entry.iterdir():
+                        _collect_subrepo_status(child, f"{entry.name}/{child.name}", all_status_items)
+                except OSError:
+                    pass
+    except OSError:
+        pass
+    git_hash = hashlib.md5(json.dumps(sorted(all_status_items)).encode()).hexdigest()
 
     # Quick filesystem fingerprint: sorted list of all entry names at each level
     # This changes when files are added, deleted, or renamed
@@ -466,6 +520,54 @@ def _is_readonly_context_file(relative_path: str) -> bool:
         return False
 
 
+def _is_path_under(child: Path, parent: Path) -> bool:
+    """Return True if *child* is equal to or a descendant of *parent*.
+
+    Uses ``Path.parts`` comparison instead of ``str().startswith()`` to avoid
+    prefix-collision attacks (e.g., ``/workspace-evil`` matching ``/workspace``).
+    Both paths should be resolved before calling.
+    """
+    child_parts = child.resolve().parts
+    parent_parts = parent.resolve().parts
+    return child_parts[: len(parent_parts)] == parent_parts
+
+
+def _is_symlink_traversal(workspace_root: Path, relative_path: str) -> bool:
+    """Return True if *relative_path* reaches outside the workspace through a
+    symlink that itself lives inside the workspace (e.g., Projects/SwarmAI/...).
+
+    **Security model — write-through-symlinks:**
+    This function intentionally allows reads/writes to files outside the
+    workspace IF reached through a trusted symlink (e.g.,
+    ``Projects/SwarmAI → ~/Desktop/SwarmAI-Workspace/swarmai``).  This is a
+    deliberate security surface expansion required for the project-linking
+    feature (``s_project-manager``).  The trust boundary is:
+
+    1. The symlink itself must live inside the workspace (not injected from outside).
+    2. The final resolved target must be a descendant of the symlink's resolved
+       target — i.e., you can't use the symlink to escape *above* the linked
+       directory via ``..`` segments that survive after resolution.
+    3. Only the first symlink hop is trusted; nested symlinks inside the target
+       are not given additional escape privileges.
+    """
+    parts = Path(relative_path).parts
+    ws_resolved = workspace_root.resolve()
+    for i in range(1, len(parts)):
+        ancestor = workspace_root / Path(*parts[:i])
+        if ancestor.is_symlink():
+            # The symlink itself must be inside the workspace
+            symlink_parent = ancestor.parent.resolve()
+            if not _is_path_under(symlink_parent, ws_resolved):
+                return False
+            # The final target must be under the symlink's resolved root
+            symlink_target = ancestor.resolve()
+            full_target = (workspace_root / relative_path).resolve()
+            if not _is_path_under(full_target, symlink_target):
+                return False
+            return True
+    return False
+
+
 @router.get("/workspace/file")
 async def get_workspace_file(
     path: str = Query(..., description="Relative path within the workspace"),
@@ -490,27 +592,11 @@ async def get_workspace_file(
     workspace_root = Path(expanded_path)
     target = (workspace_root / path).resolve()
 
-    # Ensure resolved path is still under workspace root.
-    # Exception: .claude/skills/ contains projected skill files that may
-    # resolve outside the workspace for legacy symlinks. After copytree
-    # migration, skill files are real files inside the workspace, but we
-    # keep this escape hatch for backward compatibility with any remaining
-    # legacy symlinks. Allow reading these as read-only, but ONLY if the
-    # path originates from within the workspace and the resolved target is
-    # a regular file (not a directory or special file).
-    ws_resolved = str(workspace_root.resolve())
-    is_skill_file = path.startswith(".claude/skills/") or path.startswith(".claude\\skills\\")
-    if not str(target).startswith(ws_resolved):
-        if not is_skill_file:
+    # Ensure resolved path is still under workspace root OR reached via a
+    # symlink that lives inside the workspace (e.g., Projects/SwarmAI → ...).
+    if not _is_path_under(target, workspace_root):
+        if not _is_symlink_traversal(workspace_root, path):
             raise HTTPException(status_code=400, detail=f"Path outside workspace: {path}")
-        # Skill file escape hatch: handles both legacy symlinks and
-        # copytree'd files that may resolve outside the workspace.
-        skill_path = (workspace_root / path)
-        if not skill_path.exists():
-            raise HTTPException(status_code=404, detail=f"File not found: {path}")
-        if not str(skill_path.parent.resolve()).startswith(ws_resolved):
-            raise HTTPException(status_code=400, detail=f"Path outside workspace: {path}")
-        # Only allow regular files (not directories, devices, etc.)
         if not target.is_file():
             raise HTTPException(status_code=400, detail=f"Not a regular file: {path}")
 
@@ -580,9 +666,9 @@ async def get_workspace_file_committed(
     # Verify the file exists on disk
     target = (workspace_root / path).resolve()
     ws_resolved = str(workspace_root.resolve())
-    is_skill_file = path.startswith(".claude/skills/") or path.startswith(".claude\\skills\\")
-    if not str(target).startswith(ws_resolved) and not is_skill_file:
-        raise HTTPException(status_code=400, detail=f"Path outside workspace: {path}")
+    if not str(target).startswith(ws_resolved):
+        if not _is_symlink_traversal(workspace_root, path):
+            raise HTTPException(status_code=400, detail=f"Path outside workspace: {path}")
 
     if not target.is_file():
         raise HTTPException(status_code=404, detail=f"File not found: {path}")
@@ -639,8 +725,9 @@ async def put_workspace_file(
     workspace_root = Path(expanded_path)
     target = (workspace_root / path).resolve()
 
-    if not str(target).startswith(str(workspace_root.resolve())):
-        raise HTTPException(status_code=400, detail="Path outside workspace")
+    if not _is_path_under(target, workspace_root):
+        if not _is_symlink_traversal(workspace_root, path):
+            raise HTTPException(status_code=400, detail="Path outside workspace")
 
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
