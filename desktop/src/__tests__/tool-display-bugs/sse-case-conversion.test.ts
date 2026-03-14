@@ -85,6 +85,91 @@ describe('Bug 2 — SSE Content Block Case Conversion', () => {
 // **Validates: Requirements 3.3, 3.4, 3.5**
 // ===================================================================
 
+// ---------------------------------------------------------------------------
+// Skill tool summary enrichment
+// ---------------------------------------------------------------------------
+
+describe('Skill tool summary enrichment', () => {
+  it('enriches generic "Using Skill" summary with skill_name from input', () => {
+    const block: Record<string, unknown> = {
+      type: 'tool_use',
+      id: 'toolu_skill1',
+      name: 'Skill',
+      input: { skill_name: 's_frontend-design' },
+      summary: 'Using Skill',
+      category: 'skill',
+    };
+
+    const converted = toCamelCaseContentBlock(block);
+
+    expect(converted.summary).toBe('Using Skill: frontend-design');
+  });
+
+  it('strips s_ prefix from skill name for readability', () => {
+    const block: Record<string, unknown> = {
+      type: 'tool_use',
+      id: 'toolu_skill2',
+      name: 'Skill',
+      input: { skill_name: 's_weather' },
+      summary: 'Using Skill',
+      category: 'skill',
+    };
+
+    expect(toCamelCaseContentBlock(block).summary).toBe('Using Skill: weather');
+  });
+
+  it('handles skill name without s_ prefix', () => {
+    const block: Record<string, unknown> = {
+      type: 'tool_use',
+      id: 'toolu_skill3',
+      name: 'Skill',
+      input: { skill_name: 'custom-skill' },
+      summary: 'Using Skill',
+      category: 'skill',
+    };
+
+    expect(toCamelCaseContentBlock(block).summary).toBe('Using Skill: custom-skill');
+  });
+
+  it('does not modify Skill blocks with non-generic summary', () => {
+    const block: Record<string, unknown> = {
+      type: 'tool_use',
+      id: 'toolu_skill4',
+      name: 'Skill',
+      input: { skill_name: 's_weather' },
+      summary: 'Checking weather forecast',
+      category: 'skill',
+    };
+
+    expect(toCamelCaseContentBlock(block).summary).toBe('Checking weather forecast');
+  });
+
+  it('falls back gracefully when input has no skill_name', () => {
+    const block: Record<string, unknown> = {
+      type: 'tool_use',
+      id: 'toolu_skill5',
+      name: 'Skill',
+      input: { command: 'do something' },
+      summary: 'Using Skill',
+      category: 'skill',
+    };
+
+    expect(toCamelCaseContentBlock(block).summary).toBe('Using Skill');
+  });
+
+  it('falls back gracefully when input is missing', () => {
+    const block: Record<string, unknown> = {
+      type: 'tool_use',
+      id: 'toolu_skill6',
+      name: 'Skill',
+      summary: 'Using Skill',
+      category: 'skill',
+    };
+
+    expect(toCamelCaseContentBlock(block).summary).toBe('Using Skill');
+  });
+});
+
 describe('Bug 2 Preservation — Non-tool_result content blocks unchanged', () => {
   it('text content blocks pass through unchanged (no field modification)', () => {
     // Simulate a text content block as it arrives from SSE / REST
@@ -106,11 +191,10 @@ describe('Bug 2 Preservation — Non-tool_result content blocks unchanged', () =
     expect(parsed).not.toHaveProperty('is_error');
   });
 
-  it('tool_use content blocks pass through unchanged (id, name, summary, category preserved)', () => {
-    // Simulate a tool_use content block — these already use camelCase
-    // field names from the backend (id, name are universal)
-    const toolUseBlock = {
-      type: 'tool_use' as const,
+  it('tool_use content blocks with specific summaries pass through unchanged', () => {
+    // Non-Skill tool_use blocks with descriptive summaries must not be modified
+    const toolUseBlock: Record<string, unknown> = {
+      type: 'tool_use',
       id: 'toolu_abc123',
       name: 'bash',
       input: { command: 'npm test' },
@@ -118,16 +202,14 @@ describe('Bug 2 Preservation — Non-tool_result content blocks unchanged', () =
       category: 'bash',
     };
 
-    // On both unfixed and fixed code, tool_use blocks must pass through
-    // with all fields intact — the fix only targets tool_result blocks.
-    const parsed = JSON.parse(JSON.stringify(toolUseBlock));
+    const converted = toCamelCaseContentBlock(toolUseBlock);
 
-    expect(parsed.type).toBe('tool_use');
-    expect(parsed.id).toBe('toolu_abc123');
-    expect(parsed.name).toBe('bash');
-    expect(parsed.input).toEqual({ command: 'npm test' });
-    expect(parsed.summary).toBe('Running: npm test');
-    expect(parsed.category).toBe('bash');
+    expect(converted.type).toBe('tool_use');
+    expect(converted.id).toBe('toolu_abc123');
+    expect(converted.name).toBe('bash');
+    expect(converted.input).toEqual({ command: 'npm test' });
+    expect(converted.summary).toBe('Running: npm test');
+    expect(converted.category).toBe('bash');
   });
 
   it('mixed content array preserves all block types', () => {

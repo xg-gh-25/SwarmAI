@@ -77,11 +77,16 @@ const toMessageCamelCase = (data: Record<string, unknown>): ChatMessage => {
   };
 };
 
-/** Convert snake_case fields in a content block to camelCase.
- * Only transforms known snake_case fields on tool_result blocks:
+/** Convert snake_case fields in a content block to camelCase and enrich generic summaries.
+ *
+ * tool_result blocks:
  * - tool_use_id → toolUseId
  * - is_error → isError
- * Defensively handles all block types — passes non-tool_result blocks through unchanged.
+ *
+ * tool_use blocks:
+ * - Enriches generic "Using Skill" summary with the actual skill name from input
+ *
+ * Defensively handles all block types — passes unknown blocks through unchanged.
  */
 export const toCamelCaseContentBlock = (block: Record<string, unknown>): Record<string, unknown> => {
   if (block.type === 'tool_result') {
@@ -96,6 +101,34 @@ export const toCamelCaseContentBlock = (block: Record<string, unknown>): Record<
     }
     return converted;
   }
+  if (block.type === 'tool_use') {
+    return enrichToolUseSummary(block);
+  }
+  return block;
+};
+
+/**
+ * Enrich tool_use summary when the SDK sends a generic label.
+ *
+ * The Claude Code SDK generates summaries like "Using Skill" without
+ * including which skill is invoked. This extracts the skill name from
+ * the tool input and rewrites the summary to e.g. "Using Skill: frontend-design".
+ */
+const enrichToolUseSummary = (block: Record<string, unknown>): Record<string, unknown> => {
+  const name = block.name as string | undefined;
+  const summary = block.summary as string | undefined;
+  const input = block.input as Record<string, unknown> | undefined;
+
+  // Only enrich when summary is the generic SDK default
+  if (name === 'Skill' && summary === 'Using Skill' && input) {
+    const skillName = (input.skill_name ?? input.skillName ?? input.name) as string | undefined;
+    if (skillName) {
+      // Strip "s_" prefix for readability: "s_frontend-design" → "frontend-design"
+      const displayName = skillName.replace(/^s_/, '');
+      return { ...block, summary: `Using Skill: ${displayName}` };
+    }
+  }
+
   return block;
 };
 

@@ -1,5 +1,4 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
-import { remove } from '@tauri-apps/plugin-fs';
 import type { FileTreeItem } from './FileTreeNode';
 import SwarmWorkspaceWarningDialog from '../common/SwarmWorkspaceWarningDialog';
 
@@ -29,10 +28,12 @@ interface FileContextMenuProps {
   onAttachToChat?: (item: FileTreeItem) => void;
   /** Callback when rename is requested */
   onRename?: (item: FileTreeItem) => void;
-  /** Callback when delete is completed */
-  onDelete?: (item: FileTreeItem) => void;
+  /** Callback when delete is confirmed — should handle the actual deletion */
+  onDelete?: (item: FileTreeItem) => void | Promise<void>;
   /** Callback when file system changes (for refresh) */
   onFileSystemChange?: () => void;
+  /** Callback when "Ask Swarm about this" is selected */
+  onAskAbout?: (item: FileTreeItem) => void;
   /** Ref to the element that should receive focus when the menu closes via Escape (Requirement 10.4) */
   returnFocusRef?: React.RefObject<HTMLElement | null>;
 }
@@ -57,6 +58,7 @@ export default function FileContextMenu({
   onRename,
   onDelete,
   onFileSystemChange,
+  onAskAbout,
   returnFocusRef,
 }: FileContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
@@ -165,6 +167,12 @@ export default function FileContextMenu({
     onClose();
   }, [item, onRename, onClose]);
 
+  // Handle "Ask Swarm about this"
+  const handleAskAbout = useCallback(() => {
+    onAskAbout?.(item);
+    onClose();
+  }, [item, onAskAbout, onClose]);
+
   // Handle delete with confirmation
   // For Swarm Workspace items, show warning dialog instead (Requirements 4.1, 4.4, 10.3)
   const handleDeleteClick = useCallback(() => {
@@ -175,12 +183,11 @@ export default function FileContextMenu({
     }
   }, [item.isSwarmWorkspace]);
 
-  // Confirm delete
+  // Confirm delete — delegates to parent handler (trash via backend)
   const handleDeleteConfirm = useCallback(async () => {
     setIsDeleting(true);
     try {
-      await remove(item.path, { recursive: item.type === 'directory' });
-      onDelete?.(item);
+      await onDelete?.(item);
       onFileSystemChange?.();
       onClose();
     } catch (error) {
@@ -221,6 +228,16 @@ export default function FileContextMenu({
       label: 'Attach to Chat',
       icon: 'attach_file',
       action: handleAttachToChat,
+    });
+  }
+
+  // Ask Swarm about this file
+  if (item.type === 'file') {
+    menuItems.push({
+      id: 'ask-swarm',
+      label: 'Ask Swarm',
+      icon: 'smart_toy',
+      action: handleAskAbout,
       dividerAfter: true,
     });
   }

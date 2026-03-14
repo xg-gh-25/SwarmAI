@@ -23,7 +23,7 @@
  * Requirements: 11.2, 11.3, 14.1, 14.2, 14.4, 14.5, 14.6
  */
 
-import React, { useCallback } from 'react';
+import React, { useCallback, useEffect, useRef } from 'react';
 import type { TreeNode } from '../../types';
 import type { FileTreeItem } from './FileTreeNode';
 import { fileIcon, fileIconColor, gitStatusColor, gitStatusBadge } from '../../utils/fileUtils';
@@ -38,10 +38,16 @@ export interface TreeNodeRowProps {
   isExpanded: boolean;
   isSelected: boolean;
   isMatched: boolean;
+  /** Whether this node is currently in inline rename mode. */
+  isRenaming?: boolean;
   onToggle: () => void;
   onSelect: () => void;
   onContextMenu: (e: React.MouseEvent) => void;
   onDoubleClick: () => void;
+  /** Called when inline rename is submitted with the new name. */
+  onRenameSubmit?: (newName: string) => void;
+  /** Called when inline rename is cancelled. */
+  onRenameCancel?: () => void;
   /** Positioning style injected by react-window (top, height, position). */
   style: React.CSSProperties;
 }
@@ -70,6 +76,84 @@ function isHiddenNode(name: string): boolean {
 
 
 /* ------------------------------------------------------------------ */
+/*  Inline rename input                                                */
+/* ------------------------------------------------------------------ */
+
+/** Inline text input for renaming a file/folder in the tree. */
+function InlineRenameInput({
+  name,
+  onSubmit,
+  onCancel,
+}: {
+  name: string;
+  onSubmit?: (newName: string) => void;
+  onCancel?: () => void;
+}) {
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // Auto-focus and select name (without extension for files)
+  useEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.focus();
+    const dotIndex = name.lastIndexOf('.');
+    if (dotIndex > 0) {
+      el.setSelectionRange(0, dotIndex);
+    } else {
+      el.select();
+    }
+  }, [name]);
+
+  const submit = useCallback(() => {
+    const newName = inputRef.current?.value.trim() ?? '';
+    if (newName && newName !== name) {
+      onSubmit?.(newName);
+    } else {
+      onCancel?.();
+    }
+  }, [name, onSubmit, onCancel]);
+
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      e.stopPropagation(); // Prevent tree keyboard navigation
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        submit();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        onCancel?.();
+      }
+    },
+    [submit, onCancel],
+  );
+
+  return (
+    <input
+      ref={inputRef}
+      defaultValue={name}
+      onBlur={submit}
+      onKeyDown={handleKeyDown}
+      onClick={(e) => e.stopPropagation()}
+      onDoubleClick={(e) => e.stopPropagation()}
+      style={{
+        flex: 1,
+        minWidth: 0,
+        fontSize: '13px',
+        lineHeight: '20px',
+        padding: '1px 4px',
+        border: '1px solid var(--color-primary)',
+        borderRadius: '3px',
+        background: 'var(--color-card)',
+        color: 'var(--color-text)',
+        outline: 'none',
+        fontFamily: 'inherit',
+      }}
+      data-testid="inline-rename-input"
+    />
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /*  Component                                                          */
 /* ------------------------------------------------------------------ */
 
@@ -79,10 +163,13 @@ const TreeNodeRow: React.FC<TreeNodeRowProps> = React.memo(function TreeNodeRow(
   isExpanded,
   isSelected,
   isMatched,
+  isRenaming,
   onToggle,
   onSelect,
   onContextMenu,
   onDoubleClick,
+  onRenameSubmit,
+  onRenameCancel,
   style,
 }) {
   const isDirectory = node.type === 'directory';
@@ -321,18 +408,26 @@ const TreeNodeRow: React.FC<TreeNodeRowProps> = React.memo(function TreeNodeRow(
         )}
       </span>
 
-      {/* Node name */}
-      <span
-        style={{
-          flex: 1,
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-          whiteSpace: 'nowrap',
-        }}
-        title={node.name}
-      >
-        {node.name}
-      </span>
+      {/* Node name — inline input when renaming */}
+      {isRenaming ? (
+        <InlineRenameInput
+          name={node.name}
+          onSubmit={onRenameSubmit}
+          onCancel={onRenameCancel}
+        />
+      ) : (
+        <span
+          style={{
+            flex: 1,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+          title={node.name}
+        >
+          {node.name}
+        </span>
+      )}
 
       {/* Git status badge (A/M/D/U/R/C) — always visible when status is set */}
       {badge && (
