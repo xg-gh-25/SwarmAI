@@ -76,22 +76,68 @@ class _ClaudeClientWrapper:
     def _extract_pid(self) -> int | None:
         """Best-effort PID extraction from the SDK client internal chain.
 
-        Walks: client -> _query -> _transport -> _process -> pid
-        Returns None if any link is missing.
+        Tries multiple paths through the SDK internals since the internal
+        structure may vary across SDK versions:
+        1. client -> _query -> _transport -> _process -> pid (original)
+        2. client -> _process -> pid (direct)
+        3. client -> _transport -> _process -> pid (skip _query)
+
+        Returns None if all paths fail.
         """
         try:
             if self.client is None:
                 return None
+
+            # Path 1: client -> _query -> _transport -> _process -> pid
             query = getattr(self.client, "_query", None)
-            if query is None:
-                return None
-            transport = getattr(query, "_transport", None)
-            if transport is None:
-                return None
-            process = getattr(transport, "_process", None)
-            if process is None:
-                return None
-            return getattr(process, "pid", None)
+            if query is not None:
+                transport = getattr(query, "_transport", None)
+                if transport is not None:
+                    process = getattr(transport, "_process", None)
+                    if process is not None:
+                        pid = getattr(process, "pid", None)
+                        if pid is not None:
+                            return pid
+
+            # Path 2: client -> _process -> pid (direct)
+            process = getattr(self.client, "_process", None)
+            if process is not None:
+                pid = getattr(process, "pid", None)
+                if pid is not None:
+                    return pid
+
+            # Path 3: client -> _transport -> _process -> pid
+            transport = getattr(self.client, "_transport", None)
+            if transport is not None:
+                process = getattr(transport, "_process", None)
+                if process is not None:
+                    pid = getattr(process, "pid", None)
+                    if pid is not None:
+                        return pid
+
+            # Path 4: Walk all attributes looking for a process-like object with pid
+            for attr_name in dir(self.client):
+                if attr_name.startswith("__"):
+                    continue
+                try:
+                    attr = getattr(self.client, attr_name, None)
+                    if attr is None:
+                        continue
+                    # Check if it has a _process or process attribute with pid
+                    for proc_attr in ("_process", "process"):
+                        proc = getattr(attr, proc_attr, None)
+                        if proc is not None:
+                            pid = getattr(proc, "pid", None)
+                            if isinstance(pid, int) and pid > 0:
+                                logger.info(
+                                    "PID extracted via fallback path: client.%s.%s.pid = %d",
+                                    attr_name, proc_attr, pid,
+                                )
+                                return pid
+                except Exception:
+                    continue
+
+            return None
         except Exception:
             return None
 
