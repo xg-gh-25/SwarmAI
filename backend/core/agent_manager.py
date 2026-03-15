@@ -323,13 +323,30 @@ def _is_retriable_error(raw_error: str) -> bool:
     When True, the error event should NOT be yielded to the frontend — the
     auto-retry path (PATH B → PATH A) will handle the UX with a softer
     "reconnecting" indicator instead.
+
+    Covers two categories:
+    1. Process-level failures (OOM kill, broken pipe) — the CLI died
+    2. Bedrock API transient errors (throttling, overload, 5xx) — the API
+       returned a retriable status code but the CLI didn't retry internally
     """
     retriable_patterns = [
+        # Process-level failures
         r"exit code: -9",
         r"Cannot write to terminated process",
         r"Command failed with exit code -9",
         r"broken pipe",
         r"EPIPE",
+        # Bedrock / Anthropic API transient errors
+        r"throttl",                          # ThrottlingException, throttled, etc.
+        r"too many requests",                # HTTP 429
+        r"rate.?limit",                      # rate_limit, rate limit exceeded
+        r"service.?unavailable",             # HTTP 503
+        r"internal.?server.?error",          # HTTP 500
+        r"overloaded",                       # Anthropic overloaded_error
+        r"capacity",                         # InsufficientCapacity (Bedrock)
+        r"ECONNRESET",                       # Connection reset
+        r"connection reset",
+        r"SDK_SUBPROCESS_TIMEOUT",           # Our own watchdog timeout
     ]
     for pattern in retriable_patterns:
         if re.search(pattern, raw_error, re.IGNORECASE):
@@ -455,6 +472,40 @@ class AgentManager:
     # When a session has no messages for this long, extract activity
     # but keep the session alive so the user can resume.
     ACTIVITY_IDLE_SECONDS = 30 * 60
+    # Idle threshold for subprocess disconnect (5 minutes).
+    # Kills the claude CLI subprocess to free ~100-300MB RAM per tab,
+    # but keeps session metadata.  On next message, the resume-fallback
+    # path (context injection) seamlessly recreates the session.
+    # Set to 5min to allow normal user reading/thinking time between
+    # messages.  OOM prevention is handled by MAX_CONCURRENT_SUBPROCESSES
+    # cap + _evict_idle_subprocesses(), not by aggressive idle timeouts.
+    # Restored from 2min (2026-03-15 COE) after adding last_used update
+    # after streaming completion (Bug 2 fix) and cap-based eviction.
+    SUBPROCESS_IDLE_SECONDS = 5 * 60
+    # Maximum concurrent live claude CLI subprocesses.
+    # When exceeded, the oldest idle subprocess is disconnected before
+    # spawning a new one.  Prevents unbounded RAM growth with many tabs.
+    # Lowered from 5→3 (2026-03-15) because each claude CLI uses
+    # 200-500MB RAM; 5 concurrent = 1-2.5GB which triggers OOM kills.
+    MAX_CONCURRENT_SUBPROCESSES = 2
+    # Maximum PATH A retry attempts for retriable errors (exit -9, broken pipe).
+    # Each retry spawns a fresh subprocess.  Backoff delay between attempts
+    # gives the OS time to reclaim memory from the killed process.
+    MAX_RETRY_ATTEMPTS = 2
+    # Delay (seconds) before auto-retry after a retriable error.
+    # Gives macOS time to reclaim memory from the SIGKILL'd process.
+    RETRY_BACKOFF_SECONDS = 3.0
+
+    # ── Dynamic watchdog timeout parameters ──
+    # Base timeout before scaling (seconds).
+    WATCHDOG_BASE_TIMEOUT = 180
+    # Extra seconds per 100K cached tokens. Heavy sessions (350K+ cached
+    # tokens) legitimately take longer for Bedrock to process.
+    WATCHDOG_SECONDS_PER_100K_TOKENS = 30
+    # Extra seconds per user turn (accumulated context).
+    WATCHDOG_SECONDS_PER_TURN = 5
+    # Absolute ceiling to prevent infinite waits (seconds).
+    WATCHDOG_MAX_TIMEOUT = 600
 
     def __init__(
         self,
@@ -482,6 +533,9 @@ class AgentManager:
         # Per-session user turn counter for context monitoring.
         # Key: effective session_id, Value: cumulative user turns.
         self._user_turn_counts: dict[str, int] = {}
+        # Per-session last known input token count (for dynamic watchdog).
+        # Updated after each successful response from the SDK.
+        self._session_last_input_tokens: dict[str, int] = {}
         # Global PID registry — tracks ALL spawned claude CLI process PIDs.
         # Safety net: even if _active_sessions loses a reference (error path,
         # race condition), we still know about the process for cleanup.
@@ -580,13 +634,18 @@ class AgentManager:
     async def _cleanup_stale_sessions_loop(self):
         """Periodically clean up sessions that have been idle too long.
 
-        Three-tier idle detection:
-        1. **Activity extraction** (30 min idle): Fire the DailyActivity
+        Four-tier idle detection:
+        1. **Subprocess disconnect** (5 min idle): Kill the claude CLI
+           subprocess to free ~100-300MB RAM, but keep session metadata.
+           On next message, resume-fallback (context injection) recreates
+           the session transparently.  This is the PRIMARY defense against
+           macOS OOM-killing active processes (exit code -9).
+        2. **Activity extraction** (30 min idle): Fire the DailyActivity
            extraction hook only.  Session stays alive so the user can
            resume without losing conversation context.
-        2. **Full cleanup** (2 h idle): Tear down the session and fire
+        3. **Full cleanup** (2 h idle): Tear down the session and fire
            all post-session-close hooks.
-        3. **Orphan sweep** (every 5 min): Kill orphaned claude CLI
+        4. **Orphan sweep** (every 5 min): Kill orphaned claude CLI
            processes that survived wrapper disconnect (deadlock, crash).
         """
         _sweep_counter = 0  # Process leak sweep every 5 iterations (5 min)
@@ -596,7 +655,32 @@ class AgentManager:
                 now = time.time()
                 _sweep_counter += 1
 
-                # --- Tier 1: Early DailyActivity extraction (30 min idle) ---
+                # --- Tier 1: Subprocess idle disconnect (5 min) ---
+                # Free RAM by killing idle subprocesses.  Session metadata
+                # stays in _active_sessions so resume-fallback works.
+                # GUARD: Skip sessions that are actively streaming — killing
+                # a subprocess mid-stream causes "Cannot write to terminated
+                # process" errors and triggers the full retry cascade.
+                idle_for_disconnect = [
+                    (sid, info) for sid, info in self._active_sessions.items()
+                    if (now - info.get("last_used", info["created_at"]) > self.SUBPROCESS_IDLE_SECONDS
+                        and info.get("wrapper") is not None
+                        and not info.get("is_streaming"))
+                ]
+                for sid, info in idle_for_disconnect:
+                    wrapper = info.get("wrapper")
+                    if wrapper:
+                        logger.info(
+                            "Subprocess idle disconnect for session %s "
+                            "(idle %.0fs, freeing RAM)",
+                            sid, now - info.get("last_used", info["created_at"]),
+                        )
+                        await self._disconnect_wrapper(wrapper, f"idle-disconnect-{sid}")
+                        # Clear subprocess references but keep session metadata
+                        info["wrapper"] = None
+                        info["client"] = None
+
+                # --- Tier 2: Early DailyActivity extraction (30 min idle) ---
                 idle_for_extraction = [
                     (sid, info) for sid, info in self._active_sessions.items()
                     if (now - info.get("last_used", info["created_at"]) > self.ACTIVITY_IDLE_SECONDS
@@ -605,7 +689,7 @@ class AgentManager:
                 for sid, info in idle_for_extraction:
                     await self._extract_activity_early(sid, info)
 
-                # --- Tier 2: Full cleanup (2 h TTL) ---
+                # --- Tier 3: Full cleanup (2 h TTL) ---
                 stale = [
                     sid for sid, info in self._active_sessions.items()
                     if now - info.get("last_used", info["created_at"]) > self.SESSION_TTL_SECONDS
@@ -614,7 +698,7 @@ class AgentManager:
                     logger.info(f"Cleaning up stale session {sid}")
                     await self._cleanup_session(sid)
 
-                # --- Tier 3: Process leak sweep (every ~5 min) ---
+                # --- Tier 4: Process leak sweep (every ~5 min) ---
                 # COE 2026-03-15: zombie claude processes exhausted macOS vnodes.
                 # Two sweeps: (a) tracked PIDs not in active sessions, (b) OS-level orphans.
                 if _sweep_counter >= 5:
@@ -689,6 +773,59 @@ class AgentManager:
             info["activity_extracted"] = False  # Allow retry on next cycle
             logger.error("Early activity extraction failed for session %s: %s", session_id, exc)
 
+    async def _evict_idle_subprocesses(self) -> int:
+        """Disconnect idle subprocesses to stay under MAX_CONCURRENT_SUBPROCESSES.
+
+        Called before spawning a new claude CLI process.  Evicts the
+        oldest idle sessions' subprocesses (but keeps their metadata
+        so resume-fallback works on the next message).
+
+        Returns the number of subprocesses evicted.
+        """
+        # Count sessions with live subprocesses, separating streaming from idle.
+        # GUARD: Never evict sessions that are actively streaming — killing
+        # a subprocess mid-stream causes "Cannot write to terminated process"
+        # errors and the full retry cascade (exit code -9 → "slow to respond").
+        idle_sessions = []
+        streaming_count = 0
+        for sid, info in self._active_sessions.items():
+            if info.get("wrapper") is None:
+                continue
+            if info.get("is_streaming"):
+                streaming_count += 1
+            else:
+                idle_sessions.append((sid, info))
+
+        # Only evict idle sessions; streaming ones are untouchable.
+        total_live = len(idle_sessions) + streaming_count
+        evict_count = total_live - self.MAX_CONCURRENT_SUBPROCESSES + 1  # +1 for the one about to spawn
+        if evict_count <= 0:
+            return 0
+
+        # Sort by last_used ascending (oldest idle first)
+        idle_sessions.sort(key=lambda x: x[1].get("last_used", x[1].get("created_at", 0)))
+
+        # Can only evict idle sessions — cap evict_count to available idle sessions
+        evict_count = min(evict_count, len(idle_sessions))
+
+        evicted = 0
+        for sid, info in idle_sessions[:evict_count]:
+            wrapper = info.get("wrapper")
+            if wrapper:
+                idle_secs = time.time() - info.get("last_used", info.get("created_at", 0))
+                logger.info(
+                    "Evicting idle subprocess for session %s "
+                    "(idle %.0fs, %d/%d live, %d streaming) to stay under cap",
+                    sid, idle_secs, total_live - evicted,
+                    self.MAX_CONCURRENT_SUBPROCESSES, streaming_count,
+                )
+                await self._disconnect_wrapper(wrapper, f"evict-cap-{sid}")
+                info["wrapper"] = None
+                info["client"] = None
+                evicted += 1
+
+        return evicted
+
     async def _cleanup_session(self, session_id: str, skip_hooks: bool = False):
         """Disconnect and remove a stored session client.
 
@@ -738,8 +875,9 @@ class AgentManager:
         _pm.clear_session_approvals(session_id)
         # Clean up system prompt metadata to prevent unbounded memory growth
         _system_prompt_metadata.pop(session_id, None)
-        # Clean up context monitor turn counter
+        # Clean up context monitor turn counter and token tracker
         self._user_turn_counts.pop(session_id, None)
+        self._session_last_input_tokens.pop(session_id, None)
 
     async def _disconnect_wrapper(
         self, wrapper: _ClaudeClientWrapper, label: str, timeout: float = 5.0,
@@ -864,6 +1002,19 @@ class AgentManager:
         # Also include all globally tracked PIDs (they have wrappers managing them)
         safe_pids |= self._tracked_pids
 
+        # SAFETY: If we have no tracked PIDs at all, PID extraction is broken.
+        # In this state, we cannot distinguish active processes from orphans.
+        # Only kill processes whose parent is PID 1 (truly re-parented orphans),
+        # NOT children of our backend (which are likely active but untracked).
+        pid_tracking_broken = len(safe_pids) == 0 and len(self._active_sessions) > 0
+        if pid_tracking_broken:
+            logger.debug(
+                "PID tracking appears broken (0 tracked PIDs, %d active sessions). "
+                "Orphan sweep will only kill re-parented processes (ppid=1), "
+                "not direct children of the backend.",
+                len(self._active_sessions),
+            )
+
         killed = 0
         my_pid = os.getpid()
         try:
@@ -886,7 +1037,10 @@ class AgentManager:
                     ppid = int(ppid_result.stdout.strip()) if ppid_result.stdout.strip() else -1
 
                     # Kill if orphaned (ppid=1) or direct child of our backend
-                    if ppid in (1, my_pid):
+                    # SAFETY: When PID tracking is broken, only kill truly
+                    # orphaned processes (ppid=1). Direct children (ppid=my_pid)
+                    # are likely active sessions we can't track.
+                    if ppid == 1 or (ppid == my_pid and not pid_tracking_broken):
                         try:
                             subprocess.run(
                                 ["pkill", "-9", "-P", str(pid)],
@@ -1005,14 +1159,29 @@ class AgentManager:
         return killed
 
     def _get_active_client(self, session_id: str) -> ClaudeSDKClient | None:
-        """Get an existing long-lived client for a session, if available."""
+        """Get an existing long-lived client for a session, if available.
+
+        Returns None if the session's subprocess was idle-disconnected
+        (wrapper=None, client=None).  The caller will then fall through
+        to PATH A (fresh client with context injection), which is the
+        designed resume-fallback path.
+        """
         info = self._active_sessions.get(session_id)
         if info:
             info["last_used"] = time.time()
             # Reset early-extraction flag so new activity gets captured
             # after the next idle period.
             info["activity_extracted"] = False
-            return info["client"]
+            client = info.get("client")
+            if client is None:
+                # Subprocess was idle-disconnected — fall through to PATH A
+                logger.info(
+                    "Session %s exists but subprocess was idle-disconnected, "
+                    "will use resume-fallback (context injection)",
+                    session_id,
+                )
+                return None
+            return client
         return None
 
     def _resolve_allowed_tools(self, agent_config: dict) -> list[str]:
@@ -1270,6 +1439,40 @@ class AgentManager:
             + (usage.get("cache_read_input_tokens") or 0)
             + (usage.get("cache_creation_input_tokens") or 0)
         )
+
+    def _compute_watchdog_timeout(self, session_id: Optional[str]) -> int:
+        """Compute a dynamic watchdog timeout based on session complexity.
+
+        Scales the base timeout by:
+        - Cached/input tokens: +30s per 100K tokens (heavy sessions need more time)
+        - User turns: +5s per turn (accumulated context grows with conversation)
+
+        Capped at WATCHDOG_MAX_TIMEOUT to prevent infinite waits.
+        Returns WATCHDOG_BASE_TIMEOUT when no session data is available.
+        """
+        timeout = self.WATCHDOG_BASE_TIMEOUT
+        if not session_id:
+            return timeout
+
+        # Scale by last known input token count
+        last_tokens = self._session_last_input_tokens.get(session_id, 0)
+        if last_tokens > 0:
+            hundreds_of_k = last_tokens / 100_000
+            timeout += int(hundreds_of_k * self.WATCHDOG_SECONDS_PER_100K_TOKENS)
+
+        # Scale by conversation depth (user turns)
+        turns = self._user_turn_counts.get(session_id, 0)
+        if turns > 0:
+            timeout += turns * self.WATCHDOG_SECONDS_PER_TURN
+
+        clamped = min(timeout, self.WATCHDOG_MAX_TIMEOUT)
+        if clamped != self.WATCHDOG_BASE_TIMEOUT:
+            logger.debug(
+                "Dynamic watchdog: %ds (base=%d, tokens=%d, turns=%d) for session %s",
+                clamped, self.WATCHDOG_BASE_TIMEOUT, last_tokens, turns,
+                session_id[:8] if session_id else "?",
+            )
+        return clamped
 
     def _build_context_warning(
         self,
@@ -1840,6 +2043,9 @@ class AgentManager:
             try:
                 turns = self._user_turn_counts.get(effective_sid, 0) + 1
                 self._user_turn_counts[effective_sid] = turns
+                # Track last known input tokens for dynamic watchdog timeout
+                if last_input_tokens and last_input_tokens > 0:
+                    self._session_last_input_tokens[effective_sid] = last_input_tokens
 
                 warning_event = self._build_context_warning(last_input_tokens, last_model)
                 if warning_event:
@@ -2060,19 +2266,42 @@ class AgentManager:
                     # Mark as saved so PATH A auto-retry won't double-save
                     deferred_user_content = None
 
-                async for event in self._run_query_on_client(
-                    client=client,
-                    query_content=query_content,
-                    display_text=display_text,
-                    agent_config=agent_config,
-                    session_context=session_context,
-                    assistant_content=assistant_content,
-                    is_resuming=is_resuming,
-                    content=content,
-                    user_message=user_message,
-                    agent_id=agent_id,
-                ):
-                    yield event
+                # Mark session as actively streaming so the cleanup loop
+                # skips it regardless of last_used timestamp. Cleared in
+                # the post-stream block below (both success and error paths).
+                _path_b_streaming_info = self._active_sessions.get(session_id)
+                if _path_b_streaming_info:
+                    _path_b_streaming_info["is_streaming"] = True
+
+                try:
+                    async for event in self._run_query_on_client(
+                        client=client,
+                        query_content=query_content,
+                        display_text=display_text,
+                        agent_config=agent_config,
+                        session_context=session_context,
+                        assistant_content=assistant_content,
+                        is_resuming=is_resuming,
+                        content=content,
+                        user_message=user_message,
+                        agent_id=agent_id,
+                    ):
+                        yield event
+                finally:
+                    # Clear is_streaming flag — session is now idle.
+                    _path_b_done_info = self._active_sessions.get(session_id)
+                    if _path_b_done_info:
+                        _path_b_done_info["is_streaming"] = False
+
+                # Update last_used after PATH B streaming completes (Bug 2 fix).
+                # Prevents _cleanup_stale_sessions_loop Tier 1 from killing
+                # subprocesses that were actively streaming. Without this,
+                # last_used stays at the value set by _get_active_client at
+                # request start, causing the cleanup loop to see the session
+                # as idle even though streaming just completed.
+                _path_b_info = self._active_sessions.get(session_id)
+                if _path_b_info:
+                    _path_b_info["last_used"] = time.time()
 
                 # PATH B post-run: if the reused client hit an error (e.g.
                 # watchdog timeout, SDK crash), evict it and signal auto-retry
@@ -2173,6 +2402,11 @@ class AgentManager:
                     # Clear deferred content so it's not saved again
                     deferred_user_content = None
 
+                # Enforce max concurrent subprocess cap before spawning.
+                # Disconnect oldest idle subprocesses to free RAM and prevent
+                # macOS OOM-killer from SIGKILL-ing active processes.
+                await self._evict_idle_subprocesses()
+
                 _t_client_start = time.monotonic()
                 logger.info("Creating new ClaudeSDKClient...")
                 wrapper = _ClaudeClientWrapper(options=options)
@@ -2213,6 +2447,14 @@ class AgentManager:
                     self._active_sessions[_early_key] = _early_info
                     session_context["_early_active_key"] = _early_key
 
+                # Mark session as actively streaming so the cleanup loop
+                # skips it regardless of last_used timestamp.
+                _early_key_for_streaming = session_context.get("_early_active_key")
+                if _early_key_for_streaming:
+                    _early_streaming_info = self._active_sessions.get(_early_key_for_streaming)
+                    if _early_streaming_info:
+                        _early_streaming_info["is_streaming"] = True
+
                 try:
                     async for event in self._run_query_on_client(
                         client=client,
@@ -2231,6 +2473,13 @@ class AgentManager:
                     # On error, disconnect the wrapper instead of keeping alive
                     await self._disconnect_wrapper(wrapper, f"error-{session_id or 'new'}")
                     raise
+                finally:
+                    # Clear is_streaming flag — session is now idle.
+                    _early_key_done = session_context.get("_early_active_key")
+                    if _early_key_done:
+                        _early_done_info = self._active_sessions.get(_early_key_done)
+                        if _early_done_info:
+                            _early_done_info["is_streaming"] = False
 
                 # Store client for reuse (keep alive for future resume calls)
                 # Skip storage if the session ended with an error (e.g. auth failure)
@@ -2243,38 +2492,59 @@ class AgentManager:
                     else final_session_id
                 )
                 if session_context.get("had_error"):
-                    # PATH A auto-retry: if this was the first attempt (not
-                    # already a retry from PATH B), try once more with a fresh
-                    # client. This handles the case where a brand-new session
-                    # hits a watchdog timeout — without this, the user sees a
-                    # dead 1-message session and must manually resend.
-                    if not _need_fresh_client and not session_context.get("_path_a_retried"):
+                    # PATH A auto-retry loop: retry up to MAX_RETRY_ATTEMPTS
+                    # times with exponential backoff.  Each retry spawns a
+                    # fresh subprocess.  The backoff gives macOS time to
+                    # reclaim memory from the SIGKILL'd process, reducing
+                    # the chance of consecutive OOM kills.
+                    _retry_count = session_context.get("_path_a_retry_count", 0)
+                    _max_retries = self.MAX_RETRY_ATTEMPTS if not _need_fresh_client else self.MAX_RETRY_ATTEMPTS + 1
+                    while (
+                        session_context.get("had_error")
+                        and _retry_count < _max_retries
+                    ):
+                        _retry_count += 1
+                        session_context["_path_a_retry_count"] = _retry_count
+                        # Exponential backoff: 3s, 6s, ... — gives OS time
+                        # to reclaim memory from the killed process.
+                        _backoff = self.RETRY_BACKOFF_SECONDS * _retry_count
                         logger.info(
-                            "PATH A: fresh client had error, auto-retrying once "
-                            "with a new client"
+                            "PATH A: auto-retry attempt %d/%d after %.1fs backoff",
+                            _retry_count, _max_retries, _backoff,
                         )
+                        await asyncio.sleep(_backoff)
+
                         session_context["had_error"] = False
                         session_context["_path_a_retried"] = True
                         assistant_content = ContentBlockAccumulator()
-                        await self._disconnect_wrapper(wrapper, f"retry-{session_id}")
+                        # Update last_used on early-registered session to prevent
+                        # cleanup loop from interfering during retry backoff (Bug 2 defensive).
+                        _early_key = session_context.get("_early_active_key")
+                        if _early_key:
+                            _early_info = self._active_sessions.get(_early_key)
+                            if _early_info:
+                                _early_info["last_used"] = time.time()
+                        await self._disconnect_wrapper(wrapper, f"retry-{_retry_count}-{session_id}")
 
                         # Re-enter streaming state on the frontend
                         yield {"type": "reconnecting"}
 
-                        # Visual indicator
-                        yield {
-                            "type": "assistant",
-                            "content": [{
-                                "type": "text",
-                                "text": (
-                                    "\n\n---\n\n"
-                                    "⚠️ *AI service was slow to respond. "
-                                    "Retrying automatically...*\n\n"
-                                ),
-                            }],
-                        }
+                        # Visual indicator (only on first retry to avoid spam)
+                        if _retry_count == 1:
+                            yield {
+                                "type": "assistant",
+                                "content": [{
+                                    "type": "text",
+                                    "text": (
+                                        "\n\n---\n\n"
+                                        "⚠️ *AI service was slow to respond. "
+                                        "Retrying automatically...*\n\n"
+                                    ),
+                                }],
+                            }
 
-                        # Create a fresh client for the retry
+                        # Aggressively evict idle subprocesses before retry
+                        await self._evict_idle_subprocesses()
                         options = await self._build_options(
                             agent_config, enable_skills, enable_mcp,
                             None, session_context, channel_context,
@@ -2285,7 +2555,10 @@ class AgentManager:
                             client = await wrapper.__aenter__()
                         # Register retry PID in global tracker
                         self._register_wrapper_pid(wrapper)
-                        logger.info("PATH A retry: fresh client created (pid=%s)", wrapper.pid)
+                        logger.info(
+                            "PATH A retry %d: fresh client created (pid=%s)",
+                            _retry_count, wrapper.pid,
+                        )
 
                         try:
                             async for event in self._run_query_on_client(
@@ -2302,16 +2575,16 @@ class AgentManager:
                             ):
                                 yield event
                         except Exception:
-                            await self._disconnect_wrapper(wrapper, f"retry-error-{session_id}")
+                            await self._disconnect_wrapper(wrapper, f"retry-{_retry_count}-error-{session_id}")
                             raise
 
-                        # Re-evaluate after retry
-                        final_session_id = session_context["sdk_session_id"]
-                        effective_session_id = (
-                            session_context["app_session_id"]
-                            if session_context.get("app_session_id") is not None
-                            else final_session_id
-                        )
+                    # Re-evaluate after retry loop
+                    final_session_id = session_context["sdk_session_id"]
+                    effective_session_id = (
+                        session_context["app_session_id"]
+                        if session_context.get("app_session_id") is not None
+                        else final_session_id
+                    )
 
                     if session_context.get("had_error"):
                         logger.info("Session had error (after retry), disconnecting instead of storing")
@@ -2652,14 +2925,16 @@ class AgentManager:
                             logger.warning("Failed to save partial assistant content on error", exc_info=True)
 
                     # Determine if auto-retry will handle this error silently.
-                    # PATH B (reused client) and PATH A (fresh client, first
-                    # attempt) both check `had_error` after the queue loop and
-                    # retry with a friendly "reconnecting" indicator.  When
-                    # auto-retry is available, suppress the raw error event to
-                    # avoid showing scary messages before the retry.
+                    # PATH B (reused client) and PATH A (fresh client) both
+                    # check `had_error` after the queue loop and retry with
+                    # a friendly "reconnecting" indicator.  When retries
+                    # remain, suppress the raw error event to avoid showing
+                    # scary messages before the retry.
+                    _retry_count = session_context.get("_path_a_retry_count", 0)
+                    _max_retries = self.MAX_RETRY_ATTEMPTS
                     _will_auto_retry = (
                         _is_retriable_error(raw_error)
-                        and not session_context.get("_path_a_retried")
+                        and _retry_count < _max_retries
                     )
 
                     if _will_auto_retry:
@@ -2800,16 +3075,21 @@ class AgentManager:
                                         logger.info(f"Saved partial assistant content ({len(assistant_content.blocks)} blocks) before error_during_execution")
                                     except Exception:
                                         logger.warning("Failed to save partial assistant content on error_during_execution", exc_info=True)
-                                # Remove broken session from reuse pool
-                                if eff_sid and eff_sid in self._active_sessions:
-                                    await self._cleanup_session(eff_sid, skip_hooks=True)
-                                    logger.info(f"Removed broken session {eff_sid} from active sessions pool")
-
-                                # Check if auto-retry will handle this silently
+                                # Determine retry eligibility BEFORE cleanup (Bug 1 fix).
+                                # If auto-retry will handle this error, preserve session
+                                # state (wrapper, lock, permission queue) for the retry
+                                # path in _execute_on_session_inner.
+                                _retry_count_ede = session_context.get("_path_a_retry_count", 0)
                                 _will_auto_retry_ede = (
                                     _is_retriable_error(error_text)
-                                    and not session_context.get("_path_a_retried")
+                                    and _retry_count_ede < self.MAX_RETRY_ATTEMPTS
                                 )
+
+                                # Only clean up if auto-retry will NOT handle this
+                                if not _will_auto_retry_ede:
+                                    if eff_sid and eff_sid in self._active_sessions:
+                                        await self._cleanup_session(eff_sid, skip_hooks=True)
+                                        logger.info(f"Removed broken session {eff_sid} from active sessions pool")
                                 if _will_auto_retry_ede:
                                     logger.info(
                                         "Suppressing error_during_execution for retriable "
@@ -2881,9 +3161,12 @@ class AgentManager:
 
                             # Check if auto-retry will handle this error silently
                             # (same logic as SDK reader error path)
+                            # Unified retry-eligibility (Bug 3 fix): use count-based
+                            # condition, same as the SDK reader error path.
+                            _retry_count_sdk = session_context.get("_path_a_retry_count", 0)
                             _will_auto_retry_sdk = (
                                 _is_retriable_error(error_msg)
-                                and not session_context.get("_path_a_retried")
+                                and _retry_count_sdk < self.MAX_RETRY_ATTEMPTS
                             )
                             if _will_auto_retry_sdk:
                                 logger.info(
