@@ -201,9 +201,12 @@ class DistillationTriggerHook:
         all_corrections: list[tuple[str, str]] = []  # (date, correction)
         all_competence: list[tuple[str, str]] = []  # (date, competence)
 
-        # Collect all entries across files, then write once per section
+        # Collect all entries across files, then write once per section.
+        # Track which files were successfully extracted (marked distilled
+        # AFTER writes succeed — see GAP 12).
         all_decisions: list[str] = []
         all_lessons: list[str] = []
+        extracted_files: list[tuple[Path, dict, str]] = []  # (path, frontmatter, body)
 
         for da_file in files:
             try:
@@ -235,11 +238,8 @@ class DistillationTriggerHook:
                     for signal, topic in coe_items:
                         coe_entries.append((file_date, signal, topic))
 
-                # Mark file as distilled
-                fm["distilled"] = True
-                fm["distilled_date"] = date.today().isoformat()
-                new_content = write_frontmatter(fm, body)
-                da_file.write_text(new_content, encoding="utf-8")
+                # Track for post-write marking (NOT marked here — see GAP 12)
+                extracted_files.append((da_file, fm, body))
 
                 distilled_count += 1
                 logger.debug("Distilled %s: %d decisions, %d lessons, %d corrections, %d competence",
@@ -275,6 +275,20 @@ class DistillationTriggerHook:
         # Enforce section caps on MEMORY.md to prevent unbounded growth
         if all_decisions or all_lessons or coe_entries:
             self._enforce_section_caps(memory_path)
+
+        # Mark files as distilled AFTER all writes succeed.
+        # Previous ordering (mark inside loop, write after) could lose entries:
+        # if batch writes failed, already-marked files wouldn't be re-extracted.
+        for da_file, fm, body in extracted_files:
+            try:
+                fm["distilled"] = True
+                fm["distilled_date"] = date.today().isoformat()
+                new_content = write_frontmatter(fm, body)
+                da_file.write_text(new_content, encoding="utf-8")
+            except Exception as exc:
+                logger.warning("Failed to mark %s as distilled: %s", da_file.name, exc)
+                # Non-fatal: file will be re-processed next time, but dedup
+                # in _run_locked_write prevents duplicate MEMORY.md entries.
 
         # Log distillation to EVOLUTION_CHANGELOG.jsonl
         if distilled_count > 0:

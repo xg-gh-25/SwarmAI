@@ -139,6 +139,34 @@ def _format_conversation(messages: list[dict], since_idx: int = 0) -> str:
 _LLM_MAX_RETRIES = 3
 _LLM_RETRY_DELAY = 1.0  # seconds, doubles each retry
 
+# Module-level client cache — avoids recreating boto3 client on every call.
+# Each (region, model) combo gets its own cached client.  Thread-safe because
+# boto3 clients are safe for concurrent use after construction.
+_bedrock_clients: dict[str, Any] = {}
+
+
+def _get_bedrock_client(region: str) -> Any:
+    """Return a cached bedrock-runtime client for the given region.
+
+    Creates a new client on first call, reuses on subsequent calls.
+    Mirrors the caching pattern in ``SummarizationPipeline._get_bedrock_client()``.
+    """
+    import boto3
+    from botocore.config import Config as BotoConfig
+
+    if region not in _bedrock_clients:
+        boto_config = BotoConfig(
+            retries={"max_attempts": 2, "mode": "adaptive"},
+            connect_timeout=10,
+            read_timeout=30,
+        )
+        _bedrock_clients[region] = boto3.client(
+            "bedrock-runtime",
+            region_name=region,
+            config=boto_config,
+        )
+    return _bedrock_clients[region]
+
 
 def _call_llm(prompt: str, config: dict[str, Any] | None = None) -> str:
     """Make a direct Bedrock API call for extraction with retry.
@@ -146,6 +174,10 @@ def _call_llm(prompt: str, config: dict[str, Any] | None = None) -> str:
     Uses boto3 bedrock-runtime to invoke the model.  Retries up to
     ``_LLM_MAX_RETRIES`` times on transient errors (network, throttling,
     zlib decompression failures from corrupted HTTP responses).
+
+    Uses a module-level cached client to avoid ~200-500ms overhead of
+    boto3 client construction (credential chain, STS call, session) on
+    every invocation.
 
     Args:
         prompt: The fully formatted extraction prompt.
@@ -155,8 +187,6 @@ def _call_llm(prompt: str, config: dict[str, Any] | None = None) -> str:
         Raw LLM response text, or ``"{}"`` if all retries fail.
     """
     import time
-    import boto3
-    from botocore.config import Config as BotoConfig
 
     region = "us-east-1"
     model_id = EXTRACTION_MODEL
@@ -165,24 +195,13 @@ def _call_llm(prompt: str, config: dict[str, Any] | None = None) -> str:
         region = config.get("aws_region", region)
         model_id = config.get("memory_extraction_model", model_id)
 
-    # Configure boto3 with built-in retry for standard AWS errors,
-    # plus we add our own retry loop for non-standard errors (zlib, etc.)
-    boto_config = BotoConfig(
-        retries={"max_attempts": 2, "mode": "adaptive"},
-        connect_timeout=10,
-        read_timeout=30,
-    )
+    client = _get_bedrock_client(region)
 
     last_error: Exception | None = None
     delay = _LLM_RETRY_DELAY
 
     for attempt in range(1, _LLM_MAX_RETRIES + 1):
         try:
-            client = boto3.client(
-                "bedrock-runtime",
-                region_name=region,
-                config=boto_config,
-            )
             response = client.invoke_model(
                 modelId=model_id,
                 contentType="application/json",
