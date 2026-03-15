@@ -14,6 +14,22 @@ export interface ActiveSessionMeta {
   agentName: string;
 }
 
+// ── Session Meta Context (separate to avoid re-rendering layout consumers) ──
+interface SessionMetaContextValue {
+  activeSessionMeta: ActiveSessionMeta | null;
+  setActiveSessionMeta: (meta: ActiveSessionMeta | null) => void;
+}
+
+const SessionMetaContext = createContext<SessionMetaContextValue | undefined>(undefined);
+
+/** Read session metadata (TopBar, BottomBar). Isolated from LayoutContext to
+ *  prevent high-frequency meta updates from re-rendering the entire layout tree. */
+export function useSessionMeta(): SessionMetaContextValue {
+  const ctx = useContext(SessionMetaContext);
+  if (!ctx) throw new Error('useSessionMeta must be used within a LayoutProvider');
+  return ctx;
+}
+
 // Layout context value interface
 export interface LayoutContextValue {
   // Workspace Explorer state
@@ -41,10 +57,6 @@ export interface LayoutContextValue {
 
   // Responsive state
   isNarrowViewport: boolean;
-
-  // TopBar session context -- written by ChatPage, read by TopBar
-  activeSessionMeta: ActiveSessionMeta | null;
-  setActiveSessionMeta: (meta: ActiveSessionMeta | null) => void;
 }
 
 // LocalStorage keys for persistence
@@ -55,7 +67,7 @@ const STORAGE_KEYS = {
 } as const;
 
 // Default values
-const DEFAULT_WORKSPACE_EXPLORER_WIDTH = 280;
+const DEFAULT_WORKSPACE_EXPLORER_WIDTH = 260;
 const MIN_WORKSPACE_EXPLORER_WIDTH = 200;
 const MAX_WORKSPACE_EXPLORER_WIDTH = 500;
 
@@ -121,8 +133,14 @@ export function LayoutProvider({ children }: LayoutProviderProps) {
   // Workspace settings modal target ID
   const [workspaceSettingsId, setWorkspaceSettingsId] = useState<string>('');
 
-  // TopBar session context -- ChatPage writes, TopBar reads
+  // TopBar session context -- ChatPage writes, TopBar/BottomBar read.
+  // Hosted in a SEPARATE context (SessionMetaContext) so high-frequency
+  // updates don't re-render the entire layout tree.
   const [activeSessionMeta, setActiveSessionMeta] = useState<ActiveSessionMeta | null>(null);
+  const sessionMetaValue = useMemo<SessionMetaContextValue>(() => ({
+    activeSessionMeta,
+    setActiveSessionMeta,
+  }), [activeSessionMeta]);
 
   // Persist collapsed state to localStorage
   const setWorkspaceExplorerCollapsed = useCallback((collapsed: boolean) => {
@@ -219,8 +237,6 @@ export function LayoutProvider({ children }: LayoutProviderProps) {
     workspaceSettingsId,
     setWorkspaceSettingsId,
     isNarrowViewport,
-    activeSessionMeta,
-    setActiveSessionMeta,
   }), [
     workspaceExplorerCollapsed,
     setWorkspaceExplorerCollapsedWithViewportCheck,
@@ -235,13 +251,13 @@ export function LayoutProvider({ children }: LayoutProviderProps) {
     workspaceSettingsId,
     setWorkspaceSettingsId,
     isNarrowViewport,
-    activeSessionMeta,
-    setActiveSessionMeta,
   ]);
 
   return (
     <LayoutContext.Provider value={value}>
-      {children}
+      <SessionMetaContext.Provider value={sessionMetaValue}>
+        {children}
+      </SessionMetaContext.Provider>
     </LayoutContext.Provider>
   );
 }
@@ -261,6 +277,6 @@ export const LAYOUT_CONSTANTS = {
   MIN_WORKSPACE_EXPLORER_WIDTH,
   MAX_WORKSPACE_EXPLORER_WIDTH,
   NARROW_VIEWPORT_BREAKPOINT: 768,
-  LEFT_SIDEBAR_WIDTH: 48,
+  LEFT_SIDEBAR_WIDTH: 44,
   STORAGE_KEYS,
 } as const;

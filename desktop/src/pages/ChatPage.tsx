@@ -34,7 +34,7 @@ import { tasksService } from '../services/tasks';
 import { Spinner, ConfirmDialog, AgentFormModal, ErrorBoundary } from '../components/common';
 import { useToast } from '../contexts/ToastContext';
 import { useHealth } from '../contexts/HealthContext';
-import { useLayout } from '../contexts/LayoutContext';
+import { useSessionMeta } from '../contexts/LayoutContext';
 import { EvolutionMessage, ChatErrorMessage } from '../components/chat';
 import { ChatDropZone } from '../components/chat/ChatDropZone';
 import type { EvolutionEventType } from '../services/evolution';
@@ -75,7 +75,7 @@ export default function ChatPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const { addToast } = useToast();
   const { health } = useHealth();
-  const { setActiveSessionMeta } = useLayout();
+  const { setActiveSessionMeta } = useSessionMeta();
   const { isLimited, getRemainingSeconds } = useRateLimiter();
   const chatRateLimitCountdown = useRateLimitCountdown({ getRemainingSeconds, endpoint: '/chat' });
 
@@ -1500,7 +1500,7 @@ export default function ChatPage() {
                 onScroll={handleMessagesScroll}
                 className={messages.length === 0
                   ? 'flex-1 overflow-hidden flex flex-col'
-                  : 'flex-1 overflow-y-auto px-6 py-4 space-y-4 min-w-0'
+                  : 'flex-1 overflow-y-auto px-4 py-3.5 space-y-2.5 min-w-0'
                 }
               >
                 {isLoadingOlderMessages && (
