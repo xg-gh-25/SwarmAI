@@ -5,7 +5,7 @@
  * Verifies:
  * - TopBar renders session metadata when provided
  * - TopBar shows fallback "SwarmAI" when no session meta
- * - TopBar context usage color thresholds (>80% red, >60% amber)
+ * - TopBar context usage color thresholds (>80% red, >60% yellow, ≤60% green)
  * - BottomBar renders connection status, agent name, workspace name
  * - BottomBar shows "Offline" when disconnected
  * - BottomBar keyboard hints are present
@@ -133,13 +133,14 @@ describe('TopBar', () => {
     expect(screen.getByText('72')).toBeDefined();
   });
 
-  it('renders 0 when contextPct is null', () => {
+  it('renders no label when contextPct is null', () => {
     setupMocks({ sessionMeta: { contextPct: null } });
     render(<TopBar />);
     const pctLabel = screen.getByLabelText(/Context usage: unknown/);
     expect(pctLabel).toBeDefined();
-    // Ring shows "0" when null
-    expect(pctLabel.textContent).toContain('0');
+    // Ring renders with "No context data yet" tooltip, no numeric label inside
+    const ring = pctLabel.querySelector('[title="No context data yet"]');
+    expect(ring).toBeDefined();
   });
 
   it('renders file count', () => {
@@ -160,13 +161,12 @@ describe('TopBar', () => {
     const pctLabel = screen.getByLabelText(/Context usage: 85%/);
     expect(pctLabel).toBeDefined();
     expect(pctLabel.textContent).toContain('85');
-    // Verify the ring uses the error color variable for high usage
     const svg = pctLabel.querySelector('svg');
     const progressCircle = svg?.querySelectorAll('circle')[1];
-    expect(progressCircle?.getAttribute('stroke')).toBe('var(--color-error)');
+    expect(progressCircle?.getAttribute('stroke')).toBe('#ef4444');
   });
 
-  it('renders SVG ring with warning stroke when context > 60%', () => {
+  it('renders SVG ring with yellow stroke when context > 60%', () => {
     setupMocks({ sessionMeta: { contextPct: 65 } });
     render(<TopBar />);
     const pctLabel = screen.getByLabelText(/Context usage: 65%/);
@@ -174,10 +174,10 @@ describe('TopBar', () => {
     expect(pctLabel.textContent).toContain('65');
     const svg = pctLabel.querySelector('svg');
     const progressCircle = svg?.querySelectorAll('circle')[1];
-    expect(progressCircle?.getAttribute('stroke')).toBe('var(--color-warning)');
+    expect(progressCircle?.getAttribute('stroke')).toBe('#eab308');
   });
 
-  it('renders SVG ring with neutral stroke when context <= 60%', () => {
+  it('renders SVG ring with green stroke when context <= 60%', () => {
     setupMocks({ sessionMeta: { contextPct: 40 } });
     render(<TopBar />);
     const pctLabel = screen.getByLabelText(/Context usage: 40%/);
@@ -185,7 +185,7 @@ describe('TopBar', () => {
     expect(pctLabel.textContent).toContain('40');
     const svg = pctLabel.querySelector('svg');
     const progressCircle = svg?.querySelectorAll('circle')[1];
-    expect(progressCircle?.getAttribute('stroke')).toBe('var(--color-context-ring)');
+    expect(progressCircle?.getAttribute('stroke')).toBe('#22c55e');
   });
 
   it('has data-tauri-drag-region for window dragging', () => {
@@ -243,10 +243,10 @@ describe('BottomBar', () => {
     expect(screen.getByText('tab')).toBeDefined();
   });
 
-  it('falls back to "SwarmAI" when no session meta', () => {
+  it('falls back to "Swarm" when no session meta', () => {
     setupMocks({ sessionMeta: null });
     render(<BottomBar />);
-    expect(screen.getByText('SwarmAI')).toBeDefined();
+    expect(screen.getByText('Swarm')).toBeDefined();
   });
 
   it('has data-testid for targeting', () => {
