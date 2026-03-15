@@ -7,7 +7,7 @@
  *
  * - ``TreeDataContext``   — treeData, isLoading, error, refreshTree
  * - ``SelectionContext``  — expandedPaths, selectedPath, matchedPaths,
- *                           highlightedPaths, focusMode, activeProjectId
+ *                           highlightedPaths
  * - ``SearchContext``     — searchQuery, setSearchQuery
  *
  * Key exports:
@@ -18,8 +18,8 @@
  * - ``useExplorerContext``    — Convenience hook composing all three
  *
  * Session persistence:
- * - ``expandedPaths``, ``focusMode``, and ``activeProjectId`` are persisted
- *   to sessionStorage under key ``swarmws-explorer-state``.
+ * - ``expandedPaths`` is persisted to sessionStorage under key
+ *   ``swarmws-explorer-state``.
  * - On mount, state is restored from sessionStorage; read failures fall
  *   back silently to defaults.
  */
@@ -64,12 +64,6 @@ export interface ExplorerState {
   matchedPaths: Set<string>;
   highlightedPaths: Set<string>;
 
-  // Focus Mode
-  focusMode: boolean;
-  toggleFocusMode: () => void;
-  activeProjectId: string | null;
-  setActiveProjectId: (id: string | null) => void;
-
   // Actions
   refreshTree: () => void;
 }
@@ -77,8 +71,6 @@ export interface ExplorerState {
 /** Persisted to sessionStorage under key "swarmws-explorer-state". */
 export interface ExplorerSessionState {
   expandedPaths: string[];
-  focusMode: boolean;
-  activeProjectId: string | null;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -106,8 +98,7 @@ export function loadSessionState(): ExplorerSessionState | null {
     // Basic shape validation
     if (
       parsed &&
-      Array.isArray(parsed.expandedPaths) &&
-      typeof parsed.focusMode === 'boolean'
+      Array.isArray(parsed.expandedPaths)
     ) {
       return parsed as ExplorerSessionState;
     }
@@ -145,10 +136,6 @@ interface SelectionContextValue {
   setSelectedPath: (path: string | null) => void;
   matchedPaths: Set<string>;
   highlightedPaths: Set<string>;
-  focusMode: boolean;
-  toggleFocusMode: () => void;
-  activeProjectId: string | null;
-  setActiveProjectId: (id: string | null) => void;
 }
 
 const SelectionContext = createContext<SelectionContextValue | undefined>(undefined);
@@ -179,77 +166,6 @@ function collectAllDirectoryPaths(nodes: TreeNode[]): string[] {
   }
   nodes.forEach(walk);
   return paths;
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Focus mode helpers (exported for property testing)
-// ─────────────────────────────────────────────────────────────────────────────
-
-/** Collect all directory paths under a given node recursively. */
-function collectDescendantDirectoryPaths(node: TreeNode): string[] {
-  const paths: string[] = [];
-  function walk(n: TreeNode) {
-    if (n.type === 'directory') {
-      paths.push(n.path);
-      n.children?.forEach(walk);
-    }
-  }
-  // Walk children only (the node itself is handled by the caller)
-  node.children?.forEach(walk);
-  return paths;
-}
-
-/** Find a node by path in the tree. */
-function findNodeByPath(nodes: TreeNode[], targetPath: string): TreeNode | null {
-  for (const node of nodes) {
-    if (node.path === targetPath) return node;
-    if (node.children) {
-      const found = findNodeByPath(node.children, targetPath);
-      if (found) return found;
-    }
-  }
-  return null;
-}
-
-/** Compute the expandedPaths set for focus mode.
- *
- *  When focus mode is enabled:
- *  - Include "Projects" (the parent container) so the active project is visible
- *  - Include the active project path "Projects/{activeProjectId}"
- *  - Recursively include all directory children of the active project
- *  - Do NOT include "Knowledge" (visible in flattened list but collapsed)
- *  - Do NOT include any other project paths under Projects/
- *
- *  @param treeData - The full workspace tree
- *  @param activeProjectId - The ID of the active project (folder name under Projects/)
- *  @returns A new Set of expanded paths for focus mode
- */
-export function computeFocusModeExpandedPaths(
-  treeData: TreeNode[],
-  activeProjectId: string,
-): Set<string> {
-  const expanded = new Set<string>();
-
-  // Include "Projects" so the active project folder is visible
-  expanded.add('Projects');
-
-  // Include the active project path
-  const activeProjectPath = `Projects/${activeProjectId}`;
-  expanded.add(activeProjectPath);
-
-  // Find the active project node in the tree and expand all its directory children
-  const activeProjectNode = findNodeByPath(treeData, activeProjectPath);
-  if (activeProjectNode) {
-    const descendantPaths = collectDescendantDirectoryPaths(activeProjectNode);
-    for (const p of descendantPaths) {
-      expanded.add(p);
-    }
-  }
-
-  // Knowledge is NOT added to expandedPaths — it stays visible in the
-  // flattened list (it's a top-level folder) but collapsed.
-
-  return expanded;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -334,18 +250,6 @@ export function ExplorerProvider({ children }: ExplorerProviderProps) {
   /** Snapshot of expandedPaths taken before the first search keystroke.
    *  Restored when the search query is cleared. */
   const preSearchExpandedPaths = useRef<Set<string> | null>(null);
-
-  // ── Focus mode state ───────────────────────────────────────────────────
-  const [focusMode, setFocusMode] = useState(
-    () => sessionState.current?.focusMode ?? false
-  );
-  const [activeProjectId, setActiveProjectId] = useState<string | null>(
-    () => sessionState.current?.activeProjectId ?? null
-  );
-
-  /** Snapshot of expandedPaths taken before focus mode was enabled.
-   *  Restored when focus mode is toggled OFF. */
-  const preFocusExpandedPaths = useRef<Set<string> | null>(null);
 
   // ── Polling ref (declared early so fetchTree/refreshTree can seed it) ──
   const lastTreeRef = useRef<TreeNode[] | null>(null);
@@ -434,10 +338,8 @@ export function ExplorerProvider({ children }: ExplorerProviderProps) {
   useEffect(() => {
     saveSessionState({
       expandedPaths: Array.from(expandedPaths),
-      focusMode,
-      activeProjectId,
     });
-  }, [expandedPaths, focusMode, activeProjectId]);
+  }, [expandedPaths]);
 
   // ── Search: compute matchedPaths & highlightedPaths on query change ────
   useEffect(() => {
@@ -503,30 +405,6 @@ export function ExplorerProvider({ children }: ExplorerProviderProps) {
     setExpandedPaths(new Set());
   }, []);
 
-  // ── Focus mode toggle ────────────────────────────────────────────────
-  const toggleFocusMode = useCallback(() => {
-    if (activeProjectId === null) return; // no-op when no project selected
-
-    setFocusMode((prev) => {
-      const nextFocusMode = !prev;
-
-      if (nextFocusMode) {
-        // Toggling ON: snapshot current expandedPaths, then compute focus paths
-        preFocusExpandedPaths.current = new Set(expandedPaths);
-        const focusPaths = computeFocusModeExpandedPaths(treeData, activeProjectId);
-        setExpandedPaths(focusPaths);
-      } else {
-        // Toggling OFF: restore the snapshot exactly
-        if (preFocusExpandedPaths.current !== null) {
-          setExpandedPaths(preFocusExpandedPaths.current);
-          preFocusExpandedPaths.current = null;
-        }
-      }
-
-      return nextFocusMode;
-    });
-  }, [activeProjectId, expandedPaths, treeData]);
-
   // ── Memoized sub-context values ────────────────────────────────────────
   const treeDataValue = useMemo<TreeDataContextValue>(
     () => ({ treeData, isLoading, error, refreshTree }),
@@ -543,10 +421,6 @@ export function ExplorerProvider({ children }: ExplorerProviderProps) {
       setSelectedPath,
       matchedPaths,
       highlightedPaths,
-      focusMode,
-      toggleFocusMode,
-      activeProjectId,
-      setActiveProjectId,
     }),
     [
       expandedPaths,
@@ -556,9 +430,6 @@ export function ExplorerProvider({ children }: ExplorerProviderProps) {
       selectedPath,
       matchedPaths,
       highlightedPaths,
-      focusMode,
-      toggleFocusMode,
-      activeProjectId,
     ]
   );
 

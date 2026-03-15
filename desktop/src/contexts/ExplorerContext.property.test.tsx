@@ -7,9 +7,6 @@
  * Key properties verified:
  * - **Property 4: Toggle Expand/Collapse** — toggling a path adds it if absent
  *   or removes it if present, changing the set size by exactly one.
- * - **Property 6: Focus Mode State Transformation** — enabling focus mode
- *   auto-expands the active project and ancestors, collapses non-active
- *   projects, and keeps Knowledge visible but collapsed.
  * - **Property 8: Search Match, Expand, and Highlight** — for any tree and
  *   non-empty query, matchedPaths contains every node whose name contains the
  *   query, ancestors includes all ancestor paths of matched nodes, and no
@@ -23,7 +20,7 @@
 
 import { describe, it, expect, beforeEach } from 'vitest';
 import * as fc from 'fast-check';
-import { computeFocusModeExpandedPaths, findMatches, substringMatch, saveSessionState, loadSessionState } from './ExplorerContext';
+import { findMatches, substringMatch, saveSessionState, loadSessionState } from './ExplorerContext';
 import type { ExplorerSessionState } from './ExplorerContext';
 import type { TreeNode } from '../types';
 
@@ -126,177 +123,6 @@ describe('ExplorerContext - Property-Based Tests', () => {
             expect(expandedPaths.has(p)).toBe(true);
           }
         }),
-        { numRuns: 100 },
-      );
-    });
-  });
-
-  // Feature: swarmws-explorer-ux, Property 6: Focus Mode State Transformation
-  // **Validates: Requirements 12.1, 12.2, 12.3**
-  describe('Property 6: Focus Mode State Transformation', () => {
-    /** Generates a project subfolder TreeNode under Projects/. */
-    const arbProjectName = fc
-      .array(fc.constantFrom('a', 'b', 'c', 'd', 'e', '1', '2', '3'), {
-        minLength: 2,
-        maxLength: 8,
-      })
-      .map((chars) => chars.join(''))
-      .filter((s) => /^[a-e]/.test(s));
-
-    /** Generates child nodes (files/subdirectories) for a project folder. */
-    const arbProjectChild = (parentPath: string): fc.Arbitrary<TreeNode> =>
-      fc.oneof(
-        fc.constant<TreeNode>({
-          name: 'README.md',
-          path: `${parentPath}/README.md`,
-          type: 'file',
-        }),
-        fc.constant<TreeNode>({
-          name: 'context-files',
-          path: `${parentPath}/context-files`,
-          type: 'directory',
-          children: [
-            {
-              name: 'notes.md',
-              path: `${parentPath}/context-files/notes.md`,
-              type: 'file',
-            },
-          ],
-        }),
-        fc.constant<TreeNode>({
-          name: 'research',
-          path: `${parentPath}/research`,
-          type: 'directory',
-          children: [],
-        }),
-      );
-
-    /** Generates a single project directory node. */
-    const arbProjectNode = (name: string): fc.Arbitrary<TreeNode> => {
-      const projectPath = `Projects/${name}`;
-      return fc.array(arbProjectChild(projectPath), { minLength: 0, maxLength: 3 }).map(
-        (children): TreeNode => ({
-          name,
-          path: projectPath,
-          type: 'directory',
-          children,
-        }),
-      );
-    };
-
-    /**
-     * Generates a workspace tree with Knowledge/ and Projects/ containing
-     * 2–6 project subfolders. Returns { tree, projectNames }.
-     */
-    const arbWorkspaceWithProjects = fc
-      .uniqueArray(arbProjectName, { minLength: 2, maxLength: 6 })
-      .chain((projectNames) => {
-        const projectNodeArbs = projectNames.map((name) => arbProjectNode(name));
-        return fc.tuple(fc.constant(projectNames), ...projectNodeArbs);
-      })
-      .map(([projectNames, ...projectNodes]) => {
-        const names = projectNames as string[];
-        const knowledgeNode: TreeNode = {
-          name: 'Knowledge',
-          path: 'Knowledge',
-          type: 'directory',
-          children: [
-            {
-              name: 'Library',
-              path: 'Knowledge/Library',
-              type: 'directory',
-              children: [],
-            },
-            {
-              name: 'Notes',
-              path: 'Knowledge/Notes',
-              type: 'directory',
-              children: [],
-            },
-          ],
-        };
-
-        const projectsNode: TreeNode = {
-          name: 'Projects',
-          path: 'Projects',
-          type: 'directory',
-          children: projectNodes as TreeNode[],
-        };
-
-        const tree: TreeNode[] = [knowledgeNode, projectsNode];
-        return { tree, projectNames: names };
-      });
-
-    it('(a) active project path and "Projects" ancestor are in expandedPaths', () => {
-      fc.assert(
-        fc.property(
-          arbWorkspaceWithProjects.chain(({ tree, projectNames }) => {
-            // Pick a random active project from the generated names
-            return fc.tuple(
-              fc.constant(tree),
-              fc.constant(projectNames),
-              fc.constantFrom(...projectNames),
-            );
-          }),
-          ([tree, _projectNames, activeProjectId]) => {
-            const result = computeFocusModeExpandedPaths(tree, activeProjectId);
-
-            // "Projects" ancestor must be expanded
-            expect(result.has('Projects')).toBe(true);
-            // Active project path must be expanded
-            expect(result.has(`Projects/${activeProjectId}`)).toBe(true);
-          },
-        ),
-        { numRuns: 100 },
-      );
-    });
-
-    it('(b) no non-active project paths under Projects/ are in expandedPaths', () => {
-      fc.assert(
-        fc.property(
-          arbWorkspaceWithProjects.chain(({ tree, projectNames }) => {
-            return fc.tuple(
-              fc.constant(tree),
-              fc.constant(projectNames),
-              fc.constantFrom(...projectNames),
-            );
-          }),
-          ([tree, projectNames, activeProjectId]) => {
-            const result = computeFocusModeExpandedPaths(tree, activeProjectId);
-
-            const otherProjects = projectNames.filter((n) => n !== activeProjectId);
-            for (const other of otherProjects) {
-              const otherPath = `Projects/${other}`;
-              // Non-active project root must NOT be expanded
-              expect(result.has(otherPath)).toBe(false);
-              // No descendant paths of non-active projects should be expanded
-              for (const p of result) {
-                expect(p.startsWith(`${otherPath}/`)).toBe(false);
-              }
-            }
-          },
-        ),
-        { numRuns: 100 },
-      );
-    });
-
-    it('(c) "Knowledge" is NOT in expandedPaths', () => {
-      fc.assert(
-        fc.property(
-          arbWorkspaceWithProjects.chain(({ tree, projectNames }) => {
-            return fc.tuple(
-              fc.constant(tree),
-              fc.constant(projectNames),
-              fc.constantFrom(...projectNames),
-            );
-          }),
-          ([tree, _projectNames, activeProjectId]) => {
-            const result = computeFocusModeExpandedPaths(tree, activeProjectId);
-
-            // Knowledge must NOT be in expandedPaths (visible but collapsed)
-            expect(result.has('Knowledge')).toBe(false);
-          },
-        ),
         { numRuns: 100 },
       );
     });
@@ -484,8 +310,6 @@ describe('ExplorerContext - Property-Based Tests', () => {
     /** Generates a random ExplorerSessionState. */
     const arbSessionState: fc.Arbitrary<ExplorerSessionState> = fc.record({
       expandedPaths: fc.uniqueArray(arbPath, { maxLength: 20 }),
-      focusMode: fc.boolean(),
-      activeProjectId: fc.oneof(fc.constant(null), arbPath),
     });
 
     it('serialize → deserialize produces identical state', () => {
@@ -496,8 +320,6 @@ describe('ExplorerContext - Property-Based Tests', () => {
 
           expect(restored).not.toBeNull();
           expect(restored!.expandedPaths).toEqual(state.expandedPaths);
-          expect(restored!.focusMode).toBe(state.focusMode);
-          expect(restored!.activeProjectId).toBe(state.activeProjectId);
         }),
         { numRuns: 100 },
       );

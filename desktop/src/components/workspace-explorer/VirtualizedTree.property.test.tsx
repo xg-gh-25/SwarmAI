@@ -430,14 +430,10 @@ describe('Property 11: Virtualization Renders Fewer DOM Nodes', () => {
           selectedPath: null,
           matchedPaths: new Set<string>(),
           highlightedPaths: new Set<string>(),
-          focusMode: false,
-          activeProjectId: null,
           toggleExpand: vi.fn(),
           expandAll: vi.fn(),
           collapseAll: vi.fn(),
           setSelectedPath: vi.fn(),
-          toggleFocusMode: vi.fn(),
-          setActiveProjectId: vi.fn(),
         });
 
         const { container } = render(

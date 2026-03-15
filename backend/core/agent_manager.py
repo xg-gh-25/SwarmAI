@@ -1837,6 +1837,15 @@ class AgentManager:
                 if p.strip()
             ]
 
+        # Build extra CLI args for features not yet in ClaudeAgentOptions.
+        extra_args: dict[str, str | None] = {}
+        # --name: label the CLI session for easier identification in logs
+        # and `claude --resume` picker.  Uses app_session_id (short prefix)
+        # so we can correlate CLI sessions to frontend tabs.
+        session_name = (session_context or {}).get("app_session_id")
+        if session_name:
+            extra_args["name"] = session_name[:12]  # short, readable
+
         return ClaudeAgentOptions(
             system_prompt=system_prompt_config,
             allowed_tools=allowed_tools if allowed_tools else None,
@@ -1856,10 +1865,14 @@ class AgentManager:
             can_use_tool=file_access_handler,
             max_buffer_size=max_buffer_size,
             add_dirs=add_dirs if add_dirs else None,
+            extra_args=extra_args,
             # Enable partial message streaming so the SDK yields StreamEvent
             # objects with token-level deltas (content_block_delta, etc.)
             # instead of buffering the entire response into one AssistantMessage.
             include_partial_messages=True,
+            # Track file changes per user message for future undo/rewind.
+            # Enables ClaudeSDKClient.rewind_files() — free safety net.
+            enable_file_checkpointing=True,
         )
 
     async def _save_message(
