@@ -95,14 +95,20 @@ def _parse_entries(content: str, section_name: str) -> list[dict]:
     return entries
 
 
-def _append_changelog(changelog_path: Path, action: str, entry_id: str, summary: str) -> None:
+def _append_changelog(
+    changelog_path: Path,
+    action: str,
+    entry_id: str,
+    summary: str,
+    source: str = "maintenance_hook",
+) -> None:
     """Append a single JSONL line to the evolution changelog."""
     line = json.dumps({
         "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "action": action,
         "id": entry_id,
         "summary": summary,
-        "source": "maintenance_hook",
+        "source": source,
     })
     try:
         with open(changelog_path, "a", encoding="utf-8") as f:
@@ -211,6 +217,7 @@ class EvolutionMaintenanceHook:
         """Set an entry's Status to deprecated via locked_write."""
         from scripts.locked_write import locked_field_modify
 
+        from scripts.locked_write import LockedWriteError
         try:
             locked_field_modify(
                 evo_path, section, entry_id, "Status", "set-field", "deprecated"
@@ -220,7 +227,7 @@ class EvolutionMaintenanceHook:
                 f"Auto-deprecated: idle >{self._deprecation_days}d with 0 usage"
             )
             logger.debug("Deprecated %s in %s", entry_id, section)
-        except (ValueError, SystemExit) as exc:
+        except (ValueError, LockedWriteError) as exc:
             logger.warning("Failed to deprecate %s: %s", entry_id, exc)
 
     def _prune_entry(

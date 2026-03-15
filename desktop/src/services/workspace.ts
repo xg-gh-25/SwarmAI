@@ -426,6 +426,18 @@ export const folderService = {
     await api.put('/workspace/rename', { old_path: oldPath, new_path: newPath });
   },
 
+  /** Create an empty file at the given relative path. Returns 409 if already exists. */
+  async createFile(path: string): Promise<void> {
+    await api.post('/workspace/file', { path });
+  },
+
+  /** Move an item to a new parent directory within the workspace. */
+  async moveItem(oldPath: string, newParentPath: string): Promise<void> {
+    const name = oldPath.split('/').pop() ?? oldPath;
+    const newPath = newParentPath ? `${newParentPath}/${name}` : name;
+    await api.put('/workspace/rename', { old_path: oldPath, new_path: newPath });
+  },
+
   /** Move item to Trash (recoverable on macOS). Errors if trashing fails (no fallback to permanent delete). */
   async trashItem(path: string): Promise<void> {
     await api.post('/workspace/trash', { path });
