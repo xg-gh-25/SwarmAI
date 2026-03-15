@@ -56,7 +56,7 @@ export const WelcomeScreen: React.FC = () => {
       </h1>
 
       {/* Slogan */}
-      <p className="text-lg text-[var(--color-text-primary)] mb-2">
+      <p className="text-lg text-[var(--color-text)] mb-2">
         Your AI Team, 24/7
       </p>
 

@@ -771,8 +771,8 @@ export default function FileEditorModal({
                       const configResp = await api.get<{ file_path?: string; filePath?: string }>('/workspace');
                       const wsRoot = configResp.data.file_path ?? configResp.data.filePath ?? '';
                       const absolutePath = wsRoot ? `${wsRoot}/${filePath}` : filePath;
-                      const { openUrl } = await import('@tauri-apps/plugin-opener');
-                      await openUrl(`file://${absolutePath}`);
+                      const { openPath } = await import('@tauri-apps/plugin-opener');
+                      await openPath(absolutePath);
                     } catch {
                       window.open(filePath, '_blank');
                     }

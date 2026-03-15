@@ -12,9 +12,8 @@ dependencies = [
     # Data validation
     "pydantic>=2.10.0",
     "pydantic-settings>=2.6.0",
-    # Claude Agent SDK (>=0.1.31 uses always-streaming mode where the CLI
-    # stays alive for multiple queries; we keep clients alive for reuse)
-    "claude-agent-sdk>=0.1.34",
+    # Claude Agent SDK
+    "claude-agent-sdk>=0.1.48",
     # SQLite
     "aiosqlite>=0.20.0",
     # Authentication

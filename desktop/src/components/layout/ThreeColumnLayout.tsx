@@ -19,6 +19,7 @@ import WorkspaceSettingsModal from '../modals/WorkspaceSettingsModal';
 import type { FileTreeItem } from '../workspace-explorer/FileTreeNode';
 import type { GitStatus } from '../../types';
 import api from '../../services/api';
+import { ContextUsageRing } from '../../pages/chat/components/ContextUsageRing';
 
 // Left sidebar width constant
 const LEFT_SIDEBAR_WIDTH = LAYOUT_CONSTANTS.LEFT_SIDEBAR_WIDTH;
@@ -28,25 +29,6 @@ const MIN_MAIN_CHAT_PANEL_WIDTH = 300;
 
 interface ThreeColumnLayoutProps {
   children: ReactNode;
-}
-
-// 16x16 SVG ring showing context usage percentage (matches mockup ctx-ring)
-function ContextRingSVG({ pct, color }: { pct: number; color: string }) {
-  const r = 6; // radius
-  const circumference = 2 * Math.PI * r;
-  const offset = circumference - (pct / 100) * circumference;
-  return (
-    <span className="relative inline-flex items-center justify-center" style={{ width: 16, height: 16 }}>
-      <svg width="16" height="16" style={{ transform: 'rotate(-90deg)' }}>
-        <circle cx="8" cy="8" r={r} fill="none" stroke="var(--color-hover)" strokeWidth="3" />
-        <circle cx="8" cy="8" r={r} fill="none" stroke={color} strokeWidth="3" strokeLinecap="round"
-          strokeDasharray={circumference} strokeDashoffset={offset} />
-      </svg>
-      <span className="absolute inset-0 flex items-center justify-center text-[6.5px] font-semibold text-[var(--color-text-muted)]" style={{ lineHeight: 1 }}>
-        {Math.round(pct)}
-      </span>
-    </span>
-  );
 }
 
 // TopBar -- Session context bar replacing the old file search.
@@ -66,7 +48,6 @@ function TopBar() {
   };
 
   const meta = activeSessionMeta;
-  const contextPct = meta?.contextPct ?? 0;
 
   return (
     <div
@@ -83,21 +64,21 @@ function TopBar() {
         {meta ? (
           <>
             <span className="flex items-center gap-1.5 text-[var(--color-text-secondary)] font-medium truncate min-w-0" style={{ maxWidth: 'clamp(120px, 25vw, 360px)', letterSpacing: '-0.02em' }} aria-label={`Session: ${meta.topic || 'New Session'}`}>
-              <span className="material-symbols-outlined text-[14px]" aria-hidden="true">chat_bubble</span>
+              <span className="material-symbols-outlined text-[13px]" aria-hidden="true">chat_bubble</span>
               {meta.topic || 'New Session'}
             </span>
             <div className="w-px h-3 bg-[var(--color-border)] flex-shrink-0" aria-hidden="true" />
             <span className="flex items-center gap-1" aria-label={`Context usage: ${meta.contextPct != null ? Math.round(meta.contextPct) + '%' : 'unknown'}`}>
-              <ContextRingSVG pct={contextPct} color={contextPct > 80 ? 'var(--color-error)' : contextPct > 60 ? 'var(--color-warning)' : 'var(--color-context-ring)'} />
+              <ContextUsageRing pct={meta.contextPct} size={20} showLabel />
             </span>
             <div className="w-px h-3 bg-[var(--color-border)] flex-shrink-0" aria-hidden="true" />
             <span className="flex items-center gap-1" aria-label={`${meta.fileCount} attached files`}>
-              <span className="material-symbols-outlined text-[14px]" aria-hidden="true">attach_file</span>
+              <span className="material-symbols-outlined text-[13px]" aria-hidden="true">attach_file</span>
               {meta.fileCount}
             </span>
             <div className="w-px h-3 bg-[var(--color-border)] flex-shrink-0" aria-hidden="true" />
             <span className="flex items-center gap-1" aria-label={`Agent: ${meta.agentName}`}>
-              <span className="material-symbols-outlined text-[14px]" aria-hidden="true">smart_toy</span>
+              <span className="material-symbols-outlined text-[13px]" aria-hidden="true">smart_toy</span>
               {meta.agentName}
             </span>
           </>

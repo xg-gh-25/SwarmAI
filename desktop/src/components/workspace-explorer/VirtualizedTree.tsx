@@ -18,6 +18,8 @@
  * 1. Root-level files (system-prompts.md, context-L0.md, context-L1.md) first
  * 2. Zone separator "Shared Knowledge" → Knowledge/ folder and expanded children
  * 3. Zone separator "Active Work" → Projects/ folder and expanded children
+ * 4. Remaining top-level directories not assigned to any zone
+ * 5. Zone separator "System Settings" → .context/, .claude/, config.json, proactive_state.json
  *
  * Requirements: 10.1, 10.2, 10.3, 11.1, 11.4, 15.1, 15.2, 15.3
  */
@@ -90,9 +92,24 @@ export interface ContextMenuState {
 // Flattening algorithm
 // ─────────────────────────────────────────────────────────────────────────────
 
+/** Date prefix pattern: YYYY-MM-DD at the start of a name. */
+const DATE_PREFIX_RE = /^\d{4}-\d{2}-\d{2}/;
+
+/** Folders whose children with date-prefixed names should be sorted newest-first. */
+const DATE_DESC_ROOTS = new Set(['Knowledge', 'Attachments']);
+
+/** Check if a node's ancestry is under a date-desc root. */
+function isUnderDateDescRoot(path: string): boolean {
+  const first = path.split('/')[0];
+  return DATE_DESC_ROOTS.has(first);
+}
+
 /**
  * Recursively flatten a directory node's children into the row list.
  * Only includes children of directories whose path is in `expandedPaths`.
+ *
+ * When inside Knowledge/ or Attachments/, date-prefixed items are sorted
+ * descending (newest first) while preserving dirs-before-files ordering.
  */
 function flattenChildren(
   children: TreeNode[],
@@ -101,7 +118,27 @@ function flattenChildren(
   matchedPaths: Set<string>,
   rows: FlattenedRow[],
 ): void {
-  for (const child of children) {
+  // Apply date-descending sort for Knowledge/Attachments subdirectories
+  let sorted = children;
+  if (children.length > 0 && isUnderDateDescRoot(children[0].path)) {
+    const hasDateItems = children.some((c) => DATE_PREFIX_RE.test(c.name));
+    if (hasDateItems) {
+      sorted = [...children].sort((a, b) => {
+        // Dirs before files (preserve backend grouping)
+        if (a.type !== b.type) return a.type === 'directory' ? -1 : 1;
+        // Both have date prefixes → descending
+        const aDate = DATE_PREFIX_RE.test(a.name);
+        const bDate = DATE_PREFIX_RE.test(b.name);
+        if (aDate && bDate) return b.name.localeCompare(a.name);
+        // Date-prefixed items before non-date items
+        if (aDate !== bDate) return aDate ? -1 : 1;
+        // Fallback: alphabetical ascending
+        return a.name.localeCompare(b.name);
+      });
+    }
+  }
+
+  for (const child of sorted) {
     const isExpanded = child.type === 'directory' && expandedPaths.has(child.path);
     rows.push({
       kind: 'node',
@@ -253,7 +290,11 @@ export function flattenTree(
     }
   }
 
-  // 5. System files/directories pinned at the bottom (dimmed but fully interactive)
+  // 5. System Settings zone — pinned at the bottom (dimmed but fully interactive)
+  const hasSystemItems = treeData.some((n) => SYSTEM_NAMES.has(n.name));
+  if (hasSystemItems) {
+    rows.push({ kind: 'zone-separator', zoneLabel: 'System Settings' });
+  }
   for (const node of treeData) {
     if (SYSTEM_NAMES.has(node.name)) {
       const isExpanded = node.type === 'directory' && expandedPaths.has(node.path);

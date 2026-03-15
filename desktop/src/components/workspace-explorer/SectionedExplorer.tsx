@@ -20,6 +20,9 @@ import { fileIcon, fileIconColor, gitStatusBadge } from '../../utils/fileUtils';
 /** Files/directories that are pinned at the bottom as system items. */
 const SYSTEM_NAMES = new Set(['.context', '.claude', 'config.json', 'proactive_state.json']);
 
+/** Directories excluded from "Working Files" — not source-controlled content. */
+const WORKING_FILES_EXCLUDE = new Set(['Attachments']);
+
 interface SectionedExplorerProps {
   onFileDoubleClick?: (node: FileTreeItem) => void;
   onAttachToChat?: (item: FileTreeItem) => void;
@@ -35,8 +38,8 @@ interface WorkingFile {
 function collectWorkingFiles(nodes: TreeNode[], parentName: string = ''): WorkingFile[] {
   const results: WorkingFile[] = [];
   for (const node of nodes) {
-    // Skip system items entirely
-    if (SYSTEM_NAMES.has(node.name)) continue;
+    // Skip system items and non-source directories (e.g. Attachments/)
+    if (SYSTEM_NAMES.has(node.name) || WORKING_FILES_EXCLUDE.has(node.name)) continue;
     if (node.type === 'file' && node.gitStatus && ['modified', 'added', 'untracked'].includes(node.gitStatus)) {
       results.push({ node, parentName });
     }
@@ -118,14 +121,14 @@ function WorkingFileItem({
 
   return (
     <div
-      className="flex items-center gap-1.5 px-3.5 py-[2px] cursor-pointer hover:bg-[var(--color-hover)] transition-colors text-[12px] border-l-2 border-l-[#3fb950]"
-      style={{ paddingLeft: 20 }}
+      className="flex items-center gap-1 py-[2px] cursor-pointer hover:bg-[var(--color-hover)] transition-colors border-l-2 border-l-[#3fb950]"
+      style={{ paddingLeft: 8, fontSize: '13px', lineHeight: '32px' }}
       onDoubleClick={handleDoubleClick}
     >
-      <span className="material-symbols-outlined text-[14px] flex-shrink-0" style={{ color: iconColor }}>
+      <span className="material-symbols-outlined" style={{ fontSize: '16px', color: iconColor, flexShrink: 0 }}>
         {icon}
       </span>
-      <span className="truncate text-[var(--color-text)] font-medium" style={{ letterSpacing: '-0.01em' }}>
+      <span className="truncate text-[var(--color-text)]" style={{ letterSpacing: '-0.01em' }}>
         {node.name}
       </span>
       {parentName && (

@@ -78,7 +78,7 @@ export default function Sidebar({ collapsed, onClose, isOverlay }: SidebarProps)
         </div>
 
         {/* Navigation */}
-        <nav className="flex-1 py-4 px-2 space-y-1">
+        <nav className="flex-1 py-4 px-2 space-y-5">
           {navItems.map((item) => (
             <div key={item.path} className="relative">
               <NavLink
@@ -103,7 +103,7 @@ export default function Sidebar({ collapsed, onClose, isOverlay }: SidebarProps)
         </nav>
 
         {/* Bottom navigation */}
-        <div className="py-4 px-2 border-t border-[var(--color-border)] space-y-1">
+        <div className="py-4 px-2 border-t border-[var(--color-border)] space-y-5">
           {bottomNavItems.map((item) => (
             <NavLink
               key={item.path}

@@ -18,7 +18,7 @@ export function BottomBar() {
   const healthCtx = useContext(HealthContext);
   const isConnected = healthCtx?.health?.status === 'connected';
   const { activeSessionMeta } = useSessionMeta();
-  const agentName = activeSessionMeta?.agentName || 'SwarmAI';
+  const agentName = activeSessionMeta?.agentName || 'Swarm';
 
   return (
     <div
@@ -51,15 +51,19 @@ export function BottomBar() {
       {/* Right: keyboard hints with badge-style kbd */}
       <div className="flex items-center gap-3 font-mono text-[9px]">
         <span className="flex items-center gap-1">
-          <kbd className="bg-[var(--color-hover)] text-[var(--color-text-muted)] px-1 py-px rounded-[3px]">Enter</kbd>
+          <kbd className="bg-[var(--color-hover)] text-[var(--color-text-muted)] border border-[var(--color-border)] px-1 py-px rounded-[3px]">Enter</kbd>
           <span>send</span>
         </span>
         <span className="flex items-center gap-1">
-          <kbd className="bg-[var(--color-hover)] text-[var(--color-text-muted)] px-1 py-px rounded-[3px]">Shift+Enter</kbd>
+          <kbd className="bg-[var(--color-hover)] text-[var(--color-text-muted)] border border-[var(--color-border)] px-1 py-px rounded-[3px]">Shift+Enter</kbd>
           <span>newline</span>
         </span>
         <span className="flex items-center gap-1">
-          <kbd className="bg-[var(--color-hover)] text-[var(--color-text-muted)] px-1 py-px rounded-[3px]">&#8984;1-9</kbd>
+          <kbd className="bg-[var(--color-hover)] text-[var(--color-text-muted)] border border-[var(--color-border)] px-1 py-px rounded-[3px]">&#8984;N</kbd>
+          <span>new</span>
+        </span>
+        <span className="flex items-center gap-1">
+          <kbd className="bg-[var(--color-hover)] text-[var(--color-text-muted)] border border-[var(--color-border)] px-1 py-px rounded-[3px]">&#8984;1-9</kbd>
           <span>tab</span>
         </span>
       </div>
