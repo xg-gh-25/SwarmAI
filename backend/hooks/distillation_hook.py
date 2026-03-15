@@ -51,12 +51,56 @@ _LESSON_PATTERNS = re.compile(
 # Competence patterns: "now I know how to X" — positive capability acquisition.
 # Distinct from lessons ("next time avoid X") which are corrective/negative.
 _COMPETENCE_PATTERNS = re.compile(
-    r"(?:(?:now )?(?:know|knows|understand|understands) (?:how to|that|about)|"
-    r"(?:can now|is able to|figured out how to|discovered that|"
+    r"(?:"
+    # First-person learning
+    r"(?:now )?(?:know|knows|understand|understands) (?:how to|that|about)|"
+    r"can now|is able to|figured out how to|discovered that|"
     r"the (?:way|trick|method|pattern|technique) (?:is|to)|"
-    r"(?:works by|achieved by|accomplished via|done with|built using)))",
+    # Technical facts: "X works by Y", "X points to Y"
+    r"(?:works by|achieved by|accomplished via|done with|built using)|"
+    r"(?:verified|confirmed) (?:that|working|live|in production)|"
+    r"(?:root cause|fix) (?:was|is|:)|"
+    r"(?:pipeline|system|hook|engine) (?:works|fires|runs|produces)|"
+    r"uses? [\w./]+ (?:instead of|rather than|over)|"
+    r"(?:requires?|needs?) (?:both |\w+ (?:to|for|before|and ))|"
+    # Declarative facts: "X does not source Y", "X rejects Y"
+    r"(?:does not|doesn't|cannot|can't|do not|don't) (?:source|inherit|load|"
+    r"see|find|support|work|include|have|resolve|recognize|persist)|"
+    r"(?:don't|do not|never) (?:\w[\w-]* ){1,3}(?:without|before|until) |"
+    r"(?:blocks?|rejects?|prevents?) [\w/]+ \w+|"
+    # Imperative guidance: "Use X to Y", "prefer X over Y"
+    r"(?:use |prefer |always )(?:\w+ ){1,3}(?:to |for |when |instead |before |during )|"
+    # Requirement patterns: "must run/use/be"
+    r"must (?:run|use|be|have|call|spawn|import)|"
+    # Structural observations: "X hierarchy: Y", "X order: Y"
+    r"\w+ (?:hierarchy|order|precedence|priority): |"
+    # Factual pointers: "X points to Y", "X refers to Y"
+    r"(?:points? to|refers? to|maps? to) |"
+    # Architecture: "content must be preserved in ref"
+    r"(?:content|state|data) must be (?:preserved|stored|saved|maintained)"
+    r")",
     re.IGNORECASE,
 )
+
+
+def _is_noise_entry(entry: str) -> bool:
+    """Detect noise entries leaked from agent monologue or table fragments."""
+    # Table fragments: starts with |
+    if entry.startswith("|") or re.match(r"^\|.*\|.*\|", entry):
+        return True
+    # Agent internal monologue: "Let me...", "I'll..."
+    if re.match(
+        r"(?:Let me |I'll |I will |I should |I need to |"
+        r"Item \d|Found |Good —|Wait —|Hmm)",
+        entry, re.IGNORECASE,
+    ):
+        return True
+    # Checkbox/status markers that aren't decisions
+    # Use alternation — ⚠️ is two codepoints (U+26A0 + U+FE0F) which breaks
+    # inside a character class.
+    if re.match(r"^(?:✅|❌|⚠️) ", entry):
+        return True
+    return False
 
 
 class DistillationTriggerHook:
@@ -253,7 +297,7 @@ class DistillationTriggerHook:
             # Lines in Decisions sections
             if in_decisions_section and stripped.startswith("- ") and stripped != "- (none)":
                 entry = stripped[2:].strip()
-                if len(entry) > 15:  # Skip trivially short entries
+                if len(entry) > 15 and not _is_noise_entry(entry):
                     decisions.append(entry[:200])
             # Lines elsewhere that match decision patterns
             elif stripped.startswith("- ") and _DECISION_PATTERNS.search(stripped):
@@ -355,8 +399,9 @@ class DistillationTriggerHook:
             # Must match competence pattern
             if not _COMPETENCE_PATTERNS.search(entry):
                 continue
-            # Must NOT match lesson pattern (avoid double-counting)
-            if _LESSON_PATTERNS.search(entry):
+            # Skip purely corrective entries ("should have", "next time avoid")
+            # but allow entries that are both competence AND lesson-like
+            if re.search(r"(?:mistake was|should have|next time (?:avoid|don't))", entry, re.IGNORECASE):
                 continue
             competence.append(entry[:200])
         return competence[:5]  # Cap
