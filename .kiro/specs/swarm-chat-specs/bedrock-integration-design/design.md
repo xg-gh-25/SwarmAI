@@ -522,7 +522,7 @@ class CmdPermissionManager:
 
 ```python
 class AgentManager:
-    SESSION_TTL_SECONDS = 12 * 60 * 60  # 12 hours
+    SESSION_TTL_SECONDS = 2 * 60 * 60  # 2 hours
 
     _clients: dict[str, ClaudeSDKClient]
     _active_sessions: dict[str, dict]  # {client, wrapper, created_at, last_used}
@@ -541,7 +541,7 @@ class AgentManager:
 
 **Responsibilities**:
 - Build `ClaudeAgentOptions` (model, tools, MCP servers, hooks, system prompt, sandbox)
-- Manage long-lived client pool with 12-hour TTL and background cleanup
+- Manage long-lived client pool with 2-hour TTL and background cleanup
 - Route model IDs through `get_bedrock_model_id()` when Bedrock is active
 - Stream SDK responses as SSE events
 - Persist messages to SQLite via `_save_message()`
@@ -1164,7 +1164,7 @@ else:
 ## Performance Considerations
 
 - **Zero IO on hot path**: `configure_claude_environment()` reads from in-memory config cache. No file or DB reads per chat request.
-- **Session pool with 12-hour TTL**: Long-lived `ClaudeSDKClient` instances avoid cold-start overhead. Background cleanup runs every 60 seconds.
+- **Session pool with 2-hour TTL**: Long-lived `ClaudeSDKClient` instances avoid cold-start overhead. Background cleanup runs every 60 seconds.
 - **SSE heartbeat at 15-second intervals**: Prevents proxy/load-balancer timeouts. Heartbeats filtered client-side.
 - **Command permission in-memory cache**: `CmdPermissionManager` loads files once at startup, checks in memory. File write only on new approval (append-only).
 - **Config file write only on Settings save**: `AppConfigManager` writes to disk only when user updates settings (rare operation).

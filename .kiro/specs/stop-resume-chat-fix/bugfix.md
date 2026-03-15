@@ -38,7 +38,7 @@ The root cause is that `interrupt_session()` sets no flag to distinguish user-in
 
 3.2 WHEN a user sends a message while another is genuinely still processing (not interrupted) THEN the system SHALL CONTINUE TO reject with SESSION_BUSY to prevent double-send corruption
 
-3.3 WHEN sessions are idle beyond the 12-hour TTL THEN the system SHALL CONTINUE TO clean them up via `_cleanup_stale_sessions_loop`
+3.3 WHEN sessions are idle beyond the 2-hour TTL THEN the system SHALL CONTINUE TO clean them up via `_cleanup_stale_sessions_loop`
 
 3.4 WHEN `continue_with_answer` or `continue_with_cmd_permission` is called on an active session THEN the system SHALL CONTINUE TO find the client in `_clients` and resume correctly
 
