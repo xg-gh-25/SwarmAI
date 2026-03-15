@@ -669,11 +669,19 @@ class TestUpdateLearning:
         assert result.observations == []
 
     def test_dedup_guard_prevents_reprocessing(self, tmp_path):
-        """Calling _update_learning twice with same file should only count once."""
+        """Calling _update_learning twice with same file should only count once.
+
+        Uses (stem, sessions_count) from frontmatter as the dedup key.
+        Without frontmatter, sessions_count defaults to 0 — so two calls
+        with the same file content (no frontmatter change) should only
+        count once.  Adding a new session (with updated sessions_count
+        in frontmatter) should trigger reprocessing.
+        """
         da_dir = tmp_path / "DailyActivity"
         da_dir.mkdir()
         from datetime import datetime
         today = datetime.now().strftime("%Y-%m-%d")
+        # File without frontmatter — sessions_count defaults to 0
         (da_dir / f"{today}.md").write_text(
             "## 10:00 | abc | Session\n\n"
             "**Delivered:**\n"
@@ -688,14 +696,16 @@ class TestUpdateLearning:
         assert state.work_type_distribution.get("maintenance", 0) >= 1 or \
                state.work_type_distribution.get("feature", 0) >= 1
 
-        # Second call with same file (unchanged mtime) — should skip
+        # Second call with same file (same sessions_count=0) — should skip
         state = _update_learning_from_activity(state, da_dir)
         assert len(state.observations) == 1  # still 1, not 2
 
-        # Third call after file modification — should process again
-        import time
-        time.sleep(0.05)  # ensure mtime changes
+        # Third call after new session added (sessions_count changes) — should process
         (da_dir / f"{today}.md").write_text(
+            "---\n"
+            f'date: "{today}"\n'
+            "sessions_count: 2\n"
+            "---\n"
             "## 10:00 | abc | Session\n\n"
             "**Delivered:**\n"
             "- Fixed MCP servers not connecting\n"
@@ -705,6 +715,7 @@ class TestUpdateLearning:
         )
         state = _update_learning_from_activity(state, da_dir)
         assert len(state.observations) == 2  # now 2
+        assert state.last_processed_activity_key == f"{today}:2"
 
 
 class TestApplyLearning:

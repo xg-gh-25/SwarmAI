@@ -270,11 +270,14 @@ def _parse_extraction(raw: str) -> dict[str, list[str]]:
     return result
 
 
-# Map extraction keys to MEMORY.md section headers
+# Map extraction keys to MEMORY.md section headers.
+# Note: open_threads maps to "Recent Context" (not "Open Threads") because
+# Open Threads now uses P0/P1/P2 subsections that require structured writes.
+# Unstructured LLM-extracted items would break the section format.
 _SECTION_MAP = {
     "key_decisions": "Key Decisions",
     "lessons_learned": "Lessons Learned",
-    "open_threads": "Open Threads",
+    "open_threads": "Recent Context",
     "recent_context": "Recent Context",
 }
 
