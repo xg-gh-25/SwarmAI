@@ -86,7 +86,7 @@ export function TSCCPopoverButton({ sessionId, metadata }: TSCCPopoverButtonProp
         disabled={isDisabled}
         onClick={isDisabled ? undefined : handleToggle}
         className={`
-          w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0
+          w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0
           transition-colors
           ${isDisabled
             ? 'text-[var(--color-text-muted)]/50 cursor-not-allowed'
@@ -94,7 +94,7 @@ export function TSCCPopoverButton({ sessionId, metadata }: TSCCPopoverButtonProp
           }
         `}
       >
-        <span className="material-symbols-outlined">
+        <span className="material-symbols-outlined text-[18px]">
           psychology
         </span>
       </button>
