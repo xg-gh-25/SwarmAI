@@ -27,6 +27,7 @@ import React, { useCallback, useEffect, useRef } from 'react';
 import type { TreeNode } from '../../types';
 import type { FileTreeItem } from './FileTreeNode';
 import { fileIcon, fileIconColor, gitStatusColor, gitStatusBadge } from '../../utils/fileUtils';
+import { SYSTEM_NAMES } from './VirtualizedTree';
 
 /* ------------------------------------------------------------------ */
 /*  Props                                                              */
@@ -311,7 +312,9 @@ const TreeNodeRow: React.FC<TreeNodeRowProps> = React.memo(function TreeNodeRow(
   const textColor = statusColor
     ?? (isHidden ? 'var(--color-hidden-text)' : 'var(--color-text)');
   const badge = gitStatusBadge(node.gitStatus);
-  const rowOpacity = (node.gitStatus === 'ignored' || isHidden) ? 0.7 : 1;
+  const isSystemFile = depth === 0 && SYSTEM_NAMES.has(node.name);
+  // System files: dimmed at rest but interactive (hover restores opacity via CSS class)
+  const rowOpacity = isSystemFile ? 0.5 : (node.gitStatus === 'ignored' || isHidden) ? 0.7 : 1;
 
   // Icon color: git status > hidden dimming > file-type color
   const iconColor = statusColor

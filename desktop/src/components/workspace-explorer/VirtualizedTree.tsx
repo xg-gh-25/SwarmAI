@@ -49,8 +49,8 @@ export const SEMANTIC_ZONES = [
 /** Root-level files displayed above the first zone separator. */
 export const ROOT_FILES: string[] = [];
 
-/** System files/directories pinned at explorer bottom — excluded from main tree. */
-const SYSTEM_NAMES = new Set(['.context', '.claude', 'config.json', 'proactive_state.json']);
+/** System files/directories pinned at explorer bottom — dimmed but fully interactive. */
+export const SYSTEM_NAMES = new Set(['.context', '.claude', 'config.json', 'proactive_state.json']);
 
 const ROW_HEIGHT = 32;
 
@@ -240,6 +240,23 @@ export function flattenTree(
       !SYSTEM_NAMES.has(node.name)
     ) {
       const isExpanded = expandedPaths.has(node.path);
+      rows.push({
+        kind: 'node',
+        node,
+        depth: 0,
+        isMatched: matchedPaths.has(node.path),
+        isExpanded,
+      });
+      if (isExpanded && node.children) {
+        flattenChildren(node.children, 1, expandedPaths, matchedPaths, rows);
+      }
+    }
+  }
+
+  // 5. System files/directories pinned at the bottom (dimmed but fully interactive)
+  for (const node of treeData) {
+    if (SYSTEM_NAMES.has(node.name)) {
+      const isExpanded = node.type === 'directory' && expandedPaths.has(node.path);
       rows.push({
         kind: 'node',
         node,

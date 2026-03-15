@@ -47,10 +47,6 @@ function collectWorkingFiles(nodes: TreeNode[], parentName: string = ''): Workin
   return results;
 }
 
-/** Collect top-level system files/directories. */
-function collectSystemFiles(nodes: TreeNode[]): TreeNode[] {
-  return nodes.filter((n) => SYSTEM_NAMES.has(n.name));
-}
 
 /** Collapsible section header with chevron, label, and optional badge. */
 function SectionHeader({
@@ -149,35 +145,18 @@ function WorkingFileItem({
   );
 }
 
-/** Single system file row — pinned at bottom with reduced opacity. */
-function SystemFileItem({ node }: { node: TreeNode }) {
-  const icon = node.type === 'directory' ? 'folder' : 'settings';
-  const iconColor = node.type === 'directory' ? 'var(--color-icon-folder)' : 'var(--color-text-dim)';
-  return (
-    <div
-      className="flex items-center gap-1.5 px-3.5 py-[2px] text-[11px] opacity-50 hover:opacity-75 transition-opacity cursor-default"
-    >
-      <span className="material-symbols-outlined text-[13px] flex-shrink-0" style={{ color: iconColor }}>
-        {icon}
-      </span>
-      <span className="truncate text-[var(--color-text-muted)]">
-        {node.name}
-      </span>
-    </div>
-  );
-}
 
 export default function SectionedExplorer({ onFileDoubleClick, onAttachToChat }: SectionedExplorerProps) {
   const { treeData } = useTreeData();
   const [workingOpen, setWorkingOpen] = useState(true);
 
   const workingFiles = useMemo(() => collectWorkingFiles(treeData), [treeData]);
-  const systemFiles = useMemo(() => collectSystemFiles(treeData), [treeData]);
 
   return (
     <div className="flex flex-col h-full">
       {/* Working Files section — scrollable when list is large */}
-      <div className="flex-shrink-0" style={{ maxHeight: '40%', display: 'flex', flexDirection: 'column' }}>
+      {/* Working Files: show max 5 items (~100px), scroll for more */}
+      <div className="flex-shrink-0" style={{ display: 'flex', flexDirection: 'column' }}>
         <SectionHeader
           title="Working Files"
           count={workingFiles.length}
@@ -186,7 +165,7 @@ export default function SectionedExplorer({ onFileDoubleClick, onAttachToChat }:
           badgeColor="green"
         />
         {workingOpen && workingFiles.length > 0 && (
-          <div className="pb-0.5 overflow-y-auto flex-1 min-h-0">
+          <div className="pb-0.5 overflow-y-auto min-h-0" style={{ maxHeight: 100 }}>
             {workingFiles.map((f) => (
               <WorkingFileItem key={f.node.path} file={f} onDoubleClick={onFileDoubleClick} />
             ))}
@@ -216,14 +195,6 @@ export default function SectionedExplorer({ onFileDoubleClick, onAttachToChat }:
         />
       </div>
 
-      {/* System files pinned at bottom — reduced opacity */}
-      {systemFiles.length > 0 && (
-        <div className="flex-shrink-0 border-t border-[var(--color-border)] py-1">
-          {systemFiles.map((node) => (
-            <SystemFileItem key={node.path} node={node} />
-          ))}
-        </div>
-      )}
     </div>
   );
 }

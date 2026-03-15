@@ -2355,6 +2355,10 @@ class AgentManager:
         # lets the main loop process both streams without polling or nested awaits.
         sdk_reader_task = None
         forwarder_task = None
+        # Pre-initialize before try so the finally block can always iterate,
+        # even if client.query() throws before the list is populated.
+        _generation = 0
+        _reader_tasks: list[asyncio.Task] = []
 
         try:
             logger.info(f"Sending query: {display_text[:100] if display_text else 'multimodal'}...")
@@ -2399,13 +2403,6 @@ class AgentManager:
             # into one consumer loop, avoiding race conditions between the two sources.
             combined_queue: asyncio.Queue = asyncio.Queue()
             message_count = 0
-
-            # Generation counter for stale-result filtering during --resume.
-            # Each SDK reader task is assigned a monotonically increasing generation.
-            # Queue items are tagged with their generation so the main loop can
-            # discard items from old readers without draining the queue.
-            _generation = 0
-            _reader_tasks: list[asyncio.Task] = []
 
             async def sdk_message_reader(gen: int):
                 """Read SDK messages and put them in the combined queue.
