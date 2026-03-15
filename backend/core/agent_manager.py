@@ -1163,28 +1163,65 @@ class AgentManager:
     def _get_active_client(self, session_id: str) -> ClaudeSDKClient | None:
         """Get an existing long-lived client for a session, if available.
 
-        Returns None if the session's subprocess was idle-disconnected
-        (wrapper=None, client=None).  The caller will then fall through
-        to PATH A (fresh client with context injection), which is the
-        designed resume-fallback path.
+        Returns None if:
+        - The session is not in ``_active_sessions``.
+        - The session's subprocess was idle-disconnected (wrapper=None).
+        - The subprocess PID is no longer alive (crash, OOM-kill, SIGKILL).
+
+        In all cases the caller falls through to PATH A (fresh client
+        with context injection), which is the designed resume-fallback.
+
+        **COE 2026-03-15:** Prior to the liveness check, a dead subprocess
+        was silently reused — the Python ``client`` object was still valid
+        but the underlying CLI process was gone.  ``_run_query_on_client``
+        would then fail with "Not connected", "exit code -9", or "Cannot
+        write to terminated process" on the very first write.
         """
         info = self._active_sessions.get(session_id)
-        if info:
-            info["last_used"] = time.time()
-            # Reset early-extraction flag so new activity gets captured
-            # after the next idle period.
-            info["activity_extracted"] = False
-            client = info.get("client")
-            if client is None:
-                # Subprocess was idle-disconnected — fall through to PATH A
-                logger.info(
-                    "Session %s exists but subprocess was idle-disconnected, "
-                    "will use resume-fallback (context injection)",
-                    session_id,
+        if not info:
+            return None
+
+        info["last_used"] = time.time()
+        # Reset early-extraction flag so new activity gets captured
+        # after the next idle period.
+        info["activity_extracted"] = False
+
+        client = info.get("client")
+        if client is None:
+            # Subprocess was idle-disconnected — fall through to PATH A
+            logger.info(
+                "Session %s exists but subprocess was idle-disconnected, "
+                "will use resume-fallback (context injection)",
+                session_id,
+            )
+            return None
+
+        # ── Liveness check ──────────────────────────────────────────
+        # Verify the subprocess PID is still alive before handing
+        # the client back.  After a kernel panic, macOS OOM-kill, or
+        # crash the PID is gone but the Python object is still valid.
+        pid = info.get("pid")
+        if pid:
+            try:
+                os.kill(pid, 0)  # Signal 0 = existence check, no-op if alive
+            except ProcessLookupError:
+                # Process is dead — evict session and fall through to PATH A
+                logger.warning(
+                    "Session %s subprocess pid=%d is dead (crash/OOM-kill), "
+                    "evicting and falling through to resume-fallback",
+                    session_id, pid,
                 )
+                self._tracked_pids.discard(pid)
+                # Async disconnect not possible here (sync method), but the
+                # process is already dead so just clear the references.
+                info["client"] = None
+                info["wrapper"] = None
+                info["pid"] = None
                 return None
-            return client
-        return None
+            except PermissionError:
+                pass  # Process exists but owned by another user — unlikely, treat as alive
+
+        return client
 
     def _resolve_allowed_tools(self, agent_config: dict) -> list[str]:
         """Resolve the list of allowed tool names from agent configuration.
@@ -1838,13 +1875,14 @@ class AgentManager:
             ]
 
         # Build extra CLI args for features not yet in ClaudeAgentOptions.
+        # IMPORTANT: The bundled CLI (currently 2.1.71) errors on unknown
+        # flags.  Only add flags that the bundled version supports.
+        # --name requires CLI ≥2.1.76 — uncomment when SDK bundles it.
         extra_args: dict[str, str | None] = {}
-        # --name: label the CLI session for easier identification in logs
-        # and `claude --resume` picker.  Uses app_session_id (short prefix)
-        # so we can correlate CLI sessions to frontend tabs.
-        session_name = (session_context or {}).get("app_session_id")
-        if session_name:
-            extra_args["name"] = session_name[:12]  # short, readable
+        # TODO(sdk-upgrade): uncomment when claude-agent-sdk bundles CLI ≥2.1.76
+        # session_name = (session_context or {}).get("app_session_id")
+        # if session_name:
+        #     extra_args["name"] = session_name[:12]  # short, readable
 
         return ClaudeAgentOptions(
             system_prompt=system_prompt_config,

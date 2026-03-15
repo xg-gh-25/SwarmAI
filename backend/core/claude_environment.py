@@ -171,6 +171,8 @@ def _configure_claude_environment(config: AppConfigManager) -> None:
     - ``AWS_REGION`` / ``AWS_DEFAULT_REGION`` — from cached config
     - ``ANTHROPIC_BASE_URL`` — optional custom endpoint from cached config
     - ``CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS`` — from cached config
+    - ``CLAUDE_CODE_DISABLE_AUTO_MEMORY`` — always ``"1"``; SwarmAI owns its
+      memory pipeline (DailyActivity → distillation → MEMORY.md)
 
     **Env vars NOT set** (delegated to AWS credential chain):
 
@@ -205,7 +207,12 @@ def _configure_claude_environment(config: AppConfigManager) -> None:
     else:
         os.environ.pop("CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS", None)
 
-    # 4. Pre-flight auth validation
+    # 4. Disable CLI auto-memory — SwarmAI owns its own memory pipeline
+    # (DailyActivity → distillation → MEMORY.md). CLI auto-memory would
+    # create conflicting writes and duplicate context injection.
+    os.environ["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
+
+    # 5. Pre-flight auth validation
     # AWS credentials are NOT checked here — the SDK resolves them via the
     # standard credential chain at query time. Auth errors from expired
     # credentials are caught by _run_query_on_client's _AUTH_PATTERNS.
