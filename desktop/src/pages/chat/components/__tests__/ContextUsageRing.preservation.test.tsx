@@ -12,7 +12,7 @@
  *
  * Properties verified:
  * - strokeDashoffset ∈ [0, circumference] and equals circumference - (pct/100)*circumference
- * - Color thresholds: green < 70%, amber [70, 85), red [85, 100]
+ * - Color thresholds: green ≤ 60%, yellow (61, 80], red > 80%
  * - Tooltip text: "{pct}% context used" for non-null, "No context data yet" for null
  *
  * **Validates: Requirements 3.3, 3.4**
@@ -63,14 +63,14 @@ function getTooltip(wrapper: Element): string {
 /** Integer pct in [0, 100] — the valid range for normal ring rendering. */
 const validPctArb = fc.integer({ min: 0, max: 100 });
 
-/** Integer pct in [0, 70) — green zone. */
-const greenPctArb = fc.integer({ min: 0, max: 69 });
+/** Integer pct in [0, 60] — green zone. */
+const greenPctArb = fc.integer({ min: 0, max: 60 });
 
-/** Integer pct in [70, 85) — amber zone. */
-const amberPctArb = fc.integer({ min: 70, max: 84 });
+/** Integer pct in [61, 80] — yellow zone. */
+const yellowPctArb = fc.integer({ min: 61, max: 80 });
 
-/** Integer pct in [85, 100] — red zone. */
-const redPctArb = fc.integer({ min: 85, max: 100 });
+/** Integer pct in [81, 100] — red zone. */
+const redPctArb = fc.integer({ min: 81, max: 100 });
 
 // ── Preservation Tests ─────────────────────────────────────────────────
 
@@ -103,36 +103,36 @@ describe('Preservation Property Tests — ContextUsageRing', () => {
   });
 
   /**
-   * For all pct in [0, 70): strokeColor is #10b981 (green).
+   * For all pct in [0, 60]: strokeColor is #22c55e (green).
    *
    * **Validates: Requirements 3.3**
    */
-  it('strokeColor is green (#10b981) for pct in [0, 70)', () => {
+  it('strokeColor is green (#22c55e) for pct in [0, 60]', () => {
     fc.assert(
       fc.property(greenPctArb, (pct) => {
         const { fg, container } = renderRing(pct);
         const stroke = getFgStroke(fg);
 
-        expect(stroke).toBe('#10b981');
+        expect(stroke).toBe('#22c55e');
 
         container.remove();
       }),
-      { numRuns: 70 },
+      { numRuns: 60 },
     );
   });
 
   /**
-   * For all pct in [70, 85): strokeColor is #f59e0b (amber).
+   * For all pct in [61, 80]: strokeColor is #eab308 (yellow).
    *
    * **Validates: Requirements 3.3**
    */
-  it('strokeColor is amber (#f59e0b) for pct in [70, 85)', () => {
+  it('strokeColor is yellow (#eab308) for pct in [61, 80]', () => {
     fc.assert(
-      fc.property(amberPctArb, (pct) => {
+      fc.property(yellowPctArb, (pct) => {
         const { fg, container } = renderRing(pct);
         const stroke = getFgStroke(fg);
 
-        expect(stroke).toBe('#f59e0b');
+        expect(stroke).toBe('#eab308');
 
         container.remove();
       }),
@@ -141,11 +141,11 @@ describe('Preservation Property Tests — ContextUsageRing', () => {
   });
 
   /**
-   * For all pct in [85, 100]: strokeColor is #ef4444 (red).
+   * For all pct in [81, 100]: strokeColor is #ef4444 (red).
    *
    * **Validates: Requirements 3.3**
    */
-  it('strokeColor is red (#ef4444) for pct in [85, 100]', () => {
+  it('strokeColor is red (#ef4444) for pct in [81, 100]', () => {
     fc.assert(
       fc.property(redPctArb, (pct) => {
         const { fg, container } = renderRing(pct);
