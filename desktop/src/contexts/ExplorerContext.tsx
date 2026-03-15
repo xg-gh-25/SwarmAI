@@ -1,7 +1,7 @@
 /**
  * Explorer context for the SwarmWS Workspace Explorer.
  *
- * Provides shared state between the TopBar (GlobalSearchBar) and the
+ * Provides shared state between the TopBar and the
  * WorkspaceExplorer (VirtualizedTree). State is split into three
  * sub-contexts for render performance:
  *
@@ -604,7 +604,7 @@ export function useSearch(): SearchContextValue {
 }
 
 /** Safe variant of useSearch that returns null when outside ExplorerProvider.
- *  Used by GlobalSearchBar which may render before the provider is wired. */
+ *  Returns null instead of throwing when the provider is not in the tree. */
 export function useSearchSafe(): SearchContextValue | null {
   return useContext(SearchContext) ?? null;
 }
