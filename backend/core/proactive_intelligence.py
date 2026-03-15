@@ -583,10 +583,12 @@ class LearningState:
         "feature": 0, "maintenance": 0, "investigation": 0, "design": 0,
     })
     observations: list[dict[str, Any]] = field(default_factory=list)
-    # Dedup guard: mtime of the DailyActivity file last processed by
-    # _update_learning_from_activity(). Prevents re-counting the same
-    # deliverables across multiple session starts within the same day.
-    last_processed_activity_mtime: float = 0.0
+    # Dedup guard: "stem:sessions_count" of the DailyActivity file last
+    # processed by _update_learning_from_activity(). Prevents re-counting
+    # the same deliverables across multiple session starts within the same
+    # day.  Previous mtime-based guard was unreliable because DailyActivity
+    # is append-only — mtime changes every session, causing double-counting.
+    last_processed_activity_key: str = ""
 
     def preferred_work_type(self) -> Optional[str]:
         """Return the work type with highest count, or None if no data."""
@@ -647,7 +649,7 @@ def _load_learning_state(workspace_dir: Path) -> LearningState:
                 "feature": 0, "maintenance": 0, "investigation": 0, "design": 0,
             }),
             observations=data.get("observations", []),
-            last_processed_activity_mtime=data.get("last_processed_activity_mtime", 0.0),
+            last_processed_activity_key=data.get("last_processed_activity_key", ""),
         )
         return state
     except (json.JSONDecodeError, KeyError, TypeError) as exc:
@@ -673,7 +675,7 @@ def _save_learning_state(workspace_dir: Path, state: LearningState) -> None:
         "item_history": state.item_history,
         "work_type_distribution": state.work_type_distribution,
         "observations": state.observations[-_OBSERVATIONS_CAP:],
-        "last_processed_activity_mtime": state.last_processed_activity_mtime,
+        "last_processed_activity_key": state.last_processed_activity_key,
     }
     tmp_path = path.with_suffix(".tmp")
     try:
@@ -746,6 +748,18 @@ def _extract_deliverables(daily_dir: Path) -> list[str]:
     return deliverables
 
 
+def _normalize_history_key(title: str) -> str:
+    """Normalize a suggestion title into a stable item_history key.
+
+    Strips punctuation, collapses whitespace, lowercases, and truncates
+    to 50 chars.  This prevents duplicate keys like "mcp servers not
+    connecting in app" vs "mcp servers not connecting in-app".
+    """
+    key = re.sub(r"[^\w\s]", " ", title.lower())
+    key = re.sub(r"\s+", " ", key).strip()
+    return key[:50]
+
+
 def _update_learning_from_activity(
     state: LearningState,
     daily_dir: Path,
@@ -755,14 +769,15 @@ def _update_learning_from_activity(
     Updates skip/follow counts and work type distribution.
     Only runs if there's a previous briefing to compare against.
 
-    Dedup guard: checks the most recent DailyActivity file's mtime against
-    ``state.last_processed_activity_mtime``. If unchanged, the file was already
-    processed by a prior session start — skip to avoid inflating counters.
+    Dedup guard: uses ``(file_stem, sessions_count)`` from DailyActivity
+    frontmatter instead of mtime.  mtime changes on every append, but
+    sessions_count only increments when a new session entry is written —
+    preventing the same deliverables from being counted multiple times.
     """
     if not state.last_briefing_suggested:
         return state  # no previous suggestions to compare
 
-    # --- Dedup guard: skip if DailyActivity file hasn't changed ---
+    # --- Dedup guard: skip if DailyActivity hasn't gained new sessions ---
     if daily_dir.is_dir():
         da_files = sorted(
             [f for f in daily_dir.glob("*.md") if f.stem[:4].isdigit()],
@@ -770,10 +785,23 @@ def _update_learning_from_activity(
             reverse=True,
         )
         if da_files:
-            current_mtime = da_files[0].stat().st_mtime
-            if current_mtime == state.last_processed_activity_mtime:
+            try:
+                _content = da_files[0].read_text(encoding="utf-8")
+                _sc = 0
+                if _content.startswith("---"):
+                    _end = _content.find("---", 3)
+                    if _end != -1:
+                        for _line in _content[3:_end].splitlines():
+                            if _line.strip().startswith("sessions_count:"):
+                                _sc = int(_line.split(":", 1)[1].strip())
+                                break
+                current_key = f"{da_files[0].stem}:{_sc}"
+            except (OSError, ValueError):
+                current_key = ""
+            if current_key and current_key == state.last_processed_activity_key:
                 return state  # already processed this version
-            state.last_processed_activity_mtime = current_mtime
+            if current_key:
+                state.last_processed_activity_key = current_key
 
     deliverables = _extract_deliverables(daily_dir)
     if not deliverables:
@@ -790,7 +818,7 @@ def _update_learning_from_activity(
     deliverables_lower = " ".join(d.lower() for d in deliverables)
 
     for suggested_title in state.last_briefing_suggested:
-        key = suggested_title[:50].lower()
+        key = _normalize_history_key(suggested_title)
         # Fuzzy match: any significant overlap between suggestion and deliverables
         title_words = set(key.split()) - {"the", "a", "an", "in", "on", "for", "and", "or", "to"}
         matched = sum(1 for w in title_words if w in deliverables_lower)
