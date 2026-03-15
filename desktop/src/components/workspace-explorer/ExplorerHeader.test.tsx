@@ -6,29 +6,22 @@
  * - "SwarmWS" static title renders (Req 9.1)
  * - Old controls are absent: no dropdown, no toggle, no checkbox,
  *   no "New Workspace" button, no add-context area (Req 9.3–9.7)
- * - Focus Mode toggle is disabled when no project is selected (Req 12.4)
  *
- * **Validates: Requirements 9.1, 9.3, 9.4, 9.5, 9.6, 9.7, 12.4**
+ * **Validates: Requirements 9.1, 9.3, 9.4, 9.5, 9.6, 9.7**
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import ExplorerHeader from './ExplorerHeader';
-import { useSelection, useTreeData } from '../../contexts/ExplorerContext';
+import { useTreeData } from '../../contexts/ExplorerContext';
 
 // Mock the ExplorerContext hooks
 vi.mock('../../contexts/ExplorerContext', () => ({
-  useSelection: vi.fn(),
   useTreeData: vi.fn(),
 }));
 
 describe('ExplorerHeader', () => {
   beforeEach(() => {
-    (useSelection as ReturnType<typeof vi.fn>).mockReturnValue({
-      focusMode: false,
-      toggleFocusMode: vi.fn(),
-      activeProjectId: null,
-    });
     (useTreeData as ReturnType<typeof vi.fn>).mockReturnValue({
       refreshTree: vi.fn(),
     });
@@ -42,10 +35,8 @@ describe('ExplorerHeader', () => {
   describe('old controls are absent (Req 9.3–9.7)', () => {
     it('does not render a workspace dropdown selector', () => {
       render(<ExplorerHeader />);
-      // No select/combobox role elements
       expect(screen.queryByRole('combobox')).toBeNull();
       expect(screen.queryByRole('listbox')).toBeNull();
-      // No text referencing workspace selection
       expect(screen.queryByText(/select.*workspace/i)).toBeNull();
     });
 
@@ -77,39 +68,6 @@ describe('ExplorerHeader', () => {
       render(<ExplorerHeader />);
       expect(screen.queryByRole('searchbox')).toBeNull();
       expect(screen.queryByPlaceholderText(/search/i)).toBeNull();
-    });
-  });
-
-  describe('Focus Mode toggle (Req 12.4)', () => {
-    it('is disabled when no project is selected', () => {
-      (useSelection as ReturnType<typeof vi.fn>).mockReturnValue({
-        focusMode: false,
-        toggleFocusMode: vi.fn(),
-        activeProjectId: null,
-      });
-
-      render(<ExplorerHeader />);
-      const toggle = screen.getByTestId('focus-mode-toggle');
-      expect(toggle).toBeDefined();
-      expect((toggle as HTMLButtonElement).disabled).toBe(true);
-    });
-
-    it('is enabled when a project is selected', () => {
-      (useSelection as ReturnType<typeof vi.fn>).mockReturnValue({
-        focusMode: false,
-        toggleFocusMode: vi.fn(),
-        activeProjectId: 'my-project',
-      });
-
-      render(<ExplorerHeader />);
-      const toggle = screen.getByTestId('focus-mode-toggle');
-      expect((toggle as HTMLButtonElement).disabled).toBe(false);
-    });
-
-    it('shows "Select a project first" tooltip when disabled', () => {
-      render(<ExplorerHeader />);
-      const toggle = screen.getByTestId('focus-mode-toggle');
-      expect(toggle.getAttribute('title')).toBe('Select a project first');
     });
   });
 });
