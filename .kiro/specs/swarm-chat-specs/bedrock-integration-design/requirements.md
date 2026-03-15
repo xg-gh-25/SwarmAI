@@ -19,7 +19,7 @@ This document defines the requirements for the Bedrock Integration (E2E Architec
 - **ANTHROPIC_TO_BEDROCK_MODEL_MAP**: Static dictionary mapping Anthropic model IDs to Bedrock cross-region inference ARNs
 - **Config_File**: The file at `~/.swarm-ai/config.json` storing non-secret application settings
 - **Cmd_Permissions_Directory**: The directory at `~/.swarm-ai/cmd_permissions/` containing `approved_commands.json` and `dangerous_patterns.json`
-- **Session_Pool**: In-memory dictionary of active ClaudeSDKClient sessions keyed by session ID with 12-hour TTL
+- **Session_Pool**: In-memory dictionary of active ClaudeSDKClient sessions keyed by session ID with 2-hour TTL
 - **TSCC_Events**: Optional telemetry events (`agent_activity`, `tool_invocation`, `sources_updated`) emitted for the TSCC dashboard
 
 ## Requirements

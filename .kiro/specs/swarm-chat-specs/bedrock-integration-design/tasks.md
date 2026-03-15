@@ -194,7 +194,7 @@ Phased migration from SQLite-based settings to file-based configuration with AWS
   - [x] 7.3 Verify session lifecycle in `AgentManager`
     - Ensure new sessions create `ClaudeSDKClient`, store in `_active_sessions` with `created_at`/`last_used` timestamps
     - Ensure session resumption retrieves existing client and updates `last_used`
-    - Ensure 12-hour TTL cleanup loop runs every 60 seconds
+    - Ensure 2-hour TTL cleanup loop runs every 60 seconds
     - Ensure stale session ID falls back to fresh session transparently
     - Ensure `error_during_execution` removes session from pool
     - _Requirements: 8.1, 8.2, 8.3, 8.4, 8.5, 8.6, 8.7_
