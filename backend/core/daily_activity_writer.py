@@ -81,6 +81,44 @@ def write_frontmatter(frontmatter: dict[str, Any], body: str) -> str:
     return "\n".join(lines) + body
 
 
+_TITLE_MIN_LEN = 8  # Titles shorter than this are treated as garbage
+
+
+def _validate_title(
+    summary_title: str,
+    context_title: str,
+    topics: list[str],
+) -> str:
+    """Pick the best available title, filtering out garbage.
+
+    Cascade:
+    1. summary_title (from _derive_title — highest quality)
+    2. context_title (from DB/frontend — may be garbage like "1" or "ok")
+    3. First topic (from extracted user messages)
+    4. "Untitled"
+
+    Each candidate must be >= _TITLE_MIN_LEN chars and not "Untitled session"
+    to be accepted. Skips noise-like titles (pure digits, single words < 5 chars).
+    """
+    for candidate in [summary_title, context_title]:
+        if not candidate or candidate == "Untitled session":
+            continue
+        cleaned = candidate.strip()
+        if len(cleaned) < _TITLE_MIN_LEN:
+            continue
+        # Skip pure numbers or very short single-word titles
+        if cleaned.isdigit():
+            continue
+        return cleaned[:60]
+
+    # Fallback: use first substantive topic
+    for topic in (topics or []):
+        if len(topic) >= _TITLE_MIN_LEN and not topic.isdigit():
+            return topic[:60]
+
+    return "Untitled"
+
+
 def _format_session_entry(summary: StructuredSummary, context: HookContext) -> str:
     """Format a StructuredSummary into a markdown session entry.
 
@@ -96,7 +134,9 @@ def _format_session_entry(summary: StructuredSummary, context: HookContext) -> s
     """
     lines: list[str] = []
     short_id = context.session_id[:8] if context.session_id else "unknown"
-    title = summary.session_title or context.session_title or "Untitled"
+    title = _validate_title(
+        summary.session_title, context.session_title, summary.topics
+    )
     ts = summary.timestamp or datetime.now().strftime("%H:%M")
 
     # COE badge in header when applicable
