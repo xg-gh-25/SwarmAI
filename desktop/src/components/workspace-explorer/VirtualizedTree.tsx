@@ -22,7 +22,7 @@
  * Requirements: 10.1, 10.2, 10.3, 11.1, 11.4, 15.1, 15.2, 15.3
  */
 
-import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
+import React, { useContext, useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { List } from 'react-window';
 import type { TreeNode } from '../../types';
@@ -31,6 +31,7 @@ import { useTreeData, useSelection } from '../../contexts/ExplorerContext';
 import { toFileTreeItem } from './toFileTreeItem';
 import { folderService } from '../../services/workspace';
 import { EXPLORER_ATTACH_FILE, EXPLORER_ASK_ABOUT_FILE } from '../../constants/explorerEvents';
+import { ToastContext } from '../../contexts/ToastContext';
 import TreeNodeRow from './TreeNodeRow';
 import ZoneSeparator from './ZoneSeparator';
 import FileContextMenu from './FileContextMenu';
@@ -334,6 +335,8 @@ const VirtualizedTree: React.FC<VirtualizedTreeProps> = ({ height, width, onFile
   const { treeData, refreshTree } = useTreeData();
   const { expandedPaths, matchedPaths, selectedPath, toggleExpand, setSelectedPath } =
     useSelection();
+  // Safe: useContext returns undefined when ToastProvider is missing (no throw in tests)
+  const toastCtx = useContext(ToastContext);
 
   // ── Context menu state ──────────────────────────────────────────────────
   const [contextMenu, setContextMenu] = useState<ContextMenuState>({
@@ -385,7 +388,9 @@ const VirtualizedTree: React.FC<VirtualizedTreeProps> = ({ height, width, onFile
     setRenamingPath(item.path);
   }, []);
 
-  /** Inline input submitted → call backend rename → refresh tree. */
+  /** Inline input submitted → call backend rename → refresh tree.
+   *  On failure, closes the input — the unchanged name in the tree signals
+   *  the rename didn't take. User can right-click → Rename to retry. */
   const handleRenameSubmit = useCallback(
     async (oldPath: string, newName: string) => {
       const oldName = oldPath.split('/').pop() ?? '';
@@ -400,10 +405,14 @@ const VirtualizedTree: React.FC<VirtualizedTreeProps> = ({ height, width, onFile
         refreshTree();
       } catch (err) {
         console.error('Rename failed:', err);
+        toastCtx?.addToast({
+          severity: 'error',
+          message: `Rename failed: ${err instanceof Error ? err.message : 'Unknown error'}`,
+        });
       }
       setRenamingPath(null);
     },
-    [refreshTree],
+    [refreshTree, toastCtx],
   );
 
   /** Inline input cancelled → clear rename state. */
@@ -413,15 +422,12 @@ const VirtualizedTree: React.FC<VirtualizedTreeProps> = ({ height, width, onFile
 
   // ── Delete handler ──────────────────────────────────────────────────────
 
-  /** Delete confirmed in context menu → trash via backend → refresh tree. */
+  /** Delete confirmed in context menu → trash via backend → refresh tree.
+   *  Re-throws on failure so FileContextMenu can display the error. */
   const handleDelete = useCallback(
     async (item: FileTreeItem) => {
-      try {
-        await folderService.trashItem(item.path);
-        refreshTree();
-      } catch (err) {
-        console.error('Trash failed:', err);
-      }
+      await folderService.trashItem(item.path);
+      refreshTree();
     },
     [refreshTree],
   );

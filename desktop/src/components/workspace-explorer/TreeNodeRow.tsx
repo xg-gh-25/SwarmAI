@@ -90,6 +90,9 @@ function InlineRenameInput({
   onCancel?: () => void;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
+  // Guard against double-fire: onBlur + Enter keydown race (Enter fires
+  // keydown which calls submit, then focus leaves which fires onBlur again).
+  const submittedRef = useRef(false);
 
   // Auto-focus and select name (without extension for files)
   useEffect(() => {
@@ -105,8 +108,17 @@ function InlineRenameInput({
   }, [name]);
 
   const submit = useCallback(() => {
+    if (submittedRef.current) return;
     const newName = inputRef.current?.value.trim() ?? '';
+    // Validate illegal filename characters and reserved names
     if (newName && newName !== name) {
+      if (/[/:\0]/.test(newName) || newName === '.' || newName === '..') {
+        // Shake the input briefly to signal invalid name, then let user retry
+        inputRef.current?.classList.add('animate-shake');
+        setTimeout(() => inputRef.current?.classList.remove('animate-shake'), 300);
+        return;
+      }
+      submittedRef.current = true;
       onSubmit?.(newName);
     } else {
       onCancel?.();
