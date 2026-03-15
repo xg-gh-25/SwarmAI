@@ -23,7 +23,7 @@ Key responsibilities retained in this module:
                                 ``run_conversation`` and ``continue_with_answer``)
 - ``_run_query_on_client``    — Message processing loop with SSE event dispatch
 - ``_format_message``         — Converts SDK messages to frontend-friendly dicts
-- Session caching with 12-hour TTL and background cleanup
+- Session caching with 2-hour TTL, background cleanup, and orphan process reaping
 """
 from typing import AsyncIterator, Optional, Any
 from uuid import uuid4
@@ -35,6 +35,7 @@ import json
 import re
 import asyncio
 import platform
+import signal
 import subprocess
 import sys
 import time
@@ -385,8 +386,10 @@ class AgentManager:
     Claude Code (underlying SDK) has built-in support for Skills and MCP servers.
     """
 
-    # TTL for idle sessions before automatic cleanup (12 hours)
-    SESSION_TTL_SECONDS = 12 * 60 * 60
+    # TTL for idle sessions before automatic cleanup (2 hours).
+    # Previous value of 12h caused 80+ zombie claude processes to accumulate,
+    # exhausting macOS vnodes (263K→127) and triggering kernel panics.
+    SESSION_TTL_SECONDS = 2 * 60 * 60
     # Idle threshold for early DailyActivity extraction (30 minutes).
     # When a session has no messages for this long, extract activity
     # but keep the session alive so the user can resume.
@@ -418,6 +421,12 @@ class AgentManager:
         # Per-session user turn counter for context monitoring.
         # Key: effective session_id, Value: cumulative user turns.
         self._user_turn_counts: dict[str, int] = {}
+        # Global PID registry — tracks ALL spawned claude CLI process PIDs.
+        # Safety net: even if _active_sessions loses a reference (error path,
+        # race condition), we still know about the process for cleanup.
+        # PIDs are added at spawn time, removed on confirmed disconnect/kill.
+        # COE 2026-03-15: prevents vnode exhaustion from leaked processes.
+        self._tracked_pids: set[int] = set()
 
     def configure(
         self,
@@ -475,6 +484,29 @@ class AgentManager:
             session_title=session.title if session else "Unknown",
         )
 
+    def _register_wrapper_pid(self, wrapper: _ClaudeClientWrapper, session_info: dict | None = None) -> int | None:
+        """Register a wrapper's PID in the global tracker. Called right after spawn.
+
+        Args:
+            wrapper: The wrapper whose PID to register.
+            session_info: Optional session info dict to store the PID in.
+
+        Returns:
+            The PID if found, None otherwise.
+        """
+        pid = wrapper.pid
+        if pid:
+            self._tracked_pids.add(pid)
+            if session_info is not None:
+                session_info["pid"] = pid
+            logger.debug("Registered claude PID %d in global tracker (total tracked: %d)", pid, len(self._tracked_pids))
+        return pid
+
+    def _unregister_pid(self, pid: int | None) -> None:
+        """Remove a PID from the global tracker after confirmed disconnect/kill."""
+        if pid:
+            self._tracked_pids.discard(pid)
+
     def has_active_session(self, session_id: str) -> bool:
         """Check if a session is currently active in memory."""
         return session_id in self._active_sessions
@@ -487,17 +519,21 @@ class AgentManager:
     async def _cleanup_stale_sessions_loop(self):
         """Periodically clean up sessions that have been idle too long.
 
-        Two-tier idle detection:
+        Three-tier idle detection:
         1. **Activity extraction** (30 min idle): Fire the DailyActivity
            extraction hook only.  Session stays alive so the user can
            resume without losing conversation context.
-        2. **Full cleanup** (12 h idle): Tear down the session and fire
+        2. **Full cleanup** (2 h idle): Tear down the session and fire
            all post-session-close hooks.
+        3. **Orphan sweep** (every 10 min): Kill orphaned claude CLI
+           processes that survived wrapper disconnect (deadlock, crash).
         """
+        _sweep_counter = 0  # Process leak sweep every 5 iterations (5 min)
         while True:
             try:
                 await asyncio.sleep(60)  # Check every minute
                 now = time.time()
+                _sweep_counter += 1
 
                 # --- Tier 1: Early DailyActivity extraction (30 min idle) ---
                 idle_for_extraction = [
@@ -508,7 +544,7 @@ class AgentManager:
                 for sid, info in idle_for_extraction:
                     await self._extract_activity_early(sid, info)
 
-                # --- Tier 2: Full cleanup (12 h TTL) ---
+                # --- Tier 2: Full cleanup (2 h TTL) ---
                 stale = [
                     sid for sid, info in self._active_sessions.items()
                     if now - info.get("last_used", info["created_at"]) > self.SESSION_TTL_SECONDS
@@ -516,6 +552,24 @@ class AgentManager:
                 for sid in stale:
                     logger.info(f"Cleaning up stale session {sid}")
                     await self._cleanup_session(sid)
+
+                # --- Tier 3: Process leak sweep (every ~5 min) ---
+                # COE 2026-03-15: zombie claude processes exhausted macOS vnodes.
+                # Two sweeps: (a) tracked PIDs not in active sessions, (b) OS-level orphans.
+                if _sweep_counter >= 5:
+                    _sweep_counter = 0
+                    # Sweep tracked PIDs first (fast, no subprocess spawn)
+                    leaked = self.kill_tracked_leaks()
+                    if leaked:
+                        logger.warning(
+                            "Periodic tracked-leak sweep killed %d claude process(es)", leaked,
+                        )
+                    # Then sweep OS-level orphans (catches processes we lost track of)
+                    orphaned = self.kill_orphan_claude_processes()
+                    if orphaned:
+                        logger.warning(
+                            "Periodic orphan sweep killed %d claude process(es)", orphaned,
+                        )
             except asyncio.CancelledError:
                 break
             except Exception as e:
@@ -614,12 +668,8 @@ class AgentManager:
         info = self._active_sessions.pop(session_id, None)
         if info:
             wrapper = info.get("wrapper")
-            try:
-                if wrapper:
-                    await wrapper.__aexit__(None, None, None)
-                    logger.info(f"Disconnected long-lived client for session {session_id}")
-            except Exception as e:
-                logger.warning(f"Error disconnecting session {session_id}: {e}")
+            if wrapper:
+                await self._disconnect_wrapper(wrapper, session_id)
         # Clean up per-session permission queue and session lock
         _pm.remove_session_queue(session_id)
         self._session_locks.pop(session_id, None)
@@ -629,6 +679,269 @@ class AgentManager:
         _system_prompt_metadata.pop(session_id, None)
         # Clean up context monitor turn counter
         self._user_turn_counts.pop(session_id, None)
+
+    async def _disconnect_wrapper(
+        self, wrapper: _ClaudeClientWrapper, label: str, timeout: float = 5.0,
+    ) -> None:
+        """Gracefully disconnect a wrapper, force-killing the subprocess on timeout.
+
+        1. Attempt graceful ``__aexit__`` with a timeout.
+        2. If that fails, use stored PID (reliable) or extract from SDK chain
+           (fallback) and send SIGKILL to it plus its child tree.
+
+        This prevents zombie ``claude`` CLI processes from accumulating and
+        exhausting macOS vnodes (which caused kernel panics — COE 2026-03-15).
+        """
+        # Use wrapper.pid (captured at spawn time — reliable) first,
+        # fall back to chain extraction (fragile but better than nothing).
+        pid = wrapper.pid or self._extract_wrapper_pid(wrapper)
+
+        try:
+            await asyncio.wait_for(
+                wrapper.__aexit__(None, None, None),
+                timeout=timeout,
+            )
+            logger.info("Disconnected client for %s (pid=%s)", label, pid)
+        except asyncio.TimeoutError:
+            logger.warning(
+                "Graceful disconnect timed out for %s (pid=%s) after %.1fs — force killing",
+                label, pid, timeout,
+            )
+            self._force_kill_pid(pid)
+        except Exception as e:
+            logger.warning(
+                "Error disconnecting %s (pid=%s): %s — force killing",
+                label, pid, e,
+            )
+            self._force_kill_pid(pid)
+        finally:
+            # Always unregister PID from global tracker after disconnect attempt
+            self._unregister_pid(pid)
+
+    @staticmethod
+    def _extract_wrapper_pid(wrapper: _ClaudeClientWrapper) -> int | None:
+        """Best-effort PID extraction from the SDK client chain.
+
+        Walks: wrapper.client → _query → _transport._process.pid
+        (ClaudeSDKClient stores _query and _transport directly on the instance.)
+        Returns None if any link is missing (defensive).
+        """
+        try:
+            client = wrapper.client
+            if client is None:
+                return None
+            # ClaudeSDKClient stores _query directly
+            query = getattr(client, "_query", None)
+            if query is None:
+                return None
+            transport = getattr(query, "_transport", None)
+            if transport is None:
+                return None
+            process = getattr(transport, "_process", None)
+            if process is None:
+                return None
+            return getattr(process, "pid", None)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _force_kill_pid(pid: int | None) -> None:
+        """Send SIGKILL to a process and its entire child tree. Best-effort, never raises.
+
+        Uses ``pkill -P`` to kill children first (recursively), then kills
+        the parent.  Does NOT use ``os.killpg`` because claude CLI processes
+        typically share the backend's process group — killing the group would
+        kill us too.
+
+        COE 2026-03-15: This is the last-resort backstop that prevents zombie
+        claude processes from exhausting macOS vnodes and causing kernel panics.
+        """
+        if pid is None:
+            return
+        # Kill children first (claude spawns node/file-watcher subprocesses)
+        try:
+            subprocess.run(
+                ["pkill", "-9", "-P", str(pid)],
+                capture_output=True, timeout=3,
+            )
+        except Exception:
+            pass
+        # Kill the main process
+        try:
+            os.kill(pid, signal.SIGKILL)
+            logger.info("Force-killed claude pid %d", pid)
+        except (ProcessLookupError, PermissionError):
+            pass  # Already dead
+        except Exception as exc:
+            logger.debug("Could not force-kill pid %d: %s", pid, exc)
+
+    def kill_orphan_claude_processes(self, exclude_pids: set[int] | None = None) -> int:
+        """Find and kill orphaned ``claude`` CLI processes.
+
+        Called periodically to prevent vnode exhaustion. Kills processes
+        whose parent is PID 1 (re-parented orphan) or the python-backend
+        PID (leaked child), EXCLUDING PIDs known to be actively managed
+        (in ``_active_sessions`` or the explicit ``exclude_pids`` set).
+
+        COE 2026-03-15: 80 zombie claude processes with deadlocked file
+        watchers exhausted macOS vnodes (263K -> 127) causing kernel panics.
+
+        Args:
+            exclude_pids: Additional PIDs to skip (e.g. from caller context).
+
+        Returns the number of processes killed.
+        """
+        if platform.system() not in ("Darwin", "Linux"):
+            return 0
+
+        # Build set of PIDs that are actively managed — never kill these
+        safe_pids = set(exclude_pids) if exclude_pids else set()
+        for info in self._active_sessions.values():
+            pid = info.get("pid")
+            if pid:
+                safe_pids.add(pid)
+        # Also include all globally tracked PIDs (they have wrappers managing them)
+        safe_pids |= self._tracked_pids
+
+        killed = 0
+        my_pid = os.getpid()
+        try:
+            result = subprocess.run(
+                ["pgrep", "-x", "claude"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode != 0 or not result.stdout.strip():
+                return 0
+
+            pids = [int(p) for p in result.stdout.strip().split("\n") if p.strip()]
+            for pid in pids:
+                if pid in safe_pids:
+                    continue  # Actively managed — don't kill
+                try:
+                    ppid_result = subprocess.run(
+                        ["ps", "-o", "ppid=", "-p", str(pid)],
+                        capture_output=True, text=True, timeout=2,
+                    )
+                    ppid = int(ppid_result.stdout.strip()) if ppid_result.stdout.strip() else -1
+
+                    # Kill if orphaned (ppid=1) or direct child of our backend
+                    if ppid in (1, my_pid):
+                        try:
+                            subprocess.run(
+                                ["pkill", "-9", "-P", str(pid)],
+                                capture_output=True, timeout=3,
+                            )
+                        except Exception:
+                            pass
+                        os.kill(pid, signal.SIGKILL)
+                        killed += 1
+                        logger.info(
+                            "Killed orphan claude process pid=%d (ppid=%d)", pid, ppid,
+                        )
+                except (ProcessLookupError, PermissionError, ValueError):
+                    pass
+                except Exception as exc:
+                    logger.debug("Could not inspect/kill claude pid %d: %s", pid, exc)
+        except FileNotFoundError:
+            pass  # pgrep not available
+        except Exception as exc:
+            logger.warning("Orphan claude cleanup failed: %s", exc)
+
+        if killed:
+            logger.warning("Killed %d orphan claude process(es)", killed)
+        return killed
+
+    @staticmethod
+    def kill_all_claude_processes() -> int:
+        """Kill ALL claude CLI processes unconditionally.
+
+        Called at **startup** — no claude processes should be running before
+        the backend starts. This is more aggressive than kill_orphan_claude_processes
+        which only kills orphans/our-children.
+
+        COE 2026-03-15: At startup, leftover processes from a crashed previous
+        instance are guaranteed stale. Kill them all.
+
+        Returns the number of processes killed.
+        """
+        if platform.system() not in ("Darwin", "Linux"):
+            return 0
+
+        killed = 0
+        try:
+            result = subprocess.run(
+                ["pgrep", "-x", "claude"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode != 0 or not result.stdout.strip():
+                return 0
+
+            pids = [int(p) for p in result.stdout.strip().split("\n") if p.strip()]
+            for pid in pids:
+                try:
+                    # Kill children first
+                    try:
+                        subprocess.run(
+                            ["pkill", "-9", "-P", str(pid)],
+                            capture_output=True, timeout=3,
+                        )
+                    except Exception:
+                        pass
+                    os.kill(pid, signal.SIGKILL)
+                    killed += 1
+                    logger.info("Startup: killed leftover claude process pid=%d", pid)
+                except (ProcessLookupError, PermissionError):
+                    pass
+                except Exception as exc:
+                    logger.debug("Could not kill claude pid %d: %s", pid, exc)
+        except FileNotFoundError:
+            pass
+        except Exception as exc:
+            logger.warning("Startup claude cleanup failed: %s", exc)
+
+        if killed:
+            logger.warning(
+                "Startup: killed %d leftover claude process(es) from previous instance",
+                killed,
+            )
+        return killed
+
+    def kill_tracked_leaks(self) -> int:
+        """Kill tracked PIDs that are no longer associated with any active session.
+
+        This catches processes that leaked due to error paths removing entries
+        from _active_sessions without proper disconnect.
+
+        Returns the number of processes killed.
+        """
+        if not self._tracked_pids:
+            return 0
+
+        # Collect PIDs that are still in active sessions
+        active_pids = set()
+        for info in self._active_sessions.values():
+            pid = info.get("pid")
+            if pid:
+                active_pids.add(pid)
+
+        # Leaked PIDs = tracked but not in any active session
+        leaked_pids = self._tracked_pids - active_pids
+        killed = 0
+        for pid in leaked_pids:
+            try:
+                # Verify process is still alive before killing
+                os.kill(pid, 0)  # Signal 0 = existence check
+                self._force_kill_pid(pid)
+                killed += 1
+                logger.warning("Killed leaked claude process pid=%d (tracked but not in active sessions)", pid)
+            except (ProcessLookupError, PermissionError):
+                pass  # Already dead — just clean up tracking
+            finally:
+                self._tracked_pids.discard(pid)
+
+        if killed:
+            logger.warning("Killed %d leaked claude process(es) from PID tracker", killed)
+        return killed
 
     def _get_active_client(self, session_id: str) -> ClaudeSDKClient | None:
         """Get an existing long-lived client for a session, if available."""
@@ -1710,22 +2023,9 @@ class AgentManager:
                     )
                     evicted = self._active_sessions.pop(session_id, None)
                     if evicted and evicted.get("wrapper"):
-                        try:
-                            await asyncio.wait_for(
-                                evicted["wrapper"].__aexit__(None, None, None),
-                                timeout=5.0,
-                            )
-                        except asyncio.TimeoutError:
-                            logger.warning(
-                                f"PATH B: wrapper disconnect timed out for "
-                                f"{session_id} — orphan subprocess may linger "
-                                f"until Tauri kill_process_tree at app close"
-                            )
-                        except Exception as exc:
-                            logger.warning(
-                                f"PATH B: wrapper disconnect failed for "
-                                f"{session_id}: {exc}"
-                            )
+                        await self._disconnect_wrapper(
+                            evicted["wrapper"], f"pathB-evict-{session_id}",
+                        )
 
                     # Signal auto-retry: reset error state, fresh accumulator
                     _need_fresh_client = True
@@ -1839,7 +2139,7 @@ class AgentManager:
                 session_context["_wrapper"] = wrapper  # For init-time registration in _run_query_on_client
                 if session_context.get("app_session_id"):
                     _early_key = session_context["app_session_id"]
-                    self._active_sessions[_early_key] = {
+                    _early_info = {
                         "client": client,
                         "wrapper": wrapper,
                         "created_at": time.time(),
@@ -1847,6 +2147,9 @@ class AgentManager:
                         "activity_extracted": False,
                         "failure_tracker": ToolFailureTracker(),
                     }
+                    # Register PID in global tracker immediately after spawn
+                    self._register_wrapper_pid(wrapper, _early_info)
+                    self._active_sessions[_early_key] = _early_info
                     session_context["_early_active_key"] = _early_key
 
                 try:
@@ -1865,10 +2168,7 @@ class AgentManager:
                         yield event
                 except Exception:
                     # On error, disconnect the wrapper instead of keeping alive
-                    try:
-                        await wrapper.__aexit__(None, None, None)
-                    except Exception:
-                        pass
+                    await self._disconnect_wrapper(wrapper, f"error-{session_id or 'new'}")
                     raise
 
                 # Store client for reuse (keep alive for future resume calls)
@@ -1895,10 +2195,7 @@ class AgentManager:
                         session_context["had_error"] = False
                         session_context["_path_a_retried"] = True
                         assistant_content = ContentBlockAccumulator()
-                        try:
-                            await wrapper.__aexit__(None, None, None)
-                        except Exception:
-                            pass
+                        await self._disconnect_wrapper(wrapper, f"retry-{session_id}")
 
                         # Re-enter streaming state on the frontend
                         yield {"type": "reconnecting"}
@@ -1925,7 +2222,9 @@ class AgentManager:
                         async with _env_lock:
                             _configure_claude_environment(self._config)
                             client = await wrapper.__aenter__()
-                        logger.info("PATH A retry: fresh client created")
+                        # Register retry PID in global tracker
+                        self._register_wrapper_pid(wrapper)
+                        logger.info("PATH A retry: fresh client created (pid=%s)", wrapper.pid)
 
                         try:
                             async for event in self._run_query_on_client(
@@ -1942,10 +2241,7 @@ class AgentManager:
                             ):
                                 yield event
                         except Exception:
-                            try:
-                                await wrapper.__aexit__(None, None, None)
-                            except Exception:
-                                pass
+                            await self._disconnect_wrapper(wrapper, f"retry-error-{session_id}")
                             raise
 
                         # Re-evaluate after retry
@@ -1958,23 +2254,24 @@ class AgentManager:
 
                     if session_context.get("had_error"):
                         logger.info("Session had error (after retry), disconnecting instead of storing")
-                        try:
-                            await wrapper.__aexit__(None, None, None)
-                        except Exception:
-                            pass
+                        await self._disconnect_wrapper(wrapper, f"had-error-{session_id}")
                         # Clean up early registration
                         _early_key = session_context.get("_early_active_key")
                         if _early_key:
                             self._active_sessions.pop(_early_key, None)
                     elif effective_session_id:
-                        self._active_sessions[effective_session_id] = {
+                        _final_info = {
                             "client": client,
                             "wrapper": wrapper,
                             "created_at": time.time(),
                             "last_used": time.time(),
                             "activity_extracted": False,
                             "failure_tracker": ToolFailureTracker(),
+                            "pid": wrapper.pid,
                         }
+                        self._active_sessions[effective_session_id] = _final_info
+                        # Ensure PID is in global tracker
+                        self._register_wrapper_pid(wrapper, _final_info)
                         # Clean up early key if it differs from the final key
                         _early_key = session_context.get("_early_active_key")
                         if _early_key and _early_key != effective_session_id:
@@ -2656,14 +2953,17 @@ class AgentManager:
                             _init_sid = session_context["sdk_session_id"]
                             _init_wrapper = session_context.get("_wrapper")
                             if _init_sid and _init_wrapper and _init_sid not in self._active_sessions:
-                                self._active_sessions[_init_sid] = {
+                                _init_info = {
                                     "client": client,
                                     "wrapper": _init_wrapper,
                                     "created_at": time.time(),
                                     "last_used": time.time(),
                                     "activity_extracted": False,
                                     "failure_tracker": ToolFailureTracker(),
+                                    "pid": _init_wrapper.pid,
                                 }
+                                self._register_wrapper_pid(_init_wrapper, _init_info)
+                                self._active_sessions[_init_sid] = _init_info
                                 session_context["_early_active_key"] = _init_sid
                                 logger.info(
                                     "Early client registration for new session %s",
@@ -3223,10 +3523,19 @@ class AgentManager:
         # ── Phase 0: Snapshot & metrics ──────────────────────────────
         sessions = list(self._active_sessions.items())
         if not sessions:
-            logger.info("Shutdown: no active sessions — fast return")
+            logger.info("Shutdown: no active sessions")
             # Still cancel the cleanup loop
             if self._cleanup_task and not self._cleanup_task.done():
                 self._cleanup_task.cancel()
+            # Even with no active sessions, there may be tracked PIDs from
+            # sessions that were cleaned up individually. Sweep them.
+            leaked = self.kill_tracked_leaks()
+            orphans = self.kill_orphan_claude_processes()
+            if leaked or orphans:
+                logger.warning(
+                    "Shutdown: killed %d leaked + %d orphan process(es) in final sweep",
+                    leaked, orphans,
+                )
             return
 
         extracted_count = sum(
@@ -3383,6 +3692,23 @@ class AgentManager:
                     "Shutdown: %d hook tasks cancelled (DA extraction may be lost if incomplete)",
                     cancelled,
                 )
+
+        # ── Phase 3: Final safety sweep — kill any remaining tracked PIDs ──
+        # COE 2026-03-15: last-resort backstop. If any spawned processes
+        # survived Phase 1d disconnect, force-kill them now.
+        remaining_leaked = self.kill_tracked_leaks()
+        if remaining_leaked:
+            logger.warning(
+                "Shutdown Phase 3: killed %d leaked process(es) from PID tracker",
+                remaining_leaked,
+            )
+        # Also do an OS-level orphan sweep as absolute last resort
+        final_orphans = self.kill_orphan_claude_processes()
+        if final_orphans:
+            logger.warning(
+                "Shutdown Phase 3: killed %d orphan process(es) in final sweep",
+                final_orphans,
+            )
 
         total_elapsed = time.monotonic() - t0
         logger.info("Shutdown disconnect_all completed in %.2fs", total_elapsed)
@@ -3666,16 +3992,9 @@ Create the skill in the `.claude/skills/` directory within the current workspace
                             )
                             info = self._active_sessions.pop(session_id, None)
                             if info and info.get("wrapper"):
-                                try:
-                                    await asyncio.wait_for(
-                                        info["wrapper"].__aexit__(None, None, None),
-                                        timeout=5.0,
-                                    )
-                                except (asyncio.TimeoutError, Exception):
-                                    logger.warning(
-                                        f"PATH B (skill-creator): wrapper disconnect "
-                                        f"timed out or failed for {session_id}"
-                                    )
+                                await self._disconnect_wrapper(
+                                    info["wrapper"], f"skill-creator-pathB-{session_id}",
+                                )
                     else:
                         # No active client — start fresh (--resume won't work with SDK 0.1.34+)
                         if is_resuming:
@@ -3718,7 +4037,9 @@ Create the skill in the `.claude/skills/` directory within the current workspace
                         async with _env_lock:
                             _configure_claude_environment(_cfg)
                             client = await wrapper.__aenter__()
-                        logger.info(f"ClaudeSDKClient created for skill creation")
+                        # Register skill-creator PID in global tracker
+                        self._register_wrapper_pid(wrapper)
+                        logger.info("ClaudeSDKClient created for skill creation (pid=%s)", wrapper.pid)
 
                         try:
                             async for event in self._run_query_on_client(
@@ -3737,10 +4058,7 @@ Create the skill in the `.claude/skills/` directory within the current workspace
                                     event["skill_name"] = skill_name
                                 yield event
                         except Exception:
-                            try:
-                                await wrapper.__aexit__(None, None, None)
-                            except Exception:
-                                pass
+                            await self._disconnect_wrapper(wrapper, f"skill-creator-error-{session_id}")
                             raise
 
                         # Store for reuse — key by effective_session_id so the next
@@ -3752,14 +4070,17 @@ Create the skill in the `.claude/skills/` directory within the current workspace
                             else final_session_id
                         )
                         if effective_session_id:
-                            self._active_sessions[effective_session_id] = {
+                            _skill_info = {
                                 "client": client,
                                 "wrapper": wrapper,
                                 "created_at": time.time(),
                                 "last_used": time.time(),
                                 "activity_extracted": False,
                                 "failure_tracker": ToolFailureTracker(),
+                                "pid": wrapper.pid,
                             }
+                            self._register_wrapper_pid(wrapper, _skill_info)
+                            self._active_sessions[effective_session_id] = _skill_info
                             logger.info(f"Stored long-lived client for skill creator session {effective_session_id}")
 
                 except Exception as e:

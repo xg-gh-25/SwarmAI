@@ -74,6 +74,9 @@ htmlcov/
 coverage/
 .hypothesis/
 
+# Temp test databases
+swarmai_test_*.db
+
 # Temporary files
 *.tmp
 *.bak

@@ -363,14 +363,14 @@ export function ChatInput({
   const canSend = (inputValue.trim() || hasAttachments) && selectedAgentId;
 
   return (
-    <div className="px-4 pb-4 pt-2">
+    <div className="pl-2 pr-4 pb-4 pt-2">
         {/* Input Container with drag-and-drop */}
         <div
           className={clsx(
             'bg-[var(--color-card)] border rounded-xl p-3 relative transition-all',
             isDragging
               ? 'border-primary bg-primary/5'
-              : 'border-[var(--color-border)]'
+              : 'border-[var(--color-border)] focus-within:border-[rgba(43,108,238,0.5)] focus-within:shadow-[0_0_0_2px_rgba(43,108,238,0.1)]'
           )}
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}
@@ -457,7 +457,7 @@ export function ChatInput({
               rows={2}
               disabled={isStreaming || disabled}
               className={clsx(
-                'flex-1 bg-transparent text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] resize-none focus:outline-none py-2',
+                'flex-1 bg-transparent text-[var(--color-text)] placeholder:text-[var(--color-text-dim)] resize-none focus:outline-none py-2',
                 (isStreaming || disabled) && 'opacity-50 cursor-not-allowed'
               )}
             />
@@ -482,10 +482,10 @@ export function ChatInput({
               onClick={isStreaming ? onStop : handleSend}
               disabled={(!isStreaming && !canSend) || disabled}
               className={clsx(
-                'w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 transition-colors',
+                'w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 transition-colors shadow-[0_1px_2px_rgba(0,0,0,0.2)]',
                 isStreaming
                   ? 'bg-red-500 hover:bg-red-600'
-                  : 'bg-primary hover:bg-primary-hover',
+                  : 'bg-gradient-to-b from-[#3d7ef0] to-[#2b6cee] hover:from-[#5a94f5] hover:to-[#3d7ef0]',
                 ((!isStreaming && !canSend) || disabled) && 'opacity-50 cursor-not-allowed'
               )}
               title={

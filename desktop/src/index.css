@@ -68,6 +68,12 @@
   --color-error: #dc2626;
   --color-warning: #d97706;
 
+  /* Inline code */
+  --color-inline-code: #953800;
+
+  /* Context ring (normal state — below 60%) */
+  --color-context-ring: #7d8590;
+
   /* User message bubble */
   --color-user-bubble-bg: #e8f0fe;
   --color-user-bubble-border: rgba(43, 108, 238, 0.15);
@@ -145,6 +151,12 @@
   --color-error: #ef4444;
   --color-warning: #f59e0b;
 
+  /* Inline code */
+  --color-inline-code: #f0883e;
+
+  /* Context ring (normal state — below 60%) */
+  --color-context-ring: #8b949e;
+
   /* User message bubble */
   --color-user-bubble-bg: #1e3a5f;
   --color-user-bubble-border: rgba(88, 166, 255, 0.12);
@@ -158,7 +170,8 @@
 }
 
 @theme {
-  --font-family-sans: 'Space Grotesk', system-ui, sans-serif;
+  --font-family-sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-family-mono: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
 
   /* Primary colors (unchanged for both themes) */
   --color-primary: #2b6cee;

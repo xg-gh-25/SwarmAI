@@ -195,12 +195,13 @@ def _call_llm(prompt: str, config: dict[str, Any] | None = None) -> str:
         region = config.get("aws_region", region)
         model_id = config.get("memory_extraction_model", model_id)
 
-    client = _get_bedrock_client(region)
-
     last_error: Exception | None = None
     delay = _LLM_RETRY_DELAY
 
     for attempt in range(1, _LLM_MAX_RETRIES + 1):
+        # Fetch client at top of each iteration so cache eviction
+        # (on auth errors below) takes effect on the next retry.
+        client = _get_bedrock_client(region)
         try:
             response = client.invoke_model(
                 modelId=model_id,
@@ -222,6 +223,11 @@ def _call_llm(prompt: str, config: dict[str, Any] | None = None) -> str:
             return "{}"
         except Exception as e:
             last_error = e
+            # Evict cached client on auth/credential errors so next
+            # retry creates a fresh one with refreshed credentials.
+            err_name = type(e).__name__
+            if "Expired" in err_name or "Credential" in err_name or "Auth" in err_name:
+                _bedrock_clients.pop(region, None)
             if attempt < _LLM_MAX_RETRIES:
                 logger.warning(
                     "LLM extraction attempt %d/%d failed: %s — retrying in %.1fs",

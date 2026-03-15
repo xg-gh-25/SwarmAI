@@ -271,7 +271,7 @@ const MermaidDiagram = memo(function MermaidDiagram({ chart }: { chart: string }
         titleColor: '#1e293b',
         edgeLabelBackground: '#ffffff',
       },
-      fontFamily: 'Space Grotesk, sans-serif',
+      fontFamily: 'Inter, sans-serif',
     });
   }, [resolvedTheme]);
 
@@ -522,27 +522,27 @@ const CodeBlock = memo(function CodeBlock({
   };
 
   return (
-    <div className="relative my-4 bg-[var(--color-card)] border border-[var(--color-border)] rounded-lg overflow-hidden group">
-      {/* Header with language label and copy button */}
-      <div className="flex items-center justify-between px-4 py-2 bg-[var(--color-hover)] border-b border-[var(--color-border)]">
-        <span className="text-xs text-[var(--color-text-muted)] font-medium uppercase tracking-wider">
+    <div className="relative my-1.5 bg-[var(--color-card)] border border-[var(--color-border)] rounded-lg overflow-hidden group">
+      {/* Header with language label and copy button — matches mockup code-head */}
+      <div className="flex items-center justify-between px-3 py-1 bg-[var(--color-hover)] border-b border-[var(--color-border)]">
+        <span className="text-[11px] text-[var(--color-text-muted)] font-mono font-normal">
           {language || 'code'}
         </span>
         <button
           onClick={handleCopy}
-          className="flex items-center gap-1 px-2 py-1 text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] bg-[var(--color-card)] hover:bg-[var(--color-border)] rounded transition-colors"
+          className="flex items-center gap-1 text-[11px] text-[var(--color-text-dim)] hover:text-[var(--color-text)] transition-colors bg-transparent border-none cursor-pointer"
         >
-          <span className="material-symbols-outlined text-sm">
+          <span className="material-symbols-outlined text-[13px]">
             {copied ? 'check' : 'content_copy'}
           </span>
           {copied ? 'Copied!' : 'Copy'}
         </button>
       </div>
       {/* Code content with syntax highlighting */}
-      <pre className="p-4 overflow-x-auto">
+      <pre className="px-3 py-2 overflow-x-auto">
         <code
           ref={codeRef}
-          className={`text-sm font-mono ${language ? `language-${language}` : ''}`}
+          className={`text-[11.5px] leading-[1.55] font-mono ${language ? `language-${language}` : ''}`}
         >
           {children}
         </code>
@@ -557,7 +557,7 @@ const InlineCode = memo(function InlineCode({ children }: { children: React.Reac
   const hasNewlines = content.includes('\n');
 
   return (
-    <code className={`px-1.5 py-0.5 bg-[var(--color-card)] border border-[var(--color-border)] rounded text-sm text-primary font-mono ${hasNewlines ? 'whitespace-pre-wrap block my-2' : ''}`}>
+    <code className={`px-1 py-px bg-[var(--color-hover)] rounded-[3px] text-[11.5px] text-[var(--color-inline-code)] font-mono ${hasNewlines ? 'whitespace-pre-wrap block my-2' : ''}`}>
       {children}
     </code>
   );

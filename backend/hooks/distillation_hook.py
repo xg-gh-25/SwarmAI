@@ -544,13 +544,19 @@ class DistillationTriggerHook:
             else:
                 existing = ""
 
-            # Dedup: filter out entries already present
+            # Dedup: filter out entries already present (line-by-line match).
+            # Compare against existing lines to avoid substring false-positives
+            # where a 60-char prefix of one entry matches inside a different entry.
             if existing:
-                existing_lower = existing.lower()
+                existing_lines_lower = {
+                    ln.strip()[:60].lower()
+                    for ln in existing.splitlines()
+                    if ln.strip()
+                }
                 new_lines = []
                 for line in text.splitlines():
                     entry_key = line.strip()[:60].lower()
-                    if entry_key and entry_key in existing_lower:
+                    if entry_key and entry_key in existing_lines_lower:
                         continue
                     new_lines.append(line)
                 if not new_lines:
@@ -616,6 +622,7 @@ class DistillationTriggerHook:
                 by_topic[key] = []
             by_topic[key].append((file_date, signal))
 
+        blocks: list[str] = []
         for topic_key, events in by_topic.items():
             # Use the original casing from the first entry
             original_topic = next(
@@ -625,11 +632,15 @@ class DistillationTriggerHook:
             has_resolution = any(s == "resolution" for _, s in events)
             status = "✅ Resolved" if has_resolution else "🔍 Investigating"
 
-            entry = (
+            blocks.append(
                 f"- {dates[0]}: **{original_topic}** — {status}. "
                 f"Sessions: {', '.join(dates)}"
             )
-            self._run_locked_write(memory_path, "COE Registry", entry)
+
+        if blocks:
+            self._run_locked_write(
+                memory_path, "COE Registry", "\n".join(blocks)
+            )
 
         logger.info("Wrote %d COE registry entries to MEMORY.md", len(by_topic))
 
@@ -772,6 +783,7 @@ class DistillationTriggerHook:
         cutoff = date.today() - timedelta(days=ARCHIVE_DAYS)
         archive_dir = ws_path / "Knowledge" / "Archives"
         archived = 0
+        import shutil
 
         for f in da_dir.glob("*.md"):
             try:
@@ -790,7 +802,6 @@ class DistillationTriggerHook:
                 continue
 
             # Move to archive (shutil.move handles cross-device moves)
-            import shutil
             archive_dir.mkdir(parents=True, exist_ok=True)
             dest = archive_dir / f.name
             if dest.exists():

@@ -174,7 +174,7 @@ export default function ChatPage() {
   // File attachment — unified hook replaces both useFileAttachment and LayoutContext.attachedFiles
   const { attachments, addFiles, addWorkspaceFiles, removeAttachment, clearAll: clearAttachments,
     isProcessing: isProcessingFiles, error: fileError, canAddMore } = useUnifiedAttachments(
-    activeTabIdRef.current, tabMapRef
+    activeTabId, tabMapRef
   );
 
   // ── Explorer → Chat custom event bridge ──────────────────────────────
@@ -811,6 +811,23 @@ export default function ChatPage() {
     });
     return () => setActiveSessionMeta(null);
   }, [activeTabTitle, contextPct, fileCount, agentName, setActiveSessionMeta]);
+
+  // Cmd+1-9 / Ctrl+1-9 keyboard shortcuts for tab switching.
+  // Uses openTabsRef to avoid re-registering the listener on every tab change.
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key >= '1' && e.key <= '9') {
+        e.preventDefault();
+        const idx = parseInt(e.key) - 1;
+        const tabs = openTabsRef.current;
+        if (tabs[idx]) {
+          handleTabSelect(tabs[idx].id);
+        }
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [handleTabSelect]);
 
   // Validate tabs against sessions - filter out tabs referencing deleted sessions (Req 3.4)
   // Guard: skip during initial restore — sessions query may return stale data
@@ -1500,7 +1517,7 @@ export default function ChatPage() {
                 onScroll={handleMessagesScroll}
                 className={messages.length === 0
                   ? 'flex-1 overflow-hidden flex flex-col'
-                  : 'flex-1 overflow-y-auto px-4 py-3.5 space-y-2.5 min-w-0'
+                  : 'flex-1 overflow-y-auto pl-2 pr-4 py-3.5 space-y-2.5 min-w-0'
                 }
               >
                 {isLoadingOlderMessages && (

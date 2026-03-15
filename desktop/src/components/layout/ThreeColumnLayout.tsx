@@ -30,6 +30,25 @@ interface ThreeColumnLayoutProps {
   children: ReactNode;
 }
 
+// 16x16 SVG ring showing context usage percentage (matches mockup ctx-ring)
+function ContextRingSVG({ pct, color }: { pct: number; color: string }) {
+  const r = 6; // radius
+  const circumference = 2 * Math.PI * r;
+  const offset = circumference - (pct / 100) * circumference;
+  return (
+    <span className="relative inline-flex items-center justify-center" style={{ width: 16, height: 16 }}>
+      <svg width="16" height="16" style={{ transform: 'rotate(-90deg)' }}>
+        <circle cx="8" cy="8" r={r} fill="none" stroke="var(--color-hover)" strokeWidth="3" />
+        <circle cx="8" cy="8" r={r} fill="none" stroke={color} strokeWidth="3" strokeLinecap="round"
+          strokeDasharray={circumference} strokeDashoffset={offset} />
+      </svg>
+      <span className="absolute inset-0 flex items-center justify-center text-[6.5px] font-semibold text-[var(--color-text-muted)]" style={{ lineHeight: 1 }}>
+        {Math.round(pct)}
+      </span>
+    </span>
+  );
+}
+
 // TopBar -- Session context bar replacing the old file search.
 // Shows: session topic, context usage %, attached files, active agent.
 // Remains draggable for Tauri window move (macOS).
@@ -48,8 +67,6 @@ function TopBar() {
 
   const meta = activeSessionMeta;
   const contextPct = meta?.contextPct ?? 0;
-  const ringColor =
-    contextPct > 80 ? 'text-red-400' : contextPct > 60 ? 'text-amber-400' : 'text-[var(--color-text-muted)]';
 
   return (
     <div
@@ -70,9 +87,8 @@ function TopBar() {
               {meta.topic || 'New Session'}
             </span>
             <div className="w-px h-3 bg-[var(--color-border)] flex-shrink-0" aria-hidden="true" />
-            <span className={`flex items-center gap-1 ${ringColor}`} aria-label={`Context usage: ${meta.contextPct != null ? Math.round(meta.contextPct) + '%' : 'unknown'}`}>
-              <span className="material-symbols-outlined text-[14px]" aria-hidden="true">memory</span>
-              {meta.contextPct != null ? `${Math.round(meta.contextPct)}%` : '--'}
+            <span className="flex items-center gap-1" aria-label={`Context usage: ${meta.contextPct != null ? Math.round(meta.contextPct) + '%' : 'unknown'}`}>
+              <ContextRingSVG pct={contextPct} color={contextPct > 80 ? 'var(--color-error)' : contextPct > 60 ? 'var(--color-warning)' : 'var(--color-context-ring)'} />
             </span>
             <div className="w-px h-3 bg-[var(--color-border)] flex-shrink-0" aria-hidden="true" />
             <span className="flex items-center gap-1" aria-label={`${meta.fileCount} attached files`}>
@@ -122,7 +138,7 @@ function LeftSidebar() {
       </div>
 
       {/* Navigation icons */}
-      <nav className="flex-1 py-1.5 px-1 space-y-0.5 overflow-y-auto" data-testid="nav-icons">
+      <nav className="flex-1 py-1.5 space-y-0.5 overflow-y-auto flex flex-col items-center" data-testid="nav-icons">
         {navItems.map((item) => (
           <NavIconButton
             key={item.modalType}
@@ -136,7 +152,7 @@ function LeftSidebar() {
       </nav>
 
       {/* Bottom section - Settings and GitHub link */}
-      <div className="py-1.5 px-1 border-t border-[var(--color-border)] space-y-0.5">
+      <div className="py-1.5 border-t border-[var(--color-border)] space-y-0.5 flex flex-col items-center">
         <NavIconButton
           icon="settings"
           label="Settings"

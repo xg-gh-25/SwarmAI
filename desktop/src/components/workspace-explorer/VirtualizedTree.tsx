@@ -49,6 +49,9 @@ export const SEMANTIC_ZONES = [
 /** Root-level files displayed above the first zone separator. */
 export const ROOT_FILES: string[] = [];
 
+/** System files/directories pinned at explorer bottom — excluded from main tree. */
+const SYSTEM_NAMES = new Set(['.context', '.claude', 'config.json', 'proactive_state.json']);
+
 const ROW_HEIGHT = 32;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -166,12 +169,13 @@ export function flattenTree(
     }
   }
 
-  // 2. Other root-level files not in ROOT_FILES and not zone folders
+  // 2. Other root-level files not in ROOT_FILES, not zone folders, not system
   for (const node of treeData) {
     if (
       node.type === 'file' &&
       !rootFileNames.has(node.name) &&
-      !zoneFolderNames.has(node.name)
+      !zoneFolderNames.has(node.name) &&
+      !SYSTEM_NAMES.has(node.name)
     ) {
       rows.push({
         kind: 'node',
@@ -183,12 +187,13 @@ export function flattenTree(
     }
   }
 
-  // 2b. Dot-directories (e.g. .claude, .context) — shown before zones
+  // 2b. Dot-directories (non-system) — shown before zones
   for (const node of treeData) {
     if (
       node.type === 'directory' &&
       node.name.startsWith('.') &&
-      !zoneFolderNames.has(node.name)
+      !zoneFolderNames.has(node.name) &&
+      !SYSTEM_NAMES.has(node.name)
     ) {
       const isExpanded = expandedPaths.has(node.path);
       rows.push({
@@ -226,12 +231,13 @@ export function flattenTree(
     }
   }
 
-  // 4. Remaining top-level directories not assigned to a zone or dot-dirs
+  // 4. Remaining top-level directories not assigned to a zone, dot-dirs, or system
   for (const node of treeData) {
     if (
       node.type === 'directory' &&
       !zoneFolderNames.has(node.name) &&
-      !node.name.startsWith('.')
+      !node.name.startsWith('.') &&
+      !SYSTEM_NAMES.has(node.name)
     ) {
       const isExpanded = expandedPaths.has(node.path);
       rows.push({

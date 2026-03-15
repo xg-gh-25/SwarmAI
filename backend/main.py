@@ -494,6 +494,14 @@ async def lifespan(app: FastAPI):
     register_tscc_dependencies(_tscc_state_manager)
     logger.info("TSCC state manager initialized")
 
+    # Kill ALL leftover claude CLI processes from previous instance.
+    # At startup, no claude processes should be running — any that exist are
+    # zombies from a crash or unclean shutdown. These hold vnodes and can
+    # cause kernel panics (COE 2026-03-15: 80 zombies -> vnode exhaustion -> panic).
+    startup_killed = agent_manager.kill_all_claude_processes()
+    if startup_killed:
+        logger.warning("Killed %d leftover claude process(es) at startup", startup_killed)
+
     # Mark startup as complete - health check will now return healthy
     _startup_complete = True
     total_ms = round((time.monotonic() - t0) * 1000)

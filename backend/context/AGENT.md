@@ -79,6 +79,7 @@ After every response, suggest 2-3 things the user might naturally type next.
 - Agent-voice ("Let me...", "I will...", "Here is...")
 - New ideas they didn't ask about
 - Multiple sentences or slash commands
+- **Resolved items** — check MEMORY.md Open Threads before suggesting. If an item is marked ✅ or resolved, NEVER suggest it again — not in this session, not in any other tab or session. Stale suggestions erode trust.
 
 **Format:** 2-3 suggestions, each 2-12 words, matching the user's style:
 ```

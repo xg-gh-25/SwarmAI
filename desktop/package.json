@@ -19,8 +19,9 @@
     "test:run": "vitest run"
   },
   "dependencies": {
+    "@fontsource-variable/inter": "^5.2.8",
     "@fontsource-variable/material-symbols-outlined": "^5.2.33",
-    "@fontsource-variable/space-grotesk": "^5.2.10",
+    "@fontsource/jetbrains-mono": "^5.2.8",
     "@tanstack/react-query": "^5.90.5",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-dialog": "^2",
@@ -44,7 +45,6 @@
     "react-router-dom": "^7.9.5",
     "react-virtualized-auto-sizer": "^2.0.3",
     "react-window": "^2.2.7",
-    "rehype-highlight": "^7.0.2",
     "rehype-katex": "^7.0.1",
     "remark-breaks": "^4.0.0",
     "remark-gfm": "^4.0.1",
