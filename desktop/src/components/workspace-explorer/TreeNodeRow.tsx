@@ -40,6 +40,8 @@ export interface TreeNodeRowProps {
   isMatched: boolean;
   /** Whether this node is currently in inline rename mode. */
   isRenaming?: boolean;
+  /** Whether this directory node is currently a drag-over target. */
+  isDragOver?: boolean;
   onToggle: () => void;
   onSelect: () => void;
   onContextMenu: (e: React.MouseEvent) => void;
@@ -48,6 +50,12 @@ export interface TreeNodeRowProps {
   onRenameSubmit?: (newName: string) => void;
   /** Called when inline rename is cancelled. */
   onRenameCancel?: () => void;
+  /** Called when a file/folder is dragged over this directory. */
+  onDragOver?: (e: React.DragEvent) => void;
+  /** Called when drag leaves this directory. */
+  onDragLeave?: (e: React.DragEvent) => void;
+  /** Called when a file/folder is dropped on this directory. */
+  onDrop?: (e: React.DragEvent) => void;
   /** Positioning style injected by react-window (top, height, position). */
   style: React.CSSProperties;
 }
@@ -80,7 +88,7 @@ function isHiddenNode(name: string): boolean {
 /* ------------------------------------------------------------------ */
 
 /** Inline text input for renaming a file/folder in the tree. */
-function InlineRenameInput({
+export function InlineRenameInput({
   name,
   onSubmit,
   onCancel,
@@ -112,7 +120,7 @@ function InlineRenameInput({
     const newName = inputRef.current?.value.trim() ?? '';
     // Validate illegal filename characters and reserved names
     if (newName && newName !== name) {
-      if (/[/:\0]/.test(newName) || newName === '.' || newName === '..') {
+      if (/[/:\\\0\x01-\x1f\x7f]/.test(newName) || newName === '.' || newName === '..') {
         // Shake the input briefly to signal invalid name, then let user retry
         inputRef.current?.classList.add('animate-shake');
         setTimeout(() => inputRef.current?.classList.remove('animate-shake'), 300);
@@ -176,12 +184,16 @@ const TreeNodeRow: React.FC<TreeNodeRowProps> = React.memo(function TreeNodeRow(
   isSelected,
   isMatched,
   isRenaming,
+  isDragOver,
   onToggle,
   onSelect,
   onContextMenu,
   onDoubleClick,
   onRenameSubmit,
   onRenameCancel,
+  onDragOver,
+  onDragLeave,
+  onDrop,
   style,
 }) {
   const isDirectory = node.type === 'directory';
@@ -189,21 +201,19 @@ const TreeNodeRow: React.FC<TreeNodeRowProps> = React.memo(function TreeNodeRow(
   /* ---- drag handler ---- */
 
   const handleDragStart = useCallback((e: React.DragEvent) => {
-    if (isDirectory) {
-      e.preventDefault();
-      return;
-    }
     const payload: FileTreeItem = {
       id: node.path,
       name: node.name,
-      type: node.type as 'file',
+      type: node.type as 'file' | 'directory',
       path: node.path,
       workspaceId: '',
       workspaceName: '',
       gitStatus: node.gitStatus,
     };
     e.dataTransfer.setData('application/json', JSON.stringify(payload));
-    e.dataTransfer.effectAllowed = 'copy';
+    // Also set a custom type for tree-internal moves
+    e.dataTransfer.setData('text/x-swarm-tree-path', node.path);
+    e.dataTransfer.effectAllowed = 'move';
 
     // Custom drag ghost using textContent (not innerHTML) to prevent XSS
     const ghost = document.createElement('div');
@@ -321,9 +331,12 @@ const TreeNodeRow: React.FC<TreeNodeRowProps> = React.memo(function TreeNodeRow(
       aria-expanded={isDirectory ? isExpanded : undefined}
       aria-selected={isSelected}
       tabIndex={isSelected ? 0 : -1}
-      className="tree-node-row"
-      draggable={!isDirectory}
+      className={`tree-node-row${isDragOver ? ' drag-over' : ''}`}
+      draggable
       onDragStart={handleDragStart}
+      onDragOver={isDirectory ? onDragOver : undefined}
+      onDragLeave={isDirectory ? onDragLeave : undefined}
+      onDrop={isDirectory ? onDrop : undefined}
       style={{
         ...style,
         paddingLeft,

@@ -1,4 +1,4 @@
-<!-- SYSTEM DEFAULT — Managed by SwarmAI. Refreshed from built-in templates on every startup.
+<!-- ⚙️ SYSTEM DEFAULT — Managed by SwarmAI. Refreshed from built-in templates on every startup.
      Edits here will be OVERWRITTEN. To change the agent's name or intro, copy this file and
      modify STEERING.md to override specific behaviors. -->
 

@@ -1,6 +1,6 @@
 import { ReactNode, useState, useCallback, useRef } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { LayoutProvider, useLayout, LAYOUT_CONSTANTS, ModalType } from '../../contexts/LayoutContext';
+import { LayoutProvider, useLayout, LAYOUT_CONSTANTS, ModalType, useSessionMeta } from '../../contexts/LayoutContext';
 import { ExplorerProvider, useTreeData } from '../../contexts/ExplorerContext';
 import { WorkspaceExplorer } from '../workspace-explorer';
 import { BottomBar } from './BottomBar';
@@ -34,7 +34,7 @@ interface ThreeColumnLayoutProps {
 // Shows: session topic, context usage %, attached files, active agent.
 // Remains draggable for Tauri window move (macOS).
 function TopBar() {
-  const { activeSessionMeta } = useLayout();
+  const { activeSessionMeta } = useSessionMeta();
 
   const handleMouseDown = async (e: React.MouseEvent) => {
     if (e.button === 0 && e.clientX > 80) {
@@ -54,7 +54,7 @@ function TopBar() {
   return (
     <div
       onMouseDown={handleMouseDown}
-      className="h-9 bg-[var(--color-bg)] border-b border-[var(--color-border)] flex-shrink-0 select-none cursor-default flex items-center"
+      className="h-10 bg-[var(--color-bg-chrome)] border-b border-[var(--color-border)] flex-shrink-0 select-none cursor-default flex items-center"
       data-tauri-drag-region
       data-testid="top-bar"
     >
@@ -112,17 +112,17 @@ function LeftSidebar() {
 
   return (
     <aside
-      className="bg-[var(--color-bg)] border-r border-[var(--color-border)] flex flex-col flex-shrink-0"
+      className="bg-[var(--color-bg-chrome)] border-r border-[var(--color-border)] flex flex-col flex-shrink-0"
       style={{ width: LEFT_SIDEBAR_WIDTH }}
       data-testid="left-sidebar"
     >
       {/* Logo/Brand area */}
-      <div className="h-9 flex items-center justify-center border-b border-[var(--color-border)]">
+      <div className="h-10 flex items-center justify-center border-b border-[var(--color-border)]">
         <SwarmAILogo />
       </div>
 
       {/* Navigation icons */}
-      <nav className="flex-1 py-2 px-1.5 space-y-0.5 overflow-y-auto" data-testid="nav-icons">
+      <nav className="flex-1 py-1.5 px-1 space-y-0.5 overflow-y-auto" data-testid="nav-icons">
         {navItems.map((item) => (
           <NavIconButton
             key={item.modalType}
@@ -136,7 +136,7 @@ function LeftSidebar() {
       </nav>
 
       {/* Bottom section - Settings and GitHub link */}
-      <div className="py-2 px-1.5 border-t border-[var(--color-border)] space-y-0.5">
+      <div className="py-1.5 px-1 border-t border-[var(--color-border)] space-y-0.5">
         <NavIconButton
           icon="settings"
           label="Settings"
@@ -149,7 +149,7 @@ function LeftSidebar() {
           target="_blank"
           rel="noopener noreferrer"
           title="GitHub"
-          className="flex items-center justify-center w-9 h-9 rounded-lg transition-colors text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)]"
+          className="flex items-center justify-center w-8 h-8 rounded-lg transition-colors text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)]"
           data-testid="github-link"
         >
           <GitHubIcon className="w-4 h-4" />
@@ -163,7 +163,7 @@ function LeftSidebar() {
 function SwarmAILogo() {
   return (
     <div
-      className="w-7 h-7 rounded-lg flex items-center justify-center overflow-hidden"
+      className="w-[26px] h-[26px] rounded-md flex items-center justify-center overflow-hidden"
       title="SwarmAI"
       data-testid="swarm-logo"
     >
@@ -188,13 +188,13 @@ function NavIconButton({ icon, label, isActive, onClick, 'data-testid': testId }
       title={label}
       data-testid={testId}
       aria-pressed={isActive}
-      className={`flex items-center justify-center w-9 h-9 rounded-lg transition-colors ${
+      className={`flex items-center justify-center w-8 h-8 rounded-lg transition-colors ${
         isActive
           ? 'bg-[var(--color-primary)]/15 text-[var(--color-sidebar-icon-active)] ring-1 ring-[var(--color-primary)]/30'
           : 'text-[var(--color-sidebar-icon)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)]'
       }`}
     >
-      <span className="material-symbols-outlined text-lg">{icon}</span>
+      <span className="material-symbols-outlined text-[18px]">{icon}</span>
     </button>
   );
 }
