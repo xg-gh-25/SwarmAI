@@ -64,6 +64,7 @@ export default function FileContextMenu({
   const menuRef = useRef<HTMLDivElement>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const [showSwarmWorkspaceWarning, setShowSwarmWorkspaceWarning] = useState(false);
 
   // Close menu when clicking outside
@@ -180,6 +181,7 @@ export default function FileContextMenu({
       setShowSwarmWorkspaceWarning(true);
     } else {
       setShowDeleteConfirm(true);
+      setDeleteError(null);
     }
   }, [item.isSwarmWorkspace]);
 
@@ -192,14 +194,19 @@ export default function FileContextMenu({
       onClose();
     } catch (error) {
       console.error('Failed to delete:', error);
+      // Keep confirm dialog visible so user sees something went wrong
+      setDeleteError(
+        error instanceof Error ? error.message : 'Failed to move to Trash',
+      );
+    } finally {
       setIsDeleting(false);
-      setShowDeleteConfirm(false);
     }
   }, [item, onDelete, onFileSystemChange, onClose]);
 
   // Cancel delete
   const handleDeleteCancel = useCallback(() => {
     setShowDeleteConfirm(false);
+    setDeleteError(null);
   }, []);
 
   // Close Swarm Workspace warning dialog (Requirements 4.1, 4.4)
@@ -231,16 +238,14 @@ export default function FileContextMenu({
     });
   }
 
-  // Ask Swarm about this file
-  if (item.type === 'file') {
-    menuItems.push({
-      id: 'ask-swarm',
-      label: 'Ask Swarm',
-      icon: 'smart_toy',
-      action: handleAskAbout,
-      dividerAfter: true,
-    });
-  }
+  // Ask Swarm about this file or folder
+  menuItems.push({
+    id: 'ask-swarm',
+    label: 'Ask Swarm',
+    icon: 'smart_toy',
+    action: handleAskAbout,
+    dividerAfter: true,
+  });
 
   // Rename
   menuItems.push({
@@ -252,10 +257,10 @@ export default function FileContextMenu({
     disabled: item.isSwarmWorkspace && item.path === item.workspaceId,
   });
 
-  // Delete - enabled for all items, but Swarm Workspace items show warning dialog
+  // Move to Trash - enabled for all items, but Swarm Workspace items show warning dialog
   menuItems.push({
     id: 'delete',
-    label: 'Delete',
+    label: 'Move to Trash',
     icon: 'delete',
     action: handleDeleteClick,
     danger: true,
@@ -280,15 +285,19 @@ export default function FileContextMenu({
         data-testid="delete-confirm-dialog"
       >
         <div className="flex items-start gap-3 mb-4">
-          <span className="material-symbols-outlined text-[var(--color-error)]">warning</span>
+          <span className="material-symbols-outlined text-[var(--color-warning, var(--color-error))]">delete</span>
           <div>
             <h4 className="text-sm font-medium text-[var(--color-text)] mb-1">
-              Delete {item.type === 'directory' ? 'Folder' : 'File'}?
+              Move to Trash?
             </h4>
             <p className="text-xs text-[var(--color-text-muted)]">
-              Are you sure you want to delete "{item.name}"?
-              {item.type === 'directory' && ' This will delete all contents.'}
+              "{item.name}" will be moved to the Trash.
+              {item.type === 'directory' && ' This includes all contents.'}
+              {' '}You can recover it from Finder.
             </p>
+            {deleteError && (
+              <p className="text-xs text-[var(--color-error)] mt-1">{deleteError}</p>
+            )}
           </div>
         </div>
         <div className="flex justify-end gap-2">
@@ -309,7 +318,7 @@ export default function FileContextMenu({
             {isDeleting && (
               <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />
             )}
-            Delete
+            Move to Trash
           </button>
         </div>
       </div>
