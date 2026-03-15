@@ -77,15 +77,15 @@ export const SessionTab = forwardRef<HTMLDivElement, SessionTabProps>(function S
         onKeyDown?.(e);
       }}
       className={clsx(
-        'flex items-center gap-2 px-3 py-2 rounded-lg cursor-pointer transition-colors',
+        'group/tab flex items-center gap-1.5 px-3 py-1 rounded cursor-pointer transition-colors',
         'min-w-0 max-w-[200px] flex-shrink-0',
         isActive
-          ? 'bg-primary/15 text-primary'
+          ? 'bg-[var(--color-card)] text-[var(--color-text)] font-medium'
           : 'text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)]'
       )}
     >
       {/* Chat icon */}
-      <span className="material-symbols-outlined text-[18px] flex-shrink-0">
+      <span className="material-symbols-outlined text-[14px] flex-shrink-0">
         chat_bubble
       </span>
 
@@ -93,23 +93,22 @@ export const SessionTab = forwardRef<HTMLDivElement, SessionTabProps>(function S
       {status && <TabStatusIndicator status={status} />}
 
       {/* Truncated title */}
-      <span className="truncate text-sm font-medium" title={tab.title}>
+      <span className="truncate text-xs" title={tab.title}>
         {displayTitle}
       </span>
 
-      {/* Close button */}
+      {/* Close button — hidden by default, visible on tab hover */}
       <button
         onClick={handleClose}
         aria-label={`Close ${tab.title}`}
         className={clsx(
-          'p-0.5 rounded transition-colors flex-shrink-0',
+          'p-0.5 rounded transition-all flex-shrink-0',
+          'opacity-0 group-hover/tab:opacity-100',
           'hover:bg-[var(--color-hover)]',
-          isActive
-            ? 'text-primary/70 hover:text-primary'
-            : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
+          'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
         )}
       >
-        <span className="material-symbols-outlined text-[16px]">close</span>
+        <span className="material-symbols-outlined text-[14px]">close</span>
       </button>
     </div>
   );

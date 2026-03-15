@@ -757,6 +757,10 @@ async def put_workspace_file(
     if path.startswith(".claude/skills/") or path.startswith(".claude\\skills\\"):
         raise HTTPException(status_code=403, detail="Skill files are read-only")
 
+    # System-default context files are read-only (0o444, overwritten on startup)
+    if _is_readonly_context_file(path):
+        raise HTTPException(status_code=403, detail="System-default context files are read-only")
+
     expanded_path = await _get_workspace_path()
     workspace_root = Path(expanded_path)
     target = (workspace_root / path).resolve()
@@ -784,6 +788,43 @@ async def put_workspace_file(
 # ─────────────────────────────────────────────────────────────────────────────
 # Folder / file operations
 # ─────────────────────────────────────────────────────────────────────────────
+
+
+@router.post("/workspace/file")
+async def create_file(request: FolderCreateRequest):
+    """Create an empty file inside the workspace.
+
+    Creates parent directories as needed.  Returns HTTP 409 if the file
+    already exists to prevent accidental overwrites.
+    Returns HTTP 403 if the target is inside a system-managed directory.
+    """
+    expanded_path = await _get_workspace_path()
+    target = _validate_relative_path(request.path, expanded_path)
+
+    # Reject creation inside system-managed folders
+    rel_path = request.path.replace("\\", "/").strip("/")
+    rel_parts = rel_path.split("/")
+    for i in range(len(rel_parts)):
+        prefix = "/".join(rel_parts[: i + 1])
+        if prefix in SYSTEM_MANAGED_FOLDERS:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Cannot create inside system-managed directory: {prefix}",
+            )
+
+    if target.exists():
+        raise HTTPException(status_code=409, detail="File already exists")
+
+    # Validate depth
+    is_valid, error_msg = swarm_workspace_manager.validate_depth(request.path)
+    if not is_valid:
+        raise HTTPException(status_code=400, detail=error_msg)
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.touch()
+
+    logger.info("Created file: %s", request.path)
+    return {"path": request.path}
 
 
 @router.post("/workspace/folders")
@@ -850,15 +891,23 @@ async def trash_item(request: FolderDeleteRequest):
     Never falls back to permanent delete — if trashing fails, the error is
     surfaced to the user so they can decide what to do.
 
-    **Symlink note:** ``_validate_relative_path`` resolves symlinks, so if the
-    target is a symlink the resolved (real) path is trashed.  This means
-    trashing a symlink trashes the *target*, not the link itself.  This is
-    consistent with Finder's own behavior for POSIX file paths.
+    **Symlink handling:** If the target path is a symlink, only the link
+    itself is removed (``os.unlink``).  The real target directory is
+    preserved.  This prevents accidental data loss when trashing linked
+    project folders (e.g., ``Projects/SwarmAI → ~/real/repo``).
 
     Returns HTTP 403 if the target is a system-managed directory.
     Returns HTTP 500 if trashing fails (osascript error, permissions, etc.).
     """
     expanded_path = await _get_workspace_path()
+    workspace_root = Path(expanded_path)
+
+    # Build the unresolved path BEFORE _validate_relative_path (which resolves
+    # symlinks).  We need the unresolved path to detect symlinks and to pass
+    # the correct filesystem entry to osascript / unlink.
+    stripped = request.path.replace("\\", "/").strip("/")
+    unresolved_path = workspace_root / stripped
+
     target = _validate_relative_path(request.path, expanded_path)
 
     # Reject trash on system-managed folders
@@ -869,22 +918,44 @@ async def trash_item(request: FolderDeleteRequest):
             detail=f"Cannot delete system-managed directory: {rel_path}",
         )
 
-    if not target.exists():
+    if not target.exists() and not unresolved_path.is_symlink():
         raise HTTPException(status_code=404, detail="Path not found")
 
+    # Symlink guard: if the path is a symlink, remove the link itself — never
+    # trash the real target directory.  This prevents accidental data loss when
+    # trashing linked project folders (e.g., Projects/SwarmAI → ~/real/repo).
+    # os.unlink removes the symlink without touching the target.
+    if unresolved_path.is_symlink():
+        try:
+            await asyncio.to_thread(os.unlink, str(unresolved_path))
+        except OSError as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to remove symlink: {exc}",
+            )
+        logger.info("Removed symlink (target preserved): %s", request.path)
+        return {"path": request.path, "trashed": True, "was_symlink": True}
+
     # macOS Trash via osascript (recoverable).
-    # For directories, Finder uses "delete POSIX file" for both files and
-    # folders — it resolves the type automatically.
+    # For directories, "POSIX file" must be coerced to alias — Finder's
+    # "delete POSIX file" only reliably handles files on all macOS versions.
     #
     # Escape backslashes and double-quotes for the AppleScript string literal
     # to prevent injection via crafted filenames.
     target_str = str(target).replace("\\", "\\\\").replace('"', '\\"').replace("\n", "").replace("\r", "")
 
-    applescript = (
-        'tell application "Finder"\n'
-        f'  delete POSIX file "{target_str}"\n'
-        'end tell'
-    )
+    if target.is_dir():
+        applescript = (
+            'tell application "Finder"\n'
+            f'  delete (POSIX file "{target_str}" as alias)\n'
+            'end tell'
+        )
+    else:
+        applescript = (
+            'tell application "Finder"\n'
+            f'  delete POSIX file "{target_str}"\n'
+            'end tell'
+        )
 
     try:
         # Run in thread to avoid blocking the async event loop (osascript
@@ -926,8 +997,8 @@ async def rename_item(request: FolderRenameRequest):
     Increments project_files_version for context cache invalidation
     when project files are renamed or moved (Requirement 34.2).
 
-    Returns HTTP 403 if the source is a system-managed directory
-    (Requirement 12.9).
+    Returns HTTP 403 if the source or destination is a system-managed
+    directory (Requirement 12.9).
     """
     expanded_path = await _get_workspace_path()
 
@@ -939,11 +1010,25 @@ async def rename_item(request: FolderRenameRequest):
             detail=f"Cannot delete/rename system-managed directory: {normalized_old}",
         )
 
+    # Reject move INTO a system-managed directory (same check as create_file)
+    normalized_new = request.new_path.replace("\\", "/").strip("/")
+    new_parts = normalized_new.split("/")
+    for i in range(len(new_parts) - 1):  # exclude the item itself
+        prefix = "/".join(new_parts[: i + 1])
+        if prefix in SYSTEM_MANAGED_FOLDERS:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Cannot move into system-managed directory: {prefix}",
+            )
+
     old_target = _validate_relative_path(request.old_path, expanded_path)
     new_target = _validate_relative_path(request.new_path, expanded_path)
 
     if not old_target.exists():
         raise HTTPException(status_code=404, detail="Source path not found")
+
+    if new_target.exists():
+        raise HTTPException(status_code=409, detail=f"Destination already exists: {request.new_path}")
 
     # If the destination is a directory path, validate depth
     if new_target.suffix == "" or old_target.is_dir():

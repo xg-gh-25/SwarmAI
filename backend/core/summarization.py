@@ -35,19 +35,12 @@ logger = logging.getLogger(__name__)
 # Threshold: sessions with more messages than this get LLM enrichment
 LLM_ENRICHMENT_THRESHOLD = 8
 
-# Decision-indicator patterns (case-insensitive)
-_DECISION_PATTERNS = re.compile(
-    r"\b(?:decided to|chose|will use|going with|recommend|"
-    r"the approach is|selected|switched to|adopted|confirmed|"
-    r"approved|rejected|using .+ instead of|opted for)\b",
-    re.IGNORECASE,
-)
-
-# Filler/noise patterns to filter from topics
-_NOISE_PATTERNS = re.compile(
-    r"^(?:ok|yes|no|sure|thanks|thank you|got it|right|"
-    r"hmm|ah|oh|please|hi|hello|hey)\b",
-    re.IGNORECASE,
+# Centralized patterns — shared with distillation_hook.py to prevent drift.
+# Summarization uses the BROAD variant (runs on raw conversation).
+from .extraction_patterns import (
+    DECISION_PATTERNS_BROAD as _DECISION_PATTERNS,
+    AGENT_MONOLOGUE as _AGENT_MONOLOGUE,
+    NOISE_PATTERNS as _NOISE_PATTERNS,
 )
 
 # Tool names whose input contains file paths
@@ -347,6 +340,9 @@ class SummarizationPipeline:
                 if not sentence or len(sentence) < 20:
                     continue
                 if _DECISION_PATTERNS.search(sentence):
+                    # Filter agent monologue
+                    if _AGENT_MONOLOGUE.match(sentence):
+                        continue
                     # Normalize for dedup
                     normalized = sentence.lower().strip()
                     if normalized in seen_normalized:

@@ -68,6 +68,10 @@
   --color-error: #dc2626;
   --color-warning: #d97706;
 
+  /* User message bubble */
+  --color-user-bubble-bg: #e8f0fe;
+  --color-user-bubble-border: rgba(43, 108, 238, 0.15);
+
   /* Chrome surfaces (TopBar, NavBar, Explorer, BottomBar) — subtle depth layer */
   --color-bg-chrome: #eef1f5;
 
@@ -140,6 +144,10 @@
   /* Semantic aliases — dark theme */
   --color-error: #ef4444;
   --color-warning: #f59e0b;
+
+  /* User message bubble */
+  --color-user-bubble-bg: #1e3a5f;
+  --color-user-bubble-border: rgba(88, 166, 255, 0.12);
 
   /* Chrome surfaces — dark theme */
   --color-bg-chrome: #151b23;
