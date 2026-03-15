@@ -485,8 +485,10 @@ class AgentManager:
     # Maximum concurrent live claude CLI subprocesses.
     # When exceeded, the oldest idle subprocess is disconnected before
     # spawning a new one.  Prevents unbounded RAM growth with many tabs.
-    # Lowered from 5→3 (2026-03-15) because each claude CLI uses
-    # 200-500MB RAM; 5 concurrent = 1-2.5GB which triggers OOM kills.
+    # Lowered from 3→2 (2026-03-15) because each claude CLI uses
+    # 200-500MB RAM; with Kiro + browser + other tools running,
+    # 3 concurrent pushes macOS into jetsam (OOM kill) territory.
+    # The non-active tab resumes via PATH A (~5s slower but no SIGKILL).
     MAX_CONCURRENT_SUBPROCESSES = 2
     # Maximum PATH A retry attempts for retriable errors (exit -9, broken pipe).
     # Each retry spawns a fresh subprocess.  Backoff delay between attempts
