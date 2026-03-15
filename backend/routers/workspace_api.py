@@ -37,6 +37,7 @@ import base64
 import hashlib
 import json
 import logging
+import asyncio
 import mimetypes
 import os
 import shutil
@@ -849,6 +850,11 @@ async def trash_item(request: FolderDeleteRequest):
     Never falls back to permanent delete — if trashing fails, the error is
     surfaced to the user so they can decide what to do.
 
+    **Symlink note:** ``_validate_relative_path`` resolves symlinks, so if the
+    target is a symlink the resolved (real) path is trashed.  This means
+    trashing a symlink trashes the *target*, not the link itself.  This is
+    consistent with Finder's own behavior for POSIX file paths.
+
     Returns HTTP 403 if the target is a system-managed directory.
     Returns HTTP 500 if trashing fails (osascript error, permissions, etc.).
     """
@@ -872,7 +878,7 @@ async def trash_item(request: FolderDeleteRequest):
     #
     # Escape backslashes and double-quotes for the AppleScript string literal
     # to prevent injection via crafted filenames.
-    target_str = str(target).replace("\\", "\\\\").replace('"', '\\"')
+    target_str = str(target).replace("\\", "\\\\").replace('"', '\\"').replace("\n", "").replace("\r", "")
 
     applescript = (
         'tell application "Finder"\n'
@@ -881,7 +887,10 @@ async def trash_item(request: FolderDeleteRequest):
     )
 
     try:
-        result = subprocess.run(
+        # Run in thread to avoid blocking the async event loop (osascript
+        # talks to Finder via Apple Events and can take seconds).
+        result = await asyncio.to_thread(
+            subprocess.run,
             ["osascript", "-e", applescript],
             capture_output=True,
             text=True,
