@@ -1,9 +1,12 @@
 """Distillation trigger hook — auto-distills undistilled DailyActivity files.
 
 Checks the count of undistilled DailyActivity files after each session
-close.  When the threshold (>3) is exceeded, runs a lightweight
+close.  When the threshold (>2) is exceeded, runs a lightweight
 rule-based distillation directly in the hook (no agent session needed),
-writing curated entries to MEMORY.md via ``locked_read_modify_write()``.
+writing curated entries to MEMORY.md via ``_modify_content()`` under flock.
+
+Also archives old DailyActivity files (>90 days) and enforces section
+caps on MEMORY.md to prevent unbounded growth.
 
 Falls back to the flag-file approach if direct distillation fails,
 so the next agent session can pick it up.
@@ -12,6 +15,8 @@ Key public symbols:
 
 - ``DistillationTriggerHook``  — Implements ``SessionLifecycleHook``.
 - ``UNDISTILLED_THRESHOLD``    — Minimum undistilled files to trigger (2).
+- ``ARCHIVE_DAYS``             — Age threshold for DailyActivity archival (90).
+- ``SECTION_CAPS``             — Max entries per MEMORY.md section after distillation.
 """
 
 from __future__ import annotations
@@ -25,7 +30,7 @@ from pathlib import Path
 from core.session_hooks import HookContext
 from core.initialization_manager import initialization_manager
 from core.daily_activity_writer import parse_frontmatter, write_frontmatter
-from scripts.locked_write import locked_read_modify_write, LockedWriteError
+from scripts.locked_write import LockedWriteError
 from hooks.evolution_maintenance_hook import _append_changelog
 
 logger = logging.getLogger(__name__)
@@ -33,6 +38,12 @@ logger = logging.getLogger(__name__)
 UNDISTILLED_THRESHOLD = 2
 FLAG_FILENAME = ".needs_distillation"
 SCAN_DAYS = 30  # Only check files from last 30 days
+ARCHIVE_DAYS = 90  # Move files older than this to Archives/
+SECTION_CAPS = {  # Max entries per MEMORY.md section after distillation
+    "Key Decisions": 30,
+    "Lessons Learned": 20,
+    "COE Registry": 15,
+}
 
 # Centralized patterns — shared with summarization.py via extraction_patterns.py.
 # Distillation uses the STRICT variant (runs on already-extracted DailyActivity).
@@ -81,10 +92,9 @@ _COMPETENCE_PATTERNS = re.compile(
 class DistillationTriggerHook:
     """Checks undistilled DailyActivity count and runs direct distillation.
 
-    Unlike the previous flag-based approach, this hook distills directly
-    using ``locked_read_modify_write()`` via direct function call.
-    If direct distillation fails, it falls back to writing a
-    ``.needs_distillation`` flag for the next agent session.
+    Distills directly using ``_modify_content()`` under flock (single lock
+    acquisition per section).  If direct distillation fails, falls back to
+    writing a ``.needs_distillation`` flag for the next agent session.
     """
 
     name = "distillation_trigger"
@@ -114,6 +124,16 @@ class DistillationTriggerHook:
             len(undistilled_files),
             UNDISTILLED_THRESHOLD,
         )
+
+        # Auto-archive old DailyActivity files (>90 days)
+        try:
+            archived = await asyncio.to_thread(
+                self._archive_old_files, da_dir, Path(ws_path)
+            )
+            if archived:
+                logger.info("Archived %d old DailyActivity files", archived)
+        except Exception as exc:
+            logger.warning("DailyActivity archival failed (non-blocking): %s", exc)
 
         # Attempt direct distillation
         try:
@@ -251,6 +271,10 @@ class DistillationTriggerHook:
             self._write_corrections(evolution_path, all_corrections)
         if all_competence:
             self._write_competence(evolution_path, all_competence)
+
+        # Enforce section caps on MEMORY.md to prevent unbounded growth
+        if all_decisions or all_lessons or coe_entries:
+            self._enforce_section_caps(memory_path)
 
         # Log distillation to EVOLUTION_CHANGELOG.jsonl
         if distilled_count > 0:
@@ -479,17 +503,61 @@ class DistillationTriggerHook:
         section: str,
         text: str,
     ) -> None:
-        """Write to MEMORY.md via direct locked_read_modify_write call.
+        """Write to MEMORY.md via flock + _modify_content (single lock).
 
-        Uses direct function import instead of subprocess to avoid
-        PyInstaller bundle issue where sys.executable != Python.
+        Deduplicates entries before writing: acquires the lock first, then
+        reads existing content and skips entries whose first 60 chars
+        already appear.  This prevents double-writes when the distilled
+        frontmatter update fails after content extraction succeeds.
+
+        Calls ``_modify_content`` directly under the same flock instead
+        of ``locked_read_modify_write`` to avoid a nested-lock deadlock
+        (flock is per-open-file-description on POSIX).
         """
+        import fcntl as _fcntl
+        from scripts.locked_write import _modify_content
+
+        lock_path = memory_path.with_suffix(memory_path.suffix + ".lock")
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        fd = None
         try:
-            locked_read_modify_write(memory_path, section, text, mode="prepend")
+            fd = open(lock_path, "w")  # noqa: SIM115
+            _fcntl.flock(fd, _fcntl.LOCK_EX)
+
+            # Read current content under lock
+            if memory_path.exists():
+                existing = memory_path.read_text(encoding="utf-8")
+            else:
+                existing = ""
+
+            # Dedup: filter out entries already present
+            if existing:
+                existing_lower = existing.lower()
+                new_lines = []
+                for line in text.splitlines():
+                    entry_key = line.strip()[:60].lower()
+                    if entry_key and entry_key in existing_lower:
+                        continue
+                    new_lines.append(line)
+                if not new_lines:
+                    return  # all entries already present
+                text = "\n".join(new_lines)
+
+            # Modify + write under the same lock
+            new_content = _modify_content(existing, section, text, "prepend")
+            memory_path.parent.mkdir(parents=True, exist_ok=True)
+            memory_path.write_text(new_content, encoding="utf-8")
         except LockedWriteError as e:
             logger.warning("locked_write failed for section %s: %s", section, e)
         except Exception as e:
             logger.warning("locked_write failed for section %s: %s", section, e)
+        finally:
+            if fd is not None:
+                try:
+                    _fcntl.flock(fd, _fcntl.LOCK_UN)
+                except OSError:
+                    pass
+                fd.close()
 
     @staticmethod
     def _extract_coe_entries(body: str) -> list[tuple[str, str]]:
@@ -567,22 +635,25 @@ class DistillationTriggerHook:
         """
         import fcntl
 
+        lock_path = memory_path.with_suffix(memory_path.suffix + ".lock")
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        fd = None
         try:
-            # Read current content under lock
-            lock_path = Path(str(memory_path) + ".lock")
-            lock_path.touch(exist_ok=True)
-            with open(lock_path, "r") as lock_fh:
-                fcntl.flock(lock_fh, fcntl.LOCK_EX)
-                try:
-                    content = memory_path.read_text(encoding="utf-8")
-                    updated = self._apply_open_thread_updates(content, coe_entries)
-                    if updated != content:
-                        memory_path.write_text(updated, encoding="utf-8")
-                        logger.info("Updated Open Threads with %d COE entries", len(coe_entries))
-                finally:
-                    fcntl.flock(lock_fh, fcntl.LOCK_UN)
+            fd = open(lock_path, "w")  # noqa: SIM115  — matches locked_write.py
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            try:
+                content = memory_path.read_text(encoding="utf-8")
+                updated = self._apply_open_thread_updates(content, coe_entries)
+                if updated != content:
+                    memory_path.write_text(updated, encoding="utf-8")
+                    logger.info("Updated Open Threads with %d COE entries", len(coe_entries))
+            finally:
+                fcntl.flock(fd, fcntl.LOCK_UN)
         except Exception as exc:
             logger.warning("Failed to update Open Threads: %s", exc)
+        finally:
+            if fd is not None:
+                fd.close()
 
     @staticmethod
     def _apply_open_thread_updates(
@@ -673,6 +744,126 @@ class DistillationTriggerHook:
                 matched_topics.add(topic_key)
 
         return "\n".join(lines)
+
+    @staticmethod
+    def _archive_old_files(da_dir: Path, ws_path: Path) -> int:
+        """Move DailyActivity files older than ARCHIVE_DAYS to Knowledge/Archives/.
+
+        Only moves files that are already distilled (distilled: true in
+        frontmatter).  Un-distilled old files are left in place as a
+        safety net — they'll be distilled first on the next run.
+
+        Returns the number of files archived.
+        """
+        cutoff = date.today() - timedelta(days=ARCHIVE_DAYS)
+        archive_dir = ws_path / "Knowledge" / "Archives"
+        archived = 0
+
+        for f in da_dir.glob("*.md"):
+            try:
+                file_date = date.fromisoformat(f.stem)
+                if file_date >= cutoff:
+                    continue
+            except ValueError:
+                continue
+
+            # Only archive distilled files
+            try:
+                content = f.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            if not _is_distilled(content):
+                continue
+
+            # Move to archive (shutil.move handles cross-device moves)
+            import shutil
+            archive_dir.mkdir(parents=True, exist_ok=True)
+            dest = archive_dir / f.name
+            if dest.exists():
+                logger.debug("Archive target already exists, skipping: %s", dest)
+                continue
+            shutil.move(str(f), str(dest))
+            archived += 1
+            logger.debug("Archived %s → %s", f.name, dest)
+
+        return archived
+
+    @staticmethod
+    def _enforce_section_caps(memory_path: Path) -> None:
+        """Trim MEMORY.md sections to SECTION_CAPS max entries.
+
+        Reads the file, finds each capped section, counts ``- `` prefixed
+        lines, and removes the oldest (bottom) entries that exceed the cap.
+        Writes back atomically under flock.
+
+        This runs after distillation writes, so the newest entries are at
+        the top of each section (prepend mode).  Oldest = bottom = trimmed.
+        """
+        import fcntl as _fcntl
+        from scripts.locked_write import _find_section_range
+
+        if not memory_path.exists():
+            return
+
+        lock_path = memory_path.with_suffix(memory_path.suffix + ".lock")
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        fd = None
+        try:
+            fd = open(lock_path, "w")  # noqa: SIM115  — matches locked_write.py
+            _fcntl.flock(fd, _fcntl.LOCK_EX)
+            try:
+                content = memory_path.read_text(encoding="utf-8")
+                modified = False
+
+                for section_name, cap in SECTION_CAPS.items():
+                    section_range = _find_section_range(content, section_name)
+                    if section_range is None:
+                        continue
+
+                    header_end, next_header_pos = section_range
+                    section_text = content[header_end:next_header_pos]
+                    lines = section_text.splitlines()
+
+                    # Count entry lines (start with "- ")
+                    entry_indices = [
+                        i for i, line in enumerate(lines)
+                        if line.strip().startswith("- ")
+                    ]
+
+                    if len(entry_indices) <= cap:
+                        continue
+
+                    # Remove oldest entries (bottom of section)
+                    to_remove = set(entry_indices[cap:])
+                    trimmed_lines = [
+                        line for i, line in enumerate(lines)
+                        if i not in to_remove
+                    ]
+                    # Preserve original trailing whitespace between sections
+                    new_section = "\n".join(trimmed_lines)
+                    if section_text.endswith("\n"):
+                        new_section += "\n"
+                    content = (
+                        content[:header_end]
+                        + new_section
+                        + content[next_header_pos:]
+                    )
+                    modified = True
+                    removed = len(entry_indices) - cap
+                    logger.info(
+                        "Capped %s: removed %d oldest entries (cap=%d)",
+                        section_name, removed, cap,
+                    )
+
+                if modified:
+                    memory_path.write_text(content, encoding="utf-8")
+            finally:
+                _fcntl.flock(fd, _fcntl.LOCK_UN)
+        except Exception as exc:
+            logger.warning("Section cap enforcement failed: %s", exc)
+        finally:
+            if fd is not None:
+                fd.close()
 
     @staticmethod
     def _write_flag(da_dir: Path, count: int) -> None:
