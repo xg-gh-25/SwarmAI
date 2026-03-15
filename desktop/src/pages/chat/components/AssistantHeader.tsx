@@ -53,7 +53,7 @@ export const AssistantHeader: React.FC<AssistantHeaderProps> = ({
         🐝
       </span>
       <span className="text-base font-bold text-[var(--color-text-primary)]">
-        SwarmAI
+        Swarm
       </span>
       {formattedTime && (
         <>

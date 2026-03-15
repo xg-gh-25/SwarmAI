@@ -34,6 +34,7 @@ import { tasksService } from '../services/tasks';
 import { Spinner, ConfirmDialog, AgentFormModal, ErrorBoundary } from '../components/common';
 import { useToast } from '../contexts/ToastContext';
 import { useHealth } from '../contexts/HealthContext';
+import { useLayout } from '../contexts/LayoutContext';
 import { EvolutionMessage, ChatErrorMessage } from '../components/chat';
 import { ChatDropZone } from '../components/chat/ChatDropZone';
 import type { EvolutionEventType } from '../services/evolution';
@@ -74,6 +75,7 @@ export default function ChatPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const { addToast } = useToast();
   const { health } = useHealth();
+  const { setActiveSessionMeta } = useLayout();
   const { isLimited, getRemainingSeconds } = useRateLimiter();
   const chatRateLimitCountdown = useRateLimitCountdown({ getRemainingSeconds, endpoint: '/chat' });
 
@@ -789,6 +791,26 @@ export default function ChatPage() {
       });
     }
   }, [contextWarning, addToast]);
+
+  // Push session metadata to TopBar via LayoutContext (pure reads, no new API calls).
+  // Use primitive deps only to avoid re-firing on every render (selectedAgent is
+  // a new object ref each time). The cleanup sets null on unmount so the TopBar
+  // falls back to the "SwarmAI" placeholder when ChatPage is not mounted.
+  // Note: React runs old-cleanup → new-effect synchronously in the commit phase,
+  // so the intermediate null is never painted.
+  const activeTabTitle = openTabs.find(t => t.id === activeTabId)?.title;
+  const agentName = selectedAgent?.name;
+  const contextPct = contextWarning?.pct ?? null;
+  const fileCount = attachments.length;
+  useEffect(() => {
+    setActiveSessionMeta({
+      topic: activeTabTitle || 'New Session',
+      contextPct,
+      fileCount,
+      agentName: agentName || 'SwarmAI',
+    });
+    return () => setActiveSessionMeta(null);
+  }, [activeTabTitle, contextPct, fileCount, agentName, setActiveSessionMeta]);
 
   // Validate tabs against sessions - filter out tabs referencing deleted sessions (Req 3.4)
   // Guard: skip during initial restore — sessions query may return stale data

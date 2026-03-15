@@ -3,7 +3,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { LayoutProvider, useLayout, LAYOUT_CONSTANTS, ModalType } from '../../contexts/LayoutContext';
 import { ExplorerProvider, useTreeData } from '../../contexts/ExplorerContext';
 import { WorkspaceExplorer } from '../workspace-explorer';
-import GlobalSearchBar from './GlobalSearchBar';
+import { BottomBar } from './BottomBar';
 import FileEditorModal from '../common/FileEditorModal';
 import BinaryPreviewModal from '../common/BinaryPreviewModal';
 import SwarmWorkspaceWarningDialog from '../common/SwarmWorkspaceWarningDialog';
@@ -30,13 +30,13 @@ interface ThreeColumnLayoutProps {
   children: ReactNode;
 }
 
-// TopBar component with window dragging support and centered GlobalSearchBar.
-// The bar remains draggable (Tauri window drag) except over the search input,
-// which stops mouseDown propagation to prevent window dragging.
-// Requirements: 9.2, 13.1
+// TopBar -- Session context bar replacing the old file search.
+// Shows: session topic, context usage %, attached files, active agent.
+// Remains draggable for Tauri window move (macOS).
 function TopBar() {
+  const { activeSessionMeta } = useLayout();
+
   const handleMouseDown = async (e: React.MouseEvent) => {
-    // Only start drag on left mouse button and not on traffic light area (macOS)
     if (e.button === 0 && e.clientX > 80) {
       try {
         await getCurrentWindow().startDragging();
@@ -46,16 +46,50 @@ function TopBar() {
     }
   };
 
+  const meta = activeSessionMeta;
+  const contextPct = meta?.contextPct ?? 0;
+  const ringColor =
+    contextPct > 80 ? 'text-red-400' : contextPct > 60 ? 'text-amber-400' : 'text-[var(--color-text-muted)]';
+
   return (
     <div
       onMouseDown={handleMouseDown}
-      className="h-10 bg-[var(--color-bg)] border-b border-[var(--color-border)] flex-shrink-0 select-none cursor-default flex items-center"
+      className="h-9 bg-[var(--color-bg)] border-b border-[var(--color-border)] flex-shrink-0 select-none cursor-default flex items-center"
       data-tauri-drag-region
+      data-testid="top-bar"
     >
       {/* Spacer for macOS traffic lights */}
       <div className="w-20 flex-shrink-0" />
-      {/* GlobalSearchBar — centered, stops drag propagation internally */}
-      <GlobalSearchBar />
+
+      {/* Session context info -- centered */}
+      <div className="flex-1 flex items-center justify-center gap-3 text-[11px] text-[var(--color-text-muted)]" role="status" aria-label="Session context">
+        {meta ? (
+          <>
+            <span className="flex items-center gap-1.5 text-[var(--color-text)] font-medium truncate min-w-0" style={{ maxWidth: 'clamp(120px, 25vw, 360px)' }} aria-label={`Session: ${meta.topic || 'New Session'}`}>
+              <span className="material-symbols-outlined text-[14px]" aria-hidden="true">chat_bubble</span>
+              {meta.topic || 'New Session'}
+            </span>
+            <span className="text-[var(--color-border)]" aria-hidden="true">|</span>
+            <span className={`flex items-center gap-1 ${ringColor}`} aria-label={`Context usage: ${meta.contextPct != null ? Math.round(meta.contextPct) + '%' : 'unknown'}`}>
+              <span className="material-symbols-outlined text-[14px]" aria-hidden="true">memory</span>
+              {meta.contextPct != null ? `${Math.round(meta.contextPct)}%` : '--'}
+            </span>
+            <span className="text-[var(--color-border)]" aria-hidden="true">|</span>
+            <span className="flex items-center gap-1" aria-label={`${meta.fileCount} attached files`}>
+              <span className="material-symbols-outlined text-[14px]" aria-hidden="true">attach_file</span>
+              {meta.fileCount}
+            </span>
+            <span className="text-[var(--color-border)]" aria-hidden="true">|</span>
+            <span className="flex items-center gap-1" aria-label={`Agent: ${meta.agentName}`}>
+              <span className="material-symbols-outlined text-[14px]" aria-hidden="true">smart_toy</span>
+              {meta.agentName}
+            </span>
+          </>
+        ) : (
+          <span className="text-[var(--color-text-dim)]">SwarmAI</span>
+        )}
+      </div>
+
       {/* Right spacer for symmetry */}
       <div className="w-20 flex-shrink-0" />
     </div>
@@ -82,13 +116,13 @@ function LeftSidebar() {
       style={{ width: LEFT_SIDEBAR_WIDTH }}
       data-testid="left-sidebar"
     >
-      {/* Logo/Brand area - Requirement 2.4 */}
-      <div className="h-12 flex items-center justify-center border-b border-[var(--color-border)]">
+      {/* Logo/Brand area */}
+      <div className="h-9 flex items-center justify-center border-b border-[var(--color-border)]">
         <SwarmAILogo />
       </div>
 
-      {/* Navigation icons - Requirement 2.1, 2.2 */}
-      <nav className="flex-1 py-3 px-2 space-y-1 overflow-y-auto" data-testid="nav-icons">
+      {/* Navigation icons */}
+      <nav className="flex-1 py-2 px-1.5 space-y-0.5 overflow-y-auto" data-testid="nav-icons">
         {navItems.map((item) => (
           <NavIconButton
             key={item.modalType}
@@ -102,8 +136,7 @@ function LeftSidebar() {
       </nav>
 
       {/* Bottom section - Settings and GitHub link */}
-      <div className="py-3 px-2 border-t border-[var(--color-border)] space-y-1">
-        {/* Settings - Requirement 2.1, 2.2 */}
+      <div className="py-2 px-1.5 border-t border-[var(--color-border)] space-y-0.5">
         <NavIconButton
           icon="settings"
           label="Settings"
@@ -111,27 +144,26 @@ function LeftSidebar() {
           onClick={() => openModal('settings')}
           data-testid="nav-settings"
         />
-        {/* GitHub Link - Requirement 2.6 */}
         <a
           href="https://github.com/xg-gh-25/SwarmAI.git"
           target="_blank"
           rel="noopener noreferrer"
           title="GitHub"
-          className="flex items-center justify-center w-10 h-10 rounded-lg transition-colors text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)]"
+          className="flex items-center justify-center w-9 h-9 rounded-lg transition-colors text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)]"
           data-testid="github-link"
         >
-          <GitHubIcon className="w-5 h-5" />
+          <GitHubIcon className="w-4 h-4" />
         </a>
       </div>
     </aside>
   );
 }
 
-// SwarmAI Logo component - Requirement 2.4
+// SwarmAI Logo component
 function SwarmAILogo() {
   return (
-    <div 
-      className="w-8 h-8 rounded-lg flex items-center justify-center overflow-hidden"
+    <div
+      className="w-7 h-7 rounded-lg flex items-center justify-center overflow-hidden"
       title="SwarmAI"
       data-testid="swarm-logo"
     >
@@ -156,13 +188,13 @@ function NavIconButton({ icon, label, isActive, onClick, 'data-testid': testId }
       title={label}
       data-testid={testId}
       aria-pressed={isActive}
-      className={`flex items-center justify-center w-10 h-10 rounded-lg transition-colors ${
+      className={`flex items-center justify-center w-9 h-9 rounded-lg transition-colors ${
         isActive
           ? 'bg-[var(--color-primary)]/15 text-[var(--color-sidebar-icon-active)] ring-1 ring-[var(--color-primary)]/30'
           : 'text-[var(--color-sidebar-icon)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)]'
       }`}
     >
-      <span className="material-symbols-outlined text-xl">{icon}</span>
+      <span className="material-symbols-outlined text-lg">{icon}</span>
     </button>
   );
 }
@@ -188,11 +220,10 @@ interface MainChatPanelProps {
 
 function MainChatPanel({ children }: MainChatPanelProps) {
   return (
-    <main 
+    <main
       className="flex-1 overflow-hidden bg-[var(--color-bg)] flex flex-col"
       style={{ minWidth: MIN_MAIN_CHAT_PANEL_WIDTH }}
     >
-      {/* ChatDropZone moved to ChatPage for direct prop access to useUnifiedAttachments */}
       {children}
     </main>
   );
@@ -241,7 +272,7 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
     pendingFile: FileTreeItem | null;
   }>({ isOpen: false, pendingFile: null });
 
-  // Open file editor with content — reads via backend API (no Tauri fs scope issues)
+  // Open file editor with content -- reads via backend API (no Tauri fs scope issues)
   const openFileEditor = useCallback(async (file: FileTreeItem, gitStatus?: GitStatus) => {
     try {
       const response = await api.get<{ content: string; path: string; name: string; readonly?: boolean }>(
@@ -259,7 +290,7 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
           );
           committedContent = committedResponse.data.content;
         } catch (err) {
-          // Untracked or binary file — fall back to empty string
+          // Untracked or binary file -- fall back to empty string
           console.warn('Failed to fetch committed version:', err);
           committedContent = '';
         }
@@ -278,13 +309,11 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
       });
     } catch (error) {
       console.error('Failed to read file:', error);
-      // TODO: Show error toast
     }
   }, []);
 
-  // Handle file double-click - Requirement 9.1, 1.1–1.5, 7.1–7.2
+  // Handle file double-click - Requirement 9.1, 1.1-1.5, 7.1-7.2
   const handleFileDoubleClick = useCallback(async (file: FileTreeItem) => {
-    // Check if this is a Swarm Workspace file - Requirement 4.3
     if (file.isSwarmWorkspace) {
       setSwarmWarning({ isOpen: true, pendingFile: file });
       return;
@@ -293,10 +322,8 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
     const previewType: FilePreviewType = classifyFileForPreview(file.name);
 
     if (previewType === 'text') {
-      // Existing path — open FileEditorModal
       await openFileEditor(file, file.gitStatus);
     } else {
-      // New path — open BinaryPreviewModal for image, pdf, or unsupported
       setBinaryPreviewState({
         isOpen: true,
         fileName: file.name,
@@ -306,7 +333,7 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
     }
   }, [openFileEditor]);
 
-  // Handle Swarm workspace warning confirmation - Requirement 4.3, 4.5
+  // Handle Swarm workspace warning confirmation
   const handleSwarmWarningConfirm = useCallback(async () => {
     if (swarmWarning.pendingFile) {
       await openFileEditor(swarmWarning.pendingFile, swarmWarning.pendingFile.gitStatus);
@@ -314,7 +341,6 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
     setSwarmWarning({ isOpen: false, pendingFile: null });
   }, [swarmWarning.pendingFile, openFileEditor]);
 
-  // Handle Swarm workspace warning cancel
   const handleSwarmWarningCancel = useCallback(() => {
     setSwarmWarning({ isOpen: false, pendingFile: null });
   }, []);
@@ -327,44 +353,39 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
       await api.put('/workspace/file', { content }, {
         params: { path: fileEditorState.filePath },
       });
-      // Refresh tree to update git status after save
       refreshTreeRef.current?.();
     } catch (error) {
       console.error('Failed to save file:', error);
-      throw error; // Re-throw to keep modal open
+      throw error;
     }
   }, [fileEditorState]);
 
   // Handle file editor close - Requirement 9.7
   const handleFileEditorClose = useCallback(() => {
     setFileEditorState(null);
-    // Refresh tree to pick up any git status changes from the editing session
     refreshTreeRef.current?.();
   }, []);
 
   return (
     <div className="flex flex-col h-screen bg-[var(--color-bg)]">
       <ExplorerProvider>
-        {/* Bridge: capture refreshTree from ExplorerContext into the ref */}
         <RefreshTreeBridge refreshTreeRef={refreshTreeRef} />
 
-        {/* Top bar with traffic lights area - draggable */}
+        {/* Top bar -- session context, draggable */}
         <TopBar />
 
         {/* Main layout below top bar */}
         <div className="flex flex-1 overflow-hidden">
-          {/* Left Sidebar - 56px fixed width */}
           <LeftSidebar />
-
-          {/* Workspace Explorer - 280px default, resizable 200-500px, collapsible */}
           <WorkspaceExplorer onFileDoubleClick={handleFileDoubleClick} />
-
-          {/* Main Chat Panel - flex-1 (remaining space) */}
           <MainChatPanel>{children}</MainChatPanel>
         </div>
+
+        {/* Bottom status bar */}
+        <BottomBar />
       </ExplorerProvider>
 
-      {/* Binary Preview Modal - Requirement 1.2, 1.3, 1.5 */}
+      {/* Binary Preview Modal */}
       {binaryPreviewState && (
         <BinaryPreviewModal
           isOpen={binaryPreviewState.isOpen}
@@ -375,7 +396,7 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
         />
       )}
 
-      {/* File Editor Modal - Requirement 9.1, 9.2 */}
+      {/* File Editor Modal */}
       {fileEditorState && (
         <FileEditorModal
           isOpen={fileEditorState.isOpen}
@@ -391,7 +412,7 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
         />
       )}
 
-      {/* Swarm Workspace Warning Dialog - Requirement 4.3, 4.5 */}
+      {/* Swarm Workspace Warning Dialog */}
       <SwarmWorkspaceWarningDialog
         isOpen={swarmWarning.isOpen}
         action="edit"
@@ -400,14 +421,13 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
         onCancel={handleSwarmWarningCancel}
       />
 
-      {/* Management Page Modals - Requirement 2.2 */}
+      {/* Management Page Modals */}
       <WorkspacesModal isOpen={activeModal === 'workspaces'} onClose={closeModal} />
       <SwarmCoreModal isOpen={activeModal === 'swarmcore'} onClose={closeModal} />
       <SkillsModal isOpen={activeModal === 'skills'} onClose={closeModal} />
       <MCPSettingsModal isOpen={activeModal === 'mcp'} onClose={closeModal} />
       <AgentsModal isOpen={activeModal === 'agents'} onClose={closeModal} />
       <SettingsModal isOpen={activeModal === 'settings'} onClose={closeModal} />
-      {/* Workspace Settings Modal - Requirement 3.14 */}
       <WorkspaceSettingsModal
         isOpen={activeModal === 'workspace-settings'}
         onClose={closeModal}

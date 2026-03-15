@@ -27,7 +27,7 @@ export interface HealthContextValue {
   triggerHealthCheck: () => void;
 }
 
-const HealthContext = createContext<HealthContextValue | undefined>(undefined);
+export const HealthContext = createContext<HealthContextValue | undefined>(undefined);
 
 // ---------------------------------------------------------------------------
 // Provider

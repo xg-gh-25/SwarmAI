@@ -1,10 +1,18 @@
-import { createContext, useContext, useEffect, useState, useCallback, ReactNode } from 'react';
+import { createContext, useContext, useEffect, useState, useCallback, useMemo, ReactNode } from 'react';
 
 // Modal types that can be opened from the left sidebar
 export type ModalType = 'workspaces' | 'swarmcore' | 'skills' | 'mcp' | 'agents' | 'settings' | 'file-editor' | 'workspace-settings';
 
 // Workspace scope - 'all' for all workspaces or a specific workspace ID
 export type WorkspaceScope = 'all' | string;
+
+// Session metadata displayed in the TopBar context bar
+export interface ActiveSessionMeta {
+  topic: string;
+  contextPct: number | null;
+  fileCount: number;
+  agentName: string;
+}
 
 // Layout context value interface
 export interface LayoutContextValue {
@@ -13,26 +21,30 @@ export interface LayoutContextValue {
   setWorkspaceExplorerCollapsed: (collapsed: boolean) => void;
   workspaceExplorerWidth: number;
   setWorkspaceExplorerWidth: (width: number) => void;
-  
+
   // Workspace scope
   selectedWorkspaceScope: WorkspaceScope;
   setSelectedWorkspaceScope: (scope: WorkspaceScope) => void;
-  
+
   // Workspace scope validation - Requirement 10.2
   // Call this with workspace IDs to validate stored scope on startup
   validateWorkspaceScope: (workspaceIds: string[]) => void;
-  
+
   // Modal management
   activeModal: ModalType | null;
   openModal: (modal: ModalType) => void;
   closeModal: () => void;
-  
+
   // Workspace settings modal - workspace ID for WorkspaceSettingsModal
   workspaceSettingsId: string;
   setWorkspaceSettingsId: (id: string) => void;
-  
+
   // Responsive state
   isNarrowViewport: boolean;
+
+  // TopBar session context -- written by ChatPage, read by TopBar
+  activeSessionMeta: ActiveSessionMeta | null;
+  setActiveSessionMeta: (meta: ActiveSessionMeta | null) => void;
 }
 
 // LocalStorage keys for persistence
@@ -109,6 +121,9 @@ export function LayoutProvider({ children }: LayoutProviderProps) {
   // Workspace settings modal target ID
   const [workspaceSettingsId, setWorkspaceSettingsId] = useState<string>('');
 
+  // TopBar session context -- ChatPage writes, TopBar reads
+  const [activeSessionMeta, setActiveSessionMeta] = useState<ActiveSessionMeta | null>(null);
+
   // Persist collapsed state to localStorage
   const setWorkspaceExplorerCollapsed = useCallback((collapsed: boolean) => {
     setWorkspaceExplorerCollapsedState(collapsed);
@@ -161,15 +176,12 @@ export function LayoutProvider({ children }: LayoutProviderProps) {
     }
   }, [selectedWorkspaceScope, setSelectedWorkspaceScope]);
 
-  // Export validateWorkspaceScope for use by WorkspaceExplorer
-  // This allows validation when workspaces are loaded
-
   // Handle responsive auto-collapse on window resize
   useEffect(() => {
     const handleResize = () => {
       const isNarrow = window.innerWidth < 768;
       setIsNarrowViewport(isNarrow);
-      
+
       // Auto-collapse when screen width falls below 768px (Requirement 1.8, 11.1)
       if (isNarrow && !workspaceExplorerCollapsed) {
         setWorkspaceExplorerCollapsed(true);
@@ -193,7 +205,7 @@ export function LayoutProvider({ children }: LayoutProviderProps) {
     setWorkspaceExplorerCollapsed(collapsed);
   }, [isNarrowViewport, setWorkspaceExplorerCollapsed]);
 
-  const value: LayoutContextValue = {
+  const value: LayoutContextValue = useMemo(() => ({
     workspaceExplorerCollapsed,
     setWorkspaceExplorerCollapsed: setWorkspaceExplorerCollapsedWithViewportCheck,
     workspaceExplorerWidth,
@@ -207,7 +219,25 @@ export function LayoutProvider({ children }: LayoutProviderProps) {
     workspaceSettingsId,
     setWorkspaceSettingsId,
     isNarrowViewport,
-  };
+    activeSessionMeta,
+    setActiveSessionMeta,
+  }), [
+    workspaceExplorerCollapsed,
+    setWorkspaceExplorerCollapsedWithViewportCheck,
+    workspaceExplorerWidth,
+    setWorkspaceExplorerWidth,
+    selectedWorkspaceScope,
+    setSelectedWorkspaceScope,
+    validateWorkspaceScope,
+    activeModal,
+    openModal,
+    closeModal,
+    workspaceSettingsId,
+    setWorkspaceSettingsId,
+    isNarrowViewport,
+    activeSessionMeta,
+    setActiveSessionMeta,
+  ]);
 
   return (
     <LayoutContext.Provider value={value}>
@@ -231,6 +261,6 @@ export const LAYOUT_CONSTANTS = {
   MIN_WORKSPACE_EXPLORER_WIDTH,
   MAX_WORKSPACE_EXPLORER_WIDTH,
   NARROW_VIEWPORT_BREAKPOINT: 768,
-  LEFT_SIDEBAR_WIDTH: 56,
+  LEFT_SIDEBAR_WIDTH: 48,
   STORAGE_KEYS,
 } as const;
