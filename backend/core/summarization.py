@@ -41,6 +41,7 @@ from .extraction_patterns import (
     DECISION_PATTERNS_BROAD as _DECISION_PATTERNS,
     AGENT_MONOLOGUE as _AGENT_MONOLOGUE,
     NOISE_PATTERNS as _NOISE_PATTERNS,
+    is_noise_entry as _is_noise_entry,
 )
 
 # Tool names whose input contains file paths
@@ -340,8 +341,10 @@ class SummarizationPipeline:
                 if not sentence or len(sentence) < 20:
                     continue
                 if _DECISION_PATTERNS.search(sentence):
-                    # Filter agent monologue
+                    # Filter agent monologue and table fragments
                     if _AGENT_MONOLOGUE.match(sentence):
+                        continue
+                    if _is_noise_entry(sentence):
                         continue
                     # Normalize for dedup
                     normalized = sentence.lower().strip()

@@ -215,9 +215,7 @@ class EvolutionMaintenanceHook:
         self, evo_path: Path, section: str, entry_id: str, changelog_path: Path
     ) -> None:
         """Set an entry's Status to deprecated via locked_write."""
-        from scripts.locked_write import locked_field_modify
-
-        from scripts.locked_write import LockedWriteError
+        from scripts.locked_write import locked_field_modify, LockedWriteError
         try:
             locked_field_modify(
                 evo_path, section, entry_id, "Status", "set-field", "deprecated"
