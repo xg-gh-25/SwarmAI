@@ -78,6 +78,14 @@ def _parse_open_threads(memory_text: str) -> list[dict]:
             current_priority = ph.group(1)
             continue
 
+        # Skip resolved items — lines starting with ✅ or ~~strikethrough~~.
+        # Only skip the thread bullet itself, not status/detail lines
+        # (which may contain "resolved" in a negative context like "not resolved").
+        line_stripped = line.strip()
+        if line_stripped.startswith(("-", "*")):
+            if line_stripped.startswith("- \u2705") or line_stripped.startswith("- ~~"):
+                continue
+
         # Check for thread bullet
         tm = _THREAD_RE.search(line)
         if tm:
@@ -92,7 +100,7 @@ def _parse_open_threads(memory_text: str) -> list[dict]:
 
         # Simpler pattern: **title** without report count
         simple = re.search(r"\*\*(.+?)\*\*", line)
-        if simple and line.strip().startswith(("-", "*")):
+        if simple and line_stripped.startswith(("-", "*")):
             title = simple.group(1).strip()
             threads.append({
                 "priority": current_priority,
@@ -104,7 +112,15 @@ def _parse_open_threads(memory_text: str) -> list[dict]:
         # Status line — attach to most recent thread
         sm = _STATUS_RE.search(line)
         if sm and threads:
-            threads[-1]["status"] = sm.group(1).strip()
+            status_text = sm.group(1).strip()
+            threads[-1]["status"] = status_text
+            # Remove thread if status clearly indicates resolved.
+            # Guard against negated phrases like "not resolved" or "not durably resolved".
+            status_lower = status_text.lower()
+            if any(kw in status_lower for kw in ["resolved", "done", "closed", "moot"]):
+                # Check for negation: "not resolved", "not durably resolved", "unresolved"
+                if not re.search(r"\bnot\b.*\bresolved\b|\bunresolved\b", status_lower):
+                    threads.pop()
 
     return threads
 
@@ -194,14 +210,17 @@ def _detect_patterns(
     if rebuild_count > 0:
         signals.append(f"{rebuild_count} fix(es) pending rebuild verification")
 
-    # 3. COE Registry items
+    # 3. COE Registry items (only unresolved ones)
     coe_match = re.search(r"## COE Registry\b", memory_text)
     if coe_match:
         coe_section = memory_text[coe_match.end():]
         next_sec = re.search(r"\n## [^#]", coe_section)
         if next_sec:
             coe_section = coe_section[:next_sec.start()]
-        investigating = coe_section.count("Investigating")
+        investigating = sum(
+            1 for line in coe_section.splitlines()
+            if "Investigating" in line and "\u2705" not in line and "Resolved" not in line
+        )
         if investigating > 0:
             signals.append(f"{investigating} COE(s) still under investigation")
 

@@ -126,18 +126,20 @@ describe('TopBar', () => {
     expect(screen.getByText('New Session')).toBeDefined();
   });
 
-  it('renders context percentage', () => {
+  it('renders context percentage in SVG ring', () => {
     setupMocks({ sessionMeta: { contextPct: 72 } });
     render(<TopBar />);
-    expect(screen.getByText('72%')).toBeDefined();
+    // SVG ring shows just the number (no "%" suffix)
+    expect(screen.getByText('72')).toBeDefined();
   });
 
-  it('renders "--" when contextPct is null', () => {
+  it('renders 0 when contextPct is null', () => {
     setupMocks({ sessionMeta: { contextPct: null } });
     render(<TopBar />);
     const pctLabel = screen.getByLabelText(/Context usage: unknown/);
     expect(pctLabel).toBeDefined();
-    expect(pctLabel.textContent).toContain('--');
+    // Ring shows "0" when null
+    expect(pctLabel.textContent).toContain('0');
   });
 
   it('renders file count', () => {
@@ -152,25 +154,38 @@ describe('TopBar', () => {
     expect(screen.getByText('TestAgent')).toBeDefined();
   });
 
-  it('applies red color class when context > 80%', () => {
+  it('renders SVG ring with red stroke when context > 80%', () => {
     setupMocks({ sessionMeta: { contextPct: 85 } });
     render(<TopBar />);
     const pctLabel = screen.getByLabelText(/Context usage: 85%/);
-    expect(pctLabel.className).toContain('text-red-400');
+    expect(pctLabel).toBeDefined();
+    expect(pctLabel.textContent).toContain('85');
+    // Verify the ring uses the error color variable for high usage
+    const svg = pctLabel.querySelector('svg');
+    const progressCircle = svg?.querySelectorAll('circle')[1];
+    expect(progressCircle?.getAttribute('stroke')).toBe('var(--color-error)');
   });
 
-  it('applies amber color class when context > 60%', () => {
+  it('renders SVG ring with warning stroke when context > 60%', () => {
     setupMocks({ sessionMeta: { contextPct: 65 } });
     render(<TopBar />);
     const pctLabel = screen.getByLabelText(/Context usage: 65%/);
-    expect(pctLabel.className).toContain('text-amber-400');
+    expect(pctLabel).toBeDefined();
+    expect(pctLabel.textContent).toContain('65');
+    const svg = pctLabel.querySelector('svg');
+    const progressCircle = svg?.querySelectorAll('circle')[1];
+    expect(progressCircle?.getAttribute('stroke')).toBe('var(--color-warning)');
   });
 
-  it('applies muted color class when context <= 60%', () => {
+  it('renders SVG ring with neutral stroke when context <= 60%', () => {
     setupMocks({ sessionMeta: { contextPct: 40 } });
     render(<TopBar />);
     const pctLabel = screen.getByLabelText(/Context usage: 40%/);
-    expect(pctLabel.className).toContain('text-[var(--color-text-muted)]');
+    expect(pctLabel).toBeDefined();
+    expect(pctLabel.textContent).toContain('40');
+    const svg = pctLabel.querySelector('svg');
+    const progressCircle = svg?.querySelectorAll('circle')[1];
+    expect(progressCircle?.getAttribute('stroke')).toBe('var(--color-context-ring)');
   });
 
   it('has data-tauri-drag-region for window dragging', () => {

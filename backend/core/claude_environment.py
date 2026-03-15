@@ -59,10 +59,41 @@ class _ClaudeClientWrapper:
     def __init__(self, options: ClaudeAgentOptions) -> None:
         self.options: ClaudeAgentOptions = options
         self.client: ClaudeSDKClient | None = None
+        self.pid: int | None = None  # Captured immediately after subprocess spawn
 
     async def __aenter__(self) -> ClaudeSDKClient:
         self.client = ClaudeSDKClient(options=self.options)
-        return await self.client.__aenter__()  # type: ignore[union-attr]
+        result = await self.client.__aenter__()  # type: ignore[union-attr]
+        # Capture PID immediately — this is the most reliable time to extract it.
+        # The subprocess is freshly spawned, all internal references are intact.
+        self.pid = self._extract_pid()
+        if self.pid:
+            logger.info("Claude CLI subprocess spawned with pid=%d", self.pid)
+        else:
+            logger.warning("Could not extract PID from Claude CLI subprocess")
+        return result
+
+    def _extract_pid(self) -> int | None:
+        """Best-effort PID extraction from the SDK client internal chain.
+
+        Walks: client -> _query -> _transport -> _process -> pid
+        Returns None if any link is missing.
+        """
+        try:
+            if self.client is None:
+                return None
+            query = getattr(self.client, "_query", None)
+            if query is None:
+                return None
+            transport = getattr(query, "_transport", None)
+            if transport is None:
+                return None
+            process = getattr(transport, "_process", None)
+            if process is None:
+                return None
+            return getattr(process, "pid", None)
+        except Exception:
+            return None
 
     async def __aexit__(self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: object) -> bool:
         if self.client is None:

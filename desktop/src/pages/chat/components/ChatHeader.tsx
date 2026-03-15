@@ -53,6 +53,17 @@ export function ChatHeader({
 
       {/* Right Section: Health Indicator + Header Actions */}
       <div className="flex items-center gap-1 flex-shrink-0">
+        {/* Online indicator — green dot + "Online" text */}
+        {health.status === 'connected' && (
+          <div
+            className="flex items-center gap-1.5 px-2 py-1 text-[10px] text-green-500 font-medium mr-1"
+            role="status"
+            aria-label="Online"
+          >
+            <span className="w-[5px] h-[5px] rounded-full bg-green-500 flex-shrink-0" />
+            Online
+          </div>
+        )}
         {/* Backend Health Indicator — Validates: Requirements 1.6, 1.7 */}
         {health.status === 'disconnected' && (
           <div

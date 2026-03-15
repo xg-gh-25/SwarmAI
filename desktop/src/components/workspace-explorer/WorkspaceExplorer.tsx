@@ -29,11 +29,10 @@
  */
 
 import { useCallback } from 'react';
-import { AutoSizer } from 'react-virtualized-auto-sizer';
 import { useLayout, LAYOUT_CONSTANTS } from '../../contexts/LayoutContext';
 import { useTreeData } from '../../contexts/ExplorerContext';
 import ExplorerHeader from './ExplorerHeader';
-import VirtualizedTree from './VirtualizedTree';
+import SectionedExplorer from './SectionedExplorer';
 import ResizeHandle from './ResizeHandle';
 import type { FileTreeItem } from './FileTreeNode';
 
@@ -171,12 +170,7 @@ export default function WorkspaceExplorer({ onFileDoubleClick, onAttachToChat }:
         )}
 
         {!isLoading && !error && treeData.length > 0 && (
-          <AutoSizer
-            renderProp={({ height, width }) => {
-              if (height === undefined || width === undefined) return null;
-              return <VirtualizedTree height={height} width={width} onFileDoubleClick={onFileDoubleClick} onAttachToChat={onAttachToChat} />;
-            }}
-          />
+          <SectionedExplorer onFileDoubleClick={onFileDoubleClick} onAttachToChat={onAttachToChat} />
         )}
       </div>
     </div>

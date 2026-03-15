@@ -209,7 +209,7 @@ PORT=8000
 
 ## Design System
 
-- **Font**: Space Grotesk
+- **Font**: Inter (UI), JetBrains Mono (code)
 - **Icons**: Material Symbols Outlined
 - **Themes**: light, dark, system (CSS custom properties in index.css)
 - **Colors**: Always use `bg-[var(--color-*)]`, never hardcoded dark theme colors

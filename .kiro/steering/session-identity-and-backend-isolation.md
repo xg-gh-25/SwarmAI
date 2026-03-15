@@ -88,7 +88,7 @@ Two distinct systems that MUST NOT be confused:
 ## Session Cleanup Lifecycle
 
 Sessions are cleaned up via `_cleanup_session()` triggered by:
-- TTL expiry (12h stale session cleanup loop)
+- TTL expiry (2h stale session cleanup loop)
 - Explicit delete (user closes session)
 - Backend shutdown (`disconnect_all()`)
 
