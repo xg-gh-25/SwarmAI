@@ -1,20 +1,25 @@
 @import "tailwindcss";
 
-/* Light theme (default) */
+/* Light theme (default)
+ * 4-layer depth: bg (#f8fafc) → chrome (#eef1f5) → card (#fff) → hover (#f1f5f9)
+ * 4-tier text: text (#1e293b) → secondary (#475569) → muted (#64748b) → dim (#94a3b8)
+ */
 :root {
   --color-bg: #f8fafc;
   --color-card: #ffffff;
   --color-hover: #f1f5f9;
-  --color-border: #e2e8f0;
+  --color-border: #dce1e8;
   --color-text: #1e293b;
+  --color-text-secondary: #475569;
   --color-text-muted: #64748b;
+  --color-text-dim: #94a3b8;
   --color-placeholder: #94a3b8;
   --color-status-success: #16a34a;
   --color-status-error: #dc2626;
   --color-status-warning: #d97706;
   --color-input-bg: #ffffff;
   --color-input-border: #cbd5e1;
-  --color-sidebar-icon: #64748b;
+  --color-sidebar-icon: #94a3b8;
   --color-sidebar-icon-active: #2b6cee;
   --color-code-bg: #1e293b;
   --color-status-online: #16a34a;
@@ -22,8 +27,8 @@
 
   /* Explorer theme variables */
   --color-explorer-zone-label: #94a3b8;
-  --color-explorer-zone-separator: #e2e8f0;
-  --color-explorer-indent-guide: #e2e8f0;
+  --color-explorer-zone-separator: #dce1e8;
+  --color-explorer-indent-guide: #dce1e8;
   --color-explorer-search-highlight: rgba(43, 108, 238, 0.12);
   --color-explorer-accent: #2b6cee;
   --color-explorer-system-badge: #d97706;
@@ -59,6 +64,13 @@
   --color-icon-folder-open: #2b6cee;
   --color-icon-default: #8b949e;
 
+  /* Semantic aliases — used across components without --color-status- prefix */
+  --color-error: #dc2626;
+  --color-warning: #d97706;
+
+  /* Chrome surfaces (TopBar, NavBar, Explorer, BottomBar) — subtle depth layer */
+  --color-bg-chrome: #eef1f5;
+
   /* Hidden / dotfile / generated file dimming */
   --color-hidden-text: #a0a7b4;
   --color-hidden-icon: #b0b7c3;
@@ -66,21 +78,23 @@
 
 /* Dark theme */
 :root.dark {
-  --color-bg: #101622;
-  --color-card: #1a1f2e;
-  --color-hover: #252b3d;
-  --color-border: #2d3548;
-  --color-text: #ffffff;
-  --color-text-muted: #9da6b9;
+  --color-bg: #0d1117;
+  --color-card: #1c2333;
+  --color-hover: #2a3a52;
+  --color-border: #2a3040;
+  --color-text: #e6edf3;
+  --color-text-secondary: #b0bac5;
+  --color-text-muted: #7d8590;
+  --color-text-dim: #545d68;
   --color-placeholder: #6b7280;
   --color-status-success: #22c55e;
   --color-status-error: #ef4444;
   --color-status-warning: #f59e0b;
   --color-input-bg: #1a1f2e;
   --color-input-border: #2d3548;
-  --color-sidebar-icon: #9da6b9;
-  --color-sidebar-icon-active: #ffffff;
-  --color-code-bg: #101622;
+  --color-sidebar-icon: #545d68;
+  --color-sidebar-icon-active: #e6edf3;
+  --color-code-bg: #0d1117;
   --color-status-online: #22c55e;
   --color-status-offline: #6b7280;
 
@@ -123,6 +137,13 @@
   --color-icon-folder-open: #3d7ef0;
   --color-icon-default: #6b7280;
 
+  /* Semantic aliases — dark theme */
+  --color-error: #ef4444;
+  --color-warning: #f59e0b;
+
+  /* Chrome surfaces — dark theme */
+  --color-bg-chrome: #151b23;
+
   /* Hidden / dotfile / generated file dimming — dark theme */
   --color-hidden-text: #555d6e;
   --color-hidden-icon: #4a5264;
@@ -142,8 +163,11 @@
   --color-theme-hover: var(--color-hover);
   --color-theme-border: var(--color-border);
   --color-theme-text: var(--color-text);
+  --color-theme-text-secondary: var(--color-text-secondary);
   --color-theme-text-muted: var(--color-text-muted);
+  --color-theme-text-dim: var(--color-text-dim);
   --color-theme-placeholder: var(--color-placeholder);
+  --color-theme-bg-chrome: var(--color-bg-chrome);
   --color-theme-input-bg: var(--color-input-bg);
   --color-theme-input-border: var(--color-input-border);
   --color-theme-sidebar-icon: var(--color-sidebar-icon);
@@ -167,8 +191,10 @@
 
 /* Base styles */
 html {
-  font-size: 14px; /* Desktop-optimized base size (default: 16px) */
+  font-size: 13px; /* Matches mockup — tighter, more information-dense */
   font-family: var(--font-family-sans);
+  letter-spacing: -0.01em;
+  -webkit-font-smoothing: antialiased;
 }
 
 body {
@@ -467,6 +493,13 @@ body {
 /* Show CRUD action icons only on row hover */
 .tree-node-row:hover .tree-node-actions {
   display: flex !important;
+}
+
+/* Drag-over highlight for drop target directories */
+.tree-node-row.drag-over {
+  outline: 1px dashed var(--color-explorer-accent);
+  outline-offset: -1px;
+  background-color: color-mix(in srgb, var(--color-explorer-accent) 15%, transparent) !important;
 }
 
 /* Shake animation for invalid filename input */
