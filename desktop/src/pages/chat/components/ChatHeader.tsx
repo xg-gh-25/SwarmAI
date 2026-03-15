@@ -51,20 +51,9 @@ export function ChatHeader({
         tabStatuses={tabStatuses}
       />
 
-      {/* Right Section: Health Indicator + Header Actions */}
+      {/* Right Section: Health Warning + Header Actions */}
       <div className="flex items-center gap-1 flex-shrink-0">
-        {/* Online indicator — green dot + "Online" text */}
-        {health.status === 'connected' && (
-          <div
-            className="flex items-center gap-1.5 px-2 py-1 text-[10px] text-green-500 font-medium mr-1"
-            role="status"
-            aria-label="Online"
-          >
-            <span className="w-[5px] h-[5px] rounded-full bg-green-500 flex-shrink-0" />
-            Online
-          </div>
-        )}
-        {/* Backend Health Indicator — Validates: Requirements 1.6, 1.7 */}
+        {/* Health warning — only shown for non-connected states (BottomBar handles normal status) */}
         {health.status === 'disconnected' && (
           <div
             className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-red-500/10 text-red-400 text-xs font-medium mr-2"
@@ -89,10 +78,10 @@ export function ChatHeader({
         <button
           onClick={onNewSession}
           className="p-2 rounded-lg text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)] transition-colors"
-          title={t('chat.newSession', 'New Session')}
+          title={t('chat.newSession', 'New Session (⌘N)')}
           aria-label={t('chat.newSession', 'New Session')}
         >
-          <span className="material-symbols-outlined">add</span>
+          <span className="material-symbols-outlined text-[18px]">add</span>
         </button>
       </div>
     </div>

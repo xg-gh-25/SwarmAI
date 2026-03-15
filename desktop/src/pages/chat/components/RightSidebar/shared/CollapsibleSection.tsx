@@ -68,16 +68,16 @@ export function CollapsibleSection({
     <div className="border-b border-[var(--color-border)] last:border-b-0">
       {/* Header row — clickable toggle */}
       <button
-        className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-[var(--color-hover)] transition-colors"
+        className="flex w-full items-center gap-1.5 px-3 py-1.5 text-left hover:bg-[var(--color-hover)] transition-colors"
         onClick={handleToggle}
         aria-expanded={expanded}
         aria-controls={contentId}
       >
-        <span className="material-symbols-outlined text-base text-[var(--color-text-muted)]">
+        <span className="material-symbols-outlined text-[14px] text-[var(--color-text-muted)]">
           {icon}
         </span>
 
-        <span className="text-xs font-medium text-[var(--color-text)] truncate">
+        <span className="text-[10.5px] font-semibold uppercase tracking-[0.8px] text-[var(--color-text-muted)] truncate">
           {label}
         </span>
 

@@ -418,9 +418,10 @@ export function ExplorerProvider({ children }: ExplorerProviderProps) {
     if (treeData.length === 0) return;
     // Only seed defaults when there's no saved session (expandedPaths is empty)
     if (expandedPaths.size > 0) return;
-    const zoneFolders = ['Knowledge', 'Projects'];
+    // Only Knowledge expanded by default; Projects and Attachments start collapsed
+    const defaultExpanded = ['Knowledge'];
     const defaults = treeData
-      .filter((n) => n.type === 'directory' && zoneFolders.includes(n.name))
+      .filter((n) => n.type === 'directory' && defaultExpanded.includes(n.name))
       .map((n) => n.path);
     if (defaults.length > 0) {
       setExpandedPaths(new Set(defaults));

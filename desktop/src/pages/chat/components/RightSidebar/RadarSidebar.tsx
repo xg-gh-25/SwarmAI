@@ -286,7 +286,7 @@ export function RadarSidebar({
 
       {/* Header row: mode label, toggle, feature tip */}
       <div className="flex items-center gap-2 px-3 py-2 border-b border-[var(--color-border)]">
-        <span className="text-sm font-medium text-[var(--color-text)] flex-1">
+        <span className="text-[10.5px] font-semibold uppercase tracking-[0.8px] text-[var(--color-text-muted)] flex-1">
           {mode === 'radar' ? 'Radar' : 'History'}
         </span>
 
@@ -354,7 +354,7 @@ export function RadarSidebar({
               {!tipDismissed && (
                 <button
                   onClick={handleDismissTip}
-                  className="mt-2 text-xs text-[var(--color-primary,#3b82f6)] hover:underline"
+                  className="mt-2 text-xs text-[var(--color-primary,#2b6cee)] hover:underline"
                 >
                   Don&apos;t show again
                 </button>

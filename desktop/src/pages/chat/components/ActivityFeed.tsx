@@ -119,7 +119,7 @@ export function ActivityFeed({ blocks }: ActivityFeedProps) {
               <span className="text-[9.5px] text-[var(--color-text-dim)] w-[50px] flex-shrink-0 font-medium uppercase tracking-[0.3px]">
                 {item.label}
               </span>
-              <span className="font-mono text-[11px] text-[#58a6ff] truncate flex-1">
+              <span className="font-mono text-[11px] text-[var(--color-explorer-accent)] truncate flex-1">
                 {item.path}
               </span>
             </div>
