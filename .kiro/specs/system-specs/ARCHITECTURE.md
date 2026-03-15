@@ -159,7 +159,7 @@ desktop/src/
 ├── components/
 │   ├── chat/                     # PermissionRequestModal, ChatDropZone
 │   ├── workspace-explorer/       # SwarmWS file tree
-│   ├── layout/                   # ThreeColumnLayout, GlobalSearchBar
+│   ├── layout/                   # ThreeColumnLayout, TopBar, BottomBar
 │   ├── modals/                   # Agents, Skills, MCP, Settings modals
 │   └── common/                   # Spinner, ConfirmDialog, Toast
 └── contexts/
