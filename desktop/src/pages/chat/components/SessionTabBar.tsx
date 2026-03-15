@@ -104,10 +104,11 @@ export function SessionTabBar({
         scrollbarWidth: 'thin',
       }}
     >
-      {tabs.map((tab) => (
+      {tabs.map((tab, index) => (
         <SessionTab
           key={tab.id}
           tab={tab}
+          index={index}
           isActive={tab.id === activeTabId}
           onSelect={onTabSelect}
           onClose={onTabClose}

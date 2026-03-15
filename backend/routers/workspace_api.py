@@ -815,6 +815,10 @@ async def create_file(request: FolderCreateRequest):
     if target.exists():
         raise HTTPException(status_code=409, detail="File already exists")
 
+    # Reject creation of system-default context files (readonly, overwritten on startup)
+    if _is_readonly_context_file(rel_path):
+        raise HTTPException(status_code=403, detail="System-default context files are read-only")
+
     # Validate depth
     is_valid, error_msg = swarm_workspace_manager.validate_depth(request.path)
     if not is_valid:

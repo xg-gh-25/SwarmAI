@@ -141,7 +141,7 @@ Frontend sends chat_stream with session_id (app_session_id)
 
 ### Session Cleanup Lifecycle
 
-Triggers: TTL expiry (12h) | explicit delete | backend shutdown
+Triggers: TTL expiry (2h) | explicit delete | backend shutdown
 
 `SessionLifecycleHookManager.fire_post_session_close()` runs 4 hooks in order:
 1. `DailyActivityExtractionHook` — conversation summary extraction

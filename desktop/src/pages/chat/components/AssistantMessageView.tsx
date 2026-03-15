@@ -32,6 +32,7 @@ import { useMemorySave } from '../../../hooks/useMemorySave';
 import { chatService } from '../../../services/chat';
 import type { MemorySaveStatus } from '../../../hooks/useMemorySave';
 import { useToast } from '../../../contexts/ToastContext';
+import { ActivityFeed } from './ActivityFeed';
 
 export interface AssistantMessageViewProps {
   /** The assistant message to render */
@@ -192,8 +193,20 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
   });
 
   return (
-    <div className="group/msg min-w-0">
-      <AssistantHeader
+    <div className="group/msg min-w-0 flex gap-2.5 items-start">
+      {/* Agent avatar — 24px bronze gradient circle matching mockup & nav logo */}
+      <div
+        className="w-6 h-6 rounded-[6px] flex items-center justify-center flex-shrink-0 mt-0.5 text-[13px]"
+        style={{
+          background: 'linear-gradient(180deg, #d4a537, #a67c20)',
+          boxShadow: '0 1px 2px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.15)',
+        }}
+        aria-hidden="true"
+      >
+        <span role="img" aria-label="Swarm">&#x1F41D;</span>
+      </div>
+      <div className="flex-1 min-w-0">
+        <AssistantHeader
         timestamp={message.timestamp}
         isStreaming={isStreaming}
       />
@@ -215,6 +228,9 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
           )}
         </div>
       )}
+
+      {/* Activity Feed — collapsible tool action summary */}
+      {!isStreaming && <ActivityFeed blocks={message.content} />}
 
       {/* Action buttons — appear on hover below content, hidden while streaming */}
       {!isStreaming && extractMessageText().length > 0 && (
@@ -295,6 +311,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
         </div>
       )}
 
+    </div>
     </div>
   );
 };
