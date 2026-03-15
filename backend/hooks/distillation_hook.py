@@ -25,7 +25,8 @@ from pathlib import Path
 from core.session_hooks import HookContext
 from core.initialization_manager import initialization_manager
 from core.daily_activity_writer import parse_frontmatter, write_frontmatter
-from scripts.locked_write import locked_read_modify_write
+from scripts.locked_write import locked_read_modify_write, LockedWriteError
+from hooks.evolution_maintenance_hook import _append_changelog
 
 logger = logging.getLogger(__name__)
 
@@ -33,23 +34,17 @@ UNDISTILLED_THRESHOLD = 2
 FLAG_FILENAME = ".needs_distillation"
 SCAN_DAYS = 30  # Only check files from last 30 days
 
-# Patterns to identify distillation-worthy content.
-# These must be specific enough to avoid false positives from common words
-# like "confirmed" (the file exists), "always" (run tests), "never" (seen this).
-# Each pattern requires a decision/lesson-oriented verb phrase, not just a keyword.
-_DECISION_PATTERNS = re.compile(
-    r"(?:decided to \w+|chose to \w+|will use \w+|going with \w+|switched to \w+|"
-    r"adopted \w+|the approach is \w+|opted for \w+|selected \w+ (?:as|for|over|instead))",
-    re.IGNORECASE,
+# Centralized patterns — shared with summarization.py via extraction_patterns.py.
+# Distillation uses the STRICT variant (runs on already-extracted DailyActivity).
+from core.extraction_patterns import (
+    DECISION_PATTERNS_STRICT as _DECISION_PATTERNS,
+    LESSON_PATTERNS as _LESSON_PATTERNS,
+    is_noise_entry as _is_noise_entry,
 )
-_LESSON_PATTERNS = re.compile(
-    r"(?:lesson learned|learned that|mistake was|fixed by \w+|root cause (?:was|is)|"
-    r"workaround[: ]|should have \w+|next time \w+|"
-    r"bug was \w+|issue was \w+|problem was \w+|important to \w+ before)",
-    re.IGNORECASE,
-)
+
 # Competence patterns: "now I know how to X" — positive capability acquisition.
 # Distinct from lessons ("next time avoid X") which are corrective/negative.
+# These stay here (not in extraction_patterns) because they're only used by distillation.
 _COMPETENCE_PATTERNS = re.compile(
     r"(?:"
     # First-person learning
@@ -81,26 +76,6 @@ _COMPETENCE_PATTERNS = re.compile(
     r")",
     re.IGNORECASE,
 )
-
-
-def _is_noise_entry(entry: str) -> bool:
-    """Detect noise entries leaked from agent monologue or table fragments."""
-    # Table fragments: starts with |
-    if entry.startswith("|") or re.match(r"^\|.*\|.*\|", entry):
-        return True
-    # Agent internal monologue: "Let me...", "I'll..."
-    if re.match(
-        r"(?:Let me |I'll |I will |I should |I need to |"
-        r"Item \d|Found |Good —|Wait —|Hmm)",
-        entry, re.IGNORECASE,
-    ):
-        return True
-    # Checkbox/status markers that aren't decisions
-    # Use alternation — ⚠️ is two codepoints (U+26A0 + U+FE0F) which breaks
-    # inside a character class.
-    if re.match(r"^(?:✅|❌|⚠️) ", entry):
-        return True
-    return False
 
 
 class DistillationTriggerHook:
@@ -193,6 +168,9 @@ class DistillationTriggerHook:
         - COE signals → MEMORY.md "COE Registry" (cross-session problem tracking)
         - Corrections → EVOLUTION.md "Corrections Captured" (agent behavior fixes)
 
+        All entries per section are batched into a single locked_write call
+        to minimize lock acquisitions (was: one call per entry).
+
         Returns the number of files successfully distilled.
         """
         memory_path = ws_path / ".context" / "MEMORY.md"
@@ -202,6 +180,10 @@ class DistillationTriggerHook:
         coe_entries: list[tuple[str, str, str]] = []  # (date, signal, topic)
         all_corrections: list[tuple[str, str]] = []  # (date, correction)
         all_competence: list[tuple[str, str]] = []  # (date, competence)
+
+        # Collect all entries across files, then write once per section
+        all_decisions: list[str] = []
+        all_lessons: list[str] = []
 
         for da_file in files:
             try:
@@ -215,20 +197,11 @@ class DistillationTriggerHook:
                 corrections = self._extract_corrections(body)
                 competence = self._extract_competence(body)
 
-                # Write to MEMORY.md via direct function call
+                # Batch entries (write happens after the loop)
                 for decision in decisions:
-                    self._run_locked_write(
-                        memory_path,
-                        "Key Decisions",
-                        f"- {file_date}: {decision}",
-                    )
-
+                    all_decisions.append(f"- {file_date}: {decision}")
                 for lesson in lessons:
-                    self._run_locked_write(
-                        memory_path,
-                        "Lessons Learned",
-                        f"- {file_date}: {lesson}",
-                    )
+                    all_lessons.append(f"- {file_date}: {lesson}")
 
                 # Collect corrections and competence for EVOLUTION.md
                 for correction in corrections:
@@ -255,6 +228,16 @@ class DistillationTriggerHook:
                 logger.warning("Failed to distill %s: %s", da_file.name, exc)
                 continue
 
+        # Batched writes to MEMORY.md — one lock acquisition per section
+        if all_decisions:
+            self._run_locked_write(
+                memory_path, "Key Decisions", "\n".join(all_decisions)
+            )
+        if all_lessons:
+            self._run_locked_write(
+                memory_path, "Lessons Learned", "\n".join(all_lessons)
+            )
+
         # Write COE registry entries
         if coe_entries:
             self._write_coe_registry(memory_path, coe_entries)
@@ -268,6 +251,17 @@ class DistillationTriggerHook:
             self._write_corrections(evolution_path, all_corrections)
         if all_competence:
             self._write_competence(evolution_path, all_competence)
+
+        # Log distillation to EVOLUTION_CHANGELOG.jsonl
+        if distilled_count > 0:
+            changelog_path = ws_path / ".context" / "EVOLUTION_CHANGELOG.jsonl"
+            _append_changelog(
+                changelog_path,
+                "distill",
+                f"batch-{date.today().isoformat()}",
+                f"Distilled {distilled_count} DailyActivity file(s) to MEMORY.md",
+                source="distillation_hook",
+            )
 
         return distilled_count
 
@@ -302,7 +296,7 @@ class DistillationTriggerHook:
             # Lines elsewhere that match decision patterns
             elif stripped.startswith("- ") and _DECISION_PATTERNS.search(stripped):
                 entry = stripped[2:].strip()
-                if len(entry) > 15:
+                if len(entry) > 15 and not _is_noise_entry(entry):
                     decisions.append(entry[:200])
         return decisions[:10]  # Cap to prevent MEMORY.md bloat
 
@@ -413,7 +407,8 @@ class DistillationTriggerHook:
     ) -> None:
         """Write competence entries to EVOLUTION.md under 'Competence Learned'.
 
-        Each entry gets a K-prefixed sequential ID.
+        Each entry gets a K-prefixed sequential ID. All entries are batched
+        into a single locked_write call.
         """
         try:
             content = evolution_path.read_text(encoding="utf-8")
@@ -422,15 +417,20 @@ class DistillationTriggerHook:
         except Exception:
             next_id = 1
 
+        blocks: list[str] = []
         for file_date, entry in competence_entries:
             entry_id = f"K{next_id:03d}"
-            text = (
+            blocks.append(
                 f"### {entry_id} | {file_date}\n"
                 f"- **Competence**: {entry}\n"
                 f"- **Status**: active\n"
             )
-            self._run_locked_write(evolution_path, "Competence Learned", text)
             next_id += 1
+
+        if blocks:
+            self._run_locked_write(
+                evolution_path, "Competence Learned", "\n".join(blocks)
+            )
 
         logger.info(
             "Wrote %d competence entries to EVOLUTION.md", len(competence_entries)
@@ -443,8 +443,8 @@ class DistillationTriggerHook:
     ) -> None:
         """Write correction entries to EVOLUTION.md under 'Corrections Captured'.
 
-        Each correction gets a C-prefixed sequential ID.
-        Format matches EVOLUTION.md convention.
+        Each correction gets a C-prefixed sequential ID. All entries are
+        batched into a single locked_write call.
         """
         # Read current EVOLUTION.md to find next C-ID
         try:
@@ -454,15 +454,20 @@ class DistillationTriggerHook:
         except Exception:
             next_id = 1
 
+        blocks: list[str] = []
         for file_date, correction in corrections:
             entry_id = f"C{next_id:03d}"
-            entry = (
+            blocks.append(
                 f"### {entry_id} | {file_date}\n"
                 f"- **Correction**: {correction}\n"
                 f"- **Status**: active\n"
             )
-            self._run_locked_write(evolution_path, "Corrections Captured", entry)
             next_id += 1
+
+        if blocks:
+            self._run_locked_write(
+                evolution_path, "Corrections Captured", "\n".join(blocks)
+            )
 
         logger.info(
             "Wrote %d correction entries to EVOLUTION.md", len(corrections)
@@ -481,8 +486,8 @@ class DistillationTriggerHook:
         """
         try:
             locked_read_modify_write(memory_path, section, text, mode="prepend")
-        except SystemExit as e:
-            logger.warning("locked_write failed for section %s: exit code %s", section, e.code)
+        except LockedWriteError as e:
+            logger.warning("locked_write failed for section %s: %s", section, e)
         except Exception as e:
             logger.warning("locked_write failed for section %s: %s", section, e)
 

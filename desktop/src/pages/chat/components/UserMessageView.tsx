@@ -86,7 +86,7 @@ export function UserMessageView({ message }: UserMessageViewProps) {
 
   return (
     <div className="flex justify-end">
-      <div className="max-w-[75%] bg-blue-500/10 dark:bg-blue-500/15 rounded-lg px-3 py-2 text-right">
+      <div className="max-w-[75%] bg-[var(--color-user-bubble-bg)] border border-[var(--color-user-bubble-border)] rounded-[14px_14px_4px_14px] px-3.5 py-2.5 text-right">
         <div
           ref={contentRef}
           className={isExpanded ? 'text-left' : 'text-left line-clamp-5 overflow-hidden'}

@@ -46,6 +46,15 @@ LOCK_TIMEOUT = 5.0  # seconds
 FALLBACK_SECTION = "## Distilled"
 
 
+class LockedWriteError(Exception):
+    """Raised when a locked write operation fails.
+
+    Replaces ``sys.exit(1)`` for library callers.  The CLI ``main()``
+    catches this and calls ``sys.exit(1)`` for backward compatibility.
+    """
+    pass
+
+
 def _find_section_range(content: str, section: str):
     """Find the start and end positions of a markdown section.
 
@@ -324,7 +333,8 @@ def locked_field_modify(
         value: New value (required for "set-field" mode).
 
     Raises:
-        SystemExit: With code 1 on lock timeout or field modification error.
+        LockedWriteError: On lock timeout or file-not-found.
+        ValueError: On field modification error or invalid mode/args.
     """
     lock_path = file_path.with_suffix(file_path.suffix + ".lock")
     lock_path.parent.mkdir(parents=True, exist_ok=True)
@@ -344,46 +354,28 @@ def locked_field_modify(
                 break
             except (BlockingIOError, OSError):
                 if time.monotonic() >= deadline:
-                    print(
-                        f"ERROR: Lock timeout on {file_path}",
-                        file=sys.stderr,
+                    raise LockedWriteError(
+                        f"Lock timeout on {file_path} after {LOCK_TIMEOUT}s"
                     )
-                    sys.exit(1)
                 time.sleep(0.1)
 
         # Read current content
         if file_path.exists():
             content = file_path.read_text(encoding="utf-8")
         else:
-            print(
-                f"ERROR: File not found: {file_path}",
-                file=sys.stderr,
-            )
-            sys.exit(1)
+            raise LockedWriteError(f"File not found: {file_path}")
 
-        # Modify the field
-        try:
-            if mode == "increment-field":
-                new_content = _increment_field(content, section, entry_id, field_name)
-            elif mode == "set-field":
-                if value is None:
-                    print(
-                        "ERROR: --value is required for --set-field mode",
-                        file=sys.stderr,
-                    )
-                    sys.exit(1)
-                new_content = _set_field(
-                    content, section, entry_id, field_name, value
-                )
-            else:
-                print(
-                    f"ERROR: Unknown field mode: {mode}",
-                    file=sys.stderr,
-                )
-                sys.exit(1)
-        except ValueError as exc:
-            print(f"ERROR: {exc}", file=sys.stderr)
-            sys.exit(1)
+        # Modify the field (ValueError propagates naturally)
+        if mode == "increment-field":
+            new_content = _increment_field(content, section, entry_id, field_name)
+        elif mode == "set-field":
+            if value is None:
+                raise ValueError("value is required for set-field mode")
+            new_content = _set_field(
+                content, section, entry_id, field_name, value
+            )
+        else:
+            raise ValueError(f"Unknown field mode: {mode}")
 
         # Write back
         file_path.write_text(new_content, encoding="utf-8")
@@ -412,7 +404,7 @@ def locked_read_modify_write(
         mode: "append" (default), "prepend", or "replace".
 
     Raises:
-        SystemExit: With code 1 if the lock cannot be acquired within
+        LockedWriteError: If the lock cannot be acquired within
             ``LOCK_TIMEOUT`` seconds.
     """
     lock_path = file_path.with_suffix(file_path.suffix + ".lock")
@@ -433,11 +425,9 @@ def locked_read_modify_write(
                 break
             except (BlockingIOError, OSError):
                 if time.monotonic() >= deadline:
-                    print(
-                        f"ERROR: Lock timeout on {file_path}",
-                        file=sys.stderr,
+                    raise LockedWriteError(
+                        f"Lock timeout on {file_path} after {LOCK_TIMEOUT}s"
                     )
-                    sys.exit(1)
                 time.sleep(0.1)
 
         # Read current content (or empty if file doesn't exist)
@@ -512,13 +502,17 @@ def main():
     if args.increment_field is not None:
         if not args.entry_id:
             parser.error("--entry-id is required when using --increment-field")
-        locked_field_modify(
-            args.file,
-            args.section,
-            args.entry_id,
-            args.increment_field,
-            "increment-field",
-        )
+        try:
+            locked_field_modify(
+                args.file,
+                args.section,
+                args.entry_id,
+                args.increment_field,
+                "increment-field",
+            )
+        except (LockedWriteError, ValueError) as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            sys.exit(1)
         return
 
     if args.set_field is not None:
@@ -526,14 +520,18 @@ def main():
             parser.error("--entry-id is required when using --set-field")
         if not args.value:
             parser.error("--value is required when using --set-field")
-        locked_field_modify(
-            args.file,
-            args.section,
-            args.entry_id,
-            args.set_field,
-            "set-field",
-            args.value,
-        )
+        try:
+            locked_field_modify(
+                args.file,
+                args.section,
+                args.entry_id,
+                args.set_field,
+                "set-field",
+                args.value,
+            )
+        except (LockedWriteError, ValueError) as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            sys.exit(1)
         return
 
     # Handle text modification modes
@@ -547,7 +545,11 @@ def main():
         mode = "replace"
         text = args.text_replace
 
-    locked_read_modify_write(args.file, args.section, text, mode)
+    try:
+        locked_read_modify_write(args.file, args.section, text, mode)
+    except (LockedWriteError, ValueError) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

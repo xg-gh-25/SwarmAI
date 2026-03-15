@@ -35,8 +35,8 @@ export default function ExplorerHeader({ onCollapseToggle }: ExplorerHeaderProps
       data-testid="explorer-header"
     >
       <div className="h-10 flex items-center justify-between px-3">
-        {/* Static title — Requirements: 9.1 */}
-        <span className="text-sm font-medium text-[var(--color-text)]">
+        {/* Static title — Requirements: 9.1 — mockup: uppercase, dim, wide tracking */}
+        <span className="text-[10.5px] font-semibold uppercase tracking-[0.8px] text-[var(--color-text-muted)]">
           SwarmWS
         </span>
 

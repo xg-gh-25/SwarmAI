@@ -207,7 +207,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
           <div className="space-y-3">{contentBlocks}</div>
         </div>
       ) : (
-        <div className="space-y-3">
+        <div className="space-y-3 text-[var(--color-text-secondary)]">
           {contentBlocks}
           {/* Streaming cursor — blinking caret at end of streaming content */}
           {isStreaming && (

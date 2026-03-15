@@ -32,7 +32,7 @@ import { toFileTreeItem } from './toFileTreeItem';
 import { folderService } from '../../services/workspace';
 import { EXPLORER_ATTACH_FILE, EXPLORER_ASK_ABOUT_FILE } from '../../constants/explorerEvents';
 import { ToastContext } from '../../contexts/ToastContext';
-import TreeNodeRow from './TreeNodeRow';
+import TreeNodeRow, { InlineRenameInput } from './TreeNodeRow';
 import ZoneSeparator from './ZoneSeparator';
 import FileContextMenu from './FileContextMenu';
 
@@ -57,7 +57,8 @@ const ROW_HEIGHT = 32;
 
 export type FlattenedRow =
   | { kind: 'zone-separator'; zoneLabel: string }
-  | { kind: 'node'; node: TreeNode; depth: number; isMatched: boolean; isExpanded: boolean };
+  | { kind: 'node'; node: TreeNode; depth: number; isMatched: boolean; isExpanded: boolean }
+  | { kind: 'creating'; parentPath: string; itemType: 'file' | 'directory'; depth: number };
 
 export interface VirtualizedTreeProps {
   /** Height of the tree container (from parent layout / AutoSizer). */
@@ -258,6 +259,7 @@ interface RowCustomProps {
   rows: FlattenedRow[];
   selectedPath: string | null;
   renamingPath: string | null;
+  dragOverPath: string | null;
   toggleExpand: (path: string) => void;
   setSelectedPath: (path: string | null) => void;
   onFileDoubleClick?: (node: FileTreeItem) => void;
@@ -265,6 +267,10 @@ interface RowCustomProps {
   onAttachToChat?: (item: FileTreeItem) => void;
   onRenameSubmit: (oldPath: string, newName: string) => void;
   onRenameCancel: () => void;
+  onDragOverPath: (path: string | null) => void;
+  onDropOnFolder: (targetDirPath: string, e: React.DragEvent) => void;
+  onCreateSubmit: (name: string) => void;
+  onCreateCancel: () => void;
 }
 
 /**
@@ -278,7 +284,12 @@ function RowRenderer(props: {
   index: number;
   style: React.CSSProperties;
 } & RowCustomProps) {
-  const { index, style, rows, selectedPath, renamingPath, toggleExpand, setSelectedPath, onFileDoubleClick, onContextMenu, onRenameSubmit, onRenameCancel } = props;
+  const {
+    index, style, rows, selectedPath, renamingPath, dragOverPath,
+    toggleExpand, setSelectedPath, onFileDoubleClick, onContextMenu,
+    onRenameSubmit, onRenameCancel, onDragOverPath, onDropOnFolder,
+    onCreateSubmit, onCreateCancel,
+  } = props;
   const row = rows[index];
 
   if (!row) return null;
@@ -287,6 +298,40 @@ function RowRenderer(props: {
     return <ZoneSeparator label={row.zoneLabel} style={style} />;
   }
 
+  // ── Creating phantom row ────────────────────────────────────────────
+  if (row.kind === 'creating') {
+    const iconName = row.itemType === 'directory' ? 'folder' : 'note_add';
+    const iconColor = row.itemType === 'directory'
+      ? 'var(--color-icon-folder)'
+      : 'var(--color-explorer-accent)';
+    return (
+      <div
+        style={{
+          ...style,
+          paddingLeft: row.depth * 16 + 8,
+          display: 'flex',
+          alignItems: 'center',
+          gap: '4px',
+          paddingRight: '8px',
+          fontSize: '13px',
+          lineHeight: '32px',
+          boxSizing: 'border-box',
+        }}
+      >
+        {/* Spacer to align with chevron */}
+        <span style={{ width: '16px', flexShrink: 0 }} />
+        <span
+          className="material-symbols-outlined"
+          style={{ fontSize: '16px', color: iconColor, flexShrink: 0 }}
+        >
+          {iconName}
+        </span>
+        <InlineRenameInput name="" onSubmit={onCreateSubmit} onCancel={onCreateCancel} />
+      </div>
+    );
+  }
+
+  // ── Normal node row ─────────────────────────────────────────────────
   const { node, depth, isMatched, isExpanded } = row;
 
   /** Bridge TreeNode → FileTreeItem for the file editor modal. */
@@ -308,6 +353,36 @@ function RowRenderer(props: {
     [onRenameSubmit, node.path],
   );
 
+  // Drag-over handlers for directory drop targets
+  const handleDragOver = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      e.dataTransfer.dropEffect = 'move';
+      onDragOverPath(node.path);
+    },
+    [onDragOverPath, node.path],
+  );
+
+  const handleDragLeave = useCallback(
+    (e: React.DragEvent) => {
+      // Only clear if leaving the actual row element (not entering a child)
+      if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+      onDragOverPath(null);
+    },
+    [onDragOverPath],
+  );
+
+  const handleDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      onDragOverPath(null);
+      onDropOnFolder(node.path, e);
+    },
+    [onDragOverPath, onDropOnFolder, node.path],
+  );
+
   return (
     <TreeNodeRow
       node={node}
@@ -316,12 +391,16 @@ function RowRenderer(props: {
       isSelected={selectedPath === node.path}
       isMatched={isMatched}
       isRenaming={renamingPath === node.path}
+      isDragOver={dragOverPath === node.path}
       onToggle={handleToggle}
       onSelect={handleSelect}
       onContextMenu={handleContextMenu}
       onDoubleClick={handleDoubleClick}
       onRenameSubmit={handleRenameSubmit}
       onRenameCancel={onRenameCancel}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
       style={style}
     />
   );
@@ -348,6 +427,15 @@ const VirtualizedTree: React.FC<VirtualizedTreeProps> = ({ height, width, onFile
 
   // ── Rename state ────────────────────────────────────────────────────────
   const [renamingPath, setRenamingPath] = useState<string | null>(null);
+
+  // ── Drag-and-drop state ────────────────────────────────────────────────
+  const [dragOverPath, setDragOverPath] = useState<string | null>(null);
+
+  // ── Creating (new file/folder) state ───────────────────────────────────
+  const [creatingItem, setCreatingItem] = useState<{
+    parentPath: string;
+    itemType: 'file' | 'directory';
+  } | null>(null);
 
   /** Ref to the element that had focus when the context menu opened. */
   const returnFocusRef = useRef<HTMLElement | null>(null);
@@ -449,20 +537,129 @@ const VirtualizedTree: React.FC<VirtualizedTreeProps> = ({ height, width, onFile
     }
   }, [onAttachToChat]);
 
-  // Flatten tree into rows — recomputed when tree data or expand state changes
-  const rows = useMemo(
-    () => flattenTree(treeData, expandedPaths, matchedPaths),
-    [treeData, expandedPaths, matchedPaths],
+  // ── Drag-and-drop handlers ──────────────────────────────────────────────
+
+  /** Clear drag-over state on global dragend (e.g. user drops outside tree). */
+  useEffect(() => {
+    const clear = () => setDragOverPath(null);
+    window.addEventListener('dragend', clear);
+    return () => window.removeEventListener('dragend', clear);
+  }, []);
+
+  /** Handle a drop onto a folder — move the dragged item into it. */
+  const handleDropOnFolder = useCallback(
+    async (targetDirPath: string, e: React.DragEvent) => {
+      const sourcePath = e.dataTransfer.getData('text/x-swarm-tree-path');
+      if (!sourcePath) return;
+
+      // Guard: no self-drop, no drop on own parent, no circular move
+      const sourceParent = sourcePath.includes('/') ? sourcePath.substring(0, sourcePath.lastIndexOf('/')) : '';
+      if (sourcePath === targetDirPath) return;
+      if (sourceParent === targetDirPath) return;
+      if (targetDirPath.startsWith(sourcePath + '/')) return;
+
+      try {
+        await folderService.moveItem(sourcePath, targetDirPath);
+        refreshTree();
+      } catch (err) {
+        console.error('Move failed:', err);
+        toastCtx?.addToast({
+          severity: 'error',
+          message: `Move failed: ${err instanceof Error ? err.message : 'Unknown error'}`,
+        });
+      }
+    },
+    [refreshTree, toastCtx],
   );
+
+  // ── New file/folder handlers ───────────────────────────────────────────
+
+  /** Context menu "New File" or "New Folder" → show phantom row. */
+  const handleNewFile = useCallback((item: FileTreeItem) => {
+    // Auto-expand the parent directory
+    if (!expandedPaths.has(item.path)) {
+      toggleExpand(item.path);
+    }
+    setCreatingItem({ parentPath: item.path, itemType: 'file' });
+  }, [expandedPaths, toggleExpand]);
+
+  const handleNewFolder = useCallback((item: FileTreeItem) => {
+    if (!expandedPaths.has(item.path)) {
+      toggleExpand(item.path);
+    }
+    setCreatingItem({ parentPath: item.path, itemType: 'directory' });
+  }, [expandedPaths, toggleExpand]);
+
+  /** Phantom row inline input submitted → create file or folder. */
+  const handleCreateSubmit = useCallback(
+    async (name: string) => {
+      if (!creatingItem || !name.trim()) {
+        setCreatingItem(null);
+        return;
+      }
+      const fullPath = creatingItem.parentPath
+        ? `${creatingItem.parentPath}/${name}`
+        : name;
+      try {
+        if (creatingItem.itemType === 'directory') {
+          await folderService.createFolder(fullPath);
+        } else {
+          await folderService.createFile(fullPath);
+        }
+        refreshTree();
+      } catch (err) {
+        console.error('Create failed:', err);
+        toastCtx?.addToast({
+          severity: 'error',
+          message: `Create failed: ${err instanceof Error ? err.message : 'Unknown error'}`,
+        });
+      }
+      setCreatingItem(null);
+    },
+    [creatingItem, refreshTree, toastCtx],
+  );
+
+  const handleCreateCancel = useCallback(() => {
+    setCreatingItem(null);
+  }, []);
+
+  // Flatten tree into rows — recomputed when tree data or expand state changes.
+  // If we're creating a new item, inject a phantom row after the parent directory.
+  const rows = useMemo(() => {
+    const base = flattenTree(treeData, expandedPaths, matchedPaths);
+    if (!creatingItem) return base;
+
+    // Find the parent directory row and inject phantom after it
+    const parentIdx = base.findIndex(
+      (r) => r.kind === 'node' && r.node.path === creatingItem.parentPath,
+    );
+    if (parentIdx === -1) return base;
+
+    const parentRow = base[parentIdx];
+    const parentDepth = parentRow.kind === 'node' ? parentRow.depth : 0;
+    const phantomRow: FlattenedRow = {
+      kind: 'creating',
+      parentPath: creatingItem.parentPath,
+      itemType: creatingItem.itemType,
+      depth: parentDepth + 1,
+    };
+
+    // Insert right after the parent (before its children)
+    const result = [...base];
+    result.splice(parentIdx + 1, 0, phantomRow);
+    return result;
+  }, [treeData, expandedPaths, matchedPaths, creatingItem]);
 
   // Stable rowProps object for the row renderer
   const rowProps = useMemo<RowCustomProps>(
     () => ({
-      rows, selectedPath, renamingPath, toggleExpand, setSelectedPath,
+      rows, selectedPath, renamingPath, dragOverPath, toggleExpand, setSelectedPath,
       onFileDoubleClick, onContextMenu: handleContextMenu, onAttachToChat: handleAttachToChat,
       onRenameSubmit: handleRenameSubmit, onRenameCancel: handleRenameCancel,
+      onDragOverPath: setDragOverPath, onDropOnFolder: handleDropOnFolder,
+      onCreateSubmit: handleCreateSubmit, onCreateCancel: handleCreateCancel,
     }),
-    [rows, selectedPath, renamingPath, toggleExpand, setSelectedPath, onFileDoubleClick, handleContextMenu, handleAttachToChat, handleRenameSubmit, handleRenameCancel],
+    [rows, selectedPath, renamingPath, dragOverPath, toggleExpand, setSelectedPath, onFileDoubleClick, handleContextMenu, handleAttachToChat, handleRenameSubmit, handleRenameCancel, handleDropOnFolder, handleCreateSubmit, handleCreateCancel],
   );
 
   return (
@@ -488,6 +685,8 @@ const VirtualizedTree: React.FC<VirtualizedTreeProps> = ({ height, width, onFile
           onDelete={handleDelete}
           onFileSystemChange={refreshTree}
           onAskAbout={handleAskAbout}
+          onNewFile={handleNewFile}
+          onNewFolder={handleNewFolder}
           returnFocusRef={returnFocusRef}
         />,
         document.body,

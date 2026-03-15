@@ -44,15 +44,15 @@ export const AssistantHeader: React.FC<AssistantHeaderProps> = ({
   const formattedTime = formatTimestamp(timestamp);
 
   return (
-    <div className="flex items-center gap-2 text-sm text-[var(--color-text-secondary)] mb-1">
+    <div className="flex items-center gap-1.5 text-[10px] text-[var(--color-text-dim)] mb-1">
       <span
-        className={`text-xl${isStreaming ? ' swarm-icon-streaming' : ''}`}
+        className={`text-[13px]${isStreaming ? ' swarm-icon-streaming' : ''}`}
         role="img"
         aria-label="SwarmAI icon"
       >
         🐝
       </span>
-      <span className="text-base font-bold text-[var(--color-text-primary)]">
+      <span className="text-[12px] font-semibold text-[var(--color-text)]">
         Swarm
       </span>
       {formattedTime && (

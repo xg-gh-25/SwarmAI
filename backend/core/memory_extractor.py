@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any
 
 # Direct import — avoids sys.executable subprocess which breaks in PyInstaller bundles
-from scripts.locked_write import locked_read_modify_write
+from scripts.locked_write import locked_read_modify_write, LockedWriteError
 
 logger = logging.getLogger(__name__)
 
@@ -302,9 +302,8 @@ def _write_entries(
     try:
         locked_read_modify_write(memory_path, section, text, mode="prepend")
         return True
-    except SystemExit as e:
-        # locked_read_modify_write calls sys.exit(1) on lock timeout
-        logger.error("locked_write failed for section %s: exit code %s", section, e.code)
+    except LockedWriteError as e:
+        logger.error("locked_write failed for section %s: %s", section, e)
         return False
     except Exception as e:
         logger.error("locked_write failed for section %s: %s", section, e)

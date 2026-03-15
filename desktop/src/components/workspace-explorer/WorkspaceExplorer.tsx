@@ -117,7 +117,7 @@ export default function WorkspaceExplorer({ onFileDoubleClick, onAttachToChat }:
   if (workspaceExplorerCollapsed) {
     return (
       <div
-        className="flex-shrink-0 bg-[var(--color-bg)] border-r border-[var(--color-border)] transition-all duration-200 ease-in-out"
+        className="flex-shrink-0 bg-[var(--color-bg-chrome)] border-r border-[var(--color-border)] transition-all duration-200 ease-in-out"
         style={{ width: 24 }}
         data-testid="workspace-explorer-collapsed"
       >
@@ -143,7 +143,7 @@ export default function WorkspaceExplorer({ onFileDoubleClick, onAttachToChat }:
   // Expanded state
   return (
     <div
-      className="relative flex-shrink-0 bg-[var(--color-bg)] border-r border-[var(--color-border)] flex flex-col transition-all duration-200 ease-in-out"
+      className="relative flex-shrink-0 bg-[var(--color-bg-chrome)] border-r border-[var(--color-border)] flex flex-col transition-all duration-200 ease-in-out"
       style={{
         width: workspaceExplorerWidth,
         minWidth: LAYOUT_CONSTANTS.MIN_WORKSPACE_EXPLORER_WIDTH,

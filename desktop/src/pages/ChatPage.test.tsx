@@ -96,7 +96,7 @@ describe('ChatPage Unified Attachment Pipeline', () => {
       );
 
       await waitFor(() => {
-        expect(screen.getByPlaceholderText('Ask anything')).toBeInTheDocument();
+        expect(screen.getByPlaceholderText('Ask Swarm anything...')).toBeInTheDocument();
       });
     });
 
@@ -110,7 +110,7 @@ describe('ChatPage Unified Attachment Pipeline', () => {
       );
 
       await waitFor(() => {
-        expect(screen.getByPlaceholderText('Ask anything')).toBeInTheDocument();
+        expect(screen.getByPlaceholderText('Ask Swarm anything...')).toBeInTheDocument();
       });
 
       // No attachment preview should be rendered

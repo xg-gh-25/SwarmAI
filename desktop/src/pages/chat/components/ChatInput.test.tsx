@@ -90,7 +90,7 @@ describe('ChatInput with Unified Attachments', () => {
     it('renders text input without errors', () => {
       const props = createDefaultChatInputProps();
       renderWithProviders(<ChatInput {...props} />);
-      expect(screen.getByPlaceholderText('Ask anything')).toBeInTheDocument();
+      expect(screen.getByPlaceholderText('Ask Swarm anything...')).toBeInTheDocument();
     });
 
     it('does not accept attachedContextFiles or onRemoveContextFile props', () => {
@@ -105,7 +105,7 @@ describe('ChatInput with Unified Attachments', () => {
     it('enables send when text is present and no attachments', () => {
       const props = createDefaultChatInputProps({ inputValue: 'hello' });
       renderWithProviders(<ChatInput {...props} />);
-      const textarea = screen.getByPlaceholderText('Ask anything');
+      const textarea = screen.getByPlaceholderText('Ask Swarm anything...');
       expect(textarea).toBeInTheDocument();
     });
 
@@ -115,7 +115,7 @@ describe('ChatInput with Unified Attachments', () => {
         attachments: [att],
       });
       renderWithProviders(<ChatInput {...props} />);
-      expect(screen.getByPlaceholderText('Ask anything')).toBeInTheDocument();
+      expect(screen.getByPlaceholderText('Ask Swarm anything...')).toBeInTheDocument();
     });
 
     it('skips loading and errored attachments for send eligibility', () => {
@@ -126,7 +126,7 @@ describe('ChatInput with Unified Attachments', () => {
       });
       renderWithProviders(<ChatInput {...props} />);
       // Both are loading/errored so hasAttachments should be false
-      expect(screen.getByPlaceholderText('Ask anything')).toBeInTheDocument();
+      expect(screen.getByPlaceholderText('Ask Swarm anything...')).toBeInTheDocument();
     });
   });
 
@@ -136,7 +136,7 @@ describe('ChatInput with Unified Attachments', () => {
       const props = createDefaultChatInputProps({ onInputChange });
       renderWithProviders(<ChatInput {...props} />);
 
-      const textarea = screen.getByPlaceholderText('Ask anything');
+      const textarea = screen.getByPlaceholderText('Ask Swarm anything...');
       fireEvent.change(textarea, { target: { value: 'test message' } });
       expect(onInputChange).toHaveBeenCalled();
     });
@@ -149,7 +149,7 @@ describe('ChatInput with Unified Attachments', () => {
       });
       renderWithProviders(<ChatInput {...props} />);
 
-      const textarea = screen.getByPlaceholderText('Ask anything');
+      const textarea = screen.getByPlaceholderText('Ask Swarm anything...');
       fireEvent.keyDown(textarea, { key: 'Enter', shiftKey: false });
       expect(onSend).toHaveBeenCalled();
     });

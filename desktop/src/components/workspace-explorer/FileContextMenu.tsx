@@ -34,6 +34,10 @@ interface FileContextMenuProps {
   onFileSystemChange?: () => void;
   /** Callback when "Ask Swarm about this" is selected */
   onAskAbout?: (item: FileTreeItem) => void;
+  /** Callback when "New File" is selected (directories only) */
+  onNewFile?: (item: FileTreeItem) => void;
+  /** Callback when "New Folder" is selected (directories only) */
+  onNewFolder?: (item: FileTreeItem) => void;
   /** Ref to the element that should receive focus when the menu closes via Escape (Requirement 10.4) */
   returnFocusRef?: React.RefObject<HTMLElement | null>;
 }
@@ -59,6 +63,8 @@ export default function FileContextMenu({
   onDelete,
   onFileSystemChange,
   onAskAbout,
+  onNewFile,
+  onNewFolder,
   returnFocusRef,
 }: FileContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
@@ -174,6 +180,18 @@ export default function FileContextMenu({
     onClose();
   }, [item, onAskAbout, onClose]);
 
+  // Handle "New File" (directories only)
+  const handleNewFile = useCallback(() => {
+    onNewFile?.(item);
+    onClose();
+  }, [item, onNewFile, onClose]);
+
+  // Handle "New Folder" (directories only)
+  const handleNewFolder = useCallback(() => {
+    onNewFolder?.(item);
+    onClose();
+  }, [item, onNewFolder, onClose]);
+
   // Handle delete with confirmation
   // For Swarm Workspace items, show warning dialog instead (Requirements 4.1, 4.4, 10.3)
   const handleDeleteClick = useCallback(() => {
@@ -217,6 +235,23 @@ export default function FileContextMenu({
 
   // Build menu items based on item type
   const menuItems: MenuItem[] = [];
+
+  // New File / New Folder — only for directories
+  if (item.type === 'directory') {
+    menuItems.push({
+      id: 'new-file',
+      label: 'New File',
+      icon: 'note_add',
+      action: handleNewFile,
+    });
+    menuItems.push({
+      id: 'new-folder',
+      label: 'New Folder',
+      icon: 'create_new_folder',
+      action: handleNewFolder,
+      dividerAfter: true,
+    });
+  }
 
   // Open File — only for files (Requirements 2.1, 2.3)
   if (item.type === 'file') {

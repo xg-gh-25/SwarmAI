@@ -367,7 +367,7 @@ export function ChatInput({
         {/* Input Container with drag-and-drop */}
         <div
           className={clsx(
-            'bg-[var(--color-card)] border rounded-2xl p-3 relative transition-all',
+            'bg-[var(--color-card)] border rounded-xl p-3 relative transition-all',
             isDragging
               ? 'border-primary bg-primary/5'
               : 'border-[var(--color-border)]'
@@ -378,7 +378,7 @@ export function ChatInput({
         >
           {/* Drag Overlay */}
           {isDragging && (
-            <div className="absolute inset-0 bg-primary/10 flex items-center justify-center rounded-2xl z-10 pointer-events-none">
+            <div className="absolute inset-0 bg-primary/10 flex items-center justify-center rounded-xl z-10 pointer-events-none">
               <div className="flex flex-col items-center gap-2">
                 <span className="material-symbols-outlined text-primary text-3xl">upload_file</span>
                 <span className="text-primary font-medium">Drop files here</span>
@@ -453,7 +453,7 @@ export function ChatInput({
               onChange={handleInputChange}
               onKeyDown={handleKeyDown}
               onPaste={handlePaste}
-              placeholder={disabled ? t('chat.disconnectedPlaceholder', 'Backend offline...') : isStreaming ? t('chat.streamingPlaceholder', 'Waiting for response...') : 'Ask anything'}
+              placeholder={disabled ? t('chat.disconnectedPlaceholder', 'Backend offline...') : isStreaming ? t('chat.streamingPlaceholder', 'Waiting for response...') : 'Ask Swarm anything...'}
               rows={2}
               disabled={isStreaming || disabled}
               className={clsx(
@@ -482,7 +482,7 @@ export function ChatInput({
               onClick={isStreaming ? onStop : handleSend}
               disabled={(!isStreaming && !canSend) || disabled}
               className={clsx(
-                'w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 transition-colors',
+                'w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 transition-colors',
                 isStreaming
                   ? 'bg-red-500 hover:bg-red-600'
                   : 'bg-primary hover:bg-primary-hover',
@@ -497,9 +497,9 @@ export function ChatInput({
               }
             >
               {isStreaming ? (
-                <span className="material-symbols-outlined text-white text-xl">stop</span>
+                <span className="material-symbols-outlined text-white text-[16px]">stop</span>
               ) : (
-                <span className="material-symbols-outlined text-white text-xl">arrow_upward</span>
+                <span className="material-symbols-outlined text-white text-[16px]">arrow_upward</span>
               )}
             </button>
           </div>

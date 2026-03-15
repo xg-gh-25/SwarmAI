@@ -65,21 +65,21 @@ function TopBar() {
       <div className="flex-1 flex items-center justify-center gap-3 text-[11px] text-[var(--color-text-muted)]" role="status" aria-label="Session context">
         {meta ? (
           <>
-            <span className="flex items-center gap-1.5 text-[var(--color-text)] font-medium truncate min-w-0" style={{ maxWidth: 'clamp(120px, 25vw, 360px)' }} aria-label={`Session: ${meta.topic || 'New Session'}`}>
+            <span className="flex items-center gap-1.5 text-[var(--color-text-secondary)] font-medium truncate min-w-0" style={{ maxWidth: 'clamp(120px, 25vw, 360px)', letterSpacing: '-0.02em' }} aria-label={`Session: ${meta.topic || 'New Session'}`}>
               <span className="material-symbols-outlined text-[14px]" aria-hidden="true">chat_bubble</span>
               {meta.topic || 'New Session'}
             </span>
-            <span className="text-[var(--color-border)]" aria-hidden="true">|</span>
+            <div className="w-px h-3 bg-[var(--color-border)] flex-shrink-0" aria-hidden="true" />
             <span className={`flex items-center gap-1 ${ringColor}`} aria-label={`Context usage: ${meta.contextPct != null ? Math.round(meta.contextPct) + '%' : 'unknown'}`}>
               <span className="material-symbols-outlined text-[14px]" aria-hidden="true">memory</span>
               {meta.contextPct != null ? `${Math.round(meta.contextPct)}%` : '--'}
             </span>
-            <span className="text-[var(--color-border)]" aria-hidden="true">|</span>
+            <div className="w-px h-3 bg-[var(--color-border)] flex-shrink-0" aria-hidden="true" />
             <span className="flex items-center gap-1" aria-label={`${meta.fileCount} attached files`}>
               <span className="material-symbols-outlined text-[14px]" aria-hidden="true">attach_file</span>
               {meta.fileCount}
             </span>
-            <span className="text-[var(--color-border)]" aria-hidden="true">|</span>
+            <div className="w-px h-3 bg-[var(--color-border)] flex-shrink-0" aria-hidden="true" />
             <span className="flex items-center gap-1" aria-label={`Agent: ${meta.agentName}`}>
               <span className="material-symbols-outlined text-[14px]" aria-hidden="true">smart_toy</span>
               {meta.agentName}
