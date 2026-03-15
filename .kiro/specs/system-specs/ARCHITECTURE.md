@@ -1,6 +1,6 @@
 # SwarmAI Architecture
 
-**Version:** 7.0
+**Version:** 8.0
 **Last Updated:** March 2026
 **Status:** Production
 
@@ -90,7 +90,7 @@ Three-column layout with embedded cognitive context:
 | `useChatStreamingLifecycle` | SSE streaming, messages, sessionId, pendingQuestion, isStreaming |
 | `useTSCCState` | Thread-scoped cognitive context state |
 | `useRightSidebarGroup` | Mutual exclusion for right sidebar panels |
-| `useFileAttachment` | File upload processing for chat input |
+| `useUnifiedAttachments` | Unified file attachment lifecycle (classify → validate → encode → store → clear) |
 | `useRunningTaskCount` | Track active background task count |
 | `useHealthMonitor` | Backend health polling and reconnection detection |
 | `useMemorySave` | One-click memory save (🧠 button) via LLM extraction |
@@ -117,7 +117,6 @@ desktop/src/
 │   ├── SettingsPage.tsx          # API and app configuration
 │   ├── AgentsPage.tsx            # Agent configuration
 │   ├── SkillsPage.tsx            # Skill management
-│   ├── MCPPage.tsx               # MCP server management
 │   ├── PluginsPage.tsx           # Plugin marketplace
 │   ├── ChannelsPage.tsx          # Channel gateway (Feishu, etc.)
 │   ├── SwarmCorePage.tsx         # Core system page
@@ -129,8 +128,7 @@ desktop/src/
 │   ├── useUnifiedTabState.ts     # Tab state (Map + render counter)
 │   ├── useChatStreamingLifecycle.ts  # SSE streaming lifecycle
 │   ├── useTSCCState.ts           # Cognitive context state
-│   ├── useRightSidebarGroup.ts   # Sidebar mutual exclusion
-│   ├── useFileAttachment.ts      # File upload processing
+│   ├── useUnifiedAttachments.ts  # Unified file attachment lifecycle
 │   ├── useRunningTaskCount.ts    # Background task tracking
 │   ├── useHealthMonitor.ts       # Backend health polling + reconnection
 │   ├── useMemorySave.ts          # One-click memory save (🧠 button)
@@ -143,6 +141,7 @@ desktop/src/
 │   ├── agents.ts                 # Agent CRUD with case conversion
 │   ├── skills.ts                 # Skill CRUD
 │   ├── mcp.ts                    # MCP server CRUD
+│   ├── mcpConfig.ts              # MCP configuration management
 │   ├── plugins.ts                # Plugin marketplace
 │   ├── channels.ts               # Channel gateway API
 │   ├── tabPersistence.ts         # File-based tab save/load
@@ -150,6 +149,7 @@ desktop/src/
 │   ├── radar.ts                  # Radar panel API
 │   ├── search.ts                 # Global search API
 │   ├── settings.ts               # Config API
+│   ├── evolution.ts              # Evolution event TypeScript interfaces
 │   ├── system.ts                 # Health/status API
 │   ├── tasks.ts                  # Task management API
 │   ├── todos.ts                  # ToDo management API
@@ -230,7 +230,7 @@ backend/
 │   ├── session_manager.py         # Session storage (DB + in-memory cache)
 │   ├── initialization_manager.py  # Startup orchestration, workspace caching
 │   ├── swarm_workspace_manager.py # SwarmWS filesystem (verify_integrity, projects)
-│   ├── context_directory_loader.py# Centralized .context/ loader (10 files, L0/L1)
+│   ├── context_directory_loader.py# Centralized .context/ loader (11 files, L0/L1)
 │   ├── context_injector.py        # Resume context injection (recent messages → system prompt)
 │   ├── system_prompt.py           # Non-file prompt sections (safety, datetime, runtime)
 │   ├── claude_environment.py      # SDK env config, credential validation
@@ -242,12 +242,18 @@ backend/
 │   ├── skill_migration.py        # skill_ids (UUIDs) → allowed_skills (folder names) migration
 │   ├── projection_layer.py        # Skill symlink projection into .claude/skills/
 │   ├── plugin_manager.py          # Plugin marketplace, install/uninstall
+│   ├── proactive_intelligence.py  # Session briefing, open thread parsing, learning state
 │   ├── tool_summarizer.py         # Tool call summarization for UI
 │   ├── tscc_state_manager.py      # Thread-scoped cognitive context (LRU)
 │   ├── credential_validator.py    # Pre-flight STS validation
 │   ├── cmd_permission_manager.py  # Bash command permission persistence
-│   ├── permission_manager.py      # File access permission handler
+│   ├── permission_manager.py      # Per-session asyncio permission signaling
 │   ├── search_manager.py          # Global search across workspace
+│   ├── mcp_config_loader.py       # MCP server config loading and validation
+│   ├── mcp_migration.py           # MCP config migration utilities
+│   ├── hook_builder.py            # Hook construction helpers
+│   ├── memory_extractor.py        # LLM-powered extraction for one-click 🧠 button
+│   ├── daily_activity_writer.py   # write_daily_activity(), frontmatter handling
 │   ├── task_manager.py            # Task CRUD
 │   ├── todo_manager.py            # ToDo CRUD
 │   ├── audit_manager.py           # Audit logging
@@ -266,7 +272,9 @@ backend/
 │   ├── workspace.py               # Workspace CRUD, file operations
 │   ├── workspace_api.py           # Workspace file API (read/write)
 │   ├── workspace_config.py        # Workspace configuration
+│   ├── memory.py                  # Memory compliance, one-click save-session
 │   ├── projects.py                # Project CRUD
+│   ├── artifacts.py               # Artifact management
 │   ├── channels.py                # Channel gateway (Feishu, etc.)
 │   ├── tasks.py                   # Task management
 │   ├── todos.py                   # ToDo management
@@ -275,7 +283,7 @@ backend/
 │   ├── auth.py                    # Authentication
 │   ├── autonomous_jobs.py         # Background job management
 │   └── dev.py                     # Development-only endpoints
-├── context/                       # Default context file templates (12 files)
+├── context/                       # Default context file templates (16 files)
 ├── database/
 │   └── sqlite.py                  # SQLite with migrations, WAL mode
 ├── schemas/                       # Pydantic models (snake_case)
@@ -360,10 +368,10 @@ Dynamic budgets scale with model context window:
 
 | Model Context | Token Budget | Strategy |
 |---------------|-------------|----------|
-| ≥ 200K | 40,000 | L1 full assembly or source files |
-| 64K–200K | 25,000 | L1 full assembly |
-| 32K–64K | 25,000 | L0 compact cache |
-| < 32K | 25,000 | L0 compact, skip KNOWLEDGE + PROJECTS |
+| ≥ 200K | 50,000 | L1 full assembly or source files |
+| 64K–200K | 30,000 | L1 full assembly |
+| 32K–64K | 30,000 | L0 compact cache |
+| < 32K | 30,000 | L0 compact, skip KNOWLEDGE + PROJECTS |
 
 Truncation order: lowest priority first (PROJECTS → KNOWLEDGE → MEMORY → ...). Priorities 0–2 (SWARMAI, IDENTITY, SOUL) are never truncated.
 
@@ -372,13 +380,13 @@ MEMORY.md truncates from head (keeps newest content at the bottom). All other fi
 ### 5.5 L0/L1 Cache System
 
 ```
-Source files (10 editable .md files)
+Source files (11 editable .md files)
          │
     ┌────┴────┐
     ▼         ▼
   L1 cache    L0 cache
   (full)      (compact)
-  ~20-26K     ~3-6K tokens
+  ~25-35K     ~3-6K tokens
   ≥64K models <64K models
 ```
 
@@ -434,7 +442,7 @@ MEMORY.md is the curated long-term memory file:
 
 ### 5.7.1 Session Lifecycle Hooks (Code-Enforced Memory Pipeline)
 
-Four hooks fire via `BackgroundHookExecutor` on every session close (TTL expiry, explicit delete, backend shutdown):
+Four hooks fire via `BackgroundHookExecutor` on every session close (2h TTL expiry, explicit delete, backend shutdown):
 
 1. `DailyActivityExtractionHook` — extracts conversation summary → `Knowledge/DailyActivity/YYYY-MM-DD.md`
 2. `WorkspaceAutoCommitHook` — smart git commit with conventional prefixes (uses shared `git_lock` to prevent `.git/index.lock` contention)
@@ -443,7 +451,16 @@ Four hooks fire via `BackgroundHookExecutor` on every session close (TTL expiry,
 
 `BackgroundHookExecutor` wraps `SessionLifecycleHookManager` to run hooks as fire-and-forget `asyncio.Task`s — hooks never block the chat path. Each hook is error-isolated with 30s timeout. A shared `asyncio.Lock` (`git_lock`) prevents concurrent git operations between `WorkspaceAutoCommitHook` and other git-touching code.
 
-### 5.7.2 Resume Context Injection
+### 5.7.2 Two-Tier Session Cleanup Loop
+
+The `_cleanup_stale_sessions_loop` runs every 60 seconds with two tiers:
+
+- **Tier 1 (30 min idle)**: `_extract_activity_early()` fires only the DailyActivity extraction hook for idle sessions, preserving the client for potential resume
+- **Tier 2 (2h TTL)**: Full `_cleanup_session()` — fires all 4 lifecycle hooks, disconnects the SDK subprocess, removes from `_active_sessions`
+
+Previous 12h TTL caused 80+ zombie claude processes to accumulate, exhausting macOS vnodes and triggering kernel panics. Reduced to 2h.
+
+### 5.7.3 Resume Context Injection
 
 When a session resumes after a backend restart, `context_injector.build_resume_context()` loads recent messages from SQLite and injects them into the system prompt as read-only history:
 
@@ -452,7 +469,7 @@ When a session resumes after a backend restart, `context_injector.build_resume_c
 - Enforces a 2,000-token budget (oldest-first truncation)
 - Wraps in `## Previous Conversation Context` section with explicit RULES telling the agent not to re-execute or re-answer
 
-### 5.7.3 Tool Failure Evolution Trigger
+### 5.7.4 Tool Failure Evolution Trigger
 
 `ToolFailureTracker` (per-session, stored in `_active_sessions[sid]["failure_tracker"]`) watches for repeated tool failures and injects evolution nudges:
 
@@ -519,7 +536,33 @@ When a session resumes after a backend restart, `context_injector.build_resume_c
 └── Projects/                  # Active work containers
 ```
 
-### 5.9 Auto-Commit Workspace
+### 5.9 Proactive Intelligence (Session Briefing)
+
+`proactive_intelligence.py` generates a `## Session Briefing` section (~185 tokens) injected into the system prompt at session start. Pure parsing, no LLM calls, <1ms.
+
+Four levels of intelligence:
+- **L0**: Parse MEMORY.md `## Open Threads` section → extract thread titles, priorities, status
+- **L1**: Parse DailyActivity `**Next:**` lines → extract continuation hints, filter stale "Ongoing:" items
+- **L2**: Rule-based scoring — `ScoredItem` dataclass with deterministic scoring (priority weight + staleness + frequency + blocking + momentum). Top items shown as "Suggested focus"
+- **L3**: Learning loop — `LearningState` persisted to `.swarm-ai/SwarmWS/.proactive_state.json`. Tracks work-type preferences, applies skip penalties and affinity bonuses across sessions
+
+Key functions: `build_session_briefing()`, `_parse_open_threads()`, `_parse_continue_hints()`, `_detect_patterns()`, `_detect_temporal_signals()`, `_build_suggestions()`, `_apply_learning()`
+
+Multi-tab safe: read-only, no writes, no shared state, no locks.
+
+### 5.10 Context Usage Warning
+
+`_build_context_warning()` monitors context window consumption and emits warning events:
+
+| Threshold | Level | Action |
+|-----------|-------|--------|
+| < 70% | `ok` | No event emitted |
+| 70–84% | `warn` | "Heads up — we've used about N% of this session's context" |
+| ≥ 85% | `critical` | "Recommend: save context and start a new session" |
+
+Emitted after every turn via `_execute_on_session_inner()` and `continue_with_answer()`. Uses `_sum_usage_input_tokens()` from the SDK's usage dict.
+
+### 5.11 Auto-Commit Workspace
 
 Workspace auto-commit has been migrated from per-turn to per-session-close via `WorkspaceAutoCommitHook`:
 
@@ -617,6 +660,7 @@ Default config includes: `use_bedrock`, `aws_region`, `default_model`, `availabl
 | `agent_activity` | `activity` | Agent lifecycle event |
 | `result` | `sessionId`, `durationMs`, `totalCostUsd` | Conversation complete |
 | `error` | `error`, `code`, `detail` | Error occurred |
+| `context_usage` | `level`, `pct`, `message` | Context window usage warning (warn at 70%, critical at 85%) |
 | `heartbeat` | `timestamp` | Connection keepalive (15s interval) |
 
 ---

@@ -160,10 +160,10 @@ Key design decisions:
 
 | Model Context Window | Token Budget | Constant |
 |---------------------|-------------|----------|
-| ≥ 200K tokens | 40,000 | `BUDGET_LARGE_MODEL` |
-| 64K – 200K | 25,000 | `DEFAULT_TOKEN_BUDGET` |
-| < 64K | 25,000 (instance default) | `self.token_budget` |
-| None / 0 | 25,000 | `DEFAULT_TOKEN_BUDGET` |
+| ≥ 200K tokens | 50,000 | `BUDGET_LARGE_MODEL` |
+| 64K – 200K | 30,000 | `DEFAULT_TOKEN_BUDGET` |
+| < 64K | 30,000 (instance default) | `self.token_budget` |
+| None / 0 | 30,000 | `DEFAULT_TOKEN_BUDGET` |
 
 ### Token Estimation
 
@@ -210,7 +210,7 @@ For models with context window < 32K (`THRESHOLD_SKIP_LOW_PRIORITY`), KNOWLEDGE.
 ### L1 Cache (Full Assembly, ≥ 64K models)
 
 ```
-Source files (10 .md files)
+Source files (11 .md files)
          │
     _assemble_from_sources()
          │
@@ -338,7 +338,8 @@ The memory system forms a closed loop: conversations produce DailyActivity → D
 │       → If .needs_distillation exists → injects maintenance prompt  │
 │    [CODE-ENFORCED] SystemPromptBuilder adds identity, safety, etc.  │
 │                                                                     │
-│  Result: Agent starts with full memory + evolution context          │
+│  Result: Agent starts with full memory + evolution context +         │
+│          session briefing (proactive intelligence)                    │
 └─────────────────────────────────────────────────────────────────────┘
                               │
                               ▼
@@ -358,7 +359,7 @@ The memory system forms a closed loop: conversations produce DailyActivity → D
 ┌─────────────────────────────────────────────────────────────────────┐
 │               3. SESSION CLOSE (Recording — Code-Enforced)          │
 │                                                                     │
-│  Triggers: TTL expiry (12h) │ explicit delete │ backend shutdown    │
+│  Triggers: TTL expiry (2h) │ explicit delete │ backend shutdown    │
 │                                                                     │
 │  [CODE-ENFORCED] SessionLifecycleHookManager fires 4 hooks          │
 │  via BackgroundHookExecutor (fire-and-forget asyncio.Task):         │
@@ -474,6 +475,25 @@ Two-tier memory protocol:
 - STEERING.md: short-term, session-level rules, temporary focus areas
 - Agent reads both at session start; STEERING.md takes precedence for conflicts
 
+### Proactive Intelligence (Session Briefing)
+
+`proactive_intelligence.py` generates a `## Session Briefing` section (~185 tokens) injected into the system prompt at session start. Pure parsing, no LLM calls, <1ms.
+
+```
+_build_system_prompt()
+  │
+  └── build_session_briefing(workspace_dir, memory_text)
+        ├── L0: _parse_open_threads(memory_text) → thread titles, priorities, status
+        ├── L1: _parse_continue_hints(daily_dir) → "Next:" lines from DailyActivity
+        ├── L1: _detect_temporal_signals() → first session of day, session gap, stale P0
+        ├── L2: _build_suggestions() → ScoredItem ranking (priority + staleness + blocking)
+        ├── L2: _format_suggestions() → "Suggested focus" with reasoning
+        ├── L3: _load_learning_state() → persistent preferences from .proactive_state.json
+        └── L3: _apply_learning() → skip penalties, affinity bonuses
+```
+
+Multi-tab safe: read-only, no writes, no shared state, no locks.
+
 ---
 
 ## Knowledge Directory
@@ -581,12 +601,12 @@ Current date/time: 2026-03-07 10:30 UTC / 2026-03-07 18:30 CST
 Context window: 200,000 tokens
 
 Fixed overhead:
-  System prompt (.context/ files)        ~25,000-40,000  (12-20%)
+  System prompt (.context/ files)        ~30,000-50,000  (15-25%)
   SDK internal instructions               ~8,000          (4%)
   MCP tool definitions (5 servers)        ~10,000-20,000  (5-10%)
   ──────────────────────────────────────────────────────────
-  Total overhead                          ~43,000-68,000  (21-34%)
-  Remaining for conversation              ~132,000-157,000
+  Total overhead                          ~48,000-78,000  (24-39%)
+  Remaining for conversation              ~122,000-152,000
 
 Per conversation turn (heavy agentic):
   User message                              ~500
@@ -626,6 +646,7 @@ backend/
 │   ├── daily_activity_writer.py     # write_daily_activity(), parse/write_frontmatter
 │   ├── compliance.py                # ComplianceTracker, DailyMetrics
 │   ├── memory_extractor.py          # LLM-powered extraction for one-click 🧠 button
+│   ├── proactive_intelligence.py    # Session briefing, open thread parsing, learning state
 │   └── frontmatter.py              # parse_frontmatter(), write_frontmatter()
 ├── hooks/
 │   ├── daily_activity_hook.py       # DailyActivityExtractionHook
@@ -636,7 +657,7 @@ backend/
 ├── routers/
 │   └── memory.py                    # /api/memory-compliance, /api/memory/save-session
 ├── context/                         # Default templates
-│   ├── SWARMAI.md ... PROJECTS.md   # 10 source file templates + EVOLUTION.md
+│   ├── SWARMAI.md ... PROJECTS.md   # 11 source file templates + EVOLUTION_CHANGELOG.jsonl
 │   ├── BOOTSTRAP.md                 # First-run onboarding template
 │   ├── L0_SYSTEM_PROMPTS.md         # Compact cache template
 │   ├── L1_SYSTEM_PROMPTS.md         # Full cache template

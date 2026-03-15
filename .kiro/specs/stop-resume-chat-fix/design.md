@@ -51,7 +51,7 @@ Where `session_was_interrupted(session_id)` is true when `interrupt_session(sess
 **Unchanged Behaviors:**
 - Genuine (non-interrupt) `error_during_execution` errors must still call `_cleanup_session()`, set `had_error = True`, and emit an error event to the frontend
 - `SESSION_BUSY` rejection must still fire when a message is genuinely still processing (lock held, no interrupt)
-- 12-hour TTL stale session cleanup via `_cleanup_stale_sessions_loop` must continue unchanged
+- 2-hour TTL stale session cleanup via `_cleanup_stale_sessions_loop` must continue unchanged
 - `continue_with_answer` and `continue_with_cmd_permission` must continue to find clients in `_clients` dict and resume correctly
 - Per-tab isolation via `tabMapRef` must be preserved — `handleStop` must use per-tab `sessionId` from `tabMapRef`, not shared React state
 - `interrupt_session()` must continue to return `{"success": False}` when no active client exists in `_clients`

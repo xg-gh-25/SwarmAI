@@ -1282,9 +1282,10 @@ export function useChatStreamingLifecycle(
             ? `${errorMsg}\n\n💡 ${suggestedAction}`
             : errorMsg;
 
-          // Build the error content block
+          // Build the error content block — use friendly tone, not scary "Error:" prefix.
+          // Backend already sanitizes SDK errors into user-friendly messages.
           const errorContent: ContentBlock[] = [
-            { type: 'text' as const, text: `Error: ${fullError}` },
+            { type: 'text' as const, text: `⚠️ ${fullError}` },
           ];
 
           // Helper: APPEND error to assistant message content (preserving
@@ -1500,8 +1501,9 @@ export function useChatStreamingLifecycle(
         // For exhausted retries or mid-stream failures, show the error.
 
         const errorContent: ContentBlock[] = [
-          { type: 'text' as const, text: `Connection error: ${error.message}` },
+          { type: 'text' as const, text: `⚠️ Connection interrupted. Your conversation is saved — send your message again to continue.` },
         ];
+        console.warn('[SSE] Original connection error suppressed from UI:', error.message);
 
         // Same pattern as createStreamHandler error path: APPEND error
         // to preserve any partial tool_use / text content already streamed.

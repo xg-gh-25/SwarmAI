@@ -145,7 +145,7 @@ This feature completes the decoupling by wiring `BackgroundHookExecutor` at star
 ##### 9d: activity_extracted flag semantics with background tasks
 
 10. WHEN the Idle_Cleanup_Loop spawns a background DailyActivity extraction task, THE Agent_Manager SHALL set `activity_extracted = True` BEFORE spawning the task (current behavior), to prevent re-entry from the next 60-second loop iteration.
-11. WHEN a background DailyActivity extraction task fails, THE Agent_Manager SHALL NOT reset `activity_extracted` to False. The flag means "extraction was initiated" not "extraction completed". The next full cleanup (12h TTL) will handle the session regardless.
+11. WHEN a background DailyActivity extraction task fails, THE Agent_Manager SHALL NOT reset `activity_extracted` to False. The flag means "extraction was initiated" not "extraction completed". The next full cleanup (2h TTL) will handle the session regardless.
 12. WHEN a user sends a new message to a session (via `_get_active_client()`), THE Agent_Manager SHALL reset `activity_extracted = False` (current behavior), so that new activity after the user resumes gets captured in the next idle period.
 13. THE `activity_extracted` flag SHALL NOT be modified by the background hook task itself. Only the Idle_Cleanup_Loop (set to True) and `_get_active_client()` (reset to False) SHALL modify the flag.
 
@@ -157,4 +157,4 @@ This feature completes the decoupling by wiring `BackgroundHookExecutor` at star
 ##### 9f: Background tasks and active streaming sessions
 
 16. THE Idle_Cleanup_Loop SHALL only trigger early DailyActivity extraction for sessions that have been idle for `ACTIVITY_IDLE_SECONDS` (30 min), as determined by the `last_used` timestamp. This naturally excludes sessions that are actively streaming, because `_get_active_client()` updates `last_used` on every user message.
-17. THE Idle_Cleanup_Loop SHALL only trigger full cleanup for sessions idle for `SESSION_TTL_SECONDS` (12 h). A session that is actively streaming will never meet this threshold.
+17. THE Idle_Cleanup_Loop SHALL only trigger full cleanup for sessions idle for `SESSION_TTL_SECONDS` (2 h). A session that is actively streaming will never meet this threshold.

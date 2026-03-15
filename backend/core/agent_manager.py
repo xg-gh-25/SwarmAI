@@ -276,6 +276,67 @@ def _truncate_daily_content(content: str, cap: int = TOKEN_CAP_PER_DAILY_FILE) -
     return f"{TRUNCATION_MARKER}\n\n{truncated}"
 
 
+# ---------------------------------------------------------------------------
+# SDK error sanitization — translate raw CLI errors to user-friendly messages
+# ---------------------------------------------------------------------------
+
+# Patterns: (regex, friendly_message, suggested_action)
+_SDK_ERROR_PATTERNS: list[tuple[str, str, str]] = [
+    (
+        r"(?:Cannot write to terminated process|Command failed with exit code -9|exit code: -9)",
+        "The AI service connection was interrupted.",
+        "This is usually temporary. Your conversation is saved — just send your message again.",
+    ),
+    (
+        r"exit code: -(?:6|11|15)",
+        "The AI service process ended unexpectedly.",
+        "Your conversation is saved. Send your message again to continue.",
+    ),
+    (
+        r"(?:SIGTERM|SIGKILL|signal \d+)",
+        "The AI service was stopped by the system.",
+        "This can happen during high memory usage. Your conversation is saved.",
+    ),
+    (
+        r"(?:broken pipe|connection reset|EPIPE|ECONNRESET)",
+        "Lost connection to the AI service.",
+        "Reconnecting automatically. If this persists, try restarting the app.",
+    ),
+]
+
+def _sanitize_sdk_error(raw_error: str) -> tuple[str, str | None]:
+    """Map raw SDK error strings to user-friendly messages.
+
+    Returns (friendly_message, suggested_action).  If no pattern matches,
+    returns the original message with a generic suggestion.
+    """
+    for pattern, friendly, action in _SDK_ERROR_PATTERNS:
+        if re.search(pattern, raw_error, re.IGNORECASE):
+            return friendly, action
+    # No match — return original but add a generic suggestion
+    return raw_error, "Your conversation is saved. Send your message again to continue."
+
+
+def _is_retriable_error(raw_error: str) -> bool:
+    """Check if this SDK error is transient and should be auto-retried silently.
+
+    When True, the error event should NOT be yielded to the frontend — the
+    auto-retry path (PATH B → PATH A) will handle the UX with a softer
+    "reconnecting" indicator instead.
+    """
+    retriable_patterns = [
+        r"exit code: -9",
+        r"Cannot write to terminated process",
+        r"Command failed with exit code -9",
+        r"broken pipe",
+        r"EPIPE",
+    ]
+    for pattern in retriable_patterns:
+        if re.search(pattern, raw_error, re.IGNORECASE):
+            return True
+    return False
+
+
 def _build_error_event(
     code: str,
     message: str,
@@ -525,7 +586,7 @@ class AgentManager:
            resume without losing conversation context.
         2. **Full cleanup** (2 h idle): Tear down the session and fire
            all post-session-close hooks.
-        3. **Orphan sweep** (every 10 min): Kill orphaned claude CLI
+        3. **Orphan sweep** (every 5 min): Kill orphaned claude CLI
            processes that survived wrapper disconnect (deadlock, crash).
         """
         _sweep_counter = 0  # Process leak sweep every 5 iterations (5 min)
@@ -2567,8 +2628,10 @@ class AgentManager:
                             except Exception:
                                 logger.warning("Failed to save partial content after interrupt error", exc_info=True)
                         break  # Exit the combined_queue loop cleanly
-                    logger.error(f"Error from SDK reader: {item['error']}")
+                    raw_error = str(item["error"])
+                    logger.error(f"Error from SDK reader: {raw_error}")
                     session_context["had_error"] = True
+
                     # Persist any partial assistant content accumulated before
                     # the error — prevents message loss on SDK crash / restart.
                     eff_session = (
@@ -2587,18 +2650,40 @@ class AgentManager:
                             logger.info(f"Saved partial assistant content ({len(assistant_content.blocks)} blocks) before error")
                         except Exception:
                             logger.warning("Failed to save partial assistant content on error", exc_info=True)
-                    # TSCC: mark lifecycle as failed (best-effort)
-                    try:
-                        sid = session_context.get("sdk_session_id")
-                        if sid:
-                            await _tscc_state_manager.set_lifecycle_state(sid, "failed")
-                    except Exception:
-                        logger.debug("TSCC: failed lifecycle update failed", exc_info=True)
-                    yield _build_error_event(
-                        code="SDK_STREAM_ERROR",
-                        message=str(item["error"]),
-                        detail=item.get("detail"),
+
+                    # Determine if auto-retry will handle this error silently.
+                    # PATH B (reused client) and PATH A (fresh client, first
+                    # attempt) both check `had_error` after the queue loop and
+                    # retry with a friendly "reconnecting" indicator.  When
+                    # auto-retry is available, suppress the raw error event to
+                    # avoid showing scary messages before the retry.
+                    _will_auto_retry = (
+                        _is_retriable_error(raw_error)
+                        and not session_context.get("_path_a_retried")
                     )
+
+                    if _will_auto_retry:
+                        # Silent break — auto-retry path will handle the UX
+                        logger.info(
+                            "Suppressing error event for retriable error "
+                            "(auto-retry will handle): %s", raw_error[:120]
+                        )
+                    else:
+                        # Non-retriable or already retried — show friendly error
+                        friendly_msg, suggested = _sanitize_sdk_error(raw_error)
+                        # TSCC: mark lifecycle as failed (best-effort)
+                        try:
+                            sid = session_context.get("sdk_session_id")
+                            if sid:
+                                await _tscc_state_manager.set_lifecycle_state(sid, "failed")
+                        except Exception:
+                            logger.debug("TSCC: failed lifecycle update failed", exc_info=True)
+                        yield _build_error_event(
+                            code="SDK_STREAM_ERROR",
+                            message=friendly_msg,
+                            detail=item.get("detail") if settings.debug else None,
+                            suggested_action=suggested,
+                        )
                     break
 
                 if item["source"] == "sdk":
@@ -2719,10 +2804,24 @@ class AgentManager:
                                 if eff_sid and eff_sid in self._active_sessions:
                                     await self._cleanup_session(eff_sid, skip_hooks=True)
                                     logger.info(f"Removed broken session {eff_sid} from active sessions pool")
-                                yield _build_error_event(
-                                    code="ERROR_DURING_EXECUTION",
-                                    message=error_text,
+
+                                # Check if auto-retry will handle this silently
+                                _will_auto_retry_ede = (
+                                    _is_retriable_error(error_text)
+                                    and not session_context.get("_path_a_retried")
                                 )
+                                if _will_auto_retry_ede:
+                                    logger.info(
+                                        "Suppressing error_during_execution for retriable "
+                                        "error (auto-retry will handle): %s", error_text[:120]
+                                    )
+                                else:
+                                    friendly_msg, suggested = _sanitize_sdk_error(error_text)
+                                    yield _build_error_event(
+                                        code="ERROR_DURING_EXECUTION",
+                                        message=friendly_msg,
+                                        suggested_action=suggested,
+                                    )
 
                         elif message.is_error:
                             # is_error=True but subtype is NOT 'error_during_execution':
@@ -2779,10 +2878,25 @@ class AgentManager:
                                     logger.info(f"Saved partial assistant content ({len(assistant_content.blocks)} blocks) before SDK error")
                                 except Exception:
                                     logger.warning("Failed to save partial assistant content on SDK error", exc_info=True)
-                            yield _build_error_event(
-                                code="SDK_ERROR",
-                                message=error_msg,
+
+                            # Check if auto-retry will handle this error silently
+                            # (same logic as SDK reader error path)
+                            _will_auto_retry_sdk = (
+                                _is_retriable_error(error_msg)
+                                and not session_context.get("_path_a_retried")
                             )
+                            if _will_auto_retry_sdk:
+                                logger.info(
+                                    "Suppressing is_error event for retriable error "
+                                    "(auto-retry will handle): %s", error_msg[:120]
+                                )
+                            else:
+                                friendly_msg, suggested = _sanitize_sdk_error(error_msg)
+                                yield _build_error_event(
+                                    code="SDK_ERROR",
+                                    message=friendly_msg,
+                                    suggested_action=suggested,
+                                )
 
                         else:
                             # --- Stale-result detection ---

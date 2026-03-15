@@ -212,7 +212,7 @@ _build_system_prompt() in AgentManager
   │     ├── ensure_directory() → copy defaults from backend/context/
   │     ├── Compute dynamic token budget based on model context window
   │     ├── load_all(model_context_window)
-  │     │     → ≥64K: L1 cache (if fresh) or assemble 10 source files
+  │     │     → ≥64K: L1 cache (if fresh) or assemble 11 source files
   │     │     → <64K: L0 compact cache
   │     ├── BOOTSTRAP.md detection (ephemeral onboarding, prepended)
   │     ├── DailyActivity reading (today + yesterday, 2K token cap per file)
@@ -534,18 +534,23 @@ self._active_sessions[session_id] = {
     "wrapper": wrapper,
     "created_at": time.time(),
     "last_used": time.time(),
+    "failure_tracker": ToolFailureTracker(),  # Per-session evolution nudges
 }
 ```
 
-### 7.2 TTL Cleanup (12-hour idle timeout)
+### 7.2 TTL Cleanup (2-hour idle timeout)
 
 ```python
 async def _cleanup_stale_sessions_loop(self):
     while True:
         await asyncio.sleep(60)
         now = time.time()
+        # Tier 1: Early DailyActivity extraction (30 min idle)
+        for sid, info in idle_sessions:
+            await self._extract_activity_early(sid, info)
+        # Tier 2: Full cleanup (2h TTL)
         for sid in list(self._active_sessions):
-            if now - info["last_used"] > SESSION_TTL:  # 12 hours
+            if now - info["last_used"] > SESSION_TTL:  # 2 hours
                 await self._cleanup_session(sid)
 ```
 
@@ -655,20 +660,21 @@ This ensures the frontend always has something to display for every conversation
 
 ## Auto-Commit Workspace
 
-After every conversation turn completes (ResultMessage), workspace changes are auto-committed:
+Workspace auto-commit has been migrated from per-turn to per-session-close via `WorkspaceAutoCommitHook`:
 
 ```python
-async def _auto_commit_workspace(self, title: str) -> None:
-    # Runs in asyncio.to_thread (non-blocking)
-    git status --porcelain   # Check for changes
-    git add -A               # Stage everything
-    git commit -m "Session: {title[:50]}"
+class WorkspaceAutoCommitHook:
+    # Registered as 2nd session lifecycle hook
+    # Analyzes git diff --stat, categorizes files by path pattern
+    # Generates conventional commit messages (framework:, skills:, content:, project:, output:, chore:)
+    # Skips trivial changes (only skill config syncs)
+    # Uses shared git_lock to prevent .git/index.lock contention
 ```
 
-- Non-blocking: runs in background thread
-- Skips silently if nothing changed or git unavailable
-- Provides workspace versioning — every turn is a commit
-- Failure is non-critical (debug log only)
+- Fires once per session close (not per message — cleaner git history)
+- Smart commit messages derived from actual file changes, not user's first message
+- Categorizes by path prefix: `.context/` → `framework:`, `Knowledge/` → `content:`, etc.
+- Trivial changes (only skill syncs) get `chore: session sync` or are skipped
 
 ---
 
@@ -698,6 +704,20 @@ Bedrock model IDs are stripped of prefix/suffix before lookup: `us.anthropic.cla
 - **Production mode**: Strips traceback headers, file paths with line numbers, caret lines, and library version strings
 - Auth errors: Detected via `_AUTH_PATTERNS` (13 patterns), enriched with `_CREDENTIAL_SETUP_GUIDE`
 - Bedrock fallback: Unclassified errors while Bedrock is active hint at expired credentials
+
+---
+
+## Context Usage Warning
+
+After every turn, `_build_context_warning()` checks context window consumption and emits a `context_usage` SSE event:
+
+| Threshold | Level | Message |
+|-----------|-------|---------|
+| < 70% | `ok` | No event emitted |
+| 70–84% | `warn` | "Heads up — we've used about N% of this session's context" |
+| ≥ 85% | `critical` | "Recommend: save context and start a new session" |
+
+Uses `_sum_usage_input_tokens()` to extract input token count from the SDK's usage dict. The warning is emitted in both `_execute_on_session_inner()` and `continue_with_answer()` flows.
 
 ---
 

@@ -433,7 +433,7 @@ No new fields are added to `_active_sessions` dict entries. The existing `activi
 
 **Risk**: `_extract_activity_early()` sets `activity_extracted = True` before spawning the background task. If the task fails, the flag remains True, preventing retry.
 
-**Mitigation (by design)**: This is intentional. The flag means "extraction was initiated," not "extraction completed." The next full cleanup at 12h TTL handles the session regardless.
+**Mitigation (by design)**: This is intentional. The flag means "extraction was initiated," not "extraction completed." The next full cleanup at 2h TTL handles the session regardless.
 
 **PE Review Finding #2 clarification**: The `except Exception` block in `_extract_activity_early()` (line 473) resets the flag to False, but this only fires when `_build_hook_context()` fails (before `fire_single` is called) or in the inline fallback path. In the background path, once `fire_single()` is called, the flag stays True regardless of background task outcome — the background task itself never modifies the flag.
 
@@ -568,7 +568,7 @@ No new fields are added to `_active_sessions` dict entries. The existing `activi
 
 ### Property 16: Idle thresholds respected
 
-*For any* session with idle time T, the idle cleanup loop SHALL trigger early DailyActivity extraction only when T > `ACTIVITY_IDLE_SECONDS` (1800s) AND `activity_extracted` is False. Full cleanup SHALL trigger only when T > `SESSION_TTL_SECONDS` (43200s).
+*For any* session with idle time T, the idle cleanup loop SHALL trigger early DailyActivity extraction only when T > `ACTIVITY_IDLE_SECONDS` (1800s) AND `activity_extracted` is False. Full cleanup SHALL trigger only when T > `SESSION_TTL_SECONDS` (7200s).
 
 **Validates: Requirements 9f.16, 9f.17**
 

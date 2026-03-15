@@ -103,7 +103,7 @@ flowchart TD
 
     B3 -->|"≥ 64K"| C{L1 cache fresh?}
     C -->|YES| D[Load L1 cache]
-    C -->|NO| E["Assemble 10 source files"]
+    C -->|NO| E["Assemble 11 source files"]
     E --> E1["Enforce token budget"]
     E1 --> E2["Write L1 cache"]
     E2 --> D
@@ -538,22 +538,26 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    A[ResultMessage received] --> B["_auto_commit_workspace(title)"]
-    B --> C["asyncio.to_thread()"]
-    C --> D["git status --porcelain"]
-    D --> E{Changes detected?}
-    E -->|NO| F[Skip silently]
-    E -->|YES| G["git add -A"]
-    G --> H["git commit -m 'Session: {title}'"]
-    H --> I[Log success]
+    A[Session Close - TTL/delete/shutdown] --> B["WorkspaceAutoCommitHook fires"]
+    B --> C["git diff --stat"]
+    C --> D{Changes detected?}
+    D -->|NO| E[Skip silently]
+    D -->|YES| F["Categorize by path prefix"]
+    F --> G["Generate conventional commit message"]
+    G --> H{Trivial changes only?}
+    H -->|YES| I["chore: session sync"]
+    H -->|NO| J["framework:/skills:/content:/project: prefix"]
+    I --> K["git add -A && git commit"]
+    J --> K
+    K --> L[Log success]
 
-    style C fill:#9ff,stroke:#333
-    style F fill:#ddd,stroke:#333
+    style E fill:#ddd,stroke:#333
+    style F fill:#9ff,stroke:#333
 ```
 
 ---
 
-## 20. Deferred Startup Flow
+## 20. Deferred Startup & Session Cleanup Flow
 
 ```mermaid
 flowchart TD
@@ -571,9 +575,22 @@ flowchart TD
     I -->|N channels| K["asyncio.create_task()"]
     K --> L["channel_gateway.startup()"]
 
+    subgraph "Cleanup Loop (every 60s)"
+        M["_cleanup_stale_sessions_loop"] --> N{Session idle > 30 min?}
+        N -->|YES| O["Tier 1: _extract_activity_early()"]
+        O --> P[DailyActivity hook only - client preserved]
+        N -->|NO| Q[Skip]
+        M --> R{Session idle > 2h?}
+        R -->|YES| S["Tier 2: _cleanup_session()"]
+        S --> T[All 4 hooks + disconnect subprocess]
+        R -->|NO| U[Skip]
+    end
+
     style C fill:#9f9,stroke:#333
     style E fill:#ff9,stroke:#333
     style K fill:#ff9,stroke:#333
+    style O fill:#ff9,stroke:#333
+    style S fill:#f99,stroke:#333
 ```
 
 ---
@@ -589,4 +606,5 @@ flowchart TD
 | Yellow fill | Head truncation (MEMORY.md) / Deferred background task |
 | Cyan fill | Tail truncation (default) / Background thread |
 | Green fill | Startup complete / success state |
+| Red fill | Destructive cleanup (session teardown) |
 | Grey fill | Skipped / no-op |

@@ -137,7 +137,7 @@ human_approval_hook(input_data, tool_use_id, context)
   ├── Create permission request:
   │   ├── request_id = "perm_{uuid4().hex[:12]}"
   │   ├── Store in PermissionManager._pending_requests (in-memory)
-  │   └── Put in permission_request_queue (for SSE streaming)
+  │   └── Enqueue via permission_mgr.enqueue_permission_request(session_id, request)
   │       {sessionId, requestId, toolName, toolInput, reason, options}
   │
   ├── SUSPEND: await permission_mgr.wait_for_permission_decision(request_id)
@@ -239,7 +239,7 @@ class PermissionManager:
     _approved_commands: dict[str, set[str]]           # session_id → set of command hashes
     _permission_events: dict[str, asyncio.Event]      # request_id → Event (for signaling)
     _permission_results: dict[str, str]               # request_id → "approve" or "deny"
-    _permission_request_queue: asyncio.Queue           # Shared queue for SSE streaming
+    _session_queues: dict[str, asyncio.Queue]         # session_id → per-session permission queue
     _pending_requests: dict[str, dict]                 # In-memory store for pending requests
 ```
 
@@ -253,7 +253,9 @@ class PermissionManager:
 | `store_pending_request(data)` | Store pending request in memory |
 | `wait_for_permission_decision(request_id, timeout=300)` | Suspend until user decides (5 min timeout) |
 | `set_permission_decision(request_id, decision)` | Signal the waiting hook to continue |
-| `get_permission_queue()` | Return the shared asyncio.Queue for SSE events |
+| `get_session_queue(session_id)` | Return (or create) the per-session asyncio.Queue |
+| `remove_session_queue(session_id)` | Clean up queue on session end |
+| `enqueue_permission_request(session_id, request)` | Route request to session's queue |
 
 ### Signaling Flow
 
@@ -293,20 +295,19 @@ await permission_mgr.get_permission_queue().put({
 })
 ```
 
-### 2. Fan-In Queue Forwards to SSE
+### 2. Per-Session Queue Forwards to SSE
 
-In `_run_query_on_client`, the `permission_request_forwarder` task monitors the global queue:
+In `_run_query_on_client`, the `permission_request_forwarder` task monitors the session's queue:
 
 ```python
 async def permission_request_forwarder():
+    session_queue = permission_mgr.get_session_queue(sdk_session_id)
     while True:
-        request = await _permission_request_queue.get()
-        if request["sessionId"] == current_session_id:
-            await combined_queue.put({"source": "permission", "request": request})
-        else:
-            await _permission_request_queue.put(request)  # Put back for other sessions
-            await asyncio.sleep(0.01)  # Prevent busy-loop
+        request = await session_queue.get()
+        await combined_queue.put({"source": "permission", "request": request})
 ```
+
+Each session has its own queue — no cross-session contention, no busy-loop re-enqueuing.
 
 ### 3. Main Loop Yields SSE Event
 
@@ -396,13 +397,13 @@ Set as `ClaudeAgentOptions.can_use_tool` — invoked for EVERY tool call. Defaul
 | Aspect | CmdPermissionManager | PermissionManager |
 |--------|---------------------|-------------------|
 | Storage | Filesystem (JSON files) | In-memory (dict) |
-| Scope | Shared across all sessions | Per-session |
+| Scope | Shared across all sessions | Per-session queues |
 | Persistence | Survives restarts | Lost on restart |
 | Matching | Glob (`fnmatch`) | Hash (SHA-256) |
-| Purpose | Dangerous detection + approval storage | Asyncio signaling + legacy approval |
+| Purpose | Dangerous detection + approval storage | Per-session asyncio signaling + legacy approval |
 | Loaded | Once at startup (`load()`) | Created at import time |
 
-The `CmdPermissionManager` is the primary system — persistent, shared, glob-based. The `PermissionManager` provides the asyncio signaling mechanism (events + queue) and serves as a fallback when `CmdPermissionManager` rejects an overly-broad pattern.
+The `CmdPermissionManager` is the primary system — persistent, shared, glob-based. The `PermissionManager` provides per-session asyncio signaling (events + queues) and serves as a fallback when `CmdPermissionManager` rejects an overly-broad pattern. The global `get_permission_queue()` is deprecated — use `get_session_queue(session_id)` instead.
 
 ---
 
