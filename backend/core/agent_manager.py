@@ -3349,22 +3349,37 @@ class AgentManager:
                             _init_sid = session_context["sdk_session_id"]
                             _init_wrapper = session_context.get("_wrapper")
                             if _init_sid and _init_wrapper and _init_sid not in self._active_sessions:
-                                _init_info = {
-                                    "client": client,
-                                    "wrapper": _init_wrapper,
-                                    "created_at": time.time(),
-                                    "last_used": time.time(),
-                                    "activity_extracted": False,
-                                    "failure_tracker": ToolFailureTracker(),
-                                    "pid": _init_wrapper.pid,
-                                }
-                                self._register_wrapper_pid(_init_wrapper, _init_info)
-                                self._active_sessions[_init_sid] = _init_info
-                                session_context["_early_active_key"] = _init_sid
-                                logger.info(
-                                    "Early client registration for new session %s",
-                                    _init_sid,
-                                )
+                                # When app_session_id is set (resume-fallback), the
+                                # client is already registered under the app key.
+                                # Share the SAME dict so eviction of either key
+                                # clears both (prevents stale client references).
+                                _app_key = session_context.get("_early_active_key")
+                                _existing_info = self._active_sessions.get(_app_key) if _app_key else None
+                                if _existing_info:
+                                    # Alias: both keys point to the same dict
+                                    self._active_sessions[_init_sid] = _existing_info
+                                    logger.info(
+                                        "Early client registration for new session %s "
+                                        "(aliased to app key %s)",
+                                        _init_sid, _app_key,
+                                    )
+                                else:
+                                    _init_info = {
+                                        "client": client,
+                                        "wrapper": _init_wrapper,
+                                        "created_at": time.time(),
+                                        "last_used": time.time(),
+                                        "activity_extracted": False,
+                                        "failure_tracker": ToolFailureTracker(),
+                                        "pid": _init_wrapper.pid,
+                                    }
+                                    self._register_wrapper_pid(_init_wrapper, _init_info)
+                                    self._active_sessions[_init_sid] = _init_info
+                                    session_context["_early_active_key"] = _init_sid
+                                    logger.info(
+                                        "Early client registration for new session %s",
+                                        _init_sid,
+                                    )
 
                         # Forward task_started events so the frontend can show
                         # sub-agent activity (e.g. "Sub-agent: Explore frontend codebase")
