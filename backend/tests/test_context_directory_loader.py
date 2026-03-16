@@ -18,7 +18,8 @@ tests (Hypothesis) for universal correctness properties.
 Key properties verified:
 - Property 3: BOOTSTRAP.md created iff USER.md is empty template AND
   BOOTSTRAP.md does not already exist.
-- Property 4: Dynamic token budget tiers match model context window.
+- Property 4: Dynamic token budget tiers match model context window
+  (1M/500K+, 200K+, 64K+, <64K).
 - Property 5: Truncation direction matches truncate_from field.
 - Property 11: L1 cache budget-tier consistency — cache returns None
   when budget mismatch, content when budget matches.
@@ -288,10 +289,22 @@ class TestComputeTokenBudget:
         loader = self._make_loader(tmp_dirs)
         assert loader.compute_token_budget(200_000) == BUDGET_LARGE_MODEL
 
-    def test_large_model_500k(self, tmp_dirs):
-        """500K context window → BUDGET_LARGE_MODEL (50,000)."""
+    def test_large_model_499k(self, tmp_dirs):
+        """499K context window → BUDGET_LARGE_MODEL (50,000)."""
         loader = self._make_loader(tmp_dirs)
-        assert loader.compute_token_budget(500_000) == BUDGET_LARGE_MODEL
+        assert loader.compute_token_budget(499_999) == BUDGET_LARGE_MODEL
+
+    def test_1m_model_500k(self, tmp_dirs):
+        """>=500K context window → BUDGET_1M_MODEL (100,000)."""
+        from core.context_directory_loader import BUDGET_1M_MODEL
+        loader = self._make_loader(tmp_dirs)
+        assert loader.compute_token_budget(500_000) == BUDGET_1M_MODEL
+
+    def test_1m_model_1m(self, tmp_dirs):
+        """1M context window → BUDGET_1M_MODEL (100,000)."""
+        from core.context_directory_loader import BUDGET_1M_MODEL
+        loader = self._make_loader(tmp_dirs)
+        assert loader.compute_token_budget(1_000_000) == BUDGET_1M_MODEL
 
     def test_medium_model_64k(self, tmp_dirs):
         """Exactly 64K → DEFAULT_TOKEN_BUDGET (30,000)."""
