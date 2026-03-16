@@ -464,24 +464,29 @@ class AgentManager:
     Claude Code (underlying SDK) has built-in support for Skills and MCP servers.
     """
 
-    # TTL for idle sessions before automatic cleanup (2 hours).
-    # Previous value of 12h caused 80+ zombie claude processes to accumulate,
-    # exhausting macOS vnodes (263K→127) and triggering kernel panics.
-    SESSION_TTL_SECONDS = 2 * 60 * 60
+    # TTL for idle sessions before automatic cleanup (8 hours).
+    # Generous TTL so users can leave for lunch, meetings, or overnight
+    # work and come back to a live session.  The old 2h value forced
+    # cold-start resumes during normal work patterns.  Memory is managed
+    # by SIGSTOP hibernation + MAX_CONCURRENT_SUBPROCESSES cap, not TTL.
+    SESSION_TTL_SECONDS = 8 * 60 * 60
     # Idle threshold for early DailyActivity extraction (30 minutes).
     # When a session has no messages for this long, extract activity
     # but keep the session alive so the user can resume.
     ACTIVITY_IDLE_SECONDS = 30 * 60
-    # Idle threshold for subprocess disconnect (5 minutes).
-    # Kills the claude CLI subprocess to free ~100-300MB RAM per tab,
-    # but keeps session metadata.  On next message, the resume-fallback
-    # path (context injection) seamlessly recreates the session.
-    # Set to 5min to allow normal user reading/thinking time between
-    # messages.  OOM prevention is handled by MAX_CONCURRENT_SUBPROCESSES
-    # cap + _evict_idle_subprocesses(), not by aggressive idle timeouts.
-    # Restored from 2min (2026-03-15 COE) after adding last_used update
-    # after streaming completion (Bug 2 fix) and cap-based eviction.
+    # Idle threshold for subprocess FREEZE via SIGSTOP (5 minutes).
+    # Instead of killing, we freeze the subprocess — it uses zero CPU
+    # and macOS naturally pages out its memory.  On next message,
+    # SIGCONT thaws it instantly (<100ms) with full context intact.
+    # This eliminates the 10-20s cold-start penalty for normal idle
+    # patterns (reading docs, checking Slack, lunch breaks).
     SUBPROCESS_IDLE_SECONDS = 5 * 60
+    # Idle threshold for subprocess KILL (2 hours).
+    # After this long, the subprocess is killed (not just frozen) to
+    # fully reclaim resources.  On next message, PATH A cold-starts
+    # with context injection (~10-15s).  This is the ONLY case where
+    # the user experiences a resume delay during normal usage.
+    SUBPROCESS_KILL_SECONDS = 2 * 60 * 60
     # Maximum concurrent live claude CLI subprocesses.
     # When exceeded, the oldest idle subprocess is disconnected before
     # spawning a new one.  Prevents unbounded RAM growth with many tabs.
@@ -508,6 +513,12 @@ class AgentManager:
     WATCHDOG_SECONDS_PER_TURN = 5
     # Absolute ceiling to prevent infinite waits (seconds).
     WATCHDOG_MAX_TIMEOUT = 600
+    # Tighter timeout for cold-start resume (fresh subprocess after idle
+    # kill or eviction).  A fresh subprocess should respond in ~15s;
+    # 45s gives 3x margin without the 180s pain of the full watchdog.
+    # Only applies to the INITIAL timeout before first real message;
+    # once streaming starts, inter-message timeout uses the normal value.
+    COLD_START_TIMEOUT = 45
 
     def __init__(
         self,
@@ -636,16 +647,18 @@ class AgentManager:
     async def _cleanup_stale_sessions_loop(self):
         """Periodically clean up sessions that have been idle too long.
 
-        Four-tier idle detection:
-        1. **Subprocess disconnect** (5 min idle): Kill the claude CLI
-           subprocess to free ~100-300MB RAM, but keep session metadata.
-           On next message, resume-fallback (context injection) recreates
-           the session transparently.  This is the PRIMARY defense against
-           macOS OOM-killing active processes (exit code -9).
+        Five-tier idle detection:
+        1. **Subprocess FREEZE** (5 min idle): SIGSTOP the subprocess.
+           Uses zero CPU, macOS pages out idle memory naturally.
+           On next message, SIGCONT thaws instantly (<100ms) — full
+           context preserved, zero user-visible delay.
+        1.5. **Subprocess KILL** (2 h idle): Kill frozen subprocesses.
+           After 2h the subprocess is killed to fully reclaim resources.
+           On next message, PATH A cold-starts with context injection.
         2. **Activity extraction** (30 min idle): Fire the DailyActivity
            extraction hook only.  Session stays alive so the user can
            resume without losing conversation context.
-        3. **Full cleanup** (2 h idle): Tear down the session and fire
+        3. **Full cleanup** (8 h idle): Tear down the session and fire
            all post-session-close hooks.
         4. **Orphan sweep** (every 5 min): Kill orphaned claude CLI
            processes that survived wrapper disconnect (deadlock, crash).
@@ -657,30 +670,49 @@ class AgentManager:
                 now = time.time()
                 _sweep_counter += 1
 
-                # --- Tier 1: Subprocess idle disconnect (5 min) ---
-                # Free RAM by killing idle subprocesses.  Session metadata
-                # stays in _active_sessions so resume-fallback works.
-                # GUARD: Skip sessions that are actively streaming — killing
-                # a subprocess mid-stream causes "Cannot write to terminated
-                # process" errors and triggers the full retry cascade.
-                idle_for_disconnect = [
+                # --- Tier 1: Subprocess FREEZE via SIGSTOP (5 min idle) ---
+                # Freeze idle subprocesses instead of killing them.  The
+                # subprocess uses zero CPU and macOS naturally pages out
+                # its memory.  On next message, SIGCONT thaws instantly.
+                # GUARD: Skip sessions that are actively streaming or
+                # already frozen.
+                idle_for_freeze = [
                     (sid, info) for sid, info in self._active_sessions.items()
                     if (now - info.get("last_used", info["created_at"]) > self.SUBPROCESS_IDLE_SECONDS
                         and info.get("wrapper") is not None
+                        and not info.get("is_streaming")
+                        and not info.get("is_frozen"))
+                ]
+                for sid, info in idle_for_freeze:
+                    self._freeze_subprocess(sid, info)
+
+                # --- Tier 1.5: Subprocess KILL (2 h idle) ---
+                # Kill subprocesses that have been idle for 2+ hours.
+                # This is the only path that forces a cold-start resume.
+                # GUARD: Skip sessions that are actively streaming.
+                idle_for_kill = [
+                    (sid, info) for sid, info in self._active_sessions.items()
+                    if (now - info.get("last_used", info["created_at"]) > self.SUBPROCESS_KILL_SECONDS
+                        and info.get("wrapper") is not None
                         and not info.get("is_streaming"))
                 ]
-                for sid, info in idle_for_disconnect:
+                for sid, info in idle_for_kill:
                     wrapper = info.get("wrapper")
                     if wrapper:
                         logger.info(
-                            "Subprocess idle disconnect for session %s "
-                            "(idle %.0fs, freeing RAM)",
+                            "Subprocess idle kill for session %s "
+                            "(idle %.0fs, reclaiming resources)",
                             sid, now - info.get("last_used", info["created_at"]),
                         )
-                        await self._disconnect_wrapper(wrapper, f"idle-disconnect-{sid}")
-                        # Clear subprocess references but keep session metadata
+                        # Thaw first if frozen — SIGKILL on a stopped process
+                        # is fine on macOS/Linux, but thawing first is cleaner
+                        # for graceful __aexit__.
+                        if info.get("is_frozen"):
+                            self._thaw_subprocess(sid, info)
+                        await self._disconnect_wrapper(wrapper, f"idle-kill-{sid}")
                         info["wrapper"] = None
                         info["client"] = None
+                        info["is_frozen"] = False
 
                 # --- Tier 2: Early DailyActivity extraction (30 min idle) ---
                 idle_for_extraction = [
@@ -691,7 +723,7 @@ class AgentManager:
                 for sid, info in idle_for_extraction:
                     await self._extract_activity_early(sid, info)
 
-                # --- Tier 3: Full cleanup (2 h TTL) ---
+                # --- Tier 3: Full cleanup (8 h TTL) ---
                 stale = [
                     sid for sid, info in self._active_sessions.items()
                     if now - info.get("last_used", info["created_at"]) > self.SESSION_TTL_SECONDS
@@ -821,9 +853,13 @@ class AgentManager:
                     sid, idle_secs, total_live - evicted,
                     self.MAX_CONCURRENT_SUBPROCESSES, streaming_count,
                 )
+                # Thaw first if frozen — cleaner for graceful __aexit__
+                if info.get("is_frozen"):
+                    self._thaw_subprocess(sid, info)
                 await self._disconnect_wrapper(wrapper, f"evict-cap-{sid}")
                 info["wrapper"] = None
                 info["client"] = None
+                info["is_frozen"] = False
                 evicted += 1
 
         return evicted
@@ -869,6 +905,9 @@ class AgentManager:
         if info:
             wrapper = info.get("wrapper")
             if wrapper:
+                # Thaw first if frozen — cleaner for graceful __aexit__
+                if info.get("is_frozen"):
+                    self._thaw_subprocess(session_id, info)
                 await self._disconnect_wrapper(wrapper, session_id)
         # Clean up per-session permission queue and session lock
         _pm.remove_session_queue(session_id)
@@ -918,6 +957,108 @@ class AgentManager:
         finally:
             # Always unregister PID from global tracker after disconnect attempt
             self._unregister_pid(pid)
+
+    def _freeze_subprocess(self, session_id: str, info: dict) -> bool:
+        """Freeze a subprocess via SIGSTOP — zero CPU, instant resume via SIGCONT.
+
+        The process stays in memory but uses zero CPU.  macOS naturally
+        pages out idle process memory if it needs RAM for other things.
+        On next message, ``_thaw_subprocess`` sends SIGCONT and the process
+        resumes instantly (<100ms) with full context intact.
+
+        Returns True if the process was successfully frozen.
+        """
+        pid = info.get("pid")
+        if not pid:
+            wrapper = info.get("wrapper")
+            if wrapper:
+                pid = wrapper.pid
+        if not pid:
+            return False
+
+        try:
+            os.kill(pid, 0)  # Existence check
+        except ProcessLookupError:
+            logger.warning(
+                "Cannot freeze session %s: pid %d is dead", session_id, pid,
+            )
+            # Process is dead — clear references so PATH A handles it
+            self._tracked_pids.discard(pid)
+            info["client"] = None
+            info["wrapper"] = None
+            info["pid"] = None
+            info["is_frozen"] = False
+            return False
+        except PermissionError:
+            pass  # Process exists
+
+        try:
+            os.kill(pid, signal.SIGSTOP)
+            info["is_frozen"] = True
+            idle_secs = time.time() - info.get("last_used", info.get("created_at", 0))
+            logger.info(
+                "Froze subprocess pid=%d for session %s (idle %.0fs)",
+                pid, session_id, idle_secs,
+            )
+            return True
+        except OSError as e:
+            logger.warning(
+                "Failed to SIGSTOP pid=%d for session %s: %s",
+                pid, session_id, e,
+            )
+            return False
+
+    def _thaw_subprocess(self, session_id: str, info: dict) -> bool:
+        """Thaw a frozen subprocess via SIGCONT — instant resume, full context.
+
+        Called by ``_get_active_client`` when the user sends a new message
+        to a frozen session.  The process resumes instantly with no
+        context loss — the user sees zero delay.
+
+        Returns True if the process was successfully thawed.
+        """
+        if not info.get("is_frozen"):
+            return True  # Already thawed
+
+        pid = info.get("pid")
+        if not pid:
+            wrapper = info.get("wrapper")
+            if wrapper:
+                pid = wrapper.pid
+        if not pid:
+            info["is_frozen"] = False
+            return False
+
+        try:
+            os.kill(pid, 0)  # Existence check
+        except ProcessLookupError:
+            logger.warning(
+                "Cannot thaw session %s: pid %d is dead", session_id, pid,
+            )
+            self._tracked_pids.discard(pid)
+            info["client"] = None
+            info["wrapper"] = None
+            info["pid"] = None
+            info["is_frozen"] = False
+            return False
+        except PermissionError:
+            pass
+
+        try:
+            os.kill(pid, signal.SIGCONT)
+            info["is_frozen"] = False
+            logger.info(
+                "Thawed subprocess pid=%d for session %s — instant resume",
+                pid, session_id,
+            )
+            return True
+        except OSError as e:
+            logger.warning(
+                "Failed to SIGCONT pid=%d for session %s: %s",
+                pid, session_id, e,
+            )
+            info["is_frozen"] = False
+            return False
 
     @staticmethod
     def _extract_wrapper_pid(wrapper: _ClaudeClientWrapper) -> int | None:
@@ -1188,13 +1329,43 @@ class AgentManager:
 
         client = info.get("client")
         if client is None:
-            # Subprocess was idle-disconnected — fall through to PATH A
+            # Subprocess was killed (idle >2h, eviction, or crash) — fall through to PATH A
             logger.info(
-                "Session %s exists but subprocess was idle-disconnected, "
+                "Session %s exists but subprocess was killed, "
                 "will use resume-fallback (context injection)",
                 session_id,
             )
             return None
+
+        # ── Thaw frozen subprocess ─────────────────────────────────
+        # If the subprocess was SIGSTOP'd by Tier 1 cleanup, thaw it
+        # with SIGCONT — instant resume (<100ms), full context intact.
+        if info.get("is_frozen"):
+            if self._thaw_subprocess(session_id, info):
+                # Successfully thawed — mark as streaming IMMEDIATELY to
+                # close the race window with the cleanup loop's Tier 1.5
+                # kill check.  Without this, the cleanup loop could see
+                # the session as thawed + idle and kill it before the
+                # caller sets is_streaming=True in _execute_on_session.
+                # The caller's finally block clears is_streaming after
+                # the stream completes (both success and error paths).
+                info["is_streaming"] = True
+                logger.info(
+                    "Session %s thawed from frozen state — instant resume "
+                    "(is_streaming set to guard against cleanup race)",
+                    session_id,
+                )
+                return client
+            else:
+                # Thaw failed (process died while frozen) — fall through to PATH A
+                logger.warning(
+                    "Session %s thaw failed — subprocess died while frozen, "
+                    "falling through to resume-fallback",
+                    session_id,
+                )
+                info["client"] = None
+                info["wrapper"] = None
+                return None
 
         # ── Liveness check ──────────────────────────────────────────
         # Verify the subprocess PID is still alive before handing
@@ -2413,6 +2584,10 @@ class AgentManager:
                 # gone and --resume cannot work.  Start a fresh session instead.
                 if is_resuming:
                     logger.info(f"No active client for session {session_id}, starting fresh session instead of --resume")
+                    # Tell the frontend we're cold-starting a resume — shows
+                    # "Resuming session..." instead of ambiguous "Thinking..."
+                    if not _need_fresh_client:  # Don't double-emit on auto-retry
+                        yield {"type": "session_resuming"}
                     # Observability: log the resume-fallback path
                     if session_context.get("app_session_id") is not None:
                         logger.info(
@@ -2493,6 +2668,7 @@ class AgentManager:
                         "created_at": time.time(),
                         "last_used": time.time(),
                         "activity_extracted": False,
+                        "is_frozen": False,
                         "failure_tracker": ToolFailureTracker(),
                     }
                     # Register PID in global tracker immediately after spawn
@@ -2508,6 +2684,12 @@ class AgentManager:
                     if _early_streaming_info:
                         _early_streaming_info["is_streaming"] = True
 
+                # Determine if this is a cold-start resume (fresh subprocess
+                # after idle kill, eviction, or app restart).  Cold starts use
+                # a tighter watchdog timeout because the fresh subprocess has
+                # no cached context to process — it should respond quickly.
+                _is_cold_start = agent_config.get("needs_context_injection", False)
+
                 try:
                     async for event in self._run_query_on_client(
                         client=client,
@@ -2520,6 +2702,7 @@ class AgentManager:
                         content=content,
                         user_message=user_message,
                         agent_id=agent_id,
+                        is_cold_start=_is_cold_start,
                     ):
                         yield event
                 except Exception:
@@ -2625,6 +2808,7 @@ class AgentManager:
                                 content=content,
                                 user_message=user_message,
                                 agent_id=agent_id,
+                                is_cold_start=True,  # Retry = fresh subprocess, tight timeout
                             ):
                                 yield event
                         except Exception:
@@ -2653,6 +2837,7 @@ class AgentManager:
                             "created_at": time.time(),
                             "last_used": time.time(),
                             "activity_extracted": False,
+                            "is_frozen": False,
                             "failure_tracker": ToolFailureTracker(),
                             "pid": wrapper.pid,
                         }
@@ -2714,11 +2899,18 @@ class AgentManager:
         content: Optional[list[dict]],
         user_message: Optional[str],
         agent_id: str,
+        is_cold_start: bool = False,
     ) -> AsyncIterator[dict]:
         """Send a query on an existing client and yield SSE events.
 
         This is the shared message-processing loop used by both new and resumed sessions.
         The client is NOT disconnected after the response completes (caller manages lifecycle).
+
+        Args:
+            is_cold_start: True when this is a resume-fallback PATH A with a
+                fresh subprocess (context injection).  Uses a tighter initial
+                watchdog timeout (COLD_START_TIMEOUT) because a fresh subprocess
+                should respond faster than a mid-conversation reuse.
         """
         # Clear any stale interrupted flag from a previous turn so it doesn't
         # leak into the current turn's error handling. If interrupt_session()
@@ -2871,7 +3063,16 @@ class AgentManager:
             # response, the stdout stream hangs forever (anyio TextReceiveStream
             # doesn't detect broken pipe reliably). This timeout surfaces an
             # error to the user instead of infinite "Thinking...".
-            _WATCHDOG_INITIAL_TIMEOUT = 180   # seconds before first real message
+            # Cold-start resumes use a tighter initial timeout (COLD_START_TIMEOUT)
+            # because a fresh subprocess should respond in ~15s — no reason to
+            # wait 180s.  Once streaming starts, inter-message uses normal timeout.
+            _WATCHDOG_INITIAL_TIMEOUT = (
+                self.COLD_START_TIMEOUT if is_cold_start
+                else self._compute_watchdog_timeout(
+                    session_context.get("sdk_session_id")
+                    or session_context.get("app_session_id")
+                )
+            )
             _WATCHDOG_INTER_MSG_TIMEOUT = 180  # seconds between messages during tool use
             _got_first_real_message = False
             _query_sent_at = time.monotonic()  # Track time from query to first message
@@ -2902,13 +3103,17 @@ class AgentManager:
                             watchdog_timeout, _watchdog_elapsed, _got_first_real_message,
                         )
                     session_context["had_error"] = True
+                    _timeout_msg = (
+                        f"Session couldn't start within {watchdog_timeout}s. "
+                        "Your machine may be under load."
+                    ) if is_cold_start and not _got_first_real_message else (
+                        f"The AI service didn't respond within {watchdog_timeout}s. "
+                        "This usually means the Claude backend is temporarily "
+                        "overloaded or the request was too complex."
+                    )
                     yield _build_error_event(
                         code="SDK_SUBPROCESS_TIMEOUT",
-                        message=(
-                            f"The AI service didn't respond within {watchdog_timeout}s. "
-                            "This usually means the Claude backend is temporarily "
-                            "overloaded or the request was too complex."
-                        ),
+                        message=_timeout_msg,
                         suggested_action=(
                             "Your conversation is saved. "
                             "Send your message again to continue."
@@ -3421,6 +3626,7 @@ class AgentManager:
                                         "created_at": time.time(),
                                         "last_used": time.time(),
                                         "activity_extracted": False,
+                                        "is_frozen": False,
                                         "failure_tracker": ToolFailureTracker(),
                                         "pid": _init_wrapper.pid,
                                     }
@@ -4538,6 +4744,7 @@ Create the skill in the `.claude/skills/` directory within the current workspace
                                 "created_at": time.time(),
                                 "last_used": time.time(),
                                 "activity_extracted": False,
+                                "is_frozen": False,
                                 "failure_tracker": ToolFailureTracker(),
                                 "pid": wrapper.pid,
                             }

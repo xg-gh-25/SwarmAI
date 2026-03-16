@@ -995,6 +995,10 @@ export function useChatStreamingLifecycle(
               id: `reconnect-success-${capturedTabId}`,
             });
           }
+          // Clear "Resuming session..." indicator once data arrives
+          if (tabState.isResuming) {
+            tabState.isResuming = false;
+          }
         }
 
         // DEBUG: trace every SSE event through the handler
@@ -1347,6 +1351,24 @@ export function useChatStreamingLifecycle(
           // Reset stream start time for the elapsed counter
           if (streamStartTimeRef.current === null) {
             streamStartTimeRef.current = Date.now();
+          }
+        }
+        // Backend cold-start resume: subprocess was killed (idle >2h, app restart),
+        // PATH A is spawning a fresh subprocess with context injection.
+        // Show "Resuming session..." instead of ambiguous "Thinking...".
+        else if (event.type === 'session_resuming') {
+          const tabState = capturedTabId
+            ? tabMapRef.current.get(capturedTabId)
+            : undefined;
+          if (tabState) {
+            tabState.isResuming = true;
+            // Force re-render so ChatPage picks up isResuming from tabMapRef.
+            // Same pattern as isReconnecting — ref mutations alone don't
+            // trigger React re-renders.
+            const isActive = capturedTabId === activeTabIdRef.current;
+            if (isActive) {
+              setIsStreaming(true, capturedTabId ?? undefined);
+            }
           }
         }
         // Context compacted — backend emits when the SDK compacts the context window

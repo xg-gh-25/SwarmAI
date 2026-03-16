@@ -88,6 +88,28 @@ export function ChatInput({
     maxHeightRef.current = MAX_ROWS * lineHeight;
   }, []);
 
+  // L2: Listen for auto-diff injection from FileEditorPanel save
+  // and L3 review feedback. Updates both the visible textarea AND the
+  // per-tab draft storage so the text survives tab switches.
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const { text, focus } = (e as CustomEvent<{ text: string; focus?: boolean }>).detail ?? {};
+      if (text) {
+        onInputChange(text);
+        // Sync to per-tab draft storage so the injected text survives tab switches
+        const tabId = activeTabIdRef?.current;
+        if (tabId && inputValueMapRef) {
+          inputValueMapRef.current.set(tabId, text);
+        }
+        if (focus) {
+          requestAnimationFrame(() => textareaRef.current?.focus());
+        }
+      }
+    };
+    window.addEventListener('swarm:inject-chat-input', handler);
+    return () => window.removeEventListener('swarm:inject-chat-input', handler);
+  }, [onInputChange, activeTabIdRef, inputValueMapRef]);
+
   // Apply a brief CSS transition for mode toggle animations only (not during typing)
   const applyTransition = useCallback(() => {
     const el = textareaRef.current;

@@ -551,10 +551,78 @@ const CodeBlock = memo(function CodeBlock({
   );
 });
 
+/**
+ * Custom event name dispatched when a clickable file path is clicked in chat.
+ * ThreeColumnLayout listens for this to open the FileEditorModal.
+ */
+export const OPEN_FILE_EVENT = 'swarm:open-file';
+
+/**
+ * Detects whether inline code text looks like a workspace-relative file path.
+ * Matches: Knowledge/Notes/file.md, .context/MEMORY.md, backend/core/agent.py
+ * Rejects: URLs, single words, package names, shell commands, absolute paths.
+ */
+export function isWorkspaceFilePath(text: string): boolean {
+  // Must contain at least one /
+  if (!text.includes('/')) return false;
+  // No spaces (workspace paths don't have spaces)
+  if (/\s/.test(text)) return false;
+  // Not a URL
+  if (/^https?:\/\//i.test(text)) return false;
+  // Not an absolute path
+  if (text.startsWith('/')) return false;
+  // No path traversal segments
+  if (text.split('/').includes('..')) return false;
+  // Must end with a file extension (1-10 chars after last dot)
+  if (!/\.\w{1,10}$/.test(text)) return false;
+  // No obviously non-path characters
+  if (/[<>|"'`]/.test(text)) return false;
+  return true;
+}
+
 // Inline code component (supports multiline with whitespace-pre-wrap)
+// When content looks like a workspace file path, renders as a clickable link
+// that dispatches OPEN_FILE_EVENT for ThreeColumnLayout to handle.
 const InlineCode = memo(function InlineCode({ children }: { children: React.ReactNode }) {
   const content = String(children);
   const hasNewlines = content.includes('\n');
+  const isFilePath = !hasNewlines && isWorkspaceFilePath(content);
+
+  if (isFilePath) {
+    // Strip leading ./ if present for the dispatched path
+    const cleanPath = content.startsWith('./') ? content.slice(2) : content;
+
+    const handleClick = (e: React.MouseEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      document.dispatchEvent(
+        new CustomEvent(OPEN_FILE_EVENT, { detail: { path: cleanPath } }),
+      );
+    };
+
+    const handleKeyDown = (e: React.KeyboardEvent) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        document.dispatchEvent(
+          new CustomEvent(OPEN_FILE_EVENT, { detail: { path: cleanPath } }),
+        );
+      }
+    };
+
+    return (
+      <code
+        onClick={handleClick}
+        onKeyDown={handleKeyDown}
+        role="button"
+        tabIndex={0}
+        className="px-1 py-px bg-[var(--color-hover)] rounded-[3px] text-[11.5px] text-primary font-mono cursor-pointer hover:bg-[var(--color-primary)]/10 hover:underline decoration-primary/50 transition-colors inline-flex items-center gap-0.5"
+        title={`Open ${cleanPath}`}
+      >
+        <span className="material-symbols-outlined text-[11px] leading-none">open_in_new</span>
+        {children}
+      </code>
+    );
+  }
 
   return (
     <code className={`px-1 py-px bg-[var(--color-hover)] rounded-[3px] text-[11.5px] text-[var(--color-inline-code)] font-mono ${hasNewlines ? 'whitespace-pre-wrap block my-2' : ''}`}>
