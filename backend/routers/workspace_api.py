@@ -53,6 +53,7 @@ from pydantic import BaseModel
 from core.context_directory_loader import CONTEXT_FILES
 from core.swarm_workspace_manager import SYSTEM_MANAGED_FOLDERS, swarm_workspace_manager
 from database import db
+from utils.diff_parser import parse_unified_diff, format_human_summary
 from schemas.workspace_config import (
     TreeNodeResponse,
     WorkspaceConfigResponse,
@@ -677,6 +678,75 @@ async def get_workspace_file_raw(
 
     mime_type, _ = mimetypes.guess_type(target.name)
     return FileResponse(target, media_type=mime_type or "application/octet-stream")
+
+
+@router.get("/workspace/file/diff")
+async def get_workspace_file_diff(
+    path: str = Query(..., description="Relative path within the workspace"),
+):
+    """Return a structured diff summary of uncommitted changes for a file.
+
+    Used by the file editor panel's auto-diff feature (L2) to inject an
+    edit summary into the chat input after saving. Runs ``git diff`` on the
+    file and parses the output into hunks with section-aware descriptions.
+
+    Returns ``{"path": ..., "hunks": [...], "summary": "...", "raw_diff": "..."}``.
+    """
+    if ".." in path.split("/"):
+        raise HTTPException(status_code=400, detail="Path traversal not allowed")
+
+    expanded_path = await _get_workspace_path()
+    workspace_root = Path(expanded_path)
+    target = (workspace_root / path).resolve()
+
+    if not _is_path_under(target, workspace_root):
+        if not _is_symlink_traversal(workspace_root, path):
+            raise HTTPException(status_code=400, detail="Path outside workspace")
+
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail=f"File not found: {path}")
+
+    git_dir = workspace_root / ".git"
+    if not git_dir.is_dir():
+        return {"path": path, "hunks": [], "summary": "", "raw_diff": ""}
+
+    try:
+        result = subprocess.run(
+            ["git", "diff", "--unified=3", "--", path],
+            cwd=str(workspace_root),
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return {"path": path, "hunks": [], "summary": "", "raw_diff": ""}
+
+    raw_diff = result.stdout or ""
+
+    hunks = parse_unified_diff(raw_diff)
+
+    # Read current file content for section-aware summary
+    try:
+        file_content = target.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        file_content = ""
+
+    summary = format_human_summary(hunks, file_content)
+
+    # Serialize hunks to dicts for JSON response
+    hunk_dicts = [
+        {
+            "old_start": h.old_start,
+            "old_count": h.old_count,
+            "new_start": h.new_start,
+            "new_count": h.new_count,
+            "added_lines": h.added_lines,
+            "removed_lines": h.removed_lines,
+        }
+        for h in hunks
+    ]
+
+    return {"path": path, "hunks": hunk_dicts, "summary": summary, "raw_diff": raw_diff}
 
 
 @router.get("/workspace/file/committed")

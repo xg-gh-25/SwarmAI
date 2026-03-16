@@ -1,10 +1,11 @@
-import { ReactNode, useState, useCallback, useRef } from 'react';
+import { ReactNode, useState, useCallback, useRef, useEffect } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { LayoutProvider, useLayout, LAYOUT_CONSTANTS, ModalType, useSessionMeta } from '../../contexts/LayoutContext';
 import { ExplorerProvider, useTreeData } from '../../contexts/ExplorerContext';
 import { WorkspaceExplorer } from '../workspace-explorer';
 import { BottomBar } from './BottomBar';
 import FileEditorModal from '../common/FileEditorModal';
+import FileEditorPanel from '../common/FileEditorPanel';
 import BinaryPreviewModal from '../common/BinaryPreviewModal';
 import SwarmWorkspaceWarningDialog from '../common/SwarmWorkspaceWarningDialog';
 import { classifyFileForPreview } from '../../utils/fileUtils';
@@ -243,6 +244,8 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
   const refreshTreeRef = useRef<(() => void) | null>(null);
 
   // File editor state - Requirement 9.1
+  // editorMode: 'panel' = side panel (default), 'modal' = fullscreen overlay
+  const [editorMode, setEditorMode] = useState<'panel' | 'modal'>('panel');
   const [fileEditorState, setFileEditorState] = useState<{
     isOpen: boolean;
     filePath: string;
@@ -309,6 +312,34 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
     }
   }, []);
 
+  // Listen for swarm:open-file custom events dispatched by clickable file paths
+  // in chat messages (MarkdownRenderer). Uses a ref to avoid stale closure on
+  // openFileEditor which depends on external state.
+  const openFileEditorRef = useRef(openFileEditor);
+  openFileEditorRef.current = openFileEditor;
+
+  useEffect(() => {
+    const handleOpenFileEvent = (e: Event) => {
+      const { path: filePath } = (e as CustomEvent<{ path: string }>).detail ?? {};
+      if (!filePath) return;
+
+      const fileName = filePath.split('/').pop() || filePath;
+      const fileItem: FileTreeItem = {
+        id: filePath,
+        name: fileName,
+        type: 'file',
+        path: filePath,
+        workspaceId: '',
+        workspaceName: '',
+      };
+
+      openFileEditorRef.current(fileItem);
+    };
+
+    document.addEventListener('swarm:open-file', handleOpenFileEvent);
+    return () => document.removeEventListener('swarm:open-file', handleOpenFileEvent);
+  }, []);
+
   // Handle file double-click - Requirement 9.1, 1.1-1.5, 7.1-7.2
   const handleFileDoubleClick = useCallback(async (file: FileTreeItem) => {
     if (file.isSwarmWorkspace) {
@@ -360,8 +391,26 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
   // Handle file editor close - Requirement 9.7
   const handleFileEditorClose = useCallback(() => {
     setFileEditorState(null);
+    setEditorMode('panel'); // Reset to panel for next open
     refreshTreeRef.current?.();
   }, []);
+
+  // Toggle between panel and modal mode (preserves file state)
+  const handleToggleEditorMode = useCallback(() => {
+    setEditorMode((prev) => (prev === 'panel' ? 'modal' : 'panel'));
+  }, []);
+
+  // L2: Auto-diff feedback — inject edit summary into chat input.
+  // Accepts fileName as a parameter to avoid stale-closure reads of
+  // fileEditorState (which may be nulled if the editor closes during
+  // the async diff fetch).
+  const handleSaveWithDiff = useCallback((diffSummary: string, savedFileName?: string) => {
+    const fileName = savedFileName ?? fileEditorState?.fileName ?? 'file';
+    const text = `I edited \`${fileName}\`:\n${diffSummary}\n\nPlease revise the doc to align with these changes.`;
+    window.dispatchEvent(new CustomEvent('swarm:inject-chat-input', {
+      detail: { text, focus: true },
+    }));
+  }, [fileEditorState?.fileName]);
 
   return (
     <div className="flex flex-col h-screen bg-[var(--color-bg)]">
@@ -376,6 +425,22 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
           <LeftSidebar />
           <WorkspaceExplorer onFileDoubleClick={handleFileDoubleClick} />
           <MainChatPanel>{children}</MainChatPanel>
+          {/* File Editor Panel — side-by-side with chat */}
+          {fileEditorState && editorMode === 'panel' && (
+            <FileEditorPanel
+              filePath={fileEditorState.filePath}
+              fileName={fileEditorState.fileName}
+              workspaceId={fileEditorState.workspaceId}
+              initialContent={fileEditorState.content}
+              onSave={handleFileSave}
+              onClose={handleFileEditorClose}
+              gitStatus={fileEditorState.gitStatus}
+              readonly={fileEditorState.readonly}
+              committedContent={fileEditorState.committedContent}
+              onToggleMode={handleToggleEditorMode}
+              onSaveWithDiff={handleSaveWithDiff}
+            />
+          )}
         </div>
 
         {/* Bottom status bar */}
@@ -393,8 +458,8 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
         />
       )}
 
-      {/* File Editor Modal */}
-      {fileEditorState && (
+      {/* File Editor Modal — fullscreen overlay mode */}
+      {fileEditorState && editorMode === 'modal' && (
         <FileEditorModal
           isOpen={fileEditorState.isOpen}
           filePath={fileEditorState.filePath}
@@ -406,6 +471,8 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
           gitStatus={fileEditorState.gitStatus}
           readonly={fileEditorState.readonly}
           committedContent={fileEditorState.committedContent}
+          onToggleMode={handleToggleEditorMode}
+          onSaveWithDiff={handleSaveWithDiff}
         />
       )}
 

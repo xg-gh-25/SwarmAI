@@ -70,6 +70,8 @@ export interface UnifiedTab {
   scrollPosition?: number;
   /** True while the SSE connection is being retried after a connection-phase failure. */
   isReconnecting?: boolean;
+  /** True while PATH A cold-start resume is in progress (subprocess killed, re-spawning). */
+  isResuming?: boolean;
   /** Current reconnection attempt number (0 = not reconnecting). */
   reconnectionAttempt?: number;
   /** Set to true on the first non-heartbeat SSE event — used to distinguish connection-phase vs mid-stream failures. */
@@ -151,6 +153,7 @@ function createDefaultTab(agentId: string): UnifiedTab {
     status: 'idle',
     contextWarning: null,
     isReconnecting: false,
+    isResuming: false,
     reconnectionAttempt: 0,
     attachments: [],
   };
@@ -179,6 +182,7 @@ function hydrateTab(s: PersistedTab): UnifiedTab {
     status: 'idle',
     contextWarning: null,
     isReconnecting: false,
+    isResuming: false,
     reconnectionAttempt: 0,
     attachments: [],
   };
