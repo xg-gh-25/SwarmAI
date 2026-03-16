@@ -1001,6 +1001,19 @@ export function useChatStreamingLifecycle(
           }
         }
 
+        // Also clear isResuming on any real data event, outside the
+        // hasReceivedData guard.  The session_resuming event itself can
+        // consume the one-shot !hasReceivedData check before isResuming
+        // is set to true (ordering: hasReceivedData=true runs at line 984,
+        // then isResuming=true at line 1364).  Subsequent data events
+        // skip the guard and isResuming stays stuck.  This catches it.
+        if (tabState?.isResuming && (
+          event.type === 'assistant' || event.type === 'tool_use' ||
+          event.type === 'tool_result' || event.type === 'result'
+        )) {
+          tabState.isResuming = false;
+        }
+
         // DEBUG: trace every SSE event through the handler
         if (import.meta.env.DEV) {
           console.log('[StreamHandler]', event.type, {
@@ -1608,6 +1621,10 @@ export function useChatStreamingLifecycle(
         const tabState = tabMapRef.current.get(capturedTabId);
         if (!tabState || tabState.streamGen !== capturedGen) return; // stale or closed tab
         tabState.isStreaming = false;
+        // Always clear resume indicator on stream completion — safety net
+        // for the case where session_resuming consumed hasReceivedData
+        // before isResuming was set (ordering race in the event handler).
+        tabState.isResuming = false;
       }
 
       if (streamGenRef.current !== capturedGen) return; // stale — no-op
