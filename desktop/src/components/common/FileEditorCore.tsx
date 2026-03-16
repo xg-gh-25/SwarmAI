@@ -286,6 +286,7 @@ export default function FileEditorCore({
   variant,
   onToggleMode,
   onSaveWithDiff,
+  onContentChange,
 }: FileEditorCoreProps) {
   const [content, setContent] = useState(initialContent);
   const [originalContent, setOriginalContent] = useState(committedContent ?? initialContent);
@@ -298,6 +299,7 @@ export default function FileEditorCore({
   const [currentMatchIndex, setCurrentMatchIndex] = useState(0);
   const [activeLineNumber, setActiveLineNumber] = useState<number | undefined>(undefined);
   const [attachFeedback, setAttachFeedback] = useState(false);
+  const [copyPathFeedback, setCopyPathFeedback] = useState(false);
   const [scrollTop, setScrollTop] = useState(0);
   const rootRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -642,11 +644,13 @@ export default function FileEditorCore({
               </span>
               {showDiff ? 'Back to Edit' : 'Show Changes'}
             </button>
-            {/* Open in Browser — for HTML, PDF, SVG, XML */}
+            {/* Open externally — browser for HTML/SVG, system app for PDF/XML */}
             {(() => {
               const ext = fileName.split('.').pop()?.toLowerCase() ?? '';
-              const browserRenderable = ['html', 'htm', 'pdf', 'svg', 'xml'];
-              if (!browserRenderable.includes(ext)) return null;
+              const browserRenderable = ['html', 'htm', 'svg'];
+              const externalRenderable = ['html', 'htm', 'pdf', 'svg', 'xml'];
+              if (!externalRenderable.includes(ext)) return null;
+              const useBrowser = browserRenderable.includes(ext);
               return (
                 <button
                   onClick={async () => {
@@ -654,20 +658,60 @@ export default function FileEditorCore({
                       const configResp = await api.get<{ file_path?: string; filePath?: string }>('/workspace');
                       const wsRoot = configResp.data.file_path ?? configResp.data.filePath ?? '';
                       const absolutePath = wsRoot ? `${wsRoot}/${filePath}` : filePath;
-                      const { openPath } = await import('@tauri-apps/plugin-opener');
-                      await openPath(absolutePath);
+                      if (useBrowser) {
+                        // openUrl with file:// forces the default browser
+                        const { openUrl } = await import('@tauri-apps/plugin-opener');
+                        await openUrl(`file://${absolutePath}`);
+                      } else {
+                        const { openPath } = await import('@tauri-apps/plugin-opener');
+                        await openPath(absolutePath);
+                      }
                     } catch {
-                      window.open(filePath, '_blank');
+                      // Fallback: copy path to clipboard so user can paste in browser
+                      try {
+                        const configResp = await api.get<{ file_path?: string; filePath?: string }>('/workspace');
+                        const wsRoot = configResp.data.file_path ?? configResp.data.filePath ?? '';
+                        const absolutePath = wsRoot ? `${wsRoot}/${filePath}` : filePath;
+                        await navigator.clipboard.writeText(absolutePath);
+                      } catch { /* best effort */ }
                     }
                   }}
                   className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)] transition-colors"
                   data-testid="open-in-browser-btn"
+                  title={useBrowser ? 'Open in browser' : 'Open with system app'}
                 >
                   <span className="material-symbols-outlined text-sm">open_in_browser</span>
                   Open
                 </button>
               );
             })()}
+            {/* Copy absolute file path */}
+            <button
+              onClick={async () => {
+                if (copyPathFeedback) return;
+                try {
+                  const configResp = await api.get<{ file_path?: string; filePath?: string }>('/workspace');
+                  const wsRoot = configResp.data.file_path ?? configResp.data.filePath ?? '';
+                  const absolutePath = wsRoot ? `${wsRoot}/${filePath}` : filePath;
+                  await navigator.clipboard.writeText(absolutePath);
+                  setCopyPathFeedback(true);
+                  setTimeout(() => setCopyPathFeedback(false), 2000);
+                } catch { /* best effort */ }
+              }}
+              className={clsx(
+                'flex items-center gap-1 px-2 py-1 rounded-lg text-xs transition-colors',
+                copyPathFeedback
+                  ? 'text-[var(--color-success)] cursor-default'
+                  : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)]'
+              )}
+              title="Copy absolute file path"
+              data-testid="copy-path-btn"
+            >
+              <span className="material-symbols-outlined text-sm">
+                {copyPathFeedback ? 'check' : 'content_copy'}
+              </span>
+              {copyPathFeedback ? 'Copied' : 'Copy Path'}
+            </button>
             {/* Attach to Chat */}
             {onAttachToChat && (
               <button
@@ -833,7 +877,7 @@ export default function FileEditorCore({
                 <textarea
                   ref={textareaRef}
                   value={content}
-                  onChange={(e) => { if (!readonly && !review.isReviewMode) setContent(e.target.value); }}
+                  onChange={(e) => { if (!readonly && !review.isReviewMode) { setContent(e.target.value); onContentChange?.(e.target.value); } }}
                   onScroll={handleScroll}
                   onSelect={handleSelect}
                   onClick={handleSelect}

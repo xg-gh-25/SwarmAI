@@ -138,6 +138,7 @@ export default function BinaryPreviewModal({
   const [fileSize, setFileSize] = useState<number>(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [copyFeedback, setCopyFeedback] = useState(false);
 
   // Image viewer state
   const [scale, setScale] = useState(1);
@@ -264,25 +265,37 @@ export default function BinaryPreviewModal({
     setImageDimensions({ w: img.naturalWidth, h: img.naturalHeight });
   }, []);
 
-  const handleRevealInFinder = useCallback(async () => {
-    // Resolve absolute path by fetching workspace root
-    try {
-      const configResp = await api.get<{ file_path?: string; filePath?: string }>('/workspace');
-      const wsRoot = configResp.data.file_path ?? configResp.data.filePath ?? '';
-      const absolutePath = wsRoot ? `${wsRoot}/${filePath}` : filePath;
+  const getAbsolutePath = useCallback(async (): Promise<string> => {
+    const configResp = await api.get<{ file_path?: string; filePath?: string }>('/workspace');
+    const wsRoot = configResp.data.file_path ?? configResp.data.filePath ?? '';
+    return wsRoot ? `${wsRoot}/${filePath}` : filePath;
+  }, [filePath]);
 
+  const handleRevealInFinder = useCallback(async () => {
+    try {
+      const absolutePath = await getAbsolutePath();
       const { openPath } = await import('@tauri-apps/plugin-opener');
       await openPath(absolutePath);
     } catch {
-      // Fallback: try relative path or window.open
+      // Fallback: copy path to clipboard
       try {
-        const { openPath } = await import('@tauri-apps/plugin-opener');
-        await openPath(filePath);
-      } catch {
-        window.open(filePath, '_blank');
-      }
+        const absolutePath = await getAbsolutePath();
+        await navigator.clipboard.writeText(absolutePath);
+        setCopyFeedback(true);
+        setTimeout(() => setCopyFeedback(false), 2000);
+      } catch { /* best effort */ }
     }
-  }, [filePath]);
+  }, [getAbsolutePath]);
+
+  const handleCopyPath = useCallback(async () => {
+    if (copyFeedback) return;
+    try {
+      const absolutePath = await getAbsolutePath();
+      await navigator.clipboard.writeText(absolutePath);
+      setCopyFeedback(true);
+      setTimeout(() => setCopyFeedback(false), 2000);
+    } catch { /* best effort */ }
+  }, [getAbsolutePath, copyFeedback]);
 
   const handlePdfLoadSuccess = useCallback(({ numPages: n }: { numPages: number }) => {
     setNumPages(n);
@@ -454,13 +467,25 @@ export default function BinaryPreviewModal({
             {fileTypeInfo.message}
           </p>
         </div>
-        <button
-          onClick={handleRevealInFinder}
-          className="flex items-center gap-2 px-4 py-2 text-sm rounded-lg bg-[var(--color-primary)] text-white hover:opacity-90 transition-opacity"
-        >
-          <span className="material-symbols-outlined text-base">open_in_new</span>
-          {fileTypeInfo.action}
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleRevealInFinder}
+            className="flex items-center gap-2 px-4 py-2 text-sm rounded-lg bg-[var(--color-primary)] text-white hover:opacity-90 transition-opacity"
+          >
+            <span className="material-symbols-outlined text-base">open_in_new</span>
+            {fileTypeInfo.action}
+          </button>
+          <button
+            onClick={handleCopyPath}
+            className="flex items-center gap-2 px-4 py-2 text-sm rounded-lg text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)] border border-[var(--color-border)] transition-colors"
+            title="Copy absolute file path"
+          >
+            <span className="material-symbols-outlined text-base">
+              {copyFeedback ? 'check' : 'content_copy'}
+            </span>
+            {copyFeedback ? 'Copied!' : 'Copy Path'}
+          </button>
+        </div>
       </div>
     );
   };
@@ -513,13 +538,33 @@ export default function BinaryPreviewModal({
               {fileName}
             </h2>
           </div>
-          <button
-            onClick={onClose}
-            className="p-1 rounded-lg text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)] transition-colors"
-            aria-label="Close"
-          >
-            <span className="material-symbols-outlined">close</span>
-          </button>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={handleRevealInFinder}
+              className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)] transition-colors"
+              title="Open with system default app"
+            >
+              <span className="material-symbols-outlined text-sm">open_in_new</span>
+              Open
+            </button>
+            <button
+              onClick={handleCopyPath}
+              className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)] transition-colors"
+              title="Copy absolute file path"
+            >
+              <span className="material-symbols-outlined text-sm">
+                {copyFeedback ? 'check' : 'content_copy'}
+              </span>
+              {copyFeedback ? 'Copied!' : 'Copy Path'}
+            </button>
+            <button
+              onClick={onClose}
+              className="p-1 rounded-lg text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)] transition-colors"
+              aria-label="Close"
+            >
+              <span className="material-symbols-outlined">close</span>
+            </button>
+          </div>
         </div>
 
         {/* Content */}
