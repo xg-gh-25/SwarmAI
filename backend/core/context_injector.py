@@ -62,13 +62,50 @@ def _filter_tool_only_messages(messages: list[dict]) -> list[dict]:
     return result
 
 
+def _compact_tool_args(inp: dict) -> str:
+    """Produce a compact summary of tool arguments (file paths, key params).
+
+    Keeps file_path, command (first 80 chars), and pattern fields.
+    Returns a short string like ``file_path=agent_manager.py`` or
+    ``command=git status...``.
+    """
+    parts: list[str] = []
+    for key in ("file_path", "path", "command", "pattern", "query", "content"):
+        val = inp.get(key)
+        if val is not None:
+            s = str(val)
+            if len(s) > 80:
+                s = s[:77] + "..."
+            parts.append(f"{key}={s}")
+        if len(parts) >= 2:
+            break
+    return ", ".join(parts) if parts else ""
+
+
+def _summarize_tool_blocks(content: list[dict]) -> list[str]:
+    """Summarize tool_use blocks as compact action descriptions.
+
+    Returns a list of strings like ``→ Read(file_path=agent_manager.py)``.
+    """
+    summaries: list[str] = []
+    for block in content:
+        if not isinstance(block, dict):
+            continue
+        if block.get("type") == "tool_use":
+            name = block.get("name", "unknown")
+            inp = block.get("input", {})
+            brief = _compact_tool_args(inp) if isinstance(inp, dict) else ""
+            summaries.append(f"  → {name}({brief})")
+    return summaries
+
+
 def _format_message(message: dict) -> str | None:
     """Format a single message as ``Role: content`` with placeholder handling.
 
     Extracts text blocks and joins them with newline separators.  Image blocks
     become ``[image attachment]``, document blocks become
-    ``[document attachment]``.  Tool-use and tool-result blocks are silently
-    skipped.
+    ``[document attachment]``.  Tool-use blocks are summarized as compact
+    action descriptions so the resumed agent knows what tools were used.
 
     Args:
         message: A message dict with ``role`` and ``content`` keys.
@@ -97,7 +134,21 @@ def _format_message(message: dict) -> str | None:
                 parts.append("[image attachment]")
             elif block_type == "document":
                 parts.append("[document attachment]")
-            # tool_use and tool_result are silently skipped
+            # tool_use and tool_result handled below
+
+        # Summarize tool usage ONLY when the message has no text blocks.
+        # When text is present, it already provides context (e.g. "I read
+        # the file and found...").  Tool summaries are most valuable for
+        # messages that would otherwise be empty after filtering.
+        has_text = any(
+            isinstance(b, dict) and b.get("type") == "text" and b.get("text")
+            for b in content
+        )
+        if not has_text:
+            tool_summaries = _summarize_tool_blocks(content)
+            if tool_summaries:
+                parts.append("[Tools used:]")
+                parts.extend(tool_summaries)
 
         if not parts:
             return None
@@ -177,9 +228,9 @@ def _assemble_context(messages: list[str], was_truncated: bool) -> str:
 
 async def build_resume_context(
     app_session_id: str,
-    max_messages: int = 20,
-    db_fetch_limit: int = 60,
-    token_budget: int = 6000,
+    max_messages: int = 40,
+    db_fetch_limit: int = 100,
+    token_budget: int = 12000,
 ) -> str:
     """Load recent messages and format them for system prompt injection.
 
@@ -189,12 +240,12 @@ async def build_resume_context(
     Args:
         app_session_id: The stable tab-level session ID to query messages for.
         max_messages: Maximum number of human-readable messages in the final
-            output (default 20).
+            output (default 40).
         db_fetch_limit: Number of messages to fetch from DB before filtering
-            (default 60).  Set higher than max_messages to account for
+            (default 100).  Set higher than max_messages to account for
             tool-only messages being filtered out.
         token_budget: Maximum estimated tokens for the formatted output
-            (default 4000).
+            (default 12000).
 
     Returns:
         Formatted context string with section header, preamble, and message

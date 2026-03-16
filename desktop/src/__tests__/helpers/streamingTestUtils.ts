@@ -70,6 +70,7 @@ export function initTestTab(tabId: string, initialMessages?: Message[]): void {
     status: 'idle' as TabStatus,
     contextWarning: null,
     isReconnecting: false,
+    isResuming: false,
     reconnectionAttempt: 0,
     hasReceivedData: false,
     attachments: [],

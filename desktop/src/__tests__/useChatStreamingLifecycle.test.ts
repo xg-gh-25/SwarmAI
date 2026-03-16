@@ -428,7 +428,7 @@ describe('useChatStreamingLifecycle', () => {
       const content = result.current.messages[0].content;
       expect(content).toHaveLength(1);
       expect((content[0] as { text: string }).text).toContain(
-        'Network failure',
+        'Connection interrupted',
       );
     });
   });

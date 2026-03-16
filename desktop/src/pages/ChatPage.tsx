@@ -1583,6 +1583,13 @@ export default function ChatPage() {
                     <span className="text-sm">{t('chat.reconnecting', 'Reconnecting...')}</span>
                   </div>
                 )}
+                {/* Resuming indicator — cold-start resume when subprocess was killed after long idle */}
+                {activeTabIdRef.current && tabMapRef.current.get(activeTabIdRef.current)?.isResuming && (
+                  <div className="flex items-center gap-2 text-[var(--color-text-muted)]">
+                    <Spinner size="sm" />
+                    <span className="text-sm">{t('chat.resuming', 'Resuming session...')}</span>
+                  </div>
+                )}
                 {isStreaming && (
                   <div className="flex items-center gap-2 text-[var(--color-text-muted)]">
                     <Spinner size="sm" />
