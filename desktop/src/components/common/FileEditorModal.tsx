@@ -41,6 +41,9 @@ export interface FileEditorModalProps {
   /** Called after save when diff is non-empty (L2 auto-diff).
    *  Second arg is the fileName captured at save time to avoid stale closures. */
   onSaveWithDiff?: (diffSummary: string, fileName?: string) => void;
+  /** Called on every content change so parent can track live edits.
+   *  Used to preserve content across panel ↔ modal mode switches. */
+  onContentChange?: (content: string) => void;
 }
 
 export interface FileEditorState {
@@ -183,6 +186,7 @@ export default function FileEditorModal({
   committedContent,
   onToggleMode,
   onSaveWithDiff,
+  onContentChange,
 }: FileEditorModalProps) {
   const overlayRef = useRef<HTMLDivElement>(null);
 
@@ -227,6 +231,7 @@ export default function FileEditorModal({
           variant="modal"
           onToggleMode={onToggleMode}
           onSaveWithDiff={onSaveWithDiff}
+          onContentChange={onContentChange}
         />
       </div>
     </div>
