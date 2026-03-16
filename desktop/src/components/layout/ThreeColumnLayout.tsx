@@ -296,6 +296,7 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
         }
       }
 
+      liveContentRef.current = null; // Reset live content tracking for new file
       setFileEditorState({
         isOpen: true,
         filePath: file.path,
@@ -315,9 +316,73 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
   // Listen for swarm:open-file custom events dispatched by clickable file paths
   // in chat messages (MarkdownRenderer). Uses a ref to avoid stale closure on
   // openFileEditor which depends on external state.
-  const openFileEditorRef = useRef(openFileEditor);
-  openFileEditorRef.current = openFileEditor;
 
+  // Notify RadarSidebar when file editor panel is open/closed so it can auto-hide
+  const isEditorPanelOpen = !!(fileEditorState && editorMode === 'panel');
+  useEffect(() => {
+    window.dispatchEvent(new CustomEvent('swarm:editor-panel-state', {
+      detail: { open: isEditorPanelOpen },
+    }));
+  }, [isEditorPanelOpen]);
+
+  // Ref for file open routing — assigned after handleFileDoubleClick is defined below
+  const handleFileDoubleClickRef = useRef<(file: FileTreeItem) => Promise<void>>(null!);
+
+
+  // Handle file double-click - Requirement 9.1, 1.1-1.5, 7.1-7.2
+  /**
+   * Open a file with the system default app.
+   * Used for PDFs, Office docs, and other files that can't be rendered in-app.
+   * Falls back to copying the absolute path to clipboard on failure.
+   */
+  const openWithSystemApp = useCallback(async (filePath: string) => {
+    let absolutePath = filePath;
+    try {
+      const configResp = await api.get<{ file_path?: string; filePath?: string }>('/workspace');
+      const wsRoot = configResp.data.file_path ?? configResp.data.filePath ?? '';
+      absolutePath = wsRoot ? `${wsRoot}/${filePath}` : filePath;
+    } catch { /* use relative path as fallback */ }
+
+    try {
+      const { openPath } = await import('@tauri-apps/plugin-opener');
+      await openPath(absolutePath);
+    } catch {
+      // Fallback: copy absolute path to clipboard
+      try {
+        await navigator.clipboard.writeText(absolutePath);
+        console.info(`[FileOpen] Copied path to clipboard: ${absolutePath}`);
+      } catch { /* best effort */ }
+    }
+  }, []);
+
+  const handleFileDoubleClick = useCallback(async (file: FileTreeItem) => {
+    if (file.isSwarmWorkspace) {
+      setSwarmWarning({ isOpen: true, pendingFile: file });
+      return;
+    }
+
+    const previewType: FilePreviewType = classifyFileForPreview(file.name);
+
+    if (previewType === 'text') {
+      await openFileEditor(file, file.gitStatus);
+    } else if (previewType === 'pdf' || previewType === 'system-open') {
+      // PDF, docx, xlsx, pptx, svg — open directly with system default app
+      await openWithSystemApp(file.path);
+    } else {
+      // 'image' or 'unsupported' — show in BinaryPreviewModal
+      setBinaryPreviewState({
+        isOpen: true,
+        fileName: file.name,
+        filePath: file.path,
+        mode: previewType,
+      });
+    }
+  }, [openFileEditor, openWithSystemApp]);
+
+  // Assign ref now that handleFileDoubleClick is defined
+  handleFileDoubleClickRef.current = handleFileDoubleClick;
+
+  // Listen for swarm:open-file events from clickable file paths in chat
   useEffect(() => {
     const handleOpenFileEvent = (e: Event) => {
       const { path: filePath } = (e as CustomEvent<{ path: string }>).detail ?? {};
@@ -333,33 +398,14 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
         workspaceName: '',
       };
 
-      openFileEditorRef.current(fileItem);
+      // Route through handleFileDoubleClick so pdf/docx/xlsx/pptx open with
+      // system app instead of being forced into the text editor.
+      handleFileDoubleClickRef.current(fileItem);
     };
 
     document.addEventListener('swarm:open-file', handleOpenFileEvent);
     return () => document.removeEventListener('swarm:open-file', handleOpenFileEvent);
   }, []);
-
-  // Handle file double-click - Requirement 9.1, 1.1-1.5, 7.1-7.2
-  const handleFileDoubleClick = useCallback(async (file: FileTreeItem) => {
-    if (file.isSwarmWorkspace) {
-      setSwarmWarning({ isOpen: true, pendingFile: file });
-      return;
-    }
-
-    const previewType: FilePreviewType = classifyFileForPreview(file.name);
-
-    if (previewType === 'text') {
-      await openFileEditor(file, file.gitStatus);
-    } else {
-      setBinaryPreviewState({
-        isOpen: true,
-        fileName: file.name,
-        filePath: file.path,
-        mode: previewType,
-      });
-    }
-  }, [openFileEditor]);
 
   // Handle Swarm workspace warning confirmation
   const handleSwarmWarningConfirm = useCallback(async () => {
@@ -392,11 +438,27 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
   const handleFileEditorClose = useCallback(() => {
     setFileEditorState(null);
     setEditorMode('panel'); // Reset to panel for next open
+    liveContentRef.current = null;
     refreshTreeRef.current?.();
   }, []);
 
-  // Toggle between panel and modal mode (preserves file state)
+  // Track live content in a ref (NOT state) so mode toggle preserves edits
+  // without triggering re-renders or resetting FileEditorCore's useEffect.
+  const liveContentRef = useRef<string | null>(null);
+
+  const handleContentChange = useCallback((newContent: string) => {
+    liveContentRef.current = newContent;
+  }, []);
+
+  // Toggle between panel and modal mode (preserves file state).
+  // Snapshot the live content into fileEditorState so the remounted
+  // editor picks it up as initialContent.
   const handleToggleEditorMode = useCallback(() => {
+    if (liveContentRef.current != null) {
+      setFileEditorState((prev) =>
+        prev ? { ...prev, content: liveContentRef.current! } : prev,
+      );
+    }
     setEditorMode((prev) => (prev === 'panel' ? 'modal' : 'panel'));
   }, []);
 
@@ -439,6 +501,7 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
               committedContent={fileEditorState.committedContent}
               onToggleMode={handleToggleEditorMode}
               onSaveWithDiff={handleSaveWithDiff}
+              onContentChange={handleContentChange}
             />
           )}
         </div>
@@ -473,6 +536,7 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
           committedContent={fileEditorState.committedContent}
           onToggleMode={handleToggleEditorMode}
           onSaveWithDiff={handleSaveWithDiff}
+          onContentChange={handleContentChange}
         />
       )}
 
