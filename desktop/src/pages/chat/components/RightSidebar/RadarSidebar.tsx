@@ -101,6 +101,21 @@ export function RadarSidebar({
   }, []);
 
   // -------------------------------------------------------------------------
+  // Auto-hide when file editor panel is open (user focuses on doc, not radar)
+  // -------------------------------------------------------------------------
+
+  const [hiddenByEditorPanel, setHiddenByEditorPanel] = useState(false);
+
+  useEffect(() => {
+    const handleEditorPanelState = (e: Event) => {
+      const { open } = (e as CustomEvent<{ open: boolean }>).detail ?? {};
+      setHiddenByEditorPanel(!!open);
+    };
+    window.addEventListener('swarm:editor-panel-state', handleEditorPanelState);
+    return () => window.removeEventListener('swarm:editor-panel-state', handleEditorPanelState);
+  }, []);
+
+  // -------------------------------------------------------------------------
   // Mode state — NOT persisted, always starts as 'radar'
   // -------------------------------------------------------------------------
 
@@ -264,6 +279,11 @@ export function RadarSidebar({
   // -------------------------------------------------------------------------
   // Render
   // -------------------------------------------------------------------------
+
+  // When file editor panel is open, hide the radar sidebar entirely
+  if (hiddenByEditorPanel) {
+    return null;
+  }
 
   return (
     <div
