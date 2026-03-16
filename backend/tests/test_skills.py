@@ -1,17 +1,24 @@
-"""Tests for skills API endpoints."""
+"""Tests for filesystem-based skills API endpoints.
+
+Tests the skills API defined in ``routers/skills.py``:
+
+- ``GET  /api/skills``                     — List all skills (no content)
+- ``POST /api/skills``                     — Create a user skill
+- ``POST /api/skills/rescan``              — Invalidate cache, return fresh list
+- ``GET  /api/skills/{folder_name}``       — Get single skill with content
+- ``PUT  /api/skills/{folder_name}``       — Update a user skill
+- ``DELETE /api/skills/{folder_name}``     — Delete a user skill
+
+Testing methodology: unit tests via FastAPI TestClient.
+
+Key invariants:
+- GET /api/skills returns 200 with a list
+- GET /api/skills/{folder_name} returns 404 for non-existent skills
+- POST /api/skills returns 201 for valid skill creation
+- DELETE /api/skills/{folder_name} returns 204 on success, 404 for missing
+"""
 import pytest
-import zipfile
 from fastapi.testclient import TestClient
-from io import BytesIO
-
-
-def _make_skill_zip(name: str = "test_skill") -> BytesIO:
-    """Create a minimal valid ZIP containing a SKILL.md file."""
-    buf = BytesIO()
-    with zipfile.ZipFile(buf, "w") as zf:
-        zf.writestr(f"{name}/SKILL.md", f"# {name}\nA test skill.")
-    buf.seek(0)
-    return buf
 
 
 class TestSkillsList:
@@ -25,121 +32,54 @@ class TestSkillsList:
         assert isinstance(data, list)
 
 
-class TestSystemSkillsList:
-    """Tests for GET /api/skills/system endpoint."""
+class TestSkillsRescan:
+    """Tests for POST /api/skills/rescan endpoint."""
 
-    def test_list_system_skills_success(self, client: TestClient):
-        """Test listing system skills returns only system skills."""
-        response = client.get("/api/skills/system")
+    def test_rescan_skills_success(self, client: TestClient):
+        """Test rescanning skills returns 200 and list."""
+        response = client.post("/api/skills/rescan")
         assert response.status_code == 200
         data = response.json()
         assert isinstance(data, list)
-        for skill in data:
-            assert skill.get("is_system", False) == True
 
 
 class TestGetSkill:
-    """Tests for GET /api/skills/{skill_id} endpoint."""
+    """Tests for GET /api/skills/{folder_name} endpoint."""
 
-    def test_get_skill_not_found(self, client: TestClient, invalid_skill_id: str):
+    def test_get_skill_not_found(self, client: TestClient):
         """Test getting non-existent skill returns 404."""
-        response = client.get(f"/api/skills/{invalid_skill_id}")
+        response = client.get("/api/skills/nonexistent-skill-xyz-999")
         assert response.status_code == 404
+
+    def test_get_skill_found(self, client: TestClient):
+        """Test getting an existing skill returns 200 with content."""
+        # List skills first to find one that exists
+        list_resp = client.get("/api/skills")
+        skills = list_resp.json()
+        if not skills:
+            pytest.skip("No skills available to test")
+
+        folder_name = skills[0]["folder_name"]
+        response = client.get(f"/api/skills/{folder_name}")
+        assert response.status_code == 200
         data = response.json()
-        assert data["code"] == "SKILL_NOT_FOUND"
-        assert "suggested_action" in data
+        assert data["folder_name"] == folder_name
+        assert "content" in data
 
 
-class TestUploadSkill:
-    """Tests for POST /api/skills/upload endpoint."""
+class TestCreateSkill:
+    """Tests for POST /api/skills endpoint."""
 
-    def test_upload_skill_success(self, client: TestClient):
-        """Test uploading skill ZIP returns 201."""
-        zip_content = _make_skill_zip("UploadedSkill")
-
-        response = client.post(
-            "/api/skills/upload",
-            files={"file": ("test_skill.zip", zip_content, "application/zip")},
-            data={"name": "UploadedSkill"}
-        )
-        assert response.status_code == 201
-        data = response.json()
-        assert data["name"] == "UploadedSkill"
-        assert "id" in data
-
-    def test_upload_skill_without_name(self, client: TestClient):
-        """Test uploading skill ZIP uses filename as name."""
-        zip_content = _make_skill_zip("my_skill")
-
-        response = client.post(
-            "/api/skills/upload",
-            files={"file": ("my_skill.zip", zip_content, "application/zip")}
-        )
-        assert response.status_code == 201
-        data = response.json()
-        assert data["name"] == "my_skill"
-
-    def test_upload_skill_invalid_format(self, client: TestClient):
-        """Test uploading non-ZIP file returns error."""
-        txt_content = BytesIO(b"not a zip file")
-
-        response = client.post(
-            "/api/skills/upload",
-            files={"file": ("test.txt", txt_content, "text/plain")}
-        )
+    def test_create_skill_missing_fields(self, client: TestClient):
+        """Test creating skill without required fields returns error."""
+        response = client.post("/api/skills", json={})
         assert response.status_code in [400, 422]
-        data = response.json()
-        assert "code" in data
-
-
-class TestGenerateSkill:
-    """Tests for POST /api/skills/generate endpoint."""
-
-    def test_generate_skill_success(self, client: TestClient):
-        """Test generating skill returns 201."""
-        response = client.post(
-            "/api/skills/generate",
-            json={"description": "A skill that sends notifications"}
-        )
-        assert response.status_code == 201
-        data = response.json()
-        assert "id" in data
-        assert "name" in data
-        assert data["description"] == "A skill that sends notifications"
-
-    def test_generate_skill_empty_description(self, client: TestClient):
-        """Test generating skill with empty description."""
-        response = client.post(
-            "/api/skills/generate",
-            json={"description": ""}
-        )
-        # Depending on validation, this might succeed or fail
-        assert response.status_code in [201, 400, 422]
 
 
 class TestDeleteSkill:
-    """Tests for DELETE /api/skills/{skill_id} endpoint."""
+    """Tests for DELETE /api/skills/{folder_name} endpoint."""
 
-    def test_delete_skill_success(self, client: TestClient):
-        """Test deleting user skill returns 204."""
-        # First generate a skill
-        create_response = client.post(
-            "/api/skills/generate",
-            json={"description": "Skill to delete"}
-        )
-        skill_id = create_response.json()["id"]
-
-        # Delete it
-        response = client.delete(f"/api/skills/{skill_id}")
-        assert response.status_code == 204
-
-        # Verify it's gone
-        get_response = client.get(f"/api/skills/{skill_id}")
-        assert get_response.status_code == 404
-
-    def test_delete_skill_not_found(self, client: TestClient, invalid_skill_id: str):
+    def test_delete_skill_not_found(self, client: TestClient):
         """Test deleting non-existent skill returns 404."""
-        response = client.delete(f"/api/skills/{invalid_skill_id}")
+        response = client.delete("/api/skills/nonexistent-skill-xyz-999")
         assert response.status_code == 404
-        data = response.json()
-        assert data["code"] == "SKILL_NOT_FOUND"

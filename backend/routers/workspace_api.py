@@ -646,6 +646,52 @@ async def get_workspace_file(
     }
 
 
+@router.get("/workspace/file/resolve")
+async def resolve_workspace_file(
+    path: str = Query(..., description="Partial or relative file path to resolve", max_length=1024),
+):
+    """Resolve a partial file path to a workspace-relative path.
+
+    Used by clickable file links in chat messages. The agent often outputs
+    paths relative to the source codebase (e.g., ``backend/routers/foo.py``)
+    rather than the workspace root. This endpoint searches:
+
+    1. Direct: ``{wsRoot}/{path}`` (already workspace-relative)
+    2. Under each project symlink: ``Projects/*/{path}``
+
+    Returns ``{ "resolved_path": "Projects/SwarmAI/backend/routers/foo.py" }``
+    on success, or 404 if not found anywhere.
+    """
+    # Normalize to collapse "..", ".", and redundant separators, then reject
+    # if the result escapes the workspace root (starts with ".." or "/").
+    normalized = os.path.normpath(path)
+    if normalized.startswith("..") or os.path.isabs(normalized):
+        raise HTTPException(status_code=400, detail=f"Path traversal not allowed: {path}")
+
+    expanded_path = await _get_workspace_path()
+    workspace_root = Path(expanded_path)
+
+    # 1. Try direct (already workspace-relative)
+    direct = (workspace_root / path).resolve()
+    if direct.is_file() and (_is_path_under(direct, workspace_root) or _is_symlink_traversal(workspace_root, path)):
+        return {"resolved_path": path}
+
+    # 2. Try under each project in Projects/
+    projects_dir = workspace_root / "Projects"
+    if projects_dir.is_dir():
+        for project in sorted(projects_dir.iterdir()):
+            if not project.is_dir():
+                continue
+            candidate_rel = f"Projects/{project.name}/{path}"
+            candidate = (workspace_root / candidate_rel).resolve()
+            if candidate.is_file():
+                # Validate it's reachable (direct or via symlink)
+                if _is_path_under(candidate, workspace_root) or _is_symlink_traversal(workspace_root, candidate_rel):
+                    return {"resolved_path": candidate_rel}
+
+    raise HTTPException(status_code=404, detail=f"Could not resolve file: {path}")
+
+
 @router.get("/workspace/file/raw")
 async def get_workspace_file_raw(
     path: str = Query(..., description="Relative path within the workspace"),

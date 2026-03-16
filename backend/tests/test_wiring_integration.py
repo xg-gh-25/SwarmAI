@@ -13,10 +13,11 @@ from tests.helpers import now_iso, create_workspace_with_path
 async def _seed_skill(name, is_privileged=False):
     """Create a filesystem-based skill and return its folder name."""
     from pathlib import Path
-    
+    from core.skill_manager import skill_manager
+
     # Create folder name from skill name (kebab-case)
     folder_name = name.lower().replace(" ", "-")
-    
+
     # Determine skill directory based on privilege level
     if is_privileged:
         # Privileged skills go in built-in directory
@@ -24,10 +25,10 @@ async def _seed_skill(name, is_privileged=False):
     else:
         # Regular skills go in user skills directory
         skills_dir = Path.home() / ".swarm-ai" / "skills"
-    
+
     skill_path = skills_dir / folder_name
     skill_path.mkdir(parents=True, exist_ok=True)
-    
+
     # Create SKILL.md with frontmatter
     skill_md_content = f"""---
 name: {name}
@@ -39,10 +40,13 @@ version: 1.0.0
 
 A test skill for wiring integration tests.
 """
-    
+
     skill_md = skill_path / "SKILL.md"
     skill_md.write_text(skill_md_content)
-    
+
+    # Invalidate cache so the new skill is visible
+    skill_manager.invalidate_cache()
+
     return folder_name
 
 
@@ -63,21 +67,18 @@ async def _seed_mcp(name, is_privileged=False):
     return mid
 
 
-async def _enable_cap(ws_id, entity_id, kind):
+async def _enable_mcp(ws_id, mcp_server_id):
+    """Enable an MCP server in the workspace.
+
+    NOTE: Skills no longer use a DB junction table — all filesystem skills
+    are always enabled.  This helper is MCP-only now.
+    """
     now = now_iso()
-    if kind == "skill":
-        await db.workspace_skills.put({
-            "id": str(uuid4()), "workspace_id": ws_id,
-            "skill_id": entity_id,  # entity_id is now a folder name
-            "enabled": 1,
-            "created_at": now, "updated_at": now,
-        })
-    else:
-        await db.workspace_mcps.put({
-            "id": str(uuid4()), "workspace_id": ws_id,
-            "mcp_server_id": entity_id, "enabled": 1,
-            "created_at": now, "updated_at": now,
-        })
+    await db.workspace_mcps.put({
+        "id": str(uuid4()), "workspace_id": ws_id,
+        "mcp_server_id": mcp_server_id, "enabled": 1,
+        "created_at": now, "updated_at": now,
+    })
 
 
 async def _make_ws(is_default=False):
@@ -98,23 +99,19 @@ async def _make_ws(is_default=False):
 # --- Policy enforcement integration tests via HTTP (Req 26, 34) ---
 
 
-async def test_task_409_for_disabled_skill(client: TestClient):
-    """POST /api/tasks with disabled required skill returns 409.
+async def test_task_409_for_nonexistent_skill(client: TestClient):
+    """POST /api/tasks with non-existent required skill returns 409.
 
-    Note: Policy enforcement at the HTTP level requires the task creation
-    flow to check required_skills against workspace config. Currently the
-    task is created with status='draft' which causes a Pydantic validation
-    error (400) before policy checks can return 409. This test verifies
-    the request is rejected (non-2xx).
+    In the filesystem model, all existing skills are always enabled.
+    A skill that doesn't exist in the cache triggers a 409 violation.
     """
     ws = await _make_ws()
-    sid = await _seed_skill("RequiredSkill")
 
     resp = client.post("/api/tasks", json={
         "agent_id": "default", "message": "test",
-        "workspace_id": ws["id"], "required_skills": [sid],
+        "workspace_id": ws["id"], "required_skills": ["nonexistent-skill-xyz"],
     })
-    # Task creation is rejected (400 due to status enum mismatch or 409 for policy)
+    # Task creation is rejected because skill doesn't exist
     assert resp.status_code >= 400
 
 
@@ -143,7 +140,7 @@ async def test_task_not_409_when_caps_enabled(client: TestClient):
     if not default_ws:
         default_ws = await _make_ws()
     sid = await _seed_skill("EnabledSkill")
-    await _enable_cap(default_ws["id"], sid, "skill")
+    # No _enable_mcp needed — skills are always enabled in filesystem model.
 
     resp = client.post("/api/tasks", json={
         "agent_id": "default", "message": "test",

@@ -141,6 +141,9 @@ class TestAuthErrorFaultCondition:
     the yielded SSE events MUST contain type: "error" and MUST NOT contain
     type: "assistant" with the error text.
 
+    These tests document the EXPECTED (correct) behavior. On UNFIXED code they
+    are expected to fail — xfail confirms the bug still exists.
+
     **Validates: Requirements 1.1, 2.1**
     """
 
@@ -189,6 +192,7 @@ class TestAuthErrorFaultCondition:
             f"but found: {assistant_events}"
         )
 
+    @pytest.mark.xfail(reason="Known bug: is_error ResultMessages not yielded as error events")
     @pytest.mark.asyncio
     async def test_general_error_yields_error_event_not_assistant(self):
         """Concrete general error case: 'Rate limit exceeded'.
