@@ -23,7 +23,7 @@ Key responsibilities retained in this module:
                                 ``run_conversation`` and ``continue_with_answer``)
 - ``_run_query_on_client``    — Message processing loop with SSE event dispatch
 - ``_format_message``         — Converts SDK messages to frontend-friendly dicts
-- Session caching with 2-hour TTL, background cleanup, and orphan process reaping
+- Session caching with 8-hour TTL, SIGSTOP hibernation, and orphan process reaping
 """
 from typing import AsyncIterator, Optional, Any
 from uuid import uuid4
@@ -1612,9 +1612,11 @@ class AgentManager:
         return None
 
     # Model context window sizes (tokens) for L0/L1 selection
+    # Claude 4.6: 1M context GA on Bedrock (no beta header needed, unified pricing)
+    # Claude 4.5: 1M still beta — stay at 200K unless beta explicitly enabled
     _MODEL_CONTEXT_WINDOWS: dict[str, int] = {
-        "claude-opus-4-6": 200_000,
-        "claude-sonnet-4-6": 200_000,
+        "claude-opus-4-6": 1_000_000,
+        "claude-sonnet-4-6": 1_000_000,
         "claude-sonnet-4-5-20250929": 200_000,
         "claude-opus-4-5-20251101": 200_000,
     }
@@ -1626,6 +1628,7 @@ class AgentManager:
         """Return the context window size for a model ID.
 
         Strips Bedrock prefix/suffix for lookup.  Defaults to 200K.
+        Claude 4.6 models return 1M (GA on Bedrock since 2026-03).
         """
         if not model:
             return self._DEFAULT_CONTEXT_WINDOW
@@ -4494,6 +4497,13 @@ class AgentManager:
                     "success": False,
                     "message": f"Failed to compact session: {str(e)}",
                 }
+            finally:
+                # _get_active_client sets is_streaming=True on thaw to guard
+                # against the cleanup loop race.  We must clear it when done.
+                _compact_info = self._active_sessions.get(session_id)
+                if _compact_info:
+                    _compact_info["is_streaming"] = False
+                    _compact_info["last_used"] = time.time()
 
     async def run_skill_creator_conversation(
         self,
@@ -4636,21 +4646,29 @@ Create the skill in the `.claude/skills/` directory within the current workspace
                                 content=[{"type": "text", "text": prompt}],
                             )
 
-                        async for event in self._run_query_on_client(
-                            client=client,
-                            query_content=prompt,
-                            display_text=f"Creating skill: {skill_name}",
-                            agent_config=agent_config,
-                            session_context=session_context,
-                            assistant_content=assistant_content,
-                            is_resuming=is_resuming,
-                            content=None,
-                            user_message=prompt,
-                            agent_id="skill-creator",
-                        ):
-                            if event.get("type") == "result":
-                                event["skill_name"] = skill_name
-                            yield event
+                        try:
+                            async for event in self._run_query_on_client(
+                                client=client,
+                                query_content=prompt,
+                                display_text=f"Creating skill: {skill_name}",
+                                agent_config=agent_config,
+                                session_context=session_context,
+                                assistant_content=assistant_content,
+                                is_resuming=is_resuming,
+                                content=None,
+                                user_message=prompt,
+                                agent_id="skill-creator",
+                            ):
+                                if event.get("type") == "result":
+                                    event["skill_name"] = skill_name
+                                yield event
+                        finally:
+                            # _get_active_client sets is_streaming=True on thaw
+                            # to guard against cleanup loop race.  Clear it.
+                            _sc_info = self._active_sessions.get(session_id)
+                            if _sc_info:
+                                _sc_info["is_streaming"] = False
+                                _sc_info["last_used"] = time.time()
 
                         # PATH B cleanup (same pattern as _execute_on_session)
                         if session_context.get("had_error") and session_id:
