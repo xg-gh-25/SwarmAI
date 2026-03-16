@@ -55,7 +55,7 @@ def make_init_message(session_id: str = "sdk-session-001") -> SystemMessage:
 
 def make_assistant_message(text: str = "Hello") -> AssistantMessage:
     """Create a mock AssistantMessage with a text block."""
-    return AssistantMessage(content=[TextBlock(text=text)])
+    return AssistantMessage(content=[TextBlock(text=text)], model="claude-sonnet-4-20250514")
 
 
 def make_result_message(
@@ -69,6 +69,7 @@ def make_result_message(
         result=None,
         num_turns=1,
         duration_ms=100,
+        duration_api_ms=80,
     )
 
 

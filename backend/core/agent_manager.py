@@ -502,6 +502,16 @@ class AgentManager:
     # Delay (seconds) before auto-retry after a retriable error.
     # Gives macOS time to reclaim memory from the SIGKILL'd process.
     RETRY_BACKOFF_SECONDS = 3.0
+    # If a spawned subprocess dies within this many seconds, classify as
+    # an instant OOM kill — don't waste retry attempts, use longer backoff.
+    INSTANT_KILL_THRESHOLD_SECONDS = 2.0
+    # Backoff when an instant kill is detected (gives macOS time to
+    # compress/swap memory and reclaim from the dead process tree).
+    OOM_BACKOFF_SECONDS = 20.0
+    # Minimum free memory (bytes) required before spawning a new subprocess.
+    # Each claude CLI + 5 MCP servers uses ~400-600MB.  Below this threshold
+    # spawns are likely to be immediately SIGKILL'd by macOS jetsam.
+    MIN_FREE_MEMORY_BYTES = 512 * 1024 * 1024  # 512 MB
 
     # ── Dynamic watchdog timeout parameters ──
     # Base timeout before scaling (seconds).
@@ -519,6 +529,10 @@ class AgentManager:
     # Only applies to the INITIAL timeout before first real message;
     # once streaming starts, inter-message timeout uses the normal value.
     COLD_START_TIMEOUT = 45
+    # Defensive threshold: if is_streaming has been True for longer than
+    # this, the caller forgot the finally block.  Clear it so the cleanup
+    # loop can resume normal freeze/kill duties.
+    STALE_STREAMING_THRESHOLD = 10 * 60  # 10 minutes
 
     def __init__(
         self,
@@ -670,6 +684,24 @@ class AgentManager:
                 now = time.time()
                 _sweep_counter += 1
 
+                # --- Tier 0.5: Defensive is_streaming stale guard ---
+                # _get_active_client sets is_streaming=True on thaw.  If
+                # a caller forgets the finally block (contract violation),
+                # the session gets stuck with is_streaming=True forever.
+                # Detect: is_streaming=True but last_used > 10min ago.
+                for sid, info in self._active_sessions.items():
+                    if info.get("is_streaming"):
+                        idle_since_streaming = now - info.get("last_used", info["created_at"])
+                        if idle_since_streaming > self.STALE_STREAMING_THRESHOLD:
+                            logger.warning(
+                                "Stale is_streaming detected for session %s "
+                                "(last_used %.0fs ago) — clearing flag. "
+                                "This indicates a missing finally block in a "
+                                "_get_active_client caller.",
+                                sid, idle_since_streaming,
+                            )
+                            info["is_streaming"] = False
+
                 # --- Tier 1: Subprocess FREEZE via SIGSTOP (5 min idle) ---
                 # Freeze idle subprocesses instead of killing them.  The
                 # subprocess uses zero CPU and macOS naturally pages out
@@ -806,6 +838,81 @@ class AgentManager:
         except Exception as exc:
             info["activity_extracted"] = False  # Allow retry on next cycle
             logger.error("Early activity extraction failed for session %s: %s", session_id, exc)
+
+    @staticmethod
+    def _get_free_memory_bytes() -> int | None:
+        """Return approximate free physical memory in bytes, or None if unknown.
+
+        On macOS, uses ``vm_stat`` which reports in page-sized units.
+        Falls back to ``/proc/meminfo`` on Linux.  Returns None on
+        unsupported platforms or if the check fails — callers should
+        treat None as "unknown, proceed with caution".
+
+        NOTE: Uses synchronous ``subprocess.run`` (~2ms for vm_stat) rather
+        than ``asyncio.create_subprocess_exec`` because the call is fast,
+        infrequent (only on spawn + retry), and the simpler error handling
+        of the sync API is worth the negligible event-loop block.
+        """
+        try:
+            if platform.system() == "Darwin":
+                # vm_stat is fast (~2ms) and always available on macOS.
+                result = subprocess.run(
+                    ["vm_stat"], capture_output=True, text=True, timeout=3,
+                )
+                if result.returncode != 0:
+                    return None
+                # Parse page size from first line: "Mach Virtual Memory Statistics: (page size of 16384 bytes)"
+                page_size = 16384  # default for Apple Silicon
+                first_line = result.stdout.split("\n")[0]
+                ps_match = re.search(r"page size of (\d+)", first_line)
+                if ps_match:
+                    page_size = int(ps_match.group(1))
+                # Sum free + inactive (reclaimable) pages
+                free_pages = 0
+                for line in result.stdout.split("\n"):
+                    if line.startswith("Pages free:"):
+                        free_pages += int(re.sub(r"[^\d]", "", line))
+                    elif line.startswith("Pages inactive:"):
+                        # Inactive pages are reclaimable under pressure
+                        free_pages += int(re.sub(r"[^\d]", "", line))
+                return free_pages * page_size
+            elif platform.system() == "Linux":
+                with open("/proc/meminfo") as f:
+                    for line in f:
+                        if line.startswith("MemAvailable:"):
+                            return int(line.split()[1]) * 1024  # kB → bytes
+                return None
+            else:
+                return None
+        except Exception:
+            return None
+
+    def _check_memory_pressure(self) -> str | None:
+        """Check if the system has enough free memory to spawn a subprocess.
+
+        Returns:
+            None if memory is sufficient (safe to spawn).
+            A human-readable error message if memory is too low.
+        """
+        free_bytes = self._get_free_memory_bytes()
+        if free_bytes is None:
+            # Can't determine — proceed (fail-open)
+            return None
+        free_mb = free_bytes / (1024 * 1024)
+        threshold_mb = self.MIN_FREE_MEMORY_BYTES / (1024 * 1024)
+        if free_bytes < self.MIN_FREE_MEMORY_BYTES:
+            logger.warning(
+                "Memory pressure: %.0f MB free (threshold: %.0f MB) — "
+                "refusing to spawn subprocess",
+                free_mb, threshold_mb,
+            )
+            return (
+                f"System memory is low ({free_mb:.0f} MB free). "
+                f"Close some apps or browser tabs to free up memory, "
+                f"then try again."
+            )
+        logger.debug("Memory check OK: %.0f MB free (threshold: %.0f MB)", free_mb, threshold_mb)
+        return None
 
     async def _evict_idle_subprocesses(self) -> int:
         """Disconnect idle subprocesses to stay under MAX_CONCURRENT_SUBPROCESSES.
@@ -993,6 +1100,16 @@ class AgentManager:
             pass  # Process exists
 
         try:
+            # Freeze children first (MCP servers, file watchers) — same
+            # order as _force_kill_pid.  Without this, 5+ child processes
+            # keep running while the parent is stopped.
+            try:
+                subprocess.run(
+                    ["pkill", "-STOP", "-P", str(pid)],
+                    capture_output=True, timeout=3,
+                )
+            except Exception:
+                pass  # Best-effort — parent freeze still worthwhile
             os.kill(pid, signal.SIGSTOP)
             info["is_frozen"] = True
             idle_secs = time.time() - info.get("last_used", info.get("created_at", 0))
@@ -1045,7 +1162,15 @@ class AgentManager:
             pass
 
         try:
+            # Thaw parent first, then children (reverse of freeze order)
             os.kill(pid, signal.SIGCONT)
+            try:
+                subprocess.run(
+                    ["pkill", "-CONT", "-P", str(pid)],
+                    capture_output=True, timeout=3,
+                )
+            except Exception:
+                pass  # Best-effort — parent thaw is sufficient for recovery
             info["is_frozen"] = False
             logger.info(
                 "Thawed subprocess pid=%d for session %s — instant resume",
@@ -1311,6 +1436,13 @@ class AgentManager:
 
         In all cases the caller falls through to PATH A (fresh client
         with context injection), which is the designed resume-fallback.
+
+        **CONTRACT:** When the returned client was thawed from a frozen
+        state, ``is_streaming`` is set to ``True`` on the session info to
+        guard against the cleanup loop killing the just-thawed process.
+        **Every caller MUST clear ``is_streaming`` in a ``finally`` block**
+        when done with the client.  Failing to do so will permanently
+        prevent the cleanup loop from freezing or killing the session.
 
         **COE 2026-03-15:** Prior to the liveness check, a dead subprocess
         was silently reused — the Python ``client`` object was still valid
@@ -2136,6 +2268,7 @@ class AgentManager:
         enable_skills: bool = False,
         enable_mcp: bool = False,
         channel_context: Optional[dict] = None,
+        editor_context: Optional[dict] = None,
     ) -> AsyncIterator[dict]:
         """Run conversation with agent and stream responses.
 
@@ -2156,6 +2289,7 @@ class AgentManager:
             enable_skills: Whether to enable skills
             enable_mcp: Whether to enable MCP servers
             channel_context: Optional channel context for channel-based execution
+            editor_context: Currently open file in the editor panel (EditorContext model)
         """
         # Check if this is a new session or resuming an existing one
         is_resuming = session_id is not None
@@ -2192,6 +2326,30 @@ class AgentManager:
             pending_nudge = session_info.pop("pending_evolution_nudge", None)
             if pending_nudge and isinstance(query_content, str):
                 query_content = f"[System context: {pending_nudge}]\n\n{query_content}"
+
+        # --- Inject editor context so the agent knows which file the user is viewing ---
+        # NOTE: Injected as a user-turn prefix (not system message) because the
+        # Claude Agent SDK's query() API only accepts user-role content.  System
+        # prompt is built once at client creation and cannot be amended per-turn.
+        # The bracketed format [Editor context: ...] makes it clearly machine-
+        # generated so the agent treats it as metadata, not user speech.
+        if editor_context:
+            # editor_context is an EditorContext Pydantic model; access via attributes
+            # but fall back to dict access for backward compat with raw dicts.
+            file_path = getattr(editor_context, "file_path", "") or (editor_context.get("file_path", "") if isinstance(editor_context, dict) else "")
+            file_name = getattr(editor_context, "file_name", "") or (editor_context.get("file_name", "") if isinstance(editor_context, dict) else "")
+            if file_path:
+                editor_hint = (
+                    f'[Editor context: User is currently viewing `{file_path}` ("{file_name}") '
+                    f"in the editor panel. You can read this file to see its contents.]"
+                )
+                if isinstance(query_content, str):
+                    query_content = f"{editor_hint}\n\n{query_content}"
+                elif isinstance(query_content, list):
+                    query_content = [
+                        {"type": "text", "text": editor_hint},
+                        *query_content,
+                    ]
 
         # Get agent config
         agent_config = await db.agents.get(agent_id)
@@ -2638,6 +2796,22 @@ class AgentManager:
                 # macOS OOM-killer from SIGKILL-ing active processes.
                 await self._evict_idle_subprocesses()
 
+                # Pre-spawn memory pressure check: refuse to spawn if the
+                # system is critically low on RAM.  Spawning under memory
+                # pressure leads to immediate SIGKILL (-9) by macOS jetsam,
+                # wasting retry attempts and showing confusing errors.
+                _mem_error = self._check_memory_pressure()
+                if _mem_error:
+                    yield _build_error_event(
+                        code="MEMORY_PRESSURE",
+                        message=_mem_error,
+                        suggested_action=(
+                            "Close unused browser tabs, Kiro, or other heavy apps. "
+                            "Your conversation is saved — try again when memory frees up."
+                        ),
+                    )
+                    return
+
                 _t_client_start = time.monotonic()
                 logger.info("Creating new ClaudeSDKClient...")
                 wrapper = _ClaudeClientWrapper(options=options)
@@ -2736,22 +2910,101 @@ class AgentManager:
                     # fresh subprocess.  The backoff gives macOS time to
                     # reclaim memory from the SIGKILL'd process, reducing
                     # the chance of consecutive OOM kills.
+                    #
+                    # Instant-kill detection (Fix 2026-03-16): if the process
+                    # died within INSTANT_KILL_THRESHOLD_SECONDS of spawning,
+                    # it's almost certainly macOS jetsam (OOM).  In that case:
+                    #  - Use OOM_BACKOFF_SECONDS instead of normal backoff
+                    #  - Check memory pressure before retrying
+                    #  - Abort early if memory is still critically low
                     _retry_count = session_context.get("_path_a_retry_count", 0)
                     _max_retries = self.MAX_RETRY_ATTEMPTS if not _need_fresh_client else self.MAX_RETRY_ATTEMPTS + 1
+                    _consecutive_instant_kills = session_context.get("_consecutive_instant_kills", 0)
                     while (
                         session_context.get("had_error")
                         and _retry_count < _max_retries
                     ):
                         _retry_count += 1
                         session_context["_path_a_retry_count"] = _retry_count
-                        # Exponential backoff: 3s, 6s, ... — gives OS time
-                        # to reclaim memory from the killed process.
-                        _backoff = self.RETRY_BACKOFF_SECONDS * _retry_count
+
+                        # Detect instant kills: if spawn-to-death < threshold,
+                        # the OS is killing us immediately (OOM/jetsam).
+                        _spawn_to_death = time.monotonic() - _t_client_start
+                        _is_instant_kill = _spawn_to_death < self.INSTANT_KILL_THRESHOLD_SECONDS
+                        if _is_instant_kill:
+                            _consecutive_instant_kills += 1
+                            session_context["_consecutive_instant_kills"] = _consecutive_instant_kills
+                            logger.warning(
+                                "Instant kill detected: process died %.1fs after spawn "
+                                "(threshold: %.1fs, consecutive: %d)",
+                                _spawn_to_death,
+                                self.INSTANT_KILL_THRESHOLD_SECONDS,
+                                _consecutive_instant_kills,
+                            )
+                        else:
+                            # Non-instant death — the process ran for a while before
+                            # failing.  Reset the OOM counter so a previous OOM episode
+                            # doesn't poison future retries (e.g. user closed apps and
+                            # retried 30 min later).
+                            if _consecutive_instant_kills > 0:
+                                logger.info(
+                                    "Resetting consecutive instant-kill counter "
+                                    "(process survived %.1fs, threshold: %.1fs)",
+                                    _spawn_to_death,
+                                    self.INSTANT_KILL_THRESHOLD_SECONDS,
+                                )
+                            _consecutive_instant_kills = 0
+                            session_context["_consecutive_instant_kills"] = 0
+
+                        # After 2+ consecutive instant kills, abort — retrying
+                        # is futile and just wastes time under OOM.
+                        if _consecutive_instant_kills >= 2:
+                            logger.error(
+                                "Aborting retries: %d consecutive instant kills — "
+                                "system is under severe memory pressure",
+                                _consecutive_instant_kills,
+                            )
+                            yield _build_error_event(
+                                code="OOM_KILL",
+                                message=(
+                                    "The AI process keeps getting killed by the operating system "
+                                    "due to low memory. Retrying won't help right now."
+                                ),
+                                suggested_action=(
+                                    "Close some apps (especially Kiro, browsers with many tabs, "
+                                    "or other AI tools), then try again. "
+                                    "Your conversation is saved."
+                                ),
+                            )
+                            break
+
+                        # Choose backoff: OOM gets much longer to let OS reclaim
+                        if _is_instant_kill:
+                            _backoff = self.OOM_BACKOFF_SECONDS
+                        else:
+                            _backoff = self.RETRY_BACKOFF_SECONDS * _retry_count
+
                         logger.info(
-                            "PATH A: auto-retry attempt %d/%d after %.1fs backoff",
+                            "PATH A: auto-retry attempt %d/%d after %.1fs backoff%s",
                             _retry_count, _max_retries, _backoff,
+                            " (OOM backoff)" if _is_instant_kill else "",
                         )
                         await asyncio.sleep(_backoff)
+
+                        # Pre-retry memory check: if still under pressure, abort
+                        # instead of burning the retry on another instant kill.
+                        _mem_error = self._check_memory_pressure()
+                        if _mem_error:
+                            logger.warning("Memory still low after backoff — aborting retry")
+                            yield _build_error_event(
+                                code="MEMORY_PRESSURE",
+                                message=_mem_error,
+                                suggested_action=(
+                                    "Close unused browser tabs, Kiro, or other heavy apps. "
+                                    "Your conversation is saved — try again when memory frees up."
+                                ),
+                            )
+                            break
 
                         session_context["had_error"] = False
                         session_context["_path_a_retried"] = True
@@ -2770,14 +3023,18 @@ class AgentManager:
 
                         # Visual indicator (only on first retry to avoid spam)
                         if _retry_count == 1:
+                            _retry_reason = (
+                                "System memory is low — waiting for resources..."
+                                if _is_instant_kill
+                                else "AI service was slow to respond. Retrying automatically..."
+                            )
                             yield {
                                 "type": "assistant",
                                 "content": [{
                                     "type": "text",
                                     "text": (
                                         "\n\n---\n\n"
-                                        "⚠️ *AI service was slow to respond. "
-                                        "Retrying automatically...*\n\n"
+                                        f"⚠️ *{_retry_reason}*\n\n"
                                     ),
                                 }],
                             }
@@ -2788,6 +3045,7 @@ class AgentManager:
                             agent_config, enable_skills, enable_mcp,
                             None, session_context, channel_context,
                         )
+                        _t_client_start = time.monotonic()  # Reset for instant-kill detection
                         wrapper = _ClaudeClientWrapper(options=options)
                         async with _env_lock:
                             _configure_claude_environment(self._config)
@@ -4685,6 +4943,8 @@ Create the skill in the `.claude/skills/` directory within the current workspace
                         # No active client — start fresh (--resume won't work with SDK 0.1.34+)
                         if is_resuming:
                             logger.info(f"No active client for skill creator session {session_id}, starting fresh")
+                            # Tell the frontend we're cold-starting a resume
+                            yield {"type": "session_resuming"}
                             is_resuming = False
                             session_context["sdk_session_id"] = None
                             # Observability: log the resume-fallback path

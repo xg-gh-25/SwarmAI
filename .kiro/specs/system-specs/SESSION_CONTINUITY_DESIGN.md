@@ -199,15 +199,17 @@ Runs every 60s. Five tiers in order:
 
 | File | Change |
 |------|--------|
-| `backend/core/agent_manager.py` | 4-tier lifecycle, SIGSTOP/SIGCONT, `COLD_START_TIMEOUT`, `is_cold_start` param |
-| `backend/core/context_injector.py` | 12K token budget, tool summaries, last-assistant drop |
+| `backend/core/agent_manager.py` | 4-tier lifecycle, SIGSTOP/SIGCONT + child processes, `COLD_START_TIMEOUT`, `is_cold_start` param, stale `is_streaming` guard, skill-creator `session_resuming` event |
+| `backend/core/context_injector.py` | 12K token budget, tool summaries (text-only guard), O(n) truncation, last-assistant drop |
 | `desktop/src/hooks/useChatStreamingLifecycle.ts` | `session_resuming` and `reconnecting` event handlers |
-| `desktop/src/pages/ChatPage.tsx` | "Resuming session..." and "Reconnecting..." UI indicators |
+| `desktop/src/pages/ChatPage.tsx` | "Resuming session..." indicator; streaming indicator suppressed during resume |
 | `desktop/src/types/index.ts` | `session_resuming` and `reconnecting` event types |
+| `backend/tests/test_context_injector.py` | 35 tests covering tool summarization, formatting, filtering, budget, assembly |
 
 ## Testing
 
 - **Unit tests:** `test_chat_session_stability.py` — 21 tests covering freeze timing, idle detection, retry cascade, preservation invariants
+- **Unit tests:** `test_context_injector.py` — 35 tests covering `_compact_tool_args`, `_summarize_tool_blocks`, `_format_message` (text-only, tool-only, mixed), `_filter_tool_only_messages`, `_apply_token_budget` (O(n) correctness, no-mutation), `_assemble_context`
 - **Property-based:** Hypothesis strategies for idle duration edge cases
 - **Manual validation:** Required — SIGSTOP/SIGCONT on Claude CLI subprocess, cap-based eviction under memory pressure
 
@@ -222,3 +224,6 @@ Runs every 60s. Five tiers in order:
 | 2026-03-16 | 12K token budget for resume | Covers ~40 messages with tool summaries; balances context richness vs system prompt size |
 | 2026-03-16 | Cap at 2 concurrent | Each CLI uses 200-500MB; 3 caused kernel panics with Kiro + other tools (COE 2026-03-15) |
 | 2026-03-16 | Never evict streaming sessions | Killing mid-stream causes "Cannot write to terminated process" cascade |
+| 2026-03-16 | Freeze/thaw child processes too | `pkill -STOP/-CONT -P <pid>` — without this, 5+ MCP/watcher child processes stay active while parent is frozen |
+| 2026-03-16 | Stale `is_streaming` guard (10min) | Defensive cleanup if caller forgets `finally` block — prevents permanent freeze/kill bypass |
+| 2026-03-16 | Suppress streaming indicator during resume | ChatPage: `isStreaming && !isResuming` — prevents dual spinner display |

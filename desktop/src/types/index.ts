@@ -288,6 +288,8 @@ export interface ChatRequest {
   sessionId?: string;
   enableSkills?: boolean;
   enableMCP?: boolean;
+  /** Currently open file in the editor panel — injected as agent context */
+  editorContext?: { filePath: string; fileName: string };
 }
 
 // ============== File Attachment Types ==============

@@ -4,6 +4,7 @@ import { render, screen, act, cleanup } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { ThemeProvider } from '../../contexts/ThemeContext';
+import { ToastProvider } from '../../contexts/ToastContext';
 import ThreeColumnLayout from './ThreeColumnLayout';
 import { LAYOUT_CONSTANTS } from '../../contexts/LayoutContext';
 
@@ -238,9 +239,11 @@ function renderWithCleanup(children: React.ReactNode) {
     <ThemeProvider>
       <MemoryRouter>
         <QueryClientProvider client={queryClient}>
-          <ThreeColumnLayout>
-            {children}
-          </ThreeColumnLayout>
+          <ToastProvider>
+            <ThreeColumnLayout>
+              {children}
+            </ThreeColumnLayout>
+          </ToastProvider>
         </QueryClientProvider>
       </MemoryRouter>
     </ThemeProvider>
