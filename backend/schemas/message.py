@@ -31,6 +31,13 @@ class DocumentContent(BaseModel):
     source: DocumentSourceBase64
 
 
+class EditorContext(BaseModel):
+    """Describes the file currently open in the editor panel."""
+
+    file_path: str = Field(..., max_length=1024)
+    file_name: str = Field(..., max_length=256)
+
+
 class ChatRequest(BaseModel):
     """Request model for chat.
 
@@ -45,6 +52,7 @@ class ChatRequest(BaseModel):
     session_id: str | None = None
     enable_skills: bool = False
     enable_mcp: bool = False
+    editor_context: EditorContext | None = None  # Currently open file in editor panel
 
 
 class AnswerQuestionRequest(BaseModel):

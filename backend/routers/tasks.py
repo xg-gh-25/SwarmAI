@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from schemas.task import TaskCreate, TaskResponse, TaskMessageRequest, RunningTaskCount
 from core.task_manager import task_manager
+from core.skill_manager import skill_manager
 from database import db
 
 logger = logging.getLogger(__name__)
@@ -75,15 +76,16 @@ async def create_task(request: TaskCreate):
             ws_id = config["id"] if config else None
 
         if ws_id:
-            # Check required skills
+            # Check required skills — in filesystem model all skills are always
+            # enabled, so we only verify the skill exists in the cache.
+            skill_cache = await skill_manager.get_cache()
             for skill_id in (request.required_skills or []):
-                row = await db.workspace_skills.get_by_workspace_and_skill(ws_id, skill_id)
-                if not row or not row.get("enabled", 1):
+                if skill_id not in skill_cache:
                     violations.append({
                         "entity_type": "skill",
                         "entity_id": skill_id,
-                        "message": f"Skill {skill_id} is not enabled in workspace {ws_id}",
-                        "suggestedAction": f"Enable skill {skill_id} in workspace settings",
+                        "message": f"Skill {skill_id} not found in workspace {ws_id}",
+                        "suggestedAction": f"Install skill {skill_id} or check the name",
                     })
 
             # Check required MCPs

@@ -34,6 +34,7 @@ PROPERTY_SETTINGS = settings(
 REQUIRED_FOLDERS = [
     "Knowledge",
     "Projects",
+    "Attachments",
 ]
 
 # Knowledge subdirectories created by create_folder_structure

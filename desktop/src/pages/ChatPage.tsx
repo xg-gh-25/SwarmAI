@@ -269,7 +269,16 @@ export default function ChatPage() {
   const sessionIdRef = useRef(sessionId);
   sessionIdRef.current = sessionId;
 
-
+  // Track currently-open file in editor panel — included in chat requests
+  // so the agent knows what doc the user is viewing.
+  const editorContextRef = useRef<{ filePath: string; fileName: string } | null>(null);
+  useEffect(() => {
+    const handler = (e: Event) => {
+      editorContextRef.current = (e as CustomEvent).detail ?? null;
+    };
+    window.addEventListener('swarm:editor-file-changed', handler);
+    return () => window.removeEventListener('swarm:editor-file-changed', handler);
+  }, []);
 
   const agentSkills = selectedAgent?.allowAllSkills
     ? skills
@@ -1183,6 +1192,7 @@ export default function ChatPage() {
         sessionId: sessionIdRef.current,
         enableSkills,
         enableMCP,
+        ...(editorContextRef.current && { editorContext: editorContextRef.current }),
       },
       wrappedCreateStreamHandler(assistantMessageId),
       createErrorHandler(assistantMessageId, activeTabIdRef.current ?? undefined),
@@ -1200,6 +1210,7 @@ export default function ChatPage() {
         sessionId: sessionIdRef.current,
         enableSkills,
         enableMCP,
+        ...(editorContextRef.current && { editorContext: editorContextRef.current }),
       };
       const capturedTabIdForRetry = currentActiveTabId;
       const retryStreamFn = () => {
@@ -1590,7 +1601,7 @@ export default function ChatPage() {
                     <span className="text-sm">{t('chat.resuming', 'Resuming session...')}</span>
                   </div>
                 )}
-                {isStreaming && (
+                {isStreaming && !(activeTabIdRef.current && tabMapRef.current.get(activeTabIdRef.current)?.isResuming) && (
                   <div className="flex items-center gap-2 text-[var(--color-text-muted)]">
                     <Spinner size="sm" />
                     <span className="text-sm">

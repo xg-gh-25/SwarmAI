@@ -413,7 +413,12 @@ class TestRunConversationResumeFallback:
 
     @pytest.mark.asyncio
     async def test_active_sessions_keyed_by_original_id(self):
-        """_active_sessions must be keyed by original session ID, not SDK's.
+        """_active_sessions must contain original session ID.
+
+        Early registration now stores under both original and SDK IDs
+        for interrupt lookup. The key invariant is that the original ID
+        IS present — the SDK ID may also be present as a side-effect
+        of early registration.
 
         **Validates: Requirements 2.2, 2.4**
         """
@@ -428,10 +433,6 @@ class TestRunConversationResumeFallback:
         assert "original-abc" in am._active_sessions, (
             f"Expected _active_sessions to contain 'original-abc', "
             f"but keys are: {list(am._active_sessions.keys())}"
-        )
-        assert "sdk-new-xyz" not in am._active_sessions, (
-            f"Expected _active_sessions to NOT contain SDK ID 'sdk-new-xyz', "
-            f"but it does: {list(am._active_sessions.keys())}"
         )
 
     @given(

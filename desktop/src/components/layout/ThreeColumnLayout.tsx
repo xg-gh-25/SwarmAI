@@ -1,4 +1,4 @@
-import { ReactNode, useState, useCallback, useRef, useEffect } from 'react';
+import { ReactNode, useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { LayoutProvider, useLayout, LAYOUT_CONSTANTS, ModalType, useSessionMeta } from '../../contexts/LayoutContext';
 import { ExplorerProvider, useTreeData } from '../../contexts/ExplorerContext';
@@ -20,6 +20,7 @@ import WorkspaceSettingsModal from '../modals/WorkspaceSettingsModal';
 import type { FileTreeItem } from '../workspace-explorer/FileTreeNode';
 import type { GitStatus } from '../../types';
 import api from '../../services/api';
+import { useToast } from '../../contexts/ToastContext';
 import { ContextUsageRing } from '../../pages/chat/components/ContextUsageRing';
 
 // Left sidebar width constant
@@ -239,6 +240,7 @@ function RefreshTreeBridge({ refreshTreeRef }: { refreshTreeRef: React.MutableRe
 // Inner layout component that uses the context
 function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
   const { activeModal, closeModal, workspaceSettingsId } = useLayout();
+  const { addToast } = useToast();
 
   /** Ref to hold the ExplorerContext refreshTree function (set by bridge component inside provider). */
   const refreshTreeRef = useRef<(() => void) | null>(null);
@@ -310,8 +312,13 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
       });
     } catch (error) {
       console.error('Failed to read file:', error);
+      addToast({
+        severity: 'warning',
+        message: `File not found: ${file.path}`,
+        autoDismiss: true,
+      });
     }
-  }, []);
+  }, [addToast]);
 
   // Listen for swarm:open-file custom events dispatched by clickable file paths
   // in chat messages (MarkdownRenderer). Uses a ref to avoid stale closure on
@@ -324,6 +331,20 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
       detail: { open: isEditorPanelOpen },
     }));
   }, [isEditorPanelOpen]);
+
+  // Notify ChatPage which file is currently open so it can include in chat requests.
+  // Memoize the detail to avoid dispatching redundant null→null events.
+  const editorFileDetail = useMemo(
+    () => fileEditorState
+      ? { filePath: fileEditorState.filePath, fileName: fileEditorState.fileName }
+      : null,
+    [fileEditorState?.filePath, fileEditorState?.fileName],
+  );
+  useEffect(() => {
+    window.dispatchEvent(new CustomEvent('swarm:editor-file-changed', {
+      detail: editorFileDetail,
+    }));
+  }, [editorFileDetail]);
 
   // Ref for file open routing — assigned after handleFileDoubleClick is defined below
   const handleFileDoubleClickRef = useRef<(file: FileTreeItem) => Promise<void>>(null!);
@@ -382,30 +403,65 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
   // Assign ref now that handleFileDoubleClick is defined
   handleFileDoubleClickRef.current = handleFileDoubleClick;
 
-  // Listen for swarm:open-file events from clickable file paths in chat
+  // Listen for swarm:open-file events from clickable file paths in chat.
+  // Paths from chat may be relative to source repos, not the workspace root.
+  // We call /workspace/file/resolve first to find the actual workspace path.
   useEffect(() => {
-    const handleOpenFileEvent = (e: Event) => {
+    let mounted = true;
+
+    const handleOpenFileEvent = async (e: Event) => {
       const { path: filePath } = (e as CustomEvent<{ path: string }>).detail ?? {};
       if (!filePath) return;
 
-      const fileName = filePath.split('/').pop() || filePath;
+      let resolvedPath = filePath;
+      try {
+        // Resolve partial/codebase-relative paths to workspace-relative paths
+        const resp = await api.get<{ resolved_path: string }>(
+          '/workspace/file/resolve',
+          { params: { path: filePath } },
+        );
+        if (!mounted) return;
+        resolvedPath = resp.data.resolved_path;
+      } catch (err: unknown) {
+        if (!mounted) return;
+        // 404 = not found in workspace, fall through to try the raw path.
+        // Non-404 errors (network timeout, 500) are logged for debugging.
+        const status = (err as { response?: { status?: number } })?.response?.status;
+        if (status !== undefined && status !== 404) {
+          console.warn('[swarm:open-file] resolve failed:', status, err);
+        }
+      }
+
+      const fileName = resolvedPath.split('/').pop() || resolvedPath;
       const fileItem: FileTreeItem = {
-        id: filePath,
+        id: resolvedPath,
         name: fileName,
         type: 'file',
-        path: filePath,
+        path: resolvedPath,
         workspaceId: '',
         workspaceName: '',
       };
 
       // Route through handleFileDoubleClick so pdf/docx/xlsx/pptx open with
       // system app instead of being forced into the text editor.
-      handleFileDoubleClickRef.current(fileItem);
+      try {
+        await handleFileDoubleClickRef.current(fileItem);
+      } catch {
+        if (!mounted) return;
+        addToast({
+          severity: 'warning',
+          message: `Could not open file: ${filePath}`,
+          autoDismiss: true,
+        });
+      }
     };
 
     document.addEventListener('swarm:open-file', handleOpenFileEvent);
-    return () => document.removeEventListener('swarm:open-file', handleOpenFileEvent);
-  }, []);
+    return () => {
+      mounted = false;
+      document.removeEventListener('swarm:open-file', handleOpenFileEvent);
+    };
+  }, [addToast]);
 
   // Handle Swarm workspace warning confirmation
   const handleSwarmWarningConfirm = useCallback(async () => {

@@ -41,13 +41,14 @@ class TestSwarmWorkspaceManagerConstants:
     """Tests for SwarmWorkspaceManager constants after single-workspace refactor."""
 
     def test_folder_structure_contains_required_directories(self):
-        """Verify FOLDER_STRUCTURE contains only Knowledge and Projects.
+        """Verify FOLDER_STRUCTURE contains Knowledge, Projects, and Attachments.
 
         Validates: Requirements 1.1
         """
         required_dirs = [
             "Knowledge",
             "Projects",
+            "Attachments",
         ]
         assert SwarmWorkspaceManager.FOLDER_STRUCTURE == required_dirs
 
@@ -160,7 +161,7 @@ class TestGlobalInstance:
         assert isinstance(swarm_workspace_manager, SwarmWorkspaceManager)
 
     def test_global_instance_has_folder_structure(self):
-        assert len(swarm_workspace_manager.FOLDER_STRUCTURE) == 2
+        assert len(swarm_workspace_manager.FOLDER_STRUCTURE) == 3
 
 
 class TestCreateFolderStructure:
@@ -929,14 +930,21 @@ class TestInitializationIdempotence:
                     user_file.write_text(content, encoding="utf-8")
 
             # Snapshot state after first init + user files
-            files_after_first = _collect_all_files(root)
+            # Exclude .legacy_cleaned marker — created once on second init
+            files_after_first = {
+                k: v for k, v in _collect_all_files(root).items()
+                if k != ".legacy_cleaned"
+            }
             dirs_after_first = _collect_all_dirs(root)
 
             # ── Second init ─────────────────────────────────────────────
             await manager.ensure_default_workspace(db)
 
             # Snapshot state after second init
-            files_after_second = _collect_all_files(root)
+            files_after_second = {
+                k: v for k, v in _collect_all_files(root).items()
+                if k != ".legacy_cleaned"
+            }
             dirs_after_second = _collect_all_dirs(root)
 
             # ── Assertions ──────────────────────────────────────────────

@@ -183,6 +183,12 @@ export const chatService = {
       session_id: request.sessionId,
       enable_skills: request.enableSkills,
       enable_mcp: request.enableMCP,
+      ...(request.editorContext && {
+        editor_context: {
+          file_path: request.editorContext.filePath,
+          file_name: request.editorContext.fileName,
+        },
+      }),
     };
 
     // If content array is provided, use it; otherwise use message

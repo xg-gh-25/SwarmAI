@@ -85,88 +85,49 @@ class ContextContent(BaseModel):
 async def get_effective_skills(workspace_id: str):
     """Get effective skills for a workspace.
 
-    Returns all enabled skills for the workspace from the workspace_skills table.
+    Returns all skills from the filesystem cache.  In the single-workspace
+    model every skill is enabled by default (no DB junction table).
 
     Requirement 19.6: GET /api/workspaces/{id}/skills.
     """
-    try:
-        # Get all skills from filesystem cache
-        all_skills = await skill_manager.get_cache()
-        
-        ws_configs = await db.workspace_skills.list_by_workspace(workspace_id)
-        enabled_ids = {c["skill_id"] for c in ws_configs if c.get("enabled", 1)}
-
-        configs = []
-        for skill_id in enabled_ids:
-            skill_info = all_skills.get(skill_id)
-            if skill_info:
-                configs.append(WorkspaceSkillConfig(
-                    skill_id=skill_info.folder_name,
-                    skill_name=skill_info.name,
-                    enabled=True,
-                    is_privileged=False,  # Filesystem skills don't have privileged flag
-                ))
-        return configs
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+    all_skills = await skill_manager.get_cache()
+    return [
+        WorkspaceSkillConfig(
+            skill_id=info.folder_name,
+            skill_name=info.name,
+            enabled=True,
+            is_privileged=info.source_tier == "builtin",
+        )
+        for info in all_skills.values()
+    ]
 
 
 @router.put("/{workspace_id}/skills", response_model=list[WorkspaceSkillConfig])
 async def update_skill_configs(workspace_id: str, data: WorkspaceSkillConfigUpdate):
     """Update skill configurations for a workspace.
 
-    Updates the enabled/disabled state of skills for the workspace and
-    logs changes to the audit trail.
+    In the single-workspace filesystem model, skill enable/disable is a
+    no-op for the runtime (all skills are always available), but we still
+    log changes to the audit trail for traceability.
 
     Requirement 19.6: PUT /api/workspaces/{id}/skills.
     """
-    from datetime import datetime, timezone
-    from uuid import uuid4
+    for config in data.configs:
+        # In the filesystem model all skills are always enabled at runtime.
+        # Only log an audit entry when the caller requests a state change
+        # (i.e. enabled=False), since enabled=True is already the truth.
+        if not config.enabled:
+            await audit_manager.log_change(
+                workspace_id=workspace_id,
+                change_type=ChangeType.DISABLED,
+                entity_type=EntityType.SKILL,
+                entity_id=config.skill_id,
+                old_value=json.dumps({"enabled": True}),
+                new_value=json.dumps({"enabled": False}),
+                changed_by="user",
+            )
 
-    try:
-        # Snapshot current state
-        ws_configs = await db.workspace_skills.list_by_workspace(workspace_id)
-        current_state = {c["skill_id"]: bool(c.get("enabled", 1)) for c in ws_configs}
-        existing_by_skill = {c["skill_id"]: c for c in ws_configs}
-
-        now = datetime.now(timezone.utc).isoformat()
-
-        for config in data.configs:
-            old_enabled = current_state.get(config.skill_id)
-            existing = existing_by_skill.get(config.skill_id)
-
-            if existing:
-                await db.workspace_skills.update(existing["id"], {
-                    "enabled": 1 if config.enabled else 0,
-                    "updated_at": now,
-                })
-            else:
-                await db.workspace_skills.put({
-                    "id": str(uuid4()),
-                    "workspace_id": workspace_id,
-                    "skill_id": config.skill_id,
-                    "enabled": 1 if config.enabled else 0,
-                    "created_at": now,
-                    "updated_at": now,
-                })
-
-            # Log the change if state actually changed
-            if old_enabled is None or old_enabled != config.enabled:
-                change_type = ChangeType.ENABLED if config.enabled else ChangeType.DISABLED
-                await audit_manager.log_change(
-                    workspace_id=workspace_id,
-                    change_type=change_type,
-                    entity_type=EntityType.SKILL,
-                    entity_id=config.skill_id,
-                    old_value=json.dumps({"enabled": old_enabled}),
-                    new_value=json.dumps({"enabled": config.enabled}),
-                    changed_by="user",
-                )
-
-        # Return updated effective skills
-        return await get_effective_skills(workspace_id)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    return await get_effective_skills(workspace_id)
 
 
 # ============================================================================

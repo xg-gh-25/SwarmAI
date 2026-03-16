@@ -20,6 +20,7 @@ import { render, screen, cleanup } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { ThemeProvider } from '../../contexts/ThemeContext';
+import { ToastProvider } from '../../contexts/ToastContext';
 import ThreeColumnLayout from './ThreeColumnLayout';
 
 // ============== Mocks ==============
@@ -195,7 +196,9 @@ function TestWrapper({ children }: { children: React.ReactNode }) {
     <ThemeProvider>
       <MemoryRouter>
         <QueryClientProvider client={queryClient}>
-          {children}
+          <ToastProvider>
+            {children}
+          </ToastProvider>
         </QueryClientProvider>
       </MemoryRouter>
     </ThemeProvider>

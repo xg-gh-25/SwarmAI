@@ -106,14 +106,21 @@ class TestGetTSCCState:
         assert body["thread_id"] == "thread-abc"
         assert body["lifecycle_state"] == "active"
 
-    def test_returns_404_for_missing_thread(self, client: TestClient, mock_managers):
+    def test_returns_default_state_for_missing_thread(self, client: TestClient, mock_managers):
+        """Missing thread returns 200 with default state (not 404).
+
+        The router intentionally returns a default empty state for
+        uninitiated threads to avoid frontend 404 console errors.
+        """
         state_mgr = mock_managers
         state_mgr.get_state.return_value = None
 
         resp = client.get("/api/chat_threads/no-such-thread/tscc")
 
-        assert resp.status_code == 404
-        assert "not found" in resp.json()["detail"].lower()
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["thread_id"] == "no-such-thread"
+        assert body["lifecycle_state"] == "new"
 
     def test_response_fields_are_snake_case(self, client: TestClient, mock_managers):
         state_mgr = mock_managers
@@ -153,10 +160,17 @@ class TestGetSystemPrompt:
         finally:
             _system_prompt_metadata.pop("session-123", None)
 
-    def test_returns_404_for_missing_session(self, client: TestClient):
+    def test_returns_default_for_missing_session(self, client: TestClient):
+        """Missing session returns 200 with empty metadata (not 404).
+
+        The router returns an empty SystemPromptMetadata for sessions
+        without cached metadata to avoid frontend errors.
+        """
         resp = client.get("/api/chat/nonexistent-session/system-prompt")
-        assert resp.status_code == 404
-        assert "no system prompt" in resp.json()["detail"].lower()
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["total_tokens"] == 0
+        assert body["files"] == []
 
     def test_response_fields_are_snake_case(self, client: TestClient):
         from core.agent_manager import _system_prompt_metadata

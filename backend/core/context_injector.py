@@ -181,14 +181,17 @@ def _apply_token_budget(
         messages = list(formatted_messages)
         was_truncated = False
 
-        total = sum(ContextDirectoryLoader.estimate_tokens(m) for m in messages)
+        token_counts = [ContextDirectoryLoader.estimate_tokens(m) for m in messages]
+        total = sum(token_counts)
 
-        while total > token_budget and messages:
-            removed = messages.pop(0)
-            total -= ContextDirectoryLoader.estimate_tokens(removed)
+        # O(n) index-based truncation instead of O(n²) pop(0)
+        start_idx = 0
+        while total > token_budget and start_idx < len(messages):
+            total -= token_counts[start_idx]
+            start_idx += 1
             was_truncated = True
 
-        return (messages, was_truncated)
+        return (messages[start_idx:], was_truncated)
     except Exception:
         logger.warning("Token budget estimation failed", exc_info=True)
         return ([], False)

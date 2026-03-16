@@ -140,6 +140,14 @@ class SwarmWorkspaceManager:
 
     Module-level constants are re-exported as class attributes for backward
     compatibility (e.g. ``SwarmWorkspaceManager.DEFAULT_WORKSPACE_CONFIG``).
+
+    Marker files:
+    - ``.legacy_cleaned`` — Written to the workspace root after
+      ``_cleanup_legacy_content()`` finishes its first successful run.
+      Subsequent startups skip the cleanup entirely when this marker
+      exists.  The marker is excluded from idempotence test snapshots
+      because it is created only on the second ``ensure_default_workspace``
+      call (first call creates the workspace, second call triggers cleanup).
     """
 
     # Re-export module-level constants as class attributes for backward compat
