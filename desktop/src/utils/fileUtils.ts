@@ -165,30 +165,43 @@ export function fileIconColor(name: string): string {
 // File preview classification
 // ---------------------------------------------------------------------------
 
-export type FilePreviewType = 'image' | 'pdf' | 'text' | 'unsupported';
+export type FilePreviewType = 'image' | 'pdf' | 'system-open' | 'text' | 'unsupported';
 
 const IMAGE_EXTENSIONS = new Set([
-  'png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'ico'
+  'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'ico'
 ]);
 
 const PDF_EXTENSIONS = new Set(['pdf']);
 
+/**
+ * Files that should open directly with the system default app.
+ * These are document formats that can't be rendered in-app but have
+ * native apps that handle them well (Preview, Word, Excel, etc.).
+ */
+const SYSTEM_OPEN_EXTENSIONS = new Set([
+  'docx', 'xlsx', 'pptx', 'doc', 'xls', 'ppt',
+  'svg',
+]);
+
 const UNSUPPORTED_BINARY = new Set([
   'mp4', 'mp3', 'wav', 'avi', 'mov', 'mkv', 'flac', 'ogg',
-  'docx', 'xlsx', 'pptx', 'doc', 'xls', 'ppt',
   'zip', 'tar', 'gz', 'rar', '7z', 'dmg', 'iso',
   'exe', 'dll', 'so', 'dylib', 'wasm',
 ]);
 
 /**
  * Classify a file for preview routing based on its extension.
- * Returns 'image' for viewable images, 'pdf' for PDFs,
- * 'unsupported' for known binary formats, and 'text' for everything else.
+ * - 'image': viewable inline (png, jpg, etc.)
+ * - 'pdf': open with system app (Preview.app on macOS)
+ * - 'system-open': open with system default app (docx, xlsx, pptx, svg)
+ * - 'unsupported': show info modal with "Open in Default App" button
+ * - 'text': open in FileEditor
  */
 export function classifyFileForPreview(fileName: string): FilePreviewType {
   const ext = fileName.split('.').pop()?.toLowerCase() ?? '';
   if (IMAGE_EXTENSIONS.has(ext)) return 'image';
   if (PDF_EXTENSIONS.has(ext)) return 'pdf';
+  if (SYSTEM_OPEN_EXTENSIONS.has(ext)) return 'system-open';
   if (UNSUPPORTED_BINARY.has(ext)) return 'unsupported';
   return 'text';
 }
