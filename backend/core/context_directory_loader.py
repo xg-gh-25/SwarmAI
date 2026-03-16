@@ -13,6 +13,7 @@ centralized directory.  It is responsible for:
 - ``CONTEXT_FILES``             — Ordered list of all 10 ContextFileSpec entries
 - ``DEFAULT_TOKEN_BUDGET``      — Default token budget constant (30,000)
 - ``BUDGET_LARGE_MODEL``        — Token budget for >= 200K models (50,000)
+- ``BUDGET_1M_MODEL``           — Token budget for >= 500K models (100,000)
 - ``L1_CACHE_FILENAME``         — Filename for the full L1 cache
 - ``L0_CACHE_FILENAME``         — Filename for the compact L0 cache
 - ``THRESHOLD_USE_L1``          — Context window threshold for L1 usage (64K)
@@ -62,6 +63,14 @@ THRESHOLD_SKIP_LOW_PRIORITY = 32_000
 
 BUDGET_LARGE_MODEL = 50_000
 """Token budget for models with >= 200K context window (25% of 200K)."""
+
+BUDGET_1M_MODEL = 100_000
+"""Token budget for models with >= 500K context window (10% of 1M).
+
+Claude 4.6 models have 1M context GA on Bedrock. With 5x the room,
+we can afford a richer system prompt (more DailyActivity, fuller
+MEMORY.md, untruncated KNOWLEDGE/PROJECTS) while still leaving 90%
+for conversation and tool use."""
 
 GROUP_CHANNEL_EXCLUDE: frozenset[str] = frozenset({"MEMORY.md", "USER.md"})
 """Files excluded from group channel prompts to prevent personal data leakage."""
@@ -344,7 +353,8 @@ class ContextDirectoryLoader:
 
         Scales the token budget to the model's capacity:
 
-        - >= 200K tokens → 50,000 (``BUDGET_LARGE_MODEL``)
+        - >= 500K tokens → 100,000 (``BUDGET_1M_MODEL``) — Claude 4.6 1M GA
+        - >= 200K and < 500K → 50,000 (``BUDGET_LARGE_MODEL``)
         - >= 64K and < 200K → 30,000 (``DEFAULT_TOKEN_BUDGET``)
         - < 64K → ``self.token_budget`` (instance default, L0 path)
 
@@ -365,7 +375,9 @@ class ContextDirectoryLoader:
         """
         if not model_context_window:
             return DEFAULT_TOKEN_BUDGET
-        if model_context_window >= 200_000:
+        if model_context_window >= 500_000:
+            return BUDGET_1M_MODEL
+        elif model_context_window >= 200_000:
             return BUDGET_LARGE_MODEL
         elif model_context_window >= THRESHOLD_USE_L1:
             return DEFAULT_TOKEN_BUDGET
