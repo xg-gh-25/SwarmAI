@@ -33,6 +33,7 @@ import { chatService } from '../../../services/chat';
 import type { MemorySaveStatus } from '../../../hooks/useMemorySave';
 import { useToast } from '../../../contexts/ToastContext';
 import { ActivityFeed } from './ActivityFeed';
+import { copyToClipboard } from '../../../utils/clipboard';
 
 export interface AssistantMessageViewProps {
   /** The assistant message to render */
@@ -144,7 +145,7 @@ export const AssistantMessageView: React.FC<AssistantMessageViewProps> = ({
   }, [message.content, resultMap, isStreaming]);
 
   const handleCopy = useCallback(() => {
-    navigator.clipboard.writeText(extractMessageText());
+    copyToClipboard(extractMessageText());
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   }, [extractMessageText]);

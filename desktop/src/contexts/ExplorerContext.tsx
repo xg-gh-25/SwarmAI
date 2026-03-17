@@ -293,12 +293,13 @@ export function ExplorerProvider({ children }: ExplorerProviderProps) {
   }, [fetchTree]);
 
   // ── Auto-refresh via ETag polling ─────────────────────────────────────
-  // Poll getTree() every 5 seconds. The service-layer ETag cache makes
+  // Poll getTree() every 30 seconds. The service-layer ETag cache makes
   // this very lightweight: when nothing changed the server returns 304
   // and getTree() returns the same cached array reference. We compare
   // against lastTreeRef so we only call setTreeData on actual changes.
+  // Reduced from 5s → 15s → 30s to cut CPU from git status + fs scan.
   useEffect(() => {
-    const POLL_INTERVAL_MS = 5_000;
+    const POLL_INTERVAL_MS = 30_000;
     const id = setInterval(async () => {
       // Skip polling when tab is hidden to save resources
       if (document.hidden) return;
