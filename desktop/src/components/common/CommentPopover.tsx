@@ -42,22 +42,34 @@ export default function CommentPopover({
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
 
-  // Calculate screen-absolute position from the gutter anchor
+  // Calculate screen-absolute position from the gutter anchor.
+  // Re-runs on scroll/resize so the popover tracks the anchor.
   const [position, setPosition] = useState<{ top: number; left: number } | null>(null);
 
-  useEffect(() => {
+  const recalcPosition = useCallback(() => {
     if (!anchorRef?.current) return;
     const rect = anchorRef.current.getBoundingClientRect();
-    const popoverHeight = 180; // approximate popover height
+    const measuredHeight = popoverRef.current?.offsetHeight ?? 180;
     let top = rect.top + topOffset;
     // Clamp: don't let popover go below viewport
-    if (top + popoverHeight > window.innerHeight - 8) {
-      top = window.innerHeight - popoverHeight - 8;
+    if (top + measuredHeight > window.innerHeight - 8) {
+      top = window.innerHeight - measuredHeight - 8;
     }
     // Clamp: don't let popover go above viewport
     if (top < 8) top = 8;
     setPosition({ top, left: rect.right + 4 });
   }, [anchorRef, topOffset]);
+
+  // Initial position + reposition on scroll/resize
+  useEffect(() => {
+    recalcPosition();
+    window.addEventListener('scroll', recalcPosition, true);
+    window.addEventListener('resize', recalcPosition);
+    return () => {
+      window.removeEventListener('scroll', recalcPosition, true);
+      window.removeEventListener('resize', recalcPosition);
+    };
+  }, [recalcPosition]);
 
   useEffect(() => {
     // Auto-focus and select text on mount
@@ -104,7 +116,7 @@ export default function CommentPopover({
   const popoverContent = (
     <div
       ref={popoverRef}
-      className="fixed z-[9999] w-72 bg-[var(--color-card)] border border-[var(--color-border)] rounded-lg shadow-xl"
+      className="fixed z-[1000] w-72 bg-[var(--color-card)] border border-[var(--color-border)] rounded-lg shadow-xl"
       style={position ? { top: position.top, left: position.left } : { top: topOffset, left: 0 }}
       data-testid="comment-popover"
     >
