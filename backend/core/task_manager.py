@@ -13,8 +13,10 @@ from uuid import uuid4
 
 from database import db
 from .agent_manager import agent_manager
+from .agent_defaults import resolve_default_model
 
 logger = logging.getLogger(__name__)
+
 
 # Legacy status → new status mapping for backward compatibility
 # Requirements: 5.4
@@ -121,8 +123,9 @@ class TaskManager:
 
         Validates: Requirements 1.4, 5.1, 5.6, 5.7
         """
-        # Get agent config for model and title
-        agent_config = await db.agents.get(agent_id)
+        # Get agent config — file-based for default agent, DB for custom agents
+        from core.agent_defaults import build_agent_config
+        agent_config = await build_agent_config(agent_id)
         if not agent_config:
             raise ValueError(f"Agent {agent_id} not found")
 
@@ -162,7 +165,7 @@ class TaskManager:
             "workspace_id": workspace_id,
             "source_todo_id": source_todo_id,
             "blocked_reason": None,
-            "model": agent_config.get("model"),
+            "model": agent_config.get("model") or resolve_default_model(),
             "created_at": datetime.now(timezone.utc).isoformat(),
             "started_at": None,
             "completed_at": None,

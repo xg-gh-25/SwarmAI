@@ -15,14 +15,16 @@ import { invoke } from '@tauri-apps/api/core';
 /**
  * Copy text to the system clipboard.
  * Returns true on success, false on failure.
+ * Logs the failing strategy to console.warn for debugging.
  */
 export async function copyToClipboard(text: string): Promise<boolean> {
   // Attempt 1: Tauri native command (pbcopy / xclip / PowerShell)
   try {
     await invoke('copy_to_clipboard', { text });
     return true;
-  } catch {
+  } catch (e) {
     // Not in Tauri context or command failed — fall through
+    console.debug('[clipboard] Tauri invoke failed:', e);
   }
 
   // Attempt 2: Modern Clipboard API (works in regular browsers)
@@ -30,8 +32,9 @@ export async function copyToClipboard(text: string): Promise<boolean> {
     try {
       await navigator.clipboard.writeText(text);
       return true;
-    } catch {
+    } catch (e) {
       // Clipboard API denied — fall through to legacy method
+      console.debug('[clipboard] navigator.clipboard.writeText failed:', e);
     }
   }
 
@@ -49,8 +52,12 @@ export async function copyToClipboard(text: string): Promise<boolean> {
     textarea.select();
     const ok = document.execCommand('copy');
     document.body.removeChild(textarea);
+    if (!ok) {
+      console.warn('[clipboard] All 3 strategies failed (Tauri invoke, Clipboard API, execCommand)');
+    }
     return ok;
-  } catch {
+  } catch (e) {
+    console.warn('[clipboard] All 3 strategies failed:', e);
     return false;
   }
 }

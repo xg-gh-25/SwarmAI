@@ -109,7 +109,12 @@ class SystemPromptBuilder:
             else "direct"
         )
         parts = [f"agent={name}", f"os={os_name} ({arch})", f"channel={channel}"]
+        # Model comes from build_agent_config (which reads config.json for default agent).
+        # Fallback to resolve_default_model() if agent_config has no model (e.g. stale DB record).
         model = self.agent_config.get("model")
+        if not model or model in ("default", "None"):
+            from core.agent_defaults import resolve_default_model
+            model = resolve_default_model()
         if model and model not in ("default", "None", None):
             parts.insert(1, f"model={model}")
         return "`" + " | ".join(parts) + "`"

@@ -8,6 +8,7 @@ from fastapi import APIRouter
 from database import db
 from channels.gateway import channel_gateway
 from channels.registry import list_supported_types, get_adapter_class
+from core.agent_defaults import build_agent_config, agent_exists
 from schemas.channel import (
     ChannelCreateRequest,
     ChannelUpdateRequest,
@@ -81,7 +82,7 @@ async def list_channels():
     for ch in channels:
         agent_id = ch.get("agent_id")
         if agent_id not in agent_cache:
-            agent = await db.agents.get(agent_id)
+            agent = await build_agent_config(agent_id)
             agent_cache[agent_id] = agent["name"] if agent else None
         results.append(_channel_to_response(ch, agent_name=agent_cache[agent_id]))
     return results
@@ -102,7 +103,7 @@ async def get_channel(channel_id: str):
             detail=f"Channel with ID '{channel_id}' not found"
         )
     # Enrich with agent name
-    agent = await db.agents.get(channel["agent_id"])
+    agent = await build_agent_config(channel["agent_id"])
     agent_name = agent["name"] if agent else None
     return _channel_to_response(channel, agent_name=agent_name)
 
@@ -110,8 +111,8 @@ async def get_channel(channel_id: str):
 @router.post("/", response_model=ChannelResponse, status_code=201)
 async def create_channel(request: ChannelCreateRequest):
     """Create a new channel."""
-    # Validate agent exists
-    agent = await db.agents.get(request.agent_id)
+    # Validate agent exists by building config (file-based for default, DB for custom)
+    agent = await build_agent_config(request.agent_id)
     if not agent:
         raise NotFoundException(
             detail=f"Agent with ID '{request.agent_id}' not found"
@@ -151,9 +152,8 @@ async def update_channel(channel_id: str, request: ChannelUpdateRequest):
     if request.config is not None:
         updates["config"] = request.config
     if request.agent_id is not None:
-        # Validate the new agent exists
-        agent = await db.agents.get(request.agent_id)
-        if not agent:
+        # Validate the new agent exists (file-based for default, DB for custom)
+        if not await agent_exists(request.agent_id):
             raise NotFoundException(
                 detail=f"Agent with ID '{request.agent_id}' not found"
             )
@@ -178,7 +178,7 @@ async def update_channel(channel_id: str, request: ChannelUpdateRequest):
 
     # Enrich with agent name
     agent_id = channel.get("agent_id") if channel else None
-    agent = await db.agents.get(agent_id) if agent_id else None
+    agent = await build_agent_config(agent_id) if agent_id else None
     agent_name = agent["name"] if agent else None
 
     logger.info(f"Updated channel '{channel_id}' with fields: {list(updates.keys())}")

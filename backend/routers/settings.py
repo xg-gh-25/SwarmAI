@@ -47,8 +47,7 @@ def get_config_manager() -> AppConfigManager:
     """
     global _config_manager
     if _config_manager is None:
-        _config_manager = AppConfigManager()
-        _config_manager.load()
+        _config_manager = AppConfigManager.instance()
     return _config_manager
 
 
