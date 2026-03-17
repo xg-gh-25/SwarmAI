@@ -2451,7 +2451,7 @@ class AgentManager:
                     _n_turns = event.get("num_turns") or 1
                     if _n_turns > 1:
                         last_input_tokens = last_input_tokens // _n_turns
-                last_model = agent_config.get("model")
+                last_model = self._resolve_model(agent_config)
             yield event
 
         # --- Post-response context monitor ---
@@ -4377,7 +4377,7 @@ class AgentManager:
                     _n_turns = event.get("num_turns") or 1
                     if _n_turns > 1:
                         last_input_tokens = last_input_tokens // _n_turns
-                last_model = agent_config.get("model")
+                last_model = self._resolve_model(agent_config)
             yield event
 
         # Post-response context monitor (same helper as run_conversation)
