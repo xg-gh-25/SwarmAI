@@ -22,6 +22,7 @@ import type { GitStatus } from '../../types';
 import api from '../../services/api';
 import { useToast } from '../../contexts/ToastContext';
 import { ContextUsageRing } from '../../pages/chat/components/ContextUsageRing';
+import { copyToClipboard } from '../../utils/clipboard';
 
 // Left sidebar width constant
 const LEFT_SIDEBAR_WIDTH = LAYOUT_CONSTANTS.LEFT_SIDEBAR_WIDTH;
@@ -370,7 +371,7 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
     } catch {
       // Fallback: copy absolute path to clipboard
       try {
-        await navigator.clipboard.writeText(absolutePath);
+        await copyToClipboard(absolutePath);
         console.info(`[FileOpen] Copied path to clipboard: ${absolutePath}`);
       } catch { /* best effort */ }
     }

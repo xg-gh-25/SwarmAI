@@ -693,6 +693,63 @@ async fn get_backend_status(state: tauri::State<'_, SharedBackendState>) -> Resu
     })
 }
 
+// Copy text to system clipboard using OS-native tools.
+// Tauri webview doesn't grant navigator.clipboard permissions, so we bypass
+// via pbcopy (macOS), xclip/xsel (Linux), or PowerShell (Windows).
+#[tauri::command]
+async fn copy_to_clipboard(text: String) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        use std::io::Write;
+        let mut child = std::process::Command::new("pbcopy")
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("Failed to spawn pbcopy: {}", e))?;
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin.write_all(text.as_bytes())
+                .map_err(|e| format!("Failed to write to pbcopy: {}", e))?;
+        }
+        child.wait().map_err(|e| format!("pbcopy failed: {}", e))?;
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        use std::io::Write;
+        // Try xclip first, fall back to xsel
+        let result = std::process::Command::new("xclip")
+            .args(["-selection", "clipboard"])
+            .stdin(std::process::Stdio::piped())
+            .spawn();
+        let mut child = match result {
+            Ok(c) => c,
+            Err(_) => std::process::Command::new("xsel")
+                .args(["--clipboard", "--input"])
+                .stdin(std::process::Stdio::piped())
+                .spawn()
+                .map_err(|e| format!("Neither xclip nor xsel available: {}", e))?,
+        };
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin.write_all(text.as_bytes())
+                .map_err(|e| format!("Failed to write to clipboard tool: {}", e))?;
+        }
+        child.wait().map_err(|e| format!("Clipboard tool failed: {}", e))?;
+        Ok(())
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        // Use PowerShell Set-Clipboard (available since Windows 10)
+        let escaped = text.replace('\'', "''");
+        std::process::Command::new("powershell")
+            .args(["-NoProfile", "-Command", &format!("Set-Clipboard '{}'", escaped)])
+            .creation_flags(0x08000000) // CREATE_NO_WINDOW
+            .output()
+            .map_err(|e| format!("Failed to copy to clipboard: {}", e))?;
+        Ok(())
+    }
+}
+
 // Get backend port
 #[tauri::command]
 async fn get_backend_port(state: tauri::State<'_, SharedBackendState>) -> Result<u16, String> {
@@ -944,6 +1001,7 @@ pub fn run() {
             stop_backend,
             get_backend_status,
             get_backend_port,
+            copy_to_clipboard,
             check_nodejs_version,
             check_python_version,
             check_git_bash_path,

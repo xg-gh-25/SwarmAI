@@ -9,6 +9,7 @@
  */
 
 import { useState } from 'react';
+import { copyToClipboard } from '../../../utils/clipboard';
 
 interface ToolResultBlockProps {
   content?: string;
@@ -23,7 +24,7 @@ export function ToolResultBlock({ content, isError, truncated }: ToolResultBlock
   const resolvedContent = content ?? '';
 
   const handleCopy = () => {
-    navigator.clipboard.writeText(resolvedContent);
+    copyToClipboard(resolvedContent);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
