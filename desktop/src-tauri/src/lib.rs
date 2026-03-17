@@ -739,13 +739,23 @@ async fn copy_to_clipboard(text: String) -> Result<(), String> {
 
     #[cfg(target_os = "windows")]
     {
-        // Use PowerShell Set-Clipboard (available since Windows 10)
-        let escaped = text.replace('\'', "''");
-        std::process::Command::new("powershell")
-            .args(["-NoProfile", "-Command", &format!("Set-Clipboard '{}'", escaped)])
+        // Use PowerShell Set-Clipboard via stdin pipe to avoid injection.
+        // Passing text as a command-line argument is unsafe because
+        // PowerShell metacharacters ($, `, etc.) can execute arbitrary code.
+        use std::io::Write;
+        let mut child = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-Command", "$input | Set-Clipboard"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
             .creation_flags(0x08000000) // CREATE_NO_WINDOW
-            .output()
-            .map_err(|e| format!("Failed to copy to clipboard: {}", e))?;
+            .spawn()
+            .map_err(|e| format!("Failed to spawn powershell: {}", e))?;
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin.write_all(text.as_bytes())
+                .map_err(|e| format!("Failed to write to powershell stdin: {}", e))?;
+        }
+        child.wait().map_err(|e| format!("PowerShell Set-Clipboard failed: {}", e))?;
         Ok(())
     }
 }

@@ -28,7 +28,7 @@ from schemas.chat_thread import ChatThreadResponse
 from schemas.context import ThreadBindRequest, ThreadBindResponse
 from schemas.permission import PermissionResponseRequest, PermissionRequestResponse
 from database import db
-from core.agent_manager import agent_manager, set_permission_decision, _build_error_event
+from core.agent_manager import agent_manager, set_permission_decision, _build_error_event, agent_exists
 from core.chat_thread_manager import chat_thread_manager
 from core.session_manager import session_manager
 from core.exceptions import (
@@ -266,9 +266,8 @@ async def chat_stream(request: Request):
     if chat_request.content:
         validate_content(chat_request.content)
 
-    # Verify agent exists
-    agent = await db.agents.get(chat_request.agent_id)
-    if not agent:
+    # Verify agent exists (lightweight check — no config assembly)
+    if not await agent_exists(chat_request.agent_id):
         raise AgentNotFoundException(
             detail=f"Agent with ID '{chat_request.agent_id}' does not exist",
             suggested_action="Please check the agent ID and try again"
@@ -359,9 +358,8 @@ async def answer_question(request: Request):
             detail=str(e),
         )
 
-    # Verify agent exists
-    agent = await db.agents.get(answer_request.agent_id)
-    if not agent:
+    # Verify agent exists (lightweight check — no config assembly)
+    if not await agent_exists(answer_request.agent_id):
         raise AgentNotFoundException(
             detail=f"Agent with ID '{answer_request.agent_id}' does not exist",
             suggested_action="Please check the agent ID and try again"
@@ -687,9 +685,8 @@ async def cmd_permission_continue(request: Request):
 
     agent_id = session.agent_id
 
-    # Verify agent exists
-    agent = await db.agents.get(agent_id)
-    if not agent:
+    # Verify agent exists (lightweight check — no config assembly)
+    if not await agent_exists(agent_id):
         raise AgentNotFoundException(
             detail=f"Agent with ID '{agent_id}' does not exist",
             suggested_action="Please check the agent ID and try again"

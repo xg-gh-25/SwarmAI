@@ -17,6 +17,7 @@ from typing import Optional
 from uuid import uuid4
 
 from database import db
+from core.agent_defaults import resolve_default_model
 from schemas.todo import (
     ToDoCreate,
     ToDoUpdate,
@@ -278,8 +279,9 @@ class ToDoManager:
         if not todo:
             return None
 
-        # Get agent config for model
-        agent_config = await db.agents.get(task_data.agent_id)
+        # Get agent config — file-based for default agent, DB for custom agents
+        from core.agent_defaults import build_agent_config
+        agent_config = await build_agent_config(task_data.agent_id)
         if not agent_config:
             raise ValueError(f"Agent {task_data.agent_id} not found")
 
@@ -298,7 +300,7 @@ class ToDoManager:
             "priority": (task_data.priority.value if task_data.priority else todo.get("priority", Priority.NONE.value)),
             "source_todo_id": todo_id,
             "blocked_reason": None,
-            "model": agent_config.get("model"),
+            "model": agent_config.get("model") or resolve_default_model(),
             "created_at": now,
             "started_at": None,
             "completed_at": None,
