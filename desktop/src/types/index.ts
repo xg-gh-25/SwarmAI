@@ -295,7 +295,7 @@ export interface ChatRequest {
 // ============== File Attachment Types ==============
 
 /** Classified file type for attachment processing. */
-export type AttachmentType = 'image' | 'pdf' | 'text' | 'csv';
+export type AttachmentType = 'image' | 'pdf' | 'document' | 'audio' | 'video' | 'text' | 'csv';
 
 /** How a file is delivered to the backend/Claude SDK. */
 export type DeliveryStrategy = 'base64_image' | 'base64_document' | 'inline_text' | 'path_hint';
@@ -362,10 +362,13 @@ export interface DocumentContentBlock {
 
 /** Per-type maximum file size in bytes. */
 export const SIZE_LIMITS = {
-  image: 5 * 1024 * 1024,   // 5MB
-  pdf: 10 * 1024 * 1024,    // 10MB
-  text: 1 * 1024 * 1024,    // 1MB
-  csv: 1 * 1024 * 1024,     // 1MB
+  image: 20 * 1024 * 1024,       // 20MB  — Claude API max per image
+  pdf: 25 * 1024 * 1024,         // 25MB  — Bedrock 32MB payload minus base64 overhead
+  document: 25 * 1024 * 1024,    // 25MB  — same as PDF (base64_document)
+  audio: 500 * 1024 * 1024,      // 500MB — path_hint only, file stays local
+  video: 1024 * 1024 * 1024,     // 1GB   — path_hint only, file stays local
+  text: 2 * 1024 * 1024,         // 2MB   — inlined into prompt, keep conservative
+  csv: 2 * 1024 * 1024,          // 2MB   — inlined into prompt, keep conservative
 } as const;
 
 /** @deprecated Use SIZE_LIMITS instead. */
@@ -384,9 +387,20 @@ export const MAX_ATTACHMENTS = 10;
  * Extensions cover common code, config, data, and document formats.
  */
 export const SUPPORTED_FILE_TYPES = {
-  image: ['image/png', 'image/jpeg', 'image/gif', 'image/webp'],
+  image: ['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/svg+xml', 'image/bmp', 'image/tiff', 'image/heic', 'image/heif'],
   pdf: ['application/pdf'],
-  text: ['text/plain', 'text/html'],
+  document: [
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',        // .docx
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',              // .xlsx
+    'application/vnd.openxmlformats-officedocument.presentationml.presentation',      // .pptx
+    'application/msword',                                                              // .doc
+    'application/vnd.ms-excel',                                                        // .xls
+    'application/vnd.ms-powerpoint',                                                   // .ppt
+    'application/rtf',                                                                 // .rtf
+  ],
+  audio: ['audio/mpeg', 'audio/mp4', 'audio/wav', 'audio/ogg', 'audio/flac', 'audio/aac', 'audio/webm'],
+  video: ['video/mp4', 'video/quicktime', 'video/x-msvideo', 'video/x-matroska', 'video/webm', 'video/mpeg'],
+  text: ['text/plain', 'text/html', 'text/markdown', 'application/json', 'application/xml'],
   csv: ['text/csv', 'application/csv'],
   /** Recognized code/config file extensions (classified as 'text'). */
   codeExtensions: [
@@ -395,11 +409,20 @@ export const SUPPORTED_FILE_TYPES = {
     '.md', '.txt', '.log', '.env', '.cfg', '.ini', '.conf',
     '.json', '.yaml', '.yml', '.toml',
     '.sql', '.html', '.css', '.scss', '.xml',
+    '.kt', '.swift', '.r', '.lua', '.pl', '.php',
+    '.dart', '.scala', '.zig', '.tf', '.hcl',
+    '.proto', '.graphql', '.gql',
   ],
   /** Recognized image file extensions. */
-  imageExtensions: ['.png', '.jpg', '.jpeg', '.gif', '.webp'],
-  /** Recognized document file extensions. */
+  imageExtensions: ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp', '.tiff', '.tif', '.ico', '.heic', '.heif'],
+  /** Recognized PDF extensions. */
   pdfExtensions: ['.pdf'],
+  /** Recognized Office document extensions (classified as 'document'). */
+  documentExtensions: ['.docx', '.xlsx', '.pptx', '.doc', '.xls', '.ppt', '.rtf', '.odt', '.ods', '.odp'],
+  /** Recognized audio extensions. */
+  audioExtensions: ['.mp3', '.m4a', '.wav', '.ogg', '.flac', '.aac', '.wma', '.opus', '.weba'],
+  /** Recognized video extensions. */
+  videoExtensions: ['.mp4', '.mov', '.avi', '.mkv', '.webm', '.mpeg', '.mpg', '.wmv', '.flv', '.3gp', '.m4v'],
   /** Recognized data file extensions (classified as 'csv'). */
   csvExtensions: ['.csv'],
 } as const;

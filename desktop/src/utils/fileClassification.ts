@@ -13,18 +13,62 @@ import type { AttachmentType, DeliveryStrategy } from '../types';
 import { SIZE_LIMITS, SIZE_THRESHOLD } from '../types';
 
 export const MIME_TYPE_MAP: Record<string, AttachmentType> = {
+  // Images
   'image/png': 'image',
   'image/jpeg': 'image',
   'image/gif': 'image',
   'image/webp': 'image',
+  'image/svg+xml': 'image',
+  'image/bmp': 'image',
+  'image/tiff': 'image',
+  'image/x-icon': 'image',
+  'image/heic': 'image',
+  'image/heif': 'image',
+  // PDF
   'application/pdf': 'pdf',
+  // Office documents
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'document',   // .docx
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'document',          // .xlsx
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'document',  // .pptx
+  'application/msword': 'document',            // .doc
+  'application/vnd.ms-excel': 'document',      // .xls
+  'application/vnd.ms-powerpoint': 'document', // .ppt
+  'application/rtf': 'document',               // .rtf
+  'application/vnd.oasis.opendocument.text': 'document',         // .odt
+  'application/vnd.oasis.opendocument.spreadsheet': 'document',  // .ods
+  'application/vnd.oasis.opendocument.presentation': 'document', // .odp
+  // Audio
+  'audio/mpeg': 'audio',           // .mp3
+  'audio/mp4': 'audio',            // .m4a
+  'audio/wav': 'audio',            // .wav
+  'audio/x-wav': 'audio',          // .wav (alt)
+  'audio/ogg': 'audio',            // .ogg
+  'audio/flac': 'audio',           // .flac
+  'audio/aac': 'audio',            // .aac
+  'audio/webm': 'audio',           // .weba
+  'audio/x-m4a': 'audio',          // .m4a (alt)
+  // Video
+  'video/mp4': 'video',            // .mp4
+  'video/quicktime': 'video',      // .mov
+  'video/x-msvideo': 'video',      // .avi
+  'video/x-matroska': 'video',     // .mkv
+  'video/webm': 'video',           // .webm
+  'video/mpeg': 'video',           // .mpeg
+  'video/3gpp': 'video',           // .3gp
+  // Text
   'text/plain': 'text',
   'text/html': 'text',
   'text/csv': 'csv',
   'application/csv': 'csv',
+  'application/json': 'text',
+  'application/xml': 'text',
+  'text/xml': 'text',
+  'text/markdown': 'text',
+  'application/x-yaml': 'text',
 };
 
 export const EXTENSION_TYPE_MAP: Record<string, AttachmentType> = {
+  // Code & config (text)
   '.py': 'text', '.ts': 'text', '.tsx': 'text',
   '.js': 'text', '.jsx': 'text', '.rs': 'text',
   '.go': 'text', '.java': 'text', '.c': 'text',
@@ -36,9 +80,34 @@ export const EXTENSION_TYPE_MAP: Record<string, AttachmentType> = {
   '.ini': 'text', '.conf': 'text',
   '.html': 'text', '.css': 'text',
   '.scss': 'text', '.xml': 'text', '.sql': 'text',
-  '.png': 'image', '.jpg': 'image',
-  '.jpeg': 'image', '.gif': 'image',
-  '.webp': 'image', '.pdf': 'pdf', '.csv': 'csv',
+  '.kt': 'text', '.swift': 'text', '.r': 'text',
+  '.lua': 'text', '.pl': 'text', '.php': 'text',
+  '.dart': 'text', '.scala': 'text', '.zig': 'text',
+  '.tf': 'text', '.hcl': 'text', '.proto': 'text',
+  '.graphql': 'text', '.gql': 'text',
+  '.dockerfile': 'text', '.makefile': 'text',
+  // Images
+  '.png': 'image', '.jpg': 'image', '.jpeg': 'image',
+  '.gif': 'image', '.webp': 'image', '.svg': 'image',
+  '.bmp': 'image', '.tiff': 'image', '.tif': 'image',
+  '.ico': 'image', '.heic': 'image', '.heif': 'image',
+  // PDF
+  '.pdf': 'pdf',
+  // Office documents
+  '.docx': 'document', '.xlsx': 'document', '.pptx': 'document',
+  '.doc': 'document', '.xls': 'document', '.ppt': 'document',
+  '.rtf': 'document', '.odt': 'document', '.ods': 'document', '.odp': 'document',
+  // Audio
+  '.mp3': 'audio', '.m4a': 'audio', '.wav': 'audio',
+  '.ogg': 'audio', '.flac': 'audio', '.aac': 'audio',
+  '.wma': 'audio', '.opus': 'audio', '.weba': 'audio',
+  // Video
+  '.mp4': 'video', '.mov': 'video', '.avi': 'video',
+  '.mkv': 'video', '.webm': 'video', '.mpeg': 'video',
+  '.mpg': 'video', '.wmv': 'video', '.flv': 'video',
+  '.3gp': 'video', '.m4v': 'video',
+  // Data
+  '.csv': 'csv',
 };
 
 /** Returns true if the MIME type is missing, empty, or generic. */
@@ -74,10 +143,11 @@ export function classifyFile(
 
 /**
  * Determine how a file should be delivered to the backend.
- * - image -> base64_image
- * - pdf   -> base64_document
- * - text/csv <= SIZE_THRESHOLD -> inline_text
- * - text/csv >  SIZE_THRESHOLD -> path_hint
+ * - image           -> base64_image  (Claude processes natively)
+ * - pdf / document  -> base64_document (Claude processes natively)
+ * - audio / video   -> path_hint (agent uses tools: whisper, ffmpeg, etc.)
+ * - text/csv small  -> inline_text
+ * - text/csv large  -> path_hint
  */
 export function determineDeliveryStrategy(
   type: AttachmentType,
@@ -87,7 +157,11 @@ export function determineDeliveryStrategy(
     case 'image':
       return 'base64_image';
     case 'pdf':
+    case 'document':
       return 'base64_document';
+    case 'audio':
+    case 'video':
+      return 'path_hint';
     case 'text':
     case 'csv':
       return size <= SIZE_THRESHOLD ? 'inline_text' : 'path_hint';

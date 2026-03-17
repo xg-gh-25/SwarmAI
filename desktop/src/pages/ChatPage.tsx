@@ -935,7 +935,7 @@ export default function ChatPage() {
           case 'base64_document':
             content.push({
               type: 'document',
-              source: { type: 'base64', media_type: 'application/pdf', data: att.base64! },
+              source: { type: 'base64', media_type: att.mediaType || 'application/pdf', data: att.base64! },
               _filename: att.name,
             } as unknown as ContentBlock);
             break;
@@ -977,10 +977,23 @@ export default function ChatPage() {
                 type: 'text',
                 text: `--- File: ${att.name} ---\n${att.textContent}\n--- End: ${att.name} ---`,
               } as ContentBlock);
-            } else {
+            } else if (att.workspacePath) {
               content.push({
                 type: 'text',
                 text: `[Attached file: ${att.name}] saved at ${att.workspacePath} - use Read tool to access`,
+              } as ContentBlock);
+            } else if (att.base64) {
+              // Binary file from File Picker (audio/video) — send as base64 document
+              content.push({
+                type: 'document',
+                source: { type: 'base64', media_type: att.mediaType || 'application/octet-stream', data: att.base64 },
+                _filename: att.name,
+              } as unknown as ContentBlock);
+            } else {
+              // Fallback: mention the file by name so agent knows it was attached
+              content.push({
+                type: 'text',
+                text: `[Attached ${att.type} file: ${att.name} (${(att.size / (1024 * 1024)).toFixed(1)}MB) — file was attached from system file picker]`,
               } as ContentBlock);
             }
             break;
