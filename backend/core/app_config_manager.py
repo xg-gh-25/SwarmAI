@@ -108,11 +108,33 @@ class AppConfigManager:
 
     Typical lifecycle::
 
-        mgr = AppConfigManager()
-        mgr.load()                       # once at startup
-        region = mgr.get("aws_region")   # zero IO
+        mgr = AppConfigManager()          # or AppConfigManager.instance()
+        mgr.load()                        # once at startup
+        region = mgr.get("aws_region")    # zero IO
         mgr.update({"aws_region": "eu-west-1"})  # write-through
+
+    Use ``AppConfigManager.instance()`` to get the process-wide singleton
+    (avoids creating new objects that re-read the config file).  The
+    regular constructor is kept for tests and explicit path overrides.
     """
+
+    _instance: "AppConfigManager | None" = None
+
+    @classmethod
+    def instance(cls) -> "AppConfigManager":
+        """Return the process-wide singleton (lazy-created on first call).
+
+        The singleton uses the default config path.  Call the constructor
+        directly if you need a custom path (e.g. in tests).
+        """
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+
+    @classmethod
+    def _reset_instance(cls) -> None:
+        """Reset the singleton — for tests only."""
+        cls._instance = None
 
     def __init__(self, config_path: Path | None = None) -> None:
         self._config_path: Path = config_path or (get_app_data_dir() / "SwarmWS" / "config.json")

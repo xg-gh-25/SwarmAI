@@ -64,14 +64,18 @@ from schemas.workspace_config import (
 logger = logging.getLogger(__name__)
 
 # ─── ETag / tree cache ────────────────────────────────────────────────────────
-# The frontend polls /workspace/tree every 5s.  Running `git status` +
+# The frontend polls /workspace/tree every 30s.  Running `git status` +
 # recursive iterdir on every poll wastes ~50ms CPU per call — the #1 source
 # of idle CPU burn.  This cache short-circuits the work:
 #   - _etag_cache stores (etag_value, response_bytes, timestamp)
-#   - If <2s have passed since last computation, reuse cached ETag directly
+#   - If <5s have passed since last computation, reuse cached ETag directly
 #   - Even when recomputing, git+fs work is offloaded to a thread
-_ETAG_CACHE_TTL = 5.0  # seconds — matches frontend poll interval, at most 1 real scan per cycle
+_ETAG_CACHE_TTL = 5.0  # seconds — at most 1 real scan per 5s; frontend polls every 30s
 _etag_cache: dict[str, tuple[str, bytes, float]] = {}  # key=depth → (etag, body, time)
+# Thread safety: _etag_cache is read from the event loop (fast path) and written
+# from asyncio.to_thread (slow path).  Python's GIL makes individual dict ops
+# atomic, and _invalidate_tree_cache().clear() is also atomic.  The worst case
+# is serving one stale response after a mutation — acceptable for a polling cache.
 
 
 def _invalidate_tree_cache() -> None:
@@ -501,9 +505,11 @@ def _compute_etag_and_tree_sync(workspace_root: Path, depth: int) -> tuple[str, 
         pass
     git_hash = hashlib.md5(json.dumps(sorted(all_status_items)).encode()).hexdigest()
 
-    # Filesystem fingerprint — only scan 3 levels deep for the ETag
-    # (full tree scan up to 8 levels is unnecessary for change detection)
-    _FINGERPRINT_DEPTH = min(depth, 3)
+    # Filesystem fingerprint — scan up to 5 levels deep for the ETag.
+    # Must cover the typical project depth (Projects/MyApp/src/components/)
+    # so that file adds/deletes at depth 4-5 are detected.  Deeper levels
+    # (6-8) are rare and will be caught on the next TTL expiry (5s).
+    _FINGERPRINT_DEPTH = min(depth, 5)
 
     def _fs_fingerprint(root: Path, max_depth: int) -> str:
         if max_depth <= 0 or not root.is_dir():

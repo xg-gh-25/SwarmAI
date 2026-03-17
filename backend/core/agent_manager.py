@@ -73,6 +73,8 @@ from .agent_defaults import (  # noqa: F401
     SWARM_AGENT_NAME,
     ensure_default_agent,
     get_default_agent,
+    build_agent_config,
+    agent_exists,
     expand_allowed_skills_with_plugins,
 )
 
@@ -574,6 +576,12 @@ class AgentManager:
         # message + early registration takes a few seconds). Without this,
         # the leak sweep kills actively-streaming processes.
         self._pid_spawn_times: dict[int, float] = {}
+        # PIDs that are currently streaming a response.  Maintained
+        # independently of _active_sessions as a last-resort safety net:
+        # the leak sweep MUST NOT kill any PID in this set.
+        # COE 2026-03-17: sweep killed pid 80348 mid-stream because it
+        # was tracked but somehow absent from _active_sessions.
+        self._streaming_pids: set[int] = set()
 
     def configure(
         self,
@@ -651,10 +659,38 @@ class AgentManager:
         return pid
 
     def _unregister_pid(self, pid: int | None) -> None:
-        """Remove a PID from the global tracker after confirmed disconnect/kill."""
+        """Remove a PID from ALL global trackers after confirmed disconnect/kill."""
         if pid:
             self._tracked_pids.discard(pid)
             self._pid_spawn_times.pop(pid, None)
+            self._streaming_pids.discard(pid)
+
+    def _enter_streaming(self, info: dict | None, pid: int | None) -> None:
+        """Mark a session + PID as actively streaming.
+
+        Centralises the dual-write to ``info["is_streaming"]`` and
+        ``_streaming_pids`` so they can never diverge.  Safe with
+        ``info=None`` or ``pid=None`` (partial no-ops).
+        """
+        if info is not None:
+            info["is_streaming"] = True
+        if pid:
+            self._streaming_pids.add(pid)
+
+    def _exit_streaming(self, info: dict | None, pid: int | None = None) -> None:
+        """Clear the streaming flag for a session + PID.
+
+        Mirror of ``_enter_streaming``.  Always call in a ``finally``
+        block to guarantee cleanup.
+
+        If *pid* is not provided, it is extracted from ``info["pid"]``.
+        """
+        if info is not None:
+            info["is_streaming"] = False
+            if pid is None:
+                pid = info.get("pid")
+        if pid:
+            self._streaming_pids.discard(pid)
 
     def has_active_session(self, session_id: str) -> bool:
         """Check if a session is currently active in memory."""
@@ -1020,11 +1056,16 @@ class AgentManager:
         info = self._active_sessions.pop(session_id, None)
         if info:
             wrapper = info.get("wrapper")
+            pid = info.get("pid")
             if wrapper:
                 # Thaw first if frozen — cleaner for graceful __aexit__
                 if info.get("is_frozen"):
                     self._thaw_subprocess(session_id, info)
                 await self._disconnect_wrapper(wrapper, session_id)
+            # Clean up PID from all trackers (belt-and-suspenders with _unregister_pid)
+            if pid:
+                self._pid_spawn_times.pop(pid, None)
+                self._streaming_pids.discard(pid)
         # Clean up per-session permission queue and session lock
         _pm.remove_session_queue(session_id)
         self._session_locks.pop(session_id, None)
@@ -1073,6 +1114,10 @@ class AgentManager:
         finally:
             # Always unregister PID from global tracker after disconnect attempt
             self._unregister_pid(pid)
+            # Also remove from streaming safety net — a disconnected process
+            # can't be streaming.  Belt-and-suspenders cleanup.
+            if pid:
+                self._streaming_pids.discard(pid)
 
     def _freeze_subprocess(self, session_id: str, info: dict) -> bool:
         """Freeze a subprocess via SIGSTOP — zero CPU, instant resume via SIGCONT.
@@ -1278,6 +1323,10 @@ class AgentManager:
                 safe_pids.add(pid)
         # Also include all globally tracked PIDs (they have wrappers managing them)
         safe_pids |= self._tracked_pids
+        # COE 2026-03-17: _streaming_pids is the last-resort safety net.
+        # A PID can be in _streaming_pids but absent from both _tracked_pids
+        # and _active_sessions (the exact scenario that caused the COE).
+        safe_pids |= self._streaming_pids
 
         # SAFETY: If we have no tracked PIDs at all, PID extraction is broken.
         # In this state, we cannot distinguish active processes from orphans.
@@ -1421,15 +1470,39 @@ class AgentManager:
         if not self._tracked_pids:
             return 0
 
-        # Collect PIDs that are still in active sessions
+        # Collect PIDs that are still in active sessions.
+        # Check BOTH info["pid"] AND wrapper.pid — during retries the
+        # wrapper may have been updated but info["pid"] lagged behind.
         active_pids = set()
         for info in self._active_sessions.values():
             pid = info.get("pid")
             if pid:
                 active_pids.add(pid)
+            wrapper = info.get("wrapper")
+            if wrapper:
+                wpid = getattr(wrapper, "pid", None)
+                if wpid:
+                    active_pids.add(wpid)
 
-        # Leaked PIDs = tracked but not in any active session
-        leaked_pids = self._tracked_pids - active_pids
+        # Prune dead PIDs from _streaming_pids.  If a process crashes without
+        # going through the finally-block cleanup, its PID stays in the set
+        # forever and permanently blocks the leak sweep from detecting it.
+        dead_streaming = set()
+        for spid in self._streaming_pids:
+            try:
+                os.kill(spid, 0)  # Signal 0 = existence check
+            except (ProcessLookupError, PermissionError):
+                dead_streaming.add(spid)
+        if dead_streaming:
+            self._streaming_pids -= dead_streaming
+            logger.info("Pruned %d dead PID(s) from _streaming_pids: %s",
+                        len(dead_streaming), dead_streaming)
+
+        # Leaked PIDs = tracked but not in any active session AND not streaming.
+        # Snapshot _streaming_pids to avoid TOCTOU race: a concurrent stream
+        # handler could add a PID between the set subtraction and the kill().
+        streaming_snapshot = set(self._streaming_pids)
+        leaked_pids = self._tracked_pids - active_pids - streaming_snapshot
         killed = 0
         now = time.monotonic()
         for pid in list(leaked_pids):  # copy — we mutate _tracked_pids
@@ -1445,6 +1518,10 @@ class AgentManager:
                 continue
 
             try:
+                # Re-check _streaming_pids right before kill to close the
+                # TOCTOU window (a stream may have started since the snapshot).
+                if pid in self._streaming_pids:
+                    continue
                 # Verify process is still alive before killing
                 os.kill(pid, 0)  # Signal 0 = existence check
                 self._force_kill_pid(pid)
@@ -1458,6 +1535,14 @@ class AgentManager:
 
         if killed:
             logger.warning("Killed %d leaked claude process(es) from PID tracker", killed)
+
+        # Reap stale entries from _pid_spawn_times that are no longer in
+        # _tracked_pids.  Handles PIDs that died on their own without going
+        # through _unregister_pid (crash during init, OS-level kill, etc.).
+        stale_spawn_pids = set(self._pid_spawn_times.keys()) - self._tracked_pids
+        for stale_pid in stale_spawn_pids:
+            self._pid_spawn_times.pop(stale_pid, None)
+
         return killed
 
     def _get_active_client(self, session_id: str) -> ClaudeSDKClient | None:
@@ -1515,7 +1600,7 @@ class AgentManager:
                 # caller sets is_streaming=True in _execute_on_session.
                 # The caller's finally block clears is_streaming after
                 # the stream completes (both success and error paths).
-                info["is_streaming"] = True
+                self._enter_streaming(info, info.get("pid"))
                 logger.info(
                     "Session %s thawed from frozen state — instant resume "
                     "(is_streaming set to guard against cleanup race)",
@@ -2385,8 +2470,8 @@ class AgentManager:
                         *query_content,
                     ]
 
-        # Get agent config
-        agent_config = await db.agents.get(agent_id)
+        # Get agent config — file-based for default agent, DB for custom agents
+        agent_config = await build_agent_config(agent_id)
         if not agent_config:
             yield {
                 "type": "error",
@@ -2689,8 +2774,8 @@ class AgentManager:
                 # skips it regardless of last_used timestamp. Cleared in
                 # the post-stream block below (both success and error paths).
                 _path_b_streaming_info = self._active_sessions.get(session_id)
-                if _path_b_streaming_info:
-                    _path_b_streaming_info["is_streaming"] = True
+                _path_b_pid: int | None = _path_b_streaming_info.get("pid") if _path_b_streaming_info else None
+                self._enter_streaming(_path_b_streaming_info, _path_b_pid)
 
                 try:
                     async for event in self._run_query_on_client(
@@ -2709,8 +2794,7 @@ class AgentManager:
                 finally:
                     # Clear is_streaming flag — session is now idle.
                     _path_b_done_info = self._active_sessions.get(session_id)
-                    if _path_b_done_info:
-                        _path_b_done_info["is_streaming"] = False
+                    self._exit_streaming(_path_b_done_info, _path_b_pid)
 
                 # Update last_used after PATH B streaming completes (Bug 2 fix).
                 # Prevents _cleanup_stale_sessions_loop Tier 1 from killing
@@ -2901,10 +2985,12 @@ class AgentManager:
                 # Mark session as actively streaming so the cleanup loop
                 # skips it regardless of last_used timestamp.
                 _early_key_for_streaming = session_context.get("_early_active_key")
+                _path_a_pid: int | None = None
+                _early_streaming_info: dict | None = None
                 if _early_key_for_streaming:
                     _early_streaming_info = self._active_sessions.get(_early_key_for_streaming)
-                    if _early_streaming_info:
-                        _early_streaming_info["is_streaming"] = True
+                    _path_a_pid = _early_streaming_info.get("pid") if _early_streaming_info else None
+                self._enter_streaming(_early_streaming_info, _path_a_pid)
 
                 # Determine if this is a cold-start resume (fresh subprocess
                 # after idle kill, eviction, or app restart).  Cold starts use
@@ -2934,10 +3020,8 @@ class AgentManager:
                 finally:
                     # Clear is_streaming flag — session is now idle.
                     _early_key_done = session_context.get("_early_active_key")
-                    if _early_key_done:
-                        _early_done_info = self._active_sessions.get(_early_key_done)
-                        if _early_done_info:
-                            _early_done_info["is_streaming"] = False
+                    _early_done_info = self._active_sessions.get(_early_key_done) if _early_key_done else None
+                    self._exit_streaming(_early_done_info, _path_a_pid)
 
                 # Store client for reuse (keep alive for future resume calls)
                 # Skip storage if the session ended with an error (e.g. auth failure)
@@ -3107,11 +3191,28 @@ class AgentManager:
                         async with _env_lock:
                             _configure_claude_environment(self._config)
                             client = await wrapper.__aenter__()
-                        # Register retry PID in global tracker
-                        self._register_wrapper_pid(wrapper)
+                        # Register retry PID in global tracker AND in the
+                        # early-registered session info.  Without this, the
+                        # tracked-leak sweep sees the PID as orphaned during
+                        # long queries and kills it (COE: infinite -9 loop).
+                        _early_key_pid = session_context.get("_early_active_key")
+                        _early_info_pid = (
+                            self._active_sessions.get(_early_key_pid)
+                            if _early_key_pid else None
+                        )
+                        self._register_wrapper_pid(wrapper, _early_info_pid)
+                        # Also update wrapper/client so eviction logic sees
+                        # this session as live (not orphaned).
+                        if _early_info_pid is not None:
+                            _early_info_pid["wrapper"] = wrapper
+                            _early_info_pid["client"] = client
+                            _early_info_pid["last_used"] = time.time()
+                        # Mark retry PID as streaming so leak sweep skips it
+                        _retry_pid = wrapper.pid
+                        self._enter_streaming(_early_info_pid, _retry_pid)
                         logger.info(
-                            "PATH A retry %d: fresh client created (pid=%s)",
-                            _retry_count, wrapper.pid,
+                            "PATH A retry %d: fresh client created (pid=%s, stored in session=%s)",
+                            _retry_count, wrapper.pid, _early_key_pid or "none",
                         )
 
                         try:
@@ -3132,6 +3233,9 @@ class AgentManager:
                         except Exception:
                             await self._disconnect_wrapper(wrapper, f"retry-{_retry_count}-error-{session_id}")
                             raise
+                        finally:
+                            # Clear retry streaming PID
+                            self._exit_streaming(_early_info_pid, _retry_pid)
 
                     # Re-evaluate after retry loop
                     final_session_id = session_context["sdk_session_id"]
@@ -4324,8 +4428,8 @@ class AgentManager:
         Yields:
             Formatted messages from the agent
         """
-        # Get agent config
-        agent_config = await db.agents.get(agent_id)
+        # Get agent config — file-based for default agent, DB for custom agents
+        agent_config = await build_agent_config(agent_id)
         if not agent_config:
             yield {
                 "type": "error",
@@ -4427,8 +4531,8 @@ class AgentManager:
         Yields:
             Formatted messages from the agent
         """
-        # Get agent config
-        agent_config = await db.agents.get(agent_id)
+        # Get agent config — file-based for default agent, DB for custom agents
+        agent_config = await build_agent_config(agent_id)
         if not agent_config:
             yield {
                 "type": "error",
@@ -4843,8 +4947,8 @@ class AgentManager:
                 # against the cleanup loop race.  We must clear it when done.
                 _compact_info = self._active_sessions.get(session_id)
                 if _compact_info:
-                    _compact_info["is_streaming"] = False
                     _compact_info["last_used"] = time.time()
+                self._exit_streaming(_compact_info)
 
     async def run_skill_creator_conversation(
         self,
@@ -5008,8 +5112,8 @@ Create the skill in the `.claude/skills/` directory within the current workspace
                             # to guard against cleanup loop race.  Clear it.
                             _sc_info = self._active_sessions.get(session_id)
                             if _sc_info:
-                                _sc_info["is_streaming"] = False
                                 _sc_info["last_used"] = time.time()
+                            self._exit_streaming(_sc_info)
 
                         # PATH B cleanup (same pattern as _execute_on_session)
                         if session_context.get("had_error") and session_id:
@@ -5066,8 +5170,18 @@ Create the skill in the `.claude/skills/` directory within the current workspace
                         async with _env_lock:
                             _configure_claude_environment(_cfg)
                             client = await wrapper.__aenter__()
-                        # Register skill-creator PID in global tracker
-                        self._register_wrapper_pid(wrapper)
+                        # Register skill-creator PID in global tracker.
+                        # Also store in early-registered session to prevent
+                        # tracked-leak sweep from killing it mid-query.
+                        _skill_early_key = session_context.get("_early_active_key")
+                        _skill_early_info = (
+                            self._active_sessions.get(_skill_early_key)
+                            if _skill_early_key else None
+                        )
+                        self._register_wrapper_pid(wrapper, _skill_early_info)
+                        if _skill_early_info is not None:
+                            _skill_early_info["wrapper"] = wrapper
+                            _skill_early_info["client"] = client
                         logger.info("ClaudeSDKClient created for skill creation (pid=%s)", wrapper.pid)
 
                         try:

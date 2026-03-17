@@ -1,25 +1,23 @@
 """Default agent bootstrap and system configuration.
 
-This module handles the lifecycle of the default SwarmAgent — the system agent
-that is automatically created on first launch and updated on subsequent startups.
+Architecture: The default agent's runtime config is **file-based**, assembled
+fresh on every session from two sources:
 
-Bootstrap flow:
-1. ``ensure_default_agent`` is called by ``initialization_manager`` at startup.
-2. MCP servers are now file-based (``.claude/mcps/mcp-catalog.json`` and
-   ``mcp-dev.json``).  No DB registration.  Migration from legacy files
-   happens in ``mcp_migration.py``.  Catalog merge happens in
-   ``mcp_config_loader.merge_catalog_template()``.
+1. ``default-agent.json``  — Behavioral defaults (permission_mode, tool enables, etc.)
+2. ``config.json``         — Runtime settings via AppConfigManager (model, sandbox, etc.)
 
-Skills are filesystem-based (see ``skill_manager.py``). Built-in skills live
-in ``backend/skills/`` and are always available without explicit listing. The
-``allowed_skills`` field on agent records is a list of folder names (not DB UUIDs).
+The SQLite ``agents`` table retains a minimal **marker row** for the default agent,
+used only for existence checks (``agent_exists``, ``quick_validation``).  It is
+never read as a config source.  Custom (non-default) agents are still fully DB-driven.
 
 Key public symbols:
 
 - ``DEFAULT_AGENT_ID``                    — Constant ID for the default agent
 - ``SWARM_AGENT_NAME``                    — Hardcoded system agent display name
-- ``ensure_default_agent``                — Idempotent agent creation / update
-- ``get_default_agent``                   — Fetch default agent from DB
+- ``build_agent_config``                  — Build fresh runtime config (files for default, DB for custom)
+- ``agent_exists``                        — Lightweight existence check (True for default, DB for custom)
+- ``ensure_default_agent``                — Idempotent DB marker creation at startup
+- ``get_default_agent``                   — [deprecated] Fetch stale DB record
 - ``expand_allowed_skills_with_plugins``  — Combine allowed_skills with plugin folder names
 """
 
@@ -51,96 +49,214 @@ def _get_resources_dir() -> Path:
     return get_resources_dir(dev_resources)
 
 
-async def get_default_agent() -> dict | None:
-    """Get the default agent from the database.
-    
+def resolve_default_model() -> str | None:
+    """Resolve the default model name from config.json.
+
+    Centralised fallback for when ``agent_config.get("model")`` is ``None``
+    (e.g. stale DB records for custom agents).  Zero-IO: AppConfigManager
+    keeps an in-memory cache.
+
     Returns:
-        The default agent dict or None if not found
+        Model name string (e.g. ``"claude-opus-4-6"``) or ``None``.
     """
-    agent = await db.agents.get(DEFAULT_AGENT_ID)
-    return agent
+    try:
+        from core.app_config_manager import AppConfigManager
+        return AppConfigManager.instance().get("default_model")
+    except (ImportError, AttributeError, KeyError, TypeError):
+        return None
+
+
+# Cache for default-agent.json — read once, reused across calls.
+# Invalidated only on process restart (file changes require restart).
+_default_agent_json_cache: dict | None = None
+
+
+def _load_default_agent_json() -> dict | None:
+    """Load and cache default-agent.json from the resources directory.
+
+    Returns the parsed dict, or None if the file is missing/corrupt.
+    Caches the result in module-level ``_default_agent_json_cache``.
+    """
+    global _default_agent_json_cache
+    if _default_agent_json_cache is not None:
+        return _default_agent_json_cache
+
+    resources_dir = _get_resources_dir()
+    config_path = resources_dir / "default-agent.json"
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            _default_agent_json_cache = json.load(f)
+        return _default_agent_json_cache
+    except (FileNotFoundError, json.JSONDecodeError) as exc:
+        logger.error("Failed to read default-agent.json: %s", exc)
+        return None
+
+
+async def get_default_agent() -> dict | None:
+    """Get the default agent config (file-based, always fresh).
+
+    .. deprecated:: Prefer ``build_agent_config(DEFAULT_AGENT_ID)`` directly.
+        This is a thin wrapper kept for backward compatibility with existing
+        callers (e.g. ``routers/system.py``).
+
+    Returns:
+        The freshly assembled default agent config, or None if misconfigured.
+    """
+    return await build_agent_config(DEFAULT_AGENT_ID)
+
+
+async def agent_exists(agent_id: str) -> bool:
+    """Check whether an agent exists (lightweight, no config assembly).
+
+    For the default agent this always returns True (it's built from files,
+    the DB record is just a startup marker).  For custom agents it checks
+    the database.
+
+    Use this for guard clauses in routers where you only need to reject
+    invalid agent IDs — never as a way to fetch config.
+    """
+    if agent_id == DEFAULT_AGENT_ID:
+        return True
+    return (await db.agents.get(agent_id)) is not None
+
+
+async def build_agent_config(agent_id: str) -> dict | None:
+    """Build a fresh agent config dict for runtime use.
+
+    For the default agent (``agent_id == "default"``):
+      1. Reads ``default-agent.json`` from the resources dir (behavior defaults).
+      2. Overlays runtime settings from ``config.json`` via AppConfigManager
+         (model, sandbox settings).
+      3. Adds standard bookkeeping fields expected by agent_manager consumers.
+
+    For non-default agents: falls back to ``db.agents.get(agent_id)``.
+
+    This replaces the old pattern of ``db.agents.get("default")`` which returned
+    a stale DB snapshot that was never re-synced after first creation.
+
+    Returns:
+        Agent config dict ready for ``_execute_on_session``, or None if not found.
+    """
+    if agent_id != DEFAULT_AGENT_ID:
+        return await db.agents.get(agent_id)
+
+    # --- Default agent: build from files, not DB ---
+    base = _load_default_agent_json()
+    if base is None:
+        logger.error("default-agent.json unavailable — falling back to DB")
+        return await db.agents.get(agent_id)
+
+    # Overlay runtime settings from config.json (zero IO — cached in memory).
+    # Import at call-time to avoid circular imports at module load.
+    from core.app_config_manager import AppConfigManager
+    cfg = AppConfigManager.instance()
+
+    config = {
+        # Identity
+        "id": DEFAULT_AGENT_ID,
+        "name": SWARM_AGENT_NAME,
+        "description": base.get("description", "Your AI Team, 24/7"),
+        "is_default": True,
+        "is_system_agent": True,
+        "status": "active",
+
+        # Behavior from default-agent.json
+        "permission_mode": base.get("permission_mode", "default"),
+        "max_turns": base.get("max_turns", 100),
+        "enable_bash_tool": base.get("enable_bash_tool", True),
+        "enable_file_tools": base.get("enable_file_tools", True),
+        "enable_web_tools": base.get("enable_web_tools", True),
+        "global_user_mode": base.get("global_user_mode", True),
+        "enable_human_approval": base.get("enable_human_approval", True),
+        "sandbox_enabled": base.get("sandbox_enabled", True),
+        "allow_all_skills": base.get("allow_all_skills", True),
+
+        # Runtime from config.json
+        "model": cfg.get("default_model"),
+
+        # Standard fields — read from default-agent.json with safe defaults
+        "system_prompt": base.get("system_prompt", ""),
+        "allowed_skills": base.get("allowed_skills", []),
+        "mcp_ids": base.get("mcp_ids", []),
+        "allowed_tools": base.get("allowed_tools", []),
+        "plugin_ids": base.get("plugin_ids", []),
+        "enable_tool_logging": base.get("enable_tool_logging", False),
+        "context_token_budget": base.get("context_token_budget"),
+        "project_id": base.get("project_id"),
+        "allowed_directories": base.get("allowed_directories"),
+        "add_dirs": base.get("add_dirs"),
+    }
+
+    return config
 
 
 async def ensure_default_agent(skip_registration: bool = False) -> dict:
-    """Ensure the default agent exists, creating it if necessary.
-    
-    Called during application startup. Loads configuration from
-    desktop/resources/default-agent.json and creates the agent
-    with associated skills and MCP servers.
-    
+    """Ensure the default agent DB marker exists.
+
+    Called during application startup.  The DB record is a **minimal marker**
+    used only for existence checks (``agent_exists``, ``quick_validation``).
+    All runtime configuration is assembled fresh by ``build_agent_config``
+    from ``default-agent.json`` + ``config.json`` — never from the DB record.
+
     Args:
-        skip_registration: If True, skip skill/MCP registration (used during
-            quick validation when we know resources already exist).
-    
+        skip_registration: Legacy arg, kept for API compat. Ignored.
+
     Returns:
-        The default agent configuration dict
+        The freshly assembled default agent config (from ``build_agent_config``).
     """
-    resources_dir = _get_resources_dir()
-
-    # NOTE: MCP servers are now file-based (.claude/mcps/). No DB registration needed.
-    # Migration and catalog merge happen in initialization_manager.
-
-    # Check if default agent already exists
+    # Ensure the DB marker row exists
     existing = await db.agents.get(DEFAULT_AGENT_ID)
     if existing:
+        # Keep name and is_system_agent in sync (cosmetic only)
         needs_update = (
             existing.get("name") != SWARM_AGENT_NAME or
             not existing.get("is_system_agent")
         )
-
         if needs_update:
             await db.agents.update(DEFAULT_AGENT_ID, {
                 "name": SWARM_AGENT_NAME,
                 "is_system_agent": True,
             })
-            logger.info(f"Updated default agent name/flags")
-            existing = await db.agents.get(DEFAULT_AGENT_ID)
+            logger.info("Updated default agent DB marker (name/flags)")
         else:
-            logger.info(f"Default agent up to date: {existing.get('name')}")
+            logger.info("Default agent DB marker up to date")
+    else:
+        logger.info("Creating default agent DB marker...")
+        now = datetime.now().isoformat()
+        marker = {
+            "id": DEFAULT_AGENT_ID,
+            "name": SWARM_AGENT_NAME,
+            "description": "SwarmAI — Your AI Team, 24/7",
+            "model": None,           # Runtime config comes from config.json
+            "permission_mode": "bypassPermissions",
+            "system_prompt": "",
+            "is_default": True,
+            "is_system_agent": True,
+            "status": "active",
+            "created_at": now,
+            "updated_at": now,
+        }
+        await db.agents.put(marker)
+        logger.info("Default agent DB marker created")
 
-        return existing
+    # Return the REAL runtime config (file-based, always fresh)
+    config = await build_agent_config(DEFAULT_AGENT_ID)
 
-    logger.info("Creating default agent...")
+    # --- Startup consistency check ---
+    # Log the resolved config chain so misconfigurations are visible in logs.
+    if config:
+        from core.app_config_manager import AppConfigManager
+        cfg = AppConfigManager.instance()
+        _model = cfg.get("default_model")
+        _bedrock = cfg.get("use_bedrock", False)
+        _perm = config.get("permission_mode")
+        _sandbox = config.get("sandbox_enabled")
+        logger.info(
+            "Agent config chain: model=%s, bedrock=%s, permission=%s, sandbox=%s",
+            _model, _bedrock, _perm, _sandbox,
+        )
 
-    # Load default agent configuration
-    config_path = resources_dir / "default-agent.json"
-    if not config_path.exists():
-        logger.error(f"Default agent config not found: {config_path}")
-        raise FileNotFoundError(f"Default agent configuration missing: {config_path}")
-
-    with open(config_path, "r", encoding="utf-8") as f:
-        agent_config = json.load(f)
-
-    # System prompt loaded from .context/SWARMAI.md at session start — not stored in DB.
-    now = datetime.now().isoformat()
-    agent_data = {
-        "id": DEFAULT_AGENT_ID,
-        "name": SWARM_AGENT_NAME,
-        "description": agent_config.get("description", "Your AI Team, 24/7"),
-        "model": None,  # Resolved at runtime from config.json
-        "permission_mode": agent_config.get("permission_mode", "default"),
-        "max_turns": agent_config.get("max_turns", 100),
-        "system_prompt": "",
-        "is_default": True,
-        "is_system_agent": True,
-        "allowed_skills": [],
-        "allow_all_skills": agent_config.get("allow_all_skills", True),
-        "mcp_ids": [],  # MCP servers now file-based, not DB-bound
-        "enable_bash_tool": agent_config.get("enable_bash_tool", True),
-        "enable_file_tools": agent_config.get("enable_file_tools", True),
-        "enable_web_tools": agent_config.get("enable_web_tools", True),
-        "global_user_mode": agent_config.get("global_user_mode", True),
-        "enable_human_approval": agent_config.get("enable_human_approval", True),
-        "sandbox_enabled": agent_config.get("sandbox_enabled", True),
-        "status": "active",
-        "created_at": now,
-        "updated_at": now,
-    }
-
-    await db.agents.put(agent_data)
-    logger.info(f"Default agent created: {agent_data['name']}")
-
-    return agent_data
+    return config
 
 
 # _register_default_mcp_servers() — REMOVED.

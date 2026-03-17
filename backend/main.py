@@ -396,7 +396,7 @@ async def lifespan(app: FastAPI):
     from core.credential_validator import CredentialValidator
     from routers.settings import set_config_manager
 
-    app_config = AppConfigManager()
+    app_config = AppConfigManager.instance()
     app_config.load()
     logger.info("AppConfigManager loaded (config.json)")
 

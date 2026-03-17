@@ -983,12 +983,12 @@ export default function ChatPage() {
                 text: `[Attached file: ${att.name}] saved at ${att.workspacePath} - use Read tool to access`,
               } as ContentBlock);
             } else if (att.base64) {
-              // Binary file from File Picker (audio/video) — send as base64 document
+              // Audio/video files can't be sent as base64 documents to Claude.
+              // Inform the agent about the file so it can suggest alternatives.
               content.push({
-                type: 'document',
-                source: { type: 'base64', media_type: att.mediaType || 'application/octet-stream', data: att.base64 },
-                _filename: att.name,
-              } as unknown as ContentBlock);
+                type: 'text',
+                text: `[Attached ${att.type} file: ${att.name} (${(att.size / (1024 * 1024)).toFixed(1)}MB) — binary file attached from system file picker, cannot be processed inline. Save to workspace and use tools to access.]`,
+              } as ContentBlock);
             } else {
               // Fallback: mention the file by name so agent knows it was attached
               content.push({

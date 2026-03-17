@@ -700,8 +700,7 @@ class SummarizationPipeline:
         # as the main agent).  Falls back to defaults if config not loaded.
         try:
             from core.app_config_manager import AppConfigManager
-            cfg = AppConfigManager()
-            cfg.load()
+            cfg = AppConfigManager.instance()
             region = cfg.get("aws_region") or "us-east-1"
             bedrock_map = cfg.get("bedrock_model_map") or {}
             model_id = bedrock_map.get(

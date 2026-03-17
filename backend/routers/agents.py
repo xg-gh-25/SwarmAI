@@ -1,4 +1,9 @@
-"""Agent CRUD API endpoints."""
+"""Agent CRUD API endpoints.
+
+The default agent config is **file-based** (``default-agent.json`` + ``config.json``).
+API endpoints use ``build_agent_config`` to return fresh runtime config, never the
+stale DB marker row.  Custom agents remain fully DB-driven.
+"""
 import logging
 from fastapi import APIRouter
 from pydantic import BaseModel
@@ -10,7 +15,12 @@ from core.exceptions import (
     ValidationException,
 )
 from core.task_manager import task_manager
-from core.agent_manager import SWARM_AGENT_NAME
+from core.agent_defaults import (
+    DEFAULT_AGENT_ID,
+    SWARM_AGENT_NAME,
+    build_agent_config,
+    agent_exists,
+)
 
 
 class WorkingDirectoryResponse(BaseModel):
@@ -34,27 +44,44 @@ async def list_available_models():
 
 @router.get("", response_model=list[AgentResponse])
 async def list_agents():
-    """List all agents including the default agent."""
+    """List all agents including the default agent.
+
+    The default agent is returned from file-based config (always fresh),
+    custom agents from the database.
+    """
     agents = await db.agents.list()
-    return agents
+    # Replace the stale DB marker for the default agent with fresh file-based config
+    fresh_default = await build_agent_config(DEFAULT_AGENT_ID)
+    result = []
+    for agent in agents:
+        if agent.get("id") == DEFAULT_AGENT_ID:
+            if fresh_default:
+                result.append(fresh_default)
+        else:
+            result.append(agent)
+    return result
 
 
 @router.get("/default", response_model=AgentResponse)
 async def get_default_agent():
-    """Get the default system agent."""
-    agent = await db.agents.get("default")
+    """Get the default system agent (file-based, always fresh)."""
+    agent = await build_agent_config(DEFAULT_AGENT_ID)
     if not agent:
         raise AgentNotFoundException(
             detail="Default agent configuration is missing",
-            suggested_action="Contact the administrator to set up the default agent"
+            suggested_action="Check that default-agent.json exists in resources"
         )
     return agent
 
 
 @router.get("/{agent_id}", response_model=AgentResponse)
 async def get_agent(agent_id: str):
-    """Get a specific agent by ID."""
-    agent = await db.agents.get(agent_id)
+    """Get a specific agent by ID.
+
+    Default agent: returns file-based config (fresh).
+    Custom agents: returns DB record.
+    """
+    agent = await build_agent_config(agent_id)
     if not agent:
         raise AgentNotFoundException(
             detail=f"Agent with ID '{agent_id}' does not exist",
@@ -74,14 +101,14 @@ async def get_agent_working_directory(agent_id: str):
     Note: If a session-level workDir is set (from "work in a folder"),
     that should override this on the frontend.
     """
-    agent = await db.agents.get(agent_id)
+    agent = await build_agent_config(agent_id)
     if not agent:
         raise AgentNotFoundException(
             detail=f"Agent with ID '{agent_id}' does not exist",
             suggested_action="Please check the agent ID and try again"
         )
 
-    global_user_mode = agent.get("global_user_mode", True)  # Default to True now
+    global_user_mode = agent.get("global_user_mode", True)
 
     # All agents use the single SwarmWorkspace path
     from core.initialization_manager import initialization_manager
@@ -138,16 +165,34 @@ async def create_agent(request: AgentCreateRequest):
 
 @router.put("/{agent_id}", response_model=AgentResponse)
 async def update_agent(agent_id: str, request: AgentUpdateRequest):
-    """Update an existing agent."""
-    existing = await db.agents.get(agent_id)
-    if not existing:
+    """Update an existing agent.
+
+    The default agent's runtime config is file-based (default-agent.json + config.json).
+    For the default agent, model changes are routed to config.json; other fields
+    update the DB marker row (cosmetic only — runtime reads from files).
+    Custom agents are fully DB-driven.
+    """
+    if not await agent_exists(agent_id):
         raise AgentNotFoundException(
             detail=f"Agent with ID '{agent_id}' does not exist",
             suggested_action="Please check the agent ID and try again"
         )
+    existing = await db.agents.get(agent_id)
+    if not existing:
+        # Default agent exists (file-based) but has no DB record — should not happen
+        # after ensure_default_agent, but handle gracefully.
+        # Build a synthetic existing dict from file-based config so the rest of
+        # the update logic can proceed (e.g. system agent name protection).
+        existing = await build_agent_config(agent_id)
+        if not existing:
+            raise AgentNotFoundException(
+                detail=f"Agent with ID '{agent_id}' does not exist",
+                suggested_action="Please check the agent ID and try again"
+            )
 
-    # Protect system agent name from being changed
+    # Protect system agent resources from modification
     if existing.get("is_system_agent"):
+        # Name is immutable
         if request.name is not None and request.name != SWARM_AGENT_NAME:
             raise ValidationException(
                 message="Cannot change the name of the system agent",
@@ -155,14 +200,11 @@ async def update_agent(agent_id: str, request: AgentUpdateRequest):
                 suggested_action="If you need a custom agent, create a new one instead"
             )
 
-    # Protect system resources from being unbound from SwarmAgent
-    if existing.get("is_system_agent"):
-        # Get all built-in (system) skills from SkillManager
+        # Built-in skills cannot be unbound
         from core.skill_manager import skill_manager
         cache = await skill_manager.get_cache()
         builtin_skill_folders = {folder for folder, info in cache.items() if info.source_tier == "built-in"}
         
-        # Check if allowed_skills update would remove built-in skills
         if request.allowed_skills is not None:
             new_skill_folders = set(request.allowed_skills)
             if not builtin_skill_folders.issubset(new_skill_folders):
@@ -172,11 +214,10 @@ async def update_agent(agent_id: str, request: AgentUpdateRequest):
                     suggested_action="You can add your own skills, but built-in skills cannot be removed"
                 )
         
-        # Get all system MCPs
+        # System MCP servers cannot be unbound
         system_mcps = await db.mcp_servers.list_by_system()
         system_mcp_ids = {m["id"] for m in system_mcps}
 
-        # Check if mcp_ids update would remove system MCPs
         if request.mcp_ids is not None:
             new_mcp_ids = set(request.mcp_ids)
             if not system_mcp_ids.issubset(new_mcp_ids):
@@ -189,7 +230,9 @@ async def update_agent(agent_id: str, request: AgentUpdateRequest):
     updates = request.model_dump(exclude_unset=True)
 
     # Global User Mode requires allow_all_skills=True (skill restrictions not supported)
-    # Check if global_user_mode is being set or was already set
+    # Check if global_user_mode is being set or was already set.
+    # NOTE: Must run BEFORE the default-agent field stripping below, because
+    # global_user_mode is a file-driven field that gets stripped for the default agent.
     global_user_mode = updates.get("global_user_mode", existing.get("global_user_mode", False))
 
     if global_user_mode:
@@ -197,7 +240,34 @@ async def update_agent(agent_id: str, request: AgentUpdateRequest):
         updates["allowed_skills"] = []  # Clear allowed_skills since all skills are allowed
         logger.info(f"Global User Mode enabled for agent {agent_id} - setting allow_all_skills=True, clearing allowed_skills")
 
+    # Default agent runtime config is file-based (default-agent.json + config.json).
+    # Route model changes to config.json; strip file-driven fields from DB writes.
+    if agent_id == DEFAULT_AGENT_ID:
+        if "model" in updates:
+            from core.app_config_manager import AppConfigManager
+            AppConfigManager.instance().update({"default_model": updates.pop("model")})
+            logger.info("Default agent model updated via config.json")
+
+        _file_driven = {
+            "permission_mode", "max_turns", "enable_bash_tool",
+            "enable_file_tools", "enable_web_tools", "sandbox_enabled",
+            "global_user_mode", "enable_human_approval",
+        }
+        stripped = {k for k in _file_driven if k in updates}
+        for k in stripped:
+            updates.pop(k)
+        if stripped:
+            logger.info("Ignored file-driven fields for default agent: %s", stripped)
+
+        if not updates:
+            return await build_agent_config(DEFAULT_AGENT_ID)
+
     agent = await db.agents.update(agent_id, updates)
+
+    # For the default agent, the DB update only touches the marker row.
+    # Return the fresh file-based config so the response reflects reality.
+    if agent_id == DEFAULT_AGENT_ID:
+        return await build_agent_config(agent_id)
 
     return agent
 
