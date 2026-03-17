@@ -183,7 +183,7 @@ async def build_agent_config(agent_id: str) -> dict | None:
         "enable_tool_logging": base.get("enable_tool_logging", False),
         "context_token_budget": base.get("context_token_budget"),
         "project_id": base.get("project_id"),
-        "allowed_directories": base.get("allowed_directories"),
+        "allowed_directories": base.get("allowed_directories", []),
         "add_dirs": base.get("add_dirs"),
     }
 
