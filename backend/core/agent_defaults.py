@@ -181,11 +181,17 @@ async def build_agent_config(agent_id: str) -> dict | None:
         "allowed_tools": base.get("allowed_tools", []),
         "plugin_ids": base.get("plugin_ids", []),
         "enable_tool_logging": base.get("enable_tool_logging", False),
-        "context_token_budget": base.get("context_token_budget"),
         "project_id": base.get("project_id"),
         "allowed_directories": base.get("allowed_directories", []),
         "add_dirs": base.get("add_dirs"),
     }
+
+    # Only include context_token_budget if explicitly set in default-agent.json.
+    # When absent (None), agent_manager falls back to DEFAULT_TOKEN_BUDGET,
+    # which is then overridden by compute_token_budget() based on model size.
+    _ctb = base.get("context_token_budget")
+    if _ctb is not None:
+        config["context_token_budget"] = _ctb
 
     # Overlay user-customizable fields from the DB marker row.
     # Fields like description, system_prompt, allowed_skills, etc. can be
