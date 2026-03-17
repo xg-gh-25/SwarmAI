@@ -7,7 +7,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 
 from database import db
-from core.agent_manager import get_default_agent
+from core.agent_defaults import build_agent_config, DEFAULT_AGENT_ID
 from core.initialization_manager import initialization_manager
 from core.swarm_workspace_manager import swarm_workspace_manager
 from channels.gateway import channel_gateway
@@ -115,7 +115,7 @@ async def get_system_status() -> SystemStatusResponse:
     mcp_servers_count = 0
     
     try:
-        agent = await get_default_agent()
+        agent = await build_agent_config(DEFAULT_AGENT_ID)
         if agent:
             agent_ready = True
             agent_name = agent.get("name")
