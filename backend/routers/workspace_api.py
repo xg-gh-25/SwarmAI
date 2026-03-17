@@ -551,7 +551,7 @@ async def get_workspace_tree(
     restrictions.
 
     Performance: git+fs scan is offloaded to a thread pool and cached
-    for 5s to match the 15s frontend poll interval. Sub-repo git status
+    for 5s to match the 30s frontend poll interval. Sub-repo git status
     calls are deduplicated via per-invocation cache.
 
     Requirements: 10.1, 11.5, 15.1
