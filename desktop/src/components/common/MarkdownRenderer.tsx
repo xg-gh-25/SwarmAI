@@ -10,6 +10,7 @@ import mermaid from 'mermaid';
 import hljs from 'highlight.js';
 import { getBackendPort } from '../../services/tauri';
 import { useTheme } from '../../contexts/ThemeContext';
+import { copyToClipboard } from '../../utils/clipboard';
 
 interface MarkdownRendererProps {
   content: string;
@@ -513,7 +514,7 @@ const CodeBlock = memo(function CodeBlock({
 
   const handleCopy = async () => {
     try {
-      await navigator.clipboard.writeText(children);
+      await copyToClipboard(children);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch (err) {

@@ -569,6 +569,11 @@ class AgentManager:
         # PIDs are added at spawn time, removed on confirmed disconnect/kill.
         # COE 2026-03-15: prevents vnode exhaustion from leaked processes.
         self._tracked_pids: set[int] = set()
+        # PID spawn timestamps — grace period for kill_tracked_leaks.
+        # Freshly spawned PIDs may not yet be in _active_sessions (init
+        # message + early registration takes a few seconds). Without this,
+        # the leak sweep kills actively-streaming processes.
+        self._pid_spawn_times: dict[int, float] = {}
 
     def configure(
         self,
@@ -639,6 +644,7 @@ class AgentManager:
         pid = wrapper.pid
         if pid:
             self._tracked_pids.add(pid)
+            self._pid_spawn_times[pid] = time.monotonic()
             if session_info is not None:
                 session_info["pid"] = pid
             logger.debug("Registered claude PID %d in global tracker (total tracked: %d)", pid, len(self._tracked_pids))
@@ -648,6 +654,7 @@ class AgentManager:
         """Remove a PID from the global tracker after confirmed disconnect/kill."""
         if pid:
             self._tracked_pids.discard(pid)
+            self._pid_spawn_times.pop(pid, None)
 
     def has_active_session(self, session_id: str) -> bool:
         """Check if a session is currently active in memory."""
@@ -775,8 +782,10 @@ class AgentManager:
                         logger.warning(
                             "Periodic tracked-leak sweep killed %d claude process(es)", leaked,
                         )
-                    # Then sweep OS-level orphans (catches processes we lost track of)
-                    orphaned = self.kill_orphan_claude_processes()
+                    # Then sweep OS-level orphans (catches processes we lost track of).
+                    # Offload to thread — spawns pgrep + ps subprocesses that
+                    # would otherwise block the event loop for 10-50ms.
+                    orphaned = await asyncio.to_thread(self.kill_orphan_claude_processes)
                     if orphaned:
                         logger.warning(
                             "Periodic orphan sweep killed %d claude process(es)", orphaned,
@@ -1389,11 +1398,23 @@ class AgentManager:
             )
         return killed
 
+    # Minimum age (seconds) before a tracked PID can be considered leaked.
+    # PATH A retries register PIDs in _tracked_pids immediately, but the
+    # early-client-registration that updates _active_sessions happens after
+    # the SDK init message (seconds later).  During that gap, the PID
+    # appears "leaked".  A 5-minute grace period prevents killing processes
+    # that are actively streaming but haven't been registered yet.
+    TRACKED_PID_GRACE_SECONDS = 300
+
     def kill_tracked_leaks(self) -> int:
         """Kill tracked PIDs that are no longer associated with any active session.
 
         This catches processes that leaked due to error paths removing entries
         from _active_sessions without proper disconnect.
+
+        Respects a grace period (TRACKED_PID_GRACE_SECONDS) — freshly spawned
+        PIDs are skipped even if not yet in _active_sessions, because the
+        early-registration path hasn't run yet.
 
         Returns the number of processes killed.
         """
@@ -1410,7 +1431,19 @@ class AgentManager:
         # Leaked PIDs = tracked but not in any active session
         leaked_pids = self._tracked_pids - active_pids
         killed = 0
-        for pid in leaked_pids:
+        now = time.monotonic()
+        for pid in list(leaked_pids):  # copy — we mutate _tracked_pids
+            # Grace period: skip PIDs spawned recently — they may be
+            # mid-init and not yet registered in _active_sessions.
+            spawn_time = self._pid_spawn_times.get(pid)
+            if spawn_time and (now - spawn_time) < self.TRACKED_PID_GRACE_SECONDS:
+                logger.debug(
+                    "Skipping PID %d in leak sweep — spawned %.0fs ago "
+                    "(grace period: %ds)",
+                    pid, now - spawn_time, self.TRACKED_PID_GRACE_SECONDS,
+                )
+                continue
+
             try:
                 # Verify process is still alive before killing
                 os.kill(pid, 0)  # Signal 0 = existence check
@@ -1421,6 +1454,7 @@ class AgentManager:
                 pass  # Already dead — just clean up tracking
             finally:
                 self._tracked_pids.discard(pid)
+                self._pid_spawn_times.pop(pid, None)
 
         if killed:
             logger.warning("Killed %d leaked claude process(es) from PID tracker", killed)
@@ -2707,6 +2741,17 @@ class AgentManager:
                     session_context["had_error"] = False
                     assistant_content = ContentBlockAccumulator()
 
+                    # FIX: Preserve session identity during PATH B → PATH A auto-retry.
+                    # Without this, the retry spawns a new subprocess which gets a new
+                    # SDK session ID, emits session_start with the new ID, and creates
+                    # a new DB session — orphaning the original session's messages.
+                    # After app restart, loadSessionMessages(new-id) returns only the
+                    # retry's messages; the original conversation is lost from the UI.
+                    if session_context.get("app_session_id") is None and session_id:
+                        session_context["app_session_id"] = session_id
+                        agent_config["needs_context_injection"] = True
+                        agent_config["resume_app_session_id"] = session_id
+
                     # Tell the frontend to re-enter streaming state.
                     # The prior `error` event set isStreaming=false; without
                     # this the frontend stays in "idle/error" while PATH A
@@ -2905,6 +2950,18 @@ class AgentManager:
                     else final_session_id
                 )
                 if session_context.get("had_error"):
+                    # FIX: Preserve session identity during PATH A retry.
+                    # The retry spawns a new subprocess with a new SDK session ID.
+                    # Setting app_session_id ensures the retry's init handler
+                    # suppresses session_start and saves messages under the
+                    # original session ID — preventing orphaned messages.
+                    if session_context.get("app_session_id") is None:
+                        _original_sid = session_context.get("sdk_session_id")
+                        if _original_sid:
+                            session_context["app_session_id"] = _original_sid
+                            agent_config["needs_context_injection"] = True
+                            agent_config["resume_app_session_id"] = _original_sid
+
                     # PATH A auto-retry loop: retry up to MAX_RETRY_ATTEMPTS
                     # times with exponential backoff.  Each retry spawns a
                     # fresh subprocess.  The backoff gives macOS time to
@@ -3242,6 +3299,9 @@ class AgentManager:
             # Fan-in queue: merges two async streams (SDK responses + permission requests)
             # into one consumer loop, avoiding race conditions between the two sources.
             combined_queue: asyncio.Queue = asyncio.Queue()
+            # Event signalled when sdk_session_id becomes available (init message).
+            # Replaces the 0.05s busy-poll in permission_request_forwarder.
+            _session_id_ready = asyncio.Event()
             message_count = 0
 
             async def sdk_message_reader(gen: int):
@@ -3277,13 +3337,15 @@ class AgentManager:
                 ``enqueue_permission_request(session_id, ...)``.
                 """
                 try:
+                    # Wait for sdk_session_id via Event instead of busy-polling.
+                    # The event is set by the init message handler below.
+                    await _session_id_ready.wait()
+                    current_session_id = session_context.get("sdk_session_id")
+                    if not current_session_id:
+                        logger.warning("session_id_ready fired but sdk_session_id is None")
+                        return
+                    session_queue = _pm.get_session_queue(current_session_id)
                     while True:
-                        # Wait for the session_id to be assigned (init message)
-                        current_session_id = session_context.get("sdk_session_id")
-                        if not current_session_id:
-                            await asyncio.sleep(0.05)
-                            continue
-                        session_queue = _pm.get_session_queue(current_session_id)
                         request = await session_queue.get()
                         logger.info(
                             "Forwarding permission request %s to combined queue for session %s",
@@ -3807,6 +3869,7 @@ class AgentManager:
                         # in the DB, so we only capture the ID for later reference.
                         if message.subtype == 'init':
                             session_context["sdk_session_id"] = message.data.get('session_id')
+                            _session_id_ready.set()  # Unblock permission_request_forwarder
                             _init_elapsed = time.monotonic() - _query_sent_at
                             logger.info(
                                 "SDK init received in %.1fs, session_id: %s",
@@ -3858,6 +3921,14 @@ class AgentManager:
                                     content=user_content
                                 )
 
+                                # CRITICAL: Anchor app_session_id so retries
+                                # map to the SAME DB session instead of creating
+                                # a new one on each retry attempt.  Without this,
+                                # every retry yields a new session_start, and the
+                                # frontend ends up pointing at the last retry's
+                                # sparse session — making prior messages disappear.
+                                session_context["app_session_id"] = session_context["sdk_session_id"]
+
                             # Early client registration for NEW sessions:
                             # The post-stream storage code in _execute_on_session
                             # may never run (SSE consumer cancellation race).
@@ -3873,12 +3944,24 @@ class AgentManager:
                                 _app_key = session_context.get("_early_active_key")
                                 _existing_info = self._active_sessions.get(_app_key) if _app_key else None
                                 if _existing_info:
-                                    # Alias: both keys point to the same dict
+                                    # Alias: both keys point to the same dict.
+                                    # CRITICAL: update the dict's PID/wrapper/client
+                                    # to reflect the NEW subprocess.  Without this,
+                                    # kill_tracked_leaks() sees the new PID in
+                                    # _tracked_pids but the OLD PID in info["pid"]
+                                    # and kills the actively-streaming process.
+                                    _old_pid = _existing_info.get("pid")
+                                    _existing_info["pid"] = _init_wrapper.pid
+                                    _existing_info["wrapper"] = _init_wrapper
+                                    _existing_info["client"] = client
+                                    _existing_info["last_used"] = time.time()
+                                    _existing_info["is_frozen"] = False
                                     self._active_sessions[_init_sid] = _existing_info
                                     logger.info(
                                         "Early client registration for new session %s "
-                                        "(aliased to app key %s)",
-                                        _init_sid, _app_key,
+                                        "(aliased to app key %s, pid %s→%s)",
+                                        _init_sid, _app_key, _old_pid,
+                                        _init_wrapper.pid,
                                     )
                                 else:
                                     _init_info = {

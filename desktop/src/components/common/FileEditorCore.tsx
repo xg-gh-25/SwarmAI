@@ -27,6 +27,7 @@ import { fileIcon, fileIconColor, gitStatusBadge } from '../../utils/fileUtils';
 import { computeLineDiff } from '../../utils/lineDiff';
 import type { DiffLine } from '../../utils/lineDiff';
 import api from '../../services/api';
+import { copyToClipboard } from '../../utils/clipboard';
 import MarkdownRenderer from './MarkdownRenderer';
 import { detectLanguage, isDirtyState, findAllMatches } from './FileEditorModal';
 import type { SearchMatch } from './FileEditorModal';
@@ -304,6 +305,26 @@ export default function FileEditorCore({
   const rootRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const highlightRef = useRef<HTMLPreElement>(null);
+
+  // Resolve workspace root once on mount — avoids API call on every button click
+  const wsRootRef = useRef<string>('');
+  useEffect(() => {
+    let cancelled = false;
+    api.get<{ file_path?: string; filePath?: string }>('/workspace')
+      .then((resp) => {
+        if (!cancelled) {
+          wsRootRef.current = resp.data.file_path ?? resp.data.filePath ?? '';
+        }
+      })
+      .catch(() => { /* workspace config unavailable — absolutePath will use relative */ });
+    return () => { cancelled = true; };
+  }, []);
+
+  /** Build absolute path from cached workspace root + relative filePath. */
+  const getAbsolutePath = useCallback(() => {
+    const ws = wsRootRef.current;
+    return ws ? `${ws}/${filePath}` : filePath;
+  }, [filePath]);
 
   const isDirty = isDirtyState(content, originalContent);
   const hasUnsavedEdits = isDirtyState(content, initialContent);
@@ -654,12 +675,9 @@ export default function FileEditorCore({
               return (
                 <button
                   onClick={async () => {
+                    const absolutePath = getAbsolutePath();
                     try {
-                      const configResp = await api.get<{ file_path?: string; filePath?: string }>('/workspace');
-                      const wsRoot = configResp.data.file_path ?? configResp.data.filePath ?? '';
-                      const absolutePath = wsRoot ? `${wsRoot}/${filePath}` : filePath;
                       if (useBrowser) {
-                        // openUrl with file:// forces the default browser
                         const { openUrl } = await import('@tauri-apps/plugin-opener');
                         await openUrl(`file://${absolutePath}`);
                       } else {
@@ -668,12 +686,7 @@ export default function FileEditorCore({
                       }
                     } catch {
                       // Fallback: copy path to clipboard so user can paste in browser
-                      try {
-                        const configResp = await api.get<{ file_path?: string; filePath?: string }>('/workspace');
-                        const wsRoot = configResp.data.file_path ?? configResp.data.filePath ?? '';
-                        const absolutePath = wsRoot ? `${wsRoot}/${filePath}` : filePath;
-                        await navigator.clipboard.writeText(absolutePath);
-                      } catch { /* best effort */ }
+                      await copyToClipboard(absolutePath);
                     }
                   }}
                   className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)] transition-colors"
@@ -689,14 +702,14 @@ export default function FileEditorCore({
             <button
               onClick={async () => {
                 if (copyPathFeedback) return;
-                try {
-                  const configResp = await api.get<{ file_path?: string; filePath?: string }>('/workspace');
-                  const wsRoot = configResp.data.file_path ?? configResp.data.filePath ?? '';
-                  const absolutePath = wsRoot ? `${wsRoot}/${filePath}` : filePath;
-                  await navigator.clipboard.writeText(absolutePath);
+                const absolutePath = getAbsolutePath();
+                const ok = await copyToClipboard(absolutePath);
+                if (ok) {
                   setCopyPathFeedback(true);
                   setTimeout(() => setCopyPathFeedback(false), 2000);
-                } catch { /* best effort */ }
+                } else {
+                  console.warn('[FileEditor] copyToClipboard failed for:', absolutePath);
+                }
               }}
               className={clsx(
                 'flex items-center gap-1 px-2 py-1 rounded-lg text-xs transition-colors',

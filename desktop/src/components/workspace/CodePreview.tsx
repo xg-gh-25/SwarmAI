@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, memo } from 'react';
 import hljs from 'highlight.js';
 import clsx from 'clsx';
+import { copyToClipboard } from '../../utils/clipboard';
 
 interface CodePreviewProps {
   content: string;
@@ -132,7 +133,7 @@ export const CodePreview = memo(function CodePreview({
   // Handle copy
   const handleCopy = async () => {
     try {
-      await navigator.clipboard.writeText(content);
+      await copyToClipboard(content);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch (err) {

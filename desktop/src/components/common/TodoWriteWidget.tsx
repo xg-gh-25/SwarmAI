@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import clsx from 'clsx';
+import { copyToClipboard } from '../../utils/clipboard';
 
 interface TodoItem {
   content: string;
@@ -82,7 +83,7 @@ export default function TodoWriteWidget({ todos }: TodoWriteWidgetProps) {
     const text = todos
       .map((t) => `[${t.status}] ${t.content}`)
       .join('\n');
-    navigator.clipboard.writeText(text);
+    copyToClipboard(text);
   };
 
   return (

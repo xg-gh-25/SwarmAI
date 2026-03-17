@@ -1,6 +1,7 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 import type { FileTreeItem } from './FileTreeNode';
 import SwarmWorkspaceWarningDialog from '../common/SwarmWorkspaceWarningDialog';
+import { copyToClipboard } from '../../utils/clipboard';
 
 /**
  * FileContextMenu component - right-click context menu for file operations
@@ -149,7 +150,7 @@ export default function FileContextMenu({
   // Copy path to clipboard
   const handleCopyPath = useCallback(async () => {
     try {
-      await navigator.clipboard.writeText(item.path);
+      await copyToClipboard(item.path);
       onClose();
     } catch (error) {
       console.error('Failed to copy path:', error);

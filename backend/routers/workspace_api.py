@@ -42,9 +42,10 @@ import mimetypes
 import os
 import shutil
 import subprocess
+import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from fastapi import APIRouter, Header, HTTPException, Query
 from fastapi.responses import FileResponse, Response
@@ -61,6 +62,24 @@ from schemas.workspace_config import (
 )
 
 logger = logging.getLogger(__name__)
+
+# ─── ETag / tree cache ────────────────────────────────────────────────────────
+# The frontend polls /workspace/tree every 5s.  Running `git status` +
+# recursive iterdir on every poll wastes ~50ms CPU per call — the #1 source
+# of idle CPU burn.  This cache short-circuits the work:
+#   - _etag_cache stores (etag_value, response_bytes, timestamp)
+#   - If <2s have passed since last computation, reuse cached ETag directly
+#   - Even when recomputing, git+fs work is offloaded to a thread
+_ETAG_CACHE_TTL = 5.0  # seconds — matches frontend poll interval, at most 1 real scan per cycle
+_etag_cache: dict[str, tuple[str, bytes, float]] = {}  # key=depth → (etag, body, time)
+
+
+def _invalidate_tree_cache() -> None:
+    """Clear the ETag cache after a workspace mutation (create/delete/rename/save).
+
+    Forces the next ``/workspace/tree`` poll to recompute git+fs state.
+    """
+    _etag_cache.clear()
 
 router = APIRouter(tags=["workspace-api"])
 
@@ -229,8 +248,13 @@ def _get_git_status(workspace_root: Path) -> dict[str, str]:
         return {}
 
     try:
+        # Use -unormal (default) instead of -uall.  -uall recursively
+        # enumerates every untracked file in every directory — extremely
+        # expensive on large repos (100ms+).  -unormal shows untracked
+        # *directories* as a single entry, which is sufficient for the
+        # explorer's change indicators and costs ~5ms instead.
         result = subprocess.run(
-            ["git", "status", "--porcelain", "-z", "-uall"],
+            ["git", "status", "--porcelain", "-z", "-unormal"],
             cwd=str(workspace_root),
             capture_output=True,
             text=True,
@@ -289,12 +313,16 @@ def _build_tree(
     workspace_root: Path,
     depth: int,
     git_status: dict[str, str] | None = None,
+    subrepo_status_fn: "Callable[[Path], dict[str, str]] | None" = None,
 ) -> list[dict]:
     """Build a nested tree of workspace entries.
 
     Walks *root* up to *depth* levels, excluding hidden entries (except
     ``.project.json``).  Directories are sorted before files; both groups
     are sorted alphabetically.
+
+    *subrepo_status_fn* is an optional cached git-status getter that avoids
+    duplicate subprocess spawns for symlinked sub-repos across calls.
 
     Each node is a plain dict matching ``TreeNodeResponse`` fields so it
     can be serialised directly by FastAPI.
@@ -335,13 +363,14 @@ def _build_tree(
         resolved = d.resolve()
         git_path = resolved / ".git"
         if d.is_symlink() and (git_path.is_dir() or git_path.is_file()):
-            sub_status = _get_git_status(resolved)
+            # Use cached getter if available to avoid duplicate subprocess spawns
+            sub_status = subrepo_status_fn(resolved) if subrepo_status_fn else _get_git_status(resolved)
             # Re-key sub-repo paths relative to the workspace root
             child_git_status = dict(git_status) if git_status else {}
             for sub_path, sub_st in sub_status.items():
                 child_git_status[f"{rel_path}/{sub_path}"] = sub_st
 
-        children = _build_tree(d, workspace_root, depth - 1, child_git_status) if depth > 1 else None
+        children = _build_tree(d, workspace_root, depth - 1, child_git_status, subrepo_status_fn) if depth > 1 else None
 
         # Directory git status: check direct match first, then inherit from children
         dir_status = None
@@ -408,6 +437,98 @@ def _collect_subrepo_status(
             pass
 
 
+def _collect_subrepo_status_cached(
+    entry: Path,
+    rel_prefix: str,
+    items: list[tuple[str, str]],
+    get_status: Callable[[Path], dict[str, str]],
+) -> None:
+    """Like _collect_subrepo_status but uses a cached git-status getter.
+
+    The *get_status* callable should be a per-invocation cached function
+    that deduplicates git status calls across ETag computation and tree building.
+    """
+    if entry.is_symlink() and entry.is_dir():
+        try:
+            resolved = entry.resolve()
+            git_path = resolved / ".git"
+            if git_path.is_dir() or git_path.is_file():
+                sub_status = get_status(resolved)
+                for sp, ss in sub_status.items():
+                    items.append((f"{rel_prefix}/{sp}", ss))
+        except OSError:
+            pass
+
+
+def _compute_etag_and_tree_sync(workspace_root: Path, depth: int) -> tuple[str, bytes]:
+    """Compute ETag + serialised tree JSON in a worker thread.
+
+    This is the EXPENSIVE function that runs ``git status``, iterdir(),
+    and tree building.  By running it in ``asyncio.to_thread`` we keep
+    the event loop free for SSE heartbeats and other I/O.
+
+    Uses a per-invocation sub-repo cache so each symlinked project is
+    scanned at most once (shared between ETag computation and tree building).
+    """
+    git_status = _get_git_status(workspace_root)
+
+    # Per-invocation cache: resolved_path → {relative_path: status}
+    # Prevents duplicate git status calls for symlinked sub-repos
+    # (called once during ETag scan, reused during _build_tree).
+    subrepo_cache: dict[str, dict[str, str]] = {}
+
+    def _get_subrepo_status_cached(resolved: Path) -> dict[str, str]:
+        """Return git status for a sub-repo, caching by resolved path."""
+        key = str(resolved)
+        if key not in subrepo_cache:
+            subrepo_cache[key] = _get_git_status(resolved)
+        return subrepo_cache[key]
+
+    # Collect sub-repo status (symlinked projects)
+    all_status_items = list(git_status.items())
+    try:
+        for entry in workspace_root.iterdir():
+            _collect_subrepo_status_cached(entry, entry.name, all_status_items, _get_subrepo_status_cached)
+            if entry.is_dir():
+                try:
+                    for child in entry.iterdir():
+                        _collect_subrepo_status_cached(
+                            child, f"{entry.name}/{child.name}", all_status_items, _get_subrepo_status_cached,
+                        )
+                except OSError:
+                    pass
+    except OSError:
+        pass
+    git_hash = hashlib.md5(json.dumps(sorted(all_status_items)).encode()).hexdigest()
+
+    # Filesystem fingerprint — only scan 3 levels deep for the ETag
+    # (full tree scan up to 8 levels is unnecessary for change detection)
+    _FINGERPRINT_DEPTH = min(depth, 3)
+
+    def _fs_fingerprint(root: Path, max_depth: int) -> str:
+        if max_depth <= 0 or not root.is_dir():
+            return ""
+        try:
+            names = sorted(e.name for e in root.iterdir() if _should_include(e.name))
+        except OSError:
+            return ""
+        parts = [",".join(names)]
+        for name in names:
+            child = root / name
+            if child.is_dir() and max_depth > 1:
+                parts.append(f"{name}:{_fs_fingerprint(child, max_depth - 1)}")
+        return "|".join(parts)
+
+    fs_hash = hashlib.md5(_fs_fingerprint(workspace_root, _FINGERPRINT_DEPTH).encode()).hexdigest()[:8]
+    etag = hashlib.md5(f"{git_hash}:{fs_hash}:{depth}".encode()).hexdigest()
+    etag_value = f'"{etag}"'
+
+    tree = _build_tree(workspace_root, workspace_root, depth, git_status, _get_subrepo_status_cached)
+    body = json.dumps(tree).encode()
+
+    return etag_value, body
+
+
 @router.get("/workspace/tree")
 async def get_workspace_tree(
     depth: int = Query(default=8, ge=1, le=10),
@@ -429,6 +550,10 @@ async def get_workspace_tree(
     All files are user-manageable — no lock badges or system-managed
     restrictions.
 
+    Performance: git+fs scan is offloaded to a thread pool and cached
+    for 5s to match the 15s frontend poll interval. Sub-repo git status
+    calls are deduplicated via per-invocation cache.
+
     Requirements: 10.1, 11.5, 15.1
     """
     expanded_path = await _get_workspace_path()
@@ -440,55 +565,35 @@ async def get_workspace_tree(
             detail="Workspace root directory does not exist",
         )
 
-    # Compute ETag from git status + filesystem structure
-    # Git status captures modifications; file listing captures adds/deletes
-    git_status = _get_git_status(workspace_root)
+    cache_key = str(depth)
+    now = time.monotonic()
 
-    # Also include git status from symlinked sub-repos (e.g., Projects/AIDLC)
-    # so ETag changes when files in those repos are modified.
-    # Scans up to 2 levels (root and one level down, e.g., Projects/*).
-    all_status_items = list(git_status.items())
-    try:
-        for entry in workspace_root.iterdir():
-            _collect_subrepo_status(entry, entry.name, all_status_items)
-            if entry.is_dir():
-                try:
-                    for child in entry.iterdir():
-                        _collect_subrepo_status(child, f"{entry.name}/{child.name}", all_status_items)
-                except OSError:
-                    pass
-    except OSError:
-        pass
-    git_hash = hashlib.md5(json.dumps(sorted(all_status_items)).encode()).hexdigest()
+    # Fast path: serve from cache if fresh (< 2s old)
+    cached = _etag_cache.get(cache_key)
+    if cached:
+        cached_etag, cached_body, cached_time = cached
+        if now - cached_time < _ETAG_CACHE_TTL:
+            if if_none_match and if_none_match.strip() == cached_etag:
+                return Response(status_code=304, headers={"ETag": cached_etag})
+            return Response(
+                content=cached_body,
+                media_type="application/json",
+                headers={"ETag": cached_etag},
+            )
 
-    # Quick filesystem fingerprint: sorted list of all entry names at each level
-    # This changes when files are added, deleted, or renamed
-    def _fs_fingerprint(root: Path, depth: int) -> str:
-        if depth <= 0 or not root.is_dir():
-            return ""
-        try:
-            names = sorted(e.name for e in root.iterdir() if _should_include(e.name))
-        except OSError:
-            return ""
-        parts = [",".join(names)]
-        for name in names:
-            child = root / name
-            if child.is_dir() and depth > 1:
-                parts.append(f"{name}:{_fs_fingerprint(child, depth - 1)}")
-        return "|".join(parts)
+    # Slow path: offload git+fs scan to thread pool (frees event loop)
+    etag_value, body = await asyncio.to_thread(
+        _compute_etag_and_tree_sync, workspace_root, depth,
+    )
 
-    fs_hash = hashlib.md5(_fs_fingerprint(workspace_root, depth).encode()).hexdigest()[:8]
-    etag = hashlib.md5(f"{git_hash}:{fs_hash}:{depth}".encode()).hexdigest()
-    etag_value = f'"{etag}"'
+    # Update cache
+    _etag_cache[cache_key] = (etag_value, body, time.monotonic())
 
-    # Check conditional request
     if if_none_match and if_none_match.strip() == etag_value:
         return Response(status_code=304, headers={"ETag": etag_value})
 
-    tree = _build_tree(workspace_root, workspace_root, depth, git_status)
-
     return Response(
-        content=json.dumps(tree),
+        content=body,
         media_type="application/json",
         headers={"ETag": etag_value},
     )
@@ -891,6 +996,7 @@ async def put_workspace_file(
     except OSError as exc:
         raise HTTPException(status_code=500, detail=f"Failed to write file: {exc}")
 
+    _invalidate_tree_cache()
     return {"success": True, "path": path}
 
 
@@ -943,6 +1049,7 @@ async def create_file(request: FolderCreateRequest):
     target.parent.mkdir(parents=True, exist_ok=True)
     target.touch()
 
+    _invalidate_tree_cache()
     logger.info("Created file: %s", request.path)
     return {"path": request.path}
 
@@ -966,6 +1073,7 @@ async def create_folder(request: FolderCreateRequest):
 
     # Increment project_files_version for context cache invalidation (Req 34.2)
 
+    _invalidate_tree_cache()
     logger.info("Created folder: %s", request.path)
     return {"path": request.path}
 
@@ -998,6 +1106,7 @@ async def delete_folder(request: FolderDeleteRequest):
     else:
         target.unlink()
 
+    _invalidate_tree_cache()
     logger.info("Deleted: %s", request.path)
     return Response(status_code=204)
 
@@ -1106,6 +1215,7 @@ async def trash_item(request: FolderDeleteRequest):
             detail=f"Failed to trash: {error_msg}",
         )
 
+    _invalidate_tree_cache()
     logger.info("Trashed (recoverable): %s", request.path)
     return {"path": request.path, "trashed": True}
 
@@ -1161,6 +1271,7 @@ async def rename_item(request: FolderRenameRequest):
 
     # Increment project_files_version for context cache invalidation (Req 34.2)
 
+    _invalidate_tree_cache()
     logger.info("Renamed '%s' → '%s'", request.old_path, request.new_path)
     return {"old_path": request.old_path, "new_path": request.new_path}
 

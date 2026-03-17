@@ -18,6 +18,7 @@
  */
 
 import { useState } from 'react';
+import { copyToClipboard } from '../../../utils/clipboard';
 
 /** Character threshold below which results are shown inline without toggle. */
 export const INLINE_RESULT_LIMIT = 200;
@@ -96,7 +97,7 @@ export function MergedToolBlock({
 
   const handleCopy = () => {
     if (resultContent) {
-      navigator.clipboard.writeText(resultContent);
+      copyToClipboard(resultContent);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     }

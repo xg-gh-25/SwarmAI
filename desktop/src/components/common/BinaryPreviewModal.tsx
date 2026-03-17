@@ -17,6 +17,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo, lazy, Suspense } from 'react';
 import clsx from 'clsx';
 import api from '../../services/api';
+import { copyToClipboard } from '../../utils/clipboard';
 
 // Lazy-load react-pdf so pdfjs-dist (which requires DOMMatrix) is never
 // imported at module scope.  This prevents test suites that transitively
@@ -280,7 +281,7 @@ export default function BinaryPreviewModal({
       // Fallback: copy path to clipboard
       try {
         const absolutePath = await getAbsolutePath();
-        await navigator.clipboard.writeText(absolutePath);
+        await copyToClipboard(absolutePath);
         setCopyFeedback(true);
         setTimeout(() => setCopyFeedback(false), 2000);
       } catch { /* best effort */ }
@@ -291,7 +292,7 @@ export default function BinaryPreviewModal({
     if (copyFeedback) return;
     try {
       const absolutePath = await getAbsolutePath();
-      await navigator.clipboard.writeText(absolutePath);
+      await copyToClipboard(absolutePath);
       setCopyFeedback(true);
       setTimeout(() => setCopyFeedback(false), 2000);
     } catch { /* best effort */ }
