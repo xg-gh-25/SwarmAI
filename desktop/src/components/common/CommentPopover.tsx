@@ -10,6 +10,7 @@
  */
 
 import { useState, useRef, useEffect, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 
 interface CommentPopoverProps {
   /** 1-based line number this popover is anchored to. */
@@ -24,6 +25,8 @@ interface CommentPopoverProps {
   onDelete?: () => void;
   /** Vertical offset from top of the editor area (px). */
   topOffset: number;
+  /** Ref to the gutter container — used to calculate portal position. */
+  anchorRef?: React.RefObject<HTMLDivElement | null>;
 }
 
 export default function CommentPopover({
@@ -33,9 +36,28 @@ export default function CommentPopover({
   onCancel,
   onDelete,
   topOffset,
+  anchorRef,
 }: CommentPopoverProps) {
   const [text, setText] = useState(initialText);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
+
+  // Calculate screen-absolute position from the gutter anchor
+  const [position, setPosition] = useState<{ top: number; left: number } | null>(null);
+
+  useEffect(() => {
+    if (!anchorRef?.current) return;
+    const rect = anchorRef.current.getBoundingClientRect();
+    const popoverHeight = 180; // approximate popover height
+    let top = rect.top + topOffset;
+    // Clamp: don't let popover go below viewport
+    if (top + popoverHeight > window.innerHeight - 8) {
+      top = window.innerHeight - popoverHeight - 8;
+    }
+    // Clamp: don't let popover go above viewport
+    if (top < 8) top = 8;
+    setPosition({ top, left: rect.right + 4 });
+  }, [anchorRef, topOffset]);
 
   useEffect(() => {
     // Auto-focus and select text on mount
@@ -68,10 +90,22 @@ export default function CommentPopover({
     [handleSubmit, onCancel],
   );
 
-  return (
+  // Click-outside handler: close popover when clicking outside it
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (popoverRef.current && !popoverRef.current.contains(e.target as Node)) {
+        onCancel();
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [onCancel]);
+
+  const popoverContent = (
     <div
-      className="absolute right-0 z-20 w-72 bg-[var(--color-card)] border border-[var(--color-border)] rounded-lg shadow-xl"
-      style={{ top: topOffset }}
+      ref={popoverRef}
+      className="fixed z-[9999] w-72 bg-[var(--color-card)] border border-[var(--color-border)] rounded-lg shadow-xl"
+      style={position ? { top: position.top, left: position.left } : { top: topOffset, left: 0 }}
       data-testid="comment-popover"
     >
       {/* Header */}
@@ -139,4 +173,7 @@ export default function CommentPopover({
       </div>
     </div>
   );
+
+  // Render via Portal to escape overflow-hidden ancestors
+  return createPortal(popoverContent, document.body);
 }
