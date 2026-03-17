@@ -500,16 +500,27 @@ class AgentManager:
     # Maximum PATH A retry attempts for retriable errors (exit -9, broken pipe).
     # Each retry spawns a fresh subprocess.  Backoff delay between attempts
     # gives the OS time to reclaim memory from the killed process.
-    MAX_RETRY_ATTEMPTS = 2
+    # Raised from 2→3 (2026-03-17): system often recovers on 3rd attempt
+    # after dead process memory is fully reclaimed (~15-30s).
+    MAX_RETRY_ATTEMPTS = 3
     # Delay (seconds) before auto-retry after a retriable error.
     # Gives macOS time to reclaim memory from the SIGKILL'd process.
-    RETRY_BACKOFF_SECONDS = 3.0
+    # Raised from 3→5 (2026-03-17): 3s wasn't enough for macOS to reclaim
+    # 400-600MB from dead CLI + MCP processes.
+    RETRY_BACKOFF_SECONDS = 5.0
     # If a spawned subprocess dies within this many seconds, classify as
     # an instant OOM kill — don't waste retry attempts, use longer backoff.
     INSTANT_KILL_THRESHOLD_SECONDS = 2.0
     # Backoff when an instant kill is detected (gives macOS time to
     # compress/swap memory and reclaim from the dead process tree).
-    OOM_BACKOFF_SECONDS = 20.0
+    # Raised from 20→30 (2026-03-17): 20s was not enough for cascading
+    # failures where multiple dead processes + MCP servers need cleanup.
+    OOM_BACKOFF_SECONDS = 30.0
+    # Global cooldown (seconds) after any -9 failure across ALL sessions.
+    # Prevents the user from hammering "retry" and spawning competing
+    # processes that all die under memory pressure, making things worse.
+    # During cooldown, new requests get a user-friendly "recovering" message.
+    SPAWN_COOLDOWN_SECONDS = 15.0
     # Minimum free memory (bytes) required before spawning a new subprocess.
     # Each claude CLI + 5 MCP servers uses ~400-600MB.  Below this threshold
     # spawns are likely to be immediately SIGKILL'd by macOS jetsam.
@@ -582,6 +593,12 @@ class AgentManager:
         # COE 2026-03-17: sweep killed pid 80348 mid-stream because it
         # was tracked but somehow absent from _active_sessions.
         self._streaming_pids: set[int] = set()
+        # Global spawn cooldown: timestamp of the last -9 (SIGKILL) failure.
+        # During SPAWN_COOLDOWN_SECONDS after a failure, new spawn requests
+        # get a "recovering" message instead of creating competing processes
+        # that all die under memory pressure.  COE 2026-03-17: user clicking
+        # "retry" 3-4 times during OOM recovery made cascading failures worse.
+        self._last_sigkill_time: float = 0.0
 
     def configure(
         self,
@@ -2920,6 +2937,35 @@ class AgentManager:
                     # Clear deferred content so it's not saved again
                     deferred_user_content = None
 
+                # Global spawn cooldown: if a recent -9 failure occurred,
+                # wait instead of spawning immediately.  This prevents the
+                # user from hammering "retry" and creating competing processes
+                # that all die under memory pressure — making recovery slower.
+                # The cooldown only applies to non-retry spawns (retry loop
+                # has its own backoff with _need_fresh_client set).
+                if not _need_fresh_client:
+                    _cooldown_remaining = (
+                        self._last_sigkill_time + self.SPAWN_COOLDOWN_SECONDS
+                        - time.time()
+                    )
+                    if _cooldown_remaining > 0:
+                        logger.info(
+                            "Spawn cooldown: %.1fs remaining after recent SIGKILL — "
+                            "waiting before spawn",
+                            _cooldown_remaining,
+                        )
+                        yield {
+                            "type": "assistant",
+                            "content": [{
+                                "type": "text",
+                                "text": (
+                                    f"\n\n⏳ *Recovering from a process crash — "
+                                    f"retrying in {_cooldown_remaining:.0f}s...*\n\n"
+                                ),
+                            }],
+                        }
+                        await asyncio.sleep(min(_cooldown_remaining, self.SPAWN_COOLDOWN_SECONDS))
+
                 # Enforce max concurrent subprocess cap before spawning.
                 # Disconnect oldest idle subprocesses to free RAM and prevent
                 # macOS OOM-killer from SIGKILL-ing active processes.
@@ -2947,14 +2993,53 @@ class AgentManager:
                 # Hold _env_lock during client creation so the spawned
                 # subprocess inherits the correct os.environ values.
                 # After __aenter__ the subprocess has its own env copy.
-                async with _env_lock:
-                    _configure_claude_environment(self._config)
-                    client = await wrapper.__aenter__()
+                #
+                # FIX (2026-03-17 Sev-1): Wrap connect() in try/except so
+                # -9 during subprocess init triggers the retry loop instead
+                # of propagating to the outer handler as a raw error.
+                # Previously, SIGKILL during connect() → initialize() was
+                # unrecoverable — the user saw a scary error with no retry.
+                try:
+                    async with _env_lock:
+                        _configure_claude_environment(self._config)
+                        client = await wrapper.__aenter__()
+                except Exception as _init_exc:
+                    _init_error = str(_init_exc)
+                    if _is_retriable_error(_init_error):
+                        logger.warning(
+                            "Retriable error during connect(): %s — "
+                            "setting had_error for retry loop",
+                            _init_error[:120],
+                        )
+                        if "exit code -9" in _init_error:
+                            self._last_sigkill_time = time.time()
+                        session_context["had_error"] = True
+                        # Preserve session identity for retry
+                        if session_context.get("app_session_id") is None:
+                            _orig_sid = session_context.get("sdk_session_id")
+                            if _orig_sid:
+                                session_context["app_session_id"] = _orig_sid
+                                agent_config["needs_context_injection"] = True
+                                agent_config["resume_app_session_id"] = _orig_sid
+                        # Create a dummy client so the retry loop's
+                        # disconnect call doesn't crash on None.
+                        client = None  # type: ignore[assignment]
+                    else:
+                        raise
                 _t_client_elapsed = time.monotonic() - _t_client_start
-                logger.info(
-                    "ClaudeSDKClient created in %.1fs, is_resuming=%s",
-                    _t_client_elapsed, is_resuming,
-                )
+
+                # Skip the streaming loop if connect() failed — go straight
+                # to the retry loop below (which checks had_error).
+                if session_context.get("had_error"):
+                    logger.info(
+                        "Connect failed in %.1fs, skipping to retry loop",
+                        _t_client_elapsed,
+                    )
+                else:
+                    logger.info(
+                        "ClaudeSDKClient created in %.1fs, is_resuming=%s",
+                        _t_client_elapsed, is_resuming,
+                    )
 
                 # Early registration: store client in _active_sessions NOW
                 # so interrupt_session can find it during streaming.
@@ -2965,63 +3050,71 @@ class AgentManager:
                 # IMPORTANT: The post-stream storage code (after the yield loop)
                 # may never run if the SSE consumer is cancelled. This early
                 # registration is the ONLY reliable path for client persistence.
-                session_context["_wrapper"] = wrapper  # For init-time registration in _run_query_on_client
-                if session_context.get("app_session_id"):
-                    _early_key = session_context["app_session_id"]
-                    _early_info = {
-                        "client": client,
-                        "wrapper": wrapper,
-                        "created_at": time.time(),
-                        "last_used": time.time(),
-                        "activity_extracted": False,
-                        "is_frozen": False,
-                        "failure_tracker": ToolFailureTracker(),
-                    }
-                    # Register PID in global tracker immediately after spawn
-                    self._register_wrapper_pid(wrapper, _early_info)
-                    self._active_sessions[_early_key] = _early_info
-                    session_context["_early_active_key"] = _early_key
+                #
+                # GUARD: Skip all of this when connect() failed (had_error=True).
+                # The retry loop below will handle spawning a new subprocess.
+                if not session_context.get("had_error"):
+                    session_context["_wrapper"] = wrapper  # For init-time registration in _run_query_on_client
+                    if session_context.get("app_session_id"):
+                        _early_key = session_context["app_session_id"]
+                        _early_info = {
+                            "client": client,
+                            "wrapper": wrapper,
+                            "created_at": time.time(),
+                            "last_used": time.time(),
+                            "activity_extracted": False,
+                            "is_frozen": False,
+                            "failure_tracker": ToolFailureTracker(),
+                        }
+                        # Register PID in global tracker immediately after spawn
+                        self._register_wrapper_pid(wrapper, _early_info)
+                        self._active_sessions[_early_key] = _early_info
+                        session_context["_early_active_key"] = _early_key
 
                 # Mark session as actively streaming so the cleanup loop
                 # skips it regardless of last_used timestamp.
-                _early_key_for_streaming = session_context.get("_early_active_key")
                 _path_a_pid: int | None = None
                 _early_streaming_info: dict | None = None
-                if _early_key_for_streaming:
-                    _early_streaming_info = self._active_sessions.get(_early_key_for_streaming)
-                    _path_a_pid = _early_streaming_info.get("pid") if _early_streaming_info else None
-                self._enter_streaming(_early_streaming_info, _path_a_pid)
+                if not session_context.get("had_error"):
+                    _early_key_for_streaming = session_context.get("_early_active_key")
+                    if _early_key_for_streaming:
+                        _early_streaming_info = self._active_sessions.get(_early_key_for_streaming)
+                        _path_a_pid = _early_streaming_info.get("pid") if _early_streaming_info else None
+                    self._enter_streaming(_early_streaming_info, _path_a_pid)
 
-                # Determine if this is a cold-start resume (fresh subprocess
-                # after idle kill, eviction, or app restart).  Cold starts use
-                # a tighter watchdog timeout because the fresh subprocess has
-                # no cached context to process — it should respond quickly.
-                _is_cold_start = agent_config.get("needs_context_injection", False)
+                    # Determine if this is a cold-start resume (fresh subprocess
+                    # after idle kill, eviction, or app restart).  Cold starts use
+                    # a tighter watchdog timeout because the fresh subprocess has
+                    # no cached context to process — it should respond quickly.
+                    _is_cold_start = agent_config.get("needs_context_injection", False)
 
-                try:
-                    async for event in self._run_query_on_client(
-                        client=client,
-                        query_content=query_content,
-                        display_text=display_text,
-                        agent_config=agent_config,
-                        session_context=session_context,
-                        assistant_content=assistant_content,
-                        is_resuming=is_resuming,
-                        content=content,
-                        user_message=user_message,
-                        agent_id=agent_id,
-                        is_cold_start=_is_cold_start,
-                    ):
-                        yield event
-                except Exception:
-                    # On error, disconnect the wrapper instead of keeping alive
-                    await self._disconnect_wrapper(wrapper, f"error-{session_id or 'new'}")
-                    raise
-                finally:
-                    # Clear is_streaming flag — session is now idle.
-                    _early_key_done = session_context.get("_early_active_key")
-                    _early_done_info = self._active_sessions.get(_early_key_done) if _early_key_done else None
-                    self._exit_streaming(_early_done_info, _path_a_pid)
+                    try:
+                        async for event in self._run_query_on_client(
+                            client=client,
+                            query_content=query_content,
+                            display_text=display_text,
+                            agent_config=agent_config,
+                            session_context=session_context,
+                            assistant_content=assistant_content,
+                            is_resuming=is_resuming,
+                            content=content,
+                            user_message=user_message,
+                            agent_id=agent_id,
+                            is_cold_start=_is_cold_start,
+                        ):
+                            yield event
+                    except Exception as _exc:
+                        # On error, disconnect the wrapper instead of keeping alive
+                        await self._disconnect_wrapper(wrapper, f"error-{session_id or 'new'}")
+                        # Track SIGKILL for spawn cooldown (catches -9 during connect/query)
+                        if "exit code -9" in str(_exc):
+                            self._last_sigkill_time = time.time()
+                        raise
+                    finally:
+                        # Clear is_streaming flag — session is now idle.
+                        _early_key_done = session_context.get("_early_active_key")
+                        _early_done_info = self._active_sessions.get(_early_key_done) if _early_key_done else None
+                        self._exit_streaming(_early_done_info, _path_a_pid)
 
                 # Store client for reuse (keep alive for future resume calls)
                 # Skip storage if the session ended with an error (e.g. auth failure)
@@ -3188,9 +3281,27 @@ class AgentManager:
                         )
                         _t_client_start = time.monotonic()  # Reset for instant-kill detection
                         wrapper = _ClaudeClientWrapper(options=options)
-                        async with _env_lock:
-                            _configure_claude_environment(self._config)
-                            client = await wrapper.__aenter__()
+                        # FIX (2026-03-17 Sev-1): Wrap retry connect() so -9
+                        # during init continues the retry loop instead of
+                        # propagating to the outer handler.
+                        try:
+                            async with _env_lock:
+                                _configure_claude_environment(self._config)
+                                client = await wrapper.__aenter__()
+                        except Exception as _retry_init_exc:
+                            _retry_init_error = str(_retry_init_exc)
+                            if _is_retriable_error(_retry_init_error):
+                                logger.warning(
+                                    "PATH A retry %d: connect() failed with "
+                                    "retriable error: %s — will retry",
+                                    _retry_count, _retry_init_error[:120],
+                                )
+                                if "exit code -9" in _retry_init_error:
+                                    self._last_sigkill_time = time.time()
+                                session_context["had_error"] = True
+                                continue  # Back to while had_error loop
+                            else:
+                                raise
                         # Register retry PID in global tracker AND in the
                         # early-registered session info.  Without this, the
                         # tracked-leak sweep sees the PID as orphaned during
@@ -3230,8 +3341,11 @@ class AgentManager:
                                 is_cold_start=True,  # Retry = fresh subprocess, tight timeout
                             ):
                                 yield event
-                        except Exception:
+                        except Exception as _rexc:
                             await self._disconnect_wrapper(wrapper, f"retry-{_retry_count}-error-{session_id}")
+                            # Track SIGKILL for spawn cooldown
+                            if "exit code -9" in str(_rexc):
+                                self._last_sigkill_time = time.time()
                             raise
                         finally:
                             # Clear retry streaming PID
@@ -3285,6 +3399,10 @@ class AgentManager:
             error_traceback = traceback.format_exc()
             logger.error(f"Error in conversation: {e}")
             logger.error(f"Full traceback:\n{error_traceback}")
+            # Track SIGKILL in the outer handler too — catches -9 errors
+            # that escaped the inner retry logic (non-retriable or unexpected).
+            if "exit code -9" in str(e):
+                self._last_sigkill_time = time.time()
             # Clean up broken session from reuse pool — use effective_session_id
             # so we find the entry even after resume-fallback remapping.
             eff_sid = (
@@ -3589,6 +3707,12 @@ class AgentManager:
                     raw_error = str(item["error"])
                     logger.error(f"Error from SDK reader: {raw_error}")
                     session_context["had_error"] = True
+
+                    # Set global spawn cooldown on SIGKILL (-9) to prevent
+                    # user retries from creating competing spawns that all
+                    # die under memory pressure (COE 2026-03-17).
+                    if "exit code -9" in raw_error:
+                        self._last_sigkill_time = time.time()
 
                     # Persist any partial assistant content accumulated before
                     # the error — prevents message loss on SDK crash / restart.
