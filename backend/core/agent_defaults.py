@@ -187,6 +187,20 @@ async def build_agent_config(agent_id: str) -> dict | None:
         "add_dirs": base.get("add_dirs"),
     }
 
+    # Overlay user-customizable fields from the DB marker row.
+    # Fields like description, system_prompt, allowed_skills, etc. can be
+    # updated via PUT /api/agents/default and are stored in the DB marker.
+    # The DB values take precedence over the static default-agent.json.
+    db_marker = await db.agents.get(DEFAULT_AGENT_ID)
+    if db_marker:
+        _DB_OVERLAY_FIELDS = (
+            "description", "system_prompt", "allowed_skills", "allow_all_skills",
+            "mcp_ids", "allowed_tools", "plugin_ids",
+        )
+        for field in _DB_OVERLAY_FIELDS:
+            if field in db_marker:
+                config[field] = db_marker[field]
+
     return config
 
 
