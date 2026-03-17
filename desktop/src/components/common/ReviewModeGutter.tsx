@@ -108,7 +108,7 @@ export default function ReviewModeGutter({
         })}
       </div>
 
-      {/* Comment Popover — positioned absolutely relative to the gutter */}
+      {/* Comment Popover — rendered via Portal to avoid overflow clipping */}
       {activePopoverLine != null && (
         <CommentPopover
           lineNumber={activePopoverLine}
@@ -127,6 +127,7 @@ export default function ReviewModeGutter({
               : undefined
           }
           topOffset={popoverTopOffset}
+          anchorRef={containerRef}
         />
       )}
     </div>
