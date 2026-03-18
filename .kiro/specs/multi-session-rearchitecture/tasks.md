@@ -126,15 +126,15 @@ Decompose the 5,406-line `agent_manager.py` monolith into 4 focused modules (Ses
     - Generate token counts and models, verify warning levels (warn/critical/ok) and percentage calculation
     - **Validates: Requirements 3.6**
 
-- [ ] 5. Phase 1: Extract SessionRouter (~300 LOC, zero behavior change)
-  - [ ] 5.1 Create `backend/core/session_router.py` with SessionRouter class
+- [x] 5. Phase 1: Extract SessionRouter (~300 LOC, zero behavior change)
+  - [x] 5.1 Create `backend/core/session_router.py` with SessionRouter class
     - Implement `SessionRouter` with `_units` dict, `_prompt_builder` reference, `_queue`, `_slot_available` event
     - Implement `get_unit()`, `get_or_create_unit()`, `alive_count` property
     - Implement `_acquire_slot()`: count alive units, evict oldest IDLE if at cap, queue with 60s timeout if all protected
     - Implement `_evict_idle()`: select oldest IDLE unit, call `kill()`
     - _Requirements: 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.8_
 
-  - [ ] 5.2 Implement SessionRouter public API matching AgentManager surface
+  - [x] 5.2 Implement SessionRouter public API matching AgentManager surface
     - `run_conversation()`: build options via PromptBuilder, acquire slot, dispatch to SessionUnit.send(), yield SSE events
     - `interrupt_session()`: delegate to SessionUnit.interrupt()
     - `continue_with_answer()`: delegate to SessionUnit.continue_with_answer()
@@ -144,28 +144,28 @@ Decompose the 5,406-line `agent_manager.py` monolith into 4 focused modules (Ses
     - `has_active_session()`: check if session has alive subprocess
     - _Requirements: 6.1, 6.2, 6.3, 2.7_
 
-  - [ ] 5.3 Write property test for eviction targets only IDLE
+  - [x] 5.3 Write property test for eviction targets only IDLE
     - **Property 2: Eviction targets only IDLE units**
     - Generate unit sets with mixed states, verify eviction only selects IDLE units
     - **Validates: Requirements 1.6, 2.6**
 
-  - [ ] 5.4 Write property test for concurrency cap invariant
+  - [x] 5.4 Write property test for concurrency cap invariant
     - **Property 4: Concurrency cap invariant**
     - Generate request sequences, verify `alive_count ≤ MAX_CONCURRENT` after each `_acquire_slot`
     - **Validates: Requirements 2.1**
 
-  - [ ] 5.5 Write property test for FIFO queue dispatch
+  - [x] 5.5 Write property test for FIFO queue dispatch
     - **Property 5: FIFO queue dispatch ordering**
     - Generate queued requests, verify dispatch order matches enqueue order
     - **Validates: Requirements 2.5**
 
-  - [ ] 5.6 Write property test for routing by session ID
+  - [x] 5.6 Write property test for routing by session ID
     - **Property 6: Correct routing by session ID**
     - Generate unit sets, route by random ID, verify correct unit reached
     - **Validates: Requirements 2.7**
 
-- [ ] 6. Phase 1: Extract LifecycleManager (~400 LOC, zero behavior change)
-  - [ ] 6.1 Create `backend/core/lifecycle_manager.py` with LifecycleManager class
+- [x] 6. Phase 1: Extract LifecycleManager (~400 LOC, zero behavior change)
+  - [x] 6.1 Create `backend/core/lifecycle_manager.py` with LifecycleManager class
     - Implement `LifecycleManager` with `_router` reference, `_hook_executor`, `_hook_queue` (maxsize=100)
     - Implement `start()`: run `_reap_orphans()` then start `_maintenance_loop()` as asyncio task
     - Implement `stop()`: cancel loop task, drain pending hooks
@@ -176,24 +176,24 @@ Decompose the 5,406-line `agent_manager.py` monolith into 4 focused modules (Ses
     - Implement `_reap_orphans()`: one-shot startup, find/kill unowned claude CLI processes by binary path
     - _Requirements: 4.1, 4.2, 4.4, 4.5, 4.6_
 
-  - [ ] 6.2 Write property test for TTL-based cleanup
+  - [x] 6.2 Write property test for TTL-based cleanup
     - **Property 12: TTL-based cleanup**
     - Generate units with random timestamps, verify units idle > TTL marked for cleanup, units within TTL not marked
     - **Validates: Requirements 4.2**
 
-- [ ] 7. Phase 1: Wire modules together and replace AgentManager
-  - [ ] 7.1 Update `backend/core/__init__.py` to export new modules
+- [x] 7. Phase 1: Wire modules together and replace AgentManager
+  - [x] 7.1 Update `backend/core/__init__.py` to export new modules
     - Export SessionUnit, SessionRouter, PromptBuilder, LifecycleManager
     - Add backward-compatible re-exports from agent_manager.py if needed
     - _Requirements: 6.1_
 
-  - [ ] 7.2 Update `backend/routers/chat.py` to use SessionRouter instead of AgentManager
+  - [x] 7.2 Update `backend/routers/chat.py` to use SessionRouter instead of AgentManager
     - Replace AgentManager references with SessionRouter
     - Verify zero changes to request/response contracts
     - Wire PromptBuilder and LifecycleManager initialization
     - _Requirements: 6.1, 6.2, 6.3_
 
-  - [ ] 7.3 Verify dependency graph is acyclic
+  - [x] 7.3 Verify dependency graph is acyclic
     - Confirm: `chat.py → session_router → session_unit → ClaudeSDKClient`, `session_router → prompt_builder`, `lifecycle_manager → session_router`
     - No circular imports between the 4 modules
     - _Requirements: 6.5_
