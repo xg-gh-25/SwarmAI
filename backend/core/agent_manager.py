@@ -1610,17 +1610,39 @@ class AgentManager:
         # with SIGCONT — instant resume (<100ms), full context intact.
         if info.get("is_frozen"):
             if self._thaw_subprocess(session_id, info):
-                # Successfully thawed — mark as streaming IMMEDIATELY to
-                # close the race window with the cleanup loop's Tier 1.5
-                # kill check.  Without this, the cleanup loop could see
-                # the session as thawed + idle and kill it before the
-                # caller sets is_streaming=True in _execute_on_session.
-                # The caller's finally block clears is_streaming after
-                # the stream completes (both success and error paths).
+                # Liveness check AFTER thaw — the process may have died
+                # while frozen (macOS OOM-kill, kernel panic).  Without
+                # this, a dead-but-thawed subprocess is returned to the
+                # caller causing the first-message-after-crash COE.
+                pid = info.get("pid")
+                if pid:
+                    try:
+                        os.kill(pid, 0)
+                    except ProcessLookupError:
+                        logger.warning(
+                            "Session %s subprocess pid=%d died while frozen, "
+                            "falling through to resume-fallback",
+                            session_id, pid,
+                        )
+                        self._tracked_pids.discard(pid)
+                        info["client"] = None
+                        info["wrapper"] = None
+                        info["pid"] = None
+                        return None
+                    except PermissionError:
+                        pass  # Process exists but different owner — treat as alive
+
+                # Successfully thawed + verified alive — mark as streaming
+                # IMMEDIATELY to close the race window with the cleanup
+                # loop's Tier 1.5 kill check.  Without this, the cleanup
+                # loop could see the session as thawed + idle and kill it
+                # before the caller sets is_streaming=True in
+                # _execute_on_session.  The caller's finally block clears
+                # is_streaming after the stream completes.
                 self._enter_streaming(info, info.get("pid"))
                 logger.info(
-                    "Session %s thawed from frozen state — instant resume "
-                    "(is_streaming set to guard against cleanup race)",
+                    "Session %s thawed from frozen state — liveness verified, "
+                    "instant resume (is_streaming set to guard against cleanup race)",
                     session_id,
                 )
                 return client

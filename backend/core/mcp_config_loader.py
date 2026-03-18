@@ -324,15 +324,47 @@ def add_mcp_server_to_dict(
 
     if connection_type == "stdio":
         raw_args = config.get("args", [])
-        expanded_args = [os.path.expandvars(a) for a in raw_args]
+        expanded_args = []
+        for arg in raw_args:
+            expanded = os.path.expandvars(arg)
+            # Warn if env var expansion left a $VAR placeholder unexpanded
+            if "$" in expanded and expanded != arg:
+                # Partial expansion — some vars resolved, some didn't
+                pass
+            elif "$" in expanded and expanded == arg:
+                # No expansion happened — likely undefined env var
+                logger.warning(
+                    "MCP server '%s': arg '%s' contains unexpanded env var",
+                    server_name, arg,
+                )
+            expanded_args.append(expanded)
+
+        command = config.get("command")
+        if not command:
+            logger.warning("MCP server '%s': missing 'command' in config, skipping", server_name)
+            return
+
         mcp_servers[server_name] = {
             "type": "stdio",
-            "command": config.get("command"),
+            "command": command,
             "args": expanded_args,
         }
         env = config.get("env")
         if env and isinstance(env, dict):
-            mcp_servers[server_name]["env"] = env
+            # Expand env var references in env values too
+            expanded_env = {}
+            for k, v in env.items():
+                if isinstance(v, str):
+                    expanded_v = os.path.expandvars(v)
+                    if "$" in v and expanded_v == v:
+                        logger.warning(
+                            "MCP server '%s': env var '%s' value '%s' contains unexpanded reference",
+                            server_name, k, v,
+                        )
+                    expanded_env[k] = expanded_v
+                else:
+                    expanded_env[k] = v
+            mcp_servers[server_name]["env"] = expanded_env
     elif connection_type == "sse":
         mcp_servers[server_name] = {
             "type": "sse",
