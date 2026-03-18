@@ -165,6 +165,6 @@ SessionUnits own subprocess lifecycle. Global Services own shared state. The bou
 | # | Question | Decision |
 |---|----------|----------|
 | 1 | Queue UX when both slots busy | QUEUED with 60s timeout → error |
-| 2 | Session TTL | 2hr (7200s) for all machines |
+| 2 | Session TTL | 12hr (43200s) for all machines — TTL is GC, not resource management. Cap handles pressure. 1M context = full history on resume, only penalty is 8-10s cold start. |
 | 3 | MCP hot-swap | Restart (reclaim + respawn) |
 | 4 | Tab limit | Keep 6. Cold tabs are free. |
