@@ -192,23 +192,43 @@ class PromptBuilder:
         self,
         working_directory: str,
         enable_mcp: bool,
+        lazy: bool = False,
     ) -> tuple[dict, list[str]]:
         """Build MCP server configuration from file-based layers.
 
         Delegates to ``mcp_config_loader.load_mcp_config()`` which reads
         ``.claude/mcps/mcp-catalog.json`` and ``.claude/mcps/mcp-dev.json``.
-        Synchronous — no DB access.
+
+        When ``lazy=True``, only ``builder-mcp`` is included in the initial
+        config. Other MCPs (outlook, slack, sentral, taskei) are loaded
+        on-demand via MCP hot-swap (Phase 4).
 
         Args:
             working_directory: Workspace root path.
             enable_mcp: Whether MCP servers are enabled.
+            lazy: If True, only include builder-mcp (Phase 4 optimization).
 
         Returns:
             Tuple of ``(mcp_servers, disallowed_tools)`` in the format
             expected by ``ClaudeAgentOptions``.
         """
         from .mcp_config_loader import load_mcp_config
-        return load_mcp_config(Path(working_directory), enable_mcp)
+        mcp_servers, disallowed_tools = load_mcp_config(Path(working_directory), enable_mcp)
+
+        if lazy and mcp_servers:
+            # Keep only builder-mcp for initial spawn
+            filtered = {
+                name: config for name, config in mcp_servers.items()
+                if "builder" in name.lower()
+            }
+            if filtered:
+                logger.info(
+                    "Lazy MCP: loading %d/%d servers (builder-mcp only)",
+                    len(filtered), len(mcp_servers),
+                )
+                return filtered, disallowed_tools
+
+        return mcp_servers, disallowed_tools
 
     # ------------------------------------------------------------------
     # merge_user_local_mcp_servers

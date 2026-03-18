@@ -747,6 +747,24 @@ class SessionUnit:
             self._transition(SessionState.IDLE)
             self.last_used = time.time()
 
+    async def reclaim_for_mcp_swap(self) -> None:
+        """Kill subprocess to prepare for MCP hot-swap.
+
+        Called when the session needs a different set of MCP servers.
+        Kills the current subprocess (IDLE → COLD), so the next
+        ``send()`` call will spawn a fresh subprocess with the new
+        MCP configuration.
+
+        State: IDLE → DEAD → COLD.
+        Raises RuntimeError if not in IDLE state.
+        """
+        if self.state != SessionState.IDLE:
+            raise RuntimeError(
+                f"Cannot reclaim for MCP swap in state {self.state.value} "
+                f"(session_id={self.session_id})"
+            )
+        await self.kill()
+
     async def compact(self, instructions: Optional[str] = None) -> dict:
         """Trigger /compact on the subprocess.
 
