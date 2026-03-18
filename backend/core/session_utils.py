@@ -1,0 +1,141 @@
+"""Shared utilities for the multi-session architecture.
+
+Extracted from ``agent_manager.py`` to break circular dependencies
+between ``session_unit.py`` and ``agent_manager.py``.  These are
+pure functions with no subprocess, routing, or hook logic.
+
+Public symbols:
+
+- ``_is_retriable_error``   — Classify transient SDK errors for auto-retry.
+- ``_sanitize_sdk_error``   — Map raw SDK errors to user-friendly messages.
+- ``_build_error_event``    — Build a sanitized SSE error event dict.
+
+All three functions are re-exported by ``agent_manager.py`` for backward
+compatibility so existing callers require zero import changes.
+"""
+from __future__ import annotations
+
+import re
+from typing import Optional
+
+from config import settings
+
+
+# ---------------------------------------------------------------------------
+# SDK error sanitization — translate raw CLI errors to user-friendly messages
+# ---------------------------------------------------------------------------
+
+# Patterns: (regex, friendly_message, suggested_action)
+_SDK_ERROR_PATTERNS: list[tuple[str, str, str]] = [
+    (
+        r"(?:Cannot write to terminated process|Command failed with exit code -9|exit code: -9)",
+        "The AI service connection was interrupted.",
+        "This is usually temporary. Your conversation is saved — just send your message again.",
+    ),
+    (
+        r"exit code: -(?:6|11|15)",
+        "The AI service process ended unexpectedly.",
+        "Your conversation is saved. Send your message again to continue.",
+    ),
+    (
+        r"(?:SIGTERM|SIGKILL|signal \d+)",
+        "The AI service was stopped by the system.",
+        "This can happen during high memory usage. Your conversation is saved.",
+    ),
+    (
+        r"(?:broken pipe|connection reset|EPIPE|ECONNRESET)",
+        "Lost connection to the AI service.",
+        "Reconnecting automatically. If this persists, try restarting the app.",
+    ),
+]
+
+
+def _sanitize_sdk_error(raw_error: str) -> tuple[str, Optional[str]]:
+    """Map raw SDK error strings to user-friendly messages.
+
+    Returns ``(friendly_message, suggested_action)``.  If no pattern
+    matches, returns the original message with a generic suggestion.
+    """
+    for pattern, friendly, action in _SDK_ERROR_PATTERNS:
+        if re.search(pattern, raw_error, re.IGNORECASE):
+            return friendly, action
+    # No match — return original but add a generic suggestion
+    return raw_error, "Your conversation is saved. Send your message again to continue."
+
+
+def _is_retriable_error(raw_error: str) -> bool:
+    """Check if this SDK error is transient and should be auto-retried.
+
+    When True, the error event should NOT be yielded to the frontend —
+    the auto-retry path will handle the UX with a softer "reconnecting"
+    indicator instead.
+
+    Covers two categories:
+
+    1. Process-level failures (OOM kill, broken pipe) — the CLI died
+    2. Bedrock API transient errors (throttling, overload, 5xx) — the
+       API returned a retriable status code but the CLI didn't retry
+       internally
+    """
+    retriable_patterns = [
+        # Process-level failures
+        r"exit code: -9",
+        r"Cannot write to terminated process",
+        r"Command failed with exit code -9",
+        r"broken pipe",
+        r"EPIPE",
+        # Bedrock / Anthropic API transient errors
+        r"throttl",
+        r"too many requests",
+        r"rate.?limit",
+        r"service.?unavailable",
+        r"internal.?server.?error",
+        r"overloaded",
+        r"capacity",
+        r"ECONNRESET",
+        r"connection reset",
+        r"SDK_SUBPROCESS_TIMEOUT",
+    ]
+    for pattern in retriable_patterns:
+        if re.search(pattern, raw_error, re.IGNORECASE):
+            return True
+    return False
+
+
+def _build_error_event(
+    code: str,
+    message: str,
+    *,
+    detail: Optional[str] = None,
+    suggested_action: Optional[str] = None,
+) -> dict:
+    """Build a sanitized SSE error event dict.
+
+    When ``settings.debug`` is True the full *detail* string (typically a
+    Python traceback) is included verbatim.  In production mode the detail
+    is stripped of tracebacks, file paths with line numbers, and library
+    version strings so that internal implementation details are never
+    leaked to the frontend.
+    """
+    event: dict = {"type": "error", "code": code, "error": message}
+    if suggested_action:
+        event["suggested_action"] = suggested_action
+    if detail:
+        if settings.debug:
+            event["detail"] = detail
+        else:
+            # Sanitize: drop lines that expose internal implementation details.
+            sanitized_lines: list[str] = []
+            for line in detail.splitlines():
+                stripped = line.strip()
+                if stripped.startswith("Traceback (most recent call last)"):
+                    continue
+                if stripped.startswith("File \"") and ".py\", line" in stripped:
+                    continue
+                if stripped and all(c in "^~ " for c in stripped):
+                    continue
+                sanitized_lines.append(line)
+            sanitized = "\n".join(sanitized_lines).strip()
+            if sanitized:
+                event["detail"] = sanitized
+    return event
