@@ -32,23 +32,6 @@ source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 python main.py
 ```
 
-### Multi-Session Architecture (Feature Flag)
-
-To test the new SessionRouter architecture:
-
-```bash
-# Via dev.sh (recommended)
-USE_SESSION_ROUTER=true ./dev.sh start
-
-# Or standalone
-cd backend && source .venv/bin/activate
-USE_SESSION_ROUTER=true python main.py
-```
-
-Check the backend log for confirmation:
-- `Using NEW SessionRouter architecture` — new path active
-- `Using LEGACY AgentManager architecture` — default path
-
 ## Environment Variables
 
 Create a `.env` file (or copy from `.env.example`):
