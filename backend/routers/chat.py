@@ -408,16 +408,28 @@ async def answer_question(request: Request):
         """Generate messages from the answer continuation."""
         try:
             logger.info(f"Answering question for agent {answer_request.agent_id}, session {answer_request.session_id}")
-            async for msg in agent_manager.continue_with_answer(
-                agent_id=answer_request.agent_id,
-                session_id=answer_request.session_id,
-                tool_use_id=answer_request.tool_use_id,
-                answers=answer_request.answers,
-                enable_skills=answer_request.enable_skills,
-                enable_mcp=answer_request.enable_mcp,
-            ):
-                logger.debug(f"Yielding message: {msg.get('type')}")
-                yield msg
+
+            # ── Route to SessionRouter or AgentManager ────────────
+            if _USE_SESSION_ROUTER and _session_router is not None:
+                # SessionRouter.continue_with_answer takes (session_id, answer_text)
+                answer_text = json.dumps(answer_request.answers) if answer_request.answers else ""
+                async for msg in _session_router.continue_with_answer(
+                    session_id=answer_request.session_id,
+                    answer=answer_text,
+                ):
+                    logger.debug(f"Yielding message: {msg.get('type')}")
+                    yield msg
+            else:
+                async for msg in agent_manager.continue_with_answer(
+                    agent_id=answer_request.agent_id,
+                    session_id=answer_request.session_id,
+                    tool_use_id=answer_request.tool_use_id,
+                    answers=answer_request.answers,
+                    enable_skills=answer_request.enable_skills,
+                    enable_mcp=answer_request.enable_mcp,
+                ):
+                    logger.debug(f"Yielding message: {msg.get('type')}")
+                    yield msg
         except asyncio.TimeoutError:
             logger.error("Agent response timed out")
             yield {
@@ -741,17 +753,29 @@ async def cmd_permission_continue(request: Request):
         """Generate messages from the permission continuation."""
         try:
             logger.info(f"Processing permission decision for request {permission_request.request_id}: {permission_request.decision}")
-            async for msg in agent_manager.continue_with_cmd_permission(
-                agent_id=agent_id,
-                session_id=permission_request.session_id,
-                request_id=permission_request.request_id,
-                decision=permission_request.decision,
-                feedback=permission_request.feedback,
-                enable_skills=body.get("enable_skills", False),
-                enable_mcp=body.get("enable_mcp", False),
-            ):
-                logger.debug(f"Yielding message: {msg.get('type')}")
-                yield msg
+
+            # ── Route to SessionRouter or AgentManager ────────────
+            if _USE_SESSION_ROUTER and _session_router is not None:
+                allowed = permission_request.decision == "approve"
+                async for msg in _session_router.continue_with_cmd_permission(
+                    session_id=permission_request.session_id,
+                    request_id=permission_request.request_id,
+                    allowed=allowed,
+                ):
+                    logger.debug(f"Yielding message: {msg.get('type')}")
+                    yield msg
+            else:
+                async for msg in agent_manager.continue_with_cmd_permission(
+                    agent_id=agent_id,
+                    session_id=permission_request.session_id,
+                    request_id=permission_request.request_id,
+                    decision=permission_request.decision,
+                    feedback=permission_request.feedback,
+                    enable_skills=body.get("enable_skills", False),
+                    enable_mcp=body.get("enable_mcp", False),
+                ):
+                    logger.debug(f"Yielding message: {msg.get('type')}")
+                    yield msg
         except asyncio.TimeoutError:
             logger.error("Agent response timed out")
             yield {

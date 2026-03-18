@@ -497,23 +497,6 @@ class SessionUnit:
         The caller (``send()``) is responsible for retry logic and
         error event construction.
         """
-        from claude_agent_sdk import (
-            AssistantMessage,
-            ResultMessage,
-            SystemMessage,
-            TextBlock,
-            ToolUseBlock,
-            ToolResultBlock,
-        )
-        from claude_agent_sdk.types import StreamEvent
-
-        # Pre-import tool summarizer (may not be available in all environments)
-        try:
-            from core.tool_summarizer import summarize_tool_use, get_tool_category, truncate_tool_result
-            _has_tool_summarizer = True
-        except ImportError:
-            _has_tool_summarizer = False
-
         if self._client is None:
             raise RuntimeError(
                 f"No client available for session {self.session_id}"
@@ -539,7 +522,37 @@ class SessionUnit:
             self.session_id,
         )
 
-        # Read SDK response stream
+        # Read and format the SDK response stream
+        async for event in self._read_formatted_response():
+            yield event
+
+    async def _read_formatted_response(self) -> AsyncIterator[dict]:
+        """Read SDK response stream and yield formatted SSE events.
+
+        Shared by ``_stream_response`` (after query) and
+        ``continue_with_permission`` / ``continue_with_answer``
+        (resume after user input).
+
+        Handles state transitions:
+        - On result → STREAMING → IDLE
+        - On ask_user_question → STREAMING → WAITING_INPUT
+        - On error → raises for caller to handle
+        """
+        from claude_agent_sdk import (
+            AssistantMessage,
+            ResultMessage,
+            SystemMessage,
+            TextBlock,
+            ToolUseBlock,
+            ToolResultBlock,
+        )
+        from claude_agent_sdk.types import StreamEvent
+
+        try:
+            from core.tool_summarizer import summarize_tool_use, get_tool_category, truncate_tool_result
+            _has_tool_summarizer = True
+        except ImportError:
+            _has_tool_summarizer = False
         async for message in self._client.receive_response():
             # Capture SDK session ID from init message
             if hasattr(message, "session_id") and message.session_id:
@@ -771,7 +784,7 @@ class SessionUnit:
 
         State: WAITING_INPUT → STREAMING → IDLE/WAITING_INPUT.
 
-        Yields raw SDK messages for the router to format.
+        Yields formatted SSE events (same format as send/_stream_response).
         """
         if self.state != SessionState.WAITING_INPUT:
             raise RuntimeError(
@@ -784,35 +797,20 @@ class SessionUnit:
                 f"(session_id={self.session_id})"
             )
 
-        # The SDK permission flow uses a different mechanism than query —
-        # the permission decision is signaled via PermissionManager, not
-        # via client.query(). For now, transition state and let the
-        # existing streaming loop in _stream_response handle it.
+        # The SDK permission flow: the subprocess is already waiting for
+        # the decision (signaled via PermissionManager). We just need to
+        # resume reading the response stream with the same formatting as
+        # _stream_response.
         self._transition(SessionState.STREAMING)
 
-        # The permission response is sent via the existing permission
-        # manager signaling mechanism. The subprocess is already waiting
-        # for the decision. We just need to resume reading the response.
         try:
-            async for message in self._client.receive_response():
-                if hasattr(message, "session_id") and message.session_id:
-                    self._sdk_session_id = message.session_id
-                yield {"source": "sdk", "message": message}
-
-                from claude_agent_sdk import ResultMessage
-                if isinstance(message, ResultMessage):
-                    self._transition(SessionState.IDLE)
-                    self.last_used = time.time()
-                    return
+            async for event in self._read_formatted_response():
+                yield event
         except Exception:
             self._transition(SessionState.DEAD)
             self._cleanup_internal()
             self._transition(SessionState.COLD)
             raise
-
-        if self.state == SessionState.STREAMING:
-            self._transition(SessionState.IDLE)
-            self.last_used = time.time()
 
     async def reclaim_for_mcp_swap(self) -> None:
         """Kill subprocess to prepare for MCP hot-swap.
