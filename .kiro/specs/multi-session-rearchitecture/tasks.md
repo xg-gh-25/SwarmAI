@@ -229,7 +229,7 @@ Decompose the 5,406-line `agent_manager.py` monolith into 4 focused modules (Ses
 - [x] 10. Checkpoint — Phase 2 complete, lifecycle simplified
   - Ensure all tests pass, ask the user if questions arise.
 
-- [-] 11. Phase 3: Frontend Zustand Single Store
+- [x] 11. Phase 3: Frontend Zustand Single Store
   - [x] 11.1 Create `desktop/src/stores/tabStore.ts` with Zustand store
     - Install `zustand` dependency if not present
     - Implement `TabStore` interface with `tabs: Record<string, TabState>`, `activeTabId`
@@ -250,20 +250,20 @@ Decompose the 5,406-line `agent_manager.py` monolith into 4 focused modules (Ses
     - Generate tab states with `fc.record({sessionId: fc.uuid(), ...})`, persist + restore, verify equivalence
     - **Validates: Requirements 8.4, 8.5**
 
-  - [-] 11.4 Migrate ChatPage.tsx and hooks to use Zustand store
+  - [x] 11.4 Migrate ChatPage.tsx and hooks to use Zustand store
     - Replace `tabMapRef` reads with Zustand selectors
     - Replace `useState` tab state with Zustand store reads
     - Replace manual `bumpRender()` calls with Zustand's automatic reactivity
     - Update `useChatStreamingLifecycle.ts` to write to Zustand store instead of tabMapRef
     - _Requirements: 8.1, 8.3_
 
-  - [ ] 11.5 Remove `useUnifiedTabState.ts` and render-counter pattern
+  - [x] 11.5 Remove `useUnifiedTabState.ts` and render-counter pattern
     - Delete `desktop/src/hooks/useUnifiedTabState.ts`
     - Remove re-export from `desktop/src/hooks/index.ts`
     - Remove all `renderCounter` / `bumpRender` references
     - _Requirements: 8.8_
 
-- [ ] 12. Checkpoint — Phase 3 complete, frontend migrated
+- [x] 12. Checkpoint — Phase 3 complete, frontend migrated
   - Ensure all tests pass, ask the user if questions arise.
 
 - [x] 13. Phase 4: Lazy MCP Loading
@@ -282,7 +282,7 @@ Decompose the 5,406-line `agent_manager.py` monolith into 4 focused modules (Ses
     - Reduce per-session memory by not loading unused MCP servers (outlook-mcp, slack-mcp, taskei-mcp, aws-sentral-mcp) at startup
     - _Requirements: 9.2, 9.4_
 
-- [ ] 14. Final Checkpoint — All phases complete
+- [x] 14. Final Checkpoint — All phases complete
   - Ensure all tests pass, ask the user if questions arise.
   - Verify combined LOC of 4 modules is ~1,600 lines ±15% (Req 6.4)
   - Verify SSE event sequence unchanged from original AgentManager (Req 6.2)
