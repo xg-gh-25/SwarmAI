@@ -215,7 +215,10 @@ class SessionUnit:
         ...
 
     def _transition(self, new_state: SessionState) -> None:
-        """Atomic state transition with logging."""
+        """Atomic state transition with structured logging.
+        
+        Log format: INFO session_unit.transition session_id={id} from={old} to={new} pid={pid}
+        """
         ...
 ```
 
@@ -488,7 +491,8 @@ class LifecycleManager:
     async def _reap_orphans(self) -> None:
         """One-shot startup: find and kill claude CLI processes not owned by any SessionUnit.
         
-        Uses `pgrep -f claude` to find processes, cross-references with
+        Filters by the bundled CLI binary path (not just process name 'claude')
+        to avoid killing unrelated processes. Cross-references with
         router's known PIDs, kills unowned ones.
         """
         ...
@@ -786,6 +790,12 @@ except asyncio.TimeoutError:
 
 **Validates: Requirements 1.9**
 
+### Property 20: WAITING_INPUT crash transitions to DEAD
+
+*For any* SessionUnit in WAITING_INPUT state, when the subprocess crashes (exit -9, broken pipe, or OS kill), the unit must transition to DEAD and then to COLD after cleanup. The crash must not leave the unit stuck in WAITING_INPUT with a dead subprocess. Error events must be delivered to the affected tab's SSE stream.
+
+**Validates: Requirements 1.7, 10.1**
+
 ## Error Handling
 
 ### SessionUnit Error Handling
@@ -853,7 +863,7 @@ Error codes preserved from current implementation:
 This feature requires both unit tests and property-based tests:
 
 - **Unit tests**: Specific examples, edge cases, integration points, error conditions
-- **Property tests**: Universal properties across all valid inputs (the 19 properties above)
+- **Property tests**: Universal properties across all valid inputs (the 20 properties above)
 
 Together they provide comprehensive coverage: unit tests catch concrete bugs at boundaries, property tests verify general correctness across the input space.
 
@@ -883,11 +893,12 @@ Together they provide comprehensive coverage: unit tests catch concrete bugs at 
 | P10: Watchdog timeout formula | Generate token counts + turn counts, verify formula | `@given(st.integers(0, 500000), st.integers(0, 100))` |
 | P11: Context warning thresholds | Generate token counts + models, verify warning levels | `@given(st.integers(0, 500000), model_strategy)` |
 | P12: TTL cleanup | Generate units with random timestamps, verify TTL logic | `@given(st.floats(0, 100000), st.floats(0, 100000))` |
-| P13: Hook serialization | Submit hooks from multiple "sessions", verify no overlap | `@given(st.lists(st.tuples(st.text(), hook_strategy)))` |
+| P13: Hook serialization | Submit hooks from multiple "sessions", verify no overlap via timestamps | Integration test with `asyncio.gather` + timing assertions (not hypothesis — timing properties are better tested with real concurrency) |
 | P14: Changelog concurrent writes | Concurrent appends, verify all entries present + valid JSONL | `@given(st.lists(st.text()))` |
 | P15: Interrupt preserves subprocess | Interrupt STREAMING unit, verify IDLE + same PID, then send reuses | `@given(unit_strategy)` |
 | P18: Per-unit retry isolation | Generate error sequences for multiple units, verify isolation | `@given(st.lists(error_strategy))` |
 | P19: Env lock scoping | Spawn under lock, verify lock released after spawn | `@given(unit_strategy)` |
+| P20: WAITING_INPUT crash | Crash unit in WAITING_INPUT, verify DEAD→COLD transition + error event | `@given(unit_strategy)` |
 
 #### Unit Tests (`backend/tests/test_session_unit.py`, `test_session_router.py`, etc.)
 
