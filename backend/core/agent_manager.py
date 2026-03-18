@@ -3366,6 +3366,20 @@ class AgentManager:
                         _early_key = session_context.get("_early_active_key")
                         if _early_key:
                             self._active_sessions.pop(_early_key, None)
+                        # FIX (2026-03-18): Yield error event when all retries
+                        # exhausted.  Previously the generator ended silently
+                        # and the user saw "Thinking..." forever.
+                        yield _build_error_event(
+                            code="ALL_RETRIES_EXHAUSTED",
+                            message=(
+                                "The AI service couldn't start after multiple attempts. "
+                                "This is usually temporary."
+                            ),
+                            suggested_action=(
+                                "Your conversation is saved. Wait a moment, "
+                                "then send your message again."
+                            ),
+                        )
                     elif effective_session_id:
                         _final_info = {
                             "client": client,
@@ -3865,6 +3879,9 @@ class AgentManager:
                                 error_text = message.result or "Session failed. This may be a stale session — please start a new conversation."
                                 logger.warning(f"SDK error_during_execution: {error_text}")
                                 session_context["had_error"] = True
+                                # Track SIGKILL for global spawn cooldown
+                                if "exit code -9" in error_text:
+                                    self._last_sigkill_time = time.time()
                                 # TSCC: mark lifecycle as failed
                                 try:
                                     sid = session_context.get("sdk_session_id")
@@ -3943,6 +3960,9 @@ class AgentManager:
                                 logger.warning(f"SDK is_error ResultMessage: {raw_error}")
 
                             session_context["had_error"] = True
+                            # Track SIGKILL for global spawn cooldown
+                            if "exit code -9" in (raw_error or ""):
+                                self._last_sigkill_time = time.time()
                             # TSCC: mark lifecycle as failed
                             try:
                                 sid = session_context.get("sdk_session_id")
