@@ -201,14 +201,28 @@ class SessionRouter:
 
         unit = self.get_or_create_unit(session_id, agent_id)
 
-        # Acquire concurrency slot
-        if not await self._acquire_slot(unit):
-            yield _build_error_event(
-                code="QUEUE_TIMEOUT",
-                message="Both chat slots are busy. Please wait a moment and try again.",
-                suggested_action="Your conversation is saved. The other tabs are still processing.",
-            )
-            return
+        # Acquire concurrency slot — may queue with SSE indicator
+        if not unit.is_alive and self.alive_count >= self.MAX_CONCURRENT:
+            # Try evict idle first
+            if not await self._evict_idle(exclude=unit):
+                # All slots protected — emit queued event and wait
+                yield {"type": "queued", "position": 1, "estimatedWaitMs": self.QUEUE_TIMEOUT * 1000}
+                logger.info(
+                    "session_router: all %d slots occupied, queuing session %s",
+                    self.MAX_CONCURRENT, session_id,
+                )
+                try:
+                    self._slot_available.clear()
+                    await asyncio.wait_for(
+                        self._slot_available.wait(), timeout=self.QUEUE_TIMEOUT,
+                    )
+                except asyncio.TimeoutError:
+                    yield _build_error_event(
+                        code="QUEUE_TIMEOUT",
+                        message="Both chat slots are busy. Please wait a moment and try again.",
+                        suggested_action="Your conversation is saved. The other tabs are still processing.",
+                    )
+                    return
 
         # Build query content
         query_content: Any
