@@ -99,20 +99,23 @@ class SessionRouter:
 
     # ── Slot management ───────────────────────────────────────────
 
-    async def _acquire_slot(self, requesting_unit: SessionUnit) -> bool:
+    async def _acquire_slot(self, requesting_unit: SessionUnit) -> str:
         """Acquire a concurrency slot. Evict IDLE or queue with timeout.
 
-        Returns True if a slot was acquired, False if timed out.
+        Returns:
+            "ready" — slot acquired, proceed with send
+            "queued" — was queued, now ready (caller should have yielded queued event)
+            "timeout" — queue timed out, both slots busy
         """
         if requesting_unit.is_alive:
-            return True  # Already has a slot
+            return "ready"
 
         if self.alive_count < self.MAX_CONCURRENT:
-            return True  # Slot available
+            return "ready"
 
         # Try to evict the oldest IDLE unit
         if await self._evict_idle(exclude=requesting_unit):
-            return True
+            return "ready"
 
         # All slots occupied by protected units — queue
         logger.info(
@@ -124,13 +127,13 @@ class SessionRouter:
             await asyncio.wait_for(
                 self._slot_available.wait(), timeout=self.QUEUE_TIMEOUT,
             )
-            return True
+            return "queued"
         except asyncio.TimeoutError:
             logger.warning(
                 "session_router: queue timeout for session %s after %.0fs",
                 requesting_unit.session_id, self.QUEUE_TIMEOUT,
             )
-            return False
+            return "timeout"
 
     async def _evict_idle(self, exclude: SessionUnit) -> bool:
         """Evict the oldest IDLE unit to free a slot.
@@ -202,27 +205,16 @@ class SessionRouter:
         unit = self.get_or_create_unit(session_id, agent_id)
 
         # Acquire concurrency slot — may queue with SSE indicator
-        if not unit.is_alive and self.alive_count >= self.MAX_CONCURRENT:
-            # Try evict idle first
-            if not await self._evict_idle(exclude=unit):
-                # All slots protected — emit queued event and wait
-                yield {"type": "queued", "position": 1, "estimatedWaitMs": self.QUEUE_TIMEOUT * 1000}
-                logger.info(
-                    "session_router: all %d slots occupied, queuing session %s",
-                    self.MAX_CONCURRENT, session_id,
-                )
-                try:
-                    self._slot_available.clear()
-                    await asyncio.wait_for(
-                        self._slot_available.wait(), timeout=self.QUEUE_TIMEOUT,
-                    )
-                except asyncio.TimeoutError:
-                    yield _build_error_event(
-                        code="QUEUE_TIMEOUT",
-                        message="Both chat slots are busy. Please wait a moment and try again.",
-                        suggested_action="Your conversation is saved. The other tabs are still processing.",
-                    )
-                    return
+        slot_result = await self._acquire_slot(unit)
+        if slot_result == "timeout":
+            yield _build_error_event(
+                code="QUEUE_TIMEOUT",
+                message="Both chat slots are busy. Please wait a moment and try again.",
+                suggested_action="Your conversation is saved. The other tabs are still processing.",
+            )
+            return
+        if slot_result == "queued":
+            yield {"type": "queued", "position": 1, "estimatedWaitMs": self.QUEUE_TIMEOUT * 1000}
 
         # Build query content
         query_content: Any

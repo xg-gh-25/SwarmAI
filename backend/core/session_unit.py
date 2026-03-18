@@ -224,17 +224,9 @@ class SessionUnit:
             return original_options
 
         from claude_agent_sdk import ClaudeAgentOptions as _Opts
-        from dataclasses import fields as _dc_fields
 
-        # ClaudeAgentOptions may be a dataclass or a plain class.
-        # Use getattr-based copy to be resilient to SDK changes.
-        try:
-            field_names = [f.name for f in _dc_fields(original_options)]
-        except TypeError:
-            # Not a dataclass — fall back to __dict__ copy
-            field_names = list(vars(original_options).keys())
-
-        kwargs = {name: getattr(original_options, name) for name in field_names}
+        # ClaudeAgentOptions is a dataclass — use vars() for shallow copy
+        kwargs = dict(vars(original_options))
         kwargs["resume"] = resume_session_id
         return _Opts(**kwargs)
 
