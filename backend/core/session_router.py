@@ -247,14 +247,20 @@ class SessionRouter:
         from database import db
 
         # Save user message to DB
+        from uuid import uuid4
+        from datetime import datetime
+
         user_content = content if content else [{"type": "text", "text": user_message}]
         title = (user_message or "Chat")[:50]
         await session_manager.store_session(session_id, agent_id, title)
-        await db.messages.create(
-            session_id=session_id,
-            role="user",
-            content=user_content,
-        )
+        await db.messages.put({
+            "id": str(uuid4()),
+            "session_id": session_id,
+            "role": "user",
+            "content": user_content,
+            "model": None,
+            "created_at": datetime.now().isoformat(),
+        })
 
         # Stream response and accumulate assistant content for DB persistence
         assistant_blocks: list[dict] = []
@@ -277,12 +283,14 @@ class SessionRouter:
 
         # Save assistant message to DB after stream completes
         if assistant_blocks:
-            await db.messages.create(
-                session_id=session_id,
-                role="assistant",
-                content=assistant_blocks,
-                model=assistant_model,
-            )
+            await db.messages.put({
+                "id": str(uuid4()),
+                "session_id": session_id,
+                "role": "assistant",
+                "content": assistant_blocks,
+                "model": assistant_model,
+                "created_at": datetime.now().isoformat(),
+            })
 
     async def interrupt_session(self, session_id: str) -> dict:
         """Delegate to SessionUnit.interrupt()."""
