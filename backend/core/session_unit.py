@@ -542,28 +542,88 @@ class SessionUnit:
             if hasattr(message, "session_id") and message.session_id:
                 self._sdk_session_id = message.session_id
 
-            # Yield raw message for the router to format
-            yield {"source": "sdk", "message": message}
+            # ── SystemMessage: session init metadata ──────────────
+            from claude_agent_sdk import SystemMessage
+            from claude_agent_sdk.types import StreamEvent
+            if isinstance(message, SystemMessage):
+                if message.subtype == "init":
+                    self._sdk_session_id = message.data.get("session_id")
+                    yield {
+                        "type": "session_start",
+                        "sessionId": self._sdk_session_id,
+                    }
+                continue  # Don't forward other system messages
 
-            # ── Detect interactive prompts (STREAMING → WAITING_INPUT) ──
-            # AskUserQuestion is a ToolUseBlock with name="AskUserQuestion"
-            # inside an AssistantMessage.  When detected, transition to
-            # WAITING_INPUT and return — the caller (continue_with_answer)
-            # will resume the stream later.
+            # ── StreamEvent: token-by-token streaming ─────────────
+            if isinstance(message, StreamEvent):
+                event_data = message.event
+                event_type = event_data.get("type", "")
+                if event_type == "content_block_delta":
+                    delta = event_data.get("delta", {})
+                    if delta.get("type") == "text_delta" and delta.get("text"):
+                        yield {"type": "text_delta", "text": delta["text"], "index": event_data.get("index", 0)}
+                    elif delta.get("type") == "thinking_delta" and delta.get("thinking"):
+                        yield {"type": "thinking_delta", "thinking": delta["thinking"], "index": event_data.get("index", 0)}
+                elif event_type == "content_block_start":
+                    block = event_data.get("content_block", {})
+                    if block.get("type") == "thinking":
+                        yield {"type": "thinking_start", "index": event_data.get("index", 0)}
+                    elif block.get("type") == "text":
+                        yield {"type": "text_start", "index": event_data.get("index", 0)}
+                elif event_type == "content_block_stop":
+                    yield {"type": "content_block_stop", "index": event_data.get("index", 0)}
+                continue
+
+            # ── AssistantMessage: full content blocks ─────────────
             if isinstance(message, AssistantMessage):
+                from claude_agent_sdk import TextBlock, ToolResultBlock
+                content_blocks = []
                 for block in message.content:
-                    if (
-                        isinstance(block, ToolUseBlock)
-                        and block.name == "AskUserQuestion"
-                    ):
-                        logger.info(
-                            "AskUserQuestion detected for session %s, "
-                            "transitioning to WAITING_INPUT",
-                            self.session_id,
-                        )
-                        self._transition(SessionState.WAITING_INPUT)
-                        self.last_used = time.time()
-                        return
+                    if isinstance(block, TextBlock):
+                        content_blocks.append({"type": "text", "text": block.text})
+                    elif isinstance(block, ToolUseBlock):
+                        if block.name == "AskUserQuestion":
+                            questions = block.input.get("questions", [])
+                            yield {
+                                "type": "ask_user_question",
+                                "toolUseId": block.id,
+                                "questions": questions,
+                                "sessionId": self._sdk_session_id,
+                            }
+                            self._transition(SessionState.WAITING_INPUT)
+                            self.last_used = time.time()
+                            return
+                        try:
+                            from core.tool_summarizer import summarize_tool_use, get_tool_category
+                            summary = summarize_tool_use(block.name, block.input)
+                            category = get_tool_category(block.name)
+                        except ImportError:
+                            summary = f"{block.name}(...)"
+                            category = "unknown"
+                        content_blocks.append({
+                            "type": "tool_use", "id": block.id,
+                            "name": block.name, "summary": summary, "category": category,
+                        })
+                    elif isinstance(block, ToolResultBlock):
+                        block_content = str(block.content) if block.content else ""
+                        try:
+                            from core.tool_summarizer import truncate_tool_result
+                            truncated, was_truncated = truncate_tool_result(block_content)
+                        except ImportError:
+                            truncated = block_content[:2000]
+                            was_truncated = len(block_content) > 2000
+                        content_blocks.append({
+                            "type": "tool_result", "tool_use_id": block.tool_use_id,
+                            "content": truncated, "is_error": getattr(block, "is_error", False),
+                            "truncated": was_truncated,
+                        })
+                if content_blocks:
+                    yield {
+                        "type": "assistant",
+                        "content": content_blocks,
+                        "model": getattr(message, "model", None),
+                    }
+                continue
 
             # ── ResultMessage — response complete or error ──────────
             if isinstance(message, ResultMessage):
@@ -571,34 +631,43 @@ class SessionUnit:
                 subtype = getattr(message, "subtype", None)
 
                 if is_error or subtype == "error_during_execution":
-                    # Extract error text from result or error attribute
                     error_text = str(
                         getattr(message, "result", "")
                         or getattr(message, "error", "")
                     )
 
-                    # User-initiated interrupt — not a real error
                     if self._interrupted:
-                        logger.info(
-                            "ResultMessage error after interrupt for "
-                            "session %s, treating as user stop",
-                            self.session_id,
-                        )
                         self._interrupted = False
                         self._transition(SessionState.IDLE)
                         self.last_used = time.time()
                         return
 
-                    # Check if retriable — raise so send() retry loop
-                    # handles it with exponential backoff
                     from .session_utils import _is_retriable_error
-
                     if _is_retriable_error(error_text):
-                        raise RuntimeError(
-                            f"Retriable SDK error: {error_text}"
-                        )
-                    # Non-retriable error result — still transition to
-                    # IDLE (the subprocess is alive, just the query failed)
+                        raise RuntimeError(f"Retriable SDK error: {error_text}")
+
+                    # Non-retriable error — yield error event
+                    from .session_utils import _sanitize_sdk_error, _build_error_event
+                    friendly, suggested = _sanitize_sdk_error(error_text)
+                    yield _build_error_event(
+                        code="SDK_ERROR", message=friendly, suggested_action=suggested,
+                    )
+
+                # Yield result event with usage metrics
+                usage = getattr(message, "usage", None) or {}
+                yield {
+                    "type": "result",
+                    "session_id": self._sdk_session_id,
+                    "duration_ms": getattr(message, "duration_ms", 0),
+                    "total_cost_usd": getattr(message, "total_cost_usd", None),
+                    "num_turns": getattr(message, "num_turns", 1),
+                    "usage": {
+                        "input_tokens": usage.get("input_tokens"),
+                        "output_tokens": usage.get("output_tokens"),
+                        "cache_read_input_tokens": usage.get("cache_read_input_tokens"),
+                        "cache_creation_input_tokens": usage.get("cache_creation_input_tokens"),
+                    } if usage else None,
+                }
 
                 self._transition(SessionState.IDLE)
                 self.last_used = time.time()
