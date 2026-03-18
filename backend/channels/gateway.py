@@ -4,7 +4,7 @@ This is a singleton that runs within the FastAPI process.  It is responsible for
 
 * Starting / stopping channel adapters as asyncio tasks.
 * Routing every :class:`InboundMessage` from an adapter to the correct agent
-  via ``agent_manager.run_conversation``, accumulating the reply, and sending
+  via ``session_registry.session_router.run_conversation``, accumulating the reply, and sending
   the :class:`OutboundMessage` back through the adapter.
 * Maintaining a mapping between external conversations and internal sessions.
 * Simple per-sender rate limiting and access-control checks.
@@ -23,7 +23,7 @@ from uuid import uuid4
 
 from channels.base import ChannelAdapter, InboundMessage, OutboundMessage
 from channels.registry import get_adapter_class, load_adapters
-from core.agent_manager import agent_manager
+from core import session_registry
 from core.session_manager import session_manager
 from core.initialization_manager import initialization_manager
 from database import db
@@ -595,7 +595,7 @@ class ChannelGateway:
             # exchange, the stored session_id IS the SDK session_id and
             # can be used to resume.
             resume_sid = None if _is_new else session_id
-            async for event in agent_manager.run_conversation(
+            async for event in session_registry.session_router.run_conversation(
                 agent_id=agent_id,
                 user_message=final_text,
                 session_id=resume_sid,
