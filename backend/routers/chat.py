@@ -33,10 +33,13 @@ from core.chat_thread_manager import chat_thread_manager
 from core.session_manager import session_manager
 
 # ── Multi-session re-architecture (Phase 1) ──────────────────────
-# Feature flag: set USE_SESSION_ROUTER=true in env to use the new
-# SessionRouter instead of AgentManager. Default: False (legacy path).
+# Multi-session architecture: SessionRouter is the default.
+# Set USE_LEGACY_AGENT_MANAGER=true to fall back to the old AgentManager.
 import os as _os
-_USE_SESSION_ROUTER = _os.environ.get("USE_SESSION_ROUTER", "").lower() == "true"
+import logging as _logging
+
+_chat_logger = _logging.getLogger(__name__)
+_USE_SESSION_ROUTER = _os.environ.get("USE_LEGACY_AGENT_MANAGER", "").lower() != "true"
 
 if _USE_SESSION_ROUTER:
     from core.session_router import SessionRouter
@@ -53,12 +56,12 @@ if _USE_SESSION_ROUTER:
     # Note: _lifecycle_manager.start() must be called from an async context
     # (e.g., FastAPI lifespan or first request). Module-level import is sync.
     _lifecycle_started = False
-    logger.info("Using NEW SessionRouter architecture (USE_SESSION_ROUTER=true)")
+    _chat_logger.info("Using NEW SessionRouter architecture (USE_SESSION_ROUTER=true)")
 else:
     _session_router = None
     _lifecycle_manager = None
     _lifecycle_started = True  # Not applicable for legacy path
-    logger.info("Using LEGACY AgentManager architecture")
+    _chat_logger.info("Using LEGACY AgentManager architecture")
 
 from core.exceptions import (
     AgentNotFoundException,
