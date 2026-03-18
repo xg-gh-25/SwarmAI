@@ -205,6 +205,19 @@ class SessionRouter:
         unit = self.get_or_create_unit(session_id, agent_id)
 
         # Acquire concurrency slot — may queue with SSE indicator
+        # Check if we need to queue BEFORE blocking, so we can emit the
+        # queued event immediately (user sees "Waiting..." not silence)
+        needs_queue = (
+            not unit.is_alive
+            and self.alive_count >= self.MAX_CONCURRENT
+            and not any(
+                u.state == SessionState.IDLE and u is not unit
+                for u in self._units.values()
+            )
+        )
+        if needs_queue:
+            yield {"type": "queued", "position": 1, "estimatedWaitMs": self.QUEUE_TIMEOUT * 1000}
+
         slot_result = await self._acquire_slot(unit)
         if slot_result == "timeout":
             yield _build_error_event(
@@ -213,8 +226,6 @@ class SessionRouter:
                 suggested_action="Your conversation is saved. The other tabs are still processing.",
             )
             return
-        if slot_result == "queued":
-            yield {"type": "queued", "position": 1, "estimatedWaitMs": self.QUEUE_TIMEOUT * 1000}
 
         # Build query content
         query_content: Any
