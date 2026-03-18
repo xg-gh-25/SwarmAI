@@ -242,14 +242,47 @@ class SessionRouter:
             channel_context=channel_context,
         )
 
-        # Delegate to SessionUnit
+        # Delegate to SessionUnit — wrap with message persistence
+        from .session_manager import session_manager
+        from database import db
+
+        # Save user message to DB
+        user_content = content if content else [{"type": "text", "text": user_message}]
+        title = (user_message or "Chat")[:50]
+        await session_manager.store_session(session_id, agent_id, title)
+        await db.messages.create(
+            session_id=session_id,
+            role="user",
+            content=user_content,
+        )
+
+        # Stream response and accumulate assistant content for DB persistence
+        assistant_blocks: list[dict] = []
+        assistant_model: str | None = None
+
         async for event in unit.send(
             query_content=query_content,
             options=options,
             app_session_id=session_id,
             config=self._config,
         ):
+            # Accumulate assistant content for DB save
+            if event.get("type") == "assistant" and event.get("content"):
+                for block in event["content"]:
+                    assistant_blocks.append(block)
+                if event.get("model"):
+                    assistant_model = event["model"]
+
             yield event
+
+        # Save assistant message to DB after stream completes
+        if assistant_blocks:
+            await db.messages.create(
+                session_id=session_id,
+                role="assistant",
+                content=assistant_blocks,
+                model=assistant_model,
+            )
 
     async def interrupt_session(self, session_id: str) -> dict:
         """Delegate to SessionUnit.interrupt()."""
