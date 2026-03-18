@@ -31,6 +31,31 @@ from database import db
 from core.agent_manager import agent_manager, set_permission_decision, _build_error_event, agent_exists
 from core.chat_thread_manager import chat_thread_manager
 from core.session_manager import session_manager
+
+# ── Multi-session re-architecture (Phase 1) ──────────────────────
+# Feature flag: set USE_SESSION_ROUTER=true in env to use the new
+# SessionRouter instead of AgentManager. Default: False (legacy path).
+import os as _os
+_USE_SESSION_ROUTER = _os.environ.get("USE_SESSION_ROUTER", "").lower() == "true"
+
+if _USE_SESSION_ROUTER:
+    from core.session_router import SessionRouter
+    from core.prompt_builder import PromptBuilder
+    from core.lifecycle_manager import LifecycleManager
+    from core.app_config_manager import AppConfigManager as _ACM
+
+    # Initialize the new architecture
+    _config = _ACM()
+    _config.load()
+    _prompt_builder = PromptBuilder(config=_config)
+    _session_router = SessionRouter(prompt_builder=_prompt_builder, config=_config)
+    _lifecycle_manager = LifecycleManager(router=_session_router)
+    logger.info("Using NEW SessionRouter architecture (USE_SESSION_ROUTER=true)")
+else:
+    _session_router = None
+    _lifecycle_manager = None
+    logger.info("Using LEGACY AgentManager architecture")
+
 from core.exceptions import (
     AgentNotFoundException,
     SessionNotFoundException,
@@ -277,17 +302,31 @@ async def chat_stream(request: Request):
         """Generate messages from the agent conversation."""
         try:
             logger.info(f"Starting chat stream for agent {chat_request.agent_id}")
-            async for msg in agent_manager.run_conversation(
-                agent_id=chat_request.agent_id,
-                user_message=chat_request.message,
-                content=chat_request.content,
-                session_id=chat_request.session_id,
-                enable_skills=chat_request.enable_skills,
-                enable_mcp=chat_request.enable_mcp,
-                editor_context=chat_request.editor_context,
-            ):
-                logger.debug(f"Yielding message: {msg.get('type')}")
-                yield msg
+
+            # ── Route to SessionRouter or AgentManager ────────────
+            if _USE_SESSION_ROUTER and _session_router is not None:
+                async for msg in _session_router.run_conversation(
+                    agent_id=chat_request.agent_id,
+                    user_message=chat_request.message,
+                    content=chat_request.content,
+                    session_id=chat_request.session_id,
+                    enable_skills=chat_request.enable_skills,
+                    enable_mcp=chat_request.enable_mcp,
+                ):
+                    logger.debug(f"Yielding message: {msg.get('type')}")
+                    yield msg
+            else:
+                async for msg in agent_manager.run_conversation(
+                    agent_id=chat_request.agent_id,
+                    user_message=chat_request.message,
+                    content=chat_request.content,
+                    session_id=chat_request.session_id,
+                    enable_skills=chat_request.enable_skills,
+                    enable_mcp=chat_request.enable_mcp,
+                    editor_context=chat_request.editor_context,
+                ):
+                    logger.debug(f"Yielding message: {msg.get('type')}")
+                    yield msg
         except asyncio.TimeoutError:
             logger.error("Agent response timed out")
             yield {
@@ -517,7 +556,10 @@ async def stop_session(session_id: str):
     The agent will stop processing and the stream will end gracefully.
     """
     logger.info(f"Received stop request for session {session_id}")
-    result = await agent_manager.interrupt_session(session_id)
+    if _USE_SESSION_ROUTER and _session_router is not None:
+        result = await _session_router.interrupt_session(session_id)
+    else:
+        result = await agent_manager.interrupt_session(session_id)
 
     if result["success"]:
         return {"status": "stopped", "message": result["message"]}
@@ -538,7 +580,10 @@ async def compact_session(session_id: str, body: Optional[dict] = None):
     """
     instructions = body.get("instructions") if body else None
     logger.info(f"Received compact request for session {session_id}")
-    result = await agent_manager.compact_session(session_id, instructions=instructions)
+    if _USE_SESSION_ROUTER and _session_router is not None:
+        result = await _session_router.compact_session(session_id, instructions=instructions)
+    else:
+        result = await agent_manager.compact_session(session_id, instructions=instructions)
 
     if result["success"]:
         return {"status": "compacted", "message": result["message"]}
