@@ -235,3 +235,49 @@ class TestChannelMCPInjection:
                 assert key in result
         except Exception:
             pass  # Channel injection may fail with mock data — that's OK
+
+
+# ---------------------------------------------------------------------------
+# Property 17: MCP subset configuration
+# ---------------------------------------------------------------------------
+
+class TestMCPSubsetConfiguration:
+    """Property 17: MCP subset configuration.
+
+    # Feature: multi-session-rearchitecture, Property 17: MCP subset
+
+    When lazy=True, build_mcp_config must return only builder-mcp.
+
+    **Validates: Requirements 9.1, 9.3**
+    """
+
+    def test_lazy_true_returns_only_builder_mcp(self):
+        """lazy=True filters to builder-mcp only."""
+        builder = _make_builder()
+
+        import unittest.mock as mock
+        full_servers = {
+            "builder-mcp": {"command": "uvx", "args": ["builder"]},
+            "slack-mcp": {"command": "uvx", "args": ["slack"]},
+            "outlook-mcp": {"command": "uvx", "args": ["outlook"]},
+        }
+        with mock.patch("core.mcp_config_loader.load_mcp_config", return_value=(full_servers, [])):
+            servers, _ = builder.build_mcp_config("/tmp", enable_mcp=True, lazy=True)
+
+        assert "builder-mcp" in servers
+        assert len(servers) == 1
+
+    def test_lazy_false_returns_all_servers(self):
+        """lazy=False returns all configured servers."""
+        builder = _make_builder()
+
+        import unittest.mock as mock
+        full_servers = {
+            "builder-mcp": {"command": "uvx"},
+            "slack-mcp": {"command": "uvx"},
+            "outlook-mcp": {"command": "uvx"},
+        }
+        with mock.patch("core.mcp_config_loader.load_mcp_config", return_value=(full_servers, [])):
+            servers, _ = builder.build_mcp_config("/tmp", enable_mcp=True, lazy=False)
+
+        assert len(servers) == 3
