@@ -13,14 +13,41 @@ FastAPI backend for the AI Agent Platform using **Claude Agent SDK**.
 
 ## Setup
 
+The easiest way to run the backend for development:
+
 ```bash
-# Create virtual environment with uv
+# From the project root — starts backend + frontend together
+./dev.sh start
+
+# Or restart backend only (after Python changes)
+./dev.sh backend
+```
+
+Alternatively, run the backend standalone:
+
+```bash
+cd backend
 uv sync
 source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-
-# Run the server
 python main.py
 ```
+
+### Multi-Session Architecture (Feature Flag)
+
+To test the new SessionRouter architecture:
+
+```bash
+# Via dev.sh (recommended)
+USE_SESSION_ROUTER=true ./dev.sh start
+
+# Or standalone
+cd backend && source .venv/bin/activate
+USE_SESSION_ROUTER=true python main.py
+```
+
+Check the backend log for confirmation:
+- `Using NEW SessionRouter architecture` — new path active
+- `Using LEGACY AgentManager architecture` — default path
 
 ## Environment Variables
 
