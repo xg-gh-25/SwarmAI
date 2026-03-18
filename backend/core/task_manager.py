@@ -12,7 +12,7 @@ from typing import Optional, AsyncIterator
 from uuid import uuid4
 
 from database import db
-from .agent_manager import agent_manager
+from . import session_registry
 from .agent_defaults import resolve_default_model
 
 logger = logging.getLogger(__name__)
@@ -221,7 +221,7 @@ class TaskManager:
             # Run agent conversation
             # Use aclosing() to ensure generator cleanup happens in this task
             session_id = None
-            async with aclosing(agent_manager.run_conversation(
+            async with aclosing(session_registry.session_router.run_conversation(
                 agent_id=agent_id,
                 user_message=message,
                 content=content,
@@ -314,7 +314,7 @@ class TaskManager:
 
                 needs_another_interaction = False
 
-                async with aclosing(agent_manager.run_conversation(
+                async with aclosing(session_registry.session_router.run_conversation(
                     agent_id=task["agent_id"],
                     user_message=msg_data.get("message"),
                     content=msg_data.get("content"),

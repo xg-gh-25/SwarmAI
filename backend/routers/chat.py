@@ -35,21 +35,30 @@ from core.chat_thread_manager import chat_thread_manager
 from core.session_manager import session_manager
 
 # ── Multi-session architecture ────────────────────────────────────
-from core.session_router import SessionRouter
-from core.prompt_builder import PromptBuilder
-from core.lifecycle_manager import LifecycleManager
-from core.app_config_manager import AppConfigManager as _ACM
 import os as _os
 import logging as _logging
 
 _chat_logger = _logging.getLogger(__name__)
-
-_config = _ACM()
-_config.load()
-_prompt_builder = PromptBuilder(config=_config)
-_session_router = SessionRouter(prompt_builder=_prompt_builder, config=_config)
-_lifecycle_manager = LifecycleManager(router=_session_router)
 _lifecycle_started = False
+
+# Lazy-initialized singletons — resolved on first chat request
+_session_router = None
+_lifecycle_manager = None
+
+
+def _get_router():
+    """Get or create the SessionRouter singleton."""
+    global _session_router, _lifecycle_manager
+    if _session_router is None:
+        from core import session_registry
+        if session_registry.session_router is None:
+            from core.app_config_manager import AppConfigManager
+            config = AppConfigManager()
+            config.load()
+            session_registry.initialize(config)
+        _session_router = session_registry.session_router
+        _lifecycle_manager = session_registry.lifecycle_manager
+    return _session_router
 
 from core.exceptions import (
     AgentNotFoundException,
@@ -304,7 +313,8 @@ async def chat_stream(request: Request):
 
     # Start LifecycleManager on first request (needs async context)
     global _lifecycle_started
-    if not _lifecycle_started:
+    _get_router()  # Ensure session infrastructure initialized
+    if not _lifecycle_started and _lifecycle_manager:
         _lifecycle_started = True
         await _lifecycle_manager.start()
 
@@ -319,7 +329,7 @@ async def chat_stream(request: Request):
         """Generate messages from the agent conversation."""
         try:
             logger.info(f"Starting chat stream for agent {chat_request.agent_id}")
-            async for msg in _session_router.run_conversation(
+            async for msg in _get_router().run_conversation(
                 agent_id=chat_request.agent_id,
                 user_message=chat_request.message,
                 content=chat_request.content,
@@ -412,7 +422,7 @@ async def answer_question(request: Request):
             logger.info(f"Answering question for agent {answer_request.agent_id}, session {answer_request.session_id}")
 
             answer_text = json.dumps(answer_request.answers) if answer_request.answers else ""
-            async for msg in _session_router.continue_with_answer(
+            async for msg in _get_router().continue_with_answer(
                 session_id=answer_request.session_id,
                 answer=answer_text,
             ):
@@ -556,7 +566,7 @@ async def stop_session(session_id: str):
     The agent will stop processing and the stream will end gracefully.
     """
     logger.info(f"Received stop request for session {session_id}")
-    result = await _session_router.interrupt_session(session_id)
+    result = await _get_router().interrupt_session(session_id)
 
     if result["success"]:
         return {"status": "stopped", "message": result["message"]}
@@ -577,7 +587,7 @@ async def compact_session(session_id: str, body: Optional[dict] = None):
     """
     instructions = body.get("instructions") if body else None
     logger.info(f"Received compact request for session {session_id}")
-    result = await _session_router.compact_session(session_id, instructions=instructions)
+    result = await _get_router().compact_session(session_id, instructions=instructions)
 
     if result["success"]:
         return {"status": "compacted", "message": result["message"]}
@@ -606,12 +616,14 @@ async def delete_session(session_id: str):
                 session_start_time=session.created_at,
                 session_title=session.title,
             )
-            _lifecycle_manager.enqueue_hooks(context)
+            _get_router()  # Ensure initialized
+            if _lifecycle_manager:
+                _lifecycle_manager.enqueue_hooks(context)
     except Exception as exc:
         logger.warning("Hook fire failed for delete_session %s: %s", session_id, exc)
 
     # 2. Clean up SessionUnit subprocess
-    unit = _session_router.get_unit(session_id)
+    unit = _get_router().get_unit(session_id)
     if unit and unit.is_alive:
         await unit.kill()
 
@@ -737,7 +749,7 @@ async def cmd_permission_continue(request: Request):
         try:
             logger.info(f"Processing permission decision for request {permission_request.request_id}: {permission_request.decision}")
             allowed = permission_request.decision == "approve"
-            async for msg in _session_router.continue_with_cmd_permission(
+            async for msg in _get_router().continue_with_cmd_permission(
                 session_id=permission_request.session_id,
                 request_id=permission_request.request_id,
                 allowed=allowed,
