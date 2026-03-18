@@ -11,6 +11,7 @@ Key public symbols:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from core.session_hooks import HookContext
@@ -38,9 +39,28 @@ class DailyActivityExtractionHook:
     ) -> None:
         self._pipeline = summarization_pipeline
         self._tracker = compliance_tracker
+        self._lock = asyncio.Lock()
 
     async def execute(self, context: HookContext) -> None:
         """Extract DailyActivity from the closed session's conversation."""
+        # Acquire lock with 10s timeout to prevent deadlock if holder crashes
+        try:
+            await asyncio.wait_for(self._lock.acquire(), timeout=10.0)
+        except asyncio.TimeoutError:
+            logger.warning(
+                "DailyActivity lock acquisition timed out after 10s — "
+                "skipping extraction for session %s",
+                context.session_id,
+            )
+            return
+
+        try:
+            await self._execute_locked(context)
+        finally:
+            self._lock.release()
+
+    async def _execute_locked(self, context: HookContext) -> None:
+        """Core extraction logic, called while holding ``_lock``."""
         # 1. Retrieve conversation log (capped for memory safety)
         messages = await db.messages.list_by_session_paginated(
             context.session_id, limit=500

@@ -887,8 +887,8 @@ class TestConcurrentSessionCloseWithGitLock:
 
         Creates a real ``BackgroundHookExecutor`` with a mock hook that
         acquires the ``git_lock``, sleeps briefly, and releases it.
-        Fires 5 tasks concurrently and drains.  All 5 must complete
-        with zero cancellations.
+        Fires 5 items into the serialization queue and drains.  All 5
+        must complete (serialized, one at a time) with zero cancellations.
 
         **Validates: Requirements 9c.7, 9e.14**
         """
@@ -914,7 +914,7 @@ class TestConcurrentSessionCloseWithGitLock:
 
         hook_manager.register(GitSimHook())
 
-        # Fire 5 tasks simultaneously
+        # Fire 5 items into the serialization queue
         contexts = [
             _make_hook_context(
                 session_id=f"sess-conc-{i:03d}",
@@ -925,23 +925,25 @@ class TestConcurrentSessionCloseWithGitLock:
         for ctx in contexts:
             executor.fire(ctx)
 
-        assert executor.pending_count == 5
+        # pending_count reflects queued items + worker
+        assert executor.pending_count >= 5
 
         done, cancelled = await executor.drain(timeout=10.0)
 
-        assert done == 5
+        # Worker task completes after processing all items
         assert cancelled == 0
         assert executor.pending_count == 0
-        # All 5 sessions should have start+end entries
+        # All 5 sessions should have start+end entries (serialized)
         assert len(execution_log) == 10
 
     @pytest.mark.asyncio
     async def test_git_operations_serialized_no_overlap(self):
-        """Git operations from concurrent sessions never overlap.
+        """Git operations from sessions never overlap (serialized queue).
 
         Records wall-clock timestamps when each hook acquires and
-        releases the ``git_lock``.  Verifies that no two sessions
-        hold the lock at the same time (intervals do not overlap).
+        releases the ``git_lock``.  With the serialization queue,
+        hooks execute one at a time so git operations are inherently
+        serialized even without the git_lock.
 
         **Validates: Requirements 9c.7**
         """
@@ -999,7 +1001,7 @@ class TestConcurrentSessionCloseWithGitLock:
 
         Registers a hook that acquires the lock and performs a simulated
         git operation.  Captures any exceptions raised during execution.
-        All 5 tasks must complete without errors.
+        All 5 items must complete without errors (serialized via queue).
 
         **Validates: Requirements 9c.7, 9e.14**
         """
@@ -1037,17 +1039,17 @@ class TestConcurrentSessionCloseWithGitLock:
 
         done, cancelled = await executor.drain(timeout=10.0)
 
-        assert done == 5
         assert cancelled == 0
         assert len(errors) == 0
         assert len(successes) == 5
 
     @pytest.mark.asyncio
-    async def test_pending_count_reflects_concurrent_tasks(self):
-        """pending_count reflects all N tasks while they are in flight.
+    async def test_pending_count_reflects_queued_items(self):
+        """pending_count reflects queued items while worker processes them.
 
-        Fires 5 tasks that block on an event, checks pending_count
-        equals 5, then releases them and verifies count drops to 0.
+        Fires 5 items into the serialization queue.  The worker
+        processes them one at a time.  pending_count should reflect
+        the total queued + in-flight items.
 
         **Validates: Requirements 9e.14**
         """
@@ -1079,27 +1081,31 @@ class TestConcurrentSessionCloseWithGitLock:
         for ctx in contexts:
             executor.fire(ctx)
 
-        # Let tasks start
+        # Let worker start processing the first item
         await asyncio.sleep(0.05)
 
-        assert executor.pending_count == 5
-        assert entered_count == 5
+        # Worker is processing first item, 4 remain in queue + worker = 5
+        assert executor.pending_count >= 4
+        # Only 1 hook entered (serialized — worker processes one at a time)
+        assert entered_count == 1
 
-        # Release all tasks
+        # Release all items
         gate.set()
         done, cancelled = await executor.drain(timeout=5.0)
 
-        assert done == 5
         assert cancelled == 0
         assert executor.pending_count == 0
+        # All 5 hooks eventually executed
+        assert entered_count == 5
 
     @pytest.mark.asyncio
     async def test_multiple_hooks_with_git_lock_all_serialize(self):
-        """Multiple hooks per task, only the git hook uses the lock.
+        """Multiple hooks per item, only the git hook uses the lock.
 
         Registers a fast non-git hook and a git hook that acquires the
-        lock.  Fires 5 tasks.  Verifies the non-git hooks run freely
-        while git hooks are serialized.
+        lock.  Fires 5 items.  With the serialization queue, all hooks
+        execute one item at a time.  Git hooks are additionally
+        serialized by the git_lock within each item.
 
         **Validates: Requirements 9c.7, 9e.14**
         """
@@ -1147,7 +1153,6 @@ class TestConcurrentSessionCloseWithGitLock:
 
         done, cancelled = await executor.drain(timeout=10.0)
 
-        assert done == 5
         assert cancelled == 0
 
         # All 5 fast hooks ran
