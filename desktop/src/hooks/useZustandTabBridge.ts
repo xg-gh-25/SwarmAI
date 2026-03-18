@@ -53,6 +53,35 @@ export interface ZustandTabBridge {
 export function useZustandTabBridge(defaultAgentId: string): ZustandTabBridge {
   const store = useTabStore();
 
+  // Debounced save to open_tabs.json (500ms)
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const prevTabsRef = useRef<string>('');
+
+  // Effect: persist tabs to file when they change
+  const tabsJson = JSON.stringify(store.getPersistedTabs());
+  if (tabsJson !== prevTabsRef.current && prevTabsRef.current !== '') {
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(async () => {
+      try {
+        const { tabPersistenceService } = await import('../services/tabPersistence');
+        const tabs = store.getPersistedTabs().map((t) => ({
+          id: t.tabId,
+          title: t.title,
+          sessionId: t.sessionId || undefined,
+          agentId: t.agentId,
+          isNew: !t.sessionId,
+        }));
+        await tabPersistenceService.save({
+          tabs,
+          activeTabId: store.activeTabId,
+        });
+      } catch {
+        // Best-effort persistence
+      }
+    }, 500);
+  }
+  prevTabsRef.current = tabsJson;
+
   // Build tabMapRef from Zustand state (for backward compat with stream handlers)
   // TEMPORARY: Only needed by useChatStreamingLifecycle stream handlers that
   // haven't migrated to Zustand selectors yet. Remove when all stream handler
@@ -156,8 +185,25 @@ export function useZustandTabBridge(defaultAgentId: string): ZustandTabBridge {
   }, []);
 
   const restoreFromFile = useCallback(async () => {
-    // TODO: Load from open_tabs.json via backend API
-    // For now, create a default tab if none exist
+    // Load tabs from ~/.swarm-ai/open_tabs.json via backend API
+    try {
+      const { tabPersistenceService } = await import('../services/tabPersistence');
+      const data = await tabPersistenceService.load();
+      if (data && data.tabs && data.tabs.length > 0) {
+        const persistedTabs = data.tabs.map((t) => ({
+          tabId: t.id,
+          sessionId: t.sessionId || '',
+          agentId: t.agentId || defaultAgentId,
+          title: t.title || 'Chat',
+          createdAt: new Date().toISOString(),
+        }));
+        store.restoreTabs(persistedTabs, data.activeTabId || undefined);
+        return;
+      }
+    } catch (err) {
+      console.warn('[useZustandTabBridge] Failed to load open_tabs.json:', err);
+    }
+    // No saved tabs — create a default tab
     if (Object.keys(store.tabs).length === 0) {
       store.createTab(defaultAgentId);
     }
