@@ -8,6 +8,9 @@ from .session_unit import SessionState, SessionUnit
 from .session_router import SessionRouter
 from .prompt_builder import PromptBuilder
 from .lifecycle_manager import LifecycleManager
+# Note: Functions use underscore prefix (_build_error_event, etc.) to match
+# the original agent_manager.py naming convention. They are exported via
+# __init__.py for backward compatibility but are package-internal utilities.
 from .session_utils import _is_retriable_error, _sanitize_sdk_error, _build_error_event
 
 __all__ = [
