@@ -54,6 +54,12 @@ export function useZustandTabBridge(defaultAgentId: string): ZustandTabBridge {
   const store = useTabStore();
 
   // Build tabMapRef from Zustand state (for backward compat with stream handlers)
+  // TEMPORARY: Only needed by useChatStreamingLifecycle stream handlers that
+  // haven't migrated to Zustand selectors yet. Remove when all stream handler
+  // callers read from useTabStore directly. Callers that still need this:
+  // - createStreamHandler (reads tabMapRef for background tab writes)
+  // - createErrorHandler (reads tabMapRef for background tab error appends)
+  // - useUnifiedAttachments (reads tabMapRef for attachment state)
   const tabMapRef = useRef(new Map<string, TabState>());
   // Sync tabMapRef with Zustand state
   const tabEntries = Object.entries(store.tabs);

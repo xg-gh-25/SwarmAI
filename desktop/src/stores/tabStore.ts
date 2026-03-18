@@ -278,25 +278,26 @@ export const useTabStore = create<TabStore>((set, get) => ({
   },
 
   appendTextDelta: (tabId, messageId, text) => {
+    // PERF: Mutate the message content in-place and only create a new
+    // tab reference (shallow copy) to trigger Zustand re-render.
+    // This avoids O(n) array copies on every token delta during streaming.
     set((state) => {
       const tab = state.tabs[tabId];
       if (!tab) return state;
-      const messages = tab.messages.map((msg) => {
-        if (msg.id !== messageId) return msg;
-        const content = [...msg.content];
-        const lastBlock = content[content.length - 1];
-        if (lastBlock && lastBlock.type === 'text') {
-          content[content.length - 1] = {
-            ...lastBlock,
-            text: (lastBlock.text || '') + text,
-          };
-        } else {
-          content.push({ type: 'text', text });
-        }
-        return { ...msg, content };
-      });
+      const msg = tab.messages.find((m) => m.id === messageId);
+      if (!msg) return state;
+
+      const lastBlock = msg.content[msg.content.length - 1];
+      if (lastBlock && lastBlock.type === 'text') {
+        // Mutate in-place — same object reference for content array
+        lastBlock.text = (lastBlock.text || '') + text;
+      } else {
+        msg.content.push({ type: 'text', text });
+      }
+
+      // Shallow copy only the tab to trigger Zustand subscribers
       return {
-        tabs: { ...state.tabs, [tabId]: { ...tab, messages } },
+        tabs: { ...state.tabs, [tabId]: { ...tab, lastUsed: Date.now() } },
       };
     });
   },
