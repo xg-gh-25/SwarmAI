@@ -106,6 +106,10 @@ class PermissionManager:
         finally:
             self._permission_events.pop(request_id, None)
             self._permission_results.pop(request_id, None)
+            # Guarantee _pending_requests cleanup — prevents memory leak if
+            # the caller (security_hooks) fails to call remove_pending_request
+            # due to an exception between store and remove.
+            self._pending_requests.pop(request_id, None)
 
     def set_permission_decision(self, request_id: str, decision: str) -> None:
         """Set the user's permission decision and signal waiting tasks."""

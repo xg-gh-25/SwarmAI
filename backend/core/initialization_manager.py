@@ -249,7 +249,7 @@ class InitializationManager:
         Validates: Requirements 1.1, 2.2, 2.3, 2.4, 2.5, 2.6, 3.2, 4.1, 8.1
         """
         from pathlib import Path
-        from core.agent_manager import ensure_default_agent
+        from core.agent_defaults import ensure_default_agent
         from core.swarm_workspace_manager import swarm_workspace_manager
         
         self._mode = "first_run"

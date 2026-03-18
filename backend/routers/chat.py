@@ -28,7 +28,9 @@ from schemas.chat_thread import ChatThreadResponse
 from schemas.context import ThreadBindRequest, ThreadBindResponse
 from schemas.permission import PermissionResponseRequest, PermissionRequestResponse
 from database import db
-from core.agent_manager import agent_manager, set_permission_decision, _build_error_event, agent_exists
+from core.agent_defaults import agent_exists
+from core.session_utils import _build_error_event
+from core.permission_manager import permission_manager as _pm
 from core.chat_thread_manager import chat_thread_manager
 from core.session_manager import session_manager
 
@@ -241,10 +243,18 @@ async def sse_with_heartbeat(
                     # Generator finished, exit loop
                     break
                 elif item_type == "message":
-                    yield f"data: {json.dumps(item)}\n\n"
+                    try:
+                        yield f"data: {json.dumps(item)}\n\n"
+                    except (TypeError, ValueError) as json_err:
+                        logger.warning("SSE json.dumps failed: %s", json_err)
+                        yield create_sse_error("SERIALIZATION_ERROR", str(json_err))
+                        continue
                     # Check for evolution event markers embedded in agent output
                     for evo_event in _extract_evolution_events(item):
-                        yield f"data: {json.dumps(evo_event)}\n\n"
+                        try:
+                            yield f"data: {json.dumps(evo_event)}\n\n"
+                        except (TypeError, ValueError):
+                            pass  # Skip non-serializable evolution events
                 elif item_type == "error":
                     raise item
 
@@ -253,6 +263,14 @@ async def sse_with_heartbeat(
                 if not generator_done:
                     logger.debug("Sending SSE heartbeat")
                     yield create_sse_heartbeat()
+            except Exception as unexpected_err:
+                # Catch-all: send structured error to client before closing
+                logger.error("Unexpected SSE stream error: %s", unexpected_err, exc_info=True)
+                try:
+                    yield create_sse_error("STREAM_ERROR", str(unexpected_err))
+                except Exception:
+                    pass  # Last resort — can't even send error, just close
+                break
     finally:
         # Ensure the consumer task is properly cleaned up
         if not consumer_task.done():
@@ -515,7 +533,7 @@ async def get_session_messages(
             session_id, limit=limit, before_id=before_id
         )
     else:
-        messages = await agent_manager.get_session_messages(session_id)
+        messages = await db.messages.list_by_session(session_id)
 
     return [
         ChatMessageResponse(
@@ -659,7 +677,7 @@ async def handle_cmd_permission_response(request: PermissionResponseRequest):
             logger.info(f"Command approved for session {request.session_id}: {command[:50]}...")
 
     # Signal any waiting tasks
-    set_permission_decision(request.request_id, request.decision)
+    _pm.set_permission_decision(request.request_id, request.decision)
 
     return PermissionRequestResponse(
         status="recorded",
