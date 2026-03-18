@@ -3435,10 +3435,12 @@ class AgentManager:
             elif eff_sid and eff_sid in self._active_sessions:
                 await self._cleanup_session(eff_sid, skip_hooks=True)
             if not _was_interrupted:
+                friendly_msg, suggested = _sanitize_sdk_error(str(e))
                 yield _build_error_event(
                     code="CONVERSATION_ERROR",
-                    message=str(e),
+                    message=friendly_msg,
                     detail=error_traceback,
+                    suggested_action=suggested,
                 )
 
     async def _run_query_on_client(
@@ -5383,10 +5385,15 @@ Create the skill in the `.claude/skills/` directory within the current workspace
                     )
                     if eff_sid and eff_sid in self._active_sessions:
                         await self._cleanup_session(eff_sid, skip_hooks=True)
+                    # Track SIGKILL for global spawn cooldown
+                    if "exit code -9" in str(e):
+                        self._last_sigkill_time = time.time()
+                    friendly_msg, suggested = _sanitize_sdk_error(str(e))
                     yield _build_error_event(
                         code="SKILL_CREATION_ERROR",
-                        message=str(e),
+                        message=friendly_msg,
                         detail=error_traceback,
+                        suggested_action=suggested,
                     )
         finally:
             # Clean up ephemeral lock keys to prevent unbounded memory growth.
