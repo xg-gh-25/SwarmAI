@@ -91,8 +91,8 @@ Decompose the 5,406-line `agent_manager.py` monolith into 4 focused modules (Ses
     - Crash unit in WAITING_INPUT, verify DEAD→COLD transition and error event delivery
     - **Validates: Requirements 1.7, 10.1**
 
-- [ ] 4. Phase 1: Extract PromptBuilder (~500 LOC, zero behavior change)
-  - [ ] 4.1 Create `backend/core/prompt_builder.py` with PromptBuilder class
+- [x] 4. Phase 1: Extract PromptBuilder (~500 LOC, zero behavior change)
+  - [x] 4.1 Create `backend/core/prompt_builder.py` with PromptBuilder class
     - Extract `_build_system_prompt` from `agent_manager.py` into `PromptBuilder.build_system_prompt()`
     - Extract `_build_options` into `PromptBuilder.build_options()`
     - Extract helper methods: `resolve_model()`, `resolve_allowed_tools()`, `build_mcp_config()`, `merge_user_local_mcp_servers()`, `inject_channel_mcp()`, `build_sandbox_config()`
@@ -101,27 +101,27 @@ Decompose the 5,406-line `agent_manager.py` monolith into 4 focused modules (Ses
     - IO-at-boundaries: reads context files via ContextDirectoryLoader, no subprocess ops or network calls
     - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7_
 
-  - [ ] 4.2 Write property test for PromptBuilder determinism
+  - [x] 4.2 Write property test for PromptBuilder determinism
     - **Property 7: PromptBuilder determinism**
     - Generate agent configs, call `build_system_prompt` twice with identical inputs, verify identical output
     - **Validates: Requirements 3.1**
 
-  - [ ] 4.3 Write property test for MCP server merge union
+  - [x] 4.3 Write property test for MCP server merge union
     - **Property 8: MCP server merge is a union**
     - Generate two MCP server dicts, verify merged result contains every server from both sets
     - **Validates: Requirements 3.3**
 
-  - [ ] 4.4 Write property test for channel MCP injection
+  - [x] 4.4 Write property test for channel MCP injection
     - **Property 9: Channel MCP injection**
     - Generate MCP config + non-null channel context, verify all original servers preserved plus channel server added
     - **Validates: Requirements 3.4**
 
-  - [ ] 4.5 Write property test for watchdog timeout formula
+  - [x] 4.5 Write property test for watchdog timeout formula
     - **Property 10: Watchdog timeout formula**
     - Generate non-negative token counts and turn counts, verify formula: `clamp(180 + (tokens/100K * 30) + (turns * 5), 180, 600)`
     - **Validates: Requirements 3.5**
 
-  - [ ] 4.6 Write property test for context warning thresholds
+  - [x] 4.6 Write property test for context warning thresholds
     - **Property 11: Context warning thresholds**
     - Generate token counts and models, verify warning levels (warn/critical/ok) and percentage calculation
     - **Validates: Requirements 3.6**
