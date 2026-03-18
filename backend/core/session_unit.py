@@ -43,9 +43,9 @@ logger = logging.getLogger(__name__)
 # Module-level lock that serializes subprocess spawn operations.
 # Held during _configure_claude_environment + wrapper.__aenter__() to
 # prevent concurrent sessions from racing on os.environ mutations.
-# This is the SessionUnit-local counterpart of _env_lock in
-# claude_environment.py — both are used together during spawn to
-# guarantee env isolation (Rule 6 from the design doc).
+# INTENTIONALLY module-level (not per-instance): os.environ is process-global,
+# so ALL spawns across ALL SessionUnit instances must serialize.
+# If you need multiple SessionRouter instances (e.g., tests), mock this lock.
 _spawn_lock = asyncio.Lock()
 
 
