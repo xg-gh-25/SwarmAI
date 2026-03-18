@@ -14,6 +14,7 @@ library) rather than shelling out, for atomicity and testability.
 
 from __future__ import annotations
 
+import fcntl
 import json
 import logging
 import re
@@ -102,7 +103,11 @@ def _append_changelog(
     summary: str,
     source: str = "maintenance_hook",
 ) -> None:
-    """Append a single JSONL line to the evolution changelog."""
+    """Append a single JSONL line to the evolution changelog.
+
+    Uses ``fcntl.flock`` on a ``.jsonl.lock`` sidecar file to prevent
+    concurrent writes from corrupting the changelog (P0 fix, Req 5.1).
+    """
     line = json.dumps({
         "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "action": action,
@@ -110,9 +115,15 @@ def _append_changelog(
         "summary": summary,
         "source": source,
     })
+    lock_path = changelog_path.with_suffix(".jsonl.lock")
     try:
-        with open(changelog_path, "a", encoding="utf-8") as f:
-            f.write(line + "\n")
+        with open(lock_path, "w") as lock_fd:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX)
+            try:
+                with open(changelog_path, "a", encoding="utf-8") as f:
+                    f.write(line + "\n")
+            finally:
+                fcntl.flock(lock_fd, fcntl.LOCK_UN)
     except OSError as exc:
         logger.warning("Failed to append changelog: %s", exc)
 

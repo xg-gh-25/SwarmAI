@@ -980,11 +980,10 @@ class TestCancelledErrorLoggedAtInfo:
 
     @pytest.mark.asyncio
     async def test_direct_task_cancellation_logs_info(self, caplog):
-        """Cancel a hook task directly (not via drain), verify INFO logging.
+        """Cancel the worker task directly (not via drain), verify INFO logging.
 
-        This tests the inner CancelledError handler in _run_all_safe()
-        which catches per-hook cancellation and re-raises, plus the
-        outer handler that logs the task-level cancellation summary.
+        This tests the CancelledError handler in the worker which
+        catches cancellation and logs at INFO level.
         """
         import logging
         from core.session_hooks import (
@@ -1003,13 +1002,12 @@ class TestCancelledErrorLoggedAtInfo:
         with caplog.at_level(logging.DEBUG, logger="core.session_hooks"):
             executor.fire(context)
 
-            # Let the task start
+            # Let the worker start processing
             await asyncio.sleep(0.05)
 
-            # Get the pending task and cancel it directly
-            pending_tasks = list(executor._pending)
-            assert len(pending_tasks) == 1
-            task = pending_tasks[0]
+            # Cancel the worker task directly
+            assert executor._worker_task is not None
+            task = executor._worker_task
 
             task.cancel()
 
@@ -1025,12 +1023,10 @@ class TestCancelledErrorLoggedAtInfo:
         info_cancel_records = [
             r for r in caplog.records
             if r.levelno == logging.INFO
-            and session_id in r.message
             and "cancel" in r.message.lower()
         ]
         assert len(info_cancel_records) >= 1, (
-            f"Expected INFO-level cancellation log with session ID "
-            f"'{session_id}', found none. "
+            f"Expected INFO-level cancellation log, found none. "
             f"All records: {[(r.levelname, r.message) for r in caplog.records]}"
         )
 
