@@ -32,36 +32,22 @@ from core.agent_manager import agent_manager, set_permission_decision, _build_er
 from core.chat_thread_manager import chat_thread_manager
 from core.session_manager import session_manager
 
-# ── Multi-session re-architecture (Phase 1) ──────────────────────
-# Multi-session architecture: SessionRouter is the default.
-# Set USE_LEGACY_AGENT_MANAGER=true to fall back to the old AgentManager.
+# ── Multi-session architecture ────────────────────────────────────
+from core.session_router import SessionRouter
+from core.prompt_builder import PromptBuilder
+from core.lifecycle_manager import LifecycleManager
+from core.app_config_manager import AppConfigManager as _ACM
 import os as _os
 import logging as _logging
 
 _chat_logger = _logging.getLogger(__name__)
-_USE_SESSION_ROUTER = _os.environ.get("USE_LEGACY_AGENT_MANAGER", "").lower() != "true"
 
-if _USE_SESSION_ROUTER:
-    from core.session_router import SessionRouter
-    from core.prompt_builder import PromptBuilder
-    from core.lifecycle_manager import LifecycleManager
-    from core.app_config_manager import AppConfigManager as _ACM
-
-    # Initialize the new architecture
-    _config = _ACM()
-    _config.load()
-    _prompt_builder = PromptBuilder(config=_config)
-    _session_router = SessionRouter(prompt_builder=_prompt_builder, config=_config)
-    _lifecycle_manager = LifecycleManager(router=_session_router)
-    # Note: _lifecycle_manager.start() must be called from an async context
-    # (e.g., FastAPI lifespan or first request). Module-level import is sync.
-    _lifecycle_started = False
-    _chat_logger.info("Using NEW SessionRouter architecture (USE_SESSION_ROUTER=true)")
-else:
-    _session_router = None
-    _lifecycle_manager = None
-    _lifecycle_started = True  # Not applicable for legacy path
-    _chat_logger.info("Using LEGACY AgentManager architecture")
+_config = _ACM()
+_config.load()
+_prompt_builder = PromptBuilder(config=_config)
+_session_router = SessionRouter(prompt_builder=_prompt_builder, config=_config)
+_lifecycle_manager = LifecycleManager(router=_session_router)
+_lifecycle_started = False
 
 from core.exceptions import (
     AgentNotFoundException,
@@ -300,7 +286,7 @@ async def chat_stream(request: Request):
 
     # Start LifecycleManager on first request (needs async context)
     global _lifecycle_started
-    if _USE_SESSION_ROUTER and _lifecycle_manager and not _lifecycle_started:
+    if not _lifecycle_started:
         _lifecycle_started = True
         await _lifecycle_manager.start()
 
@@ -315,31 +301,16 @@ async def chat_stream(request: Request):
         """Generate messages from the agent conversation."""
         try:
             logger.info(f"Starting chat stream for agent {chat_request.agent_id}")
-
-            # ── Route to SessionRouter or AgentManager ────────────
-            if _USE_SESSION_ROUTER and _session_router is not None:
-                async for msg in _session_router.run_conversation(
-                    agent_id=chat_request.agent_id,
-                    user_message=chat_request.message,
-                    content=chat_request.content,
-                    session_id=chat_request.session_id,
-                    enable_skills=chat_request.enable_skills,
-                    enable_mcp=chat_request.enable_mcp,
-                ):
-                    logger.debug(f"Yielding message: {msg.get('type')}")
-                    yield msg
-            else:
-                async for msg in agent_manager.run_conversation(
-                    agent_id=chat_request.agent_id,
-                    user_message=chat_request.message,
-                    content=chat_request.content,
-                    session_id=chat_request.session_id,
-                    enable_skills=chat_request.enable_skills,
-                    enable_mcp=chat_request.enable_mcp,
-                    editor_context=chat_request.editor_context,
-                ):
-                    logger.debug(f"Yielding message: {msg.get('type')}")
-                    yield msg
+            async for msg in _session_router.run_conversation(
+                agent_id=chat_request.agent_id,
+                user_message=chat_request.message,
+                content=chat_request.content,
+                session_id=chat_request.session_id,
+                enable_skills=chat_request.enable_skills,
+                enable_mcp=chat_request.enable_mcp,
+            ):
+                logger.debug(f"Yielding message: {msg.get('type')}")
+                yield msg
         except asyncio.TimeoutError:
             logger.error("Agent response timed out")
             yield {
@@ -422,27 +393,13 @@ async def answer_question(request: Request):
         try:
             logger.info(f"Answering question for agent {answer_request.agent_id}, session {answer_request.session_id}")
 
-            # ── Route to SessionRouter or AgentManager ────────────
-            if _USE_SESSION_ROUTER and _session_router is not None:
-                # SessionRouter.continue_with_answer takes (session_id, answer_text)
-                answer_text = json.dumps(answer_request.answers) if answer_request.answers else ""
-                async for msg in _session_router.continue_with_answer(
-                    session_id=answer_request.session_id,
-                    answer=answer_text,
-                ):
-                    logger.debug(f"Yielding message: {msg.get('type')}")
-                    yield msg
-            else:
-                async for msg in agent_manager.continue_with_answer(
-                    agent_id=answer_request.agent_id,
-                    session_id=answer_request.session_id,
-                    tool_use_id=answer_request.tool_use_id,
-                    answers=answer_request.answers,
-                    enable_skills=answer_request.enable_skills,
-                    enable_mcp=answer_request.enable_mcp,
-                ):
-                    logger.debug(f"Yielding message: {msg.get('type')}")
-                    yield msg
+            answer_text = json.dumps(answer_request.answers) if answer_request.answers else ""
+            async for msg in _session_router.continue_with_answer(
+                session_id=answer_request.session_id,
+                answer=answer_text,
+            ):
+                logger.debug(f"Yielding message: {msg.get('type')}")
+                yield msg
         except asyncio.TimeoutError:
             logger.error("Agent response timed out")
             yield {
@@ -581,10 +538,7 @@ async def stop_session(session_id: str):
     The agent will stop processing and the stream will end gracefully.
     """
     logger.info(f"Received stop request for session {session_id}")
-    if _USE_SESSION_ROUTER and _session_router is not None:
-        result = await _session_router.interrupt_session(session_id)
-    else:
-        result = await agent_manager.interrupt_session(session_id)
+    result = await _session_router.interrupt_session(session_id)
 
     if result["success"]:
         return {"status": "stopped", "message": result["message"]}
@@ -605,10 +559,7 @@ async def compact_session(session_id: str, body: Optional[dict] = None):
     """
     instructions = body.get("instructions") if body else None
     logger.info(f"Received compact request for session {session_id}")
-    if _USE_SESSION_ROUTER and _session_router is not None:
-        result = await _session_router.compact_session(session_id, instructions=instructions)
-    else:
-        result = await agent_manager.compact_session(session_id, instructions=instructions)
+    result = await _session_router.compact_session(session_id, instructions=instructions)
 
     if result["success"]:
         return {"status": "compacted", "message": result["message"]}
@@ -625,48 +576,26 @@ async def delete_session(session_id: str):
     prevent the stale reaper from double-firing hooks.
     """
     # 1. Fire lifecycle hooks BEFORE data deletion (fire-and-forget).
-    if _USE_SESSION_ROUTER and _session_router is not None and _lifecycle_manager is not None:
-        try:
-            session = await session_manager.get_session(session_id)
-            if session:
-                from core.session_hooks import HookContext
-                message_count = await db.messages.count_by_session(session_id)
-                context = HookContext(
-                    session_id=session_id,
-                    agent_id=session.agent_id,
-                    message_count=message_count,
-                    session_start_time=session.created_at,
-                    session_title=session.title,
-                )
-                _lifecycle_manager.enqueue_hooks(context)
-        except Exception as exc:
-            logger.warning("Hook fire failed for delete_session %s: %s", session_id, exc)
+    try:
+        session = await session_manager.get_session(session_id)
+        if session:
+            from core.session_hooks import HookContext
+            message_count = await db.messages.count_by_session(session_id)
+            context = HookContext(
+                session_id=session_id,
+                agent_id=session.agent_id,
+                message_count=message_count,
+                session_start_time=session.created_at,
+                session_title=session.title,
+            )
+            _lifecycle_manager.enqueue_hooks(context)
+    except Exception as exc:
+        logger.warning("Hook fire failed for delete_session %s: %s", session_id, exc)
 
-        # Clean up SessionUnit subprocess
-        unit = _session_router.get_unit(session_id)
-        if unit and unit.is_alive:
-            await unit.kill()
-    else:
-        hook_executor = agent_manager.hook_executor
-        if hook_executor:
-            try:
-                session = await session_manager.get_session(session_id)
-                if session:
-                    from core.session_hooks import HookContext
-                    message_count = await db.messages.count_by_session(session_id)
-                    context = HookContext(
-                        session_id=session_id,
-                        agent_id=session.agent_id,
-                        message_count=message_count,
-                        session_start_time=session.created_at,
-                        session_title=session.title,
-                    )
-                    hook_executor.fire(context)
-            except Exception as exc:
-                logger.warning("Hook fire failed for delete_session %s: %s", session_id, exc)
-
-        if agent_manager.has_active_session(session_id):
-            await agent_manager._cleanup_session(session_id, skip_hooks=True)
+    # 2. Clean up SessionUnit subprocess
+    unit = _session_router.get_unit(session_id)
+    if unit and unit.is_alive:
+        await unit.kill()
 
     # 3. Delete messages and session from DB
     await db.messages.delete_by_session(session_id)
@@ -789,29 +718,14 @@ async def cmd_permission_continue(request: Request):
         """Generate messages from the permission continuation."""
         try:
             logger.info(f"Processing permission decision for request {permission_request.request_id}: {permission_request.decision}")
-
-            # ── Route to SessionRouter or AgentManager ────────────
-            if _USE_SESSION_ROUTER and _session_router is not None:
-                allowed = permission_request.decision == "approve"
-                async for msg in _session_router.continue_with_cmd_permission(
-                    session_id=permission_request.session_id,
-                    request_id=permission_request.request_id,
-                    allowed=allowed,
-                ):
-                    logger.debug(f"Yielding message: {msg.get('type')}")
-                    yield msg
-            else:
-                async for msg in agent_manager.continue_with_cmd_permission(
-                    agent_id=agent_id,
-                    session_id=permission_request.session_id,
-                    request_id=permission_request.request_id,
-                    decision=permission_request.decision,
-                    feedback=permission_request.feedback,
-                    enable_skills=body.get("enable_skills", False),
-                    enable_mcp=body.get("enable_mcp", False),
-                ):
-                    logger.debug(f"Yielding message: {msg.get('type')}")
-                    yield msg
+            allowed = permission_request.decision == "approve"
+            async for msg in _session_router.continue_with_cmd_permission(
+                session_id=permission_request.session_id,
+                request_id=permission_request.request_id,
+                allowed=allowed,
+            ):
+                logger.debug(f"Yielding message: {msg.get('type')}")
+                yield msg
         except asyncio.TimeoutError:
             logger.error("Agent response timed out")
             yield {
