@@ -198,59 +198,59 @@ Decompose the 5,406-line `agent_manager.py` monolith into 4 focused modules (Ses
     - No circular imports between the 4 modules
     - _Requirements: 6.5_
 
-- [ ] 8. Checkpoint — Phase 1 complete, zero behavior change verified
+- [x] 8. Checkpoint — Phase 1 complete, zero behavior change verified
   - Ensure all tests pass, ask the user if questions arise.
   - Verify SSE event sequence unchanged (6.2)
   - Verify combined LOC of 4 modules is ~1,600 lines ±15% (6.4)
 
-- [ ] 9. Phase 2: Simplify Lifecycle
-  - [ ] 9.1 Remove SIGSTOP/SIGCONT signal handling from SessionUnit
+- [x] 9. Phase 2: Simplify Lifecycle
+  - [x] 9.1 Remove SIGSTOP/SIGCONT signal handling from SessionUnit
     - Delete all `os.kill(pid, signal.SIGSTOP)` and `os.kill(pid, signal.SIGCONT)` calls
     - Remove freeze/thaw state tracking
     - SessionUnit manages subprocess as binary: alive (IDLE/STREAMING/WAITING_INPUT) or dead (COLD/DEAD)
     - _Requirements: 7.1, 7.2_
 
-  - [ ] 9.2 Remove global PID tracking from LifecycleManager
+  - [x] 9.2 Remove global PID tracking from LifecycleManager
     - Delete `_tracked_pids`, `_pid_spawn_times`, `_streaming_pids` sets/dicts
     - Remove periodic orphan sweep loops (keep only startup orphan reaper)
     - _Requirements: 7.6, 7.7_
 
-  - [ ] 9.3 Implement SDK `interrupt()` for Stop button with 5s kill fallback
+  - [x] 9.3 Implement SDK `interrupt()` for Stop button with 5s kill fallback
     - `SessionUnit.interrupt()` calls `ClaudeSDKClient.interrupt()` via `asyncio.wait_for(timeout=5.0)`
     - On success: STREAMING→IDLE, subprocess stays warm
     - On timeout: force-kill subprocess, STREAMING→DEAD→COLD
     - _Requirements: 7.3, 7.4, 7.5, 11.1, 11.2, 11.3, 11.4_
 
-  - [ ] 9.4 Simplify to 12-hour TTL, remove multi-tier timeout system
+  - [x] 9.4 Simplify to 12-hour TTL, remove multi-tier timeout system
     - Remove 5min freeze timeout, 2hr kill timeout, 8hr TTL tiers
     - Single TTL = 43200s (12 hours) for idle session cleanup
     - _Requirements: 7.8_
 
-- [ ] 10. Checkpoint — Phase 2 complete, lifecycle simplified
+- [x] 10. Checkpoint — Phase 2 complete, lifecycle simplified
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 11. Phase 3: Frontend Zustand Single Store
-  - [ ] 11.1 Create `desktop/src/stores/tabStore.ts` with Zustand store
+- [-] 11. Phase 3: Frontend Zustand Single Store
+  - [x] 11.1 Create `desktop/src/stores/tabStore.ts` with Zustand store
     - Install `zustand` dependency if not present
     - Implement `TabStore` interface with `tabs: Record<string, TabState>`, `activeTabId`
     - Implement tab CRUD: `createTab()`, `closeTab()`, `setActiveTab()`
     - Implement per-tab state updates: `setStreaming()`, `appendMessage()`, `updateMessage()`, `setContextWarning()`
     - _Requirements: 8.1, 8.2, 8.3_
 
-  - [ ] 11.2 Implement tab persistence and lazy message loading
+  - [x] 11.2 Implement tab persistence and lazy message loading
     - `persistTabs()`: debounced 500ms write to `~/.swarm-ai/open_tabs.json`
     - `restoreTabs()`: load tab metadata from `open_tabs.json` on startup
     - `loadMessages()`: lazy-load messages from backend API when tab becomes active
     - Background tab SSE events update store without triggering active tab re-renders (Zustand selectors)
     - _Requirements: 8.4, 8.5, 8.6, 8.7_
 
-  - [ ] 11.3 Write property test for tab state serialization round-trip
+  - [x] 11.3 Write property test for tab state serialization round-trip
     - **Property 16: Tab state serialization round-trip**
     - Create `desktop/src/stores/__tests__/tabStore.property.test.ts`
     - Generate tab states with `fc.record({sessionId: fc.uuid(), ...})`, persist + restore, verify equivalence
     - **Validates: Requirements 8.4, 8.5**
 
-  - [ ] 11.4 Migrate ChatPage.tsx and hooks to use Zustand store
+  - [-] 11.4 Migrate ChatPage.tsx and hooks to use Zustand store
     - Replace `tabMapRef` reads with Zustand selectors
     - Replace `useState` tab state with Zustand store reads
     - Replace manual `bumpRender()` calls with Zustand's automatic reactivity
@@ -266,18 +266,18 @@ Decompose the 5,406-line `agent_manager.py` monolith into 4 focused modules (Ses
 - [ ] 12. Checkpoint — Phase 3 complete, frontend migrated
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 13. Phase 4: Lazy MCP Loading
-  - [ ] 13.1 Implement lazy MCP in PromptBuilder
+- [x] 13. Phase 4: Lazy MCP Loading
+  - [x] 13.1 Implement lazy MCP in PromptBuilder
     - Modify `build_mcp_config(lazy=True)` to return only `builder-mcp` in initial config
     - Support configuring a subset of MCP servers per session based on runtime demand
     - _Requirements: 9.1, 9.3_
 
-  - [ ] 13.2 Write property test for MCP subset configuration
+  - [x] 13.2 Write property test for MCP subset configuration
     - **Property 17: MCP subset configuration**
     - Generate subsets of available MCP servers, verify `build_mcp_config` returns exactly that subset; when `lazy=True`, verify only `{builder-mcp}`
     - **Validates: Requirements 9.1, 9.3**
 
-  - [ ] 13.3 Implement MCP hot-swap in SessionUnit
+  - [x] 13.3 Implement MCP hot-swap in SessionUnit
     - When Claude CLI requires a tool from a non-loaded MCP server, trigger subprocess reclaim + respawn with additional MCP server
     - Reduce per-session memory by not loading unused MCP servers (outlook-mcp, slack-mcp, taskei-mcp, aws-sentral-mcp) at startup
     - _Requirements: 9.2, 9.4_
