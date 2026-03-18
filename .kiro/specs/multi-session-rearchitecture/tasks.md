@@ -33,25 +33,25 @@ Decompose the 5,406-line `agent_manager.py` monolith into 4 focused modules (Ses
     - Create integration test: submit hooks from multiple "sessions" via `asyncio.gather`, verify no two hook executions overlap using timestamps
     - **Validates: Requirements 4.3, 5.4**
 
-- [-] 2. Checkpoint — P0 fixes validated
+- [x] 2. Checkpoint — P0 fixes validated
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 3. Phase 1: Extract SessionUnit (~300 LOC, zero behavior change)
-  - [ ] 3.1 Create `backend/core/session_unit.py` with SessionState enum and SessionUnit dataclass
+- [x] 3. Phase 1: Extract SessionUnit (~300 LOC, zero behavior change)
+  - [x] 3.1 Create `backend/core/session_unit.py` with SessionState enum and SessionUnit dataclass
     - Implement `SessionState` enum (COLD, IDLE, STREAMING, WAITING_INPUT, DEAD)
     - Implement `SessionUnit` dataclass with all fields from design (session_id, agent_id, state, created_at, last_used, _client, _wrapper, _lock, _sdk_session_id, _interrupted, _retry_count)
     - Implement properties: `is_alive`, `is_protected`, `pid`
     - Implement `_transition()` with structured logging
     - _Requirements: 1.1, 1.2, 1.10_
 
-  - [ ] 3.2 Implement `SessionUnit.send()` — spawn if COLD, reuse if IDLE
+  - [x] 3.2 Implement `SessionUnit.send()` — spawn if COLD, reuse if IDLE
     - Extract subprocess spawn logic from `agent_manager.py` `_run_query_on_client` into `SessionUnit._spawn()` and `SessionUnit.send()`
     - COLD→STREAMING spawns new subprocess under `_env_lock`, IDLE→STREAMING reuses existing
     - Yield SSE events (session_start, assistant, tool_use, tool_result, ask_user_question, cmd_permission_request, result, error)
     - Implement retry logic: up to 3 retries with exponential backoff for retriable errors (exit -9, broken pipe), using `--resume` flag
     - _Requirements: 1.3, 1.4, 1.5, 1.9, 10.3, 10.5_
 
-  - [ ] 3.3 Implement `SessionUnit.interrupt()`, `continue_with_answer()`, `continue_with_permission()`, `compact()`, `kill()`
+  - [x] 3.3 Implement `SessionUnit.interrupt()`, `continue_with_answer()`, `continue_with_permission()`, `compact()`, `kill()`
     - `interrupt()`: SDK `interrupt()` with 5s timeout, kill fallback. STREAMING→IDLE on success, STREAMING→DEAD→COLD on timeout
     - `continue_with_answer()`: WAITING_INPUT→STREAMING→IDLE/WAITING_INPUT
     - `continue_with_permission()`: WAITING_INPUT→STREAMING→IDLE/WAITING_INPUT
@@ -59,34 +59,34 @@ Decompose the 5,406-line `agent_manager.py` monolith into 4 focused modules (Ses
     - `kill()`: any→DEAD→COLD, force-kill subprocess and clean up
     - _Requirements: 1.7, 7.3, 7.4, 11.1, 11.2, 11.3_
 
-  - [ ] 3.4 Write property test for state machine transitions
+  - [x] 3.4 Write property test for state machine transitions
     - **Property 1: State machine transitions follow the defined transition table**
     - Create `backend/tests/test_session_unit_properties.py`
     - Generate random event sequences, verify each transition matches the state transition table
     - `@given(st.lists(st.sampled_from(events)))`
     - **Validates: Requirements 1.2, 1.3, 1.4, 1.5, 1.7**
 
-  - [ ] 3.5 Write property test for crash isolation
+  - [x] 3.5 Write property test for crash isolation
     - **Property 3: Crash isolation between SessionUnits**
     - Generate pairs of units, crash one, verify other's state/PID/client unchanged
     - **Validates: Requirements 1.8, 10.1, 10.2**
 
-  - [ ] 3.6 Write property test for interrupt preserves subprocess
+  - [x] 3.6 Write property test for interrupt preserves subprocess
     - **Property 15: Interrupt preserves subprocess for reuse**
     - Interrupt STREAMING unit, verify IDLE + same PID, then send reuses same PID
     - **Validates: Requirements 7.5, 11.2, 11.4**
 
-  - [ ] 3.7 Write property test for per-unit retry isolation
+  - [x] 3.7 Write property test for per-unit retry isolation
     - **Property 18: Per-unit retry with cap and isolation**
     - Generate error sequences for multiple units, verify retry count ≤ 3 and no cross-unit interference
     - **Validates: Requirements 10.3, 10.4**
 
-  - [ ] 3.8 Write property test for environment spawn lock scoping
+  - [x] 3.8 Write property test for environment spawn lock scoping
     - **Property 19: Environment spawn lock scoping**
     - Verify `_env_lock` acquired before spawn, released after `wrapper.__aenter__()`, not held during streaming
     - **Validates: Requirements 1.9**
 
-  - [ ] 3.9 Write property test for WAITING_INPUT crash
+  - [x] 3.9 Write property test for WAITING_INPUT crash
     - **Property 20: WAITING_INPUT crash transitions to DEAD**
     - Crash unit in WAITING_INPUT, verify DEAD→COLD transition and error event delivery
     - **Validates: Requirements 1.7, 10.1**
