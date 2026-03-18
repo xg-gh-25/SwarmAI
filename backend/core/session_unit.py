@@ -508,8 +508,19 @@ class SessionUnit:
         from claude_agent_sdk import (
             AssistantMessage,
             ResultMessage,
+            SystemMessage,
+            TextBlock,
             ToolUseBlock,
+            ToolResultBlock,
         )
+        from claude_agent_sdk.types import StreamEvent
+
+        # Pre-import tool summarizer (may not be available in all environments)
+        try:
+            from core.tool_summarizer import summarize_tool_use, get_tool_category, truncate_tool_result
+            _has_tool_summarizer = True
+        except ImportError:
+            _has_tool_summarizer = False
 
         if self._client is None:
             raise RuntimeError(
@@ -543,8 +554,6 @@ class SessionUnit:
                 self._sdk_session_id = message.session_id
 
             # ── SystemMessage: session init metadata ──────────────
-            from claude_agent_sdk import SystemMessage
-            from claude_agent_sdk.types import StreamEvent
             if isinstance(message, SystemMessage):
                 if message.subtype == "init":
                     self._sdk_session_id = message.data.get("session_id")
@@ -576,7 +585,6 @@ class SessionUnit:
 
             # ── AssistantMessage: full content blocks ─────────────
             if isinstance(message, AssistantMessage):
-                from claude_agent_sdk import TextBlock, ToolResultBlock
                 content_blocks = []
                 for block in message.content:
                     if isinstance(block, TextBlock):
@@ -593,11 +601,10 @@ class SessionUnit:
                             self._transition(SessionState.WAITING_INPUT)
                             self.last_used = time.time()
                             return
-                        try:
-                            from core.tool_summarizer import summarize_tool_use, get_tool_category
+                        if _has_tool_summarizer:
                             summary = summarize_tool_use(block.name, block.input)
                             category = get_tool_category(block.name)
-                        except ImportError:
+                        else:
                             summary = f"{block.name}(...)"
                             category = "unknown"
                         content_blocks.append({
@@ -606,10 +613,9 @@ class SessionUnit:
                         })
                     elif isinstance(block, ToolResultBlock):
                         block_content = str(block.content) if block.content else ""
-                        try:
-                            from core.tool_summarizer import truncate_tool_result
+                        if _has_tool_summarizer:
                             truncated, was_truncated = truncate_tool_result(block_content)
-                        except ImportError:
+                        else:
                             truncated = block_content[:2000]
                             was_truncated = len(block_content) > 2000
                         content_blocks.append({
