@@ -6,34 +6,34 @@ Decompose the 5,406-line `agent_manager.py` monolith into 4 focused modules (Ses
 
 ## Tasks
 
-- [ ] 1. P0 Concurrency Fixes (Prerequisites)
-  - [ ] 1.1 Add `fcntl.flock` file lock to EVOLUTION_CHANGELOG writes
+- [x] 1. P0 Concurrency Fixes (Prerequisites)
+  - [x] 1.1 Add `fcntl.flock` file lock to EVOLUTION_CHANGELOG writes
     - Modify `backend/core/session_hooks.py` (or the evolution maintenance hook file) to wrap `_append_changelog` with `fcntl.flock` on a `.lock` sidecar file
     - Acquire `LOCK_EX` before write, release in `finally` block
     - _Requirements: 5.1_
 
-  - [ ] 1.2 Write property test for EVOLUTION_CHANGELOG concurrent write safety
+  - [x] 1.2 Write property test for EVOLUTION_CHANGELOG concurrent write safety
     - **Property 14: EVOLUTION_CHANGELOG concurrent write safety**
     - Create `backend/tests/test_p0_fixes_properties.py`
     - Generate lists of entries, write concurrently with `asyncio.gather`, verify all entries present and valid JSONL
     - **Validates: Requirements 5.1**
 
-  - [ ] 1.3 Add 10-second timeout to DailyActivity lock acquisition
+  - [x] 1.3 Add 10-second timeout to DailyActivity lock acquisition
     - Modify the DailyActivity extraction hook to use `asyncio.wait_for(self._lock.acquire(), timeout=10.0)`
     - On `TimeoutError`, log warning and skip extraction for that cycle
     - _Requirements: 5.2, 5.3_
 
-  - [ ] 1.4 Serialize hook pipeline through a single asyncio queue
+  - [x] 1.4 Serialize hook pipeline through a single asyncio queue
     - Add a hook serialization queue to `BackgroundHookExecutor` (or create one) so all post-session hooks execute one at a time across sessions
     - Ensure hooks do not block the chat response path (fire-and-forget enqueue)
     - _Requirements: 5.4, 4.3_
 
-  - [ ] 1.5 Write property test for hook execution serialization
+  - [x] 1.5 Write property test for hook execution serialization
     - **Property 13: Hook execution serialization**
     - Create integration test: submit hooks from multiple "sessions" via `asyncio.gather`, verify no two hook executions overlap using timestamps
     - **Validates: Requirements 4.3, 5.4**
 
-- [ ] 2. Checkpoint — P0 fixes validated
+- [-] 2. Checkpoint — P0 fixes validated
   - Ensure all tests pass, ask the user if questions arise.
 
 - [ ] 3. Phase 1: Extract SessionUnit (~300 LOC, zero behavior change)

@@ -137,32 +137,93 @@ class SessionLifecycleHookManager:
                 )
 
 
+class _HookWorkItem:
+    """Internal work item for the hook serialization queue.
+
+    Each item represents either a full hook chain (``fire()``) or a
+    single hook (``fire_single()``).  The worker processes items one
+    at a time, guaranteeing no two hook executions overlap.
+    """
+
+    __slots__ = ("context", "skip_hooks", "single_hook", "single_timeout")
+
+    def __init__(
+        self,
+        context: HookContext,
+        skip_hooks: list[str] | None = None,
+        single_hook: SessionLifecycleHook | None = None,
+        single_timeout: float = 30.0,
+    ) -> None:
+        self.context = context
+        self.skip_hooks = skip_hooks
+        self.single_hook = single_hook
+        self.single_timeout = single_timeout
+
+
 class BackgroundHookExecutor:
-    """Fire-and-forget hook execution, fully decoupled from the chat path.
+    """Fire-and-forget hook execution, serialized through a single queue.
 
-    Hooks run as background asyncio.Tasks.  The chat path (session
-    cleanup, shutdown, idle check) never blocks waiting for hook
-    completion.  On shutdown, ``drain()`` gives pending hooks a
-    bounded grace period before cancellation.
+    All hook work — whether a full hook chain (``fire()``) or a single
+    hook (``fire_single()``) — is enqueued and processed one at a time
+    by a single background worker.  This prevents concurrent hook runs
+    across sessions, eliminating race conditions on shared resources
+    (git index, DailyActivity files, EVOLUTION_CHANGELOG).
 
-    A shared ``git_lock`` serializes all git operations across hooks
-    to prevent ``.git/index.lock`` contention when multiple sessions
-    close concurrently.
+    The chat path (session cleanup, shutdown, idle check) never blocks
+    waiting for hook completion — ``fire()`` / ``fire_single()`` return
+    immediately after enqueuing.
+
+    A shared ``git_lock`` serializes git operations within hooks that
+    need it (e.g. ``WorkspaceAutoCommitHook``).
+
+    On shutdown, ``drain()`` signals the worker to stop, gives pending
+    hooks a bounded grace period, then cancels stragglers.
 
     Key design decisions:
-    - ``fire()`` / ``fire_single()`` return immediately — caller is
-      never blocked.
-    - Each task is fully error-isolated — a failing hook does not
+    - ``fire()`` / ``fire_single()`` enqueue and return immediately —
+      caller is never blocked.
+    - A single ``_worker`` task processes items sequentially — no two
+      hook executions overlap across sessions.
+    - Each item is fully error-isolated — a failing hook does not
       affect the chat experience or other hooks.
     - ``drain()`` is only called once during shutdown, with a bounded
       timeout.  Hooks that don't finish are cancelled — they are
       designed to be idempotent and will retry next session/startup.
     """
 
+    QUEUE_MAX_SIZE: int = 100
+
     def __init__(self, hook_manager: SessionLifecycleHookManager) -> None:
         self._hook_manager = hook_manager
         self._pending: set[asyncio.Task] = set()
         self._git_lock = asyncio.Lock()
+        self._queue: asyncio.Queue[_HookWorkItem | None] = asyncio.Queue(
+            maxsize=self.QUEUE_MAX_SIZE
+        )
+        self._worker_task: asyncio.Task | None = None
+        self._started = False
+
+    def start(self) -> None:
+        """Start the background worker that processes the hook queue.
+
+        Must be called once after construction (typically at app startup).
+        Safe to call multiple times — subsequent calls are no-ops.
+        """
+        if self._started:
+            return
+        self._started = True
+        self._worker_task = asyncio.create_task(
+            self._worker(), name="hook-queue-worker"
+        )
+
+    def _ensure_started(self) -> None:
+        """Auto-start the worker on first enqueue if not already started.
+
+        This provides backward compatibility — callers that don't
+        explicitly call ``start()`` still get a working executor.
+        """
+        if not self._started:
+            self.start()
 
     @property
     def hooks(self) -> list[SessionLifecycleHook]:
@@ -175,7 +236,11 @@ class BackgroundHookExecutor:
         return self._git_lock
 
     def fire(self, context: HookContext, skip_hooks: list[str] | None = None) -> None:
-        """Queue all hooks for background execution.  Returns immediately.
+        """Enqueue all hooks for serialized background execution.
+
+        Returns immediately — the caller is never blocked.  The work
+        item is processed by the single background worker, ensuring
+        hooks from different sessions do not run concurrently.
 
         Args:
             context: Session metadata for the hooks.
@@ -183,12 +248,16 @@ class BackgroundHookExecutor:
                 ``["daily_activity_extraction"]`` when activity was
                 already extracted by the idle trigger).
         """
-        task = asyncio.create_task(
-            self._run_all_safe(context, skip_hooks),
-            name=f"hooks-{context.session_id[:8]}",
-        )
-        self._pending.add(task)
-        task.add_done_callback(self._pending.discard)
+        self._ensure_started()
+        item = _HookWorkItem(context=context, skip_hooks=skip_hooks)
+        try:
+            self._queue.put_nowait(item)
+        except asyncio.QueueFull:
+            logger.warning(
+                "Hook queue full (%d items) — dropping hooks for session %s",
+                self.QUEUE_MAX_SIZE,
+                context.session_id,
+            )
 
     def fire_single(
         self,
@@ -196,21 +265,44 @@ class BackgroundHookExecutor:
         context: HookContext,
         timeout: float = 30.0,
     ) -> None:
-        """Fire a single hook in the background.  Returns immediately."""
-        task = asyncio.create_task(
-            self._run_single_safe(hook, context, timeout),
-            name=f"hook-{hook.name}-{context.session_id[:8]}",
+        """Enqueue a single hook for serialized background execution.
+
+        Returns immediately — the caller is never blocked.
+        """
+        self._ensure_started()
+        item = _HookWorkItem(
+            context=context, single_hook=hook, single_timeout=timeout
         )
-        self._pending.add(task)
-        task.add_done_callback(self._pending.discard)
+        try:
+            self._queue.put_nowait(item)
+        except asyncio.QueueFull:
+            logger.warning(
+                "Hook queue full (%d items) — dropping hook '%s' for session %s",
+                self.QUEUE_MAX_SIZE,
+                hook.name,
+                context.session_id,
+            )
 
     @property
     def pending_count(self) -> int:
-        """Number of hook tasks currently in flight."""
-        return len(self._pending)
+        """Number of hook items queued plus any currently executing.
+
+        Includes: items waiting in the queue + 1 if the worker is
+        actively processing an item (worker task alive and queue was
+        non-empty when it last dequeued).
+        """
+        queued = self._queue.qsize()
+        worker_active = (
+            self._worker_task is not None
+            and not self._worker_task.done()
+        )
+        # If worker is active, it's either processing an item or waiting
+        # for the next one.  Count it as 1 additional pending item when
+        # there are queued items or the worker just started.
+        return queued + (1 if worker_active else 0)
 
     async def drain(self, timeout: float = 10.0) -> tuple[int, int]:
-        """Wait for pending hooks to complete; cancel stragglers.
+        """Signal the worker to stop and wait for pending hooks.
 
         Called once during shutdown.  Returns ``(completed, cancelled)``
         counts.  Most hooks are idempotent and will naturally retry on
@@ -218,18 +310,30 @@ class BackgroundHookExecutor:
         DailyActivity extraction is NOT idempotent — a cancelled
         extraction means that session's summary is permanently lost.
         """
-        if not self._pending:
+        # Send sentinel to tell worker to exit after current queue
+        try:
+            self._queue.put_nowait(None)
+        except asyncio.QueueFull:
+            # Queue is full — force-cancel the worker
+            pass
+
+        tasks_to_wait: set[asyncio.Task] = set()
+        if self._worker_task and not self._worker_task.done():
+            tasks_to_wait.add(self._worker_task)
+        tasks_to_wait.update(self._pending)
+
+        if not tasks_to_wait:
             return (0, 0)
 
-        pending_snapshot = set(self._pending)
         logger.info(
-            "Draining %d pending hook tasks (timeout=%ds)",
-            len(pending_snapshot),
+            "Draining hook executor (queue=%d, in-flight=%d, timeout=%ds)",
+            self._queue.qsize(),
+            len(self._pending),
             timeout,
         )
 
         done, still_pending = await asyncio.wait(
-            pending_snapshot, timeout=timeout
+            tasks_to_wait, timeout=timeout
         )
 
         for task in still_pending:
@@ -249,6 +353,53 @@ class BackgroundHookExecutor:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    async def _worker(self) -> None:
+        """Single background worker that processes hook items sequentially.
+
+        Runs forever until a ``None`` sentinel is received (from
+        ``drain()``) or the task is cancelled.  Each item is executed
+        in its own error-isolated wrapper — a failing hook never
+        crashes the worker.
+        """
+        logger.info("Hook queue worker started")
+        try:
+            while True:
+                item = await self._queue.get()
+                if item is None:
+                    # Sentinel — drain remaining items then exit
+                    await self._drain_remaining()
+                    break
+                await self._process_item(item)
+                self._queue.task_done()
+        except asyncio.CancelledError:
+            logger.info("Hook queue worker cancelled (shutdown)")
+            return
+        except Exception as exc:
+            logger.error("Hook queue worker crashed: %s", exc, exc_info=True)
+        finally:
+            logger.info("Hook queue worker stopped")
+
+    async def _drain_remaining(self) -> None:
+        """Process any remaining items in the queue after sentinel."""
+        while not self._queue.empty():
+            try:
+                item = self._queue.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            if item is None:
+                continue
+            await self._process_item(item)
+            self._queue.task_done()
+
+    async def _process_item(self, item: _HookWorkItem) -> None:
+        """Execute a single work item (full chain or single hook)."""
+        if item.single_hook is not None:
+            await self._run_single_safe(
+                item.single_hook, item.context, item.single_timeout
+            )
+        else:
+            await self._run_all_safe(item.context, item.skip_hooks)
 
     async def _run_all_safe(
         self,
