@@ -46,6 +46,35 @@ npm run build:all
 # Build artifacts: ./src-tauri/target/release/bundle/
 ```
 
+### Development Mode
+
+Two paths to develop and test:
+
+**`./dev.sh start`** — runs Python directly (picks up all new code, no rebuild needed)
+
+```bash
+# Start backend + frontend in dev mode
+./dev.sh start
+
+# Or start them separately:
+./dev.sh backend   # Restart backend only (after Python changes)
+./dev.sh frontend  # Start frontend only (backend already running)
+./dev.sh kill      # Stop all dev processes
+./dev.sh status    # Show what's running
+```
+
+**`./dev.sh build`** — rebuilds sidecar binary + Tauri app (takes longer, production-like)
+
+```bash
+# Full production build (PyInstaller + Tauri → DMG)
+./dev.sh build
+
+# Quick build: skip PyInstaller (frontend/Rust changes only)
+./dev.sh quick
+```
+
+Use `./dev.sh start` for daily development — it runs the Python backend directly so code changes take effect immediately without rebuilding. Use `./dev.sh build` when you need to test the production binary or create a release.
+
 ---
 
 ## 2. Configure API
