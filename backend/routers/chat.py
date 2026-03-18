@@ -50,10 +50,14 @@ if _USE_SESSION_ROUTER:
     _prompt_builder = PromptBuilder(config=_config)
     _session_router = SessionRouter(prompt_builder=_prompt_builder, config=_config)
     _lifecycle_manager = LifecycleManager(router=_session_router)
+    # Note: _lifecycle_manager.start() must be called from an async context
+    # (e.g., FastAPI lifespan or first request). Module-level import is sync.
+    _lifecycle_started = False
     logger.info("Using NEW SessionRouter architecture (USE_SESSION_ROUTER=true)")
 else:
     _session_router = None
     _lifecycle_manager = None
+    _lifecycle_started = True  # Not applicable for legacy path
     logger.info("Using LEGACY AgentManager architecture")
 
 from core.exceptions import (
@@ -290,6 +294,12 @@ async def chat_stream(request: Request):
     # Validate multimodal content blocks if present
     if chat_request.content:
         validate_content(chat_request.content)
+
+    # Start LifecycleManager on first request (needs async context)
+    global _lifecycle_started
+    if _USE_SESSION_ROUTER and _lifecycle_manager and not _lifecycle_started:
+        _lifecycle_started = True
+        await _lifecycle_manager.start()
 
     # Verify agent exists (lightweight check — no config assembly)
     if not await agent_exists(chat_request.agent_id):
@@ -612,11 +622,7 @@ async def delete_session(session_id: str):
     prevent the stale reaper from double-firing hooks.
     """
     # 1. Fire lifecycle hooks BEFORE data deletion (fire-and-forget).
-    #    Hooks run as background tasks — delete_session returns immediately.
-    #    This prevents DailyActivity extraction / git commit / distillation
-    #    from blocking the UI when a user closes a tab.
-    hook_executor = agent_manager.hook_executor
-    if hook_executor:
+    if _USE_SESSION_ROUTER and _session_router is not None and _lifecycle_manager is not None:
         try:
             session = await session_manager.get_session(session_id)
             if session:
@@ -629,13 +635,35 @@ async def delete_session(session_id: str):
                     session_start_time=session.created_at,
                     session_title=session.title,
                 )
-                hook_executor.fire(context)
+                _lifecycle_manager.enqueue_hooks(context)
         except Exception as exc:
             logger.warning("Hook fire failed for delete_session %s: %s", session_id, exc)
 
-    # 2. Clean up active session (skip_hooks=True to prevent stale reaper double-fire)
-    if agent_manager.has_active_session(session_id):
-        await agent_manager._cleanup_session(session_id, skip_hooks=True)
+        # Clean up SessionUnit subprocess
+        unit = _session_router.get_unit(session_id)
+        if unit and unit.is_alive:
+            await unit.kill()
+    else:
+        hook_executor = agent_manager.hook_executor
+        if hook_executor:
+            try:
+                session = await session_manager.get_session(session_id)
+                if session:
+                    from core.session_hooks import HookContext
+                    message_count = await db.messages.count_by_session(session_id)
+                    context = HookContext(
+                        session_id=session_id,
+                        agent_id=session.agent_id,
+                        message_count=message_count,
+                        session_start_time=session.created_at,
+                        session_title=session.title,
+                    )
+                    hook_executor.fire(context)
+            except Exception as exc:
+                logger.warning("Hook fire failed for delete_session %s: %s", session_id, exc)
+
+        if agent_manager.has_active_session(session_id):
+            await agent_manager._cleanup_session(session_id, skip_hooks=True)
 
     # 3. Delete messages and session from DB
     await db.messages.delete_by_session(session_id)
