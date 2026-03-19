@@ -23,7 +23,7 @@ Key public symbols:
 - ``inject_channel_mcp``        — Add channel-specific MCP server
   (moved from ``mcp_config_builder.py``, unchanged logic).
 - ``load_mcp_config``           — Synchronous entry point called by
-  ``AgentManager._build_mcp_config()``.  Reads both layers, merges,
+  ``PromptBuilder._build_mcp_config()``.  Reads both layers, merges,
   converts via ``add_mcp_server_to_dict()``, returns
   ``(mcp_servers, disallowed_tools)``.
 
@@ -439,7 +439,7 @@ def load_mcp_config(
     """Load MCP server configuration from the two-layer file system.
 
     Synchronous entry point called by
-    ``AgentManager._build_mcp_config()``.  No DB access — only reads
+    ``PromptBuilder._build_mcp_config()``.  No DB access — only reads
     two JSON files from ``.claude/mcps/``.
 
     Steps:

@@ -343,10 +343,8 @@ class PromptBuilder:
         Capped at ``WATCHDOG_MAX_TIMEOUT`` to prevent infinite waits.
         Returns ``WATCHDOG_BASE_TIMEOUT`` when no session data is available.
 
-        Unlike the original ``AgentManager._compute_watchdog_timeout`` which
-        reads from internal ``_session_last_input_tokens`` and
-        ``_user_turn_counts`` dicts, this version accepts the metrics as
-        explicit parameters (IO-at-boundaries).
+        Accepts metrics as explicit parameters (IO-at-boundaries) rather
+        than reading from internal state dicts.
 
         Args:
             session_id: Optional session ID (used only for logging).
