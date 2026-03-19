@@ -1,7 +1,7 @@
 """Global session infrastructure registry.
 
 Provides module-level access to the SessionRouter, PromptBuilder,
-LifecycleManager, and hook infrastructure singletons. Initialized once
+LifecycleManager, and hook infrastructure singletons.  Initialized once
 at startup by ``initialize()`` (called from ``main.py`` lifespan).
 
 This replaces the old ``agent_manager`` module-level singleton pattern
@@ -9,15 +9,16 @@ with explicit initialization and clear ownership.
 
 Public symbols:
 
-- ``initialize()``            — Create and wire all components (call once)
-- ``configure_hooks()``       — Wire lifecycle hooks after initialize()
+- ``initialize()``                — Create and wire all components (call once)
+- ``configure_hooks()``           — Wire lifecycle hooks after initialize()
 - ``kill_all_claude_processes()`` — Startup cleanup of leftover processes
-- ``disconnect_all()``        — Graceful shutdown of all sessions
-- ``session_router``          — The SessionRouter singleton
-- ``prompt_builder``          — The PromptBuilder singleton
-- ``lifecycle_manager``       — The LifecycleManager singleton
-- ``hook_executor``           — The BackgroundHookExecutor singleton
-- ``system_prompt_metadata``  — Per-session prompt metadata for TSCC viewer
+- ``disconnect_all()``            — Graceful shutdown of all sessions
+- ``run_skill_creator()``         — AI-powered skill generation via SessionRouter
+- ``session_router``              — The SessionRouter singleton
+- ``prompt_builder``              — The PromptBuilder singleton
+- ``lifecycle_manager``           — The LifecycleManager singleton
+- ``hook_executor``               — The BackgroundHookExecutor singleton
+- ``system_prompt_metadata``      — Per-session prompt metadata for TSCC viewer
 """
 from __future__ import annotations
 
@@ -26,25 +27,35 @@ import os
 import platform
 import signal
 import subprocess
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .session_router import SessionRouter
+    from .prompt_builder import PromptBuilder
+    from .lifecycle_manager import LifecycleManager
+    from .session_hooks import BackgroundHookExecutor, SessionLifecycleHookManager
+    from .app_config_manager import AppConfigManager
 
 logger = logging.getLogger(__name__)
 
-# Module-level singletons — set by initialize()
-session_router: Optional["SessionRouter"] = None
-prompt_builder: Optional["PromptBuilder"] = None
-lifecycle_manager: Optional["LifecycleManager"] = None
-hook_executor: Optional["BackgroundHookExecutor"] = None
-hook_manager: Optional["SessionLifecycleHookManager"] = None
+# ── Module-level singletons (set by initialize / configure_hooks) ──
+session_router: Optional[SessionRouter] = None
+prompt_builder: Optional[PromptBuilder] = None
+lifecycle_manager: Optional[LifecycleManager] = None
+hook_executor: Optional[BackgroundHookExecutor] = None
+hook_manager: Optional[SessionLifecycleHookManager] = None
 
 # Per-session system prompt metadata, keyed by session_id.
-# Populated by PromptBuilder and read by the TSCC API endpoint.
+# Populated by SessionRouter after PromptBuilder runs, read by TSCC API.
+# Cleaned up by delete_session and LifecycleManager TTL kill.
 system_prompt_metadata: dict[str, dict] = {}
 
 _initialized = False
 
 
-def initialize(config: "AppConfigManager") -> None:
+# ── Initialization ────────────────────────────────────────────────
+
+def initialize(config: AppConfigManager) -> None:
     """Create and wire all session infrastructure components.
 
     Called once from ``main.py`` lifespan after config is loaded.
@@ -55,25 +66,29 @@ def initialize(config: "AppConfigManager") -> None:
     if _initialized:
         return
 
-    from .prompt_builder import PromptBuilder
-    from .session_router import SessionRouter
-    from .lifecycle_manager import LifecycleManager
+    from .prompt_builder import PromptBuilder as _PB
+    from .session_router import SessionRouter as _SR
+    from .lifecycle_manager import LifecycleManager as _LM
 
-    prompt_builder = PromptBuilder(config=config)
-    session_router = SessionRouter(prompt_builder=prompt_builder, config=config)
-    lifecycle_manager = LifecycleManager(router=session_router)
+    prompt_builder = _PB(config=config)
+    session_router = _SR(prompt_builder=prompt_builder, config=config)
+    lifecycle_manager = _LM(router=session_router)
 
     _initialized = True
-    logger.info("Session infrastructure initialized (SessionRouter + PromptBuilder + LifecycleManager)")
+    logger.info(
+        "Session infrastructure initialized "
+        "(SessionRouter + PromptBuilder + LifecycleManager)"
+    )
 
 
 def configure_hooks(
-    executor: "BackgroundHookExecutor",
-    manager: "SessionLifecycleHookManager",
+    executor: BackgroundHookExecutor,
+    manager: SessionLifecycleHookManager,
 ) -> None:
     """Wire lifecycle hook infrastructure after initialize().
 
     Called from ``main.py`` lifespan after hooks are registered.
+    Must be called AFTER ``initialize()`` so ``lifecycle_manager`` exists.
     """
     global hook_executor, hook_manager
 
@@ -87,15 +102,17 @@ def configure_hooks(
     logger.info("Session hooks configured in registry")
 
 
+# ── Startup / Shutdown ────────────────────────────────────────────
+
 def kill_all_claude_processes() -> int:
     """Kill ALL claude CLI processes unconditionally.
 
     Called at **startup** — no claude processes should be running before
-    the backend starts. This is more aggressive than orphan reaping
-    which only kills orphans/our-children.
+    the backend starts.  More aggressive than orphan reaping which only
+    kills orphans/our-children.
 
     COE 2026-03-15: At startup, leftover processes from a crashed previous
-    instance are guaranteed stale. Kill them all.
+    instance are guaranteed stale.  Kill them all.
 
     Returns the number of processes killed.
     """
@@ -114,7 +131,6 @@ def kill_all_claude_processes() -> int:
         pids = [int(p) for p in result.stdout.strip().split("\n") if p.strip()]
         for pid in pids:
             try:
-                # Kill children first
                 try:
                     subprocess.run(
                         ["pkill", "-9", "-P", str(pid)],
@@ -152,27 +168,7 @@ async def disconnect_all() -> None:
     logger.info("All sessions disconnected via session_registry")
 
 
-# ── Skill Creator ─────────────────────────────────────────────────
-
-SKILL_CREATOR_SYSTEM_PROMPT_TEMPLATE = """\
-You are a Skill Creator Agent specialized in creating Claude Code skills.
-
-Your task is to help users create high-quality skills that extend Claude's capabilities.
-
-IMPORTANT GUIDELINES:
-1. Always use the skill-creator skill (invoke /skill-creator) to get guidance on skill creation best practices
-2. Follow the skill creation workflow from the skill-creator skill
-3. Create skills in the ~/.swarm-ai/skills/ directory (the user skills directory)
-4. Ensure SKILL.md has proper YAML frontmatter with name and description
-5. Description MUST follow this schema:
-   - First line: one-sentence purpose
-   - TRIGGER: quoted phrases the user would say
-   - DO NOT USE: when a different skill/approach is better (with alternative)
-6. Keep skills concise and focused - only include what Claude needs
-7. Test any scripts you create before completing
-
-Current task: Create a skill named "{skill_name}" that {skill_description}"""
-
+# ── Skill Creator (delegates to skill_creator module) ─────────────
 
 async def run_skill_creator(
     skill_name: str,
@@ -183,11 +179,8 @@ async def run_skill_creator(
 ):
     """Run a skill creation conversation via SessionRouter.
 
-    Builds a specialized agent config and delegates to
-    ``session_router.run_conversation()``.  The skill creator is just
-    a normal conversation with a custom system prompt and tool set.
-
-    Yields SSE event dicts. Adds ``skill_name`` to the ``result`` event.
+    Thin wrapper that delegates to ``skill_creator.run_skill_creator()``.
+    Yields SSE event dicts.
     """
     from .session_utils import _build_error_event
 
@@ -199,59 +192,14 @@ async def run_skill_creator(
         )
         return
 
-    # Build the prompt
-    if user_message:
-        prompt = user_message
-    else:
-        prompt = (
-            f"Please create a new skill with the following specifications:\n\n"
-            f"**Skill Name:** {skill_name}\n"
-            f"**Skill Description:** {skill_description}\n\n"
-            f"Use the skill-creator skill (invoke /skill-creator) to guide your "
-            f"skill creation process. Follow the workflow:\n"
-            f"1. Understand the skill requirements from the description above\n"
-            f"2. Plan reusable contents (scripts, references, assets) if needed\n"
-            f"3. Initialize the skill using the init_skill.py script\n"
-            f"4. Edit SKILL.md and create any necessary files\n"
-            f"5. Test any scripts you create\n\n"
-            f"Create the skill in the `.claude/skills/` directory within the "
-            f"current workspace."
-        )
+    from .skill_creator import run_skill_creator as _run
 
-    system_prompt = SKILL_CREATOR_SYSTEM_PROMPT_TEMPLATE.format(
+    async for event in _run(
+        router=session_router,
         skill_name=skill_name,
         skill_description=skill_description,
-    )
-
-    agent_config = {
-        "name": f"skill-creator-{session_id[:8] if session_id else 'new'}",
-        "description": "Temporary agent for skill creation",
-        "system_prompt": system_prompt,
-        "allowed_tools": [
-            "Bash", "Read", "Write", "Edit", "Glob", "Grep",
-            "Skill", "TodoWrite", "Task",
-        ],
-        "permission_mode": "bypassPermissions",
-        "working_directory": None,
-        "global_user_mode": False,
-        "enable_tool_logging": True,
-        "enable_safety_checks": True,
-        "model": model or "claude-sonnet-4-5-20250929",
-    }
-
-    logger.info(
-        "Skill creator via SessionRouter: name=%s session=%s model=%s",
-        skill_name, session_id, agent_config["model"],
-    )
-
-    async for event in session_router.run_conversation(
-        agent_id="skill-creator",
-        user_message=prompt,
+        user_message=user_message,
         session_id=session_id,
-        enable_skills=True,
-        enable_mcp=False,
-        agent_config=agent_config,
+        model=model,
     ):
-        if event.get("type") == "result":
-            event["skill_name"] = skill_name
         yield event
