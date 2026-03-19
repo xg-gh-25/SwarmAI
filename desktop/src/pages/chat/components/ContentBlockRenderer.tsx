@@ -114,11 +114,11 @@ export function ContentBlockRenderer({
     const thinkingText = (block as { thinking?: string }).thinking || '';
     if (!thinkingText) return null;
     return (
-      <details className="group border border-[var(--color-border)] rounded-lg overflow-hidden text-sm">
+      <details open className="group border border-[var(--color-border)] rounded-lg overflow-hidden text-sm">
         <summary className="px-3 py-2 cursor-pointer bg-[var(--color-card)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] select-none flex items-center gap-1.5">
           <span className="text-xs">💭</span>
-          <span>Thinking…</span>
-          <span className="ml-auto text-xs opacity-60">{thinkingText.length > 200 ? `${Math.ceil(thinkingText.length / 4)} tokens` : ''}</span>
+          <span>Thinking</span>
+          <span className="ml-auto text-xs opacity-60">{thinkingText.length > 200 ? `~${Math.ceil(thinkingText.length / 4)} tokens` : ''}</span>
         </summary>
         <div className="px-3 py-2 border-t border-[var(--color-border)] bg-[var(--color-bg)] text-[var(--color-text-muted)] italic text-xs leading-relaxed whitespace-pre-wrap max-h-64 overflow-y-auto">
           {thinkingText}

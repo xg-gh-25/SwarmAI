@@ -35,6 +35,10 @@ class ContentBlockAccumulator:
             # for the SDK cumulative message deduplication use case
             text = block.get('text', '')
             return f"text:{hash(text)}"
+        elif block_type == 'thinking':
+            # Thinking blocks use content hash like text blocks
+            thinking = block.get('thinking', '')
+            return f"thinking:{hash(thinking)}"
         elif block_type == 'tool_use':
             block_id = block.get('id')
             return f"tool_use:{block_id}" if block_id else None
