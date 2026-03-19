@@ -1,6 +1,6 @@
 """End-to-end integration tests for the system prompt assembly pipeline.
 
-Simulates the full flow that ``AgentManager._build_system_prompt()`` performs:
+Simulates the full flow that ``PromptBuilder.build_system_prompt()`` performs:
 
 1. ``ContextDirectoryLoader.ensure_directory()`` — template sync
 2. ``ContextDirectoryLoader.load_all()`` — context assembly with budget
@@ -35,7 +35,7 @@ from core.context_directory_loader import (
 )
 from core.system_prompt import SystemPromptBuilder
 
-# ── Constants mirrored from agent_manager.py ─────────────────────────
+# ── Constants mirrored from prompt_builder.py ─────────────────────────
 TOKEN_CAP_PER_DAILY_FILE = 2000
 RESUME_CONTEXT_BUDGET = 2000
 EPHEMERAL_HEADROOM = 2 * TOKEN_CAP_PER_DAILY_FILE + RESUME_CONTEXT_BUDGET
@@ -184,7 +184,7 @@ def _simulate_build(
     agent_name: str = "SwarmAI",
     agent_model: str | None = None,
 ) -> tuple[str, dict]:
-    """Reproduce the logic of AgentManager._build_system_prompt().
+    """Reproduce the logic of PromptBuilder.build_system_prompt().
 
     Returns:
         (final_prompt, prompt_metadata)
