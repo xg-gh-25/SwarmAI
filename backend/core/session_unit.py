@@ -718,11 +718,35 @@ class SessionUnit:
             _has_tool_summarizer = True
         except ImportError:
             _has_tool_summarizer = False
-        async for message in self._client.receive_response():
-            # ── Streaming watchdog heartbeat ───────────────────────
-            # Every SDK message (even partial deltas) proves the stream
-            # is still alive.  LifecycleManager reads _last_event_time
-            # to detect stuck streams.
+
+        # ── Per-message timeout: structurally prevents hanging ─────
+        # The SDK async iterator can hang forever if the subprocess
+        # stops producing messages (no ResultMessage, no error, nothing).
+        # Wrap each __anext__() call with a timeout so the stream
+        # CANNOT stay stuck.  On timeout, we raise — the caller's
+        # retry logic handles recovery with --resume.
+        MESSAGE_TIMEOUT = self.STREAMING_TIMEOUT_SECONDS  # 5 min between messages
+        response_iter = self._client.receive_response().__aiter__()
+        while True:
+            try:
+                message = await asyncio.wait_for(
+                    response_iter.__anext__(),
+                    timeout=MESSAGE_TIMEOUT,
+                )
+            except StopAsyncIteration:
+                break
+            except asyncio.TimeoutError:
+                logger.error(
+                    "session_unit.streaming_timeout session_id=%s — "
+                    "no SDK message for %.0fs, breaking stream",
+                    self.session_id, MESSAGE_TIMEOUT,
+                )
+                raise RuntimeError(
+                    f"Streaming timeout: no SDK response for "
+                    f"{MESSAGE_TIMEOUT:.0f}s (session_id={self.session_id})"
+                )
+
+            # ── Heartbeat: track liveness for diagnostics ──────────
             self._last_event_time = time.time()
 
             # Capture SDK session ID from init message

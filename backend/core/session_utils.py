@@ -90,6 +90,8 @@ def _is_retriable_error(raw_error: str) -> bool:
         r"ECONNRESET",
         r"connection reset",
         r"SDK_SUBPROCESS_TIMEOUT",
+        # Streaming timeout — SDK hung without producing messages
+        r"Streaming timeout: no SDK response",
     ]
     for pattern in retriable_patterns:
         if re.search(pattern, raw_error, re.IGNORECASE):
