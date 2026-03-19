@@ -1,6 +1,6 @@
 """Security hooks for the agent execution environment.
 
-This module provides hook factory functions used by AgentManager to enforce
+This module provides hook factory functions used by SessionUnit to enforce
 security policies during agent execution.  Each hook is composed into the
 Claude Agent SDK's hook system via HookMatcher configurations.
 
