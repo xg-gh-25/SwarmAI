@@ -407,7 +407,7 @@ The `CmdPermissionManager` is the primary system — persistent, shared, glob-ba
 
 ---
 
-## Hook Assembly in AgentManager
+## Hook Assembly in SessionRouter
 
 ```python
 async def _build_hooks(self, agent_config, enable_skills, enable_mcp, ...):
@@ -443,9 +443,9 @@ async def _build_hooks(self, agent_config, enable_skills, enable_mcp, ...):
 cmd_perm = CmdPermissionManager()
 cmd_perm.load()  # Reads dangerous_patterns.json + approved_commands.json
 
-agent_manager.configure(
+session_registry.configure(
     config_manager=app_config,
-    cmd_permission_manager=cmd_perm,  # Injected into AgentManager
+    cmd_permission_manager=cmd_perm,  # Injected into SessionRouter
     credential_validator=cred_validator,
 )
 ```
@@ -463,7 +463,7 @@ backend/core/
 │                              # create_skill_access_checker
 ├── cmd_permission_manager.py  # CmdPermissionManager, DEFAULT_DANGEROUS_PATTERNS
 ├── permission_manager.py      # PermissionManager (asyncio signaling)
-└── agent_manager.py           # _build_hooks() assembly
+└── session_registry.py           # _build_hooks() assembly
 
 ~/.swarm-ai/cmd_permissions/
 ├── dangerous_patterns.json    # Glob patterns (seeded from DEFAULT_DANGEROUS_PATTERNS)
