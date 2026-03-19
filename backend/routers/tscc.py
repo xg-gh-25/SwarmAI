@@ -90,9 +90,11 @@ async def get_system_prompt(session_id: str):
     session_id (e.g. after backend restart).  The metadata will be
     populated when the next conversation starts on this session.
     """
-    from core.agent_manager import _system_prompt_metadata
+    # NOTE: system_prompt_metadata is populated by PromptBuilder and stored
+    # in session_registry. Shows metadata for sessions using the new architecture.
+    from core import session_registry
 
-    metadata = _system_prompt_metadata.get(session_id)
+    metadata = session_registry.system_prompt_metadata.get(session_id)
     if metadata is None:
         return SystemPromptMetadata()
     return SystemPromptMetadata(**metadata)

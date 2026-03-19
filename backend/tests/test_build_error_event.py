@@ -1,6 +1,6 @@
 """Unit tests for _build_error_event error sanitization helper.
 
-Tests the ``_build_error_event`` function from ``agent_manager.py`` which
+Tests the ``_build_error_event`` function from ``session_utils.py`` which
 conditionally includes traceback detail based on ``settings.debug``.
 
 Key invariants verified:
@@ -15,7 +15,7 @@ from unittest.mock import patch
 
 import pytest
 
-from core.agent_manager import _build_error_event
+from core.session_utils import _build_error_event
 
 
 # ---------------------------------------------------------------------------
@@ -40,7 +40,7 @@ class TestProductionMode:
     """Error events in production mode must not leak internal details."""
 
 
-    @patch("core.agent_manager.settings")
+    @patch("core.session_utils.settings")
     def test_traceback_stripped(self, mock_settings):
         """Tracebacks must not appear in detail when debug=False."""
         mock_settings.debug = False
@@ -52,7 +52,7 @@ class TestProductionMode:
         assert 'File "' not in detail
         assert '.py", line' not in detail
 
-    @patch("core.agent_manager.settings")
+    @patch("core.session_utils.settings")
     def test_exception_class_preserved(self, mock_settings):
         """The exception class name should survive sanitization."""
         mock_settings.debug = False
@@ -62,7 +62,7 @@ class TestProductionMode:
         detail = event.get("detail", "")
         assert "ConnectionError: timeout" in detail
 
-    @patch("core.agent_manager.settings")
+    @patch("core.session_utils.settings")
     def test_no_detail_when_only_traceback(self, mock_settings):
         """If detail is purely traceback lines, detail key may be absent."""
         mock_settings.debug = False
@@ -75,7 +75,7 @@ class TestProductionMode:
         # All lines stripped → detail should be absent or empty
         assert "detail" not in event or event["detail"] == ""
 
-    @patch("core.agent_manager.settings")
+    @patch("core.session_utils.settings")
     def test_safe_detail_preserved(self, mock_settings):
         """Non-traceback detail strings pass through unchanged."""
         mock_settings.debug = False
@@ -92,7 +92,7 @@ class TestProductionMode:
 class TestDebugMode:
     """In debug mode, full traceback detail must be preserved."""
 
-    @patch("core.agent_manager.settings")
+    @patch("core.session_utils.settings")
     def test_full_traceback_included(self, mock_settings):
         """Full traceback must appear in detail when debug=True."""
         mock_settings.debug = True
@@ -101,7 +101,7 @@ class TestDebugMode:
         )
         assert event["detail"] == SAMPLE_TRACEBACK
 
-    @patch("core.agent_manager.settings")
+    @patch("core.session_utils.settings")
     def test_file_paths_included(self, mock_settings):
         """File paths and line numbers must be present in debug mode."""
         mock_settings.debug = True

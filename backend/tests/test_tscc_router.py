@@ -140,8 +140,8 @@ class TestGetSystemPrompt:
     """Tests for the GET system prompt metadata endpoint."""
 
     def test_returns_200_with_valid_metadata(self, client: TestClient):
-        from core.agent_manager import _system_prompt_metadata
-        _system_prompt_metadata["session-123"] = {
+        from core import session_registry
+        session_registry.system_prompt_metadata["session-123"] = {
             "files": [
                 {"filename": "SWARMAI.md", "tokens": 500, "truncated": False},
                 {"filename": "IDENTITY.md", "tokens": 300, "truncated": False},
@@ -158,7 +158,7 @@ class TestGetSystemPrompt:
             assert body["files"][0]["filename"] == "SWARMAI.md"
             assert "full_text" in body
         finally:
-            _system_prompt_metadata.pop("session-123", None)
+            session_registry.system_prompt_metadata.pop("session-123", None)
 
     def test_returns_default_for_missing_session(self, client: TestClient):
         """Missing session returns 200 with empty metadata (not 404).
@@ -173,8 +173,8 @@ class TestGetSystemPrompt:
         assert body["files"] == []
 
     def test_response_fields_are_snake_case(self, client: TestClient):
-        from core.agent_manager import _system_prompt_metadata
-        _system_prompt_metadata["session-sc"] = {
+        from core import session_registry
+        session_registry.system_prompt_metadata["session-sc"] = {
             "files": [{"filename": "SOUL.md", "tokens": 100, "truncated": False}],
             "total_tokens": 100,
             "full_text": "test",
@@ -184,4 +184,4 @@ class TestGetSystemPrompt:
             assert resp.status_code == 200
             assert _all_keys_snake_case(resp.json())
         finally:
-            _system_prompt_metadata.pop("session-sc", None)
+            session_registry.system_prompt_metadata.pop("session-sc", None)
