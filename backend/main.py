@@ -461,18 +461,6 @@ async def lifespan(app: FastAPI):
     hook_manager.register(DistillationTriggerHook())
     hook_manager.register(EvolutionMaintenanceHook())
 
-    agent_manager_shim = None
-    try:
-        from core.agent_manager import agent_manager as agent_manager_shim
-        agent_manager_shim.configure(
-            config_manager=app_config,
-            credential_validator=cred_validator,
-        )
-        agent_manager_shim.set_hook_manager(hook_manager)
-        agent_manager_shim.set_hook_executor(hook_executor)
-    except Exception as exc:
-        logger.warning("AgentManager shim configure failed (skill creator may not work): %s", exc)
-
     # Wire hooks into session_registry (new architecture)
     session_registry.configure_hooks(executor=hook_executor, manager=hook_manager)
     set_compliance_tracker(compliance_tracker)

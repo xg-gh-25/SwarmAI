@@ -30,7 +30,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
-from core.agent_manager import agent_manager  # Skill creator uses AgentManager directly (separate flow from SessionRouter)
+from core import session_registry  # Skill creator uses SessionRouter
 from core.initialization_manager import initialization_manager
 from core.projection_layer import ProjectionLayer
 from core.skill_manager import SkillInfo, skill_manager
@@ -189,7 +189,7 @@ async def generate_skill_with_agent(request: Request):
         async def event_generator():
             """Yield SSE events from the agent conversation."""
             try:
-                async for event in agent_manager.run_skill_creator_conversation(
+                async for event in session_registry.run_skill_creator(
                     skill_name=sanitized_name,
                     skill_description=skill_description or "",
                     user_message=message,

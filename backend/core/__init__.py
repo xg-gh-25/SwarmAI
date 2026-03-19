@@ -3,10 +3,6 @@
 The multi-session architecture (SessionUnit, SessionRouter, PromptBuilder,
 LifecycleManager) is the active code path for all chat endpoints.
 ``session_registry`` provides module-level access to the singletons.
-
-Legacy ``AgentManager`` is retained ONLY for the skill creator flow
-(``run_skill_creator_conversation``).  It will be removed once the
-skill creator is migrated to SessionRouter.
 """
 from .session_manager import SessionManager, session_manager
 from .system_prompt import SystemPromptBuilder
