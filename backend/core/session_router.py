@@ -33,8 +33,7 @@ logger = logging.getLogger(__name__)
 class SessionRouter:
     """Routes chat requests to SessionUnits. Enforces MAX_CONCURRENT=2.
 
-    Public API matches current AgentManager surface for zero-change
-    migration of ``routers/chat.py``.
+    Public API surface consumed by ``routers/chat.py``.
 
     Invariants:
 
@@ -173,7 +172,7 @@ class SessionRouter:
             if new_state in (SessionState.IDLE, SessionState.COLD, SessionState.DEAD):
                 self._slot_available.set()
 
-    # ── Public API (matches AgentManager surface) ─────────────────
+    # ── Public API ────────────────────────────────────────────────
 
     async def run_conversation(
         self,
@@ -187,7 +186,7 @@ class SessionRouter:
         editor_context: Optional[dict] = None,
         agent_config: Optional[dict] = None,
     ) -> AsyncIterator[dict]:
-        """Entry point — same signature as AgentManager.run_conversation.
+        """Entry point for chat requests.
 
         1. Get or create SessionUnit
         2. Build options via PromptBuilder

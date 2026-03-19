@@ -35,7 +35,7 @@ cd desktop && npm run build:all
 
 ### Data Flow
 ```
-User Input → React Frontend → FastAPI Backend → AgentManager → ClaudeSDKClient → SSE Streaming → UI
+User Input → React Frontend → FastAPI Backend → SessionRouter → SessionUnit → ClaudeSDKClient → SSE Streaming → UI
 ```
 
 ### Desktop Architecture

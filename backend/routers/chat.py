@@ -649,10 +649,9 @@ async def handle_cmd_permission_response(request: PermissionResponseRequest):
     that was flagged by the human approval hook. Use /cmd-permission-continue for
     streaming response.
 
-    NOTE: This endpoint uses the shared permission_manager singleton, which works
-    correctly with both AgentManager and SessionRouter paths. The permission
+    NOTE: This endpoint uses the shared permission_manager singleton. The permission
     decision is delivered to the waiting subprocess via asyncio.Event signaling,
-    independent of which routing layer created the session.
+    independent of which SessionUnit holds the session.
     """
     logger.info(f"Received permission response for request {request.request_id}: {request.decision}")
 
