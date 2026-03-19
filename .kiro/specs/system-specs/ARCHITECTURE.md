@@ -1,6 +1,6 @@
 # SwarmAI Architecture
 
-**Version:** 8.0
+**Version:** 9.0
 **Last Updated:** March 2026
 **Status:** Production
 
@@ -21,7 +21,7 @@ SwarmAI is a persistent agentic operating system for knowledge work. It's a desk
 | AI Providers | AWS Bedrock (default), Anthropic API |
 | Database | SQLite (pre-seeded for fast startup, WAL mode) |
 | Styling | Tailwind CSS 4.x + CSS custom properties |
-| State | TanStack Query (server) + useUnifiedTabState (tabs) |
+| State | TanStack Query (server) + Zustand (tabs) |
 | Testing | Vitest + fast-check (frontend), pytest + Hypothesis (backend) |
 
 ---
@@ -44,10 +44,10 @@ SwarmAI is a persistent agentic operating system for knowledge work. It's a desk
 │  (Vite bundle)   │◄──►│  FastAPI on dynamic port      │
 │                  │HTTP │                               │
 │  Three-column    │+SSE │  ┌─────────────────────────┐ │
-│  layout:         │     │  │ AgentManager             │ │
-│  • SwarmWS (L)   │     │  │ • ClaudeSDKClient        │ │
-│  • Chat (C)      │     │  │ • Session ID mapping     │ │
-│  • Radar (R)     │     │  │ • Hook system            │ │
+│  layout:         │     │  │ SessionRouter + Units    │ │
+│  • SwarmWS (L)   │     │  │ • ClaudeSDKClient/tab   │ │
+│  • Chat (C)      │     │  │ • PromptBuilder         │ │
+│  • Radar (R)     │     │  │ • LifecycleManager      │ │
 │  + TSCC panel    │     │  └────────┬────────────────┘ │
 └──────────────────┘     │           │                   │
                          │  ┌────────▼────────────────┐ │
@@ -86,7 +86,7 @@ Three-column layout with embedded cognitive context:
 
 | Hook | Purpose |
 |------|---------|
-| `useUnifiedTabState` | Single source of truth for all tab state (Map + render counter) |
+| `useZustandTabBridge` | Bridge: Zustand tab store ↔ legacy tabMapRef (incremental migration) |
 | `useChatStreamingLifecycle` | SSE streaming, messages, sessionId, pendingQuestion, isStreaming |
 | `useTSCCState` | Thread-scoped cognitive context state |
 | `useRightSidebarGroup` | Mutual exclusion for right sidebar panels |
@@ -99,13 +99,18 @@ Three-column layout with embedded cognitive context:
 
 ### Tab State Model
 
-`useUnifiedTabState` uses `useRef<Map<string, UnifiedTab>>` + `useState` render counter:
+Zustand single store (`desktop/src/stores/tabStore.ts`) is the source of truth for all tab state:
 
-- `tabMapRef`: Authoritative store — mutations don't trigger re-renders
-- `renderCounter`: Bumped after mutations to trigger `useMemo` re-derivation
-- `restoreFromFile()`: Loads tabs from `~/.swarm-ai/open_tabs.json` on startup
-- Debounced save effect persists to file every 500ms
+- `tabs: Record<string, TabState>`: Per-tab state (sessionId, agentId, messages, streaming status)
+- `activeTabId`: Currently focused tab
+- `createTab()`, `closeTab()`, `setActiveTab()`: Tab CRUD
+- `setStreaming()`, `appendMessage()`, `updateMessage()`: Per-tab state updates
+- `persistTabs()`: Debounced 500ms write to `~/.swarm-ai/open_tabs.json`
+- `restoreTabs()`: Load tab metadata from file on startup
 - Messages loaded lazily from backend API when a tab becomes active
+- Background tab SSE events update store without triggering active tab re-renders (Zustand selectors)
+
+`useZustandTabBridge` provides backward compatibility during incremental migration from the old `tabMapRef` pattern.
 
 ### Frontend File Structure
 
@@ -125,7 +130,7 @@ desktop/src/
 │       ├── constants.ts          # Welcome message, sidebar configs
 │       └── utils.ts              # Session grouping helpers
 ├── hooks/
-│   ├── useUnifiedTabState.ts     # Tab state (Map + render counter)
+│   ├── useZustandTabBridge.ts    # Bridge: Zustand store ↔ legacy tabMapRef
 │   ├── useChatStreamingLifecycle.ts  # SSE streaming lifecycle
 │   ├── useTSCCState.ts           # Cognitive context state
 │   ├── useUnifiedAttachments.ts  # Unified file attachment lifecycle
@@ -226,7 +231,13 @@ backend/
 ├── main.py                        # FastAPI entry, lifespan, startup paths
 ├── config.py                      # Settings from ~/.swarm-ai/config.json
 ├── core/
-│   ├── agent_manager.py           # ClaudeSDKClient wrapper, session mapping, hooks
+│   ├── session_registry.py        # Global singletons, startup/shutdown, skill creator entry
+│   ├── session_unit.py            # SessionUnit: 5-state machine, subprocess lifecycle (per tab)
+│   ├── session_router.py          # SessionRouter: routing, concurrency cap (MAX=2), queue
+│   ├── prompt_builder.py          # PromptBuilder: system prompt, SDK options, MCP config
+│   ├── lifecycle_manager.py       # LifecycleManager: 12hr TTL, hooks, orphan reaper
+│   ├── session_utils.py           # Shared error helpers (_build_error_event, etc.)
+│   ├── skill_creator.py           # AI skill generation agent config
 │   ├── session_manager.py         # Session storage (DB + in-memory cache)
 │   ├── initialization_manager.py  # Startup orchestration, workspace caching
 │   ├── swarm_workspace_manager.py # SwarmWS filesystem (verify_integrity, projects)
@@ -396,7 +407,7 @@ Source files (11 editable .md files)
 ### 5.6 Context Assembly Flow
 
 ```
-_build_system_prompt() in AgentManager
+PromptBuilder.build_system_prompt()
   │
   ├── 1. ContextDirectoryLoader (global context)
   │     loader = ContextDirectoryLoader(SwarmWS/.context/, budget)
@@ -451,14 +462,17 @@ Four hooks fire via `BackgroundHookExecutor` on every session close (2h TTL expi
 
 `BackgroundHookExecutor` wraps `SessionLifecycleHookManager` to run hooks as fire-and-forget `asyncio.Task`s — hooks never block the chat path. Each hook is error-isolated with 30s timeout. A shared `asyncio.Lock` (`git_lock`) prevents concurrent git operations between `WorkspaceAutoCommitHook` and other git-touching code.
 
-### 5.7.2 Two-Tier Session Cleanup Loop
+### 5.7.2 LifecycleManager Background Loop
 
-The `_cleanup_stale_sessions_loop` runs every 60 seconds with two tiers:
+`LifecycleManager` runs a single background loop every 60 seconds:
 
-- **Tier 1 (30 min idle)**: `_extract_activity_early()` fires only the DailyActivity extraction hook for idle sessions, preserving the client for potential resume
-- **Tier 2 (2h TTL)**: Full `_cleanup_session()` — fires all 4 lifecycle hooks, disconnects the SDK subprocess, removes from `_active_sessions`
+1. **Health check**: Detect dead subprocesses across all SessionUnits
+2. **TTL kill** (12hr idle): Kill SessionUnits idle > 43,200s, fire lifecycle hooks
+3. **Dead cleanup**: Transition DEAD units to COLD (reset internal state)
 
-Previous 12h TTL caused 80+ zombie claude processes to accumulate, exhausting macOS vnodes and triggering kernel panics. Reduced to 2h.
+At startup, `_reap_orphans()` runs once to kill claude CLI processes not owned by any SessionUnit.
+
+Hooks are serialized through `BackgroundHookExecutor` — never block the chat path.
 
 ### 5.7.3 Resume Context Injection
 
@@ -471,7 +485,7 @@ When a session resumes after a backend restart, `context_injector.build_resume_c
 
 ### 5.7.4 Tool Failure Evolution Trigger
 
-`ToolFailureTracker` (per-session, stored in `_active_sessions[sid]["failure_tracker"]`) watches for repeated tool failures and injects evolution nudges:
+`ToolFailureTracker` (per-session, stored in `SessionUnit`) watches for repeated tool failures and injects evolution nudges:
 
 - Tracks failure signatures (tool_name + first 100 chars of error)
 - After `FAILURE_THRESHOLD` (2) consecutive failures with same signature → emits evolution nudge
@@ -560,7 +574,7 @@ Multi-tab safe: read-only, no writes, no shared state, no locks.
 | 70–84% | `warn` | "Heads up — we've used about N% of this session's context" |
 | ≥ 85% | `critical` | "Recommend: save context and start a new session" |
 
-Emitted after every turn via `_execute_on_session_inner()` and `continue_with_answer()`. Uses `_sum_usage_input_tokens()` from the SDK's usage dict.
+Emitted after every turn via `SessionUnit._stream_response()`. Uses `_sum_usage_input_tokens()` from the SDK's usage dict.
 
 ### 5.11 Auto-Commit Workspace
 
