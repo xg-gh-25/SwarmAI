@@ -1198,11 +1198,20 @@ export default function ChatPage() {
       }
     }
 
+    // Resolve sessionId: prefer tabMapRef (synchronously updated by
+    // session_start handler) over sessionIdRef (async React state).
+    // Closes the race window where sessionIdRef hasn't been committed
+    // yet but tabMapRef already has the correct session ID.
+    const resolvedSessionId = (
+      (currentActiveTabId && tabMapRef.current.get(currentActiveTabId)?.sessionId)
+      || sessionIdRef.current
+    );
+
     const abort = chatService.streamChat(
       {
         agentId: selectedAgentId,
         ...(hasAttachments ? { content } : { message: messageText }),
-        sessionId: sessionIdRef.current,
+        sessionId: resolvedSessionId,
         enableSkills,
         enableMCP,
         ...(editorContextRef.current && { editorContext: editorContextRef.current }),
@@ -1220,7 +1229,7 @@ export default function ChatPage() {
       const streamRequest = {
         agentId: selectedAgentId,
         ...(hasAttachments ? { content } : { message: messageText }),
-        sessionId: sessionIdRef.current,
+        sessionId: resolvedSessionId,
         enableSkills,
         enableMCP,
         ...(editorContextRef.current && { editorContext: editorContextRef.current }),

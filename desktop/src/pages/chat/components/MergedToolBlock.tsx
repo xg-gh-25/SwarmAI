@@ -35,6 +35,7 @@ const CATEGORY_ICONS: Record<string, string> = {
   skill: 'handyman',
   list_dir: 'folder_open',
   todowrite: 'checklist',
+  agent: 'smart_toy',
   fallback: 'build',
 };
 

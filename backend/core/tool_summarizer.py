@@ -65,6 +65,7 @@ _WEB_SEARCH_NAMES: set[str] = {"websearch"}
 _TOOL_SEARCH_NAMES: set[str] = {"toolsearch"}
 _SKILL_NAMES: set[str] = {"skill"}
 _LIST_DIR_NAMES: set[str] = {"listdirectory", "ls", "listdir"}
+_AGENT_NAMES: set[str] = {"agent", "subagent", "dispatch_agent", "task"}
 
 
 # ---------------------------------------------------------------------------
@@ -222,7 +223,30 @@ def summarize_tool_use(name: str, input_data: Optional[dict]) -> str:
     elif lower_name in _TODOWRITE_NAMES:
         category = "todowrite"
         todos = data.get("todos", [])
-        summary = f"Writing {len(todos)} todos"
+        file_path = data.get("file_path") or data.get("path", "")
+        if file_path:
+            # Show filename + count: "Writing 7 todos → tasks.md"
+            fname = file_path.rsplit("/", 1)[-1] if "/" in file_path else file_path
+            summary = f"Writing {len(todos)} todos → {fname}"
+        else:
+            summary = f"Writing {len(todos)} todos"
+    elif lower_name in _AGENT_NAMES:
+        category = "agent"
+        # Extract the most useful context: task_description > prompt snippet > name
+        task_desc = data.get("task_description") or data.get("task", "")
+        prompt = data.get("prompt", "")
+        agent_name = data.get("name") or data.get("agent_name", "")
+        if task_desc:
+            summary = f"Agent: {task_desc}"
+        elif prompt:
+            # Show first ~120 chars of the prompt for context
+            snippet = prompt[:120].replace("\n", " ").strip()
+            label = f"Agent ({agent_name})" if agent_name else "Agent"
+            summary = f"{label}: {snippet}"
+        elif agent_name:
+            summary = f"Agent: {agent_name}"
+        else:
+            summary = f"Using {name}"
     else:
         # --- MCP detection + last-token category matching ---
         server_name, tool_name_extracted = _extract_mcp_tool_name(name)
@@ -247,9 +271,9 @@ def summarize_tool_use(name: str, input_data: Optional[dict]) -> str:
                 or data.get("title")
             )
             if context:
-                summary = f"mcp: {tool_name_extracted} \u2014 {context}"
+                summary = f"MCP: {tool_name_extracted} — {context}"
             else:
-                summary = f"mcp: {tool_name_extracted}"
+                summary = f"MCP: {tool_name_extracted}"
         else:
             # Non-MCP fallback (existing behavior unchanged)
             category = "fallback"
@@ -284,7 +308,7 @@ def get_tool_category(name: str) -> str:
     duplicating the name-matching logic.
 
     Categories: bash, read, write, search, web_fetch, web_search,
-    list_dir, todowrite, fallback.
+    list_dir, todowrite, agent, fallback.
     """
     lower_name = name.lower()
     if lower_name in _BASH_NAMES:
@@ -307,6 +331,8 @@ def get_tool_category(name: str) -> str:
         return "list_dir"
     if lower_name in _TODOWRITE_NAMES:
         return "todowrite"
+    if lower_name in _AGENT_NAMES:
+        return "agent"
     # MCP detection + last-token category matching
     server_name, tool_name_extracted = _extract_mcp_tool_name(name)
     if server_name is not None:

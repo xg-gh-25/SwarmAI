@@ -19,13 +19,16 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from datetime import datetime
 from typing import Any, AsyncIterator, Optional, TYPE_CHECKING
+from uuid import uuid4
 
 from .session_unit import SessionState, SessionUnit
 
 if TYPE_CHECKING:
     from .prompt_builder import PromptBuilder
     from .app_config_manager import AppConfigManager
+    from .lifecycle_manager import LifecycleManager
 
 logger = logging.getLogger(__name__)
 
@@ -54,11 +57,42 @@ class SessionRouter:
         self._units: dict[str, SessionUnit] = {}
         self._prompt_builder = prompt_builder
         self._config = config
+        self._lifecycle_manager = None  # Set by session_registry after init
         self._slot_available: asyncio.Event = asyncio.Event()
         self._slot_available.set()  # Initially available
         self._queue: list[asyncio.Future] = []
 
     # ── Unit management ───────────────────────────────────────────
+
+    @staticmethod
+    async def _persist_assistant_blocks(
+        session_id: str,
+        blocks: list[dict],
+        model: str | None,
+        label: str = "",
+    ) -> None:
+        """Save accumulated assistant content blocks to DB.
+
+        Called from ``finally`` blocks in streaming methods to ensure
+        partial content is persisted even on abort or error.
+        """
+        if not blocks:
+            return
+        from database import db
+        try:
+            await db.messages.put({
+                "id": str(uuid4()),
+                "session_id": session_id,
+                "role": "assistant",
+                "content": blocks,
+                "model": model,
+                "created_at": datetime.now().isoformat(),
+            })
+        except Exception as exc:
+            logger.warning(
+                "Failed to save assistant message%s for session %s: %s",
+                f" ({label})" if label else "", session_id, exc,
+            )
 
     def get_unit(self, session_id: str) -> Optional[SessionUnit]:
         """Look up a SessionUnit by session_id."""
@@ -140,6 +174,10 @@ class SessionRouter:
         Returns True if a unit was evicted, False if no IDLE units available.
         Only evicts units in IDLE state — STREAMING and WAITING_INPUT are
         protected (Rule 3).
+
+        Fires lifecycle hooks before killing (Gap 1 fix) so that
+        DailyActivity extraction, auto-commit, and distillation run
+        for the evicted session's conversation.
         """
         idle_units = sorted(
             [
@@ -157,6 +195,12 @@ class SessionRouter:
             victim.session_id,
             time.time() - victim.last_used,
         )
+
+        # Fire hooks before killing — Gap 1 fix
+        if self._lifecycle_manager and not victim._hooks_enqueued:
+            await self._lifecycle_manager.enqueue_hooks_for_unit(victim)
+            victim._hooks_enqueued = True
+
         await victim.kill()
         return True
 
@@ -198,7 +242,6 @@ class SessionRouter:
 
         # Resolve session_id — use provided or generate
         if session_id is None:
-            from uuid import uuid4
             session_id = str(uuid4())
 
         unit = self.get_or_create_unit(session_id, agent_id)
@@ -248,7 +291,7 @@ class SessionRouter:
             agent_config=agent_config,
             enable_skills=enable_skills,
             enable_mcp=enable_mcp,
-            resume_session_id=unit._sdk_session_id if unit.is_alive else None,
+            resume_session_id=unit._sdk_session_id,
             channel_context=channel_context,
         )
 
@@ -263,8 +306,6 @@ class SessionRouter:
         from database import db
 
         # Save user message to DB
-        from uuid import uuid4
-        from datetime import datetime
 
         user_content = content if content else [{"type": "text", "text": user_message}]
         title = (user_message or "Chat")[:50]
@@ -282,31 +323,28 @@ class SessionRouter:
         assistant_blocks: list[dict] = []
         assistant_model: str | None = None
 
-        async for event in unit.send(
-            query_content=query_content,
-            options=options,
-            app_session_id=session_id,
-            config=self._config,
-        ):
-            # Accumulate assistant content for DB save
-            if event.get("type") == "assistant" and event.get("content"):
-                for block in event["content"]:
-                    assistant_blocks.append(block)
-                if event.get("model"):
-                    assistant_model = event["model"]
+        try:
+            async for event in unit.send(
+                query_content=query_content,
+                options=options,
+                app_session_id=session_id,
+                config=self._config,
+            ):
+                # Accumulate assistant content for DB save
+                if event.get("type") == "assistant" and event.get("content"):
+                    for block in event["content"]:
+                        assistant_blocks.append(block)
+                    if event.get("model"):
+                        assistant_model = event["model"]
 
-            yield event
-
-        # Save assistant message to DB after stream completes
-        if assistant_blocks:
-            await db.messages.put({
-                "id": str(uuid4()),
-                "session_id": session_id,
-                "role": "assistant",
-                "content": assistant_blocks,
-                "model": assistant_model,
-                "created_at": datetime.now().isoformat(),
-            })
+                yield event
+        finally:
+            # Save assistant message to DB — runs on normal completion,
+            # abort (GeneratorExit), and errors.  Ensures partial
+            # streaming content is persisted even if the user clicks Stop.
+            await self._persist_assistant_blocks(
+                session_id, assistant_blocks, assistant_model,
+            )
 
     async def interrupt_session(self, session_id: str) -> dict:
         """Delegate to SessionUnit.interrupt()."""
@@ -323,7 +361,11 @@ class SessionRouter:
     async def continue_with_answer(
         self, session_id: str, answer: str,
     ) -> AsyncIterator[dict]:
-        """Delegate to SessionUnit.continue_with_answer()."""
+        """Delegate to SessionUnit.continue_with_answer().
+
+        Accumulates assistant content blocks and persists them to DB
+        after the stream completes (same pattern as run_conversation).
+        """
         unit = self.get_unit(session_id)
         if unit is None:
             from .session_utils import _build_error_event
@@ -332,13 +374,31 @@ class SessionRouter:
                 message=f"Session {session_id} not found",
             )
             return
-        async for event in unit.continue_with_answer(answer):
-            yield event
+
+        assistant_blocks: list[dict] = []
+        assistant_model: str | None = None
+
+        try:
+            async for event in unit.continue_with_answer(answer):
+                if event.get("type") == "assistant" and event.get("content"):
+                    for block in event["content"]:
+                        assistant_blocks.append(block)
+                    if event.get("model"):
+                        assistant_model = event["model"]
+                yield event
+        finally:
+            await self._persist_assistant_blocks(
+                session_id, assistant_blocks, assistant_model, label="answer",
+            )
 
     async def continue_with_cmd_permission(
         self, session_id: str, request_id: str, allowed: bool,
     ) -> AsyncIterator[dict]:
-        """Delegate to SessionUnit.continue_with_permission()."""
+        """Delegate to SessionUnit.continue_with_permission().
+
+        Accumulates assistant content blocks and persists them to DB
+        after the stream completes (same pattern as run_conversation).
+        """
         unit = self.get_unit(session_id)
         if unit is None:
             from .session_utils import _build_error_event
@@ -347,8 +407,22 @@ class SessionRouter:
                 message=f"Session {session_id} not found",
             )
             return
-        async for event in unit.continue_with_permission(request_id, allowed):
-            yield event
+
+        assistant_blocks: list[dict] = []
+        assistant_model: str | None = None
+
+        try:
+            async for event in unit.continue_with_permission(request_id, allowed):
+                if event.get("type") == "assistant" and event.get("content"):
+                    for block in event["content"]:
+                        assistant_blocks.append(block)
+                    if event.get("model"):
+                        assistant_model = event["model"]
+                yield event
+        finally:
+            await self._persist_assistant_blocks(
+                session_id, assistant_blocks, assistant_model, label="permission",
+            )
 
     async def compact_session(
         self, session_id: str, instructions: Optional[str] = None,
@@ -360,12 +434,21 @@ class SessionRouter:
         return await unit.compact(instructions)
 
     async def disconnect_all(self) -> None:
-        """Kill all alive SessionUnits. Called at shutdown."""
+        """Kill all alive SessionUnits. Called at shutdown.
+
+        Fires hooks before killing each unit so DailyActivity, auto-commit,
+        and distillation run for every active conversation.
+        """
         alive = [u for u in self._units.values() if u.is_alive]
         logger.info("session_router.disconnect_all: killing %d alive units", len(alive))
         for unit in alive:
             try:
+                # Fire hooks before killing (shutdown fix)
+                if self._lifecycle_manager and not unit._hooks_enqueued:
+                    await self._lifecycle_manager.enqueue_hooks_for_unit(unit)
+                    unit._hooks_enqueued = True
                 await unit.kill()
+                unit.clear_session_identity()
             except Exception as exc:
                 logger.warning(
                     "Failed to kill unit %s during disconnect_all: %s",
