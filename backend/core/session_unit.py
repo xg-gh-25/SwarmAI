@@ -711,7 +711,7 @@ class SessionUnit:
             ToolUseBlock,
             ToolResultBlock,
         )
-        from claude_agent_sdk.types import StreamEvent
+        from claude_agent_sdk.types import StreamEvent, ThinkingBlock
 
         try:
             from core.tool_summarizer import summarize_tool_use, get_tool_category, truncate_tool_result
@@ -789,6 +789,8 @@ class SessionUnit:
                 for block in message.content:
                     if isinstance(block, TextBlock):
                         content_blocks.append({"type": "text", "text": block.text})
+                    elif isinstance(block, ThinkingBlock):
+                        content_blocks.append({"type": "thinking", "thinking": block.thinking})
                     elif isinstance(block, ToolUseBlock):
                         if block.name == "AskUserQuestion":
                             questions = block.input.get("questions", [])

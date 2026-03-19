@@ -703,6 +703,35 @@ class PromptBuilder:
         return builder_text
 
     # ------------------------------------------------------------------
+    # _build_thinking_config
+    # ------------------------------------------------------------------
+
+    def _build_thinking_config(self) -> dict | None:
+        """Build thinking configuration from app config.
+
+        Reads ``thinking_mode`` from config.json:
+
+        - ``"adaptive"`` (default) — let the model decide when to think
+        - ``"enabled"``  — always think, with optional ``thinking_budget_tokens``
+        - ``"disabled"`` — never use extended thinking
+
+        Returns a ThinkingConfig dict or None (which lets the SDK decide).
+        """
+        if not self._config:
+            return {"type": "adaptive"}
+
+        mode = self._config.get("thinking_mode", "adaptive")
+
+        if mode == "disabled":
+            return {"type": "disabled"}
+        elif mode == "enabled":
+            budget = self._config.get("thinking_budget_tokens", 10000)
+            return {"type": "enabled", "budget_tokens": int(budget)}
+        else:
+            # Default: adaptive — model decides when thinking is useful
+            return {"type": "adaptive"}
+
+    # ------------------------------------------------------------------
     # build_options
     # ------------------------------------------------------------------
 
@@ -800,6 +829,10 @@ class PromptBuilder:
         # Build extra CLI args for features not yet in ClaudeAgentOptions.
         extra_args: dict[str, str | None] = {}
 
+        # Build thinking configuration from app config.
+        # Supports: "adaptive" (default), "enabled" (with budget), "disabled"
+        thinking_config = self._build_thinking_config()
+
         return ClaudeAgentOptions(
             system_prompt=system_prompt_config,
             allowed_tools=allowed_tools if allowed_tools else None,
@@ -820,4 +853,5 @@ class PromptBuilder:
             extra_args=extra_args,
             include_partial_messages=True,
             enable_file_checkpointing=True,
+            thinking=thinking_config,
         )
