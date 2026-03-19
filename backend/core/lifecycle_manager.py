@@ -162,6 +162,10 @@ class LifecycleManager:
                             )
                     await unit.kill()
 
+                    # Clean up system prompt metadata
+                    from . import session_registry
+                    session_registry.system_prompt_metadata.pop(unit.session_id, None)
+
     async def _cleanup_dead(self) -> None:
         """Transition DEAD units to COLD (cleanup internal state)."""
         for unit in self._router.list_units():
