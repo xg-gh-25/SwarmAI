@@ -462,12 +462,13 @@ async def lifespan(app: FastAPI):
     hook_manager.register(EvolutionMaintenanceHook())
 
     # Wire hooks into session_registry (new architecture)
-    session_registry.configure_hooks(executor=hook_executor, manager=hook_manager)
     set_compliance_tracker(compliance_tracker)
     logger.info("Session lifecycle hooks registered (4 hooks, background executor)")
 
     # ── Initialize new session architecture ──────────────────────────
     session_registry.initialize(app_config)
+    # Wire hooks AFTER initialize so lifecycle_manager exists
+    session_registry.configure_hooks(executor=hook_executor, manager=hook_manager)
     logger.info("SessionRouter architecture initialized")
     # ─────────────────────────────────────────────────────────────────
 

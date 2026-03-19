@@ -253,6 +253,12 @@ class SessionRouter:
             channel_context=channel_context,
         )
 
+        # Copy system prompt metadata to registry for TSCC viewer
+        _spm = agent_config.get("_system_prompt_metadata")
+        if _spm and session_id:
+            from . import session_registry
+            session_registry.system_prompt_metadata[session_id] = _spm
+
         # Delegate to SessionUnit — wrap with message persistence
         from .session_manager import session_manager
         from database import db

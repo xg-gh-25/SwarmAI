@@ -636,6 +636,10 @@ async def delete_session(session_id: str):
             suggested_action="Please check the session ID and try again"
         )
 
+    # 4. Clean up system prompt metadata to prevent unbounded memory growth
+    from core import session_registry
+    session_registry.system_prompt_metadata.pop(session_id, None)
+
 
 @router.post("/cmd-permission-response", response_model=PermissionRequestResponse)
 async def handle_cmd_permission_response(request: PermissionResponseRequest):
