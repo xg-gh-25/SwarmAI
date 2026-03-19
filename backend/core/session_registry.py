@@ -150,3 +150,108 @@ async def disconnect_all() -> None:
     if session_router is not None:
         await session_router.disconnect_all()
     logger.info("All sessions disconnected via session_registry")
+
+
+# ── Skill Creator ─────────────────────────────────────────────────
+
+SKILL_CREATOR_SYSTEM_PROMPT_TEMPLATE = """\
+You are a Skill Creator Agent specialized in creating Claude Code skills.
+
+Your task is to help users create high-quality skills that extend Claude's capabilities.
+
+IMPORTANT GUIDELINES:
+1. Always use the skill-creator skill (invoke /skill-creator) to get guidance on skill creation best practices
+2. Follow the skill creation workflow from the skill-creator skill
+3. Create skills in the ~/.swarm-ai/skills/ directory (the user skills directory)
+4. Ensure SKILL.md has proper YAML frontmatter with name and description
+5. Description MUST follow this schema:
+   - First line: one-sentence purpose
+   - TRIGGER: quoted phrases the user would say
+   - DO NOT USE: when a different skill/approach is better (with alternative)
+6. Keep skills concise and focused - only include what Claude needs
+7. Test any scripts you create before completing
+
+Current task: Create a skill named "{skill_name}" that {skill_description}"""
+
+
+async def run_skill_creator(
+    skill_name: str,
+    skill_description: str,
+    user_message: Optional[str] = None,
+    session_id: Optional[str] = None,
+    model: Optional[str] = None,
+):
+    """Run a skill creation conversation via SessionRouter.
+
+    Builds a specialized agent config and delegates to
+    ``session_router.run_conversation()``.  The skill creator is just
+    a normal conversation with a custom system prompt and tool set.
+
+    Yields SSE event dicts. Adds ``skill_name`` to the ``result`` event.
+    """
+    from .session_utils import _build_error_event
+
+    if session_router is None:
+        yield _build_error_event(
+            code="NOT_INITIALIZED",
+            message="Session infrastructure not initialized yet.",
+            suggested_action="Please wait for the backend to finish starting up.",
+        )
+        return
+
+    # Build the prompt
+    if user_message:
+        prompt = user_message
+    else:
+        prompt = (
+            f"Please create a new skill with the following specifications:\n\n"
+            f"**Skill Name:** {skill_name}\n"
+            f"**Skill Description:** {skill_description}\n\n"
+            f"Use the skill-creator skill (invoke /skill-creator) to guide your "
+            f"skill creation process. Follow the workflow:\n"
+            f"1. Understand the skill requirements from the description above\n"
+            f"2. Plan reusable contents (scripts, references, assets) if needed\n"
+            f"3. Initialize the skill using the init_skill.py script\n"
+            f"4. Edit SKILL.md and create any necessary files\n"
+            f"5. Test any scripts you create\n\n"
+            f"Create the skill in the `.claude/skills/` directory within the "
+            f"current workspace."
+        )
+
+    system_prompt = SKILL_CREATOR_SYSTEM_PROMPT_TEMPLATE.format(
+        skill_name=skill_name,
+        skill_description=skill_description,
+    )
+
+    agent_config = {
+        "name": f"skill-creator-{session_id[:8] if session_id else 'new'}",
+        "description": "Temporary agent for skill creation",
+        "system_prompt": system_prompt,
+        "allowed_tools": [
+            "Bash", "Read", "Write", "Edit", "Glob", "Grep",
+            "Skill", "TodoWrite", "Task",
+        ],
+        "permission_mode": "bypassPermissions",
+        "working_directory": None,
+        "global_user_mode": False,
+        "enable_tool_logging": True,
+        "enable_safety_checks": True,
+        "model": model or "claude-sonnet-4-5-20250929",
+    }
+
+    logger.info(
+        "Skill creator via SessionRouter: name=%s session=%s model=%s",
+        skill_name, session_id, agent_config["model"],
+    )
+
+    async for event in session_router.run_conversation(
+        agent_id="skill-creator",
+        user_message=prompt,
+        session_id=session_id,
+        enable_skills=True,
+        enable_mcp=False,
+        agent_config=agent_config,
+    ):
+        if event.get("type") == "result":
+            event["skill_name"] = skill_name
+        yield event

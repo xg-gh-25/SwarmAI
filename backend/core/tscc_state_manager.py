@@ -10,7 +10,7 @@ Simplified from the original version: removed ``apply_event()`` and all
 telemetry event handling (agent_activity, tool_invocation, sources_updated,
 capability_activated, summary_updated).  TSCC now only tracks lifecycle
 state and thread metadata — system prompt metadata is stored separately
-in ``agent_manager._system_prompt_metadata``.
+in ``session_registry.system_prompt_metadata``.
 
 Key public symbols:
 
