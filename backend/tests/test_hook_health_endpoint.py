@@ -2,13 +2,12 @@
 
 This module verifies that the ``/health`` endpoint correctly exposes the
 number of in-flight background hook tasks via the ``pending_hook_tasks``
-field.  The field reads from ``agent_manager.hook_executor.pending_count``
+field.  The field reads from ``session_registry.hook_executor.pending_count``
 and returns 0 when the executor is ``None``.
 
 Testing methodology: unit tests using FastAPI's ``TestClient`` with
 ``unittest.mock.patch`` to control the ``_startup_complete`` flag and
-direct attribute assignment on the ``agent_manager`` singleton to swap
-the ``_hook_executor``.
+direct attribute assignment on ``session_registry`` to swap the executor.
 
 Key scenarios tested:
 
@@ -38,20 +37,14 @@ def test_client():
 
 @contextlib.contextmanager
 def _patch_hook_executor(executor):
-    """Temporarily swap the agent_manager's _hook_executor attribute.
-
-    The ``hook_executor`` property is a simple read-through to
-    ``self._hook_executor``, so swapping the private attribute is the
-    cleanest way to control what ``/health`` sees without fighting
-    ``PropertyMock`` on a singleton.
-    """
-    from core.agent_manager import agent_manager
-    original = agent_manager._hook_executor
-    agent_manager._hook_executor = executor
+    """Temporarily swap session_registry.hook_executor."""
+    from core import session_registry
+    original = session_registry.hook_executor
+    session_registry.hook_executor = executor
     try:
         yield
     finally:
-        agent_manager._hook_executor = original
+        session_registry.hook_executor = original
 
 
 class TestHealthEndpointPendingHookTasks:
