@@ -40,9 +40,17 @@ export const tabPersistenceService = {
         '/settings/open-tabs',
       );
       return response.data;
-    } catch {
-      console.warn('[tabPersistence] Failed to load open_tabs.json');
-      return null;
+    } catch (err: unknown) {
+      // Distinguish "file not found" (backend returned null/404) from
+      // "backend not ready" (network error). Only swallow the former.
+      const status = (err as { response?: { status?: number } })?.response?.status;
+      if (status === 404) {
+        // File genuinely doesn't exist — fresh install
+        return null;
+      }
+      // Network error or backend not ready — let caller retry
+      console.warn('[tabPersistence] Failed to load open_tabs.json:', status || err);
+      throw err;
     }
   },
 

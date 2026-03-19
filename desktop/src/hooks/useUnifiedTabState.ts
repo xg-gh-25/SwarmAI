@@ -470,11 +470,11 @@ export function useUnifiedTabState(
   const restoreFromFile = useCallback(
     async (): Promise<boolean> => {
       if (fileRestoreDone.current) return false;
-      fileRestoreDone.current = true;
 
       const data = await tabPersistenceService.load();
       if (!data || !data.tabs || data.tabs.length === 0) {
         console.log('[useUnifiedTabState] No open_tabs.json found, keeping default tab');
+        fileRestoreDone.current = true; // Genuine fresh install — allow save effect
         return false;
       }
 
@@ -502,6 +502,7 @@ export function useUnifiedTabState(
       }
 
       bump();
+      fileRestoreDone.current = true; // Mark done AFTER successful hydration
       console.log(`[useUnifiedTabState] Restored ${data.tabs.length} tabs from open_tabs.json`);
       return true;
     },
