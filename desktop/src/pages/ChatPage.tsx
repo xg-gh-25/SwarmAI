@@ -688,33 +688,40 @@ export default function ChatPage() {
    * sessionIds. The sync-active-tab effect then loads messages from the DB.
    *
    * On failure (file missing = fresh install), keeps the default tab.
+   * Retries up to 3 times with 500ms delay if the backend isn't ready yet.
    */
   useEffect(() => {
     let mounted = true;
 
     const doRestore = async () => {
       setIsLoadingHistory(true);
-      try {
-        const restored = await restoreFromFile();
-        if (!mounted) return;
-        if (restored) {
-          console.log('[ChatPage] Tabs restored from open_tabs.json');
-          const activeId = activeTabIdRef.current;
-          const activeState = activeId ? tabMapRef.current.get(activeId) : null;
-          if (activeState?.sessionId) {
-            try {
-              await loadSessionMessages(activeState.sessionId);
-            } catch {
-              // Session may no longer exist — reset to fresh tab
-              if (mounted) {
-                setMessages([]);
-                setSessionId(undefined);
-                setIsLoadingHistory(false);
-                setMessagesReady(true);
-              }
-            }
-          } else {
-            // No session to load — show welcome screen
+
+      // Retry loop: backend sidecar may not be ready on first mount.
+      // Try up to 5 times with 500ms delay between attempts.
+      let restored = false;
+      for (let attempt = 0; attempt < 5 && !restored && mounted; attempt++) {
+        if (attempt > 0) {
+          await new Promise(r => setTimeout(r, 500));
+          if (!mounted) return;
+        }
+        try {
+          restored = await restoreFromFile();
+        } catch (err) {
+          console.warn(`[ChatPage] Tab restore attempt ${attempt + 1} failed:`, err);
+        }
+      }
+
+      if (!mounted) return;
+
+      if (restored) {
+        console.log('[ChatPage] Tabs restored from open_tabs.json');
+        const activeId = activeTabIdRef.current;
+        const activeState = activeId ? tabMapRef.current.get(activeId) : null;
+        if (activeState?.sessionId) {
+          try {
+            await loadSessionMessages(activeState.sessionId);
+          } catch {
+            // Session may no longer exist — reset to fresh tab
             if (mounted) {
               setMessages([]);
               setSessionId(undefined);
@@ -722,17 +729,21 @@ export default function ChatPage() {
               setMessagesReady(true);
             }
           }
-          return;
         } else {
-          console.log('[ChatPage] No saved tabs found, using default tab');
+          // No session to load — show welcome screen
+          if (mounted) {
+            setMessages([]);
+            setSessionId(undefined);
+            setIsLoadingHistory(false);
+            setMessagesReady(true);
+          }
         }
-      } catch (err) {
-        console.warn('[ChatPage] File tab restore failed:', err);
-      }
-      // Only clear loading for non-restore cases (fresh install, error)
-      if (mounted) {
-        setIsLoadingHistory(false);
-        setMessagesReady(true);
+      } else {
+        console.log('[ChatPage] No saved tabs found, using default tab');
+        if (mounted) {
+          setIsLoadingHistory(false);
+          setMessagesReady(true);
+        }
       }
     };
 
