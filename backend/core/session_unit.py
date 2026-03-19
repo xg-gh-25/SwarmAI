@@ -118,6 +118,11 @@ class SessionUnit:
         self._interrupted: bool = False
         self._retry_count: int = 0
 
+        # ── Hook tracking ─────────────────────────────────────────
+        # True after hooks enqueued for current IDLE period.
+        # Reset on every STREAMING transition so next IDLE fires fresh.
+        self._hooks_enqueued: bool = False
+
         # ── Observability callback ───────────────────────────────
         self._on_state_change: Optional[
             Callable[[str, SessionState, SessionState], None]
@@ -168,6 +173,12 @@ class SessionUnit:
         """
         old_state = self.state
         self.state = new_state
+
+        # Reset hook tracking when entering STREAMING — the next IDLE
+        # period is a fresh conversation turn that deserves its own hooks.
+        if new_state == SessionState.STREAMING:
+            self._hooks_enqueued = False
+
         logger.info(
             "session_unit.transition session_id=%s from=%s to=%s pid=%s",
             self.session_id,
@@ -295,13 +306,9 @@ class SessionUnit:
                         self.session_id, error_str[:120],
                     )
                     # Fall through to retry loop below
-                    self._transition(SessionState.DEAD)
-                    self._cleanup_internal()
-                    self._transition(SessionState.COLD)
+                    self._crash_to_cold()
                 else:
-                    self._transition(SessionState.DEAD)
-                    self._cleanup_internal()
-                    self._transition(SessionState.COLD)
+                    self._crash_to_cold(clear_identity=True)
                     friendly, suggested = _sanitize_sdk_error(error_str)
                     yield _build_error_event(
                         code="SPAWN_FAILED",
@@ -348,9 +355,7 @@ class SessionUnit:
                     )
 
                     # Clean up dead subprocess
-                    self._transition(SessionState.DEAD)
-                    self._cleanup_internal()
-                    self._transition(SessionState.COLD)
+                    self._crash_to_cold()
 
                     await asyncio.sleep(backoff)
 
@@ -373,9 +378,7 @@ class SessionUnit:
                             continue  # Try next retry
                         else:
                             # Non-retriable spawn error — give up
-                            self._transition(SessionState.DEAD)
-                            self._cleanup_internal()
-                            self._transition(SessionState.COLD)
+                            self._crash_to_cold(clear_identity=True)
                             friendly, suggested = _sanitize_sdk_error(error_str)
                             yield _build_error_event(
                                 code="SPAWN_FAILED",
@@ -403,9 +406,7 @@ class SessionUnit:
                         continue  # Try next retry
 
                 # All retries exhausted
-                self._transition(SessionState.DEAD)
-                self._cleanup_internal()
-                self._transition(SessionState.COLD)
+                self._crash_to_cold(clear_identity=True)
                 yield _build_error_event(
                     code="ALL_RETRIES_EXHAUSTED",
                     message=(
@@ -420,9 +421,7 @@ class SessionUnit:
                 return
 
             # ── Non-retriable error — crash to DEAD ──────────────
-            self._transition(SessionState.DEAD)
-            self._cleanup_internal()
-            self._transition(SessionState.COLD)
+            self._crash_to_cold(clear_identity=True)
             friendly, suggested = _sanitize_sdk_error(error_str)
             yield _build_error_event(
                 code="CONVERSATION_ERROR",
@@ -563,7 +562,7 @@ class SessionUnit:
                     self._sdk_session_id = message.data.get("session_id")
                     yield {
                         "type": "session_start",
-                        "sessionId": self._sdk_session_id,
+                        "sessionId": self.session_id,
                     }
                 continue  # Don't forward other system messages
 
@@ -600,7 +599,7 @@ class SessionUnit:
                                 "type": "ask_user_question",
                                 "toolUseId": block.id,
                                 "questions": questions,
-                                "sessionId": self._sdk_session_id,
+                                "sessionId": self.session_id,
                             }
                             self._transition(SessionState.WAITING_INPUT)
                             self.last_used = time.time()
@@ -667,7 +666,7 @@ class SessionUnit:
                 usage = getattr(message, "usage", None) or {}
                 yield {
                     "type": "result",
-                    "session_id": self._sdk_session_id,
+                    "session_id": self.session_id,
                     "duration_ms": getattr(message, "duration_ms", 0),
                     "total_cost_usd": getattr(message, "total_cost_usd", None),
                     "num_turns": getattr(message, "num_turns", 1),
@@ -942,13 +941,57 @@ class SessionUnit:
                 )
 
     def _cleanup_internal(self) -> None:
-        """Reset internal fields after subprocess death.
+        """Reset transient subprocess fields after subprocess death.
 
         Called during DEAD → COLD transition.  Clears client, wrapper,
-        and SDK session references so the unit is ready for reuse.
+        and retry state so the unit is ready for reuse.
+
+        Preserves ``_sdk_session_id`` so that evicted units can resume
+        via ``--resume`` when the user returns to the tab.
         """
         self._client = None
         self._wrapper = None
-        self._sdk_session_id = None
         self._interrupted = False
         self._retry_count = 0
+
+    def _full_cleanup(self) -> None:
+        """Full cleanup for non-retriable crashes where the session should NOT be resumable.
+
+        Calls ``_cleanup_internal()`` to clear transient subprocess
+        fields, then also clears ``_sdk_session_id`` so the next
+        conversation starts completely fresh (no ``--resume``).
+
+        Use this instead of ``_cleanup_internal()`` on non-retriable
+        error paths (spawn failure, all retries exhausted, streaming
+        crash) where resuming the old session would be meaningless.
+        """
+        self._cleanup_internal()
+        self._sdk_session_id = None
+
+    def _crash_to_cold(self, *, clear_identity: bool = False) -> None:
+        """Transition DEAD → COLD with appropriate cleanup.
+
+        Consolidates the repeated ``DEAD → cleanup → COLD`` pattern
+        used in ``send()`` error paths.
+
+        Args:
+            clear_identity: If ``True``, also clears ``_sdk_session_id``
+                via ``_full_cleanup()`` (non-retriable crashes).
+                If ``False``, uses ``_cleanup_internal()`` which
+                preserves ``_sdk_session_id`` for resume (retriable
+                errors and eviction).
+        """
+        self._transition(SessionState.DEAD)
+        if clear_identity:
+            self._full_cleanup()
+        else:
+            self._cleanup_internal()
+        self._transition(SessionState.COLD)
+
+    def clear_session_identity(self) -> None:
+        """Clear ``_sdk_session_id`` so the unit cannot resume.
+
+        Called by ``SessionRouter.disconnect_all()`` after ``kill()``
+        to ensure shutdown fully cleans up session identity.
+        """
+        self._sdk_session_id = None

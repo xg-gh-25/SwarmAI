@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:full": "bash scripts/dev-with-backend.sh",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
