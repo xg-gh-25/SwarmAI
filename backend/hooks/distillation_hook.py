@@ -520,7 +520,7 @@ class DistillationTriggerHook:
         """Write to MEMORY.md via flock + _modify_content (single lock).
 
         Deduplicates entries before writing: acquires the lock first, then
-        reads existing content and skips entries whose first 60 chars
+        reads existing content and skips entries whose first 120 chars
         already appear.  This prevents double-writes when the distilled
         frontmatter update fails after content extraction succeeds.
 
@@ -545,17 +545,18 @@ class DistillationTriggerHook:
                 existing = ""
 
             # Dedup: filter out entries already present (line-by-line match).
-            # Compare against existing lines to avoid substring false-positives
-            # where a 60-char prefix of one entry matches inside a different entry.
+            # Compare against existing lines to avoid substring false-positives.
+            # Use 120-char prefix (increased from 60) to distinguish entries
+            # that share a common date+category prefix but differ in content.
             if existing:
                 existing_lines_lower = {
-                    ln.strip()[:60].lower()
+                    ln.strip()[:120].lower()
                     for ln in existing.splitlines()
                     if ln.strip()
                 }
                 new_lines = []
                 for line in text.splitlines():
-                    entry_key = line.strip()[:60].lower()
+                    entry_key = line.strip()[:120].lower()
                     if entry_key and entry_key in existing_lines_lower:
                         continue
                     new_lines.append(line)

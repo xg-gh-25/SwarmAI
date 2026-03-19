@@ -74,6 +74,9 @@ def initialize(config: AppConfigManager) -> None:
     session_router = _SR(prompt_builder=prompt_builder, config=config)
     lifecycle_manager = _LM(router=session_router)
 
+    # Wire lifecycle_manager back into router for eviction/shutdown hooks
+    session_router._lifecycle_manager = lifecycle_manager
+
     _initialized = True
     logger.info(
         "Session infrastructure initialized "
