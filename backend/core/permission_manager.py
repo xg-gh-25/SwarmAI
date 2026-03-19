@@ -1,7 +1,6 @@
 """Permission state management for command approval and human-in-the-loop decisions.
 
-Encapsulates all mutable permission state that was previously module-level globals
-in agent_manager.py. Uses a singleton pattern to ensure exactly one instance exists,
+Encapsulates all mutable permission state. Uses a singleton pattern to ensure exactly one instance exists,
 preserving the current single-process concurrency model.
 
 State managed:
