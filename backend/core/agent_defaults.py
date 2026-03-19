@@ -127,7 +127,7 @@ async def build_agent_config(agent_id: str) -> dict | None:
       1. Reads ``default-agent.json`` from the resources dir (behavior defaults).
       2. Overlays runtime settings from ``config.json`` via AppConfigManager
          (model, sandbox settings).
-      3. Adds standard bookkeeping fields expected by agent_manager consumers.
+      3. Adds standard bookkeeping fields expected by consumers.
 
     For non-default agents: falls back to ``db.agents.get(agent_id)``.
 
@@ -187,7 +187,7 @@ async def build_agent_config(agent_id: str) -> dict | None:
     }
 
     # Only include context_token_budget if explicitly set in default-agent.json.
-    # When absent (None), agent_manager falls back to DEFAULT_TOKEN_BUDGET,
+    # When absent (None), PromptBuilder falls back to DEFAULT_TOKEN_BUDGET,
     # which is then overridden by compute_token_budget() based on model size.
     _ctb = base.get("context_token_budget")
     if _ctb is not None:

@@ -1,6 +1,6 @@
 """System prompt assembly and SDK option construction.
 
-Extracted from ``agent_manager.py`` to isolate prompt-building, model
+Isolates prompt-building, model
 resolution, MCP configuration, sandbox setup, and context-warning logic
 into a single IO-at-boundaries module.
 
