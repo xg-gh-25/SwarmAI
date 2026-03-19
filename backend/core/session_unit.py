@@ -48,6 +48,63 @@ logger = logging.getLogger(__name__)
 _spawn_lock = asyncio.Lock()
 
 
+# ---------------------------------------------------------------------------
+# OOM / SIGKILL detection
+# ---------------------------------------------------------------------------
+
+# Patterns that indicate the subprocess was killed by the OS (jetsam / OOM-killer).
+# Multiple patterns guard against SDK error message format changes — if any
+# single pattern matches, we treat it as OOM.  The spawn-budget fallback
+# (checked separately) catches cases where ALL patterns miss.
+_OOM_PATTERNS = [
+    "exit code -9",          # SDK format variant 1
+    "exit code: -9",         # SDK format variant 2
+    "exit code=-9",          # Defensive: possible future format
+    "sigkill",               # Generic SIGKILL mention
+    "signal 9",              # Numeric signal reference
+    "killed by signal",      # Linux OOM-killer phrasing
+    "jetsam",                # macOS memory pressure killer
+    "terminated process",    # "Cannot write to terminated process"
+]
+
+
+def _is_oom_signal(error_str: str) -> bool:
+    """Detect whether an error indicates an OOM / SIGKILL subprocess death.
+
+    Uses a multi-pattern approach so we don't silently regress if the
+    Claude SDK changes its error message format.  Also checks the
+    spawn budget as a heuristic fallback — if the system is currently
+    under memory pressure AND the process died, it's very likely OOM
+    even if the error message doesn't match any known pattern.
+
+    Returns True if OOM is likely, False otherwise.
+    """
+    error_lower = error_str.lower()
+
+    # Primary: explicit pattern match
+    for pattern in _OOM_PATTERNS:
+        if pattern in error_lower:
+            return True
+
+    # Fallback heuristic: process died + system is under memory pressure.
+    # This catches the case where the SDK changes its error format but
+    # the system is clearly memory-constrained.
+    try:
+        from .resource_monitor import resource_monitor
+        mem = resource_monitor.system_memory()
+        if mem.pressure_level == "critical":
+            logger.info(
+                "OOM heuristic: no pattern match but memory pressure is "
+                "critical (%.1f%%) — treating as OOM",
+                mem.percent_used,
+            )
+            return True
+    except Exception:
+        pass  # Resource monitor unavailable — rely on patterns only
+
+    return False
+
+
 class SessionState(Enum):
     """Lifecycle states for a single chat-tab subprocess.
 
@@ -123,6 +180,17 @@ class SessionUnit:
         # Reset on every STREAMING transition so next IDLE fires fresh.
         self._hooks_enqueued: bool = False
 
+        # ── Streaming timeout ────────────────────────────────────────
+        # Updated on every yielded event during STREAMING.  The
+        # LifecycleManager checks this to detect stuck streams that
+        # never produced a ResultMessage (e.g. SDK hang, Bedrock timeout).
+        self._last_event_time: Optional[float] = None
+        self._streaming_start_time: Optional[float] = None
+
+        # ── Resource observability ─────────────────────────────────
+        self._last_error_type: Optional[str] = None  # "oom" | "timeout" | None
+        self._last_metrics: Optional[Any] = None      # ProcessMetrics from health_check
+
         # ── Observability callback ───────────────────────────────
         self._on_state_change: Optional[
             Callable[[str, SessionState, SessionState], None]
@@ -178,6 +246,13 @@ class SessionUnit:
         # period is a fresh conversation turn that deserves its own hooks.
         if new_state == SessionState.STREAMING:
             self._hooks_enqueued = False
+            self._streaming_start_time = time.time()
+            self._last_event_time = time.time()
+
+        # Clear streaming timestamps when leaving STREAMING
+        if old_state == SessionState.STREAMING and new_state != SessionState.STREAMING:
+            self._streaming_start_time = None
+            self._last_event_time = None
 
         logger.info(
             "session_unit.transition session_id=%s from=%s to=%s pid=%s",
@@ -211,6 +286,7 @@ class SessionUnit:
 
     MAX_RETRY_ATTEMPTS: int = 3
     RETRY_BACKOFF_SECONDS: float = 5.0
+    STREAMING_TIMEOUT_SECONDS: float = 300.0  # 5 min with no SDK events → stuck
 
     # ── Subprocess lifecycle ─────────────────────────────────────
 
@@ -284,6 +360,29 @@ class SessionUnit:
             _sanitize_sdk_error,
         )
 
+        # ── Layer 1: Auto-recover stuck STREAMING sessions ─────────
+        # If a previous request got stuck (SDK never sent ResultMessage),
+        # the unit stays in STREAMING forever.  Instead of rejecting the
+        # new message with an error, force-recover to COLD and proceed.
+        # The user never sees an error — just a slightly longer response.
+        if self.state == SessionState.STREAMING:
+            stall = self.streaming_stall_seconds
+            logger.warning(
+                "session_unit.auto_recover_stuck session_id=%s state=%s "
+                "stall=%.0fs — forcing COLD before retry",
+                self.session_id, self.state.value,
+                stall or 0,
+            )
+            self.force_unstick_streaming()
+            # After force_unstick, state is COLD — fall through to spawn
+
+        if self.state == SessionState.WAITING_INPUT:
+            raise RuntimeError(
+                f"Cannot send() in state {self.state.value} — "
+                f"a permission prompt is pending "
+                f"(session_id={self.session_id})"
+            )
+
         if self.state not in (SessionState.COLD, SessionState.IDLE):
             raise RuntimeError(
                 f"Cannot send() in state {self.state.value} "
@@ -343,21 +442,70 @@ class SessionUnit:
                     and self._retry_count < self.MAX_RETRY_ATTEMPTS
                 ):
                     self._retry_count += 1
-                    backoff = self.RETRY_BACKOFF_SECONDS * self._retry_count
+
+                    # OOM-aware backoff: SIGKILL (exit -9) from macOS
+                    # jetsam or Linux OOM-killer gets a flat 30s cooldown
+                    # instead of incremental backoff, giving the OS time
+                    # to reclaim memory (COE lesson).
+                    #
+                    # Detection uses _is_oom_signal() which checks multiple
+                    # patterns + spawn budget as a fallback heuristic, so
+                    # we don't silently regress if the SDK changes its
+                    # error message format.
+                    is_oom = _is_oom_signal(error_str)
+                    if is_oom:
+                        self._last_error_type = "oom"
+                        backoff = 30.0
+                    else:
+                        self._last_error_type = None
+                        backoff = self.RETRY_BACKOFF_SECONDS * self._retry_count
+
                     logger.info(
                         "Retry %d/%d for session %s after %.1fs backoff "
-                        "(resume=%s)",
+                        "(resume=%s, oom=%s)",
                         self._retry_count,
                         self.MAX_RETRY_ATTEMPTS,
                         self.session_id,
                         backoff,
                         resume_session_id,
+                        is_oom,
                     )
 
                     # Clean up dead subprocess
                     self._crash_to_cold()
 
                     await asyncio.sleep(backoff)
+
+                    # Safety net: re-check spawn budget before retrying.
+                    # Even if OOM detection missed (e.g. SDK changed error
+                    # format), the budget gate prevents retrying into
+                    # memory pressure — the core COE fix.
+                    try:
+                        from .resource_monitor import resource_monitor
+                        budget = resource_monitor.spawn_budget()
+                        if not budget.can_spawn:
+                            logger.warning(
+                                "Retry %d aborted: spawn budget denied "
+                                "post-backoff session_id=%s reason=%s",
+                                self._retry_count, self.session_id,
+                                budget.reason,
+                            )
+                            self._crash_to_cold(clear_identity=True)
+                            from .session_utils import _build_error_event
+                            yield _build_error_event(
+                                code="RESOURCE_EXHAUSTED",
+                                message=(
+                                    "Not enough memory to restart the AI service. "
+                                    "Close unused tabs or apps to free memory."
+                                ),
+                                suggested_action=(
+                                    "Close idle chat tabs to free memory, "
+                                    "then send your message again."
+                                ),
+                            )
+                            return
+                    except Exception:
+                        pass  # Budget check failed — proceed with retry
 
                     # Build retry options with --resume flag to restore
                     # conversation context from the previous subprocess.
@@ -457,6 +605,25 @@ class SessionUnit:
             _env_lock,
         )
 
+        # Pre-spawn memory gate — check BEFORE acquiring locks
+        # to avoid holding locks while waiting or failing.
+        from .resource_monitor import resource_monitor
+        budget = resource_monitor.spawn_budget()
+        if not budget.can_spawn:
+            from .exceptions import ResourceExhaustedException
+            logger.warning(
+                "session_unit.spawn BLOCKED session_id=%s reason=%s",
+                self.session_id, budget.reason,
+            )
+            raise ResourceExhaustedException(
+                message=budget.reason,
+                detail=(
+                    f"available={budget.available_mb:.0f}MB, "
+                    f"cost={budget.estimated_cost_mb:.0f}MB, "
+                    f"headroom={budget.headroom_mb:.0f}MB"
+                ),
+            )
+
         async with _spawn_lock:
             async with _env_lock:
                 if config is not None:
@@ -552,6 +719,12 @@ class SessionUnit:
         except ImportError:
             _has_tool_summarizer = False
         async for message in self._client.receive_response():
+            # ── Streaming watchdog heartbeat ───────────────────────
+            # Every SDK message (even partial deltas) proves the stream
+            # is still alive.  LifecycleManager reads _last_event_time
+            # to detect stuck streams.
+            self._last_event_time = time.time()
+
             # Capture SDK session ID from init message
             if hasattr(message, "session_id") and message.session_id:
                 self._sdk_session_id = message.session_id
@@ -878,6 +1051,18 @@ class SessionUnit:
 
         try:
             os.kill(pid, 0)  # Signal 0 = existence check
+
+            # Collect per-process metrics (non-blocking, best-effort)
+            try:
+                from .resource_monitor import resource_monitor
+                self._last_metrics = resource_monitor.process_metrics(
+                    pid=pid,
+                    session_id=self.session_id,
+                    state=self.state.value,
+                )
+            except Exception:
+                pass  # Never let metrics collection break health_check
+
             return True
         except ProcessLookupError:
             logger.warning(
@@ -987,6 +1172,45 @@ class SessionUnit:
         else:
             self._cleanup_internal()
         self._transition(SessionState.COLD)
+
+    @property
+    def streaming_stall_seconds(self) -> Optional[float]:
+        """Seconds since last SDK event while in STREAMING state.
+
+        Returns ``None`` if not currently streaming or no events yet.
+        Used by ``LifecycleManager`` to detect stuck streams.
+        """
+        if self.state != SessionState.STREAMING:
+            return None
+        if self._last_event_time is None:
+            # Streaming but no events yet — measure from streaming start
+            if self._streaming_start_time is not None:
+                return time.time() - self._streaming_start_time
+            return None
+        return time.time() - self._last_event_time
+
+    def force_unstick_streaming(self) -> None:
+        """Force a stuck STREAMING session back to COLD.
+
+        Kills the subprocess and transitions STREAMING → DEAD → COLD,
+        preserving ``_sdk_session_id`` so the next ``send()`` can resume
+        the conversation via ``--resume``.
+
+        Called by ``LifecycleManager._check_streaming_timeout()`` when
+        a session has been in STREAMING with no SDK events for longer
+        than ``STREAMING_TIMEOUT_SECONDS``.
+        """
+        if self.state != SessionState.STREAMING:
+            return
+        logger.warning(
+            "session_unit.force_unstick session_id=%s pid=%s "
+            "stall=%.0fs — forcing COLD for recovery",
+            self.session_id,
+            self.pid,
+            self.streaming_stall_seconds or 0,
+        )
+        # Kill subprocess but keep _sdk_session_id for --resume
+        self._crash_to_cold(clear_identity=False)
 
     def clear_session_identity(self) -> None:
         """Clear ``_sdk_session_id`` so the unit cannot resume.

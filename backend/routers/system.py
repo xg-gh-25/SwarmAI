@@ -86,6 +86,46 @@ class ResetToDefaultsResponse(BaseModel):
     error: Optional[str] = None
 
 
+# ── Resource observability models ──────────────────────────────────
+
+class SystemMemoryResponse(BaseModel):
+    """System RAM snapshot."""
+    total_mb: float
+    available_mb: float
+    used_mb: float
+    percent_used: float
+    pressure_level: str  # ok | warning | critical
+
+
+class ProcessMetricsResponse(BaseModel):
+    """Per-subprocess resource metrics."""
+    pid: int
+    session_id: str
+    rss_mb: float
+    cpu_percent: float
+    num_threads: int
+    state: str
+    uptime_seconds: float
+
+
+class SpawnBudgetResponse(BaseModel):
+    """Spawn gate decision."""
+    can_spawn: bool
+    reason: str
+    available_mb: float
+    estimated_cost_mb: float
+    headroom_mb: float
+
+
+class SystemResourcesResponse(BaseModel):
+    """Full resource observability surface."""
+    memory: SystemMemoryResponse
+    spawn_budget: SpawnBudgetResponse
+    processes: list[ProcessMetricsResponse]
+    total_subprocess_rss_mb: float
+    timestamp: str
+
+
 @router.get("/status", response_model=SystemStatusResponse)
 async def get_system_status() -> SystemStatusResponse:
     """Get current system initialization status.
@@ -203,6 +243,60 @@ async def get_system_status() -> SystemStatusResponse:
         startup_time_ms=_main_module._startup_time_ms,
         phase_timings=_main_module._phase_timings,
         timestamp=timestamp
+    )
+
+
+@router.get("/resources", response_model=SystemResourcesResponse)
+async def get_system_resources() -> SystemResourcesResponse:
+    """Get system resource metrics: memory, spawn budget, per-process RSS.
+
+    Designed for the frontend resource ring and diagnostics panel.
+    Cheap to call — psutil reads are cached for 5s.
+    """
+    from core.resource_monitor import resource_monitor
+    from core import session_registry
+
+    mem = resource_monitor.system_memory()
+    budget = resource_monitor.spawn_budget()
+
+    # Collect per-process metrics from alive SessionUnits
+    processes: list[ProcessMetricsResponse] = []
+    total_rss = 0.0
+    router_inst = session_registry.session_router
+    if router_inst:
+        for unit in router_inst.list_units():
+            metrics = getattr(unit, "_last_metrics", None)
+            if metrics:
+                rss_mb = round(metrics.rss_bytes / (1024 * 1024), 1)
+                total_rss += rss_mb
+                processes.append(ProcessMetricsResponse(
+                    pid=metrics.pid,
+                    session_id=metrics.session_id,
+                    rss_mb=rss_mb,
+                    cpu_percent=metrics.cpu_percent,
+                    num_threads=metrics.num_threads,
+                    state=metrics.state,
+                    uptime_seconds=metrics.uptime_seconds,
+                ))
+
+    return SystemResourcesResponse(
+        memory=SystemMemoryResponse(
+            total_mb=round(mem.total / (1024 * 1024), 1),
+            available_mb=round(mem.available / (1024 * 1024), 1),
+            used_mb=round(mem.used / (1024 * 1024), 1),
+            percent_used=mem.percent_used,
+            pressure_level=mem.pressure_level,
+        ),
+        spawn_budget=SpawnBudgetResponse(
+            can_spawn=budget.can_spawn,
+            reason=budget.reason,
+            available_mb=budget.available_mb,
+            estimated_cost_mb=budget.estimated_cost_mb,
+            headroom_mb=budget.headroom_mb,
+        ),
+        processes=processes,
+        total_subprocess_rss_mb=round(total_rss, 1),
+        timestamp=datetime.now(timezone.utc).isoformat(),
     )
 
 

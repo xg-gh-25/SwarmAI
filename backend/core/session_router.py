@@ -144,6 +144,32 @@ class SessionRouter:
             return "ready"
 
         if self.alive_count < self.MAX_CONCURRENT:
+            # Slot available by count — also check spawn budget so we
+            # don't spawn into memory pressure even if under MAX_CONCURRENT.
+            from .resource_monitor import resource_monitor
+            budget = resource_monitor.spawn_budget()
+            if not budget.can_spawn:
+                logger.warning(
+                    "session_router: slot available but spawn budget denied "
+                    "session_id=%s reason=%s",
+                    requesting_unit.session_id, budget.reason,
+                )
+                # Try to free memory via eviction first
+                if await self._evict_idle(exclude=requesting_unit):
+                    resource_monitor.invalidate_cache()
+                    budget = resource_monitor.spawn_budget()
+                    if budget.can_spawn:
+                        return "ready"
+                # Still not enough — raise instead of silently spawning
+                from .exceptions import ResourceExhaustedException
+                raise ResourceExhaustedException(
+                    message=budget.reason,
+                    detail=(
+                        f"available={budget.available_mb:.0f}MB, "
+                        f"cost={budget.estimated_cost_mb:.0f}MB, "
+                        f"headroom={budget.headroom_mb:.0f}MB"
+                    ),
+                )
             return "ready"
 
         # Try to evict the oldest IDLE unit
@@ -179,16 +205,25 @@ class SessionRouter:
         DailyActivity extraction, auto-commit, and distillation run
         for the evicted session's conversation.
         """
-        idle_units = sorted(
-            [
-                u for u in self._units.values()
-                if u.state == SessionState.IDLE and u is not exclude
-            ],
-            key=lambda u: u.last_used,
-        )
+        idle_units = [
+            u for u in self._units.values()
+            if u.state == SessionState.IDLE and u is not exclude
+        ]
         if not idle_units:
             return False
 
+        # Resource-aware eviction: prefer the unit consuming the most
+        # memory (RSS) so the freed slot gives maximum headroom for the
+        # incoming spawn.  Falls back to oldest-idle when metrics are
+        # unavailable (e.g. psutil not installed).
+        def _eviction_key(u: SessionUnit) -> tuple:
+            metrics = getattr(u, "_last_metrics", None)
+            rss = metrics.rss_bytes if metrics else 0
+            # Primary: highest RSS first (negative for descending sort)
+            # Secondary: oldest idle first (ascending last_used)
+            return (-rss, u.last_used)
+
+        idle_units.sort(key=_eviction_key)
         victim = idle_units[0]
         logger.info(
             "session_router.evict session_id=%s (idle %.0fs)",

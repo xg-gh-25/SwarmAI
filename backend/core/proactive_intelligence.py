@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import re
 import logging
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -609,6 +610,16 @@ class LearningState:
     # is append-only — mtime changes every session, causing double-counting.
     last_processed_activity_key: str = ""
 
+    # L4: Effectiveness scoring — tracks whether briefing suggestions
+    # actually influenced user behavior, enabling self-tuning.
+    effectiveness: dict[str, Any] = field(default_factory=lambda: {
+        "total_suggestions": 0,
+        "followed": 0,
+        "skipped": 0,
+        "follow_rate": 0.0,
+        "trend": "gathering",  # gathering | improving | declining | stable
+    })
+
     def preferred_work_type(self) -> Optional[str]:
         """Return the work type with highest count, or None if no data."""
         if not self.work_type_distribution:
@@ -669,6 +680,10 @@ def _load_learning_state(workspace_dir: Path) -> LearningState:
             }),
             observations=data.get("observations", []),
             last_processed_activity_key=data.get("last_processed_activity_key", ""),
+            effectiveness=data.get("effectiveness", {
+                "total_suggestions": 0, "followed": 0, "skipped": 0,
+                "follow_rate": 0.0, "trend": "gathering",
+            }),
         )
         return state
     except (json.JSONDecodeError, KeyError, TypeError) as exc:
@@ -695,6 +710,7 @@ def _save_learning_state(workspace_dir: Path, state: LearningState) -> None:
         "work_type_distribution": state.work_type_distribution,
         "observations": state.observations[-_OBSERVATIONS_CAP:],
         "last_processed_activity_key": state.last_processed_activity_key,
+        "effectiveness": state.effectiveness,
     }
     tmp_path = path.with_suffix(".tmp")
     try:
@@ -702,6 +718,116 @@ def _save_learning_state(workspace_dir: Path, state: LearningState) -> None:
         tmp_path.replace(path)
     except OSError as exc:
         logger.warning("Failed to save proactive_state.json: %s", exc)
+
+
+def _get_signal_highlights(working_directory: str, max_items: int = 3) -> list[str]:
+    """Read signal_digest.json and return formatted highlights for the session briefing.
+
+    Filters to items fetched within the last 48 hours for freshness.
+    Returns up to *max_items* formatted lines sorted by relevance_score desc.
+
+    Returns an empty list if the digest file doesn't exist or has no fresh items
+    (signal fetcher may not be configured yet — this is a graceful no-op).
+    """
+    digest_path = Path(working_directory) / "Services" / "signals" / "signal_digest.json"
+    if not digest_path.exists():
+        return []
+
+    try:
+        data = json.loads(digest_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return []
+
+    items = data.get("items", [])
+    if not items:
+        return []
+
+    # 48-hour freshness cutoff
+    cutoff = time.time() - 48 * 3600
+    fresh = []
+    for item in items:
+        fetched_at = item.get("fetched_at", "")
+        if isinstance(fetched_at, str) and fetched_at:
+            try:
+                dt = datetime.fromisoformat(fetched_at.replace("Z", "+00:00"))
+                if dt.timestamp() >= cutoff:
+                    fresh.append(item)
+            except (ValueError, TypeError):
+                continue
+        elif isinstance(fetched_at, (int, float)):
+            if fetched_at >= cutoff:
+                fresh.append(item)
+
+    if not fresh:
+        return []
+
+    # Sort by relevance_score descending
+    fresh.sort(key=lambda x: x.get("relevance_score", 0), reverse=True)
+
+    lines = []
+    for item in fresh[:max_items]:
+        title = item.get("title", "Untitled")
+        summary = item.get("summary", "")
+        source = item.get("source", "")
+        urgency = item.get("urgency", "")
+
+        prefix = f"[{urgency}]" if urgency else ""
+        source_tag = f" ({source})" if source else ""
+        line = f"  - {prefix} **{title}**{source_tag}"
+        if summary:
+            # Truncate summary to ~100 chars for briefing compactness
+            short = summary[:100].rstrip() + ("…" if len(summary) > 100 else "")
+            line += f": {short}"
+        lines.append(line)
+
+    return lines
+
+
+def _update_effectiveness(
+    learning_state: "LearningState",
+    last_suggested: list[str],
+    actual_deliverables: list[str],
+) -> None:
+    """Compare what was suggested vs what was actually done. Update effectiveness stats.
+
+    Called during distillation when DailyActivity deliverables are available.
+    A suggestion is "followed" if any deliverable title fuzzy-matches it
+    (case-insensitive substring match in either direction).
+    """
+    if not last_suggested:
+        return
+
+    eff = learning_state.effectiveness
+    followed = 0
+    for suggestion in last_suggested:
+        s_lower = suggestion.lower()
+        for deliverable in actual_deliverables:
+            d_lower = deliverable.lower()
+            if s_lower in d_lower or d_lower in s_lower:
+                followed += 1
+                break
+
+    skipped = len(last_suggested) - followed
+    eff["total_suggestions"] = eff.get("total_suggestions", 0) + len(last_suggested)
+    eff["followed"] = eff.get("followed", 0) + followed
+    eff["skipped"] = eff.get("skipped", 0) + skipped
+
+    total = eff["total_suggestions"]
+    eff["follow_rate"] = round(eff["followed"] / total, 3) if total > 0 else 0.0
+
+    # Trend detection (need >=10 data points)
+    if total >= 10:
+        rate = eff["follow_rate"]
+        if rate < 0.3:
+            eff["trend"] = "declining"
+        elif rate > 0.8:
+            eff["trend"] = "improving"
+        else:
+            eff["trend"] = "stable"
+    else:
+        eff["trend"] = "gathering"
+
+    learning_state.effectiveness = eff
 
 
 def _classify_work_type(text: str) -> str:
@@ -974,6 +1100,11 @@ def build_session_briefing(
         if background_section:
             sections.append(background_section)
 
+        # L4: External signal highlights from signal_digest.json
+        signal_lines = _get_signal_highlights(str(workspace))
+        if signal_lines:
+            sections.append("**External signals since last session:**\n" + "\n".join(signal_lines))
+
         # L3: Surface learning insight
         learning_insight = learning_state.learning_summary()
         if learning_insight:
@@ -998,9 +1129,11 @@ def build_session_briefing(
         _save_learning_state(workspace, learning_state)
 
         logger.info(
-            "Proactive briefing (L3): %d chars, ~%d tokens, %d ranked, %d signals, learning=%s",
+            "Proactive briefing (L4): %d chars, ~%d tokens, %d ranked, %d signals, "
+            "ext_signals=%d, learning=%s, effectiveness=%s",
             len(briefing), len(briefing) // 4, len(ranked), len(signals),
-            "active" if learning_insight else "gathering",
+            len(signal_lines), "active" if learning_insight else "gathering",
+            learning_state.effectiveness.get("trend", "gathering"),
         )
         return briefing
 

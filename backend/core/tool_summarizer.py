@@ -204,7 +204,8 @@ def summarize_tool_use(name: str, input_data: Optional[dict]) -> str:
     elif lower_name in _SKILL_NAMES:
         category = "skill"
         skill_name = (
-            data.get("skill_name")
+            data.get("skill")
+            or data.get("skill_name")
             or data.get("skillName")
             or data.get("skill_folder")
             or ""
