@@ -374,7 +374,7 @@ If any answer is "no" → simplify or skip the evolution.
 backend/
 ├── core/
 │   ├── context_directory_loader.py  # EVOLUTION.md in CONTEXT_FILES at P8
-│   ├── agent_manager.py             # _build_system_prompt() loads EVOLUTION.md
+│   ├── session_registry.py             # _build_system_prompt() loads EVOLUTION.md
 │   ├── app_config_manager.py        # evolution config defaults
 │   └── evolution_events.py          # SSE event helper functions (if exists)
 ├── context/

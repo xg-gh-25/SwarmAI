@@ -44,10 +44,10 @@ flowchart TD
 sequenceDiagram
     participant User
     participant ChatPage
-    participant TabMap as useUnifiedTabState
+    participant TabMap as Zustand tabStore
     participant StreamHook as useChatStreamingLifecycle
     participant API as FastAPI Backend
-    participant AM as AgentManager
+    participant AM as SessionRouter
     participant SDK as ClaudeSDKClient
     participant Claude as Claude API / Bedrock
 
@@ -246,7 +246,7 @@ sequenceDiagram
     Tab->>FE: Send message (sessionId="abc-123")
     FE->>BE: POST /api/chat/stream (session_id="abc-123")
 
-    BE->>BE: Check _active_sessions["abc-123"]
+    BE->>BE: Check SessionUnit instances["abc-123"]
 
     alt Client found (no restart)
         BE->>SDK: Reuse existing client
@@ -256,7 +256,7 @@ sequenceDiagram
         SDK-->>BE: init(sdk_session_id="xyz-789")
         Note over BE: Map "xyz-789" → "abc-123"
         BE->>BE: Save messages under "abc-123"
-        BE->>BE: Key _active_sessions by "abc-123"
+        BE->>BE: Key SessionUnit instances by "abc-123"
         BE-->>FE: session_start(sessionId="abc-123")
     end
 
@@ -439,7 +439,7 @@ sequenceDiagram
     participant FE as Frontend
     participant SS as sessionStorage
     participant API as FastAPI
-    participant AM as AgentManager
+    participant AM as SessionRouter
     participant SDK as ClaudeSDKClient
 
     Note over SDK: ask_user_question event
@@ -478,7 +478,7 @@ sequenceDiagram
     participant User
     participant FE as Frontend
     participant API as FastAPI
-    participant AM as AgentManager
+    participant AM as SessionRouter
     participant Hook as human_approval_hook
     participant PM as PermissionManager
     participant CmdPM as CmdPermissionManager
@@ -576,7 +576,7 @@ flowchart TD
     K --> L["channel_gateway.startup()"]
 
     subgraph "Cleanup Loop (every 60s)"
-        M["_cleanup_stale_sessions_loop"] --> N{Session idle > 30 min?}
+        M["_maintenance_loop"] --> N{Session idle > 30 min?}
         N -->|YES| O["Tier 1: _extract_activity_early()"]
         O --> P[DailyActivity hook only - client preserved]
         N -->|NO| Q[Skip]

@@ -6,7 +6,7 @@ SwarmAI's context and memory system gives agents persistent identity, personalit
 
 Three cooperating systems build the final system prompt:
 1. `ContextDirectoryLoader` — reads 11 source files from `.context/`, enforces token budget
-2. `_build_system_prompt()` in AgentManager — orchestrates assembly, adds ephemeral context
+2. `_build_system_prompt()` in SessionRouter — orchestrates assembly, adds ephemeral context
 3. `SystemPromptBuilder` — appends non-file sections (safety, datetime, runtime metadata)
 
 ---
@@ -36,7 +36,7 @@ Three cooperating systems build the final system prompt:
 │                     │                                            │
 │  ┌──────────────────▼───────────────────────────┐               │
 │  │         _build_system_prompt()                │               │
-│  │         (AgentManager)                        │               │
+│  │         (SessionRouter)                        │               │
 │  │                                               │               │
 │  │  1. ContextDirectoryLoader output             │               │
 │  │  2. BOOTSTRAP.md (ephemeral, first-run)       │               │
@@ -258,7 +258,7 @@ Entire method wrapped in try/except — context loading failures never block age
 
 ---
 
-## Context Assembly in AgentManager (`_build_system_prompt`)
+## Context Assembly in SessionRouter (`_build_system_prompt`)
 
 This is the orchestration method that calls ContextDirectoryLoader and adds ephemeral context:
 
@@ -640,7 +640,7 @@ backend/
 ├── core/
 │   ├── context_directory_loader.py  # ContextDirectoryLoader, ContextFileSpec, CONTEXT_FILES
 │   ├── system_prompt.py             # SystemPromptBuilder (non-file sections)
-│   ├── agent_manager.py             # _build_system_prompt(), _get_model_context_window()
+│   ├── session_registry.py             # _build_system_prompt(), _get_model_context_window()
 │   ├── session_hooks.py             # SessionLifecycleHookManager, HookContext, Protocol
 │   ├── summarization.py             # SummarizationPipeline, StructuredSummary
 │   ├── daily_activity_writer.py     # write_daily_activity(), parse/write_frontmatter

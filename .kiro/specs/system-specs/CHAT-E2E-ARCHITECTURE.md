@@ -22,7 +22,7 @@ The Claude Agent SDK manages the actual conversation state (multi-turn history) 
 │         │                                          │        │
 │  ┌──────▼───────────────────┐                      │        │
 │  │ useChatStreamingLifecycle│                      │        │
-│  │ useUnifiedTabState       │                      │        │
+│  │ Zustand tabStore       │                      │        │
 │  │ (state machines, tabs)   │                      │        │
 │  └──────────────────────────┘                      │        │
 └────────────────────────────────────────────────────┼────────┘
@@ -31,7 +31,7 @@ The Claude Agent SDK manages the actual conversation state (multi-turn history) 
 │                 BACKEND (FastAPI sidecar)           │        │
 │                                                     ▼        │
 │  ┌──────────────┐   ┌──────────────────┐   ┌─────────────┐ │
-│  │ chat.py      │──▶│ AgentManager     │──▶│ClaudeSDK    │ │
+│  │ chat.py      │──▶│ SessionRouter     │──▶│ClaudeSDK    │ │
 │  │ POST /stream │   │ run_conversation │   │Client       │ │
 │  │ SSE response │◀──│ _run_query_on_   │◀──│(subprocess) │ │
 │  │              │   │  client          │   │             │ │
@@ -55,9 +55,9 @@ The Claude Agent SDK manages the actual conversation state (multi-turn history) 
 ### 1.1 User Opens the App
 
 1. `main.py` lifespan starts → initializes DB, loads `config.json` via `AppConfigManager`
-2. `AgentManager.configure()` receives injected `AppConfigManager`, `CmdPermissionManager`, `CredentialValidator`
+2. `session_registry.initialize()` receives injected `AppConfigManager`, `CmdPermissionManager`, `CredentialValidator`
 3. Frontend `ChatPage.tsx` mounts → queries `/api/agents` to get the default SwarmAgent
-4. `useUnifiedTabState` restores tabs from `~/.swarm-ai/open_tabs.json`
+4. `Zustand tabStore` restores tabs from `~/.swarm-ai/open_tabs.json`
 5. `useChatStreamingLifecycle` initializes: `messages=[]`, `sessionId=undefined`, `isStreaming=false`
 
 ### 1.2 User Types First Message and Hits Send
@@ -122,7 +122,7 @@ async def chat_stream(request: Request):
 
 `sse_with_heartbeat` is a fan-in wrapper: it runs the actual `message_generator()` in a background task, puts messages into an `asyncio.Queue`, and the main loop either yields messages or sends heartbeat pings every 15 seconds to keep the SSE connection alive.
 
-### 2.2 AgentManager.run_conversation()
+### 2.2 SessionRouter.run_conversation()
 
 ```python
 async def run_conversation(self, agent_id, user_message, content, session_id, ...):
@@ -186,7 +186,7 @@ _execute_on_session()
 ```
 _execute_on_session(session_id="abc-123", is_resuming=True)
   │
-  ├── Check _active_sessions for existing long-lived client
+  ├── Check SessionUnit instances for existing long-lived client
   │
   ├── IF client found (subprocess still alive):
   │     Reuse it directly → _run_query_on_client(existing_client, ...)
@@ -205,7 +205,7 @@ _execute_on_session(session_id="abc-123", is_resuming=True)
 The system prompt is assembled by three cooperating systems:
 
 ```
-_build_system_prompt() in AgentManager
+_build_system_prompt() in SessionRouter
   │
   ├── Step 1: ContextDirectoryLoader (global context from SwarmWS/.context/)
   │     │
@@ -497,7 +497,7 @@ effective_session_id = (
 
 This pattern appears in:
 - Message persistence (`_save_message`)
-- Client storage (`_active_sessions[effective_session_id]`)
+- Client storage (`SessionUnit instances[effective_session_id]`)
 - Session cleanup (`_cleanup_session(eff_sid)`)
 - Result event emission (`yield {"type": "result", "session_id": effective_session_id}`)
 - TSCC metadata keying
@@ -529,7 +529,7 @@ SwarmAI does NOT manually build the messages array. The SDK subprocess maintains
 ### 7.1 Active Session Storage
 
 ```python
-self._active_sessions[session_id] = {
+self.SessionUnit instances[session_id] = {
     "client": client,
     "wrapper": wrapper,
     "created_at": time.time(),
@@ -541,7 +541,7 @@ self._active_sessions[session_id] = {
 ### 7.2 TTL Cleanup (2-hour idle timeout)
 
 ```python
-async def _cleanup_stale_sessions_loop(self):
+async def _maintenance_loop (LifecycleManager)(self):
     while True:
         await asyncio.sleep(60)
         now = time.time()
@@ -549,7 +549,7 @@ async def _cleanup_stale_sessions_loop(self):
         for sid, info in idle_sessions:
             await self._extract_activity_early(sid, info)
         # Tier 2: Full cleanup (2h TTL)
-        for sid in list(self._active_sessions):
+        for sid in list(self.SessionUnit instances):
             if now - info["last_used"] > SESSION_TTL:  # 2 hours
                 await self._cleanup_session(sid)
 ```
@@ -559,7 +559,7 @@ async def _cleanup_stale_sessions_loop(self):
 ```python
 @app.post("/shutdown")
 async def shutdown():
-    await agent_manager.disconnect_all()
+    await session_registry.disconnect_all()
     # Kills all Claude CLI subprocesses
 ```
 
@@ -755,7 +755,7 @@ Additional resilience:
 ### Tab Restoration on Startup
 
 ```
-App Launch → useUnifiedTabState initializes with temporary default tab
+App Launch → Zustand tabStore initializes with temporary default tab
   → ChatPage mount calls restoreFromFile()
   → open_tabs.json exists?
     YES → Clear default, hydrate saved tabs (messages=[])
@@ -803,7 +803,7 @@ In-memory per-thread state with LRU eviction (max 200 entries):
 - `TSCCStateManager`: OrderedDict keyed by thread_id
 - Lifecycle states: new → active → paused/failed/cancelled/idle
 - Per-thread asyncio.Lock prevents concurrent mutation
-- System prompt metadata stored separately in `agent_manager._system_prompt_metadata`
+- System prompt metadata stored separately in `session_registry.system_prompt_metadata`
 - Frontend `useTSCCState` hook + `TSCCPanel` component display live context
 
 ---
@@ -846,7 +846,7 @@ There is no project-scoped context injection. When a chat is bound to a project 
 1. User types message → handleSendMessage()
 2. Optimistic UI update (user msg + empty assistant placeholder)
 3. chatService.streamChat() → POST /api/chat/stream (SSE)
-4. FastAPI router → AgentManager.run_conversation()
+4. FastAPI router → SessionRouter.run_conversation()
 5. _execute_on_session():
    a. Configure Claude env vars (Bedrock toggle, region)
    b. Pre-flight credential check (STS call)
