@@ -1,8 +1,7 @@
 """SessionUnit — one tab's complete subprocess lifecycle state machine.
 
-Extracted from ``agent_manager.py`` as part of the multi-session
-re-architecture (Phase 1).  Each ``SessionUnit`` owns exactly one
-Claude CLI subprocess and manages its lifecycle through a 5-state
+Part of the multi-session re-architecture.  Each ``SessionUnit`` owns
+exactly one Claude CLI subprocess and manages its lifecycle through a 5-state
 machine: COLD → STREAMING → IDLE → DEAD → COLD.
 
 Public symbols:

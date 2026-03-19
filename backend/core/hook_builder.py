@@ -1,6 +1,5 @@
 """Hook configuration builder for Claude Agent SDK sessions.
 
-Extracted from ``agent_manager.py`` to isolate hook wiring concerns.
 Composes security hooks, permission hooks, skill access checkers, and
 pre-compact hooks into the ``hooks`` dict for ``ClaudeAgentOptions``.
 
@@ -8,9 +7,6 @@ Key public symbols:
 
 - ``build_hooks``  — Async entry point, returns (hooks_dict,
                      effective_allowed_skills, allow_all_skills)
-
-All symbols are re-exported by ``agent_manager.py`` as a method on
-``AgentManager`` for backward compatibility.
 """
 
 import logging

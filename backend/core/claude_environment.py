@@ -1,7 +1,6 @@
 """Claude SDK environment configuration and client wrapper.
 
-This module was extracted from ``agent_manager.py`` to isolate environment
-setup concerns.  It is responsible for:
+This module isolates environment setup concerns.  It is responsible for:
 
 - ``_configure_claude_environment``    — Reads non-secret app settings from
                                          the in-memory ``AppConfigManager``
@@ -20,9 +19,6 @@ setup concerns.  It is responsible for:
                                          serializes ``_configure_claude_environment``
                                          + client creation to prevent concurrent
                                          sessions from racing on ``os.environ``.
-
-All public symbols are re-exported by ``agent_manager.py`` for backward
-compatibility, so existing callers require zero import changes.
 """
 from __future__ import annotations
 

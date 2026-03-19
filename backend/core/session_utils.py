@@ -1,17 +1,12 @@
 """Shared utilities for the multi-session architecture.
 
-Extracted from ``agent_manager.py`` to break circular dependencies
-between ``session_unit.py`` and ``agent_manager.py``.  These are
-pure functions with no subprocess, routing, or hook logic.
+Pure functions with no subprocess, routing, or hook logic.
 
 Public symbols:
 
 - ``_is_retriable_error``   — Classify transient SDK errors for auto-retry.
 - ``_sanitize_sdk_error``   — Map raw SDK errors to user-friendly messages.
 - ``_build_error_event``    — Build a sanitized SSE error event dict.
-
-All three functions are re-exported by ``agent_manager.py`` for backward
-compatibility so existing callers require zero import changes.
 """
 from __future__ import annotations
 
