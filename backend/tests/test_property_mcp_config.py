@@ -84,7 +84,7 @@ async def _build_mcp_config_under_test(
     """Replicate the simplified _build_mcp_config logic.
 
     This mirrors the production code so we can test the algorithm
-    without importing the full AgentManager (which has heavy deps).
+    without importing the full PromptBuilder (which has heavy deps).
 
     Returns:
         Tuple of (mcp_servers dict, disallowed_tools list).
