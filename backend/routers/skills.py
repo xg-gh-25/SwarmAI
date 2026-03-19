@@ -30,7 +30,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
-from core.agent_manager import agent_manager
+from core.agent_manager import agent_manager  # Skill creator uses AgentManager directly (separate flow from SessionRouter)
 from core.initialization_manager import initialization_manager
 from core.projection_layer import ProjectionLayer
 from core.skill_manager import SkillInfo, skill_manager

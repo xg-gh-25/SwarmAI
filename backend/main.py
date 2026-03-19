@@ -15,7 +15,7 @@ import time
 from pathlib import Path
 
 from config import settings, get_app_data_dir
-from core.agent_manager import agent_manager
+from core import session_registry
 from utils.bundle_paths import get_resource_file
 from routers import agents_router, skills_router, mcp_router, chat_router, chat_threads_router, auth_router, workspace_router, settings_router, plugins_router, tasks_router, channels_router, system_router, todos_router, search_router, workspace_config_router, workspace_api_router, projects_router, tscc_router, artifacts_router
 from routers.autonomous_jobs import router as autonomous_jobs_router
@@ -423,13 +423,6 @@ async def lifespan(app: FastAPI):
             logger.debug("boto3 pre-warm failed (non-critical)", exc_info=True)
     asyncio.create_task(_prewarm_boto3())
 
-    # Wire into AgentManager (replaces module-level singletons)
-    agent_manager.configure(
-        config_manager=app_config,
-        credential_validator=cred_validator,
-    )
-    logger.info("AgentManager configured with injected components")
-
     # Generate permissions.json for user visibility
     try:
         ws_path = getattr(initialization_manager, '_cached_workspace_path', None)
@@ -468,15 +461,31 @@ async def lifespan(app: FastAPI):
     hook_manager.register(DistillationTriggerHook())
     hook_manager.register(EvolutionMaintenanceHook())
 
-    agent_manager.set_hook_manager(hook_manager)
-    agent_manager.set_hook_executor(hook_executor)
+    agent_manager_shim = None
+    try:
+        from core.agent_manager import agent_manager as agent_manager_shim
+        agent_manager_shim.configure(
+            config_manager=app_config,
+            credential_validator=cred_validator,
+        )
+        agent_manager_shim.set_hook_manager(hook_manager)
+        agent_manager_shim.set_hook_executor(hook_executor)
+    except Exception as exc:
+        logger.warning("AgentManager shim configure failed (skill creator may not work): %s", exc)
+
+    # Wire hooks into session_registry (new architecture)
+    session_registry.configure_hooks(executor=hook_executor, manager=hook_manager)
     set_compliance_tracker(compliance_tracker)
     logger.info("Session lifecycle hooks registered (4 hooks, background executor)")
+
+    # ── Initialize new session architecture ──────────────────────────
+    session_registry.initialize(app_config)
+    logger.info("SessionRouter architecture initialized")
     # ─────────────────────────────────────────────────────────────────
 
     t_agent = time.monotonic()
-    phase_timings["agent_manager_ms"] = round((t_agent - t_config) * 1000)
-    logger.info("Phase: agent manager configure — %dms", phase_timings["agent_manager_ms"])
+    phase_timings["session_infra_ms"] = round((t_agent - t_config) * 1000)
+    logger.info("Phase: session infrastructure — %dms", phase_timings["session_infra_ms"])
 
     # Wire AppConfigManager into Settings router (DI).
     # Skip if already configured (e.g. test fixtures may pre-set).
@@ -488,9 +497,10 @@ async def lifespan(app: FastAPI):
         logger.debug("Settings router already configured (skipping overwrite)")
 
     # Wire up TSCC state manager for the tscc router
-    from core.agent_manager import _tscc_state_manager
+    from core.tscc_state_manager import TSCCStateManager
     from routers.tscc import register_tscc_dependencies
 
+    _tscc_state_manager = TSCCStateManager()
     register_tscc_dependencies(_tscc_state_manager)
     logger.info("TSCC state manager initialized")
 
@@ -498,7 +508,7 @@ async def lifespan(app: FastAPI):
     # At startup, no claude processes should be running — any that exist are
     # zombies from a crash or unclean shutdown. These hold vnodes and can
     # cause kernel panics (COE 2026-03-15: 80 zombies -> vnode exhaustion -> panic).
-    startup_killed = agent_manager.kill_all_claude_processes()
+    startup_killed = session_registry.kill_all_claude_processes()
     if startup_killed:
         logger.warning("Killed %d leftover claude process(es) at startup", startup_killed)
 
@@ -508,12 +518,12 @@ async def lifespan(app: FastAPI):
     _startup_time_ms = total_ms
     _phase_timings = phase_timings
     logger.info(
-        "Startup complete — total %dms (db=%dms, workspace=%dms, config=%dms, agent=%dms)",
+        "Startup complete — total %dms (db=%dms, workspace=%dms, config=%dms, session=%dms)",
         total_ms,
         phase_timings.get("database_ms", 0),
         phase_timings.get("workspace_ms", 0),
         phase_timings.get("config_ms", 0),
-        phase_timings.get("agent_manager_ms", 0),
+        phase_timings.get("session_infra_ms", 0),
     )
     logger.info("Startup complete - ready to serve requests")
 
@@ -523,8 +533,8 @@ async def lifespan(app: FastAPI):
     logger.info("Shutting down...")
     await channel_gateway.shutdown()
     logger.info("Channel gateway stopped")
-    await agent_manager.disconnect_all()
-    logger.info("All clients disconnected")
+    await session_registry.disconnect_all()
+    logger.info("All sessions disconnected")
 
 
 # Create FastAPI application
@@ -628,8 +638,8 @@ async def health_check():
     
     # PE Review Finding #5: Use property directly, not hasattr
     pending_hooks = (
-        agent_manager.hook_executor.pending_count
-        if agent_manager.hook_executor
+        session_registry.hook_executor.pending_count
+        if session_registry.hook_executor
         else 0
     )
 
@@ -650,7 +660,7 @@ async def shutdown():
     """
     logger.info("Shutdown endpoint called - disconnecting all clients")
     t0 = time.monotonic()
-    await agent_manager.disconnect_all()
+    await session_registry.disconnect_all()
     elapsed = time.monotonic() - t0
     logger.info("Shutdown endpoint completed in %.2fs", elapsed)
     return {"status": "shutting_down"}

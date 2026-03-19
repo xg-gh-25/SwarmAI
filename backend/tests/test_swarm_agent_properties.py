@@ -198,7 +198,7 @@ class TestSwarmAgentInitializationIdempotence:
 
         **Validates: Requirements 7.4**
         """
-        from core.agent_manager import ensure_default_agent
+        from core.agent_defaults import ensure_default_agent
         from database import db
 
         async def run_multiple_initializations():
@@ -240,7 +240,7 @@ class TestSwarmAgentInitializationIdempotence:
 
         **Validates: Requirements 7.4**
         """
-        from core.agent_manager import ensure_default_agent, DEFAULT_AGENT_ID
+        from core.agent_defaults import ensure_default_agent, DEFAULT_AGENT_ID
         from database import db
 
         async def run_and_check_bindings():
@@ -287,7 +287,7 @@ class TestSwarmAgentInitializationIdempotence:
 
         **Validates: Requirements 7.4**
         """
-        from core.agent_manager import ensure_default_agent, DEFAULT_AGENT_ID, SWARM_AGENT_NAME
+        from core.agent_defaults import ensure_default_agent, DEFAULT_AGENT_ID, SWARM_AGENT_NAME
 
         async def run_and_check_stability():
             results = []
@@ -326,7 +326,7 @@ class TestSwarmAgentInitializationIdempotence:
 
         **Validates: Requirements 7.4**
         """
-        from core.agent_manager import ensure_default_agent, SWARM_AGENT_NAME
+        from core.agent_defaults import ensure_default_agent, SWARM_AGENT_NAME
         from database import db
 
         async def run_and_count_agents():
