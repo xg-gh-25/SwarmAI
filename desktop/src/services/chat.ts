@@ -123,7 +123,7 @@ const enrichToolUseSummary = (block: Record<string, unknown>): Record<string, un
   if (name === 'Skill' && summary === 'Using Skill' && input) {
     // Known field names for the skill identifier — if the SDK changes these,
     // enrichment silently falls back to the generic "Using Skill" summary.
-    const skillName = (input.skill_name ?? input.skillName ?? input.name) as string | undefined;
+    const skillName = (input.skill ?? input.skill_name ?? input.skillName ?? input.name) as string | undefined;
     if (skillName) {
       // Strip "s_" prefix for readability: "s_frontend-design" → "frontend-design"
       const displayName = skillName.replace(/^s_/, '');

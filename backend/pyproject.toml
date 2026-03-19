@@ -24,6 +24,8 @@ dependencies = [
     "slowapi>=0.1.9",
     # AWS SDK (credential validation via STS, credential chain probing)
     "boto3>=1.35.0",
+    # System monitoring
+    "psutil>=5.9.0",
     # Utilities
     "pyyaml>=6.0.0",
     "anyio>=4.0.0",
