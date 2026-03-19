@@ -135,6 +135,13 @@ class DistillationTriggerHook:
         except Exception as exc:
             logger.warning("DailyActivity archival failed (non-blocking): %s", exc)
 
+        # L4: Update effectiveness scoring before distillation
+        # Compare last briefing suggestions against actual deliverables
+        try:
+            self._update_effectiveness_scoring(undistilled_files, Path(ws_path))
+        except Exception as exc:
+            logger.debug("Effectiveness scoring update failed (non-blocking): %s", exc)
+
         # Attempt direct distillation
         try:
             distilled_count = await asyncio.to_thread(
@@ -154,6 +161,63 @@ class DistillationTriggerHook:
                 exc,
             )
             self._write_flag(da_dir, len(undistilled_files))
+
+    @staticmethod
+    def _update_effectiveness_scoring(
+        da_files: list[Path], ws_path: Path,
+    ) -> None:
+        """Compare briefing suggestions against actual deliverables.
+
+        Reads proactive_state.json for last_briefing_suggested, extracts
+        deliverables from the DailyActivity files being distilled, and
+        calls _update_effectiveness() to adjust scoring.
+
+        Non-fatal — any failure is logged and skipped.
+        """
+        from core.proactive_intelligence import (
+            _load_learning_state,
+            _save_learning_state,
+            _update_effectiveness,
+        )
+
+        state = _load_learning_state(ws_path)
+        last_suggested = state.last_briefing_suggested
+        if not last_suggested:
+            return
+
+        # Extract deliverables from DailyActivity files
+        deliverables: list[str] = []
+        for da_file in da_files:
+            try:
+                content = da_file.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            in_deliverables = False
+            for line in content.splitlines():
+                stripped = line.strip()
+                if stripped == "**Deliverables:**" or stripped.startswith("### Deliverables"):
+                    in_deliverables = True
+                    continue
+                if in_deliverables and (
+                    stripped.startswith("**") and stripped.endswith(":**")
+                    or stripped.startswith("### ")
+                    or stripped.startswith("## ")
+                ):
+                    in_deliverables = False
+                    continue
+                if in_deliverables and stripped.startswith("- "):
+                    deliverables.append(stripped.lstrip("- ").strip())
+
+        if deliverables:
+            _update_effectiveness(state, last_suggested, deliverables)
+            _save_learning_state(ws_path, state)
+            logger.info(
+                "L4 effectiveness updated: %d suggestions vs %d deliverables, "
+                "follow_rate=%.2f, trend=%s",
+                len(last_suggested), len(deliverables),
+                state.effectiveness.get("follow_rate", 0),
+                state.effectiveness.get("trend", "gathering"),
+            )
 
     @staticmethod
     def _get_undistilled_files(da_dir: Path) -> list[Path]:

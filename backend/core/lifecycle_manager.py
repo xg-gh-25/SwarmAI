@@ -1,6 +1,7 @@
 """LifecycleManager — background maintenance, TTL cleanup, and hook serialization.
 
 Single background loop responsible for:
+- Streaming timeout watchdog (5min no SDK events → force-unstick)
 - TTL-based session cleanup (12hr idle → kill)
 - Serialized hook execution (auto-commit, daily activity, distillation, evolution)
 - Startup orphan reaper (one-shot, kills unowned claude CLI processes)
@@ -48,6 +49,7 @@ class LifecycleManager:
     TTL_SECONDS: int = 43200  # 12 hours
     LOOP_INTERVAL: float = 60.0  # Check every 60 seconds
     IDLE_HOOK_GRACE: float = 120.0  # Fire hooks after 120s idle (grace period)
+    STREAMING_TIMEOUT_SECONDS: float = 300.0  # 5 min no SDK events → stuck stream
 
     def __init__(
         self,
@@ -157,9 +159,11 @@ class LifecycleManager:
                 await asyncio.sleep(self.LOOP_INTERVAL)
                 try:
                     await self._health_check_all()
+                    await self._check_streaming_timeout()
                     await self._fire_idle_hooks()
                     await self._check_ttl()
                     await self._cleanup_dead()
+                    await self._check_memory_pressure()
                 except Exception as exc:
                     logger.error("Maintenance loop error: %s", exc, exc_info=True)
         except asyncio.CancelledError:
@@ -170,6 +174,39 @@ class LifecycleManager:
         for unit in self._router.list_units():
             if unit.is_alive:
                 await unit.health_check()
+
+    async def _check_streaming_timeout(self) -> None:
+        """Force-unstick sessions that have been STREAMING with no SDK
+        events for longer than ``STREAMING_TIMEOUT_SECONDS``.
+
+        Root cause: The SDK subprocess accepted a query but never
+        returned a ``ResultMessage`` — the session state machine stays
+        stuck in STREAMING forever, rejecting all subsequent messages
+        with "Cannot send() in state streaming".
+
+        Fix: Detect the stall via ``unit.streaming_stall_seconds``,
+        kill the subprocess, and transition back to COLD.  The next
+        user message will trigger a fresh spawn with ``--resume`` to
+        restore conversation context.
+
+        Only touches STREAMING sessions — IDLE, WAITING_INPUT, etc.
+        are handled by other maintenance methods.
+        """
+        for unit in self._router.list_units():
+            if unit.state != SessionState.STREAMING:
+                continue
+            stall = unit.streaming_stall_seconds
+            if stall is None:
+                continue
+            if stall > self.STREAMING_TIMEOUT_SECONDS:
+                logger.warning(
+                    "lifecycle_manager.streaming_timeout session_id=%s "
+                    "stall=%.0fs > timeout=%.0fs — forcing unstick",
+                    unit.session_id,
+                    stall,
+                    self.STREAMING_TIMEOUT_SECONDS,
+                )
+                unit.force_unstick_streaming()
 
     async def _fire_idle_hooks(self) -> None:
         """Fire hooks for IDLE units past the grace period (Gap 2 fix).
@@ -241,6 +278,58 @@ class LifecycleManager:
                         unit._hooks_enqueued = True
                 unit._cleanup_internal()
                 unit._transition(SessionState.COLD)
+
+    # ── Memory pressure relief ─────────────────────────────────────
+
+    async def _check_memory_pressure(self) -> None:
+        """Proactively evict IDLE units when system memory is critical (>90%).
+
+        This prevents cascading OOM kills by freeing memory before the OS
+        resorts to jetsam/SIGKILL.  Only evicts IDLE units — protected
+        states (STREAMING, WAITING_INPUT) are never touched.
+
+        Non-fatal — failures are logged and skipped.
+        """
+        try:
+            from .resource_monitor import resource_monitor
+            mem = resource_monitor.system_memory()
+            if mem.pressure_level != "critical":
+                return
+
+            idle_units = [
+                u for u in self._router.list_units()
+                if u.state == SessionState.IDLE
+            ]
+            if not idle_units:
+                return
+
+            # Evict the unit with the highest RSS first
+            def _rss(u: "SessionUnit") -> int:
+                metrics = getattr(u, "_last_metrics", None)
+                return metrics.rss_bytes if metrics else 0
+
+            idle_units.sort(key=_rss, reverse=True)
+            victim = idle_units[0]
+
+            logger.warning(
+                "lifecycle._check_memory_pressure: memory %.1f%% — evicting "
+                "session %s (rss=%dMB)",
+                mem.percent_used,
+                victim.session_id,
+                _rss(victim) // (1024 * 1024),
+            )
+
+            # Fire hooks before killing
+            if not victim._hooks_enqueued and self._hook_executor:
+                ctx = await self._build_hook_context(victim)
+                if ctx:
+                    self.enqueue_hooks(ctx)
+                    victim._hooks_enqueued = True
+
+            await victim.kill()
+            resource_monitor.invalidate_cache()
+        except Exception as exc:
+            logger.error("_check_memory_pressure failed: %s", exc)
 
     # ── Startup unprocessed session scan (Gap 4 fix) ──────────────
 

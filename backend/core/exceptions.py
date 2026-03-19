@@ -175,6 +175,18 @@ class DatabaseUnavailableException(ServiceUnavailableException):
     message = "Database service is temporarily unavailable"
 
 
+class ResourceExhaustedException(ServiceUnavailableException):
+    """Raised when system resources are insufficient to spawn a new subprocess.
+
+    Triggered by the ResourceMonitor spawn budget check when available
+    memory is below the estimated spawn cost + headroom threshold.
+    """
+
+    code = "RESOURCE_EXHAUSTED"
+    message = "Insufficient system resources. Please close unused tabs or wait for a slot to free up."
+    suggested_action = "Close idle chat tabs to free memory, or wait a moment and try again."
+
+
 # Agent Execution Errors (500)
 class AgentExecutionException(AppException):
     """Raised when agent execution fails."""

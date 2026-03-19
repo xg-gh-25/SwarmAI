@@ -353,8 +353,16 @@ async def chat_stream(request: Request):
             error_message = str(e)
             logger.error(f"Error in chat stream: {error_message}")
             logger.error(f"Full traceback:\n{error_traceback}")
-            # Determine error type and provide appropriate response
-            if "timeout" in error_message.lower():
+            # ── Error classification: specific codes → useful UX ───────
+            if "Cannot send() in state" in error_message:
+                # Session state conflict (e.g., WAITING_INPUT pending)
+                yield _build_error_event(
+                    code="SESSION_BUSY",
+                    message="This session is busy (a permission prompt may be pending)",
+                    detail=error_message,
+                    suggested_action="Complete any pending permission prompts, or wait a moment and try again.",
+                )
+            elif "timeout" in error_message.lower():
                 yield {
                     "type": "error",
                     "code": "AGENT_TIMEOUT",

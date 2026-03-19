@@ -17,8 +17,9 @@
  * @exports getToolIcon          — Returns Material Symbols icon name for a tool category
  */
 
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { copyToClipboard } from '../../../utils/clipboard';
+import { OPEN_FILE_EVENT } from '../../../components/common/MarkdownRenderer';
 
 /** Character threshold below which results are shown inline without toggle. */
 export const INLINE_RESULT_LIMIT = 200;
@@ -42,6 +43,31 @@ const CATEGORY_ICONS: Record<string, string> = {
 /** Returns the Material Symbols icon name for a given tool category. */
 export function getToolIcon(category?: string): string {
   return CATEGORY_ICONS[category ?? 'fallback'] ?? CATEGORY_ICONS.fallback;
+}
+
+/** Categories whose summaries contain a file path worth making clickable. */
+const FILE_PATH_CATEGORIES = new Set(['read', 'write']);
+
+/**
+ * Known summary prefixes that precede a file path.
+ * Matched in order; first match wins. The path is everything after the prefix.
+ */
+const PATH_PREFIXES = ['Writing to ', 'Reading ', 'Editing '];
+
+/**
+ * Extract a file path from a tool summary string for read/write/edit tools.
+ * Returns { before, path } or null if no path found.
+ */
+function extractFilePath(summary: string): { before: string; path: string } | null {
+  for (const prefix of PATH_PREFIXES) {
+    if (summary.startsWith(prefix)) {
+      const path = summary.slice(prefix.length).trim();
+      if (path && (path.includes('/') || path.includes('.'))) {
+        return { before: prefix, path };
+      }
+    }
+  }
+  return null;
 }
 
 interface MergedToolBlockProps {
@@ -106,6 +132,22 @@ export function MergedToolBlock({
 
   const handleToggle = () => setIsExpanded((prev) => !prev);
 
+  // Extract clickable file path from summary for read/write/edit tools
+  const fileParts = useMemo(() => {
+    if (!FILE_PATH_CATEGORIES.has(category ?? '')) return null;
+    return extractFilePath(summary);
+  }, [summary, category]);
+
+  const handlePathClick = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (fileParts) {
+      document.dispatchEvent(
+        new CustomEvent(OPEN_FILE_EVENT, { detail: { path: fileParts.path } }),
+      );
+    }
+  };
+
   return (
     <div className="rounded-lg overflow-hidden">
       {/* Summary line */}
@@ -119,7 +161,23 @@ export function MergedToolBlock({
       >
         <span className="material-symbols-outlined text-primary text-sm">{getToolIcon(category)}</span>
         <span className="text-sm text-[var(--color-text-muted)] truncate flex-1">
-          {summary || name || 'Unknown tool'}
+          {fileParts ? (
+            <>
+              {fileParts.before}
+              <span
+                onClick={handlePathClick}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => { if (e.key === 'Enter') handlePathClick(e as unknown as React.MouseEvent); }}
+                className="text-primary cursor-pointer hover:underline decoration-primary/50"
+                title={`Open ${fileParts.path}`}
+              >
+                {fileParts.path}
+              </span>
+            </>
+          ) : (
+            summary || name || 'Unknown tool'
+          )}
         </span>
         <span className={`material-symbols-outlined text-sm ${statusColor}`}>
           {statusIcon}
