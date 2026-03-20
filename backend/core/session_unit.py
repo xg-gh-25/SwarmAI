@@ -181,6 +181,14 @@ class SessionUnit:
         # Reset on every STREAMING transition so next IDLE fires fresh.
         self._hooks_enqueued: bool = False
 
+        # ── Buffer overflow recovery ────────────────────────────────
+        # Set True when a tool response exceeds the CLI's 10MB JSONRPC
+        # buffer.  On the next send, a recovery instruction is prepended
+        # to the user message telling the agent to use progressive
+        # processing (fetch items one-at-a-time).  Max 1 recovery per
+        # message — if the second attempt also overflows, surface error.
+        self._buffer_overflow_recovery: bool = False
+
         # ── Streaming timeout ────────────────────────────────────────
         # Updated on every yielded event during STREAMING.  The
         # LifecycleManager checks this to detect stuck streams that
@@ -431,6 +439,85 @@ class SessionUnit:
                 "Error during streaming for session %s: %s",
                 self.session_id, error_str[:200],
             )
+
+            # ── Buffer overflow — recoverable via progressive processing ──
+            # The CLI has a hardcoded 10MB JSONRPC buffer.  When an MCP
+            # tool returns >10MB (e.g. multiple base64 images), the CLI
+            # crashes.  Instead of counting this as a retry, we respawn
+            # and inject a recovery instruction telling the agent to
+            # fetch items one-at-a-time.  Max 1 recovery per message.
+            if "maximum buffer size" in error_str and not self._buffer_overflow_recovery:
+                logger.warning(
+                    "session_unit.buffer_overflow session_id=%s — "
+                    "will inject progressive processing recovery",
+                    self.session_id,
+                )
+                self._buffer_overflow_recovery = True
+                # Don't increment _retry_count — this is strategy
+                # correction, not a transient failure.
+                resume_sid = self._sdk_session_id
+                self._crash_to_cold()
+                await asyncio.sleep(2.0)  # brief cooldown
+
+                retry_options = self._build_retry_options(options, resume_sid)
+                try:
+                    await self._spawn(retry_options, config)
+                except Exception as spawn_exc:
+                    self._crash_to_cold(clear_identity=True)
+                    friendly, suggested = _sanitize_sdk_error(str(spawn_exc))
+                    yield _build_error_event(
+                        code="SPAWN_FAILED",
+                        message=friendly,
+                        detail=traceback.format_exc(),
+                        suggested_action=suggested,
+                    )
+                    return
+
+                self._transition(SessionState.STREAMING)
+
+                # Re-send with recovery instruction prepended
+                recovery_prefix = (
+                    "[System: Your previous tool call returned a response "
+                    "exceeding the 10MB buffer limit. Use progressive "
+                    "processing for this task:\n"
+                    "- Fetch items ONE at a time (never batch multiple "
+                    "files/images in a single tool call)\n"
+                    "- After each fetch, extract key findings as compact text\n"
+                    "- After all items processed, synthesize your findings\n"
+                    "- For large text files, use offset/limit to read in "
+                    "chunks of 500 lines\n"
+                    "- If you already processed some items before the error, "
+                    "continue where you left off — do not re-fetch items "
+                    "you already analyzed\n"
+                    "Do not attempt to fetch all items in a single tool "
+                    "call again.]\n\n"
+                )
+                # Build recovered query: prepend recovery prefix to the
+                # original content.  query_content may be str (text-only)
+                # or list[dict] (multimodal content blocks).
+                if isinstance(query_content, str):
+                    recovered_query = recovery_prefix + query_content
+                elif isinstance(query_content, list):
+                    # Multimodal: prepend recovery as a text block, keep
+                    # the original content blocks (images, etc.) intact.
+                    recovered_query = [
+                        {"type": "text", "text": recovery_prefix},
+                        *query_content,
+                    ]
+                else:
+                    # Unknown shape — best-effort: stringify
+                    recovered_query = recovery_prefix + str(query_content)
+                try:
+                    async for event in self._stream_response(recovered_query):
+                        yield event
+                    return  # success
+                except Exception as recovery_exc:
+                    error_str = str(recovery_exc)
+                    logger.warning(
+                        "Buffer overflow recovery failed for session %s: %s",
+                        self.session_id, error_str[:200],
+                    )
+                    # Fall through to normal error handling below
 
             # ── Retry loop for retriable errors ──────────────────
             if _is_retriable_error(error_str) and self._retry_count < self.MAX_RETRY_ATTEMPTS:

@@ -143,7 +143,7 @@ SSE_HEARTBEAT_INTERVAL = 15
 # ---------------------------------------------------------------------------
 
 MAX_CONTENT_BLOCKS = 20
-MAX_TOTAL_PAYLOAD_SIZE = 25 * 1024 * 1024  # 25MB
+MAX_TOTAL_PAYLOAD_SIZE = 32 * 1024 * 1024  # 32MB — matches Bedrock payload limit for Claude 4+
 
 
 def _estimate_block_size(block: dict) -> int:
@@ -164,22 +164,41 @@ def _estimate_block_size(block: dict) -> int:
     return 0
 
 
+def _human_size(n: int) -> str:
+    """Format byte count as human-readable string (e.g. '15.2 MB')."""
+    if n < 1024:
+        return f"{n} B"
+    elif n < 1024 * 1024:
+        return f"{n / 1024:.1f} KB"
+    else:
+        return f"{n / (1024 * 1024):.1f} MB"
+
+
 def validate_content(content: list[dict]) -> list[dict]:
     """Validate content blocks before forwarding to SDK.
 
-    Raises HTTPException(413) if limits are exceeded.
+    Raises HTTPException(413) with user-friendly messages if limits exceeded.
     """
     if len(content) > MAX_CONTENT_BLOCKS:
         raise HTTPException(
             status_code=413,
-            detail=f"Too many content blocks: {len(content)}, max {MAX_CONTENT_BLOCKS}",
+            detail=(
+                f"Too many attachments ({len(content)} files). "
+                f"Maximum is {MAX_CONTENT_BLOCKS} per message. "
+                f"Try sending fewer files at a time."
+            ),
         )
 
     total_size = sum(_estimate_block_size(block) for block in content)
     if total_size > MAX_TOTAL_PAYLOAD_SIZE:
+        limit_mb = MAX_TOTAL_PAYLOAD_SIZE / (1024 * 1024)
         raise HTTPException(
             status_code=413,
-            detail=f"Payload too large: {total_size} bytes, max {MAX_TOTAL_PAYLOAD_SIZE}",
+            detail=(
+                f"Attachments too large ({_human_size(total_size)} total). "
+                f"Maximum is {limit_mb:.0f} MB per message. "
+                f"Try attaching fewer or smaller files, or send them in separate messages."
+            ),
         )
 
     return content
