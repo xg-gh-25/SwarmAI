@@ -584,8 +584,11 @@ class DistillationTriggerHook:
                 # Threshold tuned for real entries: "Proactive Intelligence"
                 # appearing in both entries (2 words) should match even when
                 # surrounding details differ (version numbers, status verbs).
+                # Guard: both fingerprints must have ≥3 significant words.
+                # Entries like "Fixed bug" are too generic — collapsing them
+                # loses distinct information.
                 min_size = min(len(fp_i), len(fp_j))
-                if min_size > 0 and len(overlap) >= max(2, min_size * 0.3):
+                if min_size >= 3 and len(overlap) >= max(2, min_size * 0.3):
                     group.append(jdx)
                     assigned.add(jdx)
             groups.append(group)

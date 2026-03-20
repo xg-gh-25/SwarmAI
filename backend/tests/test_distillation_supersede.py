@@ -101,15 +101,24 @@ class TestSupersedeByTopic:
         assert len(result) == 2
 
     def test_short_entries_not_collapsed(self):
-        """Very short entries with few words shouldn't trigger false matches."""
+        """Very short entries with few words shouldn't trigger false matches.
+
+        "Fixed bug" and "Fixed another bug" share 2 words out of 2-3 total.
+        The 30% Jaccard overlap threshold may fire, but these entries are too
+        generic to meaningfully supersede each other.  We assert BOTH survive
+        because collapsing them would lose distinct information.
+        """
         entries = [
             "- 2026-03-14: Fixed bug",
             "- 2026-03-15: Fixed another bug",
         ]
         result = DistillationTriggerHook._supersede_by_topic(entries)
-        # "Fixed" and "bug" overlap but entries are too short for meaningful collapse
-        # The fingerprints might be small, testing actual behavior
-        assert len(result) >= 1  # At minimum one survives
+        # Both entries must survive — they describe different bug fixes.
+        # If this fails, the overlap threshold needs a minimum-fingerprint-size
+        # guard (e.g. require >= 3 significant words before comparing).
+        assert len(result) == 2, (
+            f"Short generic entries were incorrectly collapsed: {result}"
+        )
 
     def test_no_date_prefix_handled(self):
         """Entries without YYYY-MM-DD prefix don't crash."""
