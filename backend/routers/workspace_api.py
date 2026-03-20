@@ -773,21 +773,45 @@ async def resolve_workspace_file(
     Returns ``{ "resolved_path": "Projects/SwarmAI/backend/routers/foo.py" }``
     on success, or 404 if not found anywhere.
     """
-    # Normalize to collapse "..", ".", and redundant separators, then reject
-    # if the result escapes the workspace root (starts with ".." or "/").
-    normalized = os.path.normpath(path)
-    if normalized.startswith("..") or os.path.isabs(normalized):
-        raise HTTPException(status_code=400, detail=f"Path traversal not allowed: {path}")
-
     expanded_path = await _get_workspace_path()
     workspace_root = Path(expanded_path)
 
-    # 1. Try direct (already workspace-relative)
+    # --- Stage 0: Absolute path → convert to workspace-relative via symlink ---
+    # The agent often outputs absolute paths like /Users/.../swarmai/backend/foo.py.
+    # If the path is under a project symlink target, convert it to Projects/{name}/...
+    normalized = os.path.normpath(path)
+    if os.path.isabs(normalized):
+        abs_path = Path(normalized).resolve()
+        projects_dir = workspace_root / "Projects"
+        if projects_dir.is_dir():
+            for project in sorted(projects_dir.iterdir()):
+                if not project.is_dir():
+                    continue
+                try:
+                    symlink_target = project.resolve()
+                    rel = abs_path.relative_to(symlink_target)
+                    # Convert to workspace-relative and restart resolution
+                    path = f"Projects/{project.name}/{rel}"
+                    normalized = os.path.normpath(path)
+                    break
+                except ValueError:
+                    continue
+            else:
+                # Absolute path not under any project — reject
+                raise HTTPException(status_code=400, detail=f"Path traversal not allowed: {path}")
+        else:
+            raise HTTPException(status_code=400, detail=f"Path traversal not allowed: {path}")
+
+    # Reject ".." traversal after normalization
+    if normalized.startswith(".."):
+        raise HTTPException(status_code=400, detail=f"Path traversal not allowed: {path}")
+
+    # --- Stage 1: Direct lookup (already workspace-relative) ---
     direct = (workspace_root / path).resolve()
     if direct.is_file() and (_is_path_under(direct, workspace_root) or _is_symlink_traversal(workspace_root, path)):
         return {"resolved_path": path}
 
-    # 2. Try under each project in Projects/
+    # --- Stage 2: Try under each project in Projects/{name}/{path} ---
     projects_dir = workspace_root / "Projects"
     if projects_dir.is_dir():
         for project in sorted(projects_dir.iterdir()):
@@ -796,9 +820,30 @@ async def resolve_workspace_file(
             candidate_rel = f"Projects/{project.name}/{path}"
             candidate = (workspace_root / candidate_rel).resolve()
             if candidate.is_file():
-                # Validate it's reachable (direct or via symlink)
                 if _is_path_under(candidate, workspace_root) or _is_symlink_traversal(workspace_root, candidate_rel):
                     return {"resolved_path": candidate_rel}
+
+    # --- Stage 3: Bare filename → recursive search in Projects/ ---
+    # For paths like "fileClassification.ts" with no directory separators,
+    # search recursively within project directories (depth-limited for perf).
+    if "/" not in path and "\\" not in path and projects_dir.is_dir():
+        _MAX_DEPTH = 8
+        for project in sorted(projects_dir.iterdir()):
+            if not project.is_dir():
+                continue
+            project_resolved = project.resolve()
+            for match in project_resolved.rglob(path):
+                if not match.is_file():
+                    continue
+                # Depth check: count path components from project root
+                try:
+                    rel_to_project = match.relative_to(project_resolved)
+                except ValueError:
+                    continue
+                if len(rel_to_project.parts) > _MAX_DEPTH:
+                    continue
+                candidate_rel = f"Projects/{project.name}/{rel_to_project}"
+                return {"resolved_path": candidate_rel}
 
     raise HTTPException(status_code=404, detail=f"Could not resolve file: {path}")
 
