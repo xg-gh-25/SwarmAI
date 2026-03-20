@@ -44,7 +44,7 @@ flowchart TD
 sequenceDiagram
     participant User
     participant ChatPage
-    participant TabMap as Zustand tabStore
+    participant TabMap as useUnifiedTabState
     participant StreamHook as useChatStreamingLifecycle
     participant API as FastAPI Backend
     participant AM as SessionRouter
