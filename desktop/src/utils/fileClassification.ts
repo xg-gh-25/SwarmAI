@@ -12,6 +12,25 @@
 import type { AttachmentType, DeliveryStrategy } from '../types';
 import { SIZE_LIMITS, SIZE_THRESHOLD } from '../types';
 
+/**
+ * MIME types that Claude API accepts natively in image content blocks.
+ * All other image types must be routed via path_hint so the agent reads them with tools.
+ */
+export const CLAUDE_NATIVE_IMAGE_MIMES = new Set([
+  'image/jpeg',
+  'image/png',
+  'image/gif',
+  'image/webp',
+]);
+
+/**
+ * Extensions whose images Claude API accepts natively.
+ * Used by determineDeliveryStrategy when MIME type isn't available.
+ */
+export const CLAUDE_NATIVE_IMAGE_EXTENSIONS = new Set([
+  '.jpg', '.jpeg', '.png', '.gif', '.webp',
+]);
+
 export const MIME_TYPE_MAP: Record<string, AttachmentType> = {
   // Images
   'image/png': 'image',
@@ -143,22 +162,53 @@ export function classifyFile(
 
 /**
  * Determine how a file should be delivered to the backend.
- * - image           -> base64_image  (Claude processes natively)
- * - pdf / document  -> base64_document (Claude processes natively)
- * - audio / video   -> path_hint (agent uses tools: whisper, ffmpeg, etc.)
- * - text/csv small  -> inline_text
- * - text/csv large  -> path_hint
+ * - image (jpeg/png/gif/webp) -> base64_image  (Claude processes natively)
+ * - image (other)             -> path_hint      (svg/bmp/tiff/heic etc. — not supported by Claude)
+ * - pdf                       -> base64_document (Claude processes natively — ONLY format Claude accepts)
+ * - document                  -> path_hint       (docx/xlsx/pptx — Claude API rejects non-PDF documents;
+ *                                                  agent reads with tools or skills)
+ * - audio/video               -> path_hint      (agent uses tools: whisper, ffmpeg, etc.)
+ * - text/csv small            -> inline_text
+ * - text/csv large            -> path_hint
+ *
+ * @param mimeType  Optional MIME type for fine-grained image routing.
+ * @param fileName  Optional filename for extension-based fallback when MIME is generic.
  */
 export function determineDeliveryStrategy(
   type: AttachmentType,
   size: number,
+  mimeType?: string,
+  fileName?: string,
 ): DeliveryStrategy {
   switch (type) {
-    case 'image':
+    case 'image': {
+      // Claude API image blocks only accept jpeg/png/gif/webp.
+      // Route unsupported image types (svg, bmp, tiff, ico, heic, heif) via path_hint.
+      if (mimeType && !isGenericMimeType(mimeType)) {
+        if (!CLAUDE_NATIVE_IMAGE_MIMES.has(mimeType.trim().toLowerCase())) {
+          return 'path_hint';
+        }
+        return 'base64_image';
+      }
+      // Fallback: check extension
+      if (fileName) {
+        const dot = fileName.lastIndexOf('.');
+        if (dot >= 0) {
+          const ext = fileName.slice(dot).toLowerCase();
+          if (!CLAUDE_NATIVE_IMAGE_EXTENSIONS.has(ext)) {
+            return 'path_hint';
+          }
+        }
+      }
       return 'base64_image';
+    }
     case 'pdf':
-    case 'document':
       return 'base64_document';
+    case 'document':
+      // Claude API document blocks only accept application/pdf.
+      // Office docs (docx/xlsx/pptx) must go via path_hint so the agent
+      // can read them with the Read tool or process with skills.
+      return 'path_hint';
     case 'audio':
     case 'video':
       return 'path_hint';
