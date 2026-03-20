@@ -579,9 +579,10 @@ const CLICKABLE_EXTENSIONS = new Set([
  * Accepts:
  * - Relative paths: Knowledge/Notes/file.md, backend/core/agent.py
  * - Bare filenames with code extensions: tool_summarizer.py, ChatPage.tsx
- * - Absolute paths (resolved by handler): /Users/.../swarmai/backend/core/foo.py
+ * - Absolute paths under user home dirs: /Users/.../swarmai/backend/core/foo.py
  *
- * Rejects: URLs, single words without extension, shell commands, package names.
+ * Rejects: URLs, single words without extension, shell commands, package names,
+ * system paths (/etc, /usr, /bin, /var, /tmp, /proc, /sys, /dev, /sbin).
  */
 export function isWorkspaceFilePath(text: string): boolean {
   // No spaces (workspace paths don't have spaces)
@@ -594,7 +595,12 @@ export function isWorkspaceFilePath(text: string): boolean {
   if (!/\.\w{1,10}$/.test(text)) return false;
   // No obviously non-path characters
   if (/[<>|"'`]/.test(text)) return false;
-  // Accept paths with / (relative or absolute)
+  // Absolute paths: only allow user home directories, reject system paths
+  if (text.startsWith('/')) {
+    if (!/^\/(?:Users|home)\//.test(text)) return false;
+    return true;
+  }
+  // Accept relative paths with /
   if (text.includes('/')) return true;
   // Accept bare filenames with known extensions
   const dot = text.lastIndexOf('.');
