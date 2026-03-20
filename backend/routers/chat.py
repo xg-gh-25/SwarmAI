@@ -336,6 +336,7 @@ async def chat_stream(request: Request):
                 session_id=chat_request.session_id,
                 enable_skills=chat_request.enable_skills,
                 enable_mcp=chat_request.enable_mcp,
+                editor_context=chat_request.editor_context.model_dump() if chat_request.editor_context else None,
             ):
                 logger.debug(f"Yielding message: {msg.get('type')}")
                 yield msg

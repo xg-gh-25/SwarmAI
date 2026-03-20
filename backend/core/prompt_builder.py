@@ -490,6 +490,7 @@ class PromptBuilder:
         agent_config: dict,
         working_directory: str,
         channel_context: Optional[dict] = None,
+        editor_context: Optional[dict] = None,
     ) -> Any:
         """Build the system prompt with centralized context directory.
 
@@ -625,6 +626,18 @@ class PromptBuilder:
                 else:
                     logger.info("Resume context skipped: no injectable messages")
 
+            # ── Editor context injection (ephemeral, per-request) ──
+            if editor_context:
+                file_path = editor_context.get("file_path", "")
+                file_name = editor_context.get("file_name", "")
+                if file_path:
+                    context_text += (
+                        f"\n\n## Currently Open File\n"
+                        f"The user has `{file_name}` open in the editor "
+                        f"(`{file_path}`). Consider this file as relevant "
+                        f"context when responding."
+                    )
+
             if context_text:
                 existing = agent_config.get("system_prompt", "") or ""
                 agent_config["system_prompt"] = (
@@ -743,6 +756,7 @@ class PromptBuilder:
         resume_session_id: Optional[str] = None,
         session_context: Optional[dict] = None,
         channel_context: Optional[dict] = None,
+        editor_context: Optional[dict] = None,
     ) -> "ClaudeAgentOptions":
         """Orchestrate helper methods to assemble ClaudeAgentOptions.
 
@@ -757,6 +771,7 @@ class PromptBuilder:
             resume_session_id: Optional session ID to resume.
             session_context: Optional session context dict for hook tracking.
             channel_context: Optional channel context for channel-based execution.
+            editor_context: Optional editor context with file_path/file_name of the open file.
 
         Returns:
             A fully assembled ``ClaudeAgentOptions`` instance.
@@ -810,7 +825,7 @@ class PromptBuilder:
 
         # 8. Build system prompt (reads context files — stays per-session)
         system_prompt_config = await self.build_system_prompt(
-            agent_config, working_directory, channel_context,
+            agent_config, working_directory, channel_context, editor_context,
         )
 
         # Assemble final options
