@@ -312,6 +312,14 @@ class DistillationTriggerHook:
                 logger.warning("Failed to distill %s: %s", da_file.name, exc)
                 continue
 
+        # Supersede older entries about the same topic before writing.
+        # Without this, "L0+L1 implemented" (session A) and "L0-L4
+        # implemented" (session B) BOTH get promoted — the stale claim
+        # persists and poisons future sessions.  See COE: memory pipeline
+        # temporal lag gap (2026-03-19).
+        all_decisions = self._supersede_by_topic(all_decisions)
+        all_lessons = self._supersede_by_topic(all_lessons)
+
         # Batched writes to MEMORY.md — one lock acquisition per section
         if all_decisions:
             self._run_locked_write(
@@ -501,6 +509,99 @@ class DistillationTriggerHook:
                 continue
             competence.append(entry[:200])
         return competence[:5]  # Cap
+
+    @staticmethod
+    def _supersede_by_topic(entries: list[str]) -> list[str]:
+        """Keep only the newest entry per topic when multiple entries reference the same subject.
+
+        Entries have the format ``- YYYY-MM-DD: <content>``.  When two
+        entries share enough key terms (implementation, status, feature
+        names) to be about the same topic, only the chronologically
+        latest one survives.  This prevents stale implementation claims
+        from older sessions persisting alongside newer, more accurate ones.
+
+        The algorithm:
+        1. Extract topic fingerprint from each entry (lowercased noun
+           phrases, stripped of dates and filler words).
+        2. Group entries whose fingerprints overlap by ≥50%.
+        3. Within each group, keep only the entry with the latest date.
+
+        Returns the de-duped list in original order.
+        """
+        if len(entries) <= 1:
+            return entries
+
+        # Stop words that don't contribute to topic identity
+        _STOP = frozenset({
+            "a", "an", "the", "is", "was", "are", "were", "be", "been",
+            "to", "of", "in", "for", "on", "at", "by", "with", "from",
+            "and", "or", "not", "no", "but", "that", "this", "it",
+            "all", "now", "have", "has", "had", "do", "does", "did",
+            "will", "would", "should", "could", "can", "may", "might",
+            "our", "we", "i", "my", "me", "us", "its", "their",
+            "also", "just", "still", "only", "very", "too", "so",
+        })
+
+        def _fingerprint(text: str) -> set[str]:
+            """Extract meaningful words as a topic fingerprint."""
+            # Strip leading "- YYYY-MM-DD: " prefix
+            cleaned = re.sub(r"^-\s*\d{4}-\d{2}-\d{2}:\s*", "", text)
+            # Strip markdown bold
+            cleaned = cleaned.replace("**", "")
+            words = re.findall(r"[a-zA-Z][a-zA-Z0-9_.-]+", cleaned.lower())
+            return {w for w in words if w not in _STOP and len(w) > 2}
+
+        def _extract_date(text: str) -> str:
+            """Extract YYYY-MM-DD from entry prefix."""
+            m = re.match(r"^-\s*(\d{4}-\d{2}-\d{2})", text)
+            return m.group(1) if m else "0000-00-00"
+
+        # Build fingerprints
+        fps = [(_fingerprint(e), _extract_date(e), i, e) for i, e in enumerate(entries)]
+
+        # Greedy grouping: assign each entry to first overlapping group
+        groups: list[list[int]] = []  # list of entry-index lists
+        assigned: set[int] = set()
+
+        for idx in range(len(fps)):
+            if idx in assigned:
+                continue
+            group = [idx]
+            assigned.add(idx)
+            fp_i = fps[idx][0]
+            if not fp_i:
+                groups.append(group)
+                continue
+
+            for jdx in range(idx + 1, len(fps)):
+                if jdx in assigned:
+                    continue
+                fp_j = fps[jdx][0]
+                if not fp_j:
+                    continue
+                overlap = fp_i & fp_j
+                # ≥30% overlap of the SMALLER fingerprint → same topic.
+                # Threshold tuned for real entries: "Proactive Intelligence"
+                # appearing in both entries (2 words) should match even when
+                # surrounding details differ (version numbers, status verbs).
+                min_size = min(len(fp_i), len(fp_j))
+                if min_size > 0 and len(overlap) >= max(2, min_size * 0.3):
+                    group.append(jdx)
+                    assigned.add(jdx)
+            groups.append(group)
+
+        # Within each group, keep only the entry with the latest date
+        keep_indices: set[int] = set()
+        for group in groups:
+            if len(group) == 1:
+                keep_indices.add(group[0])
+            else:
+                # Sort by date descending, keep newest.
+                # Tiebreaker: higher index = appended later = newer.
+                best = max(group, key=lambda i: (fps[i][1], i))
+                keep_indices.add(best)
+
+        return [e for i, e in enumerate(entries) if i in keep_indices]
 
     def _write_competence(
         self,
