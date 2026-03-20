@@ -4,6 +4,12 @@ This module provides a stateless function that loads recent messages from
 SQLite, filters tool-only turns, formats them with role prefixes, enforces
 a token budget, and returns a formatted string for system prompt injection.
 
+**Budget scaling**: Limits scale with model context window.  1M models
+(Claude 4.6) get up to 200K tokens / 500 messages — effectively the full
+conversation.  Small models (<200K) use a conservative 12K / 40 message
+budget.  See ``_compute_resume_budget()`` for the tier logic.
+
+- ``_compute_resume_budget``        — Scale limits by model context window
 - ``build_resume_context``          — Public async entry point
 - ``_filter_tool_only_messages``    — Remove tool-only messages
 - ``_format_message``               — Format a single message with role prefix
@@ -229,32 +235,62 @@ def _assemble_context(messages: list[str], was_truncated: bool) -> str:
     return "\n".join(parts)
 
 
+def _compute_resume_budget(model_context_window: int) -> tuple[int, int, int]:
+    """Compute resume context limits scaled to model context window.
+
+    For 1M models, we inject the full conversation — no practical truncation.
+    For smaller models, use conservative limits to leave room for new work.
+
+    Returns:
+        Tuple of ``(token_budget, max_messages, db_fetch_limit)``.
+    """
+    if model_context_window >= 500_000:
+        # 1M models: 200K budget, 500 messages, fetch 1000 from DB.
+        # With 1M context, conversation history is valuable — don't discard it.
+        return (200_000, 500, 1000)
+    elif model_context_window >= 200_000:
+        # 200K models: 40K budget, 100 messages
+        return (40_000, 100, 250)
+    else:
+        # Small models (<200K): conservative 12K budget
+        return (12_000, 40, 100)
+
+
 async def build_resume_context(
     app_session_id: str,
-    max_messages: int = 40,
-    db_fetch_limit: int = 100,
-    token_budget: int = 12000,
+    model_context_window: int = 200_000,
+    max_messages: int | None = None,
+    db_fetch_limit: int | None = None,
+    token_budget: int | None = None,
 ) -> str:
     """Load recent messages and format them for system prompt injection.
 
-    Imports ``db`` from ``backend.database`` (the module-level singleton)
-    to query messages.  The function is async because the DB call is async.
+    Limits scale with model context window — 1M models get the full
+    conversation, small models get a conservative subset.  Explicit
+    overrides take precedence over auto-computed values.
 
     Args:
         app_session_id: The stable tab-level session ID to query messages for.
+        model_context_window: Model's context window in tokens.  Used to
+            auto-compute token_budget, max_messages, and db_fetch_limit
+            when they are not explicitly provided.
         max_messages: Maximum number of human-readable messages in the final
-            output (default 40).
-        db_fetch_limit: Number of messages to fetch from DB before filtering
-            (default 100).  Set higher than max_messages to account for
-            tool-only messages being filtered out.
-        token_budget: Maximum estimated tokens for the formatted output
-            (default 12000).
+            output.  Auto-computed from model_context_window if None.
+        db_fetch_limit: Number of messages to fetch from DB before filtering.
+            Auto-computed from model_context_window if None.
+        token_budget: Maximum estimated tokens for the formatted output.
+            Auto-computed from model_context_window if None.
 
     Returns:
         Formatted context string with section header, preamble, and message
         turns.  Returns empty string if no injectable messages exist or on
         any error.
     """
+    # Auto-compute limits from model context window, allow explicit overrides
+    auto_budget, auto_max, auto_fetch = _compute_resume_budget(model_context_window)
+    token_budget = token_budget if token_budget is not None else auto_budget
+    max_messages = max_messages if max_messages is not None else auto_max
+    db_fetch_limit = db_fetch_limit if db_fetch_limit is not None else auto_fetch
     if app_session_id is None:
         return ""
 

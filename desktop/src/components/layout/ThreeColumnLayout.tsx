@@ -425,9 +425,14 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
         resolvedPath = resp.data.resolved_path;
       } catch (err: unknown) {
         if (!mounted) return;
+        const status = (err as { response?: { status?: number } })?.response?.status;
+        if (status === 400) {
+          // Path traversal or truly invalid — don't fall through
+          addToast({ severity: 'warning', message: `Cannot open file: ${filePath}`, autoDismiss: true });
+          return;
+        }
         // 404 = not found in workspace, fall through to try the raw path.
         // Non-404 errors (network timeout, 500) are logged for debugging.
-        const status = (err as { response?: { status?: number } })?.response?.status;
         if (status !== undefined && status !== 404) {
           console.warn('[swarm:open-file] resolve failed:', status, err);
         }

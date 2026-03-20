@@ -11,12 +11,44 @@ Covers:
 
 from core.context_injector import (
     _compact_tool_args,
+    _compute_resume_budget,
     _summarize_tool_blocks,
     _format_message,
     _filter_tool_only_messages,
     _apply_token_budget,
     _assemble_context,
 )
+
+
+# ── _compute_resume_budget ────────────────────────────────────────
+
+
+class TestComputeResumeBudget:
+    def test_1m_model_gets_full_budget(self):
+        budget, max_msgs, fetch = _compute_resume_budget(1_000_000)
+        assert budget == 200_000
+        assert max_msgs == 500
+        assert fetch == 1000
+
+    def test_500k_model_gets_full_budget(self):
+        budget, max_msgs, fetch = _compute_resume_budget(500_000)
+        assert budget == 200_000
+
+    def test_200k_model_gets_medium_budget(self):
+        budget, max_msgs, fetch = _compute_resume_budget(200_000)
+        assert budget == 40_000
+        assert max_msgs == 100
+        assert fetch == 250
+
+    def test_128k_model_gets_small_budget(self):
+        budget, max_msgs, fetch = _compute_resume_budget(128_000)
+        assert budget == 12_000
+        assert max_msgs == 40
+        assert fetch == 100
+
+    def test_small_model_conservative(self):
+        budget, max_msgs, fetch = _compute_resume_budget(32_000)
+        assert budget == 12_000
 
 
 # ── _compact_tool_args ─────────────────────────────────────────────

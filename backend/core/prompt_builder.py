@@ -535,10 +535,11 @@ class PromptBuilder:
             context_dir = Path(working_directory) / ".context"
             # Reserve headroom for ephemeral injections (DailyActivity, Bootstrap,
             # resume context) that are appended after the token-budgeted assembly.
-            # 2 DailyActivity files × 2000 tokens each = 4000 token reservation
-            # + 2000 tokens for resume conversation context.
-            RESUME_CONTEXT_BUDGET = 2000
-            EPHEMERAL_HEADROOM = 2 * TOKEN_CAP_PER_DAILY_FILE + RESUME_CONTEXT_BUDGET
+            # For 1M models, headroom is negligible vs budget — keep it small.
+            # The resume context budget (up to 200K for 1M models) is separate
+            # from context files and doesn't need to be subtracted here.
+            RESUME_CONTEXT_HEADROOM = 2000  # small headroom, actual budget enforced in build_resume_context
+            EPHEMERAL_HEADROOM = 2 * TOKEN_CAP_PER_DAILY_FILE + RESUME_CONTEXT_HEADROOM
             base_budget = agent_config.get("context_token_budget", DEFAULT_TOKEN_BUDGET)
             loader = ContextDirectoryLoader(
                 context_dir=context_dir,
@@ -616,7 +617,10 @@ class PromptBuilder:
             # ── Resume context injection (ephemeral, for resumed sessions) ──
             if agent_config.get("needs_context_injection") and agent_config.get("resume_app_session_id"):
                 from .context_injector import build_resume_context
-                resume_ctx = await build_resume_context(agent_config["resume_app_session_id"])
+                resume_ctx = await build_resume_context(
+                    agent_config["resume_app_session_id"],
+                    model_context_window=model_context_window,
+                )
                 if resume_ctx:
                     context_text += f"\n\n{resume_ctx}"
                     logger.info(
