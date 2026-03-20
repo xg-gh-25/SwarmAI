@@ -723,16 +723,37 @@ class ContextDirectoryLoader:
 
     # ── L1 Cache ───────────────────────────────────────────────────────
 
+    # Class-level TTL cache for git status freshness check.
+    # Prevents forking a subprocess per chat message (~15s TTL).
+    _git_fresh_cache: dict[str, tuple[float, bool]] = {}
+    _GIT_FRESH_TTL: float = 15.0
+
     def _is_l1_fresh(self) -> bool:
         """Check if L1 cache is fresh. Git-first with mtime fallback.
 
         Primary: ``git status --porcelain`` (atomic, catches tracked + untracked).
         Fallback: mtime comparison (only when git unavailable).
+
+        Uses a 15-second TTL cache to avoid forking ``git status`` per message.
         """
         l1_path = self.context_dir / L1_CACHE_FILENAME
         if not l1_path.exists():
             return False
 
+        # TTL cache — avoid subprocess fork per message
+        import time
+        cache_key = str(self.context_dir)
+        now = time.monotonic()
+        cached = self._git_fresh_cache.get(cache_key)
+        if cached and (now - cached[0]) < self._GIT_FRESH_TTL:
+            return cached[1]
+
+        fresh = self._is_l1_fresh_uncached(l1_path)
+        self._git_fresh_cache[cache_key] = (now, fresh)
+        return fresh
+
+    def _is_l1_fresh_uncached(self, l1_path) -> bool:
+        """Actual freshness check (git-first, mtime fallback)."""
         # Try git first (preferred — atomic, no TOCTOU)
         try:
             result = subprocess.run(

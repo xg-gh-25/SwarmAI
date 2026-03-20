@@ -174,6 +174,7 @@ class SessionUnit:
         self._sdk_session_id: Optional[str] = None
         self._interrupted: bool = False
         self._retry_count: int = 0
+        self._model_name: Optional[str] = None
 
         # ── Hook tracking ─────────────────────────────────────────
         # True after hooks enqueued for current IDLE period.
@@ -418,6 +419,7 @@ class SessionUnit:
                     return
 
         # IDLE → STREAMING
+        self._model_name = getattr(options, "model", None)
         self._transition(SessionState.STREAMING)
 
         try:
@@ -883,12 +885,11 @@ class SessionUnit:
                 # context window.  This wires the dead-code warning
                 # builder into the live streaming path.
                 input_tokens = (usage.get("input_tokens") if usage else None)
-                if input_tokens and input_tokens > 0 and options:
+                if input_tokens and input_tokens > 0:
                     try:
                         from .prompt_builder import PromptBuilder
-                        _pb = PromptBuilder.__new__(PromptBuilder)
-                        warning_evt = _pb.build_context_warning(
-                            input_tokens, getattr(options, "model", None)
+                        warning_evt = PromptBuilder.build_context_warning(
+                            input_tokens, self._model_name
                         )
                         if warning_evt and warning_evt.get("level") != "ok":
                             yield warning_evt
@@ -1139,25 +1140,59 @@ class SessionUnit:
         self._transition(SessionState.COLD)
 
     async def _force_kill(self) -> None:
-        """Best-effort force-kill of the owned subprocess."""
+        """Best-effort force-kill of the owned subprocess and its children.
+
+        Uses process group kill (SIGKILL to entire pgid) to prevent
+        grandchild orphans (e.g. MCP servers spawned by Claude CLI).
+        Falls back to plain os.kill if pgid lookup fails.
+
+        SAFETY: Only uses killpg if the child's pgid differs from our
+        own — otherwise we'd kill the entire backend + Tauri app.
+        The Claude SDK subprocess inherits the parent's pgid unless
+        spawned with ``start_new_session=True``, so this guard is
+        critical.
+        """
         pid = self.pid
         if pid:
             try:
-                os.kill(pid, signal.SIGKILL)
-                logger.info(
-                    "session_unit.force_kill session_id=%s pid=%d",
-                    self.session_id, pid,
-                )
-            except ProcessLookupError:
+                pgid = os.getpgid(pid)
+                my_pgid = os.getpgid(os.getpid())
+                if pgid != my_pgid:
+                    # Safe: child has its own process group
+                    os.killpg(pgid, signal.SIGKILL)
+                    logger.info(
+                        "session_unit.force_kill_pg session_id=%s pid=%d pgid=%d",
+                        self.session_id, pid, pgid,
+                    )
+                else:
+                    # UNSAFE: child shares our pgid — killpg would kill us too.
+                    # Fall back to direct kill of the child PID only.
+                    os.kill(pid, signal.SIGKILL)
+                    logger.info(
+                        "session_unit.force_kill session_id=%s pid=%d "
+                        "(shared pgid=%d, skipped killpg)",
+                        self.session_id, pid, pgid,
+                    )
+            except (ProcessLookupError, PermissionError):
                 logger.debug(
                     "Process %d already dead for session %s",
                     pid, self.session_id,
                 )
-            except OSError as exc:
-                logger.warning(
-                    "Failed to kill pid %d for session %s: %s",
-                    pid, self.session_id, exc,
-                )
+            except OSError:
+                # pgid lookup failed — fall back to direct kill
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                    logger.info(
+                        "session_unit.force_kill session_id=%s pid=%d (fallback)",
+                        self.session_id, pid,
+                    )
+                except ProcessLookupError:
+                    pass
+                except OSError as exc:
+                    logger.warning(
+                        "Failed to kill pid %d for session %s: %s",
+                        pid, self.session_id, exc,
+                    )
 
         # Also try graceful wrapper cleanup
         if self._wrapper is not None:
@@ -1182,6 +1217,7 @@ class SessionUnit:
         self._wrapper = None
         self._interrupted = False
         self._retry_count = 0
+        self._model_name = None
 
     def _full_cleanup(self) -> None:
         """Full cleanup for non-retriable crashes where the session should NOT be resumable.

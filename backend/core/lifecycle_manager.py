@@ -60,6 +60,7 @@ class LifecycleManager:
         self._hook_executor = hook_executor
         self._loop_task: Optional[asyncio.Task] = None
         self._started = False
+        self._tracked_child_pids: set[int] = set()
 
     # ── Startup / Shutdown ────────────────────────────────────────
 
@@ -80,16 +81,50 @@ class LifecycleManager:
                      self.TTL_SECONDS, self.LOOP_INTERVAL)
 
     async def stop(self) -> None:
-        """Stop the background loop. Drain pending hooks via executor."""
+        """Stop the background loop. Kill tracked children. Drain hooks."""
         if self._loop_task and not self._loop_task.done():
             self._loop_task.cancel()
             try:
                 await self._loop_task
             except asyncio.CancelledError:
                 pass
+        await self._kill_tracked_pids()
         if self._hook_executor:
             await self._hook_executor.drain(timeout=10.0)
         logger.info("LifecycleManager stopped")
+
+    # ── Child PID tracking ───────────────────────────────────────
+
+    def track_pid(self, pid: int) -> None:
+        """Register a child PID for cleanup at shutdown.
+
+        Called by subsystems that spawn long-running child processes
+        (e.g., background jobs, signal fetchers). Tracked PIDs are
+        SIGKILL'd during ``stop()`` as a last-resort safety net.
+        """
+        self._tracked_child_pids.add(pid)
+
+    def untrack_pid(self, pid: int) -> None:
+        """Remove a PID from the tracked set (e.g., after normal exit)."""
+        self._tracked_child_pids.discard(pid)
+
+    async def _kill_tracked_pids(self) -> None:
+        """SIGKILL all tracked child PIDs at shutdown. Best-effort."""
+        if not self._tracked_child_pids:
+            return
+        killed = 0
+        for pid in list(self._tracked_child_pids):
+            try:
+                os.kill(pid, signal.SIGKILL)
+                killed += 1
+                logger.info("lifecycle_manager.kill_tracked pid=%d", pid)
+            except (ProcessLookupError, PermissionError):
+                pass  # Already dead or not ours
+        self._tracked_child_pids.clear()
+        if killed:
+            logger.warning(
+                "Shutdown: killed %d tracked child process(es)", killed,
+            )
 
     # ── Hook enqueue ──────────────────────────────────────────────
 
@@ -154,9 +189,11 @@ class LifecycleManager:
         4. Clean up DEAD units → COLD (with hook firing)
         """
         logger.info("Maintenance loop started")
+        cycle = 0
         try:
             while True:
                 await asyncio.sleep(self.LOOP_INTERVAL)
+                cycle += 1
                 try:
                     await self._health_check_all()
                     await self._check_streaming_timeout()
@@ -164,6 +201,9 @@ class LifecycleManager:
                     await self._check_ttl()
                     await self._cleanup_dead()
                     await self._check_memory_pressure()
+                    # Reap orphans every 10th cycle (~10 min)
+                    if cycle % 10 == 0:
+                        await self._reap_orphans()
                 except Exception as exc:
                     logger.error("Maintenance loop error: %s", exc, exc_info=True)
         except asyncio.CancelledError:
@@ -426,36 +466,142 @@ class LifecycleManager:
                 ["pgrep", "-f", "claude_agent_sdk/_bundled/claude"],
                 capture_output=True, text=True, timeout=5,
             )
-            if result.returncode != 0:
-                return  # No matching processes
-
             orphan_count = 0
-            for line in result.stdout.strip().split("\n"):
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    pid = int(line)
-                except ValueError:
-                    continue
+            if result.returncode == 0:
+                for line in result.stdout.strip().split("\n"):
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        pid = int(line)
+                    except ValueError:
+                        continue
 
-                # Skip our own process and known session PIDs
-                if pid == os.getpid() or pid in known_pids:
-                    continue
+                    # Skip our own process and known session PIDs
+                    if pid == os.getpid() or pid in known_pids:
+                        continue
 
-                try:
-                    os.kill(pid, signal.SIGKILL)
-                    orphan_count += 1
-                    logger.info(
-                        "lifecycle_manager.reap_orphan pid=%d", pid,
+                    try:
+                        os.kill(pid, signal.SIGKILL)
+                        orphan_count += 1
+                        logger.info(
+                            "lifecycle_manager.reap_orphan pid=%d", pid,
+                        )
+                    except (ProcessLookupError, PermissionError):
+                        pass
+
+                if orphan_count:
+                    logger.warning(
+                        "Startup orphan reaper killed %d claude process(es)",
+                        orphan_count,
                     )
-                except (ProcessLookupError, PermissionError):
-                    pass
 
-            if orphan_count:
-                logger.warning(
-                    "Startup orphan reaper killed %d claude process(es)",
-                    orphan_count,
+            # ── Also reap stale python main.py dev backend processes ──
+            # These can be left behind when a dev backend is started manually
+            # and then orphaned (ppid=1). The production backend runs as
+            # python-backend (PyInstaller bundle), not "python main.py".
+            try:
+                result2 = await asyncio.to_thread(
+                    subprocess.run,
+                    ["pgrep", "-f", "python main.py"],
+                    capture_output=True, text=True, timeout=5,
                 )
+                if result2.returncode == 0:
+                    dev_orphan_count = 0
+                    for line in result2.stdout.strip().split("\n"):
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            pid = int(line)
+                        except ValueError:
+                            continue
+
+                        if pid == os.getpid() or pid in known_pids:
+                            continue
+
+                        # Only kill if orphaned (ppid=1)
+                        try:
+                            ppid_result = await asyncio.to_thread(
+                                subprocess.run,
+                                ["ps", "-o", "ppid=", "-p", str(pid)],
+                                capture_output=True, text=True, timeout=5,
+                            )
+                            ppid = int(ppid_result.stdout.strip())
+                            if ppid != 1:
+                                continue  # Not orphaned — skip
+                        except (ValueError, subprocess.TimeoutExpired):
+                            continue  # Can't determine ppid — skip
+
+                        try:
+                            os.kill(pid, signal.SIGKILL)
+                            dev_orphan_count += 1
+                            logger.info(
+                                "lifecycle_manager.reap_dev_orphan pid=%d", pid,
+                            )
+                        except (ProcessLookupError, PermissionError):
+                            pass
+
+                    if dev_orphan_count:
+                        logger.warning(
+                            "Startup orphan reaper killed %d dev backend process(es)",
+                            dev_orphan_count,
+                        )
+            except Exception as exc:
+                logger.warning("Dev backend orphan reaper failed (non-fatal): %s", exc)
+
+            # ── Reap orphaned pytest processes ────────────────────────
+            # Zombie pytest sessions (from crashed IDE runs or stale test
+            # suites) can eat 36%+ CPU each.  Only kill processes that are
+            # truly orphaned (ppid=1, reparented to launchd/init).
+            try:
+                result3 = await asyncio.to_thread(
+                    subprocess.run,
+                    ["pgrep", "-f", "pytest"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                if result3.returncode == 0:
+                    pytest_orphan_count = 0
+                    for line in result3.stdout.strip().split("\n"):
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            pid = int(line)
+                        except ValueError:
+                            continue
+
+                        if pid == os.getpid():
+                            continue
+
+                        # Only kill if orphaned (ppid=1)
+                        try:
+                            ppid_result = await asyncio.to_thread(
+                                subprocess.run,
+                                ["ps", "-o", "ppid=", "-p", str(pid)],
+                                capture_output=True, text=True, timeout=5,
+                            )
+                            ppid = int(ppid_result.stdout.strip())
+                            if ppid != 1:
+                                continue  # Has a living parent — skip
+                        except (ValueError, subprocess.TimeoutExpired):
+                            continue  # Can't determine ppid — skip
+
+                        try:
+                            os.kill(pid, signal.SIGKILL)
+                            pytest_orphan_count += 1
+                            logger.info(
+                                "lifecycle_manager.reap_pytest_orphan pid=%d", pid,
+                            )
+                        except (ProcessLookupError, PermissionError):
+                            pass
+
+                    if pytest_orphan_count:
+                        logger.warning(
+                            "Startup orphan reaper killed %d pytest process(es)",
+                            pytest_orphan_count,
+                        )
+            except Exception as exc:
+                logger.warning("Pytest orphan reaper failed (non-fatal): %s", exc)
         except Exception as exc:
             logger.warning("Orphan reaper failed (non-fatal): %s", exc)

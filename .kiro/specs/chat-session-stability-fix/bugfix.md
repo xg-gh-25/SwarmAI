@@ -2,60 +2,50 @@
 
 ## Introduction
 
-Chat sessions suffer from a cascading stability regression where three interacting bugs in `backend/core/agent_manager.py` cause frequent "Not connected. Call connect() first" and "Cannot write to terminated process (exit code: -9)" errors. After these errors, streaming responses disappear from the frontend. The root cause is a combination of: (1) premature session cleanup before auto-retry can use the session, (2) `last_used` timestamp never updating after streaming completes, causing aggressive idle timeouts to kill active conversations, and (3) inconsistent retry-eligibility checks between the SDK reader and `error_during_execution` error paths.
+Chat sessions crash at the end of every successful conversation turn due to a `NameError` in `_read_formatted_response()` that references an undefined `options` variable. This crash fires at the `ResultMessage` stage — the very end of the streaming path — preventing the normal STREAMING→IDLE state transition and leaving sessions in a broken state. The crash triggers the retry loop (which also crashes the same way), exhausting all retries and leaving orphaned Claude SDK subprocesses that are never cleaned up. Compounding this, zombie Hypothesis pytest processes with no deadline/shrink limits accumulate unbounded CPU usage, and the lifecycle manager's orphan reaper does not catch stale `python main.py` dev backend processes or excess Claude SDK children from crashed sessions.
 
 ## Bug Analysis
 
 ### Current Behavior (Defect)
 
-1.1 WHEN `error_during_execution` is received in `_run_query_on_client` AND the error is retriable THEN the system calls `_cleanup_session(eff_sid, skip_hooks=True)` which pops the session from `_active_sessions`, disconnects the wrapper, and removes the session lock BEFORE checking `_will_auto_retry_ede`. The subsequent retry in `_execute_on_session_inner` creates a fresh subprocess successfully, but the premature cleanup causes metadata loss: (a) the session lock is removed, allowing concurrent requests to slip through during the retry, (b) `interrupt_session` cannot find the client during the retry stream because `_active_sessions` was popped, (c) the `_early_active_key` in `session_context` becomes stale, and (d) the wrapper is double-disconnected (once by `_cleanup_session`, once by the retry loop's `_disconnect_wrapper` call on the original wrapper variable)
+1.1 WHEN a conversation turn completes successfully and the `ResultMessage` contains usage data with `input_tokens > 0` THEN the system crashes with `NameError: name 'options' is not defined` in `_read_formatted_response()` because the context warning bridge at line ~887 references `options` which is a local variable in `send()` that was never passed to `_read_formatted_response()` or `_stream_response()`
 
-1.2 WHEN a streaming response completes successfully via PATH B (reused client) THEN the system does not update the `last_used` timestamp on the session, leaving it at the value set by `_get_active_client` at the start of the request
+1.2 WHEN the `NameError` crashes `_read_formatted_response()` THEN the exception propagates up through `_stream_response()` to `send()`, which treats it as a retriable error and enters the retry loop — but each retry also crashes with the same `NameError` at the `ResultMessage` stage, exhausting all `MAX_RETRY_ATTEMPTS` (3) retries and leaving the session in COLD state with no successful response delivered to the user
 
-1.3 WHEN a streaming response takes longer than `SUBPROCESS_IDLE_SECONDS` (120s) to complete (e.g., long tool-use chains, code generation) THEN the `_cleanup_stale_sessions_loop` Tier 1 idle disconnect sees the session as idle (because `last_used` was never updated after streaming started) and kills the subprocess mid-stream via `_disconnect_wrapper`, setting `info["wrapper"] = None` and `info["client"] = None` while the SSE connection is still open. The SDK reader task then encounters "Cannot write to terminated process" because the underlying process was killed underneath the active stream. Note: Tier 1 preserves session metadata in `_active_sessions` — the "Not connected" error only occurs when the subprocess dies during an in-flight request, not between turns (between turns, `_get_active_client` returns None and gracefully falls through to resume-fallback)
+1.3 WHEN the `NameError` crash prevents the normal STREAMING→IDLE transition THEN the SessionUnit never reaches IDLE state for that turn, which means the `_hooks_enqueued` flag is never properly cycled and the subprocess cleanup path is entered via `_crash_to_cold()` instead of the graceful IDLE path, potentially leaving Claude SDK child subprocesses orphaned
 
-1.4 WHEN the user sends a follow-up message after the subprocess was killed by Tier 1 idle timeout between turns THEN `_get_active_client` returns None (wrapper=None, client=None) and the system gracefully falls through to resume-fallback (PATH A with context injection), which is slower (5-15s overhead) but functional. The "Not connected" error only occurs if the kill happens during an active stream, not between turns
+1.4 WHEN multiple sessions crash via Bug 1.1 over time THEN orphaned Claude SDK child subprocesses accumulate beyond the expected MAX_CONCURRENT (2) limit, consuming excessive memory (observed: 6 children at 1.4GB RSS total when at most 2-3 should be alive)
 
-1.7 WHEN `SUBPROCESS_IDLE_SECONDS` is set to 120 (2 minutes) THEN even with the `last_used` fix, normal user reading/thinking time between messages (2-5 minutes) frequently exceeds the threshold, causing unnecessary subprocess kills and forcing expensive resume-fallback (context injection) on the next message, which produces the "⚠️ AI service was slow to respond. Retrying automatically..." message
+1.5 WHEN Hypothesis property-based tests run without a `deadline` setting or with unbounded `max_examples` THEN the shrinking phase can run indefinitely, creating zombie pytest processes that consume 35%+ CPU each (observed: 5 processes at ~180% CPU combined, running 4-20 hours)
 
-1.5 WHEN the SDK reader error path determines retry eligibility THEN the system uses `_retry_count < _max_retries` as the condition, but WHEN the `error_during_execution` path determines retry eligibility THEN the system uses `not session_context.get("_path_a_retried")` as the condition, creating an inconsistency where errors may be incorrectly suppressed or incorrectly shown to the user
-
-1.6 WHEN Bug 1 causes a retry to fail on a destroyed session AND Bug 3 suppresses the error THEN the user sees streaming responses disappear with no error message and no recovery
-
-1.8 WHEN Bug 1's `_cleanup_session` pops the `_early_active_key` entry from `_active_sessions` AND the retry's `_run_query_on_client` receives a new SDK session ID via the `init` SystemMessage THEN the early registration code (line ~3262) creates a NEW entry keyed by the new SDK session ID (because `_init_sid not in self._active_sessions` is True after cleanup), but `session_context["_early_active_key"]` still references the old key that was already cleaned up, causing the post-stream cleanup to no-op on a stale key while the new entry persists with potentially inconsistent state
-
-1.9 WHEN "Cannot write to terminated process" is received as an error AND `_is_retriable_error` returns True for this pattern (line 335) THEN the full auto-retry cascade fires: error is suppressed from the frontend, `had_error` is set, and the retry loop in `_execute_on_session_inner` creates a fresh subprocess. This means Bug 2's mid-stream subprocess kill triggers Bug 1's premature cleanup path AND Bug 3's inconsistent retry eligibility, creating the full cascading failure
+1.6 WHEN a `python main.py --port 8000` dev backend process is started and then orphaned (ppid=1) THEN the lifecycle manager's startup orphan reaper does not detect or kill it because the reaper only searches for `claude_agent_sdk/_bundled/claude` processes, not stale Python backend processes
 
 ### Expected Behavior (Correct)
 
-2.1 WHEN `error_during_execution` is received AND the error is retriable AND auto-retry will handle it THEN the system SHALL defer `_cleanup_session` and NOT destroy the session state, allowing the retry path in `_execute_on_session_inner` to cleanly disconnect and re-create the client
+2.1 WHEN a conversation turn completes successfully and the `ResultMessage` contains usage data THEN the system SHALL access the model's context window information without referencing the undefined `options` variable — either by passing `options` (or just the model name) into `_read_formatted_response()` as a parameter, or by storing the model name on the SessionUnit instance during `send()` so it is available when the context warning bridge executes
 
-2.2 WHEN a streaming response completes successfully (both PATH A and PATH B) THEN the system SHALL update the `last_used` timestamp on the session to the current time, reflecting that the session was actively used throughout the streaming duration
+2.2 WHEN the context warning bridge executes at the `ResultMessage` stage THEN the system SHALL emit a `context_warning` SSE event if usage exceeds 70% of the model window, and SHALL complete the normal STREAMING→IDLE transition regardless of whether the warning succeeds or fails
 
-2.3 WHEN a streaming response is in progress THEN the `_cleanup_stale_sessions_loop` SHALL NOT kill the subprocess, because the updated `last_used` timestamp keeps the idle time below the `SUBPROCESS_IDLE_SECONDS` threshold
+2.3 WHEN a conversation turn completes and the `ResultMessage` is processed THEN the system SHALL transition STREAMING→IDLE, update `last_used`, reset `_retry_count`, and return normally — the `NameError` SHALL no longer occur because the variable reference is structurally eliminated
 
-2.4 WHEN the user sends a follow-up message after a completed response THEN the system SHALL find a live subprocess (because `last_used` was updated at completion) or gracefully fall through to resume-fallback without "Not connected" errors
+2.4 WHEN Claude SDK child subprocesses are orphaned from crashed sessions THEN the lifecycle manager SHALL detect and reap them during its maintenance loop or startup orphan reaper, keeping the alive subprocess count within the MAX_CONCURRENT bound
 
-2.7 WHEN `SUBPROCESS_IDLE_SECONDS` is configured THEN the value SHALL be 300 (5 minutes) to provide a comfortable window for normal user reading/thinking time between messages, while still reclaiming RAM from genuinely abandoned sessions within a reasonable timeframe
+2.5 WHEN Hypothesis property-based tests are configured THEN they SHALL include a `deadline` setting and appropriate `suppress_health_check` configuration to prevent infinite shrinking loops and unbounded test execution time
 
-2.5 WHEN any error path (SDK reader error OR `error_during_execution`) determines retry eligibility THEN the system SHALL use the same condition (`_retry_count < _max_retries`) consistently, so that error suppression and error display decisions are aligned across all paths
-
-2.6 WHEN an auto-retry is warranted THEN the system SHALL successfully create a fresh client and stream the response, because session state was preserved (not prematurely cleaned up) and the retry condition was evaluated consistently
+2.6 WHEN the lifecycle manager's startup orphan reaper runs THEN it SHALL also detect and kill stale `python main.py` backend processes that are orphaned (ppid=1) and holding known ports (e.g., port 8000), in addition to the existing claude CLI process reaping
 
 ### Unchanged Behavior (Regression Prevention)
 
-3.1 WHEN `error_during_execution` is received AND the error is NOT retriable THEN the system SHALL CONTINUE TO call `_cleanup_session` and yield an error event to the frontend
+3.1 WHEN a conversation turn completes with no usage data (usage is None or empty) THEN the system SHALL CONTINUE TO skip the context warning bridge and transition STREAMING→IDLE normally
 
-3.2 WHEN `error_during_execution` is received AND the session was interrupted by the user THEN the system SHALL CONTINUE TO preserve the client and suppress the error (existing interrupt handling logic)
+3.2 WHEN a retriable SDK error occurs during streaming (e.g., "Cannot write to terminated process", exit code -9) THEN the system SHALL CONTINUE TO enter the retry loop with exponential backoff and `--resume` flag for conversation context restoration
 
-3.3 WHEN a session is genuinely idle (no active streaming, no recent messages) for longer than `SUBPROCESS_IDLE_SECONDS` THEN the system SHALL CONTINUE TO disconnect the subprocess to free RAM
+3.3 WHEN all retry attempts are exhausted for a genuinely retriable error THEN the system SHALL CONTINUE TO yield an `ALL_RETRIES_EXHAUSTED` error event to the frontend with a friendly message and suggested action
 
-3.4 WHEN a session reaches `SESSION_TTL_SECONDS` (2 hours) of true idleness THEN the system SHALL CONTINUE TO perform full cleanup including hook firing
+3.4 WHEN a non-retriable error occurs during streaming THEN the system SHALL CONTINUE TO crash to COLD with `clear_identity=True` and yield a `CONVERSATION_ERROR` event to the frontend
 
-3.5 WHEN PATH B (reused client) encounters an error THEN the system SHALL CONTINUE TO evict the broken session and signal auto-retry via PATH A with a "reconnecting" indicator
+3.5 WHEN the lifecycle manager's orphan reaper runs at startup THEN it SHALL CONTINUE TO kill unowned `claude_agent_sdk/_bundled/claude` processes that are not tracked by any SessionUnit
 
-3.6 WHEN all retry attempts are exhausted THEN the system SHALL CONTINUE TO yield a friendly error event to the frontend with a suggested action
+3.6 WHEN a SessionUnit transitions from STREAMING to IDLE normally THEN the system SHALL CONTINUE TO reset `_hooks_enqueued` on the next STREAMING entry and fire idle hooks after the grace period
 
-3.7 WHEN `_get_active_client` is called at the start of a request THEN the system SHALL CONTINUE TO update `last_used` and reset `activity_extracted` as it does today
-
-3.8 WHEN the SDK reader error path encounters a non-retriable error THEN the system SHALL CONTINUE TO yield the error event immediately without suppression
+3.7 WHEN the `_read_formatted_response()` method processes `AssistantMessage`, `SystemMessage`, `StreamEvent`, and `ToolUseBlock` messages THEN the system SHALL CONTINUE TO yield the same SSE event formats as today with no changes to the message processing pipeline

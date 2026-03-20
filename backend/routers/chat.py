@@ -191,6 +191,7 @@ def create_sse_error(code: str, message: str, detail: str = None, suggested_acti
         "type": "error",
         "code": code,
         "message": message,
+        "error": message,
     }
     if detail:
         error_data["detail"] = detail

@@ -381,8 +381,9 @@ class PromptBuilder:
     # build_context_warning
     # ------------------------------------------------------------------
 
+    @classmethod
     def build_context_warning(
-        self,
+        cls,
         input_tokens: Optional[int],
         model: Optional[str],
     ) -> Optional[dict]:
@@ -391,6 +392,9 @@ class PromptBuilder:
         Returns ``None`` if *input_tokens* is invalid (``None``, 0, negative).
         Uses named threshold constants ``_CONTEXT_WARN_PCT`` and
         ``_CONTEXT_CRITICAL_PCT`` for level classification.
+
+        This is a classmethod because it only uses class-level constants
+        (thresholds, model window sizes) — no instance state needed.
 
         Args:
             input_tokens: Total input tokens from the last SDK response.
@@ -402,23 +406,23 @@ class PromptBuilder:
         """
         if input_tokens is None or input_tokens <= 0:
             return None
-        window = self.get_model_context_window(model)
+        window = cls.get_model_context_window(model)
         pct = round((input_tokens / window) * 100) if window > 0 else 0
         level = (
-            "critical" if pct >= self._CONTEXT_CRITICAL_PCT
-            else "warn" if pct >= self._CONTEXT_WARN_PCT
+            "critical" if pct >= cls._CONTEXT_CRITICAL_PCT
+            else "warn" if pct >= cls._CONTEXT_WARN_PCT
             else "ok"
         )
         tokens_k = input_tokens // 1000
         window_k = window // 1000
 
-        if pct >= self._CONTEXT_CRITICAL_PCT:
+        if pct >= cls._CONTEXT_CRITICAL_PCT:
             msg = (
                 f"**Context alert**: Session is {pct}% full "
                 f"(~{tokens_k}K/{window_k}K tokens). "
                 f"Recommend: save context and start a new session."
             )
-        elif pct >= self._CONTEXT_WARN_PCT:
+        elif pct >= cls._CONTEXT_WARN_PCT:
             msg = (
                 f"Heads up — we've used about {pct}% of this session's "
                 f"context window (~{tokens_k}K/{window_k}K tokens). "
@@ -442,11 +446,15 @@ class PromptBuilder:
     # get_model_context_window
     # ------------------------------------------------------------------
 
-    def get_model_context_window(self, model: Optional[str]) -> int:
+    @classmethod
+    def get_model_context_window(cls, model: Optional[str]) -> int:
         """Return the context window size for a model ID.
 
         Strips Bedrock prefix/suffix for lookup.  Defaults to 200K.
         Claude 4.6 models return 1M (GA on Bedrock since 2026-03).
+
+        This is a classmethod because it only uses class-level model
+        window mappings — no instance state needed.
 
         Args:
             model: Model identifier string (may include Bedrock prefix).
@@ -455,11 +463,11 @@ class PromptBuilder:
             Context window size in tokens.
         """
         if not model:
-            return self._DEFAULT_CONTEXT_WINDOW
+            return cls._DEFAULT_CONTEXT_WINDOW
         base = model.replace("us.anthropic.", "").rstrip(":0")
         if base.endswith("-v1"):
             base = base[:-3]
-        return self._MODEL_CONTEXT_WINDOWS.get(base, self._DEFAULT_CONTEXT_WINDOW)
+        return cls._MODEL_CONTEXT_WINDOWS.get(base, cls._DEFAULT_CONTEXT_WINDOW)
 
     # ------------------------------------------------------------------
     # sum_usage_input_tokens (static)
