@@ -322,6 +322,23 @@ class SessionRouter:
             from .agent_defaults import build_agent_config
             agent_config = await build_agent_config(agent_id)
 
+        # Detect cold-start resume: subprocess is gone but session has
+        # prior messages in DB (app restarted or session evicted).
+        # Set context injection flags so build_system_prompt() injects
+        # prior conversation into the system prompt.
+        from database import db
+        is_cold_resume = (
+            unit.state == SessionState.COLD
+            and unit._sdk_session_id is None
+            and session_id is not None
+        )
+        if is_cold_resume:
+            msg_count = await db.messages.count_by_session(session_id)
+            if msg_count > 0:
+                agent_config["needs_context_injection"] = True
+                agent_config["resume_app_session_id"] = session_id
+                yield {"type": "session_resuming", "sessionId": session_id}
+
         options = await self._prompt_builder.build_options(
             agent_config=agent_config,
             enable_skills=enable_skills,
@@ -339,7 +356,6 @@ class SessionRouter:
 
         # Delegate to SessionUnit — wrap with message persistence
         from .session_manager import session_manager
-        from database import db
 
         # Save user message to DB
 
