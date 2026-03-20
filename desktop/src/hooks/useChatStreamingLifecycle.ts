@@ -37,6 +37,7 @@ import type {
   Message,
   ContentBlock,
   StreamEvent,
+  SystemPromptMetadata,
 } from '../types';
 import type { PendingQuestion } from '../pages/chat/types';
 import type { UnifiedTab } from './useUnifiedTabState';
@@ -624,6 +625,12 @@ export interface ChatStreamingLifecycle {
   setContextWarning: React.Dispatch<React.SetStateAction<ContextWarning | null>>;
   /** Dismiss the context warning banner/toast. */
   clearContextWarning: () => void;
+
+  // System prompt metadata (delivered via SSE alongside context_warning)
+  /** Non-null when the backend emits a system_prompt_metadata SSE event after a turn. */
+  promptMetadata: SystemPromptMetadata | null;
+  /** Set the prompt metadata display mirror (used by tab switch restore). */
+  setPromptMetadata: React.Dispatch<React.SetStateAction<SystemPromptMetadata | null>>;
 }
 
 /** Context warning payload from the backend context monitor. */
@@ -715,6 +722,9 @@ export function useChatStreamingLifecycle(
 
   // --- Context window monitoring ---
   const [contextWarning, setContextWarning] = useState<ContextWarning | null>(null);
+
+  // --- System prompt metadata (delivered via SSE, same pipeline as contextWarning) ---
+  const [promptMetadata, setPromptMetadata] = useState<SystemPromptMetadata | null>(null);
   const clearContextWarning = useCallback(() => {
     const tabId = activeTabIdRef.current;
     if (tabId) {
@@ -1436,6 +1446,21 @@ export function useChatStreamingLifecycle(
             setContextWarning(warning);
           }
         }
+        // System prompt metadata — backend emits after each turn alongside
+        // context_warning.  Same display mirror pattern: write to tabMapRef,
+        // mirror to React state only for the active tab.
+        else if (event.type === 'system_prompt_metadata') {
+          const { type: _type, ...metadata } = event;
+          const spmTab = capturedTabId
+            ? tabMapRef.current.get(capturedTabId)
+            : undefined;
+          if (spmTab) {
+            spmTab.promptMetadata = metadata as SystemPromptMetadata;
+          }
+          if (capturedTabId === null || capturedTabId === activeTabIdRef.current) {
+            setPromptMetadata(metadata as SystemPromptMetadata);
+          }
+        }
         // Evolution SSE events — inject as standalone messages in the stream
         else if (event.type?.startsWith('evolution_')) {
           const evolutionMessage: Message = {
@@ -1764,5 +1789,7 @@ export function useChatStreamingLifecycle(
     contextWarning,
     setContextWarning,
     clearContextWarning,
+    promptMetadata,
+    setPromptMetadata,
   };
 }

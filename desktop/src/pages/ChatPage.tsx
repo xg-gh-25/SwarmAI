@@ -24,7 +24,7 @@ import { useState, useRef, useEffect, useCallback, useMemo, useLayoutEffect } fr
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
-import type { Message, ContentBlock, StreamEvent, Agent, AgentCreateRequest, ChatSession } from '../types';
+import type { Message, ContentBlock, StreamEvent, Agent, AgentCreateRequest, ChatSession, SystemPromptMetadata } from '../types';
 import { chatService } from '../services/chat';
 import { agentsService } from '../services/agents';
 import { skillsService } from '../services/skills';
@@ -235,6 +235,8 @@ export default function ChatPage() {
     contextWarning,
     setContextWarning,
     clearContextWarning: _clearContextWarning,
+    promptMetadata,
+    setPromptMetadata,
   } = useChatStreamingLifecycle({
     queryClient,
     getSession: (sid: string) => chatService.getSession(sid),
@@ -245,10 +247,9 @@ export default function ChatPage() {
     activeTabIdRef,
   });
 
-  // TSCC state management — called after the streaming hook so sessionId is available
-  const {
-    promptMetadata,
-  } = useTSCCState(sessionId ?? null);
+  // TSCC state management — lifecycle state and UI preferences only.
+  // System prompt metadata is now delivered via SSE and managed by useChatStreamingLifecycle.
+  useTSCCState(sessionId ?? null);
 
   // Last assistant message index — memoized for Save-to-Memory button placement
   const lastAssistantIdx = useMemo(
@@ -441,6 +442,7 @@ export default function ChatPage() {
           setSessionId(tabState.sessionId);
           setPendingQuestion(null);
           setContextWarning(tabState.contextWarning ?? null);
+          setPromptMetadata(tabState.promptMetadata ?? null);
           setIsExpanded(tabState.isExpanded ?? false);
           setInputValue(inputValueMapRef.current.get(tabId) ?? '');
           bumpStreamingDerivation();
@@ -461,6 +463,7 @@ export default function ChatPage() {
         setPendingQuestion(tabState.pendingQuestion);
         setPendingPermissionRequestId(tabState.pendingPermissionRequestId ?? null);
         setContextWarning(tabState.contextWarning ?? null);
+        setPromptMetadata(tabState.promptMetadata ?? null);
         setIsExpanded(tabState.isExpanded ?? false);
         setInputValue(inputValueMapRef.current.get(tabId) ?? '');
         // isStreaming derivation automatically reflects target tab's state
