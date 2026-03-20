@@ -1,118 +1,123 @@
 # Implementation Plan
 
 - [x] 1. Write bug condition exploration test
-  - **Property 1: Bug Condition** — Session State Destroyed Before Auto-Retry
-  - **CRITICAL**: This test MUST FAIL on unfixed code — failure confirms the bugs exist
+  - **Property 1: Bug Condition** — NameError on ResultMessage with Usage Data
+  - **CRITICAL**: This test MUST FAIL on unfixed code — failure confirms the bug exists
   - **DO NOT attempt to fix the test or the code when it fails**
   - **NOTE**: This test encodes the expected behavior — it will validate the fix when it passes after implementation
-  - **GOAL**: Surface counterexamples that demonstrate the three interacting bugs exist
-  - **Scoped PBT Approach**: Scope the property to concrete failing cases for each bug:
-    - Bug 1: Simulate a retriable `error_during_execution` (e.g., "exit code: -9") with `_path_a_retry_count=0` and `MAX_RETRY_ATTEMPTS=2`. Assert `_active_sessions[eff_sid]` still exists after the handler runs. On unfixed code, `_cleanup_session` is called before the retry check, so the session is popped.
-    - Bug 2: Simulate PATH B streaming completion. Assert `info["last_used"]` is updated after the `_run_query_on_client` yield loop. On unfixed code, `last_used` stays at the value set by `_get_active_client` at request start.
-    - Bug 3: Set `_path_a_retry_count=1`, `_path_a_retried=True`, `MAX_RETRY_ATTEMPTS=2`. Evaluate retry eligibility in both the SDK reader error path (`_retry_count < _max_retries` → True) and the `error_during_execution` path (`not _path_a_retried` → False). Assert they agree. On unfixed code, they disagree.
-  - Test assertions match Expected Behavior Properties from design (Properties 1, 2, 3)
+  - **GOAL**: Surface counterexamples that demonstrate the NameError crash in `_read_formatted_response()`
+  - **Scoped PBT Approach**: Scope the property to concrete failing cases:
+    - Create a `SessionUnit` in STREAMING state with a mocked `_client.receive_response()` that yields a `ResultMessage` with `usage={"input_tokens": N}` where N > 0
+    - Use Hypothesis to generate `input_tokens` values (positive integers) and optional model names
+    - Assert that iterating `_read_formatted_response()` does NOT raise `NameError`
+    - Assert that the unit transitions STREAMING→IDLE after processing the `ResultMessage`
+    - Assert that a `result` event is yielded with correct usage data
+  - The bug condition from design: `isBugCondition(input) := input_tokens IS NOT None AND input_tokens > 0 AND "options" NOT IN local_scope_of(_read_formatted_response)`
+  - On UNFIXED code: `NameError: name 'options' is not defined` is raised at the context warning bridge (~line 887)
   - Run test on UNFIXED code
-  - **EXPECTED OUTCOME**: Test FAILS (this is correct — it proves the bugs exist)
-  - Document counterexamples found to understand root cause
+  - **EXPECTED OUTCOME**: Test FAILS (this is correct — it proves the bug exists)
+  - Document counterexamples found (e.g., "ResultMessage with usage={'input_tokens': 1500} raises NameError instead of completing STREAMING→IDLE")
   - Mark task complete when test is written, run, and failure is documented
-  - _Requirements: 2.1, 2.2, 2.5, 2.6_
+  - _Requirements: 1.1, 2.1, 2.2, 2.3_
 
 - [x] 2. Write preservation property tests (BEFORE implementing fix)
-  - **Property 2: Preservation** — Non-Buggy Error Paths Unchanged
+  - **Property 2: Preservation** — Non-ResultMessage Processing and No-Usage ResultMessages Unchanged
   - **IMPORTANT**: Follow observation-first methodology
   - **Observe on UNFIXED code**:
-    - Non-retriable errors (e.g., auth failure): `_cleanup_session` is called AND error event is yielded
-    - Interrupted sessions (`interrupted=True`): cleanup is skipped, error is suppressed
-    - Exhausted retries (`_retry_count >= MAX_RETRY_ATTEMPTS`): error event is yielded even for retriable errors
-    - Genuinely idle sessions (`time.time() - last_used > SUBPROCESS_IDLE_SECONDS`, no active streaming): subprocess is disconnected
+    - `AssistantMessage` with `TextBlock` content yields `{"type": "assistant", "content": [{"type": "text", ...}]}`
+    - `AssistantMessage` with `ToolUseBlock` content yields `{"type": "assistant", "content": [{"type": "tool_use", ...}]}`
+    - `AssistantMessage` with `ToolResultBlock` content yields `{"type": "assistant", "content": [{"type": "tool_result", ...}]}`
+    - `SystemMessage` with `subtype="init"` yields `{"type": "session_start", "sessionId": ...}`
+    - `StreamEvent` with `content_block_delta` / `text_delta` yields `{"type": "text_delta", ...}`
+    - `StreamEvent` with `content_block_start` / `thinking` yields `{"type": "thinking_start", ...}`
+    - `ResultMessage` with `usage=None` yields `{"type": "result", ...}` and transitions STREAMING→IDLE without error
+    - `ResultMessage` with `usage={}` yields `{"type": "result", ...}` and transitions STREAMING→IDLE without error
+    - `ResultMessage` with `usage={"input_tokens": 0}` yields `{"type": "result", ...}` and transitions STREAMING→IDLE without error
   - Write property-based tests capturing observed behavior:
-    - For any error where `_is_retriable_error` returns False, verify `_cleanup_session` is called and error event is yielded
-    - For any session with `interrupted=True`, verify cleanup is skipped and error is suppressed
-    - For any error where `_retry_count >= MAX_RETRY_ATTEMPTS`, verify error event is yielded
-    - For any session idle longer than `SUBPROCESS_IDLE_SECONDS` with no active streaming, verify subprocess disconnect
-  - Property-based testing generates many combinations of error strings, retry counts, and session states
+    - Generate random message sequences (AssistantMessage, SystemMessage, StreamEvent) followed by a ResultMessage with no/zero usage
+    - Assert each message type yields the expected SSE event format
+    - Assert ResultMessage with `usage=None`, `usage={}`, or `input_tokens=0` completes without NameError and transitions STREAMING→IDLE
+    - Assert non-ResultMessage processing is identical before and after fix
+  - Property-based testing generates many combinations of message types and content blocks for stronger preservation guarantees
   - Run tests on UNFIXED code
   - **EXPECTED OUTCOME**: Tests PASS (this confirms baseline behavior to preserve)
   - Mark task complete when tests are written, run, and passing on unfixed code
-  - _Requirements: 3.1, 3.2, 3.3, 3.4, 3.6, 3.8_
+  - _Requirements: 3.1, 3.2, 3.6, 3.7_
 
 - [x] 3. Implement chat session stability fix
 
-  - [x] 3.1 Change 1: Defer `_cleanup_session` in `error_during_execution` handler (Bug 1 + Bug 3 partial)
-    - In `_run_query_on_client`, the `error_during_execution` branch (~line 2960):
-    - Move `_will_auto_retry_ede` evaluation BEFORE the `_cleanup_session` call
-    - Replace `not session_context.get("_path_a_retried")` with `session_context.get("_path_a_retry_count", 0) < self.MAX_RETRY_ATTEMPTS`
-    - Wrap `_cleanup_session` in `if not _will_auto_retry_ede:` guard
-    - Non-retriable errors and exhausted retries still call `_cleanup_session` (preservation)
-    - _Bug_Condition: isBugCondition(input) where error is retriable AND cleanup called before retry check_
-    - _Expected_Behavior: Session entry preserved in `_active_sessions` when retry will be attempted_
-    - _Preservation: Non-retriable errors still cleaned up (Req 3.1), exhausted retries still yield error (Req 3.6)_
-    - _Requirements: 2.1, 2.6, 3.1, 3.6_
+  - [x] 3.1 Change 1 & 2: Store model name on SessionUnit and fix context warning bridge
+    - In `SessionUnit.__init__()`, add `self._model_name: Optional[str] = None` in the internal fields section
+    - In `SessionUnit.send()`, before `self._transition(SessionState.STREAMING)`, add `self._model_name = getattr(options, "model", None)`
+    - In `_read_formatted_response()` context warning bridge (~line 887):
+      - Change `if input_tokens and input_tokens > 0 and options:` to `if input_tokens and input_tokens > 0:`
+      - Replace `getattr(options, "model", None)` with `self._model_name`
+    - The `try/except Exception: pass` already wraps the PromptBuilder call — removing `and options` from the outer `if` means the entire warning logic is now defense-in-depth protected
+    - _Bug_Condition: isBugCondition(input) where input_tokens > 0 AND "options" not in local scope_
+    - _Expected_Behavior: Context warning bridge accesses model info via self._model_name, completes without NameError, session transitions STREAMING→IDLE_
+    - _Preservation: Non-usage ResultMessages still skip the warning bridge (Req 3.1); all other message processing unchanged (Req 3.7)_
+    - _Requirements: 1.1, 2.1, 2.2, 2.3, 3.1, 3.7_
 
-  - [x] 3.2 Change 2: Update `last_used` after PATH B streaming completes (Bug 2)
-    - In `_execute_on_session_inner`, after the PATH B `_run_query_on_client` yield loop:
-    - Add `_path_b_info = self._active_sessions.get(session_id)` lookup
-    - Add `if _path_b_info: _path_b_info["last_used"] = time.time()`
-    - Place BEFORE the `if session_context.get("had_error")` check
-    - Runs regardless of error state — timestamp reflects last activity
-    - _Bug_Condition: isBugCondition(input) where path=="B" AND last_used not updated after streaming_
-    - _Expected_Behavior: info["last_used"] updated to time.time() after streaming completes_
-    - _Preservation: `_get_active_client` still updates last_used at request start (Req 3.7)_
-    - _Requirements: 2.2, 2.3, 2.4, 3.7_
+  - [x] 3.2 Change 4: Broaden orphan reaper to catch stale Python backend processes
+    - In `LifecycleManager._reap_orphans()`, after the existing claude CLI reaping block:
+    - Add a second `pgrep -f "python main.py"` call
+    - For each matched PID, check ppid=1 (orphaned) via `/proc/{pid}/stat` or `ps -o ppid= -p {pid}`
+    - Skip `os.getpid()` and any PID in `known_pids`
+    - Kill orphaned matches with `SIGKILL`
+    - Log count of killed python backend orphans
+    - _Bug_Condition: isBugCondition_orphan(proc) where proc.cmdline matches "python main.py" AND proc.ppid == 1_
+    - _Expected_Behavior: Orphaned python main.py processes detected and killed at startup_
+    - _Preservation: Existing claude CLI reaping unchanged (Req 3.5); non-orphaned python processes not killed_
+    - _Requirements: 1.6, 2.6, 3.5_
 
-  - [x] 3.3 Change 3: Unify retry-eligibility in `is_error` ResultMessage handler (Bug 3)
-    - In `_run_query_on_client`, the `is_error` ResultMessage handler (~line 3085):
-    - Replace `not session_context.get("_path_a_retried")` with `session_context.get("_path_a_retry_count", 0) < self.MAX_RETRY_ATTEMPTS`
-    - This aligns all three error paths (SDK reader error, `error_during_execution`, `is_error`) to use count-based condition
-    - _Bug_Condition: isBugCondition(input) where retry_count < max_retries != (NOT path_a_retried)_
-    - _Expected_Behavior: All error paths use identical `_retry_count < MAX_RETRY_ATTEMPTS` condition_
-    - _Preservation: Non-retriable SDK reader errors still yield error events immediately (Req 3.8)_
-    - _Requirements: 2.5, 3.8_
+  - [x] 3.3 Change 5: Add Hypothesis deadline and health check settings
+    - In `backend/conftest.py`, add Hypothesis profile configuration:
+      ```python
+      from hypothesis import settings, HealthCheck
+      settings.register_profile(
+          "default",
+          deadline=5000,
+          suppress_health_check=[HealthCheck.too_slow],
+      )
+      settings.load_profile("default")
+      ```
+    - This prevents infinite shrinking loops and bounds test execution time
+    - _Bug_Condition: isBugCondition_hypothesis(test) where test.settings.deadline IS None_
+    - _Expected_Behavior: All Hypothesis tests run with 5s deadline and too_slow suppressed_
+    - _Requirements: 1.5, 2.5_
 
-  - [x] 3.4 Change 4: Update `last_used` during PATH A retry loop (defensive)
-    - In `_execute_on_session_inner`, inside the PATH A retry `while` loop, after `session_context["had_error"] = False`:
-    - Add lookup of `_early_active_key` from `session_context`
-    - Add `_early_info["last_used"] = time.time()` on the early-registered session info
-    - Prevents cleanup loop from interfering during retries
-    - _Bug_Condition: Defensive — prevents stale last_used during retry backoff_
-    - _Expected_Behavior: Early-registered session info timestamp updated each retry iteration_
-    - _Requirements: 2.2, 2.3_
+  - [x] 3.4 Change 6: Clear `_model_name` in `_cleanup_internal()`
+    - In `SessionUnit._cleanup_internal()`, add `self._model_name = None`
+    - Prevents stale model names persisting across session reuse after DEAD→COLD transitions
+    - _Preservation: All other cleanup fields unchanged_
+    - _Requirements: 2.1, 2.3_
 
-  - [x] 3.5 Change 5: Increase `SUBPROCESS_IDLE_SECONDS` from 120 to 300 (Bug 2 mitigation)
-    - In `AgentManager` class constants (~line 487):
-    - Change `SUBPROCESS_IDLE_SECONDS = 2 * 60` to `SUBPROCESS_IDLE_SECONDS = 5 * 60`
-    - Update the comment to explain 5-minute rationale (normal user reading/thinking time)
-    - Note that OOM prevention is handled by `MAX_CONCURRENT_SUBPROCESSES` cap, not aggressive idle timeouts
-    - _Bug_Condition: Mitigation — 2min too aggressive for normal interaction patterns_
-    - _Expected_Behavior: 5-minute idle threshold matches user behavior patterns_
-    - _Preservation: Genuinely idle sessions still disconnected (Req 3.3), TTL unchanged (Req 3.4)_
-    - _Requirements: 2.7, 3.3, 3.4_
-
-  - [x] 3.6 Verify bug condition exploration test now passes
-    - **Property 1: Expected Behavior** — Session State Preserved for Auto-Retry
+  - [x] 3.5 Verify bug condition exploration test now passes
+    - **Property 1: Expected Behavior** — NameError Structurally Eliminated
     - **IMPORTANT**: Re-run the SAME test from task 1 — do NOT write a new test
     - The test from task 1 encodes the expected behavior
     - When this test passes, it confirms:
-      - Bug 1: `_cleanup_session` is deferred when retry is warranted
-      - Bug 2: `last_used` is updated after PATH B streaming
-      - Bug 3: All error paths use the same count-based retry condition
+      - `self._model_name` is set during `send()` from `options.model`
+      - `_read_formatted_response()` uses `self._model_name` instead of undefined `options`
+      - ResultMessage with `input_tokens > 0` completes without NameError
+      - Session transitions STREAMING→IDLE normally
     - Run bug condition exploration test from step 1
-    - **EXPECTED OUTCOME**: Test PASSES (confirms bugs are fixed)
-    - _Requirements: 2.1, 2.2, 2.5, 2.6_
+    - **EXPECTED OUTCOME**: Test PASSES (confirms bug is fixed)
+    - _Requirements: 2.1, 2.2, 2.3_
 
-  - [x] 3.7 Verify preservation tests still pass
-    - **Property 2: Preservation** — Non-Buggy Error Paths Unchanged
+  - [x] 3.6 Verify preservation tests still pass
+    - **Property 2: Preservation** — Non-ResultMessage Processing Unchanged
     - **IMPORTANT**: Re-run the SAME tests from task 2 — do NOT write new tests
     - Run preservation property tests from step 2
     - **EXPECTED OUTCOME**: Tests PASS (confirms no regressions)
     - Confirm all tests still pass after fix:
-      - Non-retriable errors still cleaned up and error events yielded
-      - Interrupted sessions still preserved
-      - Genuinely idle sessions still disconnected
-      - Exhausted retries still yield error events
+      - AssistantMessage, SystemMessage, StreamEvent processing yields identical SSE events
+      - ResultMessage with no/zero usage still skips context warning bridge
+      - Retry logic for genuinely retriable errors still works
+      - Normal STREAMING→IDLE transitions still reset hooks and fire idle hooks
 
 - [x] 4. Checkpoint — Ensure all tests pass
-  - Run the full test suite to verify no regressions
+  - Run the full backend test suite (`cd backend && pytest`) to verify no regressions
   - Ensure bug condition exploration test passes (task 1 test on fixed code)
   - Ensure preservation property tests pass (task 2 tests on fixed code)
   - Ensure existing backend tests pass

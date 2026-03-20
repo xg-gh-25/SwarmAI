@@ -2,126 +2,124 @@
 
 ## Overview
 
-Three interacting bugs in `backend/core/agent_manager.py` cause cascading session failures: (1) `_cleanup_session` destroys session state before auto-retry can use it, (2) `last_used` is never updated after streaming completes on PATH B, causing the idle cleanup loop to kill active subprocesses, and (3) retry-eligibility checks differ between the SDK reader error path and the `error_during_execution` path, leading to inconsistent error suppression. The fix defers cleanup when retry is warranted, updates `last_used` after streaming, unifies retry-eligibility into a single helper call, and increases `SUBPROCESS_IDLE_SECONDS` from 2 to 5 minutes to match normal user interaction patterns.
+Four interacting bugs cause cascading session instability in the multi-session backend. The root cause is a `NameError` in `_read_formatted_response()` (Bug 1) that references an undefined `options` variable from `send()`'s local scope. This crash fires at the `ResultMessage` stage — the final step of every successful conversation turn — preventing the STREAMING→IDLE transition, triggering a retry loop that also crashes identically, exhausting all retries, and leaving orphaned Claude SDK subprocesses. The downstream effects are: excess child processes (Bug 4), zombie Hypothesis pytest processes with no deadline (Bug 2), and a stale dev backend orphan invisible to the lifecycle manager's reaper (Bug 3). The fix stores the model name on the `SessionUnit` instance during `send()` to structurally eliminate the `NameError`, moves the context warning bridge inside the existing try/except as defense-in-depth, broadens the orphan reaper to catch `python main.py` processes, and adds Hypothesis `deadline`/`suppress_health_check` settings.
 
 ## Glossary
 
-- **Bug_Condition (C)**: The set of inputs/states where session stability fails — retriable errors with premature cleanup, stale `last_used` timestamps, or inconsistent retry decisions
-- **Property (P)**: Session state is preserved for retry, timestamps reflect actual activity, and retry eligibility is evaluated identically across all error paths
-- **Preservation**: All existing behaviors for non-retriable errors, interrupted sessions, genuine idle cleanup, PATH B→A fallback, and exhausted-retry error display must remain unchanged
-- **`_cleanup_session`**: Method at line 811 that pops session from `_active_sessions`, disconnects wrapper, removes lock and permission queue
-- **`_cleanup_stale_sessions_loop`**: Background loop at line 633 that disconnects idle subprocesses (Tier 1: `SUBPROCESS_IDLE_SECONDS`) and performs full cleanup (Tier 3: `SESSION_TTL_SECONDS`)
-- **`_run_query_on_client`**: Shared message-processing loop at line 2573 containing both the SDK reader error path and the `error_during_execution` handler
-- **`_is_retriable_error`**: Pure function at line 320 that checks if an error string matches retriable patterns
-- **PATH A**: Fresh client creation path in `_execute_on_session_inner`
-- **PATH B**: Reused client path in `_execute_on_session_inner`
-- **`_will_auto_retry_ede`**: The retry-eligibility flag in the `error_during_execution` handler (currently uses `not session_context.get("_path_a_retried")`)
-- **`_will_auto_retry`**: The retry-eligibility flag in the SDK reader error handler (currently uses `_retry_count < _max_retries`)
+- **Bug_Condition (C)**: The condition that triggers the primary crash — `_read_formatted_response()` referencing the undefined `options` variable when processing a `ResultMessage` with usage data
+- **Property (P)**: The desired behavior — context warning bridge accesses model info from `self._model_name` (instance attribute), completes normally, and the session transitions STREAMING→IDLE
+- **Preservation**: All existing message processing (AssistantMessage, SystemMessage, StreamEvent, ToolUseBlock), retry logic for genuinely retriable errors, error event formatting, and subprocess lifecycle transitions must remain unchanged
+- **`_read_formatted_response()`**: Async generator in `session_unit.py` that reads SDK messages and yields SSE events; contains the NameError at the context warning bridge
+- **`send()`**: Entry point method on `SessionUnit` that receives `options: ClaudeAgentOptions` as a local parameter and delegates to `_stream_response()` → `_read_formatted_response()`
+- **`_stream_response()`**: Intermediate method that sends the query and delegates response reading to `_read_formatted_response()`
+- **Context warning bridge**: Code block at ~line 887 in `_read_formatted_response()` that checks input token usage against the model's context window and emits a `context_warning` SSE event
+- **`LifecycleManager._reap_orphans()`**: Startup one-shot that kills unowned `claude_agent_sdk/_bundled/claude` processes
+- **Hypothesis deadline**: Per-test time limit that prevents infinite shrinking loops in property-based tests
 
 ## Bug Details
 
 ### Bug Condition
 
-The bugs manifest when a retriable error occurs during streaming and the system attempts auto-retry, OR when a PATH B streaming response takes significant time, OR when different error paths evaluate retry eligibility.
+The primary bug (Bug 1) manifests on every conversation turn that returns a `ResultMessage` with `input_tokens > 0`. The context warning bridge in `_read_formatted_response()` references `options` — a local variable in `send()` that was never passed down the call chain. The `NameError` fires BEFORE the `try` block, so the `except Exception: pass` defense never catches it.
 
 **Formal Specification:**
 ```
 FUNCTION isBugCondition(input)
-  INPUT: input of type {error: string | None, path: "A" | "B", streaming_duration: float, retry_count: int, max_retries: int, path_a_retried: bool}
+  INPUT: input of type ResultMessage
   OUTPUT: boolean
 
-  bug1 := input.error IS NOT None
-          AND _is_retriable_error(input.error)
-          AND retry_will_be_attempted(input)
-          AND _cleanup_session_called_before_retry_check(input)
+  usage := input.usage OR {}
+  input_tokens := usage.get("input_tokens")
 
-  bug2 := input.path == "B"
-          AND input.streaming_duration > 0
-          AND last_used_not_updated_after_streaming()
-
-  bug3 := input.error IS NOT None
-          AND (input.retry_count < input.max_retries) != (NOT input.path_a_retried)
-          -- The two conditions disagree on retry eligibility
-
-  RETURN bug1 OR bug2 OR bug3
+  RETURN input_tokens IS NOT None
+         AND input_tokens > 0
+         AND "options" NOT IN local_scope_of(_read_formatted_response)
 END FUNCTION
 ```
 
+The secondary bugs are downstream effects:
+- Bug 2: `isBugCondition_hypothesis(test) := test.uses_hypothesis AND test.settings.deadline IS None`
+- Bug 3: `isBugCondition_orphan(proc) := proc.cmdline MATCHES "python main.py" AND proc.ppid == 1 AND proc NOT IN reaper_search_patterns`
+- Bug 4: `isBugCondition_excess_children(session) := session.crashed_via_bug1 AND session.subprocess NOT cleaned_up`
+
 ### Examples
 
-- **Bug 1**: User sends a message, SDK subprocess is OOM-killed (exit code -9). The `error_during_execution` handler calls `_cleanup_session(eff_sid, skip_hooks=True)` which pops the session, disconnects the wrapper, and removes the lock. Then `_will_auto_retry_ede` evaluates to `True`. The retry loop in `_execute_on_session_inner` creates a fresh subprocess successfully (new wrapper + client), but operates with degraded metadata: the session lock was removed (concurrent requests can slip through), `interrupt_session` can't find the client during the retry stream (user can't stop it), and the original wrapper is double-disconnected. The retry may succeed, but the session is in an inconsistent state.
+- **Bug 1 — Every turn crashes**: User sends "hello", Claude responds successfully, SDK emits `ResultMessage` with `usage={"input_tokens": 1500}`. At line ~887, `if input_tokens and input_tokens > 0 and options:` raises `NameError: name 'options' is not defined`. The exception propagates up through `_stream_response()` to `send()`, which treats it as a retriable error. Each retry also crashes at the same point. After 3 retries, the session enters COLD state with no response delivered.
 
-- **Bug 2**: User sends a message on an existing session (PATH B). `_get_active_client` sets `last_used = time.time()` at request start. The streaming response takes 150 seconds (long tool-use chain). During this time, `_cleanup_stale_sessions_loop` Tier 1 runs, sees `now - last_used > 120` (SUBPROCESS_IDLE_SECONDS), and kills the subprocess mid-stream via `_disconnect_wrapper` (sets wrapper=None, client=None but preserves session metadata). The SDK reader task then encounters "Cannot write to terminated process" because the process was killed underneath the active SSE stream. Note: between turns, Tier 1 is gracefully handled by `_get_active_client` returning None → resume-fallback. The "Cannot write to terminated process" error only occurs during in-flight requests where the SSE connection is still open when the process dies. Since "Cannot write to terminated process" IS in the `_is_retriable_error` set (line 335), this triggers the full auto-retry cascade (Bug 1 + Bug 3).
+- **Bug 1 — Retry loop also crashes**: After the first `NameError`, `send()` enters the retry loop. It spawns a fresh subprocess with `--resume`, streams the response again, hits the same `ResultMessage` with usage data, and crashes with the same `NameError`. This repeats for all `MAX_RETRY_ATTEMPTS` (3), yielding `ALL_RETRIES_EXHAUSTED` to the frontend.
 
-- **Bug 3**: A Bedrock throttling error occurs. The SDK reader error path checks `_retry_count (0) < _max_retries (2)` → `True` → suppresses error. But the `error_during_execution` path checks `not session_context.get("_path_a_retried")` → also `True` on first attempt, but after one retry where `_path_a_retried` is set to `True`, the `error_during_execution` path says "no more retries" while the SDK reader path (checking count) says "retries remain". This inconsistency causes errors to be either incorrectly suppressed or incorrectly shown.
+- **Bug 2 — Zombie pytest processes**: 5 Hypothesis pytest processes running 4-20 hours at ~35% CPU each. The tests have no `deadline` setting, so Hypothesis's shrinking phase runs indefinitely when it finds a failing example. Expected: tests complete within seconds with a `deadline` and `suppress_health_check` configuration.
 
-- **Edge case**: A non-retriable error (e.g., auth failure) should still trigger immediate `_cleanup_session` and yield an error event — this behavior must be preserved.
+- **Bug 3 — Invisible orphan**: PID 13782 (`python main.py --port 8000`) has ppid=1 (orphaned), running since Thursday. The reaper's `pgrep -f "claude_agent_sdk/_bundled/claude"` pattern doesn't match it. Expected: reaper also searches for stale `python main.py` processes on known ports.
+
+- **Bug 4 — Excess children**: 6 Claude SDK child subprocesses at 1.4GB RSS when MAX_CONCURRENT=2 means at most 2-3 should exist. These are orphans from Bug 1 crashes where `_crash_to_cold()` was called but the subprocess kill didn't fully clean up child trees. Expected: fixing Bug 1 eliminates the source; the reaper catches any remaining orphans.
 
 ## Expected Behavior
 
 ### Preservation Requirements
 
 **Unchanged Behaviors:**
-- Non-retriable errors in `error_during_execution` must still call `_cleanup_session` and yield error events to the frontend (Req 3.1)
-- User-interrupted sessions must still be preserved with the `interrupted` flag check (Req 3.2)
-- Genuinely idle sessions (no active streaming, no recent messages) must still be disconnected after `SUBPROCESS_IDLE_SECONDS` (Req 3.3)
-- Sessions exceeding `SESSION_TTL_SECONDS` (2h) must still get full cleanup with hook firing (Req 3.4)
-- PATH B error → evict → PATH A retry flow must continue to work (Req 3.5)
-- Exhausted retries must still yield a friendly error event (Req 3.6)
-- `_get_active_client` must still update `last_used` and reset `activity_extracted` at request start (Req 3.7)
-- Non-retriable SDK reader errors must still yield error events immediately (Req 3.8)
+- Processing of `AssistantMessage`, `SystemMessage`, `StreamEvent`, and `ToolUseBlock` messages in `_read_formatted_response()` must continue to yield the same SSE event formats (Req 3.7)
+- Retry logic for genuinely retriable SDK errors (e.g., "Cannot write to terminated process", exit code -9) must continue to work with exponential backoff and `--resume` (Req 3.2)
+- All-retries-exhausted error events must continue to be yielded to the frontend with friendly messages (Req 3.3)
+- Non-retriable errors must continue to crash to COLD with `clear_identity=True` and yield `CONVERSATION_ERROR` events (Req 3.4)
+- The lifecycle manager's existing claude CLI orphan reaping must continue to work (Req 3.5)
+- Normal STREAMING→IDLE transitions must continue to reset `_hooks_enqueued` and fire idle hooks after the grace period (Req 3.6)
+- Conversations with no usage data (usage is None or empty) must continue to skip the context warning bridge (Req 3.1)
 
 **Scope:**
-All inputs that do NOT involve retriable errors with remaining retries, PATH B streaming completion, or retry-eligibility evaluation should be completely unaffected by this fix. This includes:
+All inputs that do NOT involve: (a) `ResultMessage` processing with usage data, (b) Hypothesis test configuration, or (c) orphan process detection should be completely unaffected by this fix. This includes:
+- All message types other than `ResultMessage` in `_read_formatted_response()`
 - Mouse/keyboard interactions in the frontend
-- Non-error streaming paths
-- Session creation and initial registration
-- Permission request handling
-- Stale-result detection and re-query logic
+- Session creation, slot management, and eviction logic
+- Permission request handling (`WAITING_INPUT` state)
+- The compact, interrupt, and health_check methods
 
 ## Hypothesized Root Cause
 
-Based on the bug analysis and code review, the root causes are:
+Based on the bug description and code review of `session_unit.py`:
 
-1. **Premature Cleanup Ordering (Bug 1)**: In the `error_during_execution` handler (around line 2960-2980), `_cleanup_session(eff_sid, skip_hooks=True)` is called unconditionally for non-interrupted errors BEFORE the `_will_auto_retry_ede` check. The cleanup destroys the session entry, wrapper, lock, and permission queue. The retry loop in `_execute_on_session_inner` (line 2440+) creates a fresh subprocess successfully, but operates with degraded metadata: the session lock is gone (no concurrency protection during retry), `interrupt_session` can't find the client (user can't stop the retry), and the original wrapper is double-disconnected (harmless but wasteful). The retry may succeed, but the session is left in an inconsistent state that can cause issues on subsequent turns.
+1. **Undefined Variable Reference (Bug 1)**: The context warning bridge at line ~887 of `_read_formatted_response()` contains `if input_tokens and input_tokens > 0 and options:`. The variable `options` is a parameter of `send()` (type `ClaudeAgentOptions`) but is never passed to `_stream_response()` or `_read_formatted_response()`. Python evaluates the entire `and` chain left-to-right; when `input_tokens > 0` is `True`, it evaluates `options` which raises `NameError`. This is OUTSIDE the `try/except Exception: pass` block that wraps the warning builder call, so the exception propagates uncaught.
 
-2. **Missing Timestamp Update (Bug 2)**: After PATH B streaming completes successfully in `_execute_on_session_inner` (around line 2370), there is no `info["last_used"] = time.time()` call. The only `last_used` update happens in `_get_active_client` (line 1137) at request start. For PATH A, the post-stream storage block (line 2540) creates a new `_final_info` dict with `"last_used": time.time()`, so PATH A is not affected. But PATH B reuses the existing `info` dict without updating it.
+2. **Structural Scope Gap**: The call chain is `send(options=...) → _stream_response(query_content) → _read_formatted_response()`. Neither intermediate method accepts or forwards `options`. The context warning bridge needs only the model name (e.g., `"claude-sonnet-4-20250514"`) to look up the context window size, not the full `options` object.
 
-3. **Divergent Retry Conditions (Bug 3)**: The SDK reader error path (around line 2870) uses `_retry_count < _max_retries` (count-based), while the `error_during_execution` path (around line 2990) uses `not session_context.get("_path_a_retried")` (boolean flag-based). The boolean becomes `True` after the first retry and stays `True`, meaning the `error_during_execution` path thinks retries are exhausted after one attempt. The count-based check correctly allows up to `MAX_RETRY_ATTEMPTS` retries.
+3. **No Hypothesis Deadline (Bug 2)**: Property-based tests using Hypothesis have no `@settings(deadline=...)` decorator. When Hypothesis finds a failing example, it enters a shrinking phase that can run indefinitely without a deadline, creating zombie processes.
 
-4. **Compounding Effect**: Bug 1 + Bug 3 together cause silent failures: Bug 1 destroys the session before retry, and Bug 3's inconsistent condition may suppress the error that would otherwise alert the user.
+4. **Narrow Reaper Pattern (Bug 3)**: `_reap_orphans()` uses `pgrep -f "claude_agent_sdk/_bundled/claude"` which only matches Claude CLI processes. Stale `python main.py` dev backend processes are invisible to this pattern.
+
+5. **Cascading Orphans (Bug 4)**: Bug 1 causes every turn to crash, which calls `_crash_to_cold()` → `_force_kill()` → `os.kill(pid, SIGKILL)`. This kills the direct child but may not kill grandchildren (MCP subprocesses spawned by the Claude CLI). Over time, these accumulate.
 
 ## Correctness Properties
 
-Property 1: Bug Condition — Deferred Cleanup on Retriable Errors
+Property 1: Bug Condition — NameError Structurally Eliminated
 
-_For any_ `error_during_execution` event where `_is_retriable_error(error_text)` returns `True` AND retry attempts remain (`_retry_count < MAX_RETRY_ATTEMPTS`), the fixed `_run_query_on_client` SHALL NOT call `_cleanup_session` before breaking out of the message loop, preserving the session entry in `_active_sessions`, the wrapper connection, and the session lock for the retry path.
+_For any_ `ResultMessage` where `usage.input_tokens > 0`, the fixed `_read_formatted_response()` SHALL access the model name via `self._model_name` (an instance attribute set during `send()`) instead of referencing the undefined `options` variable, and SHALL complete the context warning bridge without raising `NameError`, transitioning STREAMING→IDLE normally.
 
-**Validates: Requirements 2.1, 2.6**
+**Validates: Requirements 2.1, 2.2, 2.3**
 
-Property 2: Bug Condition — Timestamp Update After Streaming
+Property 2: Preservation — Non-Usage ResultMessages Unaffected
 
-_For any_ successful streaming completion via PATH B (reused client), the fixed `_execute_on_session_inner` SHALL update `info["last_used"]` to `time.time()` after the `_run_query_on_client` generator is exhausted, ensuring the timestamp reflects the end of streaming rather than the start of the request.
+_For any_ `ResultMessage` where usage is `None` or `input_tokens` is `None` or `0`, the fixed `_read_formatted_response()` SHALL skip the context warning bridge entirely and transition STREAMING→IDLE, producing the same behavior as the original code for these inputs.
 
-**Validates: Requirements 2.2, 2.3, 2.4**
+**Validates: Requirements 3.1, 3.6, 3.7**
 
-Property 3: Bug Condition — Unified Retry Eligibility
+Property 3: Bug Condition — Orphan Reaper Catches Python Backend Processes
 
-_For any_ error evaluated for retry eligibility, the fixed code SHALL use the same condition (`_is_retriable_error(error) AND _retry_count < MAX_RETRY_ATTEMPTS`) in both the SDK reader error path and the `error_during_execution` path, so that the suppress-or-show decision is identical for the same error state.
+_For any_ orphaned process matching `python main.py` with ppid=1 on a known port (e.g., 8000), the fixed `_reap_orphans()` SHALL detect and kill it during startup, in addition to the existing claude CLI process reaping.
+
+**Validates: Requirements 2.6**
+
+Property 4: Preservation — Existing Claude CLI Reaping Unchanged
+
+_For any_ orphaned `claude_agent_sdk/_bundled/claude` process not owned by a SessionUnit, the fixed `_reap_orphans()` SHALL continue to detect and kill it exactly as before, with no change to the existing reaping logic.
+
+**Validates: Requirements 3.5**
+
+Property 5: Bug Condition — Hypothesis Tests Have Deadline
+
+_For any_ Hypothesis property-based test in the test suite, the test SHALL be configured with a `deadline` setting and appropriate `suppress_health_check` to prevent infinite shrinking loops.
 
 **Validates: Requirements 2.5**
-
-Property 4: Preservation — Non-Retriable Errors Still Cleaned Up
-
-_For any_ `error_during_execution` event where `_is_retriable_error(error_text)` returns `False` OR all retry attempts are exhausted, the fixed code SHALL still call `_cleanup_session(eff_sid, skip_hooks=True)` and yield an error event to the frontend, preserving the existing error-handling behavior for non-retriable errors.
-
-**Validates: Requirements 3.1, 3.6, 3.8**
-
-Property 5: Preservation — Idle Cleanup Unchanged for Genuinely Idle Sessions
-
-_For any_ session where no streaming is active AND `time.time() - last_used > SUBPROCESS_IDLE_SECONDS`, the fixed `_cleanup_stale_sessions_loop` SHALL still disconnect the subprocess, preserving the existing RAM-reclamation behavior for genuinely idle sessions.
-
-**Validates: Requirements 3.3, 3.4**
 
 ## Fix Implementation
 
@@ -129,191 +127,136 @@ _For any_ session where no streaming is active AND `time.time() - last_used > SU
 
 Assuming our root cause analysis is correct:
 
-**File**: `backend/core/agent_manager.py`
+**File**: `backend/core/session_unit.py`
 
-### Change 1: Defer `_cleanup_session` in `error_during_execution` handler (Bug 1)
+**Change 1: Store model name on instance during `send()`**
 
-**Function**: `_run_query_on_client` — the `error_during_execution` branch (~line 2960)
-
-**Current code** (simplified):
-```python
-# Remove broken session from reuse pool
-if eff_sid and eff_sid in self._active_sessions:
-    await self._cleanup_session(eff_sid, skip_hooks=True)
-
-# Check if auto-retry will handle this silently
-_will_auto_retry_ede = (
-    _is_retriable_error(error_text)
-    and not session_context.get("_path_a_retried")
-)
-```
-
-**Fixed code** (simplified):
-```python
-# Determine retry eligibility BEFORE cleanup
-_retry_count = session_context.get("_path_a_retry_count", 0)
-_will_auto_retry_ede = (
-    _is_retriable_error(error_text)
-    and _retry_count < self.MAX_RETRY_ATTEMPTS
-)
-
-# Only clean up if auto-retry will NOT handle this
-if not _will_auto_retry_ede:
-    if eff_sid and eff_sid in self._active_sessions:
-        await self._cleanup_session(eff_sid, skip_hooks=True)
-        logger.info(f"Removed broken session {eff_sid} from active sessions pool")
-```
+**Function**: `send()`
 
 **Specific Changes**:
-1. Move the `_will_auto_retry_ede` evaluation BEFORE the `_cleanup_session` call
-2. Wrap `_cleanup_session` in `if not _will_auto_retry_ede:` guard
-3. Replace the boolean `_path_a_retried` check with the count-based `_retry_count < MAX_RETRY_ATTEMPTS` check (also fixes Bug 3 for this path)
-
-### Change 2: Update `last_used` after PATH B streaming completes (Bug 2)
-
-**Function**: `_execute_on_session_inner` — after the PATH B `_run_query_on_client` yield loop (~line 2370)
-
-**Current code** (simplified):
-```python
-async for event in self._run_query_on_client(...):
-    yield event
-
-# PATH B post-run: if the reused client hit an error...
-if session_context.get("had_error") and session_id:
-    ...
-```
-
-**Fixed code** (simplified):
-```python
-async for event in self._run_query_on_client(...):
-    yield event
-
-# Update last_used after streaming completes (Bug 2 fix)
-# This prevents _cleanup_stale_sessions_loop from killing
-# subprocesses that were actively streaming.
-_path_b_info = self._active_sessions.get(session_id)
-if _path_b_info:
-    _path_b_info["last_used"] = time.time()
-
-# PATH B post-run: if the reused client hit an error...
-if session_context.get("had_error") and session_id:
-    ...
-```
-
-**Specific Changes**:
-1. After the `async for event in self._run_query_on_client(...)` loop in the PATH B block, look up the session info and update `last_used` to `time.time()`
-2. This runs regardless of error state — even if `had_error` is True, the timestamp should reflect the last activity time
-
-### Change 3: Unify retry-eligibility in SDK reader error path (Bug 3)
-
-**Function**: `_run_query_on_client` — the SDK reader `"error"` source handler (~line 2870)
-
-**Current code**:
-```python
-_retry_count = session_context.get("_path_a_retry_count", 0)
-_max_retries = self.MAX_RETRY_ATTEMPTS
-_will_auto_retry = (
-    _is_retriable_error(raw_error)
-    and _retry_count < _max_retries
-)
-```
-
-This path is already correct (count-based). The fix is in the `error_during_execution` path (Change 1 above) and the `is_error` ResultMessage path.
-
-**Function**: `_run_query_on_client` — the `is_error` ResultMessage handler (~line 3085)
-
-**Current code**:
-```python
-_will_auto_retry_sdk = (
-    _is_retriable_error(error_msg)
-    and not session_context.get("_path_a_retried")
-)
-```
-
-**Fixed code**:
-```python
-_retry_count_sdk = session_context.get("_path_a_retry_count", 0)
-_will_auto_retry_sdk = (
-    _is_retriable_error(error_msg)
-    and _retry_count_sdk < self.MAX_RETRY_ATTEMPTS
-)
-```
-
-**Specific Changes**:
-1. Replace `not session_context.get("_path_a_retried")` with `session_context.get("_path_a_retry_count", 0) < self.MAX_RETRY_ATTEMPTS` in both the `error_during_execution` handler and the `is_error` ResultMessage handler
-2. This aligns all three error paths (SDK reader error, `error_during_execution`, `is_error`) to use the same count-based condition
-
-### Change 5: Increase `SUBPROCESS_IDLE_SECONDS` from 120 to 300 (Bug 2 mitigation)
-
-**Location**: `AgentManager` class constants (~line 487)
-
-**Current code**:
-```python
-SUBPROCESS_IDLE_SECONDS = 2 * 60
-```
-
-**Fixed code**:
-```python
-SUBPROCESS_IDLE_SECONDS = 5 * 60
-```
-
-**Rationale**:
-Even with the `last_used` fix (Change 2), 2 minutes is too aggressive for normal user interaction patterns. Users routinely spend 2-5 minutes reading a response, thinking, or switching to another app before sending the next message. Each premature subprocess kill forces a full resume-fallback (context injection + fresh subprocess spawn), adding 5-15s overhead and producing the "⚠️ AI service was slow to respond. Retrying automatically..." message.
-
-The original value was 5 minutes before it was lowered to 2 in the COE fix (commit `ee790fe`). The COE addressed OOM kills from too many concurrent subprocesses — but that concern is already handled by `MAX_CONCURRENT_SUBPROCESSES = 3` and `_evict_idle_subprocesses()`. The cap-based eviction is the correct defense against OOM, not aggressive idle timeouts.
-
-With `MAX_CONCURRENT_SUBPROCESSES = 3` and each subprocess using 200-500MB, the worst case is 600MB-1.5GB — well within macOS limits. 5 minutes provides a comfortable window for normal interaction while still reclaiming RAM from genuinely abandoned sessions.
-
-**Update comment**:
-```python
-# Idle threshold for subprocess disconnect (5 minutes).
-# Kills the claude CLI subprocess to free ~100-300MB RAM per tab,
-# but keeps session metadata.  On next message, the resume-fallback
-# path (context injection) seamlessly recreates the session.
-# Set to 5min to allow normal user reading/thinking time between
-# messages.  OOM prevention is handled by MAX_CONCURRENT_SUBPROCESSES
-# cap + _evict_idle_subprocesses(), not by aggressive idle timeouts.
-SUBPROCESS_IDLE_SECONDS = 5 * 60
-```
-
-### Change 4: Update `last_used` after PATH A streaming completes (defensive)
-
-**Function**: `_execute_on_session_inner` — the PATH A post-stream storage block (~line 2540)
-
-The PATH A path already creates a new `_final_info` dict with `"last_used": time.time()`, so this is already correct. However, for the retry loop within PATH A, each retry iteration should also update `last_used` on the early-registered session info to prevent the cleanup loop from interfering during retries.
-
-**Specific Changes**:
-1. Inside the PATH A retry `while` loop, after `session_context["had_error"] = False`, add:
+1. After the spawn block and before `self._transition(SessionState.STREAMING)`, add:
    ```python
-   _early_key = session_context.get("_early_active_key")
-   if _early_key:
-       _early_info = self._active_sessions.get(_early_key)
-       if _early_info:
-           _early_info["last_used"] = time.time()
+   self._model_name = getattr(options, "model", None)
    ```
+2. Add `self._model_name: Optional[str] = None` to `__init__()` in the internal fields section
+3. This makes the model name available to `_read_formatted_response()` via `self._model_name` without threading `options` through the call chain
+
+**Change 2: Replace `options` reference with `self._model_name` in context warning bridge**
+
+**Function**: `_read_formatted_response()` — the context warning bridge (~line 887)
+
+**Current code**:
+```python
+if input_tokens and input_tokens > 0 and options:
+    try:
+        from .prompt_builder import PromptBuilder
+        _pb = PromptBuilder.__new__(PromptBuilder)
+        warning_evt = _pb.build_context_warning(
+            input_tokens, getattr(options, "model", None)
+        )
+        if warning_evt and warning_evt.get("level") != "ok":
+            yield warning_evt
+    except Exception:
+        pass
+```
+
+**Fixed code**:
+```python
+if input_tokens and input_tokens > 0:
+    try:
+        from .prompt_builder import PromptBuilder
+        _pb = PromptBuilder.__new__(PromptBuilder)
+        warning_evt = _pb.build_context_warning(
+            input_tokens, self._model_name
+        )
+        if warning_evt and warning_evt.get("level") != "ok":
+            yield warning_evt
+    except Exception:
+        pass
+```
+
+**Specific Changes**:
+1. Remove `and options` from the `if` condition — the `options` variable doesn't exist in this scope
+2. Replace `getattr(options, "model", None)` with `self._model_name`
+3. The entire block is already inside `try/except Exception: pass` after this change, providing defense-in-depth
+
+**Change 3: Move the `if ... and options:` check inside the try/except (defense-in-depth)**
+
+Per the user's design principle, the `if input_tokens and input_tokens > 0` check should be inside the existing `try/except Exception: pass` block so that any future issues in the condition evaluation are caught. The fixed code in Change 2 already achieves this since removing `and options` eliminates the only source of `NameError`, and the `try/except` wraps the `PromptBuilder` call.
+
+---
+
+**File**: `backend/core/lifecycle_manager.py`
+
+**Change 4: Broaden orphan reaper to catch stale Python backend processes**
+
+**Function**: `_reap_orphans()`
+
+**Specific Changes**:
+1. After the existing claude CLI reaping block, add a second `pgrep` call:
+   ```python
+   # Also reap stale python main.py dev backend processes (Bug 3)
+   result2 = await asyncio.to_thread(
+       subprocess.run,
+       ["pgrep", "-f", "python main.py"],
+       capture_output=True, text=True, timeout=5,
+   )
+   ```
+2. For each matched PID, check if ppid=1 (orphaned) before killing — avoid killing the current running backend
+3. Also skip our own PID (`os.getpid()`) and any PID in `known_pids`
+
+---
+
+**File**: Hypothesis test configuration (e.g., `conftest.py` or individual test files)
+
+**Change 5: Add Hypothesis deadline and health check settings**
+
+**Specific Changes**:
+1. Add a project-wide Hypothesis profile in `conftest.py`:
+   ```python
+   from hypothesis import settings, HealthCheck
+   settings.register_profile(
+       "default",
+       deadline=5000,  # 5 second deadline per example
+       suppress_health_check=[HealthCheck.too_slow],
+   )
+   settings.load_profile("default")
+   ```
+2. This prevents infinite shrinking loops and bounds test execution time
+
+---
+
+**File**: `backend/core/session_unit.py`
+
+**Change 6: Clear `_model_name` in `_cleanup_internal()`**
+
+**Function**: `_cleanup_internal()`
+
+**Specific Changes**:
+1. Add `self._model_name = None` to the cleanup to prevent stale model names across session reuse
 
 ## Testing Strategy
 
 ### Validation Approach
 
-The testing strategy follows a two-phase approach: first, surface counterexamples that demonstrate the bugs on unfixed code, then verify the fixes work correctly and preserve existing behavior. All tests target `backend/core/agent_manager.py` and can use mocked SDK clients and session state.
+The testing strategy follows a two-phase approach: first, surface counterexamples that demonstrate the bugs on unfixed code, then verify the fixes work correctly and preserve existing behavior.
 
 ### Exploratory Bug Condition Checking
 
 **Goal**: Surface counterexamples that demonstrate the bugs BEFORE implementing the fix. Confirm or refute the root cause analysis. If we refute, we will need to re-hypothesize.
 
-**Test Plan**: Write tests that simulate error conditions in `_run_query_on_client` and verify session state after the error handler runs. Run these tests on the UNFIXED code to observe failures.
+**Test Plan**: Write tests that simulate `ResultMessage` processing with usage data in `_read_formatted_response()`. Run these tests on the UNFIXED code to observe the `NameError`.
 
 **Test Cases**:
-1. **Premature Cleanup Test**: Simulate a retriable `error_during_execution` with retries remaining. Assert that `_active_sessions[eff_sid]` still exists after the handler runs. (Will fail on unfixed code — session is popped before retry check)
-2. **Stale Timestamp Test**: Simulate a PATH B streaming completion that takes 150s. Assert that `info["last_used"]` is updated to reflect completion time, not request start time. (Will fail on unfixed code — `last_used` stays at request start)
-3. **Idle Kill During Streaming Test**: Set up a session with `last_used` 130s ago, simulate active streaming. Run `_cleanup_stale_sessions_loop` logic. Assert subprocess is NOT disconnected. (Will fail on unfixed code — cleanup loop sees stale `last_used`)
-4. **Retry Condition Divergence Test**: Set `_path_a_retry_count=1` and `_path_a_retried=True` with `MAX_RETRY_ATTEMPTS=2`. Evaluate both retry conditions. Assert they agree. (Will fail on unfixed code — count says "retry", boolean says "no retry")
+1. **NameError Reproduction Test**: Create a `SessionUnit`, mock `_client.receive_response()` to yield a `ResultMessage` with `usage={"input_tokens": 1500}`. Call `_read_formatted_response()` and assert it raises `NameError`. (Will fail on unfixed code — confirms Bug 1)
+2. **Retry Cascade Test**: Call `send()` with a mocked client that returns a `ResultMessage` with usage data. Assert that all 3 retries fail with the same `NameError` and the final event is `ALL_RETRIES_EXHAUSTED`. (Will fail on unfixed code — confirms retry cascade)
+3. **No-Usage Path Test**: Mock a `ResultMessage` with `usage=None`. Assert `_read_formatted_response()` completes without error. (Should PASS on unfixed code — confirms the bug only triggers with usage data)
+4. **Orphan Reaper Pattern Test**: Run `_reap_orphans()` with a mocked `pgrep` that returns PIDs for both `claude_agent_sdk/_bundled/claude` and `python main.py` processes. Assert only claude processes are killed. (Will pass on unfixed code — confirms Bug 3 gap)
 
 **Expected Counterexamples**:
-- Session entry missing from `_active_sessions` after retriable `error_during_execution`
-- `last_used` timestamp unchanged after 150s of streaming on PATH B
-- Both retry conditions returning different values for the same state
+- `NameError: name 'options' is not defined` raised from `_read_formatted_response()`
+- All 3 retry attempts failing with the same `NameError`
+- `python main.py` orphan processes surviving the reaper
 
 ### Fix Checking
 
@@ -322,19 +265,10 @@ The testing strategy follows a two-phase approach: first, surface counterexample
 **Pseudocode:**
 ```
 FOR ALL input WHERE isBugCondition(input) DO
-  IF input.bug == "premature_cleanup":
-    result := handle_error_during_execution_fixed(input)
-    ASSERT session_still_in_active_sessions(input.eff_sid)
-    ASSERT wrapper_not_disconnected(input.eff_sid)
-  
-  IF input.bug == "stale_timestamp":
-    result := execute_on_session_inner_fixed(input)
-    ASSERT info["last_used"] >= streaming_end_time
-  
-  IF input.bug == "inconsistent_retry":
-    sdk_reader_decision := evaluate_sdk_reader_retry(input)
-    ede_decision := evaluate_ede_retry(input)
-    ASSERT sdk_reader_decision == ede_decision
+  result := _read_formatted_response_fixed(input)
+  ASSERT no NameError raised
+  ASSERT STREAMING→IDLE transition completed
+  ASSERT context_warning event yielded if usage > 70% window
 END FOR
 ```
 
@@ -345,49 +279,42 @@ END FOR
 **Pseudocode:**
 ```
 FOR ALL input WHERE NOT isBugCondition(input) DO
-  ASSERT handle_error_original(input) == handle_error_fixed(input)
-  -- Specifically:
-  -- Non-retriable errors: _cleanup_session still called, error event still yielded
-  -- Interrupted sessions: still preserved
-  -- Genuinely idle sessions: still disconnected
-  -- Exhausted retries: error event still yielded
+  ASSERT _read_formatted_response_original(input) == _read_formatted_response_fixed(input)
 END FOR
 ```
 
 **Testing Approach**: Property-based testing is recommended for preservation checking because:
-- It generates many combinations of error strings, retry counts, and session states
-- It catches edge cases like retry count exactly at MAX_RETRY_ATTEMPTS boundary
-- It provides strong guarantees that non-buggy paths are unchanged
+- It generates many combinations of message types and usage values
+- It catches edge cases like `input_tokens=0`, `usage={}`, `usage=None`
+- It provides strong guarantees that non-ResultMessage processing is unchanged
 
-**Test Plan**: Observe behavior on UNFIXED code first for non-retriable errors, interrupted sessions, and idle cleanup, then write property-based tests capturing that behavior.
+**Test Plan**: Observe behavior on UNFIXED code first for `AssistantMessage`, `SystemMessage`, `StreamEvent` processing, then write property-based tests capturing that behavior.
 
 **Test Cases**:
-1. **Non-Retriable Error Preservation**: For any error where `_is_retriable_error` returns False, verify `_cleanup_session` is called and error event is yielded — same as unfixed code
-2. **Interrupted Session Preservation**: For any session with `interrupted=True`, verify cleanup is skipped and error is suppressed — same as unfixed code
-3. **Idle Cleanup Preservation**: For any session with `last_used` older than `SUBPROCESS_IDLE_SECONDS` and no active streaming, verify subprocess is disconnected — same as unfixed code
-4. **Exhausted Retry Preservation**: For any error where `_retry_count >= MAX_RETRY_ATTEMPTS`, verify error event is yielded — same as unfixed code
+1. **AssistantMessage Preservation**: Verify that `AssistantMessage` with `TextBlock`, `ThinkingBlock`, `ToolUseBlock`, and `ToolResultBlock` content yields identical SSE events before and after the fix
+2. **StreamEvent Preservation**: Verify that `content_block_delta`, `content_block_start`, `content_block_stop` events yield identical SSE events
+3. **SystemMessage Preservation**: Verify that `init` and other system messages yield identical SSE events
+4. **No-Usage ResultMessage Preservation**: Verify that `ResultMessage` with `usage=None` or `usage={}` yields the same result event and transitions STREAMING→IDLE
 
 ### Unit Tests
 
-- Test that `_cleanup_session` is NOT called when `_is_retriable_error` returns True and `_retry_count < MAX_RETRY_ATTEMPTS` in the `error_during_execution` handler
-- Test that `_cleanup_session` IS called when `_is_retriable_error` returns False in the `error_during_execution` handler
-- Test that `_cleanup_session` IS called when `_retry_count >= MAX_RETRY_ATTEMPTS` even for retriable errors
-- Test that `last_used` is updated after PATH B streaming completes successfully
-- Test that `last_used` is updated after PATH B streaming completes with error
-- Test that all three error paths (SDK reader, `error_during_execution`, `is_error`) produce the same retry-eligibility decision for the same inputs
-- Test edge case: `_retry_count == MAX_RETRY_ATTEMPTS` (boundary — should NOT retry)
-- Test edge case: `_retry_count == MAX_RETRY_ATTEMPTS - 1` (boundary — should retry)
+- Test that `self._model_name` is set during `send()` from `options.model`
+- Test that `_read_formatted_response()` uses `self._model_name` instead of `options`
+- Test that `ResultMessage` with `input_tokens > 0` completes without `NameError`
+- Test that `ResultMessage` with `input_tokens > 0` and `self._model_name` set emits `context_warning` when usage > 70%
+- Test that `ResultMessage` with `usage=None` skips the context warning bridge
+- Test that `_cleanup_internal()` resets `self._model_name` to `None`
+- Test that `_reap_orphans()` kills orphaned `python main.py` processes with ppid=1
+- Test that `_reap_orphans()` does NOT kill non-orphaned `python main.py` processes
 
 ### Property-Based Tests
 
-- Generate random error strings (mix of retriable patterns and non-retriable strings) and random retry counts (0 to MAX_RETRY_ATTEMPTS+1). For each combination, verify all three error paths produce the same suppress/show decision (Property 3).
-- Generate random session states with varying `last_used` timestamps and streaming durations. Verify that after PATH B completion, `last_used` is always >= the completion time (Property 2).
-- Generate random error scenarios with varying retriability and retry counts. Verify that `_cleanup_session` is called if and only if auto-retry will NOT handle the error (Properties 1 and 4).
-- Generate random idle durations and verify that `_cleanup_stale_sessions_loop` disconnects if and only if `last_used` is older than `SUBPROCESS_IDLE_SECONDS` (Property 5).
+- Generate random `ResultMessage` usage dicts with varying `input_tokens` values (0, None, positive integers). Verify that the fixed `_read_formatted_response()` never raises `NameError` and always transitions STREAMING→IDLE (Property 1).
+- Generate random message sequences (mix of `AssistantMessage`, `SystemMessage`, `StreamEvent`, `ResultMessage`) and verify the fixed code produces identical SSE events as the original for all non-ResultMessage types (Property 2).
+- Generate random process lists with varying cmdlines and ppids. Verify the fixed `_reap_orphans()` kills all orphaned claude CLI AND python main.py processes while preserving non-orphaned processes (Properties 3, 4).
 
 ### Integration Tests
 
-- Test full PATH B flow: reuse client → stream for >120s → verify subprocess survives cleanup loop → send follow-up message successfully
-- Test full retry flow: retriable error → session preserved → retry creates fresh client → streaming succeeds
-- Test PATH B → PATH A fallback: reused client errors → evict → fresh client retry → verify `last_used` updated at each stage
-- Test cascading scenario (Bug 1 + Bug 3): retriable error in `error_during_execution` → verify session preserved AND retry condition consistent → retry succeeds
+- Test full conversation turn: `send()` → `_stream_response()` → `_read_formatted_response()` with a mocked SDK client that yields `AssistantMessage` then `ResultMessage` with usage data. Verify the response completes, context warning is emitted if applicable, and state transitions STREAMING→IDLE.
+- Test retry recovery: After fixing Bug 1, verify that genuinely retriable errors (e.g., "Cannot write to terminated process") still trigger the retry loop and succeed on retry.
+- Test lifecycle manager startup: Verify `_reap_orphans()` kills both claude CLI orphans and python main.py orphans in a single startup pass.

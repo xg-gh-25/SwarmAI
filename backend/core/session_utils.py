@@ -114,7 +114,7 @@ def _build_error_event(
     version strings so that internal implementation details are never
     leaked to the frontend.
     """
-    event: dict = {"type": "error", "code": code, "error": message}
+    event: dict = {"type": "error", "code": code, "message": message, "error": message}
     if suggested_action:
         event["suggested_action"] = suggested_action
     if detail:
