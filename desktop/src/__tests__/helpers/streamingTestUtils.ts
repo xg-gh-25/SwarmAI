@@ -69,6 +69,7 @@ export function initTestTab(tabId: string, initialMessages?: Message[]): void {
     streamGen: 0,
     status: 'idle' as TabStatus,
     contextWarning: null,
+    promptMetadata: null,
     isReconnecting: false,
     isResuming: false,
     reconnectionAttempt: 0,

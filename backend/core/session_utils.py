@@ -4,9 +4,10 @@ Pure functions with no subprocess, routing, or hook logic.
 
 Public symbols:
 
-- ``_is_retriable_error``   — Classify transient SDK errors for auto-retry.
-- ``_sanitize_sdk_error``   — Map raw SDK errors to user-friendly messages.
-- ``_build_error_event``    — Build a sanitized SSE error event dict.
+- ``_is_retriable_error``                — Classify transient SDK errors for auto-retry.
+- ``_sanitize_sdk_error``                — Map raw SDK errors to user-friendly messages.
+- ``_build_error_event``                 — Build a sanitized SSE error event dict.
+- ``fuzzy_title_matches_deliverable``    — Fuzzy text matching (shared by proactive + distillation).
 """
 from __future__ import annotations
 
@@ -136,3 +137,49 @@ def _build_error_event(
             if sanitized:
                 event["detail"] = sanitized
     return event
+
+
+
+# ---------------------------------------------------------------------------
+# Fuzzy text matching — shared by proactive_intelligence + distillation_hook
+# ---------------------------------------------------------------------------
+
+def fuzzy_title_matches_deliverable(
+    title: str,
+    deliverables: list[str],
+    deliv_word_sets: list[set[str]] | None = None,
+) -> bool:
+    """Check if a thread/item title fuzzy-matches any deliverable.
+
+    Matching heuristics (same as COE matching):
+    - Substring match in either direction
+    - ≥50% word overlap between title words and deliverable words
+
+    Parameters
+    ----------
+    title:
+        The thread/item title to check.
+    deliverables:
+        Lowercased deliverable strings.
+    deliv_word_sets:
+        Pre-computed word sets for each deliverable (optimization).
+        If None, computed on the fly.
+
+    Returns True if any deliverable matches.
+    """
+    title_lower = title.lower()
+    title_words = set(title_lower.split())
+
+    if deliv_word_sets is None:
+        deliv_word_sets = [set(d.split()) for d in deliverables]
+
+    for d_idx, d_text in enumerate(deliverables):
+        # Substring match
+        if title_lower in d_text or d_text in title_lower:
+            return True
+        # Fuzzy word overlap (≥50% of title words in deliverable)
+        overlap = title_words & deliv_word_sets[d_idx]
+        if len(overlap) >= max(1, len(title_words) // 2):
+            return True
+
+    return False

@@ -512,6 +512,19 @@ class LifecycleManager:
             )
         return killed
 
+    def _snapshot_known_pids(self) -> set[int]:
+        """Snapshot PIDs from active SessionUnits + tracked children.
+
+        Re-snapshot before each reap call to close the TOCTOU window
+        where a new subprocess spawns between snapshot and kill.
+        """
+        pids = {
+            u.pid for u in self._router.list_units()
+            if u.pid is not None
+        }
+        pids.update(self._tracked_child_pids)
+        return pids
+
     async def _reap_orphans(self) -> None:
         """Find and kill orphaned processes not owned by any SessionUnit.
 
@@ -519,22 +532,23 @@ class LifecycleManager:
         1. Claude CLI processes (bundled SDK binary) — always reap unowned
         2. Dev backend (``python main.py``) — only if orphaned (ppid=1)
         3. Zombie pytest — only if orphaned (ppid=1)
+
+        Re-snapshots known_pids before each pattern to minimize the
+        TOCTOU window between PID discovery and kill.
         """
         try:
-            known_pids = {
-                u.pid for u in self._router.list_units()
-                if u.pid is not None
-            }
-
             await self._reap_by_pattern(
-                "claude_agent_sdk/_bundled/claude", "claude", known_pids,
+                "claude_agent_sdk/_bundled/claude", "claude",
+                self._snapshot_known_pids(),
             )
             await self._reap_by_pattern(
-                "python main.py", "dev_backend", known_pids,
+                "python main.py", "dev_backend",
+                self._snapshot_known_pids(),
                 require_orphaned=True,
             )
             await self._reap_by_pattern(
-                "pytest", "pytest", known_pids,
+                "pytest", "pytest",
+                self._snapshot_known_pids(),
                 require_orphaned=True,
             )
         except Exception as exc:

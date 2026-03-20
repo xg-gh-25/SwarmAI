@@ -24,7 +24,7 @@ import { useState, useRef, useEffect, useCallback, useMemo, useLayoutEffect } fr
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
-import type { Message, ContentBlock, StreamEvent, Agent, AgentCreateRequest, ChatSession, SystemPromptMetadata } from '../types';
+import type { Message, ContentBlock, StreamEvent, Agent, AgentCreateRequest, ChatSession } from '../types';
 import { chatService } from '../services/chat';
 import { agentsService } from '../services/agents';
 import { skillsService } from '../services/skills';

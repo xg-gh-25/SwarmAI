@@ -492,8 +492,8 @@ class TestWorkTypeClassification:
         assert _classify_work_type("wireframe for radar page") == "design"
         assert _classify_work_type("Architecture review for new system") == "design"
 
-    def test_default_is_feature(self):
-        assert _classify_work_type("something unrecognizable") == "feature"
+    def test_default_is_other(self):
+        assert _classify_work_type("something unrecognizable") == "other"
 
 
 class TestLearningState:

@@ -27,6 +27,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
 
+from core.session_utils import fuzzy_title_matches_deliverable
+
 logger = logging.getLogger(__name__)
 
 # Module-level compiled regex — used by _detect_temporal_signals and _estimate_thread_age.
@@ -43,7 +45,7 @@ _DATE_REF_RE = re.compile(
 _PRIORITY_EMOJI = {"P0": "BLOCKING", "P1": "IMPORTANT", "P2": "NICE-TO-HAVE"}
 _THREAD_RE = re.compile(
     r"[-*]\s+"           # bullet
-    r"(?:[^\s]+\s+)?"   # optional emoji (e.g. red/yellow/blue circle)
+    r"(?:[\U0001F000-\U0001FFFF\u2600-\u27BF\u2B50-\u2BFF]\s+)?"  # optional emoji (Unicode emoji ranges)
     r"\*\*(.+?)\*\*"    # **title**
     r"\s*\(reported\s+(\d+)x",  # (reported Nx
     re.IGNORECASE,
@@ -176,6 +178,82 @@ def _parse_continue_hints(daily_dir: Path, max_files: int = 2) -> list[str]:
     return hints
 
 
+def _extract_recent_deliverables(daily_dir: Path, max_files: int = 3) -> list[str]:
+    """Extract deliverable lines from recent DailyActivity files.
+
+    Returns lowercased deliverable strings for matching against thread
+    titles.  Reuses the same parsing logic as the distillation hook's
+    effectiveness scoring.
+    """
+    deliverables: list[str] = []
+    if not daily_dir.is_dir():
+        return deliverables
+
+    da_files = sorted(
+        [f for f in daily_dir.glob("*.md") if f.stem[:4].isdigit()],
+        key=lambda f: f.stem,
+        reverse=True,
+    )[:max_files]
+
+    for da_file in da_files:
+        try:
+            content = da_file.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        in_deliverables = False
+        for line in content.splitlines():
+            stripped = line.strip()
+            if stripped == "**Deliverables:**" or stripped.startswith("### Deliverables"):
+                in_deliverables = True
+                continue
+            if in_deliverables and (
+                (stripped.startswith("**") and stripped.endswith(":**"))
+                or stripped.startswith("### ")
+                or stripped.startswith("## ")
+            ):
+                in_deliverables = False
+                continue
+            if in_deliverables and stripped.startswith("- "):
+                deliverables.append(stripped.lstrip("- ").strip().lower())
+
+    return deliverables
+
+
+def _filter_completed_threads(
+    threads: list[dict],
+    daily_dir: Path,
+) -> list[dict]:
+    """Remove threads whose topics appear in recent deliverables.
+
+    Read-time safety net: even if distillation hasn't resolved the
+    thread yet, the briefing won't suggest work that's already done.
+    Uses ≥50% word overlap matching (same heuristic as distillation).
+    """
+    deliverables = _extract_recent_deliverables(daily_dir)
+    if not deliverables:
+        return threads
+
+    deliv_word_sets = [set(d.split()) for d in deliverables]
+    filtered: list[dict] = []
+
+    for t in threads:
+        title = t.get("title", "")
+        title_lower = title.lower()
+
+        completed = fuzzy_title_matches_deliverable(
+            title, deliverables, deliv_word_sets,
+        )
+
+        if not completed:
+            filtered.append(t)
+        else:
+            logger.debug(
+                "Filtered completed thread from briefing: %s", title,
+            )
+
+    return filtered
+
+
 # ---------------------------------------------------------------------------
 # Pattern detection
 # ---------------------------------------------------------------------------
@@ -292,8 +370,11 @@ def _detect_temporal_signals(
                 if full:
                     dt = datetime.strptime(full, "%Y-%m-%d")
                 else:
-                    # Assume current year, month/day format
+                    # Assume current year, month/day format.
+                    # If the resulting date is in the future, try previous year.
                     dt = datetime(now.year, int(m), int(d))
+                    if dt > now:
+                        dt = datetime(now.year - 1, int(m), int(d))
                 if earliest is None or dt < earliest:
                     earliest = dt
             except (ValueError, TypeError):
@@ -364,12 +445,17 @@ def _estimate_thread_age(thread: dict) -> int:
             if full:
                 dt = datetime.strptime(full, "%Y-%m-%d")
             else:
+                # Assume current year, month/day format.
+                # If the resulting date is in the future (e.g. 12/20
+                # referenced in January), try previous year instead.
                 dt = datetime(now.year, int(m), int(d))
+                if dt > now:
+                    dt = datetime(now.year - 1, int(m), int(d))
             if earliest is None or dt < earliest:
                 earliest = dt
         except (ValueError, TypeError):
             continue
-    # Clamp to 0 — future dates (e.g. 12/20 referenced in January) shouldn't go negative
+    # Clamp to 0 — safety net for edge cases
     return max((now - earliest).days, 0) if earliest else 0
 
 
@@ -600,7 +686,7 @@ class LearningState:
     last_briefing_suggested: list[str] = field(default_factory=list)
     item_history: dict[str, dict[str, Any]] = field(default_factory=dict)
     work_type_distribution: dict[str, int] = field(default_factory=lambda: {
-        "feature": 0, "maintenance": 0, "investigation": 0, "design": 0,
+        "feature": 0, "maintenance": 0, "investigation": 0, "design": 0, "other": 0,
     })
     observations: list[dict[str, Any]] = field(default_factory=list)
     # Dedup guard: "stem:sessions_count" of the DailyActivity file last
@@ -676,7 +762,7 @@ def _load_learning_state(workspace_dir: Path) -> LearningState:
             last_briefing_suggested=data.get("last_briefing_suggested", []),
             item_history=data.get("item_history", {}),
             work_type_distribution=data.get("work_type_distribution", {
-                "feature": 0, "maintenance": 0, "investigation": 0, "design": 0,
+                "feature": 0, "maintenance": 0, "investigation": 0, "design": 0, "other": 0,
             }),
             observations=data.get("observations", []),
             last_processed_activity_key=data.get("last_processed_activity_key", ""),
@@ -715,9 +801,17 @@ def _save_learning_state(workspace_dir: Path, state: LearningState) -> None:
     tmp_path = path.with_suffix(".tmp")
     try:
         tmp_path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        # Restrict permissions — file contains behavioral data (work patterns)
+        import os
+        os.chmod(tmp_path, 0o600)
         tmp_path.replace(path)
-    except OSError as exc:
+    except Exception as exc:
         logger.warning("Failed to save proactive_state.json: %s", exc)
+        # Clean up orphaned temp file to avoid stale data on next load
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def _get_signal_highlights(working_directory: str, max_items: int = 3) -> list[str]:
@@ -770,6 +864,21 @@ def _get_signal_highlights(working_directory: str, max_items: int = 3) -> list[s
         summary = item.get("summary", "")
         source = item.get("source", "")
         urgency = item.get("urgency", "")
+
+        # Sanitize fields injected into system prompt — strip markdown
+        # formatting characters and control chars that could alter prompt
+        # interpretation.  signal_digest.json is user-writable.
+        def _sanitize(s: str, max_len: int = 200) -> str:
+            # Strip control characters and excessive markdown
+            s = re.sub(r"[\x00-\x1f\x7f]", "", s)
+            # Collapse multiple asterisks/underscores (prevent bold/italic injection)
+            s = re.sub(r"[*_]{3,}", "**", s)
+            return s[:max_len].strip()
+
+        title = _sanitize(title, 100)
+        summary = _sanitize(summary, 150)
+        source = _sanitize(source, 50)
+        urgency = _sanitize(urgency, 20)
 
         prefix = f"[{urgency}]" if urgency else ""
         source_tag = f" ({source})" if source else ""
@@ -852,7 +961,7 @@ def _classify_work_type(text: str) -> str:
         if score > 0:
             scores[work_type] = score
     if not scores:
-        return "feature"  # default
+        return "other"  # no keyword match — avoid biasing distribution
     return max(scores, key=scores.get)
 
 
@@ -1060,6 +1169,13 @@ def build_session_briefing(
         threads = _parse_open_threads(memory_text)
         continue_hints = _parse_continue_hints(daily_dir)
         signals = _detect_patterns(threads, daily_dir, memory_text)
+
+        # ── Read-time staleness filter ──
+        # Suppress threads whose topics appear in recent deliverables.
+        # This is the safety net for when distillation hasn't run yet
+        # (e.g. first session after a productive one).  See COE: memory
+        # pipeline temporal lag gap (2026-03-19).
+        threads = _filter_completed_threads(threads, daily_dir)
 
         # ── L3: Update learning state from previous session ──
         learning_state = _load_learning_state(workspace)

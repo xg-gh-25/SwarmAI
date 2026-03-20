@@ -61,6 +61,16 @@ export const tauriService = {
     return listen<number | null>('backend-terminated', (event) => callback(event.payload));
   },
 
+  /** Backend died unexpectedly — auto-restart in progress. */
+  async onBackendTerminatedRestarting(callback: (code: number | null) => void): Promise<UnlistenFn> {
+    return listen<number | null>('backend-terminated-restarting', (event) => callback(event.payload));
+  },
+
+  /** Backend auto-restarted on a new port. */
+  async onBackendRestarted(callback: (newPort: number) => void): Promise<UnlistenFn> {
+    return listen<number>('backend-restarted', (event) => callback(event.payload));
+  },
+
   // System dependencies check
   async checkNodejsVersion(): Promise<string> {
     return invoke<string>('check_nodejs_version');
