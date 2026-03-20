@@ -1,12 +1,15 @@
 /**
  * Unit tests for the useTSCCState React hook.
  *
- * Tests the TSCC state management hook that fetches system prompt
- * metadata from the endpoint.
+ * Tests the TSCC state management hook that fetches lifecycle state
+ * and manages per-thread expand/collapse and pin preferences.
+ *
+ * NOTE: System prompt metadata is now delivered via SSE events and
+ * managed by useChatStreamingLifecycle. This hook no longer fetches
+ * metadata — those tests have been removed.
  *
  * Tests include:
  * - Initial state fetch on mount with valid sessionId
- * - System prompt metadata fetch on mount
  * - State reset when sessionId changes
  * - Expand/collapse preference preserved per session
  * - Pin preference preserved per session
@@ -21,11 +24,10 @@ import { renderHook, act, waitFor } from '@testing-library/react';
 // Mock the tscc service before importing the hook
 vi.mock('../../services/tscc', () => ({
   getTSCCState: vi.fn(),
-  getSystemPromptMetadata: vi.fn(),
 }));
 
 import { useTSCCState } from '../useTSCCState';
-import { getTSCCState, getSystemPromptMetadata } from '../../services/tscc';
+import { getTSCCState } from '../../services/tscc';
 import type { TSCCState } from '../../types';
 
 // ---------------------------------------------------------------------------
@@ -51,20 +53,10 @@ const sampleState: TSCCState = {
   },
 };
 
-const sampleMetadata = {
-  files: [
-    { filename: 'SWARMAI.md', tokens: 500, truncated: false },
-    { filename: 'IDENTITY.md', tokens: 200, truncated: false },
-  ],
-  totalTokens: 700,
-  fullText: '# System Prompt',
-};
-
 describe('useTSCCState Hook', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(getTSCCState).mockResolvedValue(sampleState);
-    vi.mocked(getSystemPromptMetadata).mockResolvedValue(sampleMetadata);
   });
 
   describe('initial fetch', () => {
@@ -77,31 +69,18 @@ describe('useTSCCState Hook', () => {
       expect(result.current.tsccState?.threadId).toBe('session-1');
     });
 
-    it('should fetch system prompt metadata on mount', async () => {
-      const { result } = renderHook(() => useTSCCState('session-1'));
-      await waitFor(() => {
-        expect(result.current.promptMetadata).not.toBeNull();
-      });
-      expect(getSystemPromptMetadata).toHaveBeenCalledWith('session-1');
-      expect(result.current.promptMetadata?.totalTokens).toBe(700);
-      expect(result.current.promptMetadata?.files).toHaveLength(2);
-    });
-
     it('should fall back to default state on fetch failure', async () => {
       vi.mocked(getTSCCState).mockRejectedValue(new Error('fail'));
-      vi.mocked(getSystemPromptMetadata).mockRejectedValue(new Error('fail'));
       const { result } = renderHook(() => useTSCCState('session-1'));
       await waitFor(() => {
         expect(result.current.tsccState).not.toBeNull();
       });
       expect(result.current.tsccState?.lifecycleState).toBe('new');
-      expect(result.current.promptMetadata).toBeNull();
     });
 
     it('should return null state when sessionId is null', () => {
       const { result } = renderHook(() => useTSCCState(null));
       expect(result.current.tsccState).toBeNull();
-      expect(result.current.promptMetadata).toBeNull();
     });
   });
 
@@ -153,6 +132,5 @@ describe('useTSCCState Hook', () => {
       act(() => { result.current.togglePin(); });
       expect(result.current.isPinned).toBe(true);
     });
-
   });
 });

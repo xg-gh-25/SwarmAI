@@ -237,8 +237,22 @@ class SessionUnit:
 
     # ── State management ─────────────────────────────────────────
 
+    # Valid state transitions.  Any transition not listed here is a bug.
+    _VALID_TRANSITIONS: dict[SessionState, set[SessionState]] = {
+        SessionState.COLD: {SessionState.IDLE, SessionState.DEAD},
+        SessionState.IDLE: {SessionState.STREAMING, SessionState.COLD, SessionState.DEAD},
+        SessionState.STREAMING: {SessionState.IDLE, SessionState.WAITING_INPUT, SessionState.COLD, SessionState.DEAD},
+        SessionState.WAITING_INPUT: {SessionState.STREAMING, SessionState.IDLE, SessionState.COLD, SessionState.DEAD},
+        SessionState.DEAD: {SessionState.COLD},  # resurrection after cleanup
+    }
+
     def _transition(self, new_state: SessionState) -> None:
-        """Atomic state transition with structured logging.
+        """Atomic state transition with validation and structured logging.
+
+        Raises ``RuntimeError`` if the transition is not in
+        ``_VALID_TRANSITIONS`` — this catches bugs like COLD→STREAMING
+        (which skips spawn) at the source rather than surfacing as
+        a mysterious "No client available" downstream.
 
         Log format::
 
@@ -249,6 +263,16 @@ class SessionUnit:
         the new state.
         """
         old_state = self.state
+
+        # Validate transition
+        valid = self._VALID_TRANSITIONS.get(old_state, set())
+        if new_state not in valid:
+            raise RuntimeError(
+                f"Invalid state transition {old_state.value}→{new_state.value} "
+                f"for session {self.session_id}. "
+                f"Valid from {old_state.value}: {sorted(s.value for s in valid)}"
+            )
+
         self.state = new_state
 
         # Reset hook tracking when entering STREAMING — the next IDLE
@@ -410,11 +434,52 @@ class SessionUnit:
                 error_str = str(exc)
                 if _is_retriable_error(error_str):
                     logger.warning(
-                        "Retriable error during spawn for session %s: %s",
-                        self.session_id, error_str[:120],
+                        "Retriable error during spawn for session %s, "
+                        "will retry (attempt %d/%d): %s",
+                        self.session_id,
+                        self._retry_count + 1,
+                        self.MAX_RETRY_ATTEMPTS,
+                        error_str[:120],
                     )
-                    # Fall through to retry loop below
+                    # Retry spawn with backoff (same logic as streaming retry)
                     self._crash_to_cold()
+                    while (
+                        _is_retriable_error(error_str)
+                        and self._retry_count < self.MAX_RETRY_ATTEMPTS
+                    ):
+                        self._retry_count += 1
+                        is_oom = _is_oom_signal(error_str)
+                        backoff = 30.0 if is_oom else min(
+                            15 * (2 ** (self._retry_count - 1)), 60
+                        )
+                        logger.info(
+                            "session_unit.spawn_retry session_id=%s "
+                            "attempt=%d/%d backoff=%.1fs oom=%s",
+                            self.session_id, self._retry_count,
+                            self.MAX_RETRY_ATTEMPTS, backoff, is_oom,
+                        )
+                        yield {
+                            "type": "status",
+                            "message": f"Reconnecting (attempt {self._retry_count}/{self.MAX_RETRY_ATTEMPTS})...",
+                            "code": "RETRY_SPAWN",
+                        }
+                        await asyncio.sleep(backoff)
+                        try:
+                            await self._spawn(options, config)
+                            error_str = ""  # success — exit loop
+                        except Exception as retry_exc:
+                            error_str = str(retry_exc)
+                            self._crash_to_cold()
+                    # If all retries exhausted, yield error and bail
+                    if self.state == SessionState.COLD:
+                        friendly, suggested = _sanitize_sdk_error(error_str)
+                        yield _build_error_event(
+                            code="SPAWN_FAILED",
+                            message=friendly,
+                            detail=error_str,
+                            suggested_action=suggested,
+                        )
+                        return
                 else:
                     self._crash_to_cold(clear_identity=True)
                     friendly, suggested = _sanitize_sdk_error(error_str)
@@ -966,11 +1031,12 @@ class SessionUnit:
                     } if usage else None,
                 }
 
-                # ── Context usage warning bridge ───────────────────
+                # ── Context usage & metadata bridge ────────────────
                 # Read input_tokens from the result event and emit a
-                # context_warning SSE event if above 70% of the model's
-                # context window.  This wires the dead-code warning
-                # builder into the live streaming path.
+                # context_warning SSE event at all usage levels (ok,
+                # warn, critical).  Also emit system_prompt_metadata
+                # so the frontend TSCC popover gets data via the same
+                # SSE pipeline — no separate API fetch needed.
                 input_tokens = (usage.get("input_tokens") if usage else None)
                 if input_tokens and input_tokens > 0:
                     try:
@@ -978,10 +1044,21 @@ class SessionUnit:
                         warning_evt = PromptBuilder.build_context_warning(
                             input_tokens, self._model_name
                         )
-                        if warning_evt and warning_evt.get("level") != "ok":
+                        if warning_evt:
                             yield warning_evt
                     except Exception:
                         pass  # Never block on warning failure
+
+                # Emit system prompt metadata for TSCC popover
+                try:
+                    from . import session_registry
+                    spm = session_registry.system_prompt_metadata.get(
+                        self.session_id
+                    )
+                    if spm:
+                        yield {"type": "system_prompt_metadata", **spm}
+                except Exception:
+                    pass  # Never block on metadata failure
 
                 self._transition(SessionState.IDLE)
                 self.last_used = time.time()
