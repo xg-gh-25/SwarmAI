@@ -725,6 +725,8 @@ class ContextDirectoryLoader:
 
     # Class-level TTL cache for git status freshness check.
     # Prevents forking a subprocess per chat message (~15s TTL).
+    # Thread-safety: not thread-safe, but fine — asyncio runs on a single
+    # thread, so concurrent coroutines never race on dict mutations.
     _git_fresh_cache: dict[str, tuple[float, bool]] = {}
     _GIT_FRESH_TTL: float = 15.0
 

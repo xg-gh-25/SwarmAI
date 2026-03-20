@@ -208,14 +208,15 @@ export const chatService = {
     })
       .then(async (response) => {
         if (!response.ok) {
-          // Try to parse error response from backend
+          // Extract backend error detail if available
+          let errorMessage = `HTTP error! status: ${response.status}`;
           try {
             const errorData = await response.json();
-            const errorMessage = errorData.detail || errorData.message || `HTTP error! status: ${response.status}`;
-            throw new Error(errorMessage);
+            errorMessage = errorData.detail || errorData.message || errorMessage;
           } catch {
-            throw new Error(`HTTP error! status: ${response.status}`);
+            // JSON parse failed — keep generic message
           }
+          throw new Error(errorMessage);
         }
 
         const reader = response.body?.getReader();
@@ -398,13 +399,14 @@ export const chatService = {
     })
       .then(async (response) => {
         if (!response.ok) {
+          let errorMessage = `HTTP error! status: ${response.status}`;
           try {
             const errorData = await response.json();
-            const errorMessage = errorData.detail || errorData.message || `HTTP error! status: ${response.status}`;
-            throw new Error(errorMessage);
+            errorMessage = errorData.detail || errorData.message || errorMessage;
           } catch {
-            throw new Error(`HTTP error! status: ${response.status}`);
+            // JSON parse failed — keep generic message
           }
+          throw new Error(errorMessage);
         }
 
         const reader = response.body?.getReader();
@@ -535,13 +537,14 @@ export const chatService = {
     })
       .then(async (response) => {
         if (!response.ok) {
+          let errorMessage = `HTTP error! status: ${response.status}`;
           try {
             const errorData = await response.json();
-            const errorMessage = errorData.detail || errorData.message || `HTTP error! status: ${response.status}`;
-            throw new Error(errorMessage);
+            errorMessage = errorData.detail || errorData.message || errorMessage;
           } catch {
-            throw new Error(`HTTP error! status: ${response.status}`);
+            // JSON parse failed — keep generic message
           }
+          throw new Error(errorMessage);
         }
 
         const reader = response.body?.getReader();
