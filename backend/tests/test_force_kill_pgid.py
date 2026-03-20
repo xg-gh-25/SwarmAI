@@ -23,7 +23,8 @@ def _make_unit(pid: int = 1234) -> SessionUnit:
     unit._wrapper = MagicMock()
     unit._wrapper.pid = pid
     unit._wrapper.__aexit__ = AsyncMock()
-    unit._transition(SessionState.STREAMING)
+    unit._transition(SessionState.IDLE)       # COLD→IDLE
+    unit._transition(SessionState.STREAMING)   # IDLE→STREAMING
     return unit
 
 

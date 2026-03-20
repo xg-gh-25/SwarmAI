@@ -127,7 +127,8 @@ def _make_result_message(input_tokens: int, output_tokens: int = 200):
 def _make_unit(session_id: str = "test-nameerror-bug") -> SessionUnit:
     """Create a SessionUnit in STREAMING state with a mocked client."""
     unit = SessionUnit(session_id=session_id, agent_id="default")
-    unit._transition(SessionState.STREAMING)
+    unit._transition(SessionState.IDLE)       # COLD→IDLE
+    unit._transition(SessionState.STREAMING)   # IDLE→STREAMING
     return unit
 
 

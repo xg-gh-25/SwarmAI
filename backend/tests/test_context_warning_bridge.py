@@ -105,7 +105,8 @@ def _make_unit(session_id="test-cw", model_name="claude-sonnet-4-6"):
     """Create a SessionUnit in STREAMING state with _model_name set."""
     unit = SessionUnit(session_id=session_id, agent_id="default")
     unit._model_name = model_name
-    unit._transition(SessionState.STREAMING)
+    unit._transition(SessionState.IDLE)       # COLD→IDLE
+    unit._transition(SessionState.STREAMING)   # IDLE→STREAMING
     return unit
 
 

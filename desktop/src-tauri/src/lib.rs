@@ -253,6 +253,9 @@ struct BackendState {
     port: u16,
     running: bool,
     pid: Option<u32>,  // Store PID for process tree cleanup on Windows
+    /// Set to `true` when shutdown is intentional (stop_backend, window close, app exit).
+    /// Prevents the terminated-event handler from auto-restarting.
+    intentional_shutdown: bool,
 }
 
 impl Default for BackendState {
@@ -262,6 +265,7 @@ impl Default for BackendState {
             port: 8000,
             running: false,
             pid: None,
+            intentional_shutdown: false,
         }
     }
 }
@@ -270,6 +274,14 @@ impl Default for BackendState {
 /// Covers: HookContext build (~1s) + DailyActivity batch (~5s) + drain (~8s).
 /// The curl/PowerShell timeout is set to this value.
 const SHUTDOWN_GRACE_SECONDS: u64 = 10;
+
+/// Maximum number of automatic restart attempts before giving up.
+/// Prevents infinite restart loops when the backend consistently crashes.
+const MAX_AUTO_RESTARTS: u32 = 3;
+
+/// Time window (seconds) for counting restart attempts.
+/// Restart counter resets if the backend survives longer than this.
+const RESTART_WINDOW_SECS: u64 = 60;
 
 /// Post-shutdown sleep (seconds) for the manual `stop_backend` command.
 /// Proportional to SHUTDOWN_GRACE_SECONDS for manual stop operations.
@@ -420,6 +432,139 @@ pub struct BackendStatus {
     port: u16,
 }
 
+/// Handle sidecar stdout/stderr/terminated events in a loop.
+///
+/// On unexpected termination (intentional_shutdown == false), waits 2 seconds
+/// then spawns a fresh sidecar on a new port and loops back to handle the new
+/// receiver. Uses iteration (not recursion) to avoid non-Send future issues.
+///
+/// Restart cap: at most `MAX_AUTO_RESTARTS` within a `RESTART_WINDOW_SECS`
+/// sliding window. If the backend survives beyond the window, the counter
+/// resets — so a one-off crash after hours of uptime gets a fresh budget.
+async fn handle_sidecar_output(
+    rx: tauri::async_runtime::Receiver<tauri_plugin_shell::process::CommandEvent>,
+    app_handle: tauri::AppHandle,
+    state: SharedBackendState,
+) {
+    use tauri_plugin_shell::process::CommandEvent;
+
+    let mut current_rx = rx;
+    let mut restart_count: u32 = 0;
+    let mut window_start = std::time::Instant::now();
+
+    loop {
+        let mut should_restart = false;
+
+        while let Some(event) = current_rx.recv().await {
+            match event {
+                CommandEvent::Stdout(line) => {
+                    let _ = app_handle.emit("backend-log", String::from_utf8_lossy(&line).to_string());
+                }
+                CommandEvent::Stderr(line) => {
+                    let _ = app_handle.emit("backend-error", String::from_utf8_lossy(&line).to_string());
+                }
+                CommandEvent::Terminated(payload) => {
+                    let was_intentional = {
+                        let mut backend = state.lock().await;
+                        let intentional = backend.intentional_shutdown;
+                        backend.running = false;
+                        backend.child = None;
+                        backend.pid = None;
+                        intentional
+                    };
+
+                    if was_intentional {
+                        println!("[Tauri] Backend terminated intentionally (exit code: {:?})", payload.code);
+                        let _ = app_handle.emit("backend-terminated", payload.code);
+                        return; // Done — no restart needed
+                    }
+
+                    // --- Restart budget check ---
+                    // Reset counter if the backend survived past the window
+                    if window_start.elapsed().as_secs() > RESTART_WINDOW_SECS {
+                        restart_count = 0;
+                        window_start = std::time::Instant::now();
+                    }
+
+                    restart_count += 1;
+                    if restart_count > MAX_AUTO_RESTARTS {
+                        eprintln!(
+                            "[Tauri] Backend crashed {} times within {}s — giving up auto-restart",
+                            restart_count, RESTART_WINDOW_SECS
+                        );
+                        let _ = app_handle.emit("backend-terminated", payload.code);
+                        return; // Exhausted restart budget
+                    }
+
+                    // Unexpected death (e.g. killed by external pkill, OOM, crash)
+                    println!(
+                        "[Tauri] Backend terminated UNEXPECTEDLY (exit code: {:?}) — auto-restart {}/{}",
+                        payload.code, restart_count, MAX_AUTO_RESTARTS
+                    );
+                    let _ = app_handle.emit("backend-terminated-restarting", payload.code);
+
+                    // Exponential backoff: 2s, 4s, 8s for attempts 1, 2, 3
+                    let backoff_secs = 2u64.pow(restart_count);
+                    tokio::time::sleep(tokio::time::Duration::from_secs(backoff_secs)).await;
+
+                    // Auto-restart: pick new port, re-spawn sidecar
+                    let new_port = match portpicker::pick_unused_port() {
+                        Some(p) => p,
+                        None => {
+                            eprintln!("[Tauri] No available port for backend restart — giving up");
+                            let _ = app_handle.emit("backend-terminated", payload.code);
+                            return;
+                        }
+                    };
+                    let enhanced_path = get_enhanced_path();
+
+                    match app_handle
+                        .shell()
+                        .sidecar("python-backend")
+                        .map(|cmd| cmd.args(["--port", &new_port.to_string()]).env("PATH", &enhanced_path))
+                    {
+                        Ok(sidecar_cmd) => match sidecar_cmd.spawn() {
+                            Ok((new_rx, new_child)) => {
+                                let new_pid = new_child.pid();
+                                {
+                                    let mut backend = state.lock().await;
+                                    backend.child = Some(new_child);
+                                    backend.port = new_port;
+                                    backend.running = true;
+                                    backend.pid = Some(new_pid);
+                                    backend.intentional_shutdown = false;
+                                }
+                                println!("[Tauri] Backend auto-restarted on port {} (PID: {})", new_port, new_pid);
+                                let _ = app_handle.emit("backend-restarted", new_port);
+
+                                // Loop back with the new receiver
+                                current_rx = new_rx;
+                                should_restart = true;
+                            }
+                            Err(e) => {
+                                eprintln!("[Tauri] Failed to auto-restart backend: {}", e);
+                                let _ = app_handle.emit("backend-terminated", payload.code);
+                                return; // Give up
+                            }
+                        },
+                        Err(e) => {
+                            eprintln!("[Tauri] Failed to create sidecar command for restart: {}", e);
+                            let _ = app_handle.emit("backend-terminated", payload.code);
+                            return; // Give up
+                        }
+                    }
+                    break; // Break inner loop to restart outer loop with new rx
+                }
+                _ => {}
+            }
+        }
+
+        if !should_restart {
+            return; // Receiver closed without termination event — nothing to do
+        }
+    }
+}
+
 /// Gracefully shut down the backend and then force-kill as safety net.
 ///
 /// Mirrors the `stop_backend` command pattern:
@@ -439,7 +584,8 @@ fn graceful_shutdown_and_kill(state: SharedBackendState, context: &str) {
         let pid = backend.pid;
         let child = backend.child.take();
 
-        // Mark as not running under lock — prevents double-fire
+        // Mark as intentional + not running under lock — prevents double-fire and auto-restart
+        backend.intentional_shutdown = true;
         backend.running = false;
         backend.pid = None;
         drop(backend); // Release lock before blocking I/O
@@ -482,7 +628,8 @@ async fn start_backend(
     }
 
     // Find an available port
-    let port = portpicker::pick_unused_port().unwrap_or(8000);
+    let port = portpicker::pick_unused_port()
+        .ok_or_else(|| "No available port for backend".to_string())?;
 
     // Get enhanced PATH for the sidecar
     let enhanced_path = get_enhanced_path();
@@ -495,7 +642,7 @@ async fn start_backend(
         .args(["--port", &port.to_string()])
         .env("PATH", enhanced_path);
 
-    let (mut rx, child) = sidecar
+    let (rx, child) = sidecar
         .spawn()
         .map_err(|e| format!("Failed to spawn sidecar: {}", e))?;
 
@@ -509,33 +656,14 @@ async fn start_backend(
         backend.port = port;
         backend.running = true;
         backend.pid = Some(pid);
+        backend.intentional_shutdown = false;
     }
 
-    // Spawn a task to handle sidecar output
+    // Delegate sidecar output + auto-restart handling to the standalone function
     let app_handle = app.clone();
     let state_clone = state.inner().clone();
     tauri::async_runtime::spawn(async move {
-        use tauri_plugin_shell::process::CommandEvent;
-        while let Some(event) = rx.recv().await {
-            match event {
-                CommandEvent::Stdout(line) => {
-                    let _ = app_handle.emit("backend-log", String::from_utf8_lossy(&line).to_string());
-                }
-                CommandEvent::Stderr(line) => {
-                    let _ = app_handle.emit("backend-error", String::from_utf8_lossy(&line).to_string());
-                }
-                CommandEvent::Terminated(payload) => {
-                    let _ = app_handle.emit("backend-terminated", payload.code);
-                    // Update state when backend terminates
-                    let mut backend = state_clone.lock().await;
-                    backend.running = false;
-                    backend.child = None;
-                    backend.pid = None;
-                    break;
-                }
-                _ => {}
-            }
-        }
+        handle_sidecar_output(rx, app_handle, state_clone).await;
     });
 
     // Poll the /health endpoint until the backend reports "healthy"
@@ -595,7 +723,8 @@ async fn stop_backend(state: tauri::State<'_, SharedBackendState>) -> Result<(),
         let pid = backend.pid;
         let child = backend.child.take();
 
-        // Mark as not running immediately to prevent concurrent operations
+        // Mark as intentional + not running to prevent auto-restart and concurrent operations
+        backend.intentional_shutdown = true;
         backend.running = false;
         backend.pid = None;
 

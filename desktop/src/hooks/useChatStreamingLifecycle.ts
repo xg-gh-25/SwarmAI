@@ -1332,17 +1332,14 @@ export function useChatStreamingLifecycle(
             }
             // Fallback: find the last assistant message (may have different ID
             // due to race between tabState ref writes and React state updates)
-            const lastAssistantIdx = prev.reduce(
-              (lastIdx, msg, idx) => (msg.role === 'assistant' ? idx : lastIdx),
-              -1,
-            );
-            if (lastAssistantIdx >= 0) {
+            const lastAssistant = findLast(prev, (m) => m.role === 'assistant');
+            if (lastAssistant) {
               console.warn('[StreamHandler] assistantMessageId not found, appending error to last assistant message', {
                 expected: assistantMessageId,
-                actual: prev[lastAssistantIdx].id,
+                actual: lastAssistant.id,
               });
-              return prev.map((msg, idx) =>
-                idx === lastAssistantIdx
+              return prev.map((msg) =>
+                msg === lastAssistant
                   ? { ...msg, isError: true, content: [...msg.content, ...errorContent] }
                   : msg,
               );
@@ -1609,17 +1606,14 @@ export function useChatStreamingLifecycle(
             return updated;
           }
           // Fallback: find the last assistant message (race condition guard)
-          const lastAssistantIdx = prev.reduce(
-            (lastIdx, msg, idx) => (msg.role === 'assistant' ? idx : lastIdx),
-            -1,
-          );
-          if (lastAssistantIdx >= 0) {
+          const lastAssistant = findLast(prev, (m) => m.role === 'assistant');
+          if (lastAssistant) {
             console.warn('[ErrorHandler] assistantMessageId not found, appending error to last assistant message', {
               expected: assistantMessageId,
-              actual: prev[lastAssistantIdx].id,
+              actual: lastAssistant.id,
             });
-            return prev.map((msg, idx) =>
-              idx === lastAssistantIdx
+            return prev.map((msg) =>
+              msg === lastAssistant
                 ? { ...msg, content: [...msg.content, ...errorContent], isError: true }
                 : msg,
             );

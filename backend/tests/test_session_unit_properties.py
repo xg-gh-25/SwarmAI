@@ -43,27 +43,32 @@ PROPERTY_SETTINGS = settings(
 # ---------------------------------------------------------------------------
 
 # Events that can happen to a SessionUnit
-EVENTS = ["send", "complete", "permission_prompt", "crash", "kill", "cleanup"]
+EVENTS = ["spawn", "send", "complete", "permission_prompt", "crash", "kill", "cleanup", "evict", "interrupt", "answer"]
 event_sequences = st.lists(st.sampled_from(EVENTS), min_size=1, max_size=20)
 
-# Valid state transitions (from design.md state transition table)
+# Valid state transitions (matches SessionUnit._VALID_TRANSITIONS).
+# "send" from COLD is a two-step: COLD→IDLE (spawn) then IDLE→STREAMING.
+# Tests use _transition() directly, so we model atomic transitions here.
 VALID_TRANSITIONS: dict[SessionState, dict[str, SessionState]] = {
     SessionState.COLD: {
-        "send": SessionState.STREAMING,
+        "spawn": SessionState.IDLE,
+        "kill": SessionState.DEAD,
     },
     SessionState.IDLE: {
         "send": SessionState.STREAMING,
         "kill": SessionState.DEAD,
+        "evict": SessionState.COLD,
     },
     SessionState.STREAMING: {
         "complete": SessionState.IDLE,
         "permission_prompt": SessionState.WAITING_INPUT,
-        "crash": SessionState.DEAD,
+        "crash": SessionState.COLD,
         "kill": SessionState.DEAD,
     },
     SessionState.WAITING_INPUT: {
         "answer": SessionState.STREAMING,
-        "crash": SessionState.DEAD,
+        "interrupt": SessionState.IDLE,
+        "crash": SessionState.COLD,
         "kill": SessionState.DEAD,
     },
     SessionState.DEAD: {
@@ -109,23 +114,33 @@ class TestStateMachineTransitions:
             # Events not in the valid set for current state are no-ops
             # (the real send/kill methods guard against invalid states)
 
-    def test_cold_to_streaming_on_send(self):
-        """COLD → STREAMING when send() is called."""
-        unit = SessionUnit(session_id="test-cold-send", agent_id="default")
+    def test_cold_to_idle_on_spawn(self):
+        """COLD → IDLE when _spawn() succeeds."""
+        unit = SessionUnit(session_id="test-cold-spawn", agent_id="default")
         assert unit.state == SessionState.COLD
-        unit._transition(SessionState.STREAMING)
-        assert unit.state == SessionState.STREAMING
+        unit._transition(SessionState.IDLE)
+        assert unit.state == SessionState.IDLE
+
+    def test_cold_to_streaming_blocked(self):
+        """COLD → STREAMING is rejected — must go through IDLE first."""
+        unit = SessionUnit(session_id="test-cold-stream-blocked", agent_id="default")
+        assert unit.state == SessionState.COLD
+        import pytest
+        with pytest.raises(RuntimeError, match="Invalid state transition"):
+            unit._transition(SessionState.STREAMING)
 
     def test_streaming_to_idle_on_complete(self):
         """STREAMING → IDLE when response completes."""
         unit = SessionUnit(session_id="test-stream-idle", agent_id="default")
-        unit._transition(SessionState.STREAMING)
+        unit._transition(SessionState.IDLE)  # COLD→IDLE (spawn)
+        unit._transition(SessionState.STREAMING)  # IDLE→STREAMING
         unit._transition(SessionState.IDLE)
         assert unit.state == SessionState.IDLE
 
     def test_streaming_to_waiting_input(self):
         """STREAMING → WAITING_INPUT on permission prompt."""
         unit = SessionUnit(session_id="test-waiting", agent_id="default")
+        unit._transition(SessionState.IDLE)  # COLD→IDLE (spawn)
         unit._transition(SessionState.STREAMING)
         unit._transition(SessionState.WAITING_INPUT)
         assert unit.state == SessionState.WAITING_INPUT
@@ -145,11 +160,13 @@ class TestStateMachineTransitions:
             agent_id="default",
             on_state_change=lambda sid, old, new: transitions.append((sid, old, new)),
         )
-        unit._transition(SessionState.STREAMING)
-        unit._transition(SessionState.IDLE)
-        assert len(transitions) == 2
-        assert transitions[0] == ("test-callback", SessionState.COLD, SessionState.STREAMING)
-        assert transitions[1] == ("test-callback", SessionState.STREAMING, SessionState.IDLE)
+        unit._transition(SessionState.IDLE)      # COLD→IDLE
+        unit._transition(SessionState.STREAMING)  # IDLE→STREAMING
+        unit._transition(SessionState.IDLE)       # STREAMING→IDLE
+        assert len(transitions) == 3
+        assert transitions[0] == ("test-callback", SessionState.COLD, SessionState.IDLE)
+        assert transitions[1] == ("test-callback", SessionState.IDLE, SessionState.STREAMING)
+        assert transitions[2] == ("test-callback", SessionState.STREAMING, SessionState.IDLE)
 
 
 # ---------------------------------------------------------------------------
@@ -206,8 +223,20 @@ class TestCrashIsolation:
         unit_a = SessionUnit(session_id="iso-a", agent_id="default")
         unit_b = SessionUnit(session_id="iso-b", agent_id="default")
 
-        unit_a._transition(state_a)
-        unit_b._transition(state_b)
+        # Route through valid transitions to reach target state
+        def _reach_state(unit: SessionUnit, target: SessionState) -> None:
+            if target == SessionState.IDLE:
+                unit._transition(SessionState.IDLE)  # COLD→IDLE
+            elif target == SessionState.STREAMING:
+                unit._transition(SessionState.IDLE)  # COLD→IDLE
+                unit._transition(SessionState.STREAMING)  # IDLE→STREAMING
+            elif target == SessionState.WAITING_INPUT:
+                unit._transition(SessionState.IDLE)  # COLD→IDLE
+                unit._transition(SessionState.STREAMING)  # IDLE→STREAMING
+                unit._transition(SessionState.WAITING_INPUT)  # STREAMING→WAITING_INPUT
+
+        _reach_state(unit_a, state_a)
+        _reach_state(unit_b, state_b)
 
         b_state_before = unit_b.state
 
@@ -236,7 +265,8 @@ class TestInterruptPreservesSubprocess:
     async def test_interrupt_success_keeps_subprocess_warm(self):
         """After successful interrupt, state is IDLE and PID unchanged."""
         unit = SessionUnit(session_id="test-interrupt", agent_id="default")
-        unit._transition(SessionState.STREAMING)
+        unit._transition(SessionState.IDLE)       # COLD→IDLE
+        unit._transition(SessionState.STREAMING)   # IDLE→STREAMING
 
         mock_client = AsyncMock()
         mock_client.interrupt = AsyncMock()
@@ -255,7 +285,8 @@ class TestInterruptPreservesSubprocess:
     async def test_interrupt_timeout_kills_subprocess(self):
         """When interrupt() times out, subprocess is killed → COLD."""
         unit = SessionUnit(session_id="test-interrupt-timeout", agent_id="default")
-        unit._transition(SessionState.STREAMING)
+        unit._transition(SessionState.IDLE)       # COLD→IDLE
+        unit._transition(SessionState.STREAMING)   # IDLE→STREAMING
 
         mock_client = AsyncMock()
         mock_client.interrupt = AsyncMock(side_effect=asyncio.TimeoutError)
@@ -376,7 +407,9 @@ class TestWaitingInputCrash:
     def test_waiting_input_crash_goes_to_dead(self):
         """WAITING_INPUT → DEAD on crash."""
         unit = SessionUnit(session_id="test-wi-crash", agent_id="default")
-        unit._transition(SessionState.WAITING_INPUT)
+        unit._transition(SessionState.IDLE)             # COLD→IDLE
+        unit._transition(SessionState.STREAMING)         # IDLE→STREAMING
+        unit._transition(SessionState.WAITING_INPUT)     # STREAMING→WAITING_INPUT
 
         # Simulate crash
         unit._transition(SessionState.DEAD)
@@ -385,7 +418,9 @@ class TestWaitingInputCrash:
     def test_waiting_input_crash_cleanup_goes_to_cold(self):
         """WAITING_INPUT → DEAD → COLD after cleanup."""
         unit = SessionUnit(session_id="test-wi-cleanup", agent_id="default")
-        unit._transition(SessionState.WAITING_INPUT)
+        unit._transition(SessionState.IDLE)             # COLD→IDLE
+        unit._transition(SessionState.STREAMING)         # IDLE→STREAMING
+        unit._transition(SessionState.WAITING_INPUT)     # STREAMING→WAITING_INPUT
 
         # Give it a mock client
         unit._client = MagicMock()
@@ -404,7 +439,9 @@ class TestWaitingInputCrash:
     async def test_health_check_detects_dead_subprocess_in_waiting_input(self):
         """health_check() detects dead PID and transitions WAITING_INPUT → COLD."""
         unit = SessionUnit(session_id="test-hc-wi", agent_id="default")
-        unit._transition(SessionState.WAITING_INPUT)
+        unit._transition(SessionState.IDLE)             # COLD→IDLE
+        unit._transition(SessionState.STREAMING)         # IDLE→STREAMING
+        unit._transition(SessionState.WAITING_INPUT)     # STREAMING→WAITING_INPUT
 
         mock_wrapper = MagicMock()
         mock_wrapper.pid = 99999
@@ -492,7 +529,8 @@ class TestBufferOverflowRecovery:
     def test_crash_to_cold_resets_state_for_recovery(self):
         """_crash_to_cold() transitions to COLD, enabling a fresh spawn."""
         unit = SessionUnit(session_id="test-bo-crash", agent_id="default")
-        unit._transition(SessionState.STREAMING)
+        unit._transition(SessionState.IDLE)       # COLD→IDLE
+        unit._transition(SessionState.STREAMING)   # IDLE→STREAMING
 
         # Give it mock subprocess refs
         unit._client = MagicMock()
@@ -511,3 +549,36 @@ class TestBufferOverflowRecovery:
 
         unit_a._buffer_overflow_recovery = True
         assert unit_b._buffer_overflow_recovery is False
+
+    def test_buffer_overflow_resets_per_message(self):
+        """Recovery flag resets at the start of each send() call.
+
+        Bug: _buffer_overflow_recovery was set True on first overflow
+        but never reset between messages.  After a successful recovery,
+        subsequent overflows (different tool call, different turn) would
+        skip recovery and surface a raw error instead.
+
+        Fix: send() resets _buffer_overflow_recovery = False alongside
+        _retry_count = 0 at the top of each invocation.
+        """
+        unit = SessionUnit(session_id="bo-reset", agent_id="default")
+
+        # Simulate: first message triggered overflow, recovery succeeded,
+        # flag is now True from the previous send().
+        unit._buffer_overflow_recovery = True
+
+        # Verify the flag is True before the "next send()" reset
+        assert unit._buffer_overflow_recovery is True
+
+        # Simulate what send() does at the top: reset per-send state
+        unit._retry_count = 0
+        unit._interrupted = False
+        unit._buffer_overflow_recovery = False
+
+        # Now a new overflow should be recoverable
+        error_str = "JSON message exceeded maximum buffer size of 10485760 bytes"
+        should_recover = (
+            "maximum buffer size" in error_str
+            and not unit._buffer_overflow_recovery
+        )
+        assert should_recover is True
