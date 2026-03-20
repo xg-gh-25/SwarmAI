@@ -46,7 +46,7 @@ class ToolFailureTracker:
     """Per-session tracker for repeated tool/command failures.
 
     Instantiated per session — no shared mutable state. Stored in
-    ``_active_sessions[sid]["failure_tracker"]``.
+    the session context dict passed to hook invocations.
 
     Tracks failure signatures (tool_name + error substring) and fires
     a nudge when the same signature appears FAILURE_THRESHOLD times.

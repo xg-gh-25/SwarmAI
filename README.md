@@ -220,8 +220,8 @@ SwarmAI/
 │
 ├── backend/                 # FastAPI backend (Python)
 │   ├── main.py              # Entry point with fast startup / full init paths
-│   ├── core/                # Business logic (agent_manager, context_directory_loader,
-│   │                        #   skill_manager, security_hooks, cmd_permission_manager, etc.)
+│   ├── core/                # Business logic (session_router, session_unit, prompt_builder,
+│   │                        #   context_directory_loader, skill_manager, security_hooks, etc.)
 │   ├── routers/             # API routes (agents, chat, skills, mcp, plugins, settings, etc.)
 │   ├── context/             # Default context file templates (12 files)
 │   ├── skills/              # Built-in skill definitions

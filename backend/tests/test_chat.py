@@ -182,7 +182,7 @@ class TestChatStreamAsync:
         # For valid agent, should return streaming response
         # Since default agent exists, this should work
         # The actual streaming test requires more setup with mock agent
-        assert response.status_code in [200, 404]  # 404 if agent_manager not configured
+        assert response.status_code in [200, 404]  # 404 if session infrastructure not configured
 
 
 class TestChatErrorHandling:

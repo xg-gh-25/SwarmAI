@@ -1,6 +1,6 @@
 ---
 inclusion: fileMatch
-fileMatchPattern: "backend/core/agent_manager.py,backend/core/session_manager.py,backend/core/permission_manager.py,backend/core/security_hooks.py,backend/routers/chat.py"
+fileMatchPattern: "backend/core/session_router.py,backend/core/session_unit.py,backend/core/session_registry.py,backend/core/session_manager.py,backend/core/permission_manager.py,backend/core/security_hooks.py,backend/routers/chat.py"
 ---
 
 # Session Identity and Backend Isolation Principles

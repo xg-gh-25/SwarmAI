@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 class HookContext:
     """Immutable context passed to every post-session-close hook.
 
-    Built from ``_active_sessions`` dict (for TTL / shutdown triggers)
+    Built from ``SessionUnit`` state (for TTL / shutdown triggers)
     or from the database (for explicit delete trigger).
 
     Attributes:
