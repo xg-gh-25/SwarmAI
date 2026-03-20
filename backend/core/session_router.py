@@ -328,6 +328,7 @@ class SessionRouter:
             enable_mcp=enable_mcp,
             resume_session_id=unit._sdk_session_id,
             channel_context=channel_context,
+            editor_context=editor_context,
         )
 
         # Copy system prompt metadata to registry for TSCC viewer
