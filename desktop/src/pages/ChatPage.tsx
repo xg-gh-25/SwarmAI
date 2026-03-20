@@ -49,6 +49,7 @@ import { RadarSidebar } from './chat/components/RightSidebar';
 
 import { groupSessionsByTime } from './chat/utils';
 import { EXPLORER_ATTACH_FILE, EXPLORER_ASK_ABOUT_FILE } from '../constants/explorerEvents';
+import { CLAUDE_NATIVE_IMAGE_MIMES } from '../utils/fileClassification';
 
 /**
  * Re-export ``deriveStreamingActivity`` and ``MAX_OPEN_TABS`` from the
@@ -936,17 +937,39 @@ export default function ChatPage() {
         if (att.error || att.isLoading) continue;
 
         switch (att.deliveryStrategy) {
-          case 'base64_image':
+          case 'base64_image': {
+            // Claude API image blocks only accept jpeg/png/gif/webp.
+            // Guard: reject unsupported image types (should not reach here after
+            // determineDeliveryStrategy fix, but defend in depth).
+            const imgMime = (att.mediaType || '').trim().toLowerCase();
+            if (imgMime && !CLAUDE_NATIVE_IMAGE_MIMES.has(imgMime)) {
+              content.push({
+                type: 'text',
+                text: `[Attached image: ${att.name}] — ${imgMime} is not supported for native image processing. Use the Read tool to access this file.`,
+              } as ContentBlock);
+              break;
+            }
             content.push({
               type: 'image',
               source: { type: 'base64', media_type: att.mediaType, data: att.base64! },
               _filename: att.name,
             } as unknown as ContentBlock);
             break;
+          }
           case 'base64_document':
+            // Claude API document blocks ONLY accept application/pdf.
+            // Guard: reject non-PDF media types (should not reach here after
+            // determineDeliveryStrategy fix, but defend in depth).
+            if (att.mediaType && att.mediaType !== 'application/pdf') {
+              content.push({
+                type: 'text',
+                text: `[Attached file: ${att.name}] — non-PDF document cannot be sent as base64. Use the Read tool to access this file.`,
+              } as ContentBlock);
+              break;
+            }
             content.push({
               type: 'document',
-              source: { type: 'base64', media_type: att.mediaType || 'application/pdf', data: att.base64! },
+              source: { type: 'base64', media_type: 'application/pdf', data: att.base64! },
               _filename: att.name,
             } as unknown as ContentBlock);
             break;

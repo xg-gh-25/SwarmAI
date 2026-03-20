@@ -559,26 +559,50 @@ const CodeBlock = memo(function CodeBlock({
 export const OPEN_FILE_EVENT = 'swarm:open-file';
 
 /**
- * Detects whether inline code text looks like a workspace-relative file path.
- * Matches: Knowledge/Notes/file.md, .context/MEMORY.md, backend/core/agent.py
- * Rejects: URLs, single words, package names, shell commands, absolute paths.
+ * Extensions recognized as clickable file paths when appearing as bare filenames
+ * (no directory separator). Hoisted to module scope — this set is checked on every
+ * inline code span render and must not be re-allocated per call.
+ */
+const CLICKABLE_EXTENSIONS = new Set([
+  '.py', '.ts', '.tsx', '.js', '.jsx', '.rs', '.go', '.java', '.c', '.cpp', '.h',
+  '.rb', '.sh', '.md', '.txt', '.json', '.yaml', '.yml', '.toml', '.cfg', '.ini',
+  '.conf', '.html', '.css', '.scss', '.xml', '.sql', '.kt', '.swift', '.r', '.lua',
+  '.pl', '.php', '.dart', '.scala', '.zig', '.tf', '.hcl', '.proto', '.graphql',
+  '.dockerfile', '.makefile', '.csv', '.log', '.env',
+  '.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.pdf',
+  '.docx', '.xlsx', '.pptx', '.doc', '.xls', '.ppt',
+]);
+
+/**
+ * Detects whether inline code text looks like a file path worth making clickable.
+ *
+ * Accepts:
+ * - Relative paths: Knowledge/Notes/file.md, backend/core/agent.py
+ * - Bare filenames with code extensions: tool_summarizer.py, ChatPage.tsx
+ * - Absolute paths (resolved by handler): /Users/.../swarmai/backend/core/foo.py
+ *
+ * Rejects: URLs, single words without extension, shell commands, package names.
  */
 export function isWorkspaceFilePath(text: string): boolean {
-  // Must contain at least one /
-  if (!text.includes('/')) return false;
   // No spaces (workspace paths don't have spaces)
   if (/\s/.test(text)) return false;
   // Not a URL
   if (/^https?:\/\//i.test(text)) return false;
-  // Not an absolute path
-  if (text.startsWith('/')) return false;
   // No path traversal segments
   if (text.split('/').includes('..')) return false;
   // Must end with a file extension (1-10 chars after last dot)
   if (!/\.\w{1,10}$/.test(text)) return false;
   // No obviously non-path characters
   if (/[<>|"'`]/.test(text)) return false;
-  return true;
+  // Accept paths with / (relative or absolute)
+  if (text.includes('/')) return true;
+  // Accept bare filenames with known extensions
+  const dot = text.lastIndexOf('.');
+  if (dot > 0) {
+    const ext = text.slice(dot).toLowerCase();
+    if (CLICKABLE_EXTENSIONS.has(ext)) return true;
+  }
+  return false;
 }
 
 // Inline code component (supports multiline with whitespace-pre-wrap)
