@@ -1,12 +1,13 @@
 /**
  * Unified tab state hook — single source of truth for all tab state.
  *
- * @deprecated Use `useZustandTabBridge` from `./useZustandTabBridge` instead.
- * This hook uses the dual-state pattern (tabMapRef + useState + renderCounter)
- * which caused tab-switch content loss bugs (4 reports, COE'd). The Zustand
- * bridge provides the same API backed by a single Zustand store.
- *
- * Removal planned after E2E validation of the Zustand bridge.
+ * This hook uses the dual-state pattern (tabMapRef + useState + renderCounter).
+ * A Zustand-backed replacement exists in ``useZustandTabBridge`` + ``tabStore``,
+ * but the migration is blocked because ``useChatStreamingLifecycle`` and
+ * ``useUnifiedAttachments`` directly mutate ``tabMapRef`` entries (mutable ref
+ * pattern). The Zustand bridge's synthetic tabMapRef doesn't propagate mutations
+ * back to the store. Migration requires rewriting stream handlers to use
+ * Zustand's immutable ``setState`` pattern.
  *
  * Replaces the three separate stores (`useTabState`, `tabStateRef`, `tabStatuses`)
  * with a single `useRef<Map<string, UnifiedTab>>` backed by a `useState` re-render

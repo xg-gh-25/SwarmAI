@@ -211,7 +211,7 @@ def _configure_claude_environment(config: AppConfigManager) -> None:
     # 5. Pre-flight auth validation
     # AWS credentials are NOT checked here — the SDK resolves them via the
     # standard credential chain at query time. Auth errors from expired
-    # credentials are caught by _run_query_on_client's _AUTH_PATTERNS.
+    # credentials are caught by session_unit's retry logic.
     has_api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not has_api_key and not use_bedrock:
         raise AuthenticationNotConfiguredError(

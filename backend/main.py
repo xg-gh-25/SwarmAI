@@ -389,8 +389,6 @@ async def lifespan(app: FastAPI):
         logger.info("Channel gateway started (synchronous fallback)")
 
     # --- Initialize file-based config and permission components ---
-    # These replace the module-level singletons that were previously
-    # created at import time in agent_manager.py.
     # Requirements: 1.2, 4.7, 4.8, 9.3
     from core.app_config_manager import AppConfigManager
     from core.credential_validator import CredentialValidator

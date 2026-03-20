@@ -153,7 +153,7 @@ Hooks run as fire-and-forget `asyncio.Task`s via `BackgroundHookExecutor` — th
 
 ### Key Files
 
-`agent_manager.py`, `session_manager.py`, `permission_manager.py`, `cmd_permission_manager.py`, `security_hooks.py`, `chat.py`
+`session_router.py`, `session_unit.py`, `session_registry.py`, `session_manager.py`, `permission_manager.py`, `security_hooks.py`, `chat.py`
 
 ---
 
@@ -254,7 +254,7 @@ Conversation → DailyActivity (code-enforced hook) → Distillation (code-enfor
 
 ### Key Files
 
-`context_directory_loader.py`, `system_prompt.py`, `agent_manager.py`, `memory_extractor.py`, `daily_activity_writer.py`, `locked_write.py`, `hooks/*.py`, `backend/context/*.md`
+`context_directory_loader.py`, `system_prompt.py`, `prompt_builder.py`, `memory_extractor.py`, `daily_activity_writer.py`, `locked_write.py`, `hooks/*.py`, `backend/context/*.md`
 
 ---
 
@@ -394,10 +394,14 @@ All code files MUST include module-level documentation:
 ```
 backend/
 ├── core/
-│   ├── agent_manager.py             # Session orchestration, system prompt assembly
+│   ├── session_router.py            # Multi-session routing, concurrency cap, slot management
+│   ├── session_unit.py              # 5-state machine per tab (COLD/IDLE/STREAMING/WAITING_INPUT/DEAD)
+│   ├── session_registry.py          # Global singletons, startup/shutdown
+│   ├── prompt_builder.py            # System prompt assembly, SDK options, MCP config
+│   ├── lifecycle_manager.py         # 12hr TTL, orphan reaper, hook serialization
+│   ├── session_utils.py             # Shared error helpers, retriable error detection
 │   ├── session_manager.py           # Session CRUD with DB + in-memory cache
 │   ├── permission_manager.py        # Per-session HITL permission queues
-│   ├── cmd_permission_manager.py    # Global filesystem-backed command approvals
 │   ├── context_directory_loader.py  # 11 context files, token budget, L0/L1 cache
 │   ├── context_injector.py          # Resume context injection (recent messages → system prompt)
 │   ├── system_prompt.py             # Non-file prompt sections (identity, safety, etc.)

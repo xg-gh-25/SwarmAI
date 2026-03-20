@@ -85,7 +85,8 @@ backend/
 │   ├── mcp.py           # MCP server CRUD
 │   └── chat.py          # Chat streaming (SSE)
 ├── core/                # Business logic
-│   ├── agent_manager.py # Claude Agent SDK integration
+│   ├── session_router.py # Multi-session routing and orchestration
+│   ├── session_unit.py  # Per-tab state machine + ClaudeSDKClient
 │   └── session_manager.py
 ├── database/            # Data layer
 │   ├── base.py          # Base database interfaces

@@ -609,8 +609,8 @@ async def delete_session(session_id: str):
     """Delete a chat session and all its messages.
 
     Fires post-session-close hooks BEFORE deleting data so hooks can
-    read the conversation log.  Also cleans up ``_active_sessions`` to
-    prevent the stale reaper from double-firing hooks.
+    read the conversation log.  Also kills the SessionUnit subprocess
+    and cleans up session registry metadata.
     """
     # 1. Fire lifecycle hooks BEFORE data deletion (fire-and-forget).
     try:

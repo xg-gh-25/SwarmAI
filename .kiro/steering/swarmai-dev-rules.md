@@ -37,7 +37,7 @@ cd desktop && npm run build:all
 ```
 
 ## Code Documentation Standards (CRITICAL)
-When creating or modifying code files, ALWAYS include a detailed module-level docstring at the top of the file. Follow the style established in `backend/core/agent_manager.py`:
+When creating or modifying code files, ALWAYS include a detailed module-level docstring at the top of the file. Follow the style established in `backend/core/session_registry.py`:
 
 - **Python files**: Use a triple-quoted docstring as the first statement. Include:
   - One-line summary of the module's purpose
@@ -58,15 +58,11 @@ Example (Python):
 ```python
 """Claude SDK environment configuration and client wrapper.
 
-This module was extracted from ``agent_manager.py`` to isolate environment
-setup concerns.  It is responsible for:
+This module isolates environment setup concerns.  It is responsible for:
 
-- ``_configure_claude_environment``    — Reads API settings from the database
+- ``_configure_claude_environment``    — Reads API settings from config cache
 - ``_ClaudeClientWrapper``             — Async context-manager wrapper
 - ``AuthenticationNotConfiguredError`` — Pre-flight validation exception
-
-All public symbols are re-exported by ``agent_manager.py`` for backward
-compatibility.
 """
 ```
 
@@ -86,7 +82,7 @@ The following areas have dedicated steering files with detailed invariants and r
 | Area | Steering File | Key Files |
 |------|--------------|-----------|
 | Multi-tab chat isolation | `multi-tab-isolation-principles.md` | ChatPage.tsx, useChatStreamingLifecycle.ts, useUnifiedTabState.ts |
-| Session identity & backend isolation | `session-identity-and-backend-isolation.md` | agent_manager.py, session_manager.py, permission_manager.py, chat.py |
+| Session identity & backend isolation | `session-identity-and-backend-isolation.md` | session_router.py, session_unit.py, session_registry.py, session_manager.py, permission_manager.py, chat.py |
 | Context & memory safety | `context-and-memory-safety.md` | context_directory_loader.py, context_injector.py, system_prompt.py, hooks/*.py, locked_write.py |
 | Self-evolution guardrails | `self-evolution-guardrails.md` | s_self-evolution/*, EVOLUTION.md, chat.py (SSE parsing), evolution_maintenance_hook.py, evolution_trigger_hook.py |
 
@@ -94,7 +90,7 @@ The following areas have dedicated steering files with detailed invariants and r
 
 These anti-patterns apply across the entire codebase:
 
-1. **Shared mutable state between sessions**: Never add module-level mutable state (dicts, lists, sets) that isn't keyed by session ID. Use per-session data structures or the existing `_active_sessions` / `_session_locks` patterns.
+1. **Shared mutable state between sessions**: Never add module-level mutable state (dicts, lists, sets) that isn't keyed by session ID. Use per-session data structures or the SessionUnit per-tab isolation pattern.
 2. **React useState for cross-tab decisions**: Never read React `useState` values to make decisions about a specific tab. Always read from `tabMapRef` (authoritative source). React state is a display mirror only.
 3. **Overwriting user files**: Never overwrite files with `user_customized=True` in `ensure_directory()`. User edits are sacred.
 4. **Global permission queue**: Never use `permission_manager.get_permission_queue()` (deprecated). Use `get_session_queue(session_id)`.
