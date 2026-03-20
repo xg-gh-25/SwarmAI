@@ -1306,9 +1306,11 @@ export function useChatStreamingLifecycle(
           ];
 
           // Helper: APPEND error to assistant message content (preserving
-          // any tool_use / tool_result / text blocks already streamed), or
-          // add a standalone error message if the assistant message isn't
-          // found yet (error arrives before React syncs the optimistic msg).
+          // any tool_use / tool_result / text blocks already streamed).
+          // If the exact assistantMessageId isn't found (race condition where
+          // error arrives before React syncs the optimistic placeholder),
+          // fall back to the LAST assistant message — that's where the
+          // streamed content lives. Only create a standalone error as last resort.
           const applyError = (prev: Message[]): Message[] => {
             const found = prev.some((m) => m.id === assistantMessageId);
             if (found) {
@@ -1318,7 +1320,24 @@ export function useChatStreamingLifecycle(
                   : msg,
               );
             }
-            // Assistant message not yet in array — append a standalone error
+            // Fallback: find the last assistant message (may have different ID
+            // due to race between tabState ref writes and React state updates)
+            const lastAssistantIdx = prev.reduce(
+              (lastIdx, msg, idx) => (msg.role === 'assistant' ? idx : lastIdx),
+              -1,
+            );
+            if (lastAssistantIdx >= 0) {
+              console.warn('[StreamHandler] assistantMessageId not found, appending error to last assistant message', {
+                expected: assistantMessageId,
+                actual: prev[lastAssistantIdx].id,
+              });
+              return prev.map((msg, idx) =>
+                idx === lastAssistantIdx
+                  ? { ...msg, isError: true, content: [...msg.content, ...errorContent] }
+                  : msg,
+              );
+            }
+            // No assistant messages at all — create standalone error
             return [
               ...prev,
               {
@@ -1535,13 +1554,17 @@ export function useChatStreamingLifecycle(
         // fire the toast for the reconnection success (handled by stream handler).
         // For exhausted retries or mid-stream failures, show the error.
 
+        // Include the real error text so the user knows what actually happened.
+        // The original code suppressed error.message entirely — that made debugging
+        // impossible and showed a blank-looking generic message.
+        const realError = error.message || 'Unknown connection error';
         const errorContent: ContentBlock[] = [
-          { type: 'text' as const, text: `⚠️ Connection interrupted. Your conversation is saved — send your message again to continue.` },
+          { type: 'text' as const, text: `⚠️ Connection interrupted: ${realError}\n\n💡 Your conversation is saved — send your message again to continue.` },
         ];
-        console.warn('[SSE] Original connection error suppressed from UI:', error.message);
 
         // Same pattern as createStreamHandler error path: APPEND error
         // to preserve any partial tool_use / text content already streamed.
+        // Uses the same fallback-to-last-assistant strategy to prevent content loss.
         const applyError = (prev: Message[]): Message[] => {
           const found = prev.some((m) => m.id === assistantMessageId);
           if (found) {
@@ -1560,10 +1583,25 @@ export function useChatStreamingLifecycle(
             }
             return updated;
           }
-          console.warn('[ErrorHandler] Assistant message not found — creating standalone error', {
+          // Fallback: find the last assistant message (race condition guard)
+          const lastAssistantIdx = prev.reduce(
+            (lastIdx, msg, idx) => (msg.role === 'assistant' ? idx : lastIdx),
+            -1,
+          );
+          if (lastAssistantIdx >= 0) {
+            console.warn('[ErrorHandler] assistantMessageId not found, appending error to last assistant message', {
+              expected: assistantMessageId,
+              actual: prev[lastAssistantIdx].id,
+            });
+            return prev.map((msg, idx) =>
+              idx === lastAssistantIdx
+                ? { ...msg, content: [...msg.content, ...errorContent], isError: true }
+                : msg,
+            );
+          }
+          console.warn('[ErrorHandler] No assistant messages at all — creating standalone error', {
             assistantMessageId,
             messageCount: prev.length,
-            messageIds: prev.map((m) => m.id),
           });
           return [
             ...prev,
