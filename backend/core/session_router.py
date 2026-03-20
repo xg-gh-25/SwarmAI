@@ -322,10 +322,19 @@ class SessionRouter:
             from .agent_defaults import build_agent_config
             agent_config = await build_agent_config(agent_id)
 
-        # Detect cold-start resume: subprocess is gone but session has
-        # prior messages in DB (app restarted or session evicted).
+        # Detect cold-start resume (Mechanism B): subprocess is gone but
+        # session has prior messages in DB (app restarted or session evicted).
         # Set context injection flags so build_system_prompt() injects
         # prior conversation into the system prompt.
+        #
+        # Why _sdk_session_id is None here:
+        #   On cold resume the CLI subprocess has been killed (app restart or
+        #   eviction).  The SDK session ID only exists while a subprocess is
+        #   alive — it's assigned by SessionUnit._spawn() and cleared on kill.
+        #   A None value distinguishes cold resume (Mechanism B: inject prior
+        #   conversation into system prompt) from live resume (Mechanism A:
+        #   pass resume=sdk_session_id to the SDK so the CLI restores its own
+        #   conversation state).  See also: resume_session_id kwarg below.
         from database import db
         is_cold_resume = (
             unit.state == SessionState.COLD
@@ -339,6 +348,10 @@ class SessionRouter:
                 agent_config["resume_app_session_id"] = session_id
                 yield {"type": "session_resuming", "sessionId": session_id}
 
+        # resume_session_id is the SDK's own session ID for Mechanism A (live
+        # resume).  On cold resume this is always None — that's correct: the
+        # subprocess is dead, so there's no SDK session to resume.  Instead,
+        # cold resume injects prior conversation via system prompt (Mechanism B).
         options = await self._prompt_builder.build_options(
             agent_config=agent_config,
             enable_skills=enable_skills,
