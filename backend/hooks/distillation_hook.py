@@ -1,7 +1,7 @@
 """Distillation trigger hook — auto-distills undistilled DailyActivity files.
 
 Checks the count of undistilled DailyActivity files after each session
-close.  When the threshold (>2) is exceeded, runs a lightweight
+close.  When any undistilled files exist, runs a lightweight
 rule-based distillation directly in the hook (no agent session needed),
 writing curated entries to MEMORY.md via ``_modify_content()`` under flock.
 
@@ -14,7 +14,7 @@ so the next agent session can pick it up.
 Key public symbols:
 
 - ``DistillationTriggerHook``  — Implements ``SessionLifecycleHook``.
-- ``UNDISTILLED_THRESHOLD``    — Minimum undistilled files to trigger (2).
+- ``UNDISTILLED_THRESHOLD``    — Minimum undistilled files to trigger (0 = every session).
 - ``ARCHIVE_DAYS``             — Age threshold for DailyActivity archival (90).
 - ``SECTION_CAPS``             — Max entries per MEMORY.md section after distillation.
 """
@@ -35,7 +35,7 @@ from hooks.evolution_maintenance_hook import _append_changelog
 
 logger = logging.getLogger(__name__)
 
-UNDISTILLED_THRESHOLD = 2
+UNDISTILLED_THRESHOLD = 0  # Run every session close (was 2 — caused 1-2 day staleness)
 FLAG_FILENAME = ".needs_distillation"
 SCAN_DAYS = 30  # Only check files from last 30 days
 ARCHIVE_DAYS = 90  # Move files older than this to Archives/
@@ -337,6 +337,15 @@ class DistillationTriggerHook:
         # Auto-manage Open Threads from COE signals (code-enforced)
         if coe_entries:
             self._update_open_threads(memory_path, coe_entries)
+
+        # Auto-resolve Open Threads whose topics appear in deliverables.
+        # This closes the staleness gap: when work is done (captured in
+        # DailyActivity "Deliverables" section), the corresponding Open
+        # Thread is moved to "Resolved" automatically — no manual cleanup.
+        # See COE: memory pipeline temporal lag gap (2026-03-19).
+        self._reconcile_open_threads_from_deliverables(
+            memory_path, [f for f, _, _ in extracted_files]
+        )
 
         # Write corrections and competence to EVOLUTION.md
         if all_corrections:
@@ -937,6 +946,165 @@ class DistillationTriggerHook:
                             break
                 matched_topics.add(topic_key)
 
+        return "\n".join(lines)
+
+    def _reconcile_open_threads_from_deliverables(
+        self,
+        memory_path: Path,
+        da_files: list[Path],
+    ) -> None:
+        """Auto-resolve Open Threads when deliverables confirm work is done.
+
+        Extracts deliverable lines from the DailyActivity files being
+        distilled, then checks each P0/P1/P2 Open Thread title against
+        them using fuzzy word overlap.  Matched threads are moved to the
+        "Resolved (archive)" section with today's date.
+
+        Uses the same lock pattern as ``_update_open_threads`` to prevent
+        concurrent MEMORY.md corruption.
+        """
+        # Extract deliverables from all DA files being distilled
+        deliverables: list[str] = []
+        for da_file in da_files:
+            try:
+                content = da_file.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            in_deliverables = False
+            for line in content.splitlines():
+                stripped = line.strip()
+                if stripped == "**Deliverables:**" or stripped.startswith("### Deliverables"):
+                    in_deliverables = True
+                    continue
+                if in_deliverables and (
+                    (stripped.startswith("**") and stripped.endswith(":**"))
+                    or stripped.startswith("### ")
+                    or stripped.startswith("## ")
+                ):
+                    in_deliverables = False
+                    continue
+                if in_deliverables and stripped.startswith("- "):
+                    deliverables.append(stripped.lstrip("- ").strip().lower())
+
+        if not deliverables:
+            return
+
+        import fcntl
+
+        lock_path = memory_path.with_suffix(memory_path.suffix + ".lock")
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        fd = None
+        try:
+            fd = open(lock_path, "w")  # noqa: SIM115
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            try:
+                content = memory_path.read_text(encoding="utf-8")
+                updated = self._apply_deliverable_reconciliation(content, deliverables)
+                if updated != content:
+                    memory_path.write_text(updated, encoding="utf-8")
+                    logger.info("Reconciled Open Threads against %d deliverables", len(deliverables))
+            finally:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+        except Exception as exc:
+            logger.warning("Failed to reconcile Open Threads from deliverables: %s", exc)
+        finally:
+            if fd is not None:
+                fd.close()
+
+    @staticmethod
+    def _apply_deliverable_reconciliation(
+        content: str,
+        deliverables: list[str],
+    ) -> str:
+        """Move Open Threads to Resolved when deliverables confirm completion.
+
+        Matching: for each thread title, tokenize into words and check
+        against each deliverable line.  A thread is considered resolved
+        when any deliverable has ≥50% word overlap with the title
+        (same heuristic as COE matching) OR when the title is a
+        substring of the deliverable (or vice versa).
+
+        Returns the modified content string (unchanged if no matches).
+        """
+        lines = content.split("\n")
+        today = date.today().isoformat().replace("-", "/")  # 2026/03/20
+        resolved_entries: list[str] = []
+        indices_to_remove: list[int] = []
+
+        # Build deliverable word sets once
+        deliv_word_sets = [set(d.split()) for d in deliverables]
+
+        from core.session_utils import fuzzy_title_matches_deliverable
+
+        for i, line in enumerate(lines):
+            # Match thread lines: "- 🔴 **title**" or "- 🟡 **title**" or "- 🔵 **title**"
+            if not re.match(r"^- [🔴🟡🔵] \*\*", line):
+                continue
+            title_match = re.search(r"\*\*(.+?)\*\*", line)
+            if not title_match:
+                continue
+            title = title_match.group(1)
+
+            # Check if any deliverable matches this thread
+            matched = fuzzy_title_matches_deliverable(
+                title, deliverables, deliv_word_sets,
+            )
+
+            if matched:
+                # Extract short title for resolved archive entry
+                resolved_entries.append(f"{title} ({today})")
+                indices_to_remove.append(i)
+
+        if not indices_to_remove:
+            return content
+
+        # Remove matched thread lines (reverse order to preserve indices)
+        for idx in reversed(indices_to_remove):
+            # Also remove trailing description/status lines that belong to this thread
+            # (indented lines or empty lines immediately after)
+            end = idx + 1
+            while end < len(lines) and (
+                lines[end].startswith("  ") or lines[end].strip() == ""
+            ):
+                # Don't eat into the next thread or section header
+                if end + 1 < len(lines) and re.match(r"^- [🔴🟡🔵] \*\*|^###|^##", lines[end + 1]):
+                    break
+                end += 1
+            # Check if removing this leaves an empty priority section
+            # with just "_(None — all clear)_" remaining
+            del lines[idx:end]
+
+        # Append to Resolved archive
+        resolved_section_idx = None
+        for i, line in enumerate(lines):
+            if line.strip().startswith("### Resolved"):
+                resolved_section_idx = i
+                break
+
+        if resolved_section_idx is not None:
+            # Find the "- ✅ ..." line in Resolved section and append
+            for i in range(resolved_section_idx + 1, min(resolved_section_idx + 5, len(lines))):
+                if lines[i].strip().startswith("- ✅"):
+                    # Append new resolved items to existing line
+                    existing = lines[i].strip()
+                    new_items = ", ".join(resolved_entries)
+                    lines[i] = f"{existing}, {new_items}"
+                    break
+            else:
+                # No existing resolved line — create one
+                lines.insert(
+                    resolved_section_idx + 1,
+                    f"- ✅ {', '.join(resolved_entries)}",
+                )
+
+        # Clean up empty priority sections: if a P section now has only
+        # "_(None — all clear)_" or is empty, leave it as-is (harmless).
+
+        logger.info(
+            "Auto-resolved %d Open Threads from deliverables: %s",
+            len(resolved_entries),
+            ", ".join(resolved_entries),
+        )
         return "\n".join(lines)
 
     @staticmethod

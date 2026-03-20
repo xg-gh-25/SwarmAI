@@ -9,6 +9,7 @@
  * - Fires a persistent warning toast on connected → disconnected
  * - Fires a success toast on disconnected → connected
  * - Handles `initializing` status from the backend response body
+ * - Listens for Tauri sidecar events for instant crash/restart detection
  * - Uses `useRef` for interval/failure tracking to avoid re-renders
  *   on every poll; only updates React state on actual transitions
  * - Uses plain `fetch` (not axios) to avoid circular dependency with
@@ -19,7 +20,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import type { HealthState, BackendStatus } from '../types';
-import { getBackendPort } from '../services/tauri';
+import { getBackendPort, setBackendPort, tauriService } from '../services/tauri';
 import { useToast } from '../contexts/ToastContext';
 
 /** Default polling interval in milliseconds. */
@@ -79,8 +80,14 @@ export function useHealthMonitor(options?: UseHealthMonitorOptions): UseHealthMo
   // Guard against state updates after unmount.
   const mountedRef = useRef(true);
 
+  // Stable refs for toast functions — avoids useCallback/useEffect churn.
+  const addToastRef = useRef(addToast);
+  addToastRef.current = addToast;
+  const removeToastRef = useRef(removeToast);
+  removeToastRef.current = removeToast;
+
   // ------------------------------------------------------------------
-  // Transition helpers
+  // Transition helpers (read toast fns from refs — no deps needed)
   // ------------------------------------------------------------------
 
   const handleSuccess = useCallback(
@@ -93,8 +100,8 @@ export function useHealthMonitor(options?: UseHealthMonitorOptions): UseHealthMo
 
       // Transition: disconnected → connected — fire recovery toast.
       if (previousStatus === 'disconnected' && backendStatus === 'connected') {
-        removeToast(HEALTH_DISCONNECTED_TOAST_ID);
-        addToast({
+        removeToastRef.current(HEALTH_DISCONNECTED_TOAST_ID);
+        addToastRef.current({
           severity: 'success',
           message: 'Backend reconnected',
           autoDismiss: true,
@@ -107,7 +114,7 @@ export function useHealthMonitor(options?: UseHealthMonitorOptions): UseHealthMo
         consecutiveFailures: 0,
       });
     },
-    [addToast, removeToast],
+    [], // stable — reads from refs
   );
 
   const handleFailure = useCallback(
@@ -123,7 +130,7 @@ export function useHealthMonitor(options?: UseHealthMonitorOptions): UseHealthMo
 
         // Transition: connected/initializing → disconnected — fire warning.
         if (previousStatus !== 'disconnected') {
-          addToast({
+          addToastRef.current({
             severity: 'warning',
             message: 'Backend is unavailable',
             id: HEALTH_DISCONNECTED_TOAST_ID,
@@ -137,7 +144,7 @@ export function useHealthMonitor(options?: UseHealthMonitorOptions): UseHealthMo
         consecutiveFailures: failures,
       });
     },
-    [addToast, failureThreshold],
+    [failureThreshold], // only re-creates if threshold option changes
   );
 
   // ------------------------------------------------------------------
@@ -178,6 +185,11 @@ export function useHealthMonitor(options?: UseHealthMonitorOptions): UseHealthMo
     }
   }, [handleSuccess, handleFailure]);
 
+  // Stable ref for performHealthCheck — used by sidecar event handlers
+  // so they don't cause effect re-subscriptions.
+  const performHealthCheckRef = useRef(performHealthCheck);
+  performHealthCheckRef.current = performHealthCheck;
+
   // ------------------------------------------------------------------
   // Lifecycle: start polling on mount, clean up on unmount
   // ------------------------------------------------------------------
@@ -198,6 +210,83 @@ export function useHealthMonitor(options?: UseHealthMonitorOptions): UseHealthMo
       }
     };
   }, [performHealthCheck, intervalMs]);
+
+  // ------------------------------------------------------------------
+  // Tauri sidecar events: instant health transitions on backend death/restart
+  // ------------------------------------------------------------------
+
+  useEffect(() => {
+    // Only relevant in production (Tauri sidecar mode)
+    const isDev = import.meta.env.DEV;
+    if (isDev) return;
+
+    const unlisteners: Array<Promise<() => void>> = [];
+
+    // Backend died unexpectedly — immediately mark disconnected
+    unlisteners.push(
+      tauriService.onBackendTerminatedRestarting(() => {
+        if (!mountedRef.current) return;
+
+        failureCountRef.current = DEFAULT_FAILURE_THRESHOLD;
+        currentStatusRef.current = 'disconnected';
+
+        addToastRef.current({
+          severity: 'warning',
+          message: 'Backend crashed — restarting automatically…',
+          id: HEALTH_DISCONNECTED_TOAST_ID,
+        });
+
+        setHealthState({
+          status: 'disconnected',
+          lastCheckedAt: Date.now(),
+          consecutiveFailures: DEFAULT_FAILURE_THRESHOLD,
+        });
+      }),
+    );
+
+    // Backend auto-restarted on new port — update port + trigger health check
+    unlisteners.push(
+      tauriService.onBackendRestarted((newPort: number) => {
+        if (!mountedRef.current) return;
+
+        console.log(`[HealthMonitor] Backend restarted on port ${newPort}`);
+        setBackendPort(newPort);
+
+        // Give the new backend a moment to become healthy, then check
+        setTimeout(() => {
+          if (mountedRef.current) {
+            performHealthCheckRef.current();
+          }
+        }, 2_000);
+      }),
+    );
+
+    // Backend terminated permanently (intentional shutdown OR restart budget exhausted)
+    unlisteners.push(
+      tauriService.onBackendTerminated(() => {
+        if (!mountedRef.current) return;
+
+        failureCountRef.current = DEFAULT_FAILURE_THRESHOLD;
+        currentStatusRef.current = 'disconnected';
+
+        addToastRef.current({
+          severity: 'error',
+          message: 'Backend stopped — restart the app to recover',
+          id: HEALTH_DISCONNECTED_TOAST_ID,
+        });
+
+        setHealthState({
+          status: 'disconnected',
+          lastCheckedAt: Date.now(),
+          consecutiveFailures: DEFAULT_FAILURE_THRESHOLD,
+        });
+      }),
+    );
+
+    return () => {
+      unlisteners.forEach((p) => p.then((unlisten) => unlisten()));
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps -- stable: all callbacks read from refs
 
   return { state: healthState, checkNow: performHealthCheck };
 }

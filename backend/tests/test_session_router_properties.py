@@ -63,10 +63,25 @@ class TestEvictionTargetsOnlyIdle:
         """Eviction only selects IDLE units, never STREAMING or WAITING_INPUT."""
         router = _make_router()
 
+        # Valid transition paths from COLD to each target state.
+        # _transition validates the state machine, so we must walk
+        # through legal hops rather than jumping directly.
+        _PATHS_FROM_COLD: dict[SessionState, list[SessionState]] = {
+            SessionState.COLD: [],  # already there
+            SessionState.IDLE: [SessionState.IDLE],  # COLD→IDLE (spawn)
+            SessionState.STREAMING: [SessionState.IDLE, SessionState.STREAMING],
+            SessionState.WAITING_INPUT: [
+                SessionState.IDLE, SessionState.STREAMING,
+                SessionState.WAITING_INPUT,
+            ],
+            SessionState.DEAD: [SessionState.DEAD],  # COLD→DEAD
+        }
+
         # Create units with the given states
         for i, state in enumerate(states):
             unit = SessionUnit(session_id=f"unit-{i}", agent_id="default")
-            unit._transition(state)
+            for hop in _PATHS_FROM_COLD[state]:
+                unit._transition(hop)
             if state in (SessionState.IDLE, SessionState.STREAMING, SessionState.WAITING_INPUT):
                 unit._wrapper = MagicMock()
                 unit._wrapper.pid = 10000 + i

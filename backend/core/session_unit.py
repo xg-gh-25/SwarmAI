@@ -32,6 +32,8 @@ import traceback
 from enum import Enum
 from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Optional
 
+from .compaction_guard import LoopAction
+
 if TYPE_CHECKING:
     from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient
 
@@ -195,6 +197,10 @@ class SessionUnit:
         # never produced a ResultMessage (e.g. SDK hang, Bedrock timeout).
         self._last_event_time: Optional[float] = None
         self._streaming_start_time: Optional[float] = None
+
+        # ── Compaction loop guard (3-layer anti-loop) ──────────────
+        from .compaction_guard import CompactionGuard
+        self._compaction_guard: CompactionGuard = CompactionGuard()
 
         # ── Resource observability ─────────────────────────────────
         self._last_error_type: Optional[str] = None  # "oom" | "timeout" | None
@@ -422,304 +428,69 @@ class SessionUnit:
                 f"(session_id={self.session_id})"
             )
 
-        # Reset per-send retry counter
+        # Reset per-send state (retry counter + buffer overflow flag).
+        # _buffer_overflow_recovery is per-message, not per-session:
+        # each new user message should get a fresh recovery attempt
+        # if it triggers a different buffer overflow.
         self._retry_count = 0
         self._interrupted = False
+        self._buffer_overflow_recovery = False
+        self._compaction_guard.reset()  # New user turn — reset tool tracking
 
         # Spawn if needed (COLD → IDLE under _spawn_lock + _env_lock)
         if self.state == SessionState.COLD:
-            try:
-                await self._spawn(options, config)
-            except Exception as exc:
-                error_str = str(exc)
-                if _is_retriable_error(error_str):
-                    logger.warning(
-                        "Retriable error during spawn for session %s, "
-                        "will retry (attempt %d/%d): %s",
-                        self.session_id,
-                        self._retry_count + 1,
-                        self.MAX_RETRY_ATTEMPTS,
-                        error_str[:120],
-                    )
-                    # Retry spawn with backoff (same logic as streaming retry)
-                    self._crash_to_cold()
-                    while (
-                        _is_retriable_error(error_str)
-                        and self._retry_count < self.MAX_RETRY_ATTEMPTS
-                    ):
-                        self._retry_count += 1
-                        is_oom = _is_oom_signal(error_str)
-                        backoff = 30.0 if is_oom else min(
-                            15 * (2 ** (self._retry_count - 1)), 60
-                        )
-                        logger.info(
-                            "session_unit.spawn_retry session_id=%s "
-                            "attempt=%d/%d backoff=%.1fs oom=%s",
-                            self.session_id, self._retry_count,
-                            self.MAX_RETRY_ATTEMPTS, backoff, is_oom,
-                        )
-                        yield {
-                            "type": "status",
-                            "message": f"Reconnecting (attempt {self._retry_count}/{self.MAX_RETRY_ATTEMPTS})...",
-                            "code": "RETRY_SPAWN",
-                        }
-                        await asyncio.sleep(backoff)
-                        try:
-                            await self._spawn(options, config)
-                            error_str = ""  # success — exit loop
-                        except Exception as retry_exc:
-                            error_str = str(retry_exc)
-                            self._crash_to_cold()
-                    # If all retries exhausted, yield error and bail
-                    if self.state == SessionState.COLD:
-                        friendly, suggested = _sanitize_sdk_error(error_str)
-                        yield _build_error_event(
-                            code="SPAWN_FAILED",
-                            message=friendly,
-                            detail=error_str,
-                            suggested_action=suggested,
-                        )
-                        return
-                else:
-                    self._crash_to_cold(clear_identity=True)
-                    friendly, suggested = _sanitize_sdk_error(error_str)
-                    yield _build_error_event(
-                        code="SPAWN_FAILED",
-                        message=friendly,
-                        detail=traceback.format_exc(),
-                        suggested_action=suggested,
-                    )
-                    return
+            async for event in self._ensure_spawned(options, config):
+                if event.get("_abort"):
+                    return  # spawn failed after retries
+                yield event
 
         # IDLE → STREAMING
-        self._model_name = getattr(options, "model", None)
         self._transition(SessionState.STREAMING)
+        self._model_name = getattr(options, "model", None)
 
         try:
             async for event in self._stream_response(query_content):
                 yield event
         except Exception as exc:
             error_str = str(exc)
+            tb_str = traceback.format_exc()
             logger.error(
                 "Error during streaming for session %s: %s",
                 self.session_id, error_str[:200],
             )
 
             # ── Buffer overflow — recoverable via progressive processing ──
-            # The CLI has a hardcoded 10MB JSONRPC buffer.  When an MCP
-            # tool returns >10MB (e.g. multiple base64 images), the CLI
-            # crashes.  Instead of counting this as a retry, we respawn
-            # and inject a recovery instruction telling the agent to
-            # fetch items one-at-a-time.  Max 1 recovery per message.
             if "maximum buffer size" in error_str and not self._buffer_overflow_recovery:
-                logger.warning(
-                    "session_unit.buffer_overflow session_id=%s — "
-                    "will inject progressive processing recovery",
-                    self.session_id,
-                )
-                self._buffer_overflow_recovery = True
-                # Don't increment _retry_count — this is strategy
-                # correction, not a transient failure.
-                resume_sid = self._sdk_session_id
-                self._crash_to_cold()
-                await asyncio.sleep(2.0)  # brief cooldown
-
-                retry_options = self._build_retry_options(options, resume_sid)
-                try:
-                    await self._spawn(retry_options, config)
-                except Exception as spawn_exc:
-                    self._crash_to_cold(clear_identity=True)
-                    friendly, suggested = _sanitize_sdk_error(str(spawn_exc))
-                    yield _build_error_event(
-                        code="SPAWN_FAILED",
-                        message=friendly,
-                        detail=traceback.format_exc(),
-                        suggested_action=suggested,
-                    )
+                recovered = False
+                async for event in self._handle_buffer_overflow(
+                    query_content, options, config, error_str,
+                ):
+                    if event.get("_abort"):
+                        return  # spawn failed during recovery
+                    if event.get("_recovered"):
+                        recovered = True
+                        continue
+                    if "_fallthrough_error" in event:
+                        # Recovery stream raised — update error context so
+                        # the retry check below uses the recovery exception.
+                        error_str = event["_fallthrough_error"]
+                        tb_str = event.get("_fallthrough_tb", tb_str)
+                        continue
+                    yield event
+                if recovered:
                     return
-
-                self._transition(SessionState.STREAMING)
-
-                # Re-send with recovery instruction prepended
-                recovery_prefix = (
-                    "[System: Your previous tool call returned a response "
-                    "exceeding the 10MB buffer limit. Use progressive "
-                    "processing for this task:\n"
-                    "- Fetch items ONE at a time (never batch multiple "
-                    "files/images in a single tool call)\n"
-                    "- After each fetch, extract key findings as compact text\n"
-                    "- After all items processed, synthesize your findings\n"
-                    "- For large text files, use offset/limit to read in "
-                    "chunks of 500 lines\n"
-                    "- If you already processed some items before the error, "
-                    "continue where you left off — do not re-fetch items "
-                    "you already analyzed\n"
-                    "Do not attempt to fetch all items in a single tool "
-                    "call again.]\n\n"
-                )
-                # Build recovered query: prepend recovery prefix to the
-                # original content.  query_content may be str (text-only)
-                # or list[dict] (multimodal content blocks).
-                if isinstance(query_content, str):
-                    recovered_query = recovery_prefix + query_content
-                elif isinstance(query_content, list):
-                    # Multimodal: prepend recovery as a text block, keep
-                    # the original content blocks (images, etc.) intact.
-                    recovered_query = [
-                        {"type": "text", "text": recovery_prefix},
-                        *query_content,
-                    ]
-                else:
-                    # Unknown shape — best-effort: stringify
-                    recovered_query = recovery_prefix + str(query_content)
-                try:
-                    async for event in self._stream_response(recovered_query):
-                        yield event
-                    return  # success
-                except Exception as recovery_exc:
-                    error_str = str(recovery_exc)
-                    logger.warning(
-                        "Buffer overflow recovery failed for session %s: %s",
-                        self.session_id, error_str[:200],
-                    )
-                    # Fall through to normal error handling below
+                # Recovery stream failed — error_str updated via
+                # _fallthrough_error sentinel from _handle_buffer_overflow.
+                # Fall through to retry/error handling below.
 
             # ── Retry loop for retriable errors ──────────────────
             if _is_retriable_error(error_str) and self._retry_count < self.MAX_RETRY_ATTEMPTS:
-                # Capture the SDK session ID before cleanup so we can
-                # pass --resume on the retry subprocess to restore
-                # conversation context (Requirement 10.5).
-                resume_session_id = self._sdk_session_id
-
-                while (
-                    _is_retriable_error(error_str)
-                    and self._retry_count < self.MAX_RETRY_ATTEMPTS
+                async for event in self._retry_with_resume(
+                    query_content, options, config, error_str, tb_str,
                 ):
-                    self._retry_count += 1
-
-                    # OOM-aware backoff: SIGKILL (exit -9) from macOS
-                    # jetsam or Linux OOM-killer gets a flat 30s cooldown
-                    # instead of incremental backoff, giving the OS time
-                    # to reclaim memory (COE lesson).
-                    #
-                    # Detection uses _is_oom_signal() which checks multiple
-                    # patterns + spawn budget as a fallback heuristic, so
-                    # we don't silently regress if the SDK changes its
-                    # error message format.
-                    is_oom = _is_oom_signal(error_str)
-                    if is_oom:
-                        self._last_error_type = "oom"
-                        backoff = 30.0
-                    else:
-                        self._last_error_type = None
-                        backoff = self.RETRY_BACKOFF_SECONDS * self._retry_count
-
-                    logger.info(
-                        "Retry %d/%d for session %s after %.1fs backoff "
-                        "(resume=%s, oom=%s)",
-                        self._retry_count,
-                        self.MAX_RETRY_ATTEMPTS,
-                        self.session_id,
-                        backoff,
-                        resume_session_id,
-                        is_oom,
-                    )
-
-                    # Clean up dead subprocess
-                    self._crash_to_cold()
-
-                    await asyncio.sleep(backoff)
-
-                    # Safety net: re-check spawn budget before retrying.
-                    # Even if OOM detection missed (e.g. SDK changed error
-                    # format), the budget gate prevents retrying into
-                    # memory pressure — the core COE fix.
-                    try:
-                        from .resource_monitor import resource_monitor
-                        budget = resource_monitor.spawn_budget()
-                        if not budget.can_spawn:
-                            logger.warning(
-                                "Retry %d aborted: spawn budget denied "
-                                "post-backoff session_id=%s reason=%s",
-                                self._retry_count, self.session_id,
-                                budget.reason,
-                            )
-                            self._crash_to_cold(clear_identity=True)
-                            from .session_utils import _build_error_event
-                            yield _build_error_event(
-                                code="RESOURCE_EXHAUSTED",
-                                message=(
-                                    "Not enough memory to restart the AI service. "
-                                    "Close unused tabs or apps to free memory."
-                                ),
-                                suggested_action=(
-                                    "Close idle chat tabs to free memory, "
-                                    "then send your message again."
-                                ),
-                            )
-                            return
-                    except Exception:
-                        pass  # Budget check failed — proceed with retry
-
-                    # Build retry options with --resume flag to restore
-                    # conversation context from the previous subprocess.
-                    retry_options = self._build_retry_options(
-                        options, resume_session_id,
-                    )
-
-                    # Spawn fresh subprocess for retry
-                    try:
-                        await self._spawn(retry_options, config)
-                    except Exception as spawn_exc:
-                        error_str = str(spawn_exc)
-                        if _is_retriable_error(error_str):
-                            logger.warning(
-                                "Retry %d spawn failed (retriable): %s",
-                                self._retry_count, error_str[:120],
-                            )
-                            continue  # Try next retry
-                        else:
-                            # Non-retriable spawn error — give up
-                            self._crash_to_cold(clear_identity=True)
-                            friendly, suggested = _sanitize_sdk_error(error_str)
-                            yield _build_error_event(
-                                code="SPAWN_FAILED",
-                                message=friendly,
-                                detail=traceback.format_exc(),
-                                suggested_action=suggested,
-                            )
-                            return
-
-                    self._transition(SessionState.STREAMING)
-
-                    try:
-                        async for event in self._stream_response(query_content):
-                            yield event
-                        # Success — break out of retry loop
-                        return
-                    except Exception as retry_exc:
-                        error_str = str(retry_exc)
-                        logger.warning(
-                            "Retry %d failed for session %s: %s",
-                            self._retry_count,
-                            self.session_id,
-                            error_str[:200],
-                        )
-                        continue  # Try next retry
-
-                # All retries exhausted
-                self._crash_to_cold(clear_identity=True)
-                yield _build_error_event(
-                    code="ALL_RETRIES_EXHAUSTED",
-                    message=(
-                        "The AI service couldn't start after multiple attempts. "
-                        "This is usually temporary."
-                    ),
-                    suggested_action=(
-                        "Your conversation is saved. Wait a moment, "
-                        "then send your message again."
-                    ),
-                )
+                    if event.get("_abort"):
+                        return  # retries exhausted or resource denied
+                    yield event
                 return
 
             # ── Non-retriable error — crash to DEAD ──────────────
@@ -728,9 +499,406 @@ class SessionUnit:
             yield _build_error_event(
                 code="CONVERSATION_ERROR",
                 message=friendly,
+                detail=tb_str,
+                suggested_action=suggested,
+            )
+
+    # ── Extracted helpers from send() ───────────────────────────────
+    # These are async generators (yield events) called via
+    # ``async for event in self._method(): yield event`` in send().
+    # They share the same instance state — no new concurrency patterns.
+    # Sentinel keys (_abort, _recovered) are internal flow-control
+    # signals consumed by send() and never yielded to callers.
+
+    async def _ensure_spawned(
+        self,
+        options: ClaudeAgentOptions,
+        config: Optional[Any],
+    ) -> AsyncIterator[dict]:
+        """Spawn subprocess if COLD, with retry loop on retriable errors.
+
+        Yields status events during retries.  If all retries fail, yields
+        a terminal error event with ``_abort: True`` so the caller can
+        ``return`` without yielding it to the SSE stream.
+
+        State on success: IDLE (spawned and ready).
+        State on failure: COLD (all retries exhausted).
+        """
+        from .session_utils import (
+            _build_error_event,
+            _is_retriable_error,
+            _sanitize_sdk_error,
+        )
+
+        try:
+            await self._spawn(options, config)
+            return  # success — state is IDLE
+        except Exception as exc:
+            error_str = str(exc)
+
+        if _is_retriable_error(error_str):
+            logger.warning(
+                "Retriable error during spawn for session %s, "
+                "will retry (attempt %d/%d): %s",
+                self.session_id,
+                self._retry_count + 1,
+                self.MAX_RETRY_ATTEMPTS,
+                error_str[:120],
+            )
+            self._crash_to_cold()
+            while (
+                _is_retriable_error(error_str)
+                and self._retry_count < self.MAX_RETRY_ATTEMPTS
+            ):
+                self._retry_count += 1
+                is_oom = _is_oom_signal(error_str)
+                backoff = 30.0 if is_oom else min(
+                    15 * (2 ** (self._retry_count - 1)), 60
+                )
+                logger.info(
+                    "session_unit.spawn_retry session_id=%s "
+                    "attempt=%d/%d backoff=%.1fs oom=%s",
+                    self.session_id, self._retry_count,
+                    self.MAX_RETRY_ATTEMPTS, backoff, is_oom,
+                )
+                yield {
+                    "type": "status",
+                    "message": f"Reconnecting (attempt {self._retry_count}/{self.MAX_RETRY_ATTEMPTS})...",
+                    "code": "RETRY_SPAWN",
+                }
+                await asyncio.sleep(backoff)
+                try:
+                    await self._spawn(options, config)
+                    return  # success — state is IDLE
+                except Exception as retry_exc:
+                    error_str = str(retry_exc)
+                    self._crash_to_cold()
+
+            # All retries exhausted
+            friendly, suggested = _sanitize_sdk_error(error_str)
+            yield _build_error_event(
+                code="SPAWN_FAILED",
+                message=friendly,
+                detail=error_str,
+                suggested_action=suggested,
+            )
+            yield {"_abort": True}
+        else:
+            # Non-retriable spawn error
+            self._crash_to_cold(clear_identity=True)
+            friendly, suggested = _sanitize_sdk_error(error_str)
+            yield _build_error_event(
+                code="SPAWN_FAILED",
+                message=friendly,
                 detail=traceback.format_exc(),
                 suggested_action=suggested,
             )
+            yield {"_abort": True}
+
+    async def _handle_buffer_overflow(
+        self,
+        query_content: Any,
+        options: ClaudeAgentOptions,
+        config: Optional[Any],
+        error_str: str,
+    ) -> AsyncIterator[dict]:
+        """Recover from CLI 10MB JSONRPC buffer overflow.
+
+        Respawns with ``--resume`` and injects a progressive-processing
+        instruction so the agent fetches items one-at-a-time.
+
+        Yields stream events on success, or an error event + ``_abort``
+        sentinel on spawn failure.  Yields ``_recovered: True`` as final
+        event on success so the caller knows to return.
+
+        Does NOT increment ``_retry_count`` — buffer overflow is strategy
+        correction, not a transient failure.
+        """
+        from .session_utils import (
+            _build_error_event,
+            _sanitize_sdk_error,
+        )
+
+        logger.warning(
+            "session_unit.buffer_overflow session_id=%s — "
+            "will inject progressive processing recovery",
+            self.session_id,
+        )
+        self._buffer_overflow_recovery = True
+        resume_sid = self._sdk_session_id
+        self._crash_to_cold()
+        await asyncio.sleep(2.0)  # brief cooldown
+
+        retry_options = self._build_retry_options(options, resume_sid)
+        try:
+            await self._spawn(retry_options, config)
+        except Exception as spawn_exc:
+            # Capture traceback immediately — awaits in async generators
+            # can clear sys.exc_info() before format_exc() runs.
+            spawn_tb = traceback.format_exc()
+            self._crash_to_cold(clear_identity=True)
+            friendly, suggested = _sanitize_sdk_error(str(spawn_exc))
+            yield _build_error_event(
+                code="SPAWN_FAILED",
+                message=friendly,
+                detail=spawn_tb,
+                suggested_action=suggested,
+            )
+            yield {"_abort": True}
+            return
+
+        self._transition(SessionState.STREAMING)
+
+        # Build recovered query with progressive-processing instruction
+        recovery_prefix = (
+            "[System: Your previous tool call returned a response "
+            "exceeding the 10MB buffer limit. Use progressive "
+            "processing for this task:\n"
+            "- Fetch items ONE at a time (never batch multiple "
+            "files/images in a single tool call)\n"
+            "- After each fetch, extract key findings as compact text\n"
+            "- After all items processed, synthesize your findings\n"
+            "- For large text files, use offset/limit to read in "
+            "chunks of 500 lines\n"
+            "- If you already processed some items before the error, "
+            "continue where you left off — do not re-fetch items "
+            "you already analyzed\n"
+            "Do not attempt to fetch all items in a single tool "
+            "call again.]\n\n"
+        )
+        if isinstance(query_content, str):
+            recovered_query = recovery_prefix + query_content
+        elif isinstance(query_content, list):
+            recovered_query = [
+                {"type": "text", "text": recovery_prefix},
+                *query_content,
+            ]
+        else:
+            recovered_query = recovery_prefix + str(query_content)
+
+        try:
+            async for event in self._stream_response(recovered_query):
+                yield event
+            yield {"_recovered": True}
+        except Exception as recovery_exc:
+            # Recovery failed — propagate the NEW exception details back
+            # to send() so the retry check uses the recovery error, not
+            # the original "maximum buffer size" string.
+            logger.warning(
+                "Buffer overflow recovery failed for session %s: %s",
+                self.session_id, str(recovery_exc)[:200],
+            )
+            yield {
+                "_fallthrough_error": str(recovery_exc),
+                "_fallthrough_tb": traceback.format_exc(),
+            }
+
+    async def _retry_with_resume(
+        self,
+        query_content: Any,
+        options: ClaudeAgentOptions,
+        config: Optional[Any],
+        initial_error_str: str,
+        initial_tb_str: str,
+    ) -> AsyncIterator[dict]:
+        """Retry loop with exponential backoff and ``--resume``.
+
+        Handles OOM-aware backoff (30s flat for SIGKILL), spawn budget
+        re-check after backoff, and ``--resume`` flag for conversation
+        context restoration.
+
+        Yields stream events on success.  Yields error event + ``_abort``
+        sentinel when all retries are exhausted or resources denied.
+
+        On success, the generator returns normally (caller should also
+        return to exit ``send()``).  The ``_retry_count`` is managed
+        here and reset to 0 in ``_read_formatted_response`` on success.
+        """
+        from .session_utils import (
+            _build_error_event,
+            _is_retriable_error,
+            _sanitize_sdk_error,
+        )
+
+        error_str = initial_error_str
+        # Capture SDK session ID before cleanup for --resume
+        resume_session_id = self._sdk_session_id
+
+        while (
+            _is_retriable_error(error_str)
+            and self._retry_count < self.MAX_RETRY_ATTEMPTS
+        ):
+            self._retry_count += 1
+
+            # OOM-aware backoff: SIGKILL gets flat 30s cooldown
+            is_oom = _is_oom_signal(error_str)
+            if is_oom:
+                self._last_error_type = "oom"
+                backoff = 30.0
+            else:
+                self._last_error_type = None
+                backoff = self.RETRY_BACKOFF_SECONDS * self._retry_count
+
+            logger.info(
+                "Retry %d/%d for session %s after %.1fs backoff "
+                "(resume=%s, oom=%s)",
+                self._retry_count,
+                self.MAX_RETRY_ATTEMPTS,
+                self.session_id,
+                backoff,
+                resume_session_id,
+                is_oom,
+            )
+
+            self._crash_to_cold()
+            await asyncio.sleep(backoff)
+
+            # Re-check spawn budget after backoff
+            try:
+                from .resource_monitor import resource_monitor
+                budget = resource_monitor.spawn_budget()
+                if not budget.can_spawn:
+                    logger.warning(
+                        "Retry %d aborted: spawn budget denied "
+                        "post-backoff session_id=%s reason=%s",
+                        self._retry_count, self.session_id,
+                        budget.reason,
+                    )
+                    self._crash_to_cold(clear_identity=True)
+                    yield _build_error_event(
+                        code="RESOURCE_EXHAUSTED",
+                        message=(
+                            "Not enough memory to restart the AI service. "
+                            "Close unused tabs or apps to free memory."
+                        ),
+                        suggested_action=(
+                            "Close idle chat tabs to free memory, "
+                            "then send your message again."
+                        ),
+                    )
+                    yield {"_abort": True}
+                    return
+            except Exception:
+                pass  # Budget check failed — proceed with retry
+
+            retry_options = self._build_retry_options(
+                options, resume_session_id,
+            )
+
+            try:
+                await self._spawn(retry_options, config)
+            except Exception as spawn_exc:
+                # Capture traceback immediately — awaits in async generators
+                # can clear sys.exc_info() before format_exc() runs.
+                spawn_tb = traceback.format_exc()
+                error_str = str(spawn_exc)
+                if _is_retriable_error(error_str):
+                    logger.warning(
+                        "Retry %d spawn failed (retriable): %s",
+                        self._retry_count, error_str[:120],
+                    )
+                    continue
+                else:
+                    self._crash_to_cold(clear_identity=True)
+                    friendly, suggested = _sanitize_sdk_error(error_str)
+                    yield _build_error_event(
+                        code="SPAWN_FAILED",
+                        message=friendly,
+                        detail=spawn_tb,
+                        suggested_action=suggested,
+                    )
+                    yield {"_abort": True}
+                    return
+
+            self._transition(SessionState.STREAMING)
+
+            try:
+                async for event in self._stream_response(query_content):
+                    yield event
+                return  # success
+            except Exception as retry_exc:
+                error_str = str(retry_exc)
+                logger.warning(
+                    "Retry %d failed for session %s: %s",
+                    self._retry_count,
+                    self.session_id,
+                    error_str[:200],
+                )
+                continue
+
+        # All retries exhausted
+        self._crash_to_cold(clear_identity=True)
+        yield _build_error_event(
+            code="ALL_RETRIES_EXHAUSTED",
+            message=(
+                "The AI service couldn't start after multiple attempts. "
+                "This is usually temporary."
+            ),
+            suggested_action=(
+                "Your conversation is saved. Wait a moment, "
+                "then send your message again."
+            ),
+        )
+        yield {"_abort": True}
+
+    def _build_guard_event(self, action: LoopAction) -> Optional[dict]:
+        """Map a LoopAction to an SSE event dict, or None."""
+        if action == LoopAction.THROTTLE_WARN:
+            return self._compaction_guard.build_throttle_warning_event()
+        if action == LoopAction.THROTTLE_STOP:
+            return self._compaction_guard.build_throttle_stop_event()
+        if action == LoopAction.LOOP_DETECTED:
+            return self._compaction_guard.build_loop_warning_event()
+        return None
+
+    def _emit_post_stream_metadata(self, usage: dict) -> list[dict]:
+        """Build context-warning and TSCC metadata events after a result.
+
+        Returns a list of events (0–2 items) rather than yielding, so
+        the caller can iterate with a simple ``for`` loop.  Never raises
+        — failures are silently swallowed since metadata must never block
+        the response stream.
+        """
+        events: list[dict] = []
+
+        # Context usage warning (ok/warn/critical)
+        input_tokens = (usage.get("input_tokens") if usage else None)
+        if input_tokens and input_tokens > 0:
+            try:
+                from .prompt_builder import PromptBuilder
+                warning_evt = PromptBuilder.build_context_warning(
+                    input_tokens, self._model_name
+                )
+                if warning_evt:
+                    events.append(warning_evt)
+            except Exception:
+                pass  # Never block on warning failure
+
+            # Layer 1: Feed context usage to compaction guard
+            try:
+                self._compaction_guard.update_context_usage(
+                    input_tokens, self._model_name
+                )
+                guard_action = self._compaction_guard.check()
+                if guard_action != LoopAction.NONE:
+                    guard_evt = self._build_guard_event(guard_action)
+                    if guard_evt:
+                        events.append(guard_evt)
+            except Exception:
+                pass  # Never block on guard failure
+
+        # System prompt metadata for TSCC popover
+        try:
+            from . import session_registry
+            spm = session_registry.system_prompt_metadata.get(
+                self.session_id
+            )
+            if spm:
+                events.append({"type": "system_prompt_metadata", **spm})
+        except Exception:
+            pass  # Never block on metadata failure
+
+        return events
 
     async def _spawn(self, options: ClaudeAgentOptions, config: Optional[Any] = None) -> None:
         """Spawn a subprocess under ``_spawn_lock`` + ``_env_lock``.
@@ -796,6 +964,7 @@ class SessionUnit:
         )
 
         # COLD → IDLE (subprocess is alive and ready)
+        self._compaction_guard.reset_all()  # Fresh subprocess — full reset
         if self.state == SessionState.COLD:
             self._transition(SessionState.IDLE)
 
@@ -967,6 +1136,35 @@ class SessionUnit:
                             "type": "tool_use", "id": block.id,
                             "name": block.name, "summary": summary, "category": category,
                         })
+                        # ── Layer 2: Record tool call for circuit breaker ──
+                        self._compaction_guard.record_tool_call(
+                            block.name, block.input
+                        )
+                        guard_action = self._compaction_guard.check()
+                        if guard_action != LoopAction.NONE:
+                            guard_event = self._build_guard_event(guard_action)
+                            if guard_event:
+                                yield guard_event
+                            if guard_action in (
+                                LoopAction.THROTTLE_STOP,
+                                LoopAction.LOOP_DETECTED,
+                            ):
+                                # Flush accumulated content blocks before
+                                # interrupting — otherwise text/tool_use blocks
+                                # from earlier in this AssistantMessage are lost.
+                                if content_blocks:
+                                    yield {
+                                        "type": "assistant",
+                                        "content": content_blocks,
+                                        "model": getattr(message, "model", None),
+                                    }
+                                logger.warning(
+                                    "compaction_guard.interrupt "
+                                    "session_id=%s action=%s",
+                                    self.session_id, guard_action.value,
+                                )
+                                await self.interrupt()
+                                return
                     elif isinstance(block, ToolResultBlock):
                         block_content = str(block.content) if block.content else ""
                         if _has_tool_summarizer:
@@ -1032,33 +1230,8 @@ class SessionUnit:
                 }
 
                 # ── Context usage & metadata bridge ────────────────
-                # Read input_tokens from the result event and emit a
-                # context_warning SSE event at all usage levels (ok,
-                # warn, critical).  Also emit system_prompt_metadata
-                # so the frontend TSCC popover gets data via the same
-                # SSE pipeline — no separate API fetch needed.
-                input_tokens = (usage.get("input_tokens") if usage else None)
-                if input_tokens and input_tokens > 0:
-                    try:
-                        from .prompt_builder import PromptBuilder
-                        warning_evt = PromptBuilder.build_context_warning(
-                            input_tokens, self._model_name
-                        )
-                        if warning_evt:
-                            yield warning_evt
-                    except Exception:
-                        pass  # Never block on warning failure
-
-                # Emit system prompt metadata for TSCC popover
-                try:
-                    from . import session_registry
-                    spm = session_registry.system_prompt_metadata.get(
-                        self.session_id
-                    )
-                    if spm:
-                        yield {"type": "system_prompt_metadata", **spm}
-                except Exception:
-                    pass  # Never block on metadata failure
+                for meta_event in self._emit_post_stream_metadata(usage):
+                    yield meta_event
 
                 self._transition(SessionState.IDLE)
                 self.last_used = time.time()
@@ -1146,6 +1319,9 @@ class SessionUnit:
                 f"(session_id={self.session_id})"
             )
 
+        # User responded — reset circuit breaker so tool counts
+        # don't accumulate across the permission/answer boundary.
+        self._compaction_guard.reset()
         self._transition(SessionState.STREAMING)
 
         try:
@@ -1181,6 +1357,10 @@ class SessionUnit:
         # the decision (signaled via PermissionManager). We just need to
         # resume reading the response stream with the same formatting as
         # _stream_response.
+        #
+        # User responded — reset circuit breaker so tool counts
+        # don't accumulate across the permission boundary.
+        self._compaction_guard.reset()
         self._transition(SessionState.STREAMING)
 
         try:
@@ -1228,9 +1408,16 @@ class SessionUnit:
                 "message": "No active subprocess",
             }
 
+        # Layer 3: Inject work summary so post-compaction agent
+        # knows what it already did and doesn't re-run completed tools.
+        work_summary = self._compaction_guard.work_summary()
+        combined_instructions = "\n\n".join(
+            part for part in [instructions, work_summary] if part
+        )
+
         command = "/compact"
-        if instructions:
-            command = f"/compact {instructions}"
+        if combined_instructions:
+            command = f"/compact {combined_instructions}"
 
         try:
             await self._client.query(

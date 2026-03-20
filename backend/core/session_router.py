@@ -32,6 +32,103 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# ── SDK multimodal support flag ────────────────────────────────────
+# False = always convert image/document blocks to path hints.
+# Claude Code CLI does not currently support image/document content blocks
+# via stdin JSON.  When SDK support lands, flip this to True.
+_SDK_SUPPORTS_MULTIMODAL: bool = False
+
+
+async def _convert_unsupported_blocks_to_path_hints(
+    content: list[dict],
+    session_id: str | None,
+) -> list[dict]:
+    """Convert image/document content blocks to path hints.
+
+    Saves base64 data to the agent's workspace under
+    ``Attachments/{date}/{filename}`` so files are visible in the
+    Workspace Explorer and persist across sessions.  The user controls
+    cleanup — files are NOT auto-deleted.
+
+    Text blocks are passed through unchanged.
+
+    Args:
+        content: List of content block dicts (image, document, or text).
+        session_id: The effective session ID for logging.
+
+    Returns:
+        A new list with image/document blocks replaced by text path hints.
+    """
+    import base64
+    from pathlib import Path
+    from uuid import uuid4 as _uuid4
+
+    converted: list[dict] = []
+    for block in content:
+        block_type = block.get("type")
+        if block_type in ("image", "document"):
+            source = block.get("source", {})
+            data = source.get("data", "")
+            media_type = source.get("media_type", "")
+
+            ext_map = {
+                "image/png": ".png",
+                "image/jpeg": ".jpg",
+                "image/gif": ".gif",
+                "image/webp": ".webp",
+                "application/pdf": ".pdf",
+            }
+            ext = ext_map.get(media_type, ".bin")
+
+            # Save to SwarmWS/Attachments/{date}/ for Workspace Explorer visibility
+            from datetime import date as _date
+            from core.initialization_manager import initialization_manager
+
+            ws_path = initialization_manager.get_cached_workspace_path()
+            if ws_path:
+                date_str = _date.today().isoformat()
+                attach_dir = Path(ws_path) / "Attachments" / date_str
+            else:
+                attach_dir = Path.home() / ".swarm-ai" / "SwarmWS" / "Attachments"
+            attach_dir.mkdir(parents=True, exist_ok=True)
+
+            # Preserve original filename if provided by frontend
+            original_name = block.get("_filename", "")
+            if original_name:
+                safe_name = Path(original_name).name
+                candidate = attach_dir / safe_name
+                if candidate.exists():
+                    stem = candidate.stem
+                    candidate = attach_dir / f"{stem}_{_uuid4().hex[:6]}{ext}"
+                file_path = candidate
+            else:
+                file_path = attach_dir / f"{_uuid4()}{ext}"
+
+            try:
+                decoded = base64.b64decode(data)
+                await asyncio.to_thread(file_path.write_bytes, decoded)
+                logger.warning(
+                    "SDK multimodal fallback: saved %s block to %s (session %s)",
+                    block_type, file_path, session_id or "unknown",
+                )
+                rel_path = file_path.relative_to(ws_path) if ws_path else file_path
+                converted.append({
+                    "type": "text",
+                    "text": (
+                        f"[Attached {block_type}: {file_path.name}] "
+                        f"saved at {rel_path} - use Read tool to access"
+                    ),
+                })
+            except Exception as e:
+                logger.error("Failed to save attachment for fallback: %s", e)
+                converted.append({
+                    "type": "text",
+                    "text": f"[Failed to save {block_type} attachment for fallback delivery]",
+                })
+        else:
+            converted.append(block)
+    return converted
+
 
 class SessionRouter:
     """Routes chat requests to SessionUnits. Enforces MAX_CONCURRENT=2.
@@ -383,6 +480,19 @@ class SessionRouter:
             "model": None,
             "created_at": datetime.now().isoformat(),
         })
+
+        # ── Attachment persistence: save base64 files to Attachments/ ──
+        # Claude CLI doesn't support multimodal content blocks via stdin.
+        # Convert image/document blocks to text path hints, saving the file
+        # data to SwarmWS/Attachments/{date}/ so they're browsable in the
+        # Workspace Explorer and persist for the user.
+        if (
+            not _SDK_SUPPORTS_MULTIMODAL
+            and isinstance(query_content, list)
+        ):
+            query_content = await _convert_unsupported_blocks_to_path_hints(
+                query_content, session_id,
+            )
 
         # Stream response and accumulate assistant content for DB persistence
         assistant_blocks: list[dict] = []

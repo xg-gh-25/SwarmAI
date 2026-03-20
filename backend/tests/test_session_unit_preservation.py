@@ -92,7 +92,8 @@ def _patch_sdk_modules():
 def _make_unit(session_id: str = "test-preservation") -> SessionUnit:
     """Create a SessionUnit in STREAMING state with a mocked client."""
     unit = SessionUnit(session_id=session_id, agent_id="default")
-    unit._transition(SessionState.STREAMING)
+    unit._transition(SessionState.IDLE)       # COLD→IDLE
+    unit._transition(SessionState.STREAMING)   # IDLE→STREAMING
     return unit
 
 
