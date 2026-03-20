@@ -196,8 +196,8 @@ export function useUnifiedAttachments(
             continue;
           }
 
-          // 3. Determine delivery strategy
-          const strategy = determineDeliveryStrategy(fileType, file.size);
+          // 3. Determine delivery strategy (pass MIME + name for image subtype routing)
+          const strategy = determineDeliveryStrategy(fileType, file.size, file.type, file.name);
 
           // 4. Create placeholder attachment (loading state)
           const id = generateId();
@@ -322,7 +322,7 @@ export function useUnifiedAttachments(
           // - text/csv → inline_text (content read at send time via workspaceService)
           // - image/pdf → path_hint (binary files can't be read as base64 from frontend;
           //   the backend will serve them to Claude via Read tool)
-          let strategy = determineDeliveryStrategy(fileType, 0);
+          let strategy = determineDeliveryStrategy(fileType, 0, '', file.name);
           if (strategy === 'base64_image' || strategy === 'base64_document') {
             strategy = 'path_hint';
           }
