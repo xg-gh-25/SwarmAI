@@ -127,7 +127,7 @@ async def build_hooks(
         )
 
     # PreCompact hook — sets flags on session_context so
-    # _run_query_on_client can emit an SSE event after compaction.
+    # SessionUnit._stream_response can emit an SSE event after compaction.
     if session_context is not None:
         async def _pre_compact_hook(hook_input, tool_name, hook_context):
             trigger = getattr(hook_input, "trigger", "auto")

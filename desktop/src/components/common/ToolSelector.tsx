@@ -18,7 +18,7 @@ export interface Tool {
   enabledByDefault?: boolean; // Override category default for specific tools
 }
 
-// Built-in tool categories based on agent_manager.py
+// Built-in tool categories based on security_hooks.py
 export const TOOL_CATEGORIES: ToolCategory[] = [
   {
     id: 'bash',

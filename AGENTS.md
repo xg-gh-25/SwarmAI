@@ -46,7 +46,7 @@ Tauri App
 └── Python Backend (PyInstaller sidecar)
     ├── FastAPI server (main.py)
     ├── SQLite database (pre-seeded for fast startup)
-    └── ClaudeSDKClient (agent_manager.py)
+    └── SessionRouter → SessionUnit → ClaudeSDKClient
 ```
 
 ### Key Concepts
@@ -63,7 +63,13 @@ backend/
 ├── main.py                        # FastAPI entry (fast startup + full init paths)
 ├── config.py                      # Settings from config.json
 ├── core/
-│   ├── agent_manager.py           # ClaudeSDKClient wrapper, session ID mapping, hooks
+│   ├── session_router.py          # Multi-session routing, concurrency cap, slot management
+│   ├── session_unit.py            # 5-state machine per tab (COLD/IDLE/STREAMING/WAITING_INPUT/DEAD)
+│   ├── session_registry.py        # Global singletons, startup/shutdown, kill_all_claude_processes
+│   ├── prompt_builder.py          # System prompt assembly, SDK options, MCP config
+│   ├── lifecycle_manager.py       # 12hr TTL, orphan reaper, hook serialization
+│   ├── session_utils.py           # Shared error helpers, retriable error detection
+│   ├── skill_creator.py           # AI skill generation agent config
 │   ├── session_manager.py         # Conversation session storage (DB + in-memory cache)
 │   ├── initialization_manager.py  # Startup orchestration, workspace caching
 │   ├── swarm_workspace_manager.py # SwarmWS filesystem (verify_integrity, projects)
@@ -75,7 +81,6 @@ backend/
 │   ├── projection_layer.py        # Skill symlink projection into .claude/skills/
 │   ├── plugin_manager.py          # Plugin marketplace, install/uninstall
 │   ├── security_hooks.py          # 4-layer PreToolUse defense chain
-│   ├── cmd_permission_manager.py  # Filesystem-backed command approvals (glob matching)
 │   ├── permission_manager.py      # In-memory asyncio permission signaling
 │   ├── chat_thread_manager.py     # ChatThread CRUD, project binding, summaries
 │   ├── content_accumulator.py     # O(1) content block deduplication

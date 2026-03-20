@@ -1,6 +1,6 @@
 ---
 inclusion: fileMatch
-fileMatchPattern: "backend/core/context_directory_loader.py,backend/core/context_injector.py,backend/core/system_prompt.py,backend/core/agent_manager.py,backend/core/memory_extractor.py,backend/core/daily_activity_writer.py,backend/hooks/*.py,backend/scripts/locked_write.py,backend/context/*.md"
+fileMatchPattern: "backend/core/context_directory_loader.py,backend/core/context_injector.py,backend/core/system_prompt.py,backend/core/prompt_builder.py,backend/core/memory_extractor.py,backend/core/daily_activity_writer.py,backend/hooks/*.py,backend/scripts/locked_write.py,backend/context/*.md"
 ---
 
 # Context and Memory Safety Principles
