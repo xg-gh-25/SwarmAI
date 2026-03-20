@@ -45,6 +45,7 @@ class SystemPromptBuilder:
         sections = [
             self._section_identity(),
             self._section_safety(),
+            self._section_large_content(),
             self._section_workspace(),
             self._section_selected_dirs(),
             self._section_datetime(),
@@ -77,6 +78,38 @@ class SystemPromptBuilder:
             "- Prioritize safety over task completion.\n"
             "- Do not manipulate or deceive to gain permissions.\n"
             "- When uncertain, ask instead of guessing."
+        )
+
+    @staticmethod
+    def _section_large_content() -> str:
+        """Guidance for progressive processing of large MCP tool responses.
+
+        The CLI has a hardcoded 10MB JSONRPC buffer — any single tool
+        response exceeding this crashes the subprocess.  This section
+        teaches the agent to avoid triggering it.
+        """
+        return (
+            "## Large Content Processing\n\n"
+            "SDK limitation: individual tool responses must be <10MB. "
+            "When working with files, images, or attachments, use "
+            "progressive processing:\n\n"
+            "1. **ASSESS** — Get the list/count/metadata first, without "
+            "fetching content\n"
+            "2. **PROCESS** — Fetch items one at a time; only items under "
+            "500KB (plain text, small JSON) may be batched 2-3 at a time\n"
+            "3. **EXTRACT** — After each fetch, summarize key findings "
+            "as text notes\n"
+            "4. **SYNTHESIZE** — After all items processed, combine text "
+            "findings into answer\n\n"
+            "Applies when:\n"
+            "- Fetching >3 attachments, images, or files\n"
+            "- Reading files likely >5MB (large codebases, logs, data)\n"
+            "- Any MCP tool call that returns file/image content\n\n"
+            "For large text files: use offset/limit parameters (500 lines "
+            "per chunk).\n"
+            "For multiple binaries: fetch strictly one at a time.\n\n"
+            "Never skip or truncate items. Process ALL content through "
+            "progressive extraction."
         )
 
     def _section_workspace(self) -> str:

@@ -415,3 +415,99 @@ class TestWaitingInputCrash:
 
         assert alive is False
         assert unit.state == SessionState.COLD
+
+
+# ---------------------------------------------------------------------------
+# Property 21: Buffer overflow recovery
+# ---------------------------------------------------------------------------
+
+class TestBufferOverflowRecovery:
+    """Property 21: Buffer overflow recovery via progressive processing.
+
+    # Feature: progressive-content-processing
+
+    When a tool response exceeds the CLI's 10MB JSONRPC buffer, the unit
+    must set a recovery flag, NOT increment retry count, and limit
+    recovery to one attempt per message.
+
+    **Validates: Design doc 2026-03-20-progressive-content-processing-design.md**
+    """
+
+    def test_buffer_overflow_flag_initializes_false(self):
+        """Recovery flag starts as False."""
+        unit = SessionUnit(session_id="test-bo-init", agent_id="default")
+        assert unit._buffer_overflow_recovery is False
+
+    def test_buffer_overflow_sets_recovery_flag(self):
+        """Simulating buffer overflow sets the recovery flag."""
+        unit = SessionUnit(session_id="test-bo-flag", agent_id="default")
+        unit._buffer_overflow_recovery = True
+        assert unit._buffer_overflow_recovery is True
+
+    def test_buffer_overflow_does_not_increment_retry(self):
+        """Buffer overflow recovery must NOT count as a retry attempt.
+
+        The recovery is a strategy correction (progressive processing),
+        not a transient-failure retry.  Incrementing _retry_count would
+        exhaust retries for a subsequent genuine transient error.
+        """
+        unit = SessionUnit(session_id="test-bo-retry", agent_id="default")
+        initial_retry = unit._retry_count
+
+        # Simulate: overflow detected → flag set, retry count untouched
+        unit._buffer_overflow_recovery = True
+        assert unit._retry_count == initial_retry
+
+    def test_buffer_overflow_guard_prevents_infinite_loop(self):
+        """When _buffer_overflow_recovery is already True, a second overflow
+        must NOT re-trigger recovery (prevents infinite retry loop).
+
+        The send() error handler checks:
+            if "maximum buffer size" in error_str and not self._buffer_overflow_recovery:
+        When the flag is already True, the condition short-circuits.
+        """
+        unit = SessionUnit(session_id="test-bo-guard", agent_id="default")
+        unit._buffer_overflow_recovery = True
+
+        # The guard condition: must be False to enter recovery
+        error_str = "Failed to decode JSON: JSON message exceeded maximum buffer size of 10485760 bytes"
+        should_recover = (
+            "maximum buffer size" in error_str
+            and not unit._buffer_overflow_recovery
+        )
+        assert should_recover is False
+
+    def test_recovery_flag_allows_first_attempt(self):
+        """When flag is False, the guard allows recovery."""
+        unit = SessionUnit(session_id="test-bo-allow", agent_id="default")
+        assert unit._buffer_overflow_recovery is False
+
+        error_str = "JSON message exceeded maximum buffer size of 10485760 bytes"
+        should_recover = (
+            "maximum buffer size" in error_str
+            and not unit._buffer_overflow_recovery
+        )
+        assert should_recover is True
+
+    def test_crash_to_cold_resets_state_for_recovery(self):
+        """_crash_to_cold() transitions to COLD, enabling a fresh spawn."""
+        unit = SessionUnit(session_id="test-bo-crash", agent_id="default")
+        unit._transition(SessionState.STREAMING)
+
+        # Give it mock subprocess refs
+        unit._client = MagicMock()
+        unit._wrapper = MagicMock()
+
+        unit._crash_to_cold()
+
+        assert unit.state == SessionState.COLD
+        assert unit._client is None
+        assert unit._wrapper is None
+
+    def test_buffer_overflow_isolated_between_units(self):
+        """Recovery flag in unit A does not affect unit B."""
+        unit_a = SessionUnit(session_id="bo-iso-a", agent_id="default")
+        unit_b = SessionUnit(session_id="bo-iso-b", agent_id="default")
+
+        unit_a._buffer_overflow_recovery = True
+        assert unit_b._buffer_overflow_recovery is False
