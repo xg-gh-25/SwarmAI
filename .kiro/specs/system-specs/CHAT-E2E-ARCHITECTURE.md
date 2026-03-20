@@ -22,7 +22,7 @@ The Claude Agent SDK manages the actual conversation state (multi-turn history) 
 │         │                                          │        │
 │  ┌──────▼───────────────────┐                      │        │
 │  │ useChatStreamingLifecycle│                      │        │
-│  │ Zustand tabStore       │                      │        │
+│  │ useUnifiedTabState     │                      │        │
 │  │ (state machines, tabs)   │                      │        │
 │  └──────────────────────────┘                      │        │
 └────────────────────────────────────────────────────┼────────┘
@@ -57,7 +57,7 @@ The Claude Agent SDK manages the actual conversation state (multi-turn history) 
 1. `main.py` lifespan starts → initializes DB, loads `config.json` via `AppConfigManager`
 2. `session_registry.initialize()` receives injected `AppConfigManager`, `CmdPermissionManager`, `CredentialValidator`
 3. Frontend `ChatPage.tsx` mounts → queries `/api/agents` to get the default SwarmAgent
-4. `Zustand tabStore` restores tabs from `~/.swarm-ai/open_tabs.json`
+4. `useUnifiedTabState` restores tabs from `~/.swarm-ai/open_tabs.json`
 5. `useChatStreamingLifecycle` initializes: `messages=[]`, `sessionId=undefined`, `isStreaming=false`
 
 ### 1.2 User Types First Message and Hits Send
@@ -755,7 +755,7 @@ Additional resilience:
 ### Tab Restoration on Startup
 
 ```
-App Launch → Zustand tabStore initializes with temporary default tab
+App Launch → useUnifiedTabState initializes with temporary default tab
   → ChatPage mount calls restoreFromFile()
   → open_tabs.json exists?
     YES → Clear default, hydrate saved tabs (messages=[])

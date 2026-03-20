@@ -21,7 +21,7 @@ SwarmAI is a persistent agentic operating system for knowledge work. It's a desk
 | AI Providers | AWS Bedrock (default), Anthropic API |
 | Database | SQLite (pre-seeded for fast startup, WAL mode) |
 | Styling | Tailwind CSS 4.x + CSS custom properties |
-| State | TanStack Query (server) + Zustand (tabs) |
+| State | TanStack Query (server) + useRef Map (tabs) |
 | Testing | Vitest + fast-check (frontend), pytest + Hypothesis (backend) |
 
 ---
@@ -86,7 +86,7 @@ Three-column layout with embedded cognitive context:
 
 | Hook | Purpose |
 |------|---------|
-| `useZustandTabBridge` | Bridge: Zustand tab store ↔ legacy tabMapRef (incremental migration) |
+| `useUnifiedTabState` | Single source of truth for all tab state (mutable ref + render counter) |
 | `useChatStreamingLifecycle` | SSE streaming, messages, sessionId, pendingQuestion, isStreaming |
 | `useTSCCState` | Thread-scoped cognitive context state |
 | `useRightSidebarGroup` | Mutual exclusion for right sidebar panels |
@@ -99,18 +99,16 @@ Three-column layout with embedded cognitive context:
 
 ### Tab State Model
 
-Zustand single store (`desktop/src/stores/tabStore.ts`) is the source of truth for all tab state:
+`useUnifiedTabState` (`desktop/src/hooks/useUnifiedTabState.ts`) is the source of truth for all tab state, using a dual-state pattern optimized for streaming:
 
-- `tabs: Record<string, TabState>`: Per-tab state (sessionId, agentId, messages, streaming status)
-- `activeTabId`: Currently focused tab
-- `createTab()`, `closeTab()`, `setActiveTab()`: Tab CRUD
-- `setStreaming()`, `appendMessage()`, `updateMessage()`: Per-tab state updates
-- `persistTabs()`: Debounced 500ms write to `~/.swarm-ai/open_tabs.json`
-- `restoreTabs()`: Load tab metadata from file on startup
+- `tabMapRef: useRef<Map<string, UnifiedTab>>`: Mutable ref for synchronous reads/writes in stream handlers (zero re-render overhead during SSE token deltas)
+- `renderCounter: useState<number>`: Bumped to trigger `useMemo` re-derivation of display views (`openTabs`, `tabStatuses`, `activeTab`)
+- Tab CRUD: `addTab()`, `closeTab()`, `selectTab()`
+- Per-tab state: `updateTabState()`, `updateTabStatus()`, `getTabState()`
+- Persistence: Debounced 500ms write to `~/.swarm-ai/open_tabs.json`
+- `restoreFromFile()`: Load tab metadata from file on startup
 - Messages loaded lazily from backend API when a tab becomes active
-- Background tab SSE events update store without triggering active tab re-renders (Zustand selectors)
-
-`useZustandTabBridge` provides backward compatibility during incremental migration from the old `tabMapRef` pattern.
+- Stream handlers read/write `tabMapRef` directly for O(1) synchronous access during high-frequency SSE events
 
 ### Frontend File Structure
 
@@ -130,7 +128,7 @@ desktop/src/
 │       ├── constants.ts          # Welcome message, sidebar configs
 │       └── utils.ts              # Session grouping helpers
 ├── hooks/
-│   ├── useZustandTabBridge.ts    # Bridge: Zustand store ↔ legacy tabMapRef
+│   ├── useUnifiedTabState.ts     # Tab state (mutable ref + render counter)
 │   ├── useChatStreamingLifecycle.ts  # SSE streaming lifecycle
 │   ├── useTSCCState.ts           # Cognitive context state
 │   ├── useUnifiedAttachments.ts  # Unified file attachment lifecycle
