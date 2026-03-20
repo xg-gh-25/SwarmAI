@@ -877,6 +877,24 @@ class SessionUnit:
                     } if usage else None,
                 }
 
+                # ── Context usage warning bridge ───────────────────
+                # Read input_tokens from the result event and emit a
+                # context_warning SSE event if above 70% of the model's
+                # context window.  This wires the dead-code warning
+                # builder into the live streaming path.
+                input_tokens = (usage.get("input_tokens") if usage else None)
+                if input_tokens and input_tokens > 0 and options:
+                    try:
+                        from .prompt_builder import PromptBuilder
+                        _pb = PromptBuilder.__new__(PromptBuilder)
+                        warning_evt = _pb.build_context_warning(
+                            input_tokens, getattr(options, "model", None)
+                        )
+                        if warning_evt and warning_evt.get("level") != "ok":
+                            yield warning_evt
+                    except Exception:
+                        pass  # Never block on warning failure
+
                 self._transition(SessionState.IDLE)
                 self.last_used = time.time()
                 self._retry_count = 0
