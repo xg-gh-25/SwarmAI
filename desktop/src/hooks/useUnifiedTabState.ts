@@ -1,13 +1,14 @@
 /**
  * Unified tab state hook — single source of truth for all tab state.
  *
- * This hook uses the dual-state pattern (tabMapRef + useState + renderCounter).
- * A Zustand-backed replacement exists in ``useZustandTabBridge`` + ``tabStore``,
- * but the migration is blocked because ``useChatStreamingLifecycle`` and
- * ``useUnifiedAttachments`` directly mutate ``tabMapRef`` entries (mutable ref
- * pattern). The Zustand bridge's synthetic tabMapRef doesn't propagate mutations
- * back to the store. Migration requires rewriting stream handlers to use
- * Zustand's immutable ``setState`` pattern.
+ * Uses the dual-state pattern: ``useRef<Map>`` for synchronous reads/writes
+ * in stream handlers (zero re-render overhead during SSE token deltas) +
+ * ``useState`` render counter for React re-derivation of display views.
+ *
+ * This is the correct architecture for streaming-heavy state. Mutable refs
+ * give O(1) synchronous access during high-frequency SSE events (~100/sec
+ * during token streaming). An immutable store would add copy overhead on
+ * every delta with no benefit — all consumers share tabMapRef via ChatPage.
  *
  * Replaces the three separate stores (`useTabState`, `tabStateRef`, `tabStatuses`)
  * with a single `useRef<Map<string, UnifiedTab>>` backed by a `useState` re-render
