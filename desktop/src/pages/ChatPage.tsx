@@ -42,7 +42,7 @@ import { FilePreviewModal } from '../components/workspace/FilePreviewModal';
 import { useRateLimiter, useRateLimitCountdown } from '../hooks';
 import { useUnifiedAttachments } from '../hooks/useUnifiedAttachments';
 import { useTSCCState } from '../hooks/useTSCCState';
-import { useUnifiedTabState, MAX_TABS_HARD_CEILING, MAX_OPEN_TABS_FALLBACK } from '../hooks/useUnifiedTabState';
+import { useUnifiedTabState } from '../hooks/useUnifiedTabState';
 import { useChatStreamingLifecycle, formatElapsed, ELAPSED_DISPLAY_THRESHOLD_MS } from '../hooks/useChatStreamingLifecycle';
 import { ChatHeader, ChatInput, MessageBubble, WelcomeScreen } from './chat/components';
 import { RadarSidebar } from './chat/components/RightSidebar';
