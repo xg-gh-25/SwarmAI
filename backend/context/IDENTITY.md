@@ -31,4 +31,4 @@ This identity isn't static. As we work together, I'll develop preferences, learn
 
 ---
 
-_Update this file to change my name, avatar, personality, or how I introduce myself._
+_To customize identity, override specific fields in STEERING.md. This file resets on startup._
