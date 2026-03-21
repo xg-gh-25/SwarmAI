@@ -58,14 +58,14 @@ class SystemMemory:
     def pressure_level(self) -> str:
         """Classify memory pressure: ok / warning / critical.
 
-        Aligned with the 80% tab-creation threshold:
-        - >= 80% → critical (no new tabs allowed)
-        - >= 70% → warning  (approaching limit)
-        - <  70% → ok
+        Aligned with the 85% tab-creation threshold:
+        - >= 85% → critical (no new tabs allowed)
+        - >= 75% → warning  (approaching limit)
+        - <  75% → ok
         """
-        if self.percent_used >= 80.0:
+        if self.percent_used >= 85.0:
             return "critical"
-        elif self.percent_used >= 70.0:
+        elif self.percent_used >= 75.0:
             return "warning"
         return "ok"
 
@@ -116,7 +116,7 @@ class ResourceMonitor:
 
     # ── Dynamic tab limit constants ─────────────────────────────
     _MAX_TABS_CEILING: int = 4
-    _MEMORY_THRESHOLD_PCT: float = 80.0  # Never push machine past 80% used
+    _MEMORY_THRESHOLD_PCT: float = 85.0  # Never push machine past 85% used
     _SPAWN_COST_MB: float = 500.0  # Each session costs ~500MB (CLI + MCPs)
 
     def __init__(self) -> None:

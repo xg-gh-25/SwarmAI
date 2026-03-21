@@ -344,7 +344,7 @@ class TestP3ComputeMaxTabsFormulaPreservation:
         used_mb = total_mb * (used_pct / 100.0)
         used_bytes = int(used_mb * 1024 * 1024)
         available_bytes = total_bytes - used_bytes
-        headroom_mb = total_mb * 0.80 - used_mb
+        headroom_mb = total_mb * 0.85 - used_mb
         expected = max(1, min(int(headroom_mb / 500), 4))
 
         monitor = ResourceMonitor()
