@@ -206,6 +206,12 @@ export default function ChatPage() {
     };
   }, [addWorkspaceFiles]);
 
+  // Ref-bridge for the queue drain callback: drainQueuedMessage depends on
+  // createStreamHandler et al. from the lifecycle hook, so it can't be passed
+  // directly at hook-construction time. Instead we pass a stable wrapper that
+  // reads from this ref, then update the ref once drainQueuedMessage is defined.
+  const drainQueueRef = useRef<(tabId: string) => void>(() => {});
+
   // Streaming lifecycle hook — owns messages, sessionId, pendingQuestion,
   // isStreaming, refs, and stream handler factories (Phase 0 extraction).
   // Tab state is now managed by useUnifiedTabState; unified hook methods
@@ -247,6 +253,7 @@ export default function ChatPage() {
     updateTabStatus,
     tabMapRef,
     activeTabIdRef,
+    onDrainQueue: (tabId: string) => drainQueueRef.current(tabId),
   });
 
   // TSCC state management — lifecycle state and UI preferences only.
@@ -726,6 +733,12 @@ export default function ChatPage() {
         if (activeState?.sessionId) {
           try {
             await loadSessionMessages(activeState.sessionId);
+            // Task 3 fix: force a visible repaint after messages load.
+            // React 18 batching may hold the render until interaction;
+            // breaking out via setTimeout ensures the paint fires immediately.
+            if (mounted) {
+              setTimeout(() => bumpStreamingDerivation(), 0);
+            }
           } catch {
             // Session may no longer exist — reset to fresh tab
             if (mounted) {
@@ -742,6 +755,38 @@ export default function ChatPage() {
             setSessionId(undefined);
             setIsLoadingHistory(false);
             setMessagesReady(true);
+          }
+        }
+
+        // Task 2 fix: preload messages for non-active restored tabs.
+        // Writes directly to tabMapRef — NO React state changes — so tab
+        // switches are instant instead of showing empty → load → appear.
+        if (mounted) {
+          const preloadPromises: Promise<void>[] = [];
+          for (const [tabId, tab] of tabMapRef.current.entries()) {
+            if (tabId === activeId) continue;  // already loaded above
+            if (!tab.sessionId) continue;       // new tab, no session
+            if (tab.messages.length > 0) continue; // already has messages
+            const sid = tab.sessionId;
+            preloadPromises.push(
+              chatService.getSessionMessagesPaginated(sid, 50)
+                .then(msgs => {
+                  if (!mounted) return;
+                  const tabRef = tabMapRef.current.get(tabId);
+                  if (tabRef && tabRef.sessionId === sid && !tabRef.isStreaming) {
+                    tabRef.messages = msgs.map(toDisplayMessage);
+                  }
+                })
+                .catch(err => {
+                  console.warn(`[ChatPage] Background preload failed for tab ${tabId}:`, err);
+                })
+            );
+          }
+          // Fire all in parallel — don't block the UI
+          if (preloadPromises.length > 0) {
+            Promise.all(preloadPromises).then(() => {
+              console.log(`[ChatPage] Background preloaded ${preloadPromises.length} tab(s)`);
+            });
           }
         }
       } else {
@@ -1179,8 +1224,81 @@ export default function ChatPage() {
 
     // Per-tab streaming guard: check only the active tab's state
     const activeTabForGuard = tabMapRef.current.get(activeTabIdRef.current ?? '');
-    if (activeTabForGuard?.isStreaming || pendingStreamTabs.has(activeTabIdRef.current ?? '')) return;
 
+    // Hard guard: session creation in-flight — truly can't queue or send
+    if (pendingStreamTabs.has(activeTabIdRef.current ?? '')) return;
+
+    // ──── QUEUE PATH: user sends while streaming ────────────────────────
+    if (activeTabForGuard?.isStreaming) {
+      const trimmedText = messageText.trim();
+      if (!trimmedText && !hasAttachments) return;
+
+      const displayText = trimmedText || '[Attachments]';
+      const displayContent: ContentBlock[] = [{ type: 'text', text: displayText }];
+      if (hasAttachments && trimmedText) {
+        displayContent.push({ type: 'text', text: `📎 ${currentAttachments.map((a) => a.name).join(', ')}` });
+      }
+
+      // REPLACE PATH: if a message is already queued, update in-place
+      const existingQueued = activeTabForGuard.queuedMessage;
+      if (existingQueued) {
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === existingQueued.messageId
+              ? { ...m, content: displayContent, timestamp: new Date().toISOString() }
+              : m
+          )
+        );
+        if (activeTabForGuard.messages) {
+          activeTabForGuard.messages = activeTabForGuard.messages.map((m) =>
+            m.id === existingQueued.messageId
+              ? { ...m, content: displayContent, timestamp: new Date().toISOString() }
+              : m
+          );
+        }
+
+        activeTabForGuard.queuedMessage = {
+          text: messageText,
+          attachments: [...(currentAttachments || [])],
+          displayContent,
+          messageId: existingQueued.messageId,
+        };
+
+        setInputValue('');
+        clearAttachments();
+        return;
+      }
+
+      // NEW QUEUE: no existing queued message — create one
+      const queuedMessageId = `queued-${crypto.randomUUID()}`;
+
+      const queuedUserMessage: Message = {
+        id: queuedMessageId,
+        role: 'user',
+        content: displayContent,
+        timestamp: new Date().toISOString(),
+        isQueued: true,
+      };
+      setMessages((prev) => [...prev, queuedUserMessage]);
+
+      // Sync to tabMapRef (authoritative store)
+      if (activeTabForGuard.messages) {
+        activeTabForGuard.messages = [...activeTabForGuard.messages, queuedUserMessage];
+      }
+
+      activeTabForGuard.queuedMessage = {
+        text: messageText,
+        attachments: [...(currentAttachments || [])],
+        displayContent,
+        messageId: queuedMessageId,
+      };
+
+      setInputValue('');
+      clearAttachments();
+      return;
+    }
+
+    // ──── NORMAL SEND PATH (existing code) ──────────────────────────────
     // Set streaming flag IMMEDIATELY after guard passes to close the race
     // window between guard check and the old setIsStreaming call ~20 lines
     // below.  setIsStreaming synchronously mutates tabMapRef.isStreaming,
@@ -1312,6 +1430,92 @@ export default function ChatPage() {
       });
     }
   }, [selectedAgentId, enableSkills, enableMCP, handlePluginCommand, buildContentArray, clearAttachments, resetUserScroll, incrementStreamGen, setIsStreaming, setMessages, setInputValue, updateTabStatus, updateTabTitle, setTabIsNew, initTabState, wrappedCreateStreamHandler, createErrorHandler, createCompleteHandler, activeTabIdRef, tabMapRef, pendingStreamTabs, queryClient, t]);
+
+  /**
+   * Drain the queued message for a tab — builds content and starts a new stream.
+   *
+   * Called from:
+   * - createStreamHandler (result event) via onSendQueued — normal completion (site A)
+   * - handleStop (finally block) — user-initiated stop (site B)
+   *
+   * CRITICAL: This is a trusted internal call. It MUST NOT check
+   * pendingStreamTabs or isStreaming — those guards are for user-initiated
+   * sends only. By the time this runs, the previous stream is already done.
+   *
+   * Async because buildContentArray does network I/O (deferred from queue time).
+   */
+  const drainQueuedMessage = useCallback(async (tabId: string) => {
+    const tabState = tabMapRef.current.get(tabId);
+    if (!tabState?.queuedMessage) return; // idempotent — safe if both sites race
+
+    const queued = tabState.queuedMessage;
+    tabState.queuedMessage = undefined; // clear BEFORE send (exactly-once)
+    tabState.userStopped = false; // prevent stale flag from suppressing new stream errors
+
+    // Remove the "queued" badge from the user message
+    const isActive = activeTabIdRef.current === tabId;
+    if (isActive) {
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === queued.messageId ? { ...m, isQueued: false } : m
+        )
+      );
+    }
+    if (tabState.messages) {
+      tabState.messages = tabState.messages.map((m) =>
+        m.id === queued.messageId ? { ...m, isQueued: false } : m
+      );
+    }
+
+    try {
+      // Build content NOW (deferred from queue time — async, reads files)
+      const content = await buildContentArray(queued.text, queued.attachments);
+      if (content.length === 0) return;
+
+      // Set streaming state — trusted internal call, bypasses all guards
+      setIsStreaming(true, tabId);
+      if (tabId) updateTabStatus(tabId, 'streaming');
+      incrementStreamGen();
+      resetUserScroll();
+
+      const assistantMessageId = (Date.now() + 1).toString();
+      const assistantPlaceholder: Message = { id: assistantMessageId, role: 'assistant', content: [], timestamp: new Date().toISOString() };
+
+      if (isActive) {
+        setMessages((prev) => [...prev, assistantPlaceholder]);
+      }
+      if (tabState.messages) {
+        tabState.messages = [...tabState.messages, assistantPlaceholder];
+      }
+
+      // Resolve sessionId from tabMapRef (authoritative)
+      const resolvedSessionId = tabState.sessionId || sessionIdRef.current;
+
+      const abort = chatService.streamChat(
+        {
+          agentId: selectedAgentId!,
+          content,
+          sessionId: resolvedSessionId,
+          enableSkills,
+          enableMCP,
+          ...(editorContextRef.current && { editorContext: editorContextRef.current }),
+        },
+        createStreamHandler(assistantMessageId, tabId),
+        createErrorHandler(assistantMessageId, tabId),
+        createCompleteHandler(tabId),
+      );
+
+      // Store abort function in tab map
+      tabState.abortController = { abort: () => { abort(); }, signal: { aborted: false } } as unknown as AbortController;
+      tabState.hasReceivedData = false;
+      tabState.isReconnecting = false;
+      tabState.reconnectionAttempt = 0;
+    } catch (e) {
+      // Send failed — restore queue so user doesn't lose their message
+      tabState.queuedMessage = queued;
+      console.error('[queue-drain] failed, queue restored:', e);
+    }
+  }, [buildContentArray, selectedAgentId, enableSkills, enableMCP, setIsStreaming, setMessages, updateTabStatus, incrementStreamGen, resetUserScroll, createStreamHandler, createErrorHandler, createCompleteHandler, tabMapRef, activeTabIdRef]);
 
   // Handle answering AskUserQuestion
   const handleAnswerQuestion = (toolUseId: string, answers: Record<string, string>) => {
@@ -1591,6 +1795,11 @@ export default function ChatPage() {
       setIsStreaming(false, currentTabId ?? undefined);
       // Update tab status to idle
       if (currentTabId) updateTabStatus(currentTabId, 'idle');
+
+      // Drain site B: auto-send queued message after stop
+      if (currentTabId) {
+        setTimeout(() => drainQueuedMessage(currentTabId), 0);
+      }
     }
   };
 

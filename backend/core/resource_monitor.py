@@ -186,9 +186,14 @@ class ResourceMonitor:
                         pass
 
             free = stats.get("Pages free", 0)
-            inactive = stats.get("Pages inactive", 0)
             speculative = stats.get("Pages speculative", 0)
-            available = free + inactive + speculative
+            available = free + speculative
+            logger.debug(
+                "vm_stat: free=%dMB speculative=%dMB (excluded inactive=%dMB)",
+                free // (1024 * 1024),
+                speculative // (1024 * 1024),
+                stats.get("Pages inactive", 0) // (1024 * 1024),
+            )
 
             # Get total from sysctl
             sysctl_result = subprocess.run(
@@ -296,7 +301,12 @@ class ResourceMonitor:
         mem = self.system_memory()
         available_mb = mem.available / (1024 * 1024)
         raw = int((available_mb - self._TAB_HEADROOM_MB) // self._DEFAULT_SPAWN_COST_MB)
-        return max(1, min(raw, self._MAX_TABS_CEILING))
+        result = max(1, min(raw, self._MAX_TABS_CEILING))
+        logger.info(
+            "compute_max_tabs: available=%.0fMB headroom=%.0fMB raw=%d result=%d pressure=%s",
+            available_mb, self._TAB_HEADROOM_MB, raw, result, mem.pressure_level,
+        )
+        return result
 
     # ── Process metrics ─────────────────────────────────────────
 

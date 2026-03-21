@@ -468,6 +468,8 @@ async def lifespan(app: FastAPI):
     # Wire hooks AFTER initialize so lifecycle_manager exists
     session_registry.configure_hooks(executor=hook_executor, manager=hook_manager)
     logger.info("SessionRouter architecture initialized")
+    await session_registry.start_lifecycle()
+    logger.info("LifecycleManager started at startup")
     # ─────────────────────────────────────────────────────────────────
 
     t_agent = time.monotonic()
@@ -520,6 +522,8 @@ async def lifespan(app: FastAPI):
     logger.info("Shutting down...")
     await channel_gateway.shutdown()
     logger.info("Channel gateway stopped")
+    await session_registry.stop_lifecycle()
+    logger.info("LifecycleManager stopped")
     await session_registry.disconnect_all()
     logger.info("All sessions disconnected")
 
