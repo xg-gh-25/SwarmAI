@@ -617,8 +617,9 @@ class LifecycleManager:
     async def _reap_orphans(self) -> None:
         """Find and kill orphaned processes not owned by any SessionUnit.
 
-        Four categories:
-        1. Claude CLI processes (bundled SDK binary) — always reap unowned
+        Four categories (all use require_orphaned=True to avoid killing
+        active sessions during spawn race):
+        1. Claude CLI processes (bundled SDK binary) — only if orphaned (ppid=1)
         2. Dev backend (``python main.py``) — only if orphaned (ppid=1)
         3. Zombie pytest — only if orphaned (ppid=1)
         4. MCP server processes (dynamic from config) — only if orphaned (ppid=1)
@@ -630,6 +631,7 @@ class LifecycleManager:
             await self._reap_by_pattern(
                 "claude_agent_sdk/_bundled/claude", "claude",
                 self._snapshot_known_pids(),
+                require_orphaned=True,
             )
             await self._reap_by_pattern(
                 "python main.py", "dev_backend",
