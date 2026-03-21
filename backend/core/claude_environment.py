@@ -166,7 +166,6 @@ def _configure_claude_environment(config: AppConfigManager) -> None:
     - ``CLAUDE_CODE_USE_BEDROCK`` — ``"true"`` when Bedrock enabled, removed otherwise
     - ``AWS_REGION`` / ``AWS_DEFAULT_REGION`` — from cached config
     - ``ANTHROPIC_BASE_URL`` — optional custom endpoint from cached config
-    - ``CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS`` — from cached config
     - ``CLAUDE_CODE_DISABLE_AUTO_MEMORY`` — always ``"1"``; SwarmAI owns its
       memory pipeline (DailyActivity → distillation → MEMORY.md)
 
@@ -197,13 +196,7 @@ def _configure_claude_environment(config: AppConfigManager) -> None:
     else:
         os.environ.pop("ANTHROPIC_BASE_URL", None)
 
-    # 3. Experimental betas flag
-    if config.get("claude_code_disable_experimental_betas", False):
-        os.environ["CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS"] = "true"
-    else:
-        os.environ.pop("CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS", None)
-
-    # 4. Disable CLI auto-memory — SwarmAI owns its own memory pipeline
+    # 3. Disable CLI auto-memory — SwarmAI owns its own memory pipeline
     # (DailyActivity → distillation → MEMORY.md). CLI auto-memory would
     # create conflicting writes and duplicate context injection.
     os.environ["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"

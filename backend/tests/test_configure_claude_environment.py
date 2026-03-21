@@ -6,11 +6,10 @@ instead of the database. Validates:
 - Bedrock toggle sets/removes CLAUDE_CODE_USE_BEDROCK
 - AWS_REGION and AWS_DEFAULT_REGION set from config when Bedrock enabled
 - ANTHROPIC_BASE_URL set/removed based on config
-- CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS set/removed based on config
 - AWS credential env vars are NEVER set by this function
 - AuthenticationNotConfiguredError raised when no API key and Bedrock disabled
 
-**Validates: Requirements 2.3, 13.1, 13.2, 13.3, 13.4, 13.5, 13.6, 13.7**
+**Validates: Requirements 2.3, 13.1, 13.2, 13.3, 13.5, 13.6, 13.7**
 """
 import os
 import pytest
@@ -29,7 +28,6 @@ def _make_config(overrides: dict | None = None) -> AppConfigManager:
         "use_bedrock": True,
         "aws_region": "us-east-1",
         "anthropic_base_url": None,
-        "claude_code_disable_experimental_betas": True,
     }
     if overrides:
         cfg._cache.update(overrides)
@@ -45,7 +43,6 @@ MANAGED_VARS = [
     "AWS_DEFAULT_REGION",
     "ANTHROPIC_BASE_URL",
     "ANTHROPIC_API_KEY",
-    "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS",
     # Credential vars that must NEVER be set
     "AWS_ACCESS_KEY_ID",
     "AWS_SECRET_ACCESS_KEY",
@@ -115,34 +112,6 @@ class TestBaseUrl:
         _configure_claude_environment(cfg)
 
         assert "ANTHROPIC_BASE_URL" not in os.environ
-
-
-# ---------------------------------------------------------------------------
-# Experimental betas flag (Req 13.4)
-# ---------------------------------------------------------------------------
-class TestExperimentalBetas:
-    def test_betas_disabled_when_true(self):
-        """Req 13.4: flag true → CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS set."""
-        cfg = _make_config({"claude_code_disable_experimental_betas": True})
-        _configure_claude_environment(cfg)
-
-        assert os.environ["CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS"] == "true"
-
-    def test_betas_enabled_when_false(self):
-        """Req 13.4: flag false → CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS removed."""
-        os.environ["CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS"] = "true"
-        cfg = _make_config({"claude_code_disable_experimental_betas": False})
-        _configure_claude_environment(cfg)
-
-        assert "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS" not in os.environ
-
-    def test_betas_defaults_to_false(self):
-        """Default is False when key missing from config — betas enabled by default."""
-        cfg = _make_config()
-        cfg._cache.pop("claude_code_disable_experimental_betas", None)
-        _configure_claude_environment(cfg)
-
-        assert "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS" not in os.environ
 
 
 # ---------------------------------------------------------------------------

@@ -1,152 +1,192 @@
-"""Unit tests for the Settings API router (``backend/routers/settings.py``).
+"""Unit tests for the generic dict-based Settings API router.
 
-Tests cover:
+Tests cover the generic pass-through contract introduced by the
+generic-settings-pipeline spec:
 
-- GET ``/api/settings`` — returns ``AppConfigResponse`` from in-memory cache
-- PUT ``/api/settings`` — partial updates via ``AppConfigManager.update()``
-- Validation: ``default_model`` must be in ``available_models``
-- Auto-reset: ``default_model`` reset when ``available_models`` changes
-- Empty-string clearing for ``anthropic_base_url``
-- No credential fields in request/response
-- Credential status probing (``aws_credentials_configured``, ``anthropic_api_key_configured``)
+- **GET /api/settings** — returns all DEFAULT_CONFIG keys minus SECRET_KEYS,
+  plus credential status fields; no Pydantic response model.
+- **PUT /api/settings** — partial dict merge via WRITABLE_KEYS whitelist;
+  unknown and secret keys silently discarded.
+- **Validation** — ``default_model`` must be in ``available_models``;
+  auto-reset when list changes; ``anthropic_base_url`` empty-string clearing.
+- **Extensibility** — monkey-patching a new key into DEFAULT_CONFIG makes it
+  available via GET and PUT with zero router changes.
 
-NOTE: This module is currently skipped because the test fixture imports
-``from main import app`` which triggers the full FastAPI startup and hangs.
-The original fixture also passed a ``db_path`` kwarg that ``AppConfigManager``
-never accepted.  These are pre-existing issues unrelated to the SwarmWS
-restructure spec.
+Fixture strategy: each test gets a standalone FastAPI app with ONLY the
+settings router mounted (no ``from main import app``).  A ``tmp_path``-backed
+``AppConfigManager`` is injected via ``set_config_manager()``.  Both
+credential probes are mocked globally to avoid real AWS / env-var side effects.
 """
 
 import pytest
 from unittest.mock import patch
 
-pytestmark = pytest.mark.skip(
-    reason="Test fixture hangs on 'from main import app' (full app startup); "
-    "pre-existing issue unrelated to SwarmWS restructure"
-)
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from core.app_config_manager import AppConfigManager, DEFAULT_CONFIG
-from routers.settings import set_config_manager, get_config_manager
+from routers.settings import router, set_config_manager, WRITABLE_KEYS
+from core.app_config_manager import AppConfigManager, DEFAULT_CONFIG, SECRET_KEYS
+
+
+# ---------------------------------------------------------------------------
+# Expected response keys (used across multiple test classes)
+# ---------------------------------------------------------------------------
+
+_EXPECTED_CONFIG_KEYS = {
+    k for k in DEFAULT_CONFIG if k not in SECRET_KEYS
+}
+_CREDENTIAL_STATUS_KEYS = {"aws_credentials_configured", "anthropic_api_key_configured"}
+_ALL_EXPECTED_KEYS = _EXPECTED_CONFIG_KEYS | _CREDENTIAL_STATUS_KEYS
+
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
 
 
 @pytest.fixture(autouse=True)
-def _isolated_config(tmp_path):
-    """Provide a fresh AppConfigManager backed by a temp dir for each test.
+def _mock_probes():
+    """Mock credential probes globally — default both to False.
 
-    This fixture MUST run before the ``client`` fixture so that the
-    settings router reads from the isolated config, not the real
-    ``SwarmWS/config.json``.
+    Individual tests can override via nested ``patch`` context managers
+    when they need True values.
+    """
+    with patch("routers.settings._probe_aws_credentials", return_value=False), \
+         patch("routers.settings._probe_anthropic_api_key", return_value=False):
+        yield
+
+
+@pytest.fixture()
+def _isolated_config(tmp_path):
+    """Provide a fresh AppConfigManager backed by a temp dir.
+
+    Injects the manager into the settings router via ``set_config_manager``
+    and tears it down after the test.
     """
     cfg_path = tmp_path / "config.json"
     mgr = AppConfigManager(config_path=cfg_path)
     mgr.load()
     set_config_manager(mgr)
     yield mgr
-    # Reset to None so other test modules aren't affected
     set_config_manager(None)
 
 
-@pytest.fixture
+@pytest.fixture()
 def client(_isolated_config) -> TestClient:
-    """Test client that depends on _isolated_config to ensure correct ordering."""
-    from main import app
+    """Standalone TestClient with ONLY the settings router mounted."""
+    app = FastAPI()
+    app.include_router(router, prefix="/api/settings")
     with TestClient(app) as tc:
         yield tc
 
 
-class TestGetAppConfiguration:
-    """Tests for GET /api/settings endpoint."""
+# ===================================================================
+# Task 4.2 — Generic GET contract
+# ===================================================================
 
-    def test_returns_defaults(self, client: TestClient):
-        """Fresh config returns default values."""
+
+class TestGenericGETContract:
+    """Tests for GET /api/settings generic dict response."""
+
+    def test_response_contains_all_expected_keys(self, client: TestClient):
+        """Response has every DEFAULT_CONFIG key (minus secrets) plus credential status."""
         resp = client.get("/api/settings")
         assert resp.status_code == 200
         data = resp.json()
+        assert set(data.keys()) == _ALL_EXPECTED_KEYS
 
-        assert data["use_bedrock"] == DEFAULT_CONFIG["use_bedrock"]
-        assert data["aws_region"] == DEFAULT_CONFIG["aws_region"]
-        assert data["default_model"] == DEFAULT_CONFIG["default_model"]
-        assert data["available_models"] == DEFAULT_CONFIG["available_models"]
-        assert data["claude_code_disable_experimental_betas"] is True
-        assert data["anthropic_base_url"] is None
-
-    def test_no_credential_fields_in_response(self, client: TestClient):
-        """Response must not contain any credential fields."""
+    def test_no_secret_keys_in_response(self, client: TestClient):
+        """No SECRET_KEYS appear in the GET response."""
         resp = client.get("/api/settings")
         data = resp.json()
-        for secret in (
-            "anthropic_api_key",
-            "aws_access_key_id",
-            "aws_secret_access_key",
-            "aws_session_token",
-            "aws_bearer_token",
-        ):
-            assert secret not in data
+        for secret in SECRET_KEYS:
+            assert secret not in data, f"Secret key '{secret}' leaked into response"
 
-    def test_credential_status_defaults_false(self, client: TestClient):
-        """Credential status fields are False when no credentials are available."""
-        with patch("routers.settings._probe_aws_credentials", return_value=False), \
-             patch("routers.settings._probe_anthropic_api_key", return_value=False):
+    def test_credential_status_reflects_mocked_probes_false(self, client: TestClient):
+        """Credential status fields are False when probes return False (default mock)."""
+        resp = client.get("/api/settings")
+        data = resp.json()
+        assert data["aws_credentials_configured"] is False
+        assert data["anthropic_api_key_configured"] is False
+
+    def test_credential_status_reflects_mocked_probes_true(self, client: TestClient):
+        """Credential status fields are True when probes return True."""
+        with patch("routers.settings._probe_aws_credentials", return_value=True), \
+             patch("routers.settings._probe_anthropic_api_key", return_value=True):
             resp = client.get("/api/settings")
             data = resp.json()
-            assert data["aws_credentials_configured"] is False
-            assert data["anthropic_api_key_configured"] is False
+            assert data["aws_credentials_configured"] is True
+            assert data["anthropic_api_key_configured"] is True
 
-    def test_reflects_prior_update(self, client: TestClient):
+    def test_get_reflects_prior_put(self, client: TestClient):
         """GET returns values written by a prior PUT."""
         client.put("/api/settings", json={"aws_region": "eu-west-1"})
         resp = client.get("/api/settings")
         assert resp.json()["aws_region"] == "eu-west-1"
 
 
-class TestUpdateAppConfiguration:
-    """Tests for PUT /api/settings endpoint."""
+# ===================================================================
+# Task 4.3 — Generic PUT contract
+# ===================================================================
 
-    def test_partial_update_single_field(self, client: TestClient):
-        """Only the provided field is changed; others keep defaults."""
+
+class TestGenericPUTContract:
+    """Tests for PUT /api/settings generic dict merge."""
+
+    def test_partial_update_preserves_other_defaults(self, client: TestClient):
+        """Updating one field leaves all other defaults intact."""
         resp = client.put("/api/settings", json={"aws_region": "ap-southeast-1"})
         assert resp.status_code == 200
         data = resp.json()
         assert data["aws_region"] == "ap-southeast-1"
-        # Other fields unchanged
+        # Other fields unchanged from DEFAULT_CONFIG
         assert data["use_bedrock"] == DEFAULT_CONFIG["use_bedrock"]
+        assert data["default_model"] == DEFAULT_CONFIG["default_model"]
 
-    def test_partial_update_multiple_fields(self, client: TestClient):
-        """Multiple fields can be updated in one request."""
+    def test_empty_body_is_noop(self, client: TestClient):
+        """PUT with empty body {} is a no-op returning current config."""
+        resp = client.put("/api/settings", json={})
+        assert resp.status_code == 200
+        data = resp.json()
+        # All keys present, values match defaults
+        assert set(data.keys()) == _ALL_EXPECTED_KEYS
+        assert data["aws_region"] == DEFAULT_CONFIG["aws_region"]
+
+    def test_unknown_keys_silently_discarded(self, client: TestClient):
+        """Keys not in DEFAULT_CONFIG are silently ignored, not persisted."""
         resp = client.put("/api/settings", json={
-            "use_bedrock": False,
             "aws_region": "us-west-2",
+            "totally_unknown_key": "should_vanish",
         })
         assert resp.status_code == 200
         data = resp.json()
-        assert data["use_bedrock"] is False
+        assert "totally_unknown_key" not in data
         assert data["aws_region"] == "us-west-2"
 
-    def test_empty_body_is_noop(self, client: TestClient):
-        """PUT with no fields is a valid no-op."""
-        resp = client.put("/api/settings", json={})
-        assert resp.status_code == 200
-
-    def test_clear_anthropic_base_url_with_empty_string(self, client: TestClient):
-        """Empty string for anthropic_base_url clears it to None."""
-        # First set a value
-        client.put("/api/settings", json={
-            "anthropic_base_url": "https://proxy.example.com",
-        })
-        # Then clear it
+    def test_secret_keys_silently_discarded(self, client: TestClient):
+        """SECRET_KEYS in PUT body are silently discarded."""
         resp = client.put("/api/settings", json={
-            "anthropic_base_url": "",
+            "aws_region": "us-west-2",
+            "aws_access_key_id": "AKIA_SHOULD_BE_IGNORED",
+            "anthropic_api_key": "sk-secret",
         })
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "aws_access_key_id" not in data
+        assert "anthropic_api_key" not in data
+        assert data["aws_region"] == "us-west-2"
+
+    def test_anthropic_base_url_empty_string_clears_to_none(self, client: TestClient):
+        """Empty string for anthropic_base_url clears it to None."""
+        # Set a value first
+        client.put("/api/settings", json={"anthropic_base_url": "https://proxy.example.com"})
+        # Clear it
+        resp = client.put("/api/settings", json={"anthropic_base_url": ""})
         assert resp.status_code == 200
         assert resp.json()["anthropic_base_url"] is None
 
-
-class TestDefaultModelValidation:
-    """Tests for default_model / available_models validation rules."""
-
-    def test_default_model_must_be_in_available_models(self, client: TestClient):
-        """400 when default_model is not in available_models (both provided)."""
+    def test_default_model_not_in_available_models_returns_400(self, client: TestClient):
+        """400 when default_model is not in available_models."""
         resp = client.put("/api/settings", json={
             "available_models": ["model-a", "model-b"],
             "default_model": "model-c",
@@ -154,29 +194,9 @@ class TestDefaultModelValidation:
         assert resp.status_code == 400
         assert "default_model" in resp.json()["detail"].lower()
 
-    def test_default_model_valid_when_in_available(self, client: TestClient):
-        """200 when default_model is in available_models."""
-        resp = client.put("/api/settings", json={
-            "available_models": ["model-a", "model-b"],
-            "default_model": "model-b",
-        })
-        assert resp.status_code == 200
-        assert resp.json()["default_model"] == "model-b"
-
-    def test_default_model_validated_against_existing_available(
+    def test_auto_reset_default_model_when_available_models_changes(
         self, client: TestClient,
     ):
-        """default_model validated against existing available_models
-        when only default_model is provided."""
-        client.put("/api/settings", json={
-            "available_models": ["model-a", "model-b"],
-        })
-        resp = client.put("/api/settings", json={
-            "default_model": "model-x",
-        })
-        assert resp.status_code == 400
-
-    def test_auto_reset_when_available_models_changes(self, client: TestClient):
         """default_model auto-resets to first model when no longer in list."""
         # Set initial state
         client.put("/api/settings", json={
@@ -190,7 +210,9 @@ class TestDefaultModelValidation:
         assert resp.status_code == 200
         assert resp.json()["default_model"] == "model-x"
 
-    def test_no_auto_reset_when_default_still_in_list(self, client: TestClient):
+    def test_default_model_preserved_when_still_in_new_available_models(
+        self, client: TestClient,
+    ):
         """default_model is NOT reset when it's still in the new list."""
         client.put("/api/settings", json={
             "available_models": ["model-a", "model-b"],
@@ -202,113 +224,51 @@ class TestDefaultModelValidation:
         assert resp.status_code == 200
         assert resp.json()["default_model"] == "model-b"
 
+    def test_wrong_type_returns_422(self, client: TestClient):
+        """422 when a value has the wrong type (e.g. string for a bool field)."""
+        resp = client.put("/api/settings", json={"use_bedrock": "not_a_bool"})
+        assert resp.status_code == 422
+        assert "use_bedrock" in resp.json()["detail"]
 
-class TestNoCredentialFields:
-    """Verify credential fields are absent from request/response models."""
 
-    def test_put_ignores_unknown_credential_fields(self, client: TestClient):
-        """Extra credential fields in PUT body are silently ignored."""
-        resp = client.put("/api/settings", json={
-            "aws_region": "us-west-2",
-            "aws_access_key_id": "AKIA_SHOULD_BE_IGNORED",
-        })
-        # The request succeeds (extra fields ignored by Pydantic)
+# ===================================================================
+# Task 4.4 — New DEFAULT_CONFIG keys work without code changes
+# ===================================================================
+
+
+class TestExtensibility:
+    """Verify that adding a key to DEFAULT_CONFIG makes it available
+    via GET and PUT with zero router changes."""
+
+    def test_new_default_config_key_appears_in_get_and_put(
+        self, client: TestClient, _isolated_config, monkeypatch,
+    ):
+        """Monkey-patching a new key into DEFAULT_CONFIG and WRITABLE_KEYS
+        makes it visible in GET and persistable via PUT."""
+        import routers.settings as settings_mod
+        import core.app_config_manager as acm_mod
+
+        # Patch DEFAULT_CONFIG with a new key
+        patched_defaults = {**DEFAULT_CONFIG, "brand_new_setting": 42}
+        monkeypatch.setattr(acm_mod, "DEFAULT_CONFIG", patched_defaults)
+        monkeypatch.setattr(settings_mod, "DEFAULT_CONFIG", patched_defaults)
+
+        # Patch WRITABLE_KEYS to include the new key
+        patched_writable = frozenset(patched_defaults.keys()) - SECRET_KEYS
+        monkeypatch.setattr(settings_mod, "WRITABLE_KEYS", patched_writable)
+
+        # GET should include the new key with its default value
+        resp = client.get("/api/settings")
         assert resp.status_code == 200
         data = resp.json()
-        assert "aws_access_key_id" not in data
-        assert data["aws_region"] == "us-west-2"
+        assert "brand_new_setting" in data
+        assert data["brand_new_setting"] == 42
 
+        # PUT should accept and persist the new key
+        resp = client.put("/api/settings", json={"brand_new_setting": 99})
+        assert resp.status_code == 200
+        assert resp.json()["brand_new_setting"] == 99
 
-class TestCredentialProbing:
-    """Tests for credential status probing in GET /api/settings response."""
-
-    def test_aws_credentials_configured_true_when_available(self, client: TestClient):
-        """aws_credentials_configured is True when boto3 finds credentials."""
-        with patch("routers.settings._probe_aws_credentials", return_value=True):
-            resp = client.get("/api/settings")
-            assert resp.json()["aws_credentials_configured"] is True
-
-    def test_aws_credentials_configured_false_when_unavailable(self, client: TestClient):
-        """aws_credentials_configured is False when boto3 finds no credentials."""
-        with patch("routers.settings._probe_aws_credentials", return_value=False):
-            resp = client.get("/api/settings")
-            assert resp.json()["aws_credentials_configured"] is False
-
-    def test_anthropic_api_key_configured_true_when_set(self, client: TestClient):
-        """anthropic_api_key_configured is True when ANTHROPIC_API_KEY env var is set."""
-        with patch("routers.settings._probe_anthropic_api_key", return_value=True):
-            resp = client.get("/api/settings")
-            assert resp.json()["anthropic_api_key_configured"] is True
-
-    def test_anthropic_api_key_configured_false_when_unset(self, client: TestClient):
-        """anthropic_api_key_configured is False when ANTHROPIC_API_KEY is not set."""
-        with patch("routers.settings._probe_anthropic_api_key", return_value=False):
-            resp = client.get("/api/settings")
-            assert resp.json()["anthropic_api_key_configured"] is False
-
-    def test_both_credentials_configured(self, client: TestClient):
-        """Both credential status fields reflect their respective probes."""
-        with patch("routers.settings._probe_aws_credentials", return_value=True), \
-             patch("routers.settings._probe_anthropic_api_key", return_value=True):
-            resp = client.get("/api/settings")
-            data = resp.json()
-            assert data["aws_credentials_configured"] is True
-            assert data["anthropic_api_key_configured"] is True
-
-    def test_put_response_also_probes_credentials(self, client: TestClient):
-        """PUT response includes probed credential status too."""
-        with patch("routers.settings._probe_aws_credentials", return_value=True), \
-             patch("routers.settings._probe_anthropic_api_key", return_value=False):
-            resp = client.put("/api/settings", json={"aws_region": "eu-west-1"})
-            data = resp.json()
-            assert data["aws_credentials_configured"] is True
-            assert data["anthropic_api_key_configured"] is False
-
-
-class TestProbeHelpers:
-    """Unit tests for the credential probing helper functions."""
-
-    def test_probe_aws_credentials_returns_true_when_creds_exist(self):
-        """_probe_aws_credentials returns True when boto3 resolves credentials."""
-        from routers.settings import _probe_aws_credentials
-
-        mock_creds = object()  # non-None sentinel
-        with patch("boto3.Session") as mock_session_cls:
-            mock_session_cls.return_value.get_credentials.return_value = mock_creds
-            assert _probe_aws_credentials() is True
-
-    def test_probe_aws_credentials_returns_false_when_no_creds(self):
-        """_probe_aws_credentials returns False when boto3 returns None."""
-        from routers.settings import _probe_aws_credentials
-
-        with patch("boto3.Session") as mock_session_cls:
-            mock_session_cls.return_value.get_credentials.return_value = None
-            assert _probe_aws_credentials() is False
-
-    def test_probe_aws_credentials_returns_false_on_exception(self):
-        """_probe_aws_credentials returns False when boto3 raises."""
-        from routers.settings import _probe_aws_credentials
-
-        with patch("boto3.Session", side_effect=Exception("boom")):
-            assert _probe_aws_credentials() is False
-
-    def test_probe_anthropic_api_key_returns_true_when_set(self):
-        """_probe_anthropic_api_key returns True when env var is set."""
-        from routers.settings import _probe_anthropic_api_key
-
-        with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "sk-test-key"}):
-            assert _probe_anthropic_api_key() is True
-
-    def test_probe_anthropic_api_key_returns_false_when_unset(self):
-        """_probe_anthropic_api_key returns False when env var is absent."""
-        from routers.settings import _probe_anthropic_api_key
-
-        with patch.dict("os.environ", {}, clear=True):
-            assert _probe_anthropic_api_key() is False
-
-    def test_probe_anthropic_api_key_returns_false_when_empty(self):
-        """_probe_anthropic_api_key returns False when env var is empty string."""
-        from routers.settings import _probe_anthropic_api_key
-
-        with patch.dict("os.environ", {"ANTHROPIC_API_KEY": ""}):
-            assert _probe_anthropic_api_key() is False
+        # Subsequent GET reflects the updated value
+        resp = client.get("/api/settings")
+        assert resp.json()["brand_new_setting"] == 99

@@ -4,7 +4,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useTheme } from '../contexts/ThemeContext';
 import { getVersion } from '@tauri-apps/api/app';
 import { tauriService, BackendStatus, getBackendPort, setBackendPort } from '../services/tauri';
-import { settingsService, APIConfigurationResponse } from '../services/settings';
+import { settingsService, SettingsConfig } from '../services/settings';
 import {
   checkForUpdates,
   downloadAndInstallUpdate,
@@ -58,7 +58,7 @@ export default function SettingsPage() {
   };
 
   const [backendStatus, setBackendStatus] = useState<BackendStatus | null>(null);
-  const [apiConfig, setApiConfig] = useState<APIConfigurationResponse | null>(null);
+  const [apiConfig, setApiConfig] = useState<SettingsConfig | null>(null);
 
   // Form fields
   const [baseUrl, setBaseUrl] = useState('');
