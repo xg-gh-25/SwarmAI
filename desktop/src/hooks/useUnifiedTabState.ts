@@ -442,18 +442,6 @@ export function useUnifiedTabState(
   const selectTab = useCallback(
     (tabId: string) => {
       if (tabMapRef.current.has(tabId)) {
-        // Abort previous tab's SSE connection if streaming
-        const prevTabId = activeTabIdRef.current;
-        if (prevTabId && prevTabId !== tabId) {
-          const prevTab = tabMapRef.current.get(prevTabId);
-          if (prevTab?.abortController && prevTab.isStreaming) {
-            try {
-              prevTab.abortController.abort();
-            } catch {
-              // already aborted
-            }
-          }
-        }
         setActiveTabIdBoth(tabId);
         bump();
       }
@@ -627,39 +615,6 @@ export function useUnifiedTabState(
       bump();
       fileRestoreDone.current = true; // Mark done AFTER successful hydration
       console.log(`[useUnifiedTabState] Restored ${data.tabs.length} tabs from open_tabs.json`);
-
-      // Validate restored session IDs against backend (fire-and-forget).
-      // Runs after restoreFromFile returns so the UI renders immediately
-      // with hydrated tabs; invalid ones are pruned asynchronously.
-      const validateSessions = async () => {
-        const invalidIds: string[] = [];
-        for (const [tId, t] of map.entries()) {
-          if (t.sessionId) {
-            try {
-              await api.get(`/chat/sessions/${t.sessionId}`);
-              // 2xx — session exists, keep tab
-            } catch (err: unknown) {
-              // Axios rejects on non-2xx. Check if it's a 404 (session gone)
-              // vs a network error (backend unreachable — keep tab).
-              if (err && typeof err === 'object' && 'statusCode' in err && (err as { statusCode: number }).statusCode === 404) {
-                invalidIds.push(tId);
-              }
-              // Any other error (network, 500, etc.) — keep tab, don't remove
-            }
-          }
-        }
-        if (invalidIds.length === 0) return; // nothing to prune
-        for (const id of invalidIds) {
-          map.delete(id);
-        }
-        if (map.size === 0) {
-          const newTab = createDefaultTab(defaultAgentId);
-          map.set(newTab.id, newTab);
-          setActiveTabIdBoth(newTab.id);
-        }
-        bump();
-      };
-      validateSessions();
 
       return true;
     },
