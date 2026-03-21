@@ -56,10 +56,16 @@ class SystemMemory:
 
     @property
     def pressure_level(self) -> str:
-        """Classify memory pressure: ok / warning / critical."""
-        if self.percent_used >= 90.0:
+        """Classify memory pressure: ok / warning / critical.
+
+        Aligned with the 80% tab-creation threshold:
+        - >= 80% → critical (no new tabs allowed)
+        - >= 70% → warning  (approaching limit)
+        - <  70% → ok
+        """
+        if self.percent_used >= 80.0:
             return "critical"
-        elif self.percent_used >= 75.0:
+        elif self.percent_used >= 70.0:
             return "warning"
         return "ok"
 
@@ -109,11 +115,9 @@ class ResourceMonitor:
     _MAX_SPAWN_SAMPLES: int = 20  # Rolling window for spawn cost estimation
 
     # ── Dynamic tab limit constants ─────────────────────────────
-    # Larger than _HEADROOM_MB because compute_max_tabs() is a planning
-    # function (how many tabs *should* we allow?) while spawn_budget() is
-    # a safety gate (can we spawn *right now?*).
-    _TAB_HEADROOM_MB: float = 1024.0
     _MAX_TABS_CEILING: int = 4
+    _MEMORY_THRESHOLD_PCT: float = 80.0  # Never push machine past 80% used
+    _SPAWN_COST_MB: float = 500.0  # Each session costs ~500MB (CLI + MCPs)
 
     def __init__(self) -> None:
         self._cached_memory: Optional[SystemMemory] = None
@@ -228,37 +232,40 @@ class ResourceMonitor:
     def spawn_budget(self) -> SpawnBudget:
         """Check whether a new subprocess can be safely spawned.
 
-        Reads fresh system memory (invalidates cache) and compares
-        available memory against estimated spawn cost + headroom.
+        Uses the same 80% rule as compute_max_tabs: if spawning one
+        more session (~500MB) would push the machine past 80% memory
+        usage, deny the spawn.
 
         Never raises.
         """
         try:
             self.invalidate_cache()
             mem = self.system_memory()
-            available_mb = mem.available / (1024 * 1024)
+            total_mb = mem.total / (1024 * 1024)
+            used_mb = mem.used / (1024 * 1024)
             estimated_mb = self._estimated_spawn_cost_mb()
-            needed = estimated_mb + self._HEADROOM_MB
+            projected_pct = (used_mb + estimated_mb) / total_mb * 100
 
-            if available_mb >= needed:
+            if projected_pct <= self._MEMORY_THRESHOLD_PCT:
                 return SpawnBudget(
                     can_spawn=True,
                     reason="ok",
-                    available_mb=round(available_mb, 1),
+                    available_mb=round(total_mb - used_mb, 1),
                     estimated_cost_mb=round(estimated_mb, 1),
-                    headroom_mb=self._HEADROOM_MB,
+                    headroom_mb=round(total_mb * (self._MEMORY_THRESHOLD_PCT / 100) - used_mb, 1),
                 )
             else:
+                headroom = total_mb * (self._MEMORY_THRESHOLD_PCT / 100) - used_mb
                 return SpawnBudget(
                     can_spawn=False,
                     reason=(
-                        f"Insufficient memory: {available_mb:.0f}MB available, "
-                        f"need {needed:.0f}MB ({estimated_mb:.0f}MB spawn + "
-                        f"{self._HEADROOM_MB:.0f}MB headroom)"
+                        f"Opening a new tab would push memory to {projected_pct:.0f}%% "
+                        f"(limit: {self._MEMORY_THRESHOLD_PCT:.0f}%%). "
+                        f"Close an idle tab or other apps to free memory."
                     ),
-                    available_mb=round(available_mb, 1),
+                    available_mb=round(total_mb - used_mb, 1),
                     estimated_cost_mb=round(estimated_mb, 1),
-                    headroom_mb=self._HEADROOM_MB,
+                    headroom_mb=round(max(0, headroom), 1),
                 )
         except Exception as exc:
             logger.warning("spawn_budget check failed: %s", exc)
@@ -294,27 +301,28 @@ class ResourceMonitor:
     # ── Dynamic tab limit ───────────────────────────────────────
 
     def compute_max_tabs(self) -> int:
-        """Compute dynamic tab limit from available RAM.
+        """Compute dynamic tab limit: how many tabs can open without
+        pushing machine memory past 80%.
 
-        Formula: ``max(1, min(floor((available_mb - 1024) / 500), 4))``
+        Formula: ``max(1, min(floor(headroom_to_80pct / 500), 4))``
 
-        Uses ``system_memory()`` which has psutil + macOS ``vm_stat``
-        fallback.  On failure, ``system_memory()`` returns pessimistic
-        fallback (1600 MB available), which yields
-        ``floor((1600 - 1024) / 500) = floor(1.152) = 1``.
+        Each tab costs ~500MB (CLI subprocess + MCP servers).
+        The machine should never exceed 80% memory usage from SwarmAI
+        tabs — users run other apps too.
 
-        The 1024 MB headroom (``_TAB_HEADROOM_MB``) is larger than
-        ``_HEADROOM_MB`` (512) because this is a *planning* function —
-        all planned tabs may spawn concurrently — while ``spawn_budget()``
-        is a per-spawn safety gate.
+        Returns [1, 4]. Always allows at least 1 tab.
         """
         mem = self.system_memory()
-        available_mb = mem.available / (1024 * 1024)
-        raw = int((available_mb - self._TAB_HEADROOM_MB) // self._DEFAULT_SPAWN_COST_MB)
+        total_mb = mem.total / (1024 * 1024)
+        used_mb = mem.used / (1024 * 1024)
+        headroom_mb = total_mb * (self._MEMORY_THRESHOLD_PCT / 100.0) - used_mb
+        raw = int(headroom_mb / self._SPAWN_COST_MB)
         result = max(1, min(raw, self._MAX_TABS_CEILING))
         logger.info(
-            "compute_max_tabs: available=%.0fMB headroom=%.0fMB raw=%d result=%d pressure=%s",
-            available_mb, self._TAB_HEADROOM_MB, raw, result, mem.pressure_level,
+            "compute_max_tabs: used=%.0fMB/%.0fMB (%.1f%%) headroom_to_80%%=%.0fMB "
+            "raw=%d result=%d pressure=%s",
+            used_mb, total_mb, mem.percent_used,
+            headroom_mb, raw, result, mem.pressure_level,
         )
         return result
 
