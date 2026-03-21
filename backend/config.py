@@ -90,7 +90,7 @@ class Settings(BaseSettings):
     # NOTE: The following settings have been moved to SwarmWS/config.json
     # (managed by AppConfigManager, single source of truth):
     #   - anthropic_api_key, anthropic_base_url, default_model
-    #   - claude_code_use_bedrock, claude_code_disable_experimental_betas
+    #   - claude_code_use_bedrock
     #   - aws_region, available_models, bedrock_model_map
     #   - sandbox_enabled_default, sandbox_auto_allow_bash, sandbox_excluded_commands
     #   - sandbox_allow_unsandboxed, sandbox_additional_write_paths, sandbox_allowed_hosts

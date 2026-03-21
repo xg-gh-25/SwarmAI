@@ -1,36 +1,40 @@
-"""Settings API endpoints backed by file-based AppConfigManager.
+"""Settings API — generic dict pass-through backed by AppConfigManager.
 
-This module was refactored from a DB-backed settings store to use
-``AppConfigManager`` (``SwarmWS/config.json``) for all non-secret
-application configuration.  Credential fields have been removed from
-request/response models — AWS credentials are resolved via the standard
-AWS credential chain.
+GET /api/settings returns the full config dict (minus secrets) with
+credential status fields injected.  PUT /api/settings accepts any subset
+of known config keys and merges them into the config.  No per-field
+Pydantic models — DEFAULT_CONFIG is the single source of truth.
 
 Public symbols:
 
 - ``router``                — FastAPI ``APIRouter`` mounted at ``/api/settings``.
-- ``get_app_configuration`` — GET handler returning ``AppConfigResponse``.
-- ``update_app_configuration`` — PUT handler accepting ``AppConfigRequest``.
 - ``get_config_manager``    — Returns the module-level ``AppConfigManager`` instance.
 - ``set_config_manager``    — Replaces the module-level instance (for testing / DI).
-- ``_probe_aws_credentials`` — Check if AWS credentials are available via the credential chain.
-- ``_probe_anthropic_api_key`` — Check if ``ANTHROPIC_API_KEY`` env var is set.
-- ``get_open_tabs``         — GET handler returning open tab state from ``~/.swarm-ai/open_tabs.json``.
-- ``save_open_tabs``        — PUT handler writing open tab state to ``~/.swarm-ai/open_tabs.json``.
 """
 
 import json
 import logging
 import os
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 
 from config import get_app_data_dir
-from schemas.settings import AppConfigRequest, AppConfigResponse
-from core.app_config_manager import AppConfigManager, DEFAULT_CONFIG
+from core.app_config_manager import AppConfigManager, DEFAULT_CONFIG, SECRET_KEYS
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# Keys accepted from PUT requests — only DEFAULT_CONFIG keys minus secrets.
+WRITABLE_KEYS: frozenset[str] = frozenset(DEFAULT_CONFIG.keys()) - SECRET_KEYS
+
+# Expected types for known config keys — derived from DEFAULT_CONFIG values.
+# Used for lightweight type validation on PUT. Keys with None defaults accept any type.
+_EXPECTED_TYPES: dict[str, type | None] = {
+    k: type(v) if v is not None else None
+    for k, v in DEFAULT_CONFIG.items()
+    if k not in SECRET_KEYS
+}
+
 
 # ---------------------------------------------------------------------------
 # Module-level AppConfigManager instance (set at startup or via DI)
@@ -40,11 +44,7 @@ _config_manager: AppConfigManager | None = None
 
 
 def get_config_manager() -> AppConfigManager:
-    """Return the active ``AppConfigManager`` instance.
-
-    If none has been set via ``set_config_manager()``, a default instance
-    is created and loaded automatically.
-    """
+    """Return the active ``AppConfigManager`` instance."""
     global _config_manager
     if _config_manager is None:
         _config_manager = AppConfigManager.instance()
@@ -63,13 +63,7 @@ def set_config_manager(manager: AppConfigManager) -> None:
 
 
 def _probe_aws_credentials() -> bool:
-    """Check if AWS credentials are available via the credential chain.
-
-    Uses ``boto3.Session().get_credentials()`` to probe the standard AWS
-    credential resolution order (env vars, ``~/.aws/credentials``,
-    ``~/.ada/credentials``, config profiles, instance metadata) without
-    exposing actual credential values.
-    """
+    """Check if AWS credentials are available via the credential chain."""
     try:
         import boto3
         session = boto3.Session()
@@ -85,54 +79,24 @@ def _probe_anthropic_api_key() -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Generic response builder
 # ---------------------------------------------------------------------------
 
 
-def _build_response(cfg: AppConfigManager) -> AppConfigResponse:
-    """Build an ``AppConfigResponse`` from the current in-memory config cache.
+def _build_config_response(cfg: AppConfigManager) -> dict:
+    """Build a plain dict response from the config cache.
 
-    Credential status fields are computed at call time by probing the AWS
-    credential chain and checking the ``ANTHROPIC_API_KEY`` env var.  No
-    actual credential values are exposed in the response.
+    Iterates DEFAULT_CONFIG keys (public API only, no _cache access),
+    filters SECRET_KEYS, and injects credential status fields.
     """
-    return AppConfigResponse(
-        use_bedrock=cfg.get("use_bedrock", DEFAULT_CONFIG["use_bedrock"]),
-        aws_region=cfg.get("aws_region", DEFAULT_CONFIG["aws_region"]),
-        anthropic_base_url=cfg.get("anthropic_base_url"),
-        available_models=cfg.get("available_models", DEFAULT_CONFIG["available_models"]),
-        default_model=cfg.get("default_model", DEFAULT_CONFIG["default_model"]),
-        claude_code_disable_experimental_betas=cfg.get(
-            "claude_code_disable_experimental_betas",
-            DEFAULT_CONFIG["claude_code_disable_experimental_betas"],
-        ),
-        sandbox_additional_write_paths=cfg.get(
-            "sandbox_additional_write_paths",
-            DEFAULT_CONFIG["sandbox_additional_write_paths"],
-        ),
-        sandbox_enabled_default=cfg.get(
-            "sandbox_enabled_default",
-            DEFAULT_CONFIG["sandbox_enabled_default"],
-        ),
-        sandbox_auto_allow_bash=cfg.get(
-            "sandbox_auto_allow_bash",
-            DEFAULT_CONFIG["sandbox_auto_allow_bash"],
-        ),
-        sandbox_excluded_commands=cfg.get(
-            "sandbox_excluded_commands",
-            DEFAULT_CONFIG["sandbox_excluded_commands"],
-        ),
-        sandbox_allow_unsandboxed=cfg.get(
-            "sandbox_allow_unsandboxed",
-            DEFAULT_CONFIG["sandbox_allow_unsandboxed"],
-        ),
-        sandbox_allowed_hosts=cfg.get(
-            "sandbox_allowed_hosts",
-            DEFAULT_CONFIG["sandbox_allowed_hosts"],
-        ),
-        aws_credentials_configured=_probe_aws_credentials(),
-        anthropic_api_key_configured=_probe_anthropic_api_key(),
-    )
+    clean = {
+        k: cfg.get(k, v)
+        for k, v in DEFAULT_CONFIG.items()
+        if k not in SECRET_KEYS
+    }
+    clean["aws_credentials_configured"] = _probe_aws_credentials()
+    clean["anthropic_api_key_configured"] = _probe_anthropic_api_key()
+    return clean
 
 
 # ---------------------------------------------------------------------------
@@ -140,86 +104,49 @@ def _build_response(cfg: AppConfigManager) -> AppConfigResponse:
 # ---------------------------------------------------------------------------
 
 
-@router.get("", response_model=AppConfigResponse)
+@router.get("")
 async def get_app_configuration():
-    """Get current application configuration.
-
-    Returns all non-secret config fields from the in-memory cache.
-    Credential status fields are computed at call time by probing the
-    AWS credential chain and the ``ANTHROPIC_API_KEY`` env var.
-    """
+    """Get current application configuration as a plain dict."""
     cfg = get_config_manager()
-    return _build_response(cfg)
+    return _build_config_response(cfg)
 
 
-@router.put("", response_model=AppConfigResponse)
-async def update_app_configuration(request: AppConfigRequest):
-    """Update application configuration (partial update semantics).
+@router.put("")
+async def update_app_configuration(request: Request):
+    """Update application configuration (partial update, generic dict).
 
-    Only fields that are provided (not ``None``) are merged into the
-    existing configuration.  Validation rules:
-
-    - ``default_model`` must be in ``available_models`` when both are
-      provided in the same request.
-    - When ``available_models`` is updated and the current
-      ``default_model`` is not in the new list, ``default_model`` is
-      auto-reset to the first model in the new list.
-    - Empty string for ``anthropic_base_url`` clears the value (→ None).
+    Accepts any JSON object. Only keys present in DEFAULT_CONFIG (minus
+    secrets) are accepted — unknown keys are silently discarded.
     """
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=422, detail="Request body must be valid JSON")
     cfg = get_config_manager()
-    updates: dict = {}
 
-    # --- Collect provided fields into updates dict ---
+    # Whitelist to known config keys only
+    updates = {k: v for k, v in body.items() if k in WRITABLE_KEYS}
 
-    if request.use_bedrock is not None:
-        updates["use_bedrock"] = request.use_bedrock
+    # Lightweight type validation — reject values that don't match DEFAULT_CONFIG types
+    for k, v in list(updates.items()):
+        expected = _EXPECTED_TYPES.get(k)
+        if expected is not None and v is not None and not isinstance(v, expected):
+            raise HTTPException(
+                status_code=422,
+                detail=f"Invalid type for '{k}': expected {expected.__name__}, got {type(v).__name__}",
+            )
 
-    if request.aws_region is not None:
-        updates["aws_region"] = request.aws_region
+    # anthropic_base_url empty-string → None
+    if updates.get("anthropic_base_url") == "":
+        updates["anthropic_base_url"] = None
 
-    if request.anthropic_base_url is not None:
-        # Empty string clears the value
-        updates["anthropic_base_url"] = (
-            request.anthropic_base_url if request.anthropic_base_url else None
-        )
-
-    if request.claude_code_disable_experimental_betas is not None:
-        updates["claude_code_disable_experimental_betas"] = (
-            request.claude_code_disable_experimental_betas
-        )
-
-    if request.sandbox_additional_write_paths is not None:
-        updates["sandbox_additional_write_paths"] = request.sandbox_additional_write_paths
-
-    if request.sandbox_enabled_default is not None:
-        updates["sandbox_enabled_default"] = request.sandbox_enabled_default
-
-    if request.sandbox_auto_allow_bash is not None:
-        updates["sandbox_auto_allow_bash"] = request.sandbox_auto_allow_bash
-
-    if request.sandbox_excluded_commands is not None:
-        updates["sandbox_excluded_commands"] = request.sandbox_excluded_commands
-
-    if request.sandbox_allow_unsandboxed is not None:
-        updates["sandbox_allow_unsandboxed"] = request.sandbox_allow_unsandboxed
-
-    if request.sandbox_allowed_hosts is not None:
-        updates["sandbox_allowed_hosts"] = request.sandbox_allowed_hosts
-
-    if request.available_models is not None:
-        updates["available_models"] = request.available_models
-
-    if request.default_model is not None:
-        updates["default_model"] = request.default_model
-
-    # --- Validation: default_model must be in available_models ---
-
-    # Determine the effective available_models after this update
+    # Compute effective state BEFORE persisting
     effective_available = updates.get(
         "available_models",
         cfg.get("available_models", DEFAULT_CONFIG["available_models"]),
     )
 
+    # Validation: default_model must be in available_models
     if "default_model" in updates and effective_available:
         if updates["default_model"] not in effective_available:
             raise HTTPException(
@@ -227,26 +154,18 @@ async def update_app_configuration(request: AppConfigRequest):
                 detail="default_model must be in available_models",
             )
 
-    # --- Apply updates ---
-    if updates:
-        cfg.update(updates)
-
-    # --- Auto-reset default_model when available_models changed ---
-
-    if "available_models" in updates:
+    # Auto-reset default_model when available_models changed
+    if "available_models" in updates and "default_model" not in updates:
         current_default = cfg.get("default_model", DEFAULT_CONFIG["default_model"])
         new_models = updates["available_models"]
         if new_models and current_default not in new_models:
-            cfg.update({"default_model": new_models[0]})
-            logger.info("Auto-reset default_model to %s", new_models[0])
+            updates["default_model"] = new_models[0]
 
-    logger.info(
-        "App configuration updated: use_bedrock=%s, region=%s",
-        cfg.get("use_bedrock"),
-        cfg.get("aws_region"),
-    )
+    # Single atomic update — validated state only
+    if updates:
+        cfg.update(updates)
 
-    return _build_response(cfg)
+    return _build_config_response(cfg)
 
 
 # ---------------------------------------------------------------------------
@@ -263,12 +182,7 @@ def _get_open_tabs_path():
 
 @router.get("/open-tabs")
 async def get_open_tabs():
-    """Read persisted open-tab state from the filesystem.
-
-    Returns the contents of ``~/.swarm-ai/open_tabs.json`` as-is.
-    If the file does not exist or is unreadable, returns ``null``
-    so the frontend can fall back to a fresh default tab.
-    """
+    """Read persisted open-tab state from the filesystem."""
     path = _get_open_tabs_path()
     try:
         if not path.exists():
@@ -282,27 +196,15 @@ async def get_open_tabs():
 
 @router.put("/open-tabs")
 async def save_open_tabs(request: dict):
-    """Write open-tab state to the filesystem.
-
-    Accepts a JSON object with ``tabs`` (array of serializable tab
-    objects) and ``activeTabId`` (string or null).  Writes to
-    ``~/.swarm-ai/open_tabs.json``.
-    """
-    # Basic shape validation
+    """Write open-tab state to the filesystem."""
     if "tabs" not in request or not isinstance(request.get("tabs"), list):
         raise HTTPException(status_code=422, detail="'tabs' array is required")
 
     path = _get_open_tabs_path()
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            json.dumps(request, indent=2),
-            encoding="utf-8",
-        )
+        path.write_text(json.dumps(request, indent=2), encoding="utf-8")
         return {"status": "ok"}
     except Exception as exc:
         logger.error("Failed to write open_tabs.json: %s", exc)
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to persist open tabs: {exc}",
-        )
+        raise HTTPException(status_code=500, detail=f"Failed to persist open tabs: {exc}")

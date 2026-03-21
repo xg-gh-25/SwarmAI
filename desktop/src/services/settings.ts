@@ -1,60 +1,73 @@
 /**
- * Settings service for SwarmAI desktop app.
+ * Settings service — generic dict pass-through with snake↔camel transform.
  *
- * Communicates with the backend Settings API (GET/PUT /api/settings) to
- * read and update application configuration stored in SwarmWS/config.json.
+ * No per-field interfaces. The backend returns a plain dict from DEFAULT_CONFIG;
+ * this service transforms keys generically. Only fields actively used by UI
+ * components are typed in SettingsConfig — everything else passes through.
  *
  * Key exports:
- * - ``APIConfigurationResponse`` — Read-only config + credential status indicators
- * - ``APIConfigurationRequest``  — Partial-update request (no credential fields)
- * - ``settingsService``          — API methods for get/update configuration
+ * - ``SettingsConfig``   — Typed wrapper for known fields + index signature
+ * - ``settingsService``  — API methods for get/update configuration
+ * - ``snakeToCamel``     — Generic key transform (exported for testing)
+ * - ``camelToSnake``     — Generic key transform (exported for testing)
  */
 import api from './api';
 
-// Transform settings response from snake_case (backend) to camelCase (frontend)
-const toSettingsCamelCase = (data: Record<string, unknown>): APIConfigurationResponse => {
-  return {
-    useBedrock: data.use_bedrock as boolean,
-    awsRegion: data.aws_region as string,
-    anthropicBaseUrl: (data.anthropic_base_url as string | null) ?? null,
-    availableModels: data.available_models as string[],
-    defaultModel: data.default_model as string,
-    claudeCodeDisableExperimentalBetas: data.claude_code_disable_experimental_betas as boolean,
-    awsCredentialsConfigured: data.aws_credentials_configured as boolean,
-    anthropicApiKeyConfigured: data.anthropic_api_key_configured as boolean,
-  };
-};
+// ---------------------------------------------------------------------------
+// Generic snake_case ↔ camelCase utilities
+// ---------------------------------------------------------------------------
 
-export interface APIConfigurationResponse {
+export function snakeToCamel(s: string): string {
+  return s.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
+}
+
+export function camelToSnake(s: string): string {
+  return s.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
+}
+
+function transformKeys<T>(
+  obj: Record<string, unknown>,
+  keyFn: (k: string) => string,
+): T {
+  // Shallow transform only — nested objects (bedrock_model_map, evolution)
+  // keep their original key casing. This matches the backend contract where
+  // nested dicts are opaque blobs, not individually-keyed config fields.
+  const result: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(obj)) {
+    result[keyFn(k)] = v;
+  }
+  return result as T;
+}
+
+// ---------------------------------------------------------------------------
+// Typed wrapper — only fields actively used by SettingsPage
+// ---------------------------------------------------------------------------
+
+export interface SettingsConfig extends Record<string, unknown> {
   useBedrock: boolean;
   awsRegion: string;
-  anthropicBaseUrl: string | null;
-  availableModels: string[];
   defaultModel: string;
-  claudeCodeDisableExperimentalBetas: boolean;
-  /** Read-only: true if AWS credential chain resolves */
-  awsCredentialsConfigured: boolean;
-  /** Read-only: true if ANTHROPIC_API_KEY env var is set */
-  anthropicApiKeyConfigured: boolean;
+  availableModels: string[];
+  anthropicBaseUrl: string | null;
+  readonly awsCredentialsConfigured: boolean;
+  readonly anthropicApiKeyConfigured: boolean;
 }
 
-export interface APIConfigurationRequest {
-  use_bedrock?: boolean;
-  aws_region?: string;
-  anthropic_base_url?: string;
-  available_models?: string[];
-  default_model?: string;
-  claude_code_disable_experimental_betas?: boolean;
-}
+// ---------------------------------------------------------------------------
+// Service
+// ---------------------------------------------------------------------------
 
 export const settingsService = {
-  async getAPIConfiguration(): Promise<APIConfigurationResponse> {
+  async getAPIConfiguration(): Promise<SettingsConfig> {
     const response = await api.get<Record<string, unknown>>('/settings');
-    return toSettingsCamelCase(response.data);
+    return transformKeys<SettingsConfig>(response.data, snakeToCamel);
   },
 
-  async updateAPIConfiguration(request: APIConfigurationRequest): Promise<APIConfigurationResponse> {
-    const response = await api.put<Record<string, unknown>>('/settings', request);
-    return toSettingsCamelCase(response.data);
+  async updateAPIConfiguration(
+    request: Record<string, unknown>,
+  ): Promise<SettingsConfig> {
+    const payload = transformKeys<Record<string, unknown>>(request, camelToSnake);
+    const response = await api.put<Record<string, unknown>>('/settings', payload);
+    return transformKeys<SettingsConfig>(response.data, snakeToCamel);
   },
 };

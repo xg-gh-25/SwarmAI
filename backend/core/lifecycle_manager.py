@@ -70,17 +70,34 @@ class LifecycleManager:
         """Start the background loop and run startup orphan reaper.
 
         Safe to call multiple times — subsequent calls are no-ops.
+        Orphan reaping and unprocessed session scan run as background
+        tasks to avoid blocking startup (each pgrep call can take up
+        to 5s, and with 8+ patterns that's 40s worst case).
         """
         if self._started:
             return
         self._started = True
-        await self._reap_orphans()
-        await self._scan_unprocessed_sessions()
+        # Defer reaping to background — never block startup
+        asyncio.create_task(self._startup_background_tasks())
         self._loop_task = asyncio.create_task(
             self._maintenance_loop(), name="lifecycle-manager-loop",
         )
         logger.info("LifecycleManager started (TTL=%ds, interval=%.0fs)",
                      self.TTL_SECONDS, self.LOOP_INTERVAL)
+
+    async def _startup_background_tasks(self) -> None:
+        """Run startup orphan reaper and unprocessed session scan in background.
+
+        Non-fatal — failures are logged and skipped.
+        """
+        try:
+            await self._reap_orphans()
+        except Exception as exc:
+            logger.warning("Startup orphan reap failed (non-fatal): %s", exc)
+        try:
+            await self._scan_unprocessed_sessions()
+        except Exception as exc:
+            logger.warning("Startup session scan failed (non-fatal): %s", exc)
 
     async def stop(self) -> None:
         """Stop the background loop. Kill tracked children. Drain hooks."""
@@ -572,15 +589,26 @@ class LifecycleManager:
                 return _FALLBACK_PATTERNS
 
             config = json.loads(mcp_config_path.read_text(encoding="utf-8"))
-            servers = config.get("mcpServers", {})
+
+            # mcp-dev.json can be either:
+            # - dict with "mcpServers" key (new format)
+            # - list of server objects (legacy format)
             patterns = []
-            for name, server_config in servers.items():
-                cmd = server_config.get("command", "")
-                if cmd:
-                    # Extract basename: "/Users/x/.toolbox/bin/builder-mcp" → "builder-mcp"
-                    basename = Path(cmd).name
-                    if basename and basename not in patterns:
-                        patterns.append(basename)
+            if isinstance(config, dict):
+                servers = config.get("mcpServers", {})
+                for name, server_config in servers.items():
+                    cmd = server_config.get("command", "")
+                    if cmd:
+                        basename = Path(cmd).name
+                        if basename and basename not in patterns:
+                            patterns.append(basename)
+            elif isinstance(config, list):
+                for server_config in config:
+                    cmd = server_config.get("config", {}).get("command", "") if isinstance(server_config, dict) else ""
+                    if cmd:
+                        basename = Path(cmd).name
+                        if basename and basename not in patterns:
+                            patterns.append(basename)
             return patterns if patterns else _FALLBACK_PATTERNS
         except Exception as exc:
             logger.debug("Failed to read MCP config for reaper patterns: %s", exc)
