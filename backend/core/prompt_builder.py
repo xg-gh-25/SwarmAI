@@ -114,16 +114,15 @@ class PromptBuilder:
     # resolve_model
     # ------------------------------------------------------------------
 
+    # 4.6 models that get 1M context — the CLI uses [1m] suffix as a signal.
+    _1M_MODELS = {"claude-opus-4-6", "claude-sonnet-4-6"}
+
     def resolve_model(self, agent_config: dict) -> Optional[str]:
         """Resolve the model identifier from config.json (single source of truth).
 
-        The model is ALWAYS read from ``config.json`` via ``AppConfigManager``,
-        never from the agent's DB record.  The agent_config ``model`` field is
-        ignored — config.json ``default_model`` is the sole authority.
-
-        When Bedrock is enabled, the Anthropic model ID is translated to a
-        Bedrock inference profile ID via ``bedrock_model_map`` (config.json)
-        with a hardcoded fallback in ``config.py``.
+        When Bedrock is enabled, translates to a Bedrock inference profile ID.
+        For 4.6 models, appends ``[1m]`` so the CLI uses the full 1M context
+        window.  The CLI strips this suffix before calling the API.
 
         Returns:
             The resolved model string, or ``None`` if not configured.
@@ -149,6 +148,16 @@ class PromptBuilder:
             )
             model = get_bedrock_model_id(model, config_map=config_map)
             logger.info(f"Using Bedrock model: {model}")
+
+        # Append [1m] for 4.6 models so the CLI uses 1M context window.
+        # The CLI strips [1m] before sending to the API — Bedrock never sees it.
+        if model and not model.endswith("[1m]"):
+            base = model.replace("us.anthropic.", "").rstrip(":0")
+            if base.endswith("-v1"):
+                base = base[:-3]
+            if base in self._1M_MODELS:
+                model = model + "[1m]"
+
         return model
 
     # ------------------------------------------------------------------

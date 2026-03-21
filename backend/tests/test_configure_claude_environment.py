@@ -136,13 +136,13 @@ class TestExperimentalBetas:
 
         assert "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS" not in os.environ
 
-    def test_betas_defaults_to_true(self):
-        """Default is True when key missing from config."""
+    def test_betas_defaults_to_false(self):
+        """Default is False when key missing from config — betas enabled by default."""
         cfg = _make_config()
         cfg._cache.pop("claude_code_disable_experimental_betas", None)
         _configure_claude_environment(cfg)
 
-        assert os.environ["CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS"] == "true"
+        assert "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS" not in os.environ
 
 
 # ---------------------------------------------------------------------------
