@@ -24,7 +24,7 @@
  */
 
 import { useState, useRef, useMemo, useCallback, useEffect } from 'react';
-import type { Message, UnifiedAttachment, SystemPromptMetadata } from '../types/index';
+import type { Message, UnifiedAttachment, SystemPromptMetadata, CompactionGuardEvent } from '../types/index';
 import type { PendingQuestion, OpenTab } from '../pages/chat/types';
 import type { ContextWarning } from './useChatStreamingLifecycle';
 import {
@@ -71,6 +71,8 @@ export interface UnifiedTab {
   status: TabStatus;
   /** Per-tab context warning from backend context monitor (null = no warning). */
   contextWarning: ContextWarning | null;
+  /** Per-tab compaction guard event from backend (null = no active guard event). */
+  compactionGuard: CompactionGuardEvent | null;
   /** Per-tab system prompt metadata delivered via SSE (null = not yet received). */
   promptMetadata: SystemPromptMetadata | null;
   /** Per-tab expanded/compact mode for ChatInput (runtime-only, NOT serialized). */
@@ -163,6 +165,7 @@ function createDefaultTab(agentId: string): UnifiedTab {
     streamGen: 0,
     status: 'idle',
     contextWarning: null,
+    compactionGuard: null,
     promptMetadata: null,
     isReconnecting: false,
     isResuming: false,
@@ -193,6 +196,7 @@ function hydrateTab(s: PersistedTab): UnifiedTab {
     streamGen: 0,
     status: 'idle',
     contextWarning: null,
+    compactionGuard: null,
     promptMetadata: null,
     isReconnecting: false,
     isResuming: false,
@@ -435,6 +439,7 @@ export function useUnifiedTabState(
         streamGen: 0,
         status: 'idle',
         contextWarning: null,
+        compactionGuard: null,
         promptMetadata: null,
         attachments: [],
       };
