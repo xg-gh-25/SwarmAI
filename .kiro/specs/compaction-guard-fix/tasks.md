@@ -117,7 +117,7 @@
 
 - [ ] 6. Group C frontend — Tab lifecycle and cleanup fixes
 
-  - [ ] 6.1 closeTab backend cleanup (Bug 1.8)
+  - [x] 6.1 closeTab backend cleanup (Bug 1.8)
     - In `closeTab()` in `desktop/src/hooks/useUnifiedTabState.ts`, after aborting the controller:
     - Add best-effort `chatService.deleteSession(tab.sessionId)` call (fire-and-forget)
     - Wrap in try/catch — errors never block tab removal
@@ -126,7 +126,7 @@
     - _Preservation: Backend unreachable → error silently caught, local tab removal proceeds (3.11)_
     - _Requirements: 1.8, 2.8, 3.11_
 
-  - [ ] 6.2 Tab restore sessionId validation (Bug 1.9)
+  - [x] 6.2 Tab restore sessionId validation (Bug 1.9)
     - After `restoreFromFile()` hydrates tabs in `useUnifiedTabState.ts`:
     - Validate each sessionId against the backend API (e.g., `GET /api/chat/sessions/{id}`)
     - Remove tabs whose sessions no longer exist via `removeInvalidTabs()`
@@ -136,7 +136,7 @@
     - _Preservation: All sessions expired → fresh default tab created, not empty tab bar (3.12)_
     - _Requirements: 1.9, 2.9, 3.12_
 
-  - [ ] 6.3 SSE abort on tab switch (Bug 1.10)
+  - [x] 6.3 SSE abort on tab switch (Bug 1.10)
     - In `selectTab()` in `useUnifiedTabState.ts`, before switching active tab:
     - Check if previous tab has an active `abortController` and is streaming
     - If so, abort the previous tab's `abortController` to free the backend SSE slot
@@ -145,7 +145,7 @@
     - _Preservation: SessionUnit transitions to IDLE (not DEAD) — conversation resumable via cold-start (3.13)_
     - _Requirements: 1.10, 2.10, 3.13_
 
-  - [ ] 6.4 App close handler (Bug 1.11)
+  - [x] 6.4 App close handler (Bug 1.11)
     - In `desktop/src/App.tsx`, add a `useEffect` with:
     - Tauri `close-requested` event listener → call `fetch('/shutdown', { method: 'POST' })` → allow window close
     - `beforeunload` fallback for web/dev mode → `navigator.sendBeacon('/shutdown')`
@@ -154,7 +154,7 @@
     - _Preservation: Existing disconnect_all() → kill() → hook firing sequence unchanged — close handler is additive (3.14)_
     - _Requirements: 1.11, 2.11, 3.14_
 
-  - [ ] 6.5 sessionStorage cleanup (Bug 1.12)
+  - [x] 6.5 sessionStorage cleanup (Bug 1.12)
     - In `desktop/src/hooks/useChatStreamingLifecycle.ts`:
     - Add `removePendingState(sessionId)` call in the SSE stream success completion handler
     - Add `removePendingState(sessionId)` call in the SSE stream error handler

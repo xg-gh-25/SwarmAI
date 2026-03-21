@@ -628,21 +628,27 @@ export function useUnifiedTabState(
       fileRestoreDone.current = true; // Mark done AFTER successful hydration
       console.log(`[useUnifiedTabState] Restored ${data.tabs.length} tabs from open_tabs.json`);
 
-      // Validate restored session IDs against backend
+      // Validate restored session IDs against backend (fire-and-forget).
+      // Runs after restoreFromFile returns so the UI renders immediately
+      // with hydrated tabs; invalid ones are pruned asynchronously.
       const validateSessions = async () => {
         const invalidIds: string[] = [];
         for (const [tId, t] of map.entries()) {
           if (t.sessionId) {
             try {
-              const response = await api.get(`/chat/sessions/${t.sessionId}`);
-              if (response.status === 404) {
+              await api.get(`/chat/sessions/${t.sessionId}`);
+              // 2xx — session exists, keep tab
+            } catch (err: unknown) {
+              // Axios rejects on non-2xx. Check if it's a 404 (session gone)
+              // vs a network error (backend unreachable — keep tab).
+              if (err && typeof err === 'object' && 'statusCode' in err && (err as { statusCode: number }).statusCode === 404) {
                 invalidIds.push(tId);
               }
-            } catch {
-              // Backend unreachable — keep tab, don't remove
+              // Any other error (network, 500, etc.) — keep tab, don't remove
             }
           }
         }
+        if (invalidIds.length === 0) return; // nothing to prune
         for (const id of invalidIds) {
           map.delete(id);
         }
@@ -651,7 +657,7 @@ export function useUnifiedTabState(
           map.set(newTab.id, newTab);
           setActiveTabIdBoth(newTab.id);
         }
-        if (invalidIds.length > 0) bump();
+        bump();
       };
       validateSessions();
 
