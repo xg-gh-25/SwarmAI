@@ -427,8 +427,16 @@ export const SUPPORTED_FILE_TYPES = {
   csvExtensions: ['.csv'],
 } as const;
 
+/** Compaction guard event from the backend compaction amnesia loop detector. */
+export interface CompactionGuardEvent {
+  subtype: 'soft_warn' | 'hard_warn' | 'kill';
+  contextPct: number;
+  message: string;
+  patternDescription?: string;
+}
+
 export interface StreamEvent {
-  type: 'assistant' | 'tool_use' | 'tool_result' | 'result' | 'error' | 'reconnecting' | 'session_resuming' | 'ask_user_question' | 'session_start' | 'session_cleared' | 'cmd_permission_request' | 'cmd_permission_decision' | 'cmd_permission_acknowledged' | 'heartbeat' | 'agent_activity' | 'tool_invocation' | 'capability_activated' | 'sources_updated' | 'summary_updated' | 'context_warning' | 'context_compacted' | (string & {});
+  type: 'assistant' | 'tool_use' | 'tool_result' | 'result' | 'error' | 'reconnecting' | 'session_resuming' | 'ask_user_question' | 'session_start' | 'session_cleared' | 'cmd_permission_request' | 'cmd_permission_decision' | 'cmd_permission_acknowledged' | 'heartbeat' | 'agent_activity' | 'tool_invocation' | 'capability_activated' | 'sources_updated' | 'summary_updated' | 'context_warning' | 'context_compacted' | 'compaction_guard' | (string & {});
   content?: ContentBlock[];
   model?: string;
   sessionId?: string;
@@ -462,6 +470,10 @@ export interface StreamEvent {
   level?: 'ok' | 'warn' | 'critical';
   pct?: number;
   tokensEst?: number;
+  // Compaction guard fields (compaction_guard event)
+  subtype?: string;
+  contextPct?: number;
+  patternDescription?: string;
   // Context compaction fields (context_compacted event)
   trigger?: 'manual' | 'auto';
   // Usage/caching fields (result event)

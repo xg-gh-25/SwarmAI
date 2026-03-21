@@ -32,7 +32,7 @@ import traceback
 from enum import Enum
 from typing import TYPE_CHECKING, Any, AsyncIterator, Callable, Optional
 
-from .compaction_guard import LoopAction
+from .compaction_guard import EscalationLevel
 
 if TYPE_CHECKING:
     from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient
@@ -201,6 +201,9 @@ class SessionUnit:
         # ── Compaction loop guard (3-layer anti-loop) ──────────────
         from .compaction_guard import CompactionGuard
         self._compaction_guard: CompactionGuard = CompactionGuard()
+
+        # ── Zombie detection — set True when meaningful content emitted ──
+        self._content_emitted: bool = False
 
         # ── Resource observability ─────────────────────────────────
         self._last_error_type: Optional[str] = None  # "oom" | "timeout" | None
@@ -436,6 +439,7 @@ class SessionUnit:
         self._interrupted = False
         self._buffer_overflow_recovery = False
         self._compaction_guard.reset()  # New user turn — reset tool tracking
+        self._content_emitted = False   # Track if meaningful content is emitted
 
         # Spawn if needed (COLD → IDLE under _spawn_lock + _env_lock)
         if self.state == SessionState.COLD:
@@ -841,16 +845,6 @@ class SessionUnit:
         )
         yield {"_abort": True}
 
-    def _build_guard_event(self, action: LoopAction) -> Optional[dict]:
-        """Map a LoopAction to an SSE event dict, or None."""
-        if action == LoopAction.THROTTLE_WARN:
-            return self._compaction_guard.build_throttle_warning_event()
-        if action == LoopAction.THROTTLE_STOP:
-            return self._compaction_guard.build_throttle_stop_event()
-        if action == LoopAction.LOOP_DETECTED:
-            return self._compaction_guard.build_loop_warning_event()
-        return None
-
     def _emit_post_stream_metadata(self, usage: dict) -> list[dict]:
         """Build context-warning and TSCC metadata events after a result.
 
@@ -874,14 +868,14 @@ class SessionUnit:
             except Exception:
                 pass  # Never block on warning failure
 
-            # Layer 1: Feed context usage to compaction guard
+            # Feed context usage to compaction guard
             try:
                 self._compaction_guard.update_context_usage(
                     input_tokens, self._model_name
                 )
-                guard_action = self._compaction_guard.check()
-                if guard_action != LoopAction.NONE:
-                    guard_evt = self._build_guard_event(guard_action)
+                level = self._compaction_guard.check()
+                if level != EscalationLevel.MONITORING:
+                    guard_evt = self._compaction_guard.build_guard_event(level)
                     if guard_evt:
                         events.append(guard_evt)
             except Exception:
@@ -1093,6 +1087,7 @@ class SessionUnit:
                 if event_type == "content_block_delta":
                     delta = event_data.get("delta", {})
                     if delta.get("type") == "text_delta" and delta.get("text"):
+                        self._content_emitted = True
                         yield {"type": "text_delta", "text": delta["text"], "index": event_data.get("index", 0)}
                     elif delta.get("type") == "thinking_delta" and delta.get("thinking"):
                         yield {"type": "thinking_delta", "thinking": delta["thinking"], "index": event_data.get("index", 0)}
@@ -1136,18 +1131,18 @@ class SessionUnit:
                             "type": "tool_use", "id": block.id,
                             "name": block.name, "summary": summary, "category": category,
                         })
-                        # ── Layer 2: Record tool call for circuit breaker ──
+                        # ── Record tool call for compaction guard ──
                         self._compaction_guard.record_tool_call(
                             block.name, block.input
                         )
-                        guard_action = self._compaction_guard.check()
-                        if guard_action != LoopAction.NONE:
-                            guard_event = self._build_guard_event(guard_action)
+                        level = self._compaction_guard.check()
+                        if level != EscalationLevel.MONITORING:
+                            guard_event = self._compaction_guard.build_guard_event(level)
                             if guard_event:
                                 yield guard_event
-                            if guard_action in (
-                                LoopAction.THROTTLE_STOP,
-                                LoopAction.LOOP_DETECTED,
+                            if level in (
+                                EscalationLevel.HARD_WARN,
+                                EscalationLevel.KILL,
                             ):
                                 # Flush accumulated content blocks before
                                 # interrupting — otherwise text/tool_use blocks
@@ -1161,7 +1156,7 @@ class SessionUnit:
                                 logger.warning(
                                     "compaction_guard.interrupt "
                                     "session_id=%s action=%s",
-                                    self.session_id, guard_action.value,
+                                    self.session_id, level.value,
                                 )
                                 await self.interrupt()
                                 return
@@ -1178,6 +1173,7 @@ class SessionUnit:
                             "truncated": was_truncated,
                         })
                 if content_blocks:
+                    self._content_emitted = True
                     yield {
                         "type": "assistant",
                         "content": content_blocks,
@@ -1238,8 +1234,31 @@ class SessionUnit:
                 self._retry_count = 0
                 return
 
-        # Stream ended without a result message — treat as success
+        # Stream ended without a result message.
         if self.state == SessionState.STREAMING:
+            # ── Zombie detection ──────────────────────────────────
+            # If the stream ended very fast (< 2s) with no content,
+            # the subprocess is likely dead (e.g. corrupted after
+            # interrupt).  Kill it so the caller's retry logic can
+            # respawn a fresh process with --resume.
+            streaming_dur = (
+                time.time() - self._streaming_start_time
+                if self._streaming_start_time else 0.0
+            )
+            if streaming_dur < 2.0 and not self._content_emitted:
+                logger.warning(
+                    "session_unit.zombie_detected session_id=%s "
+                    "duration=%.3fs content_emitted=False — killing "
+                    "subprocess for respawn",
+                    self.session_id, streaming_dur,
+                )
+                await self.kill()
+                raise RuntimeError(
+                    f"Zombie subprocess detected: stream ended in "
+                    f"{streaming_dur:.1f}s with no content "
+                    f"(session_id={self.session_id})"
+                )
+
             self._transition(SessionState.IDLE)
             self.last_used = time.time()
 
@@ -1319,9 +1338,10 @@ class SessionUnit:
                 f"(session_id={self.session_id})"
             )
 
-        # User responded — reset circuit breaker so tool counts
+        # User responded — reset compaction guard so tool counts
         # don't accumulate across the permission/answer boundary.
         self._compaction_guard.reset()
+        self._content_emitted = False  # Reset zombie detection for new stream
         self._transition(SessionState.STREAMING)
 
         try:
@@ -1358,9 +1378,10 @@ class SessionUnit:
         # resume reading the response stream with the same formatting as
         # _stream_response.
         #
-        # User responded — reset circuit breaker so tool counts
+        # User responded — reset compaction guard so tool counts
         # don't accumulate across the permission boundary.
         self._compaction_guard.reset()
+        self._content_emitted = False  # Reset zombie detection for new stream
         self._transition(SessionState.STREAMING)
 
         try:
@@ -1408,7 +1429,7 @@ class SessionUnit:
                 "message": "No active subprocess",
             }
 
-        # Layer 3: Inject work summary so post-compaction agent
+        # Inject work summary so post-compaction agent
         # knows what it already did and doesn't re-run completed tools.
         work_summary = self._compaction_guard.work_summary()
         combined_instructions = "\n\n".join(
@@ -1427,6 +1448,8 @@ class SessionUnit:
             async for _msg in self._client.receive_response():
                 pass  # Drain response
             self.last_used = time.time()
+            # Transition guard to ACTIVE — post-compaction loop detection enabled
+            self._compaction_guard.activate()
             return {"success": True, "message": "Session compacted"}
         except Exception as exc:
             logger.error(
@@ -1627,9 +1650,14 @@ class SessionUnit:
         preserving ``_sdk_session_id`` so the next ``send()`` can resume
         the conversation via ``--resume``.
 
-        Called by ``LifecycleManager._check_streaming_timeout()`` when
-        a session has been in STREAMING with no SDK events for longer
-        than ``STREAMING_TIMEOUT_SECONDS``.
+        Called by ``LifecycleManager._check_streaming_timeout()`` and
+        by ``send()`` auto-recovery when the previous request left the
+        unit stuck in STREAMING.
+
+        Note: uses synchronous ``os.kill`` (not ``_force_kill``) because
+        this method is called from sync contexts (LifecycleManager loop,
+        send() preamble).  The wrapper ``__aexit__`` cleanup is skipped —
+        acceptable since the process is force-killed anyway.
         """
         if self.state != SessionState.STREAMING:
             return
@@ -1640,7 +1668,15 @@ class SessionUnit:
             self.pid,
             self.streaming_stall_seconds or 0,
         )
-        # Kill subprocess but keep _sdk_session_id for --resume
+        # Kill the subprocess BEFORE clearing references to prevent orphans.
+        # Uses os.kill directly since this is a sync method.
+        pid = self.pid
+        if pid:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError, OSError):
+                pass  # Already dead — fine
+        # Transition DEAD → COLD, keep _sdk_session_id for --resume
         self._crash_to_cold(clear_identity=False)
 
     def clear_session_identity(self) -> None:

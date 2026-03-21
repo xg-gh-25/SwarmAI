@@ -1,36 +1,30 @@
-"""CompactionGuard — 3-layer anti-loop protection for autonomous sessions.
+"""CompactionGuard — Two-phase anti-loop protection for autonomous sessions.
 
 Prevents the compaction amnesia loop where:
   compaction → agent forgets work → re-runs same tools → more tokens → compaction → repeat
 
-Three layers, each catching what the previous misses:
+Two-phase design:
+  PASSIVE (before compaction) — records tool calls and context usage for work summary
+    generation without triggering any warnings or interruptions.
+  ACTIVE (after compaction detected) — monitors for loop patterns using set-overlap
+    detection and single-tool repetition, with graduated escalation.
 
-Layer 1 — Context-Aware Throttle (proactive):
-    At 70% context usage: yields a throttle_warning SSE event.
-    At 85%: yields throttle_hard_stop event; caller should interrupt.
-    Prevents compaction from happening in the first place.
+Graduated escalation (ACTIVE phase only, gated by 85% context threshold):
+  MONITORING  — no action needed
+  SOFT_WARN   — first detection: remind agent of completed work
+  HARD_WARN   — second detection: instruct agent to summarize and stop
+  KILL        — third detection: caller interrupts the streaming session
 
-Layer 2 — Circuit Breaker (reactive):
-    Tracks (tool_name, hash(tool_input)) during streaming.
-    3 exact repeats → loop detected.
-    8 same-tool calls (any input) → loop detected, unless whitelisted.
-    Yields loop_warning SSE event; caller should interrupt.
-
-Layer 3 — Post-Compaction Recovery:
-    Captures tool call history as a structured work summary.
-    Injected via /compact instructions so the agent knows what it already did.
+Loop detection uses two complementary strategies:
+  1. Set-overlap: >60% of post-compaction calls match pre-compaction baseline (min 5 calls)
+  2. Single-tool repetition: any (tool_name, input_hash) pair appears ≥5 times
 
 Public symbols:
 
-- ``CompactionGuard``  — Per-session guard, created once per SessionUnit.
-- ``LoopAction``       — Enum: NONE, WARN, HARD_STOP.
-
-Usage in SessionUnit:
-    guard = CompactionGuard()
-    guard.record_tool_call(tool_name, tool_input)
-    guard.update_context_usage(input_tokens, model)
-    action = guard.check()  # returns LoopAction
-    summary = guard.work_summary()  # for /compact instructions
+- ``CompactionGuard``   — Per-session guard, created once per SessionUnit.
+- ``GuardPhase``        — Enum: PASSIVE, ACTIVE.
+- ``EscalationLevel``   — Enum: MONITORING, SOFT_WARN, HARD_WARN, KILL.
+- ``ToolRecord``        — Dataclass: tool_name, input_hash, input_detail, timestamp.
 """
 from __future__ import annotations
 
@@ -46,98 +40,115 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 
-class LoopAction(Enum):
-    """Action to take based on guard checks."""
-    NONE = "none"               # All clear
-    THROTTLE_WARN = "warn"      # Context at 70%+ — warn agent
-    THROTTLE_STOP = "stop"      # Context at 85%+ — hard stop
-    LOOP_DETECTED = "loop"      # Circuit breaker triggered
+# ── Enums ─────────────────────────────────────────────────────────
+
+class GuardPhase(Enum):
+    """Operational mode of the guard."""
+    PASSIVE = "passive"
+    ACTIVE = "active"
 
 
-# Tools that legitimately repeat with different inputs.
-# Subject to exact-repeat detection but exempt from same-tool-name threshold.
-_REPEAT_WHITELISTED_TOOLS = frozenset({
-    "Read", "Glob", "Grep", "WebFetch", "Agent",
-    "ListMcpResourcesTool", "ReadMcpResourceTool",
-})
+class EscalationLevel(Enum):
+    """Both the internal state and the return value from check().
 
-# Thresholds
-_EXACT_REPEAT_LIMIT = 3   # Same (tool, input_hash) × 3 → loop
-_TOOL_NAME_LIMIT = 8      # Same tool_name × 8 (any inputs) → loop
-_CONTEXT_WARN_PCT = 70
-_CONTEXT_STOP_PCT = 85
+    MONITORING means "no action needed".
+    """
+    MONITORING = "monitoring"
+    SOFT_WARN = "soft_warn"
+    HARD_WARN = "hard_warn"
+    KILL = "kill"
 
+
+# ── Data Models ───────────────────────────────────────────────────
 
 @dataclass
-class ToolCall:
-    """A single recorded tool call."""
+class ToolRecord:
+    """A single recorded tool call with full input for work summary."""
     tool_name: str
     input_hash: str
+    input_detail: str   # First 200 chars of JSON-serialized input
     timestamp: float = field(default_factory=time.time)
 
 
-class CompactionGuard:
-    """Per-session 3-layer anti-loop guard.
+# ── Constants ─────────────────────────────────────────────────────
 
-    Create one per SessionUnit. Reset on new user message via ``reset()``.
-    The guard tracks tool calls within a single agent turn (between user
-    messages). A "turn" starts when the user sends a message and ends
-    when the agent produces a ResultMessage or the session is interrupted.
+_CONTEXT_ACTIVATION_PCT = 85
+"""Context usage % threshold that gates loop detection in ACTIVE phase."""
+
+_OVERLAP_THRESHOLD = 0.60
+"""Fraction of post-compaction calls matching baseline to trigger loop detection."""
+
+_MIN_POST_COMPACTION_CALLS = 5
+"""Minimum post-compaction calls before set-overlap detection activates."""
+
+_SINGLE_TOOL_REPEAT_LIMIT = 5
+"""A single (tool_name, input_hash) pair repeated this many times → loop."""
+
+_COMPACTION_DROP_THRESHOLD = 30
+"""Context % drop between consecutive updates that triggers heuristic compaction detection."""
+
+
+# ── Escalation ordering (for strict one-step progression) ────────
+
+_ESCALATION_ORDER = [
+    EscalationLevel.MONITORING,
+    EscalationLevel.SOFT_WARN,
+    EscalationLevel.HARD_WARN,
+    EscalationLevel.KILL,
+]
+
+
+class CompactionGuard:
+    """Per-session compaction amnesia loop guard.
+
+    Two-phase design: PASSIVE (no interference) → ACTIVE (after compaction).
+    Graduated escalation: MONITORING → SOFT_WARN → HARD_WARN → KILL.
 
     Thread-safety: NOT thread-safe. SessionUnit methods are already
     serialized by ``_lock``, so this is fine.
     """
 
+    # ── Init & Properties ────────────────────────────────────────
+
     def __init__(self) -> None:
-        self._tool_calls: list[ToolCall] = []
-        self._exact_counts: Counter = Counter()  # (tool_name, input_hash) → count
-        self._name_counts: Counter = Counter()    # tool_name → count
+        # Phase
+        self._phase: GuardPhase = GuardPhase.PASSIVE
+
+        # Escalation
+        self._escalation: EscalationLevel = EscalationLevel.MONITORING
+
+        # Context tracking
         self._context_pct: float = 0.0
         self._context_tokens: int = 0
-        self._warned_throttle: bool = False  # Only warn once per turn
-        self._warned_stop: bool = False      # Only hard-stop once per turn
-        self._warned_loop: bool = False      # Only fire circuit breaker once per turn
+        self._prev_context_pct: float = 0.0  # For heuristic compaction detection
 
-    # ── Layer 1: Context Tracking ─────────────────────────────────
+        # Tool tracking — sets and sequences
+        self._pre_compaction_set: set[tuple[str, str]] = set()
+        self._rolling_baseline_set: set[tuple[str, str]] = set()
+        self._post_compaction_sequence: list[tuple[str, str]] = []
 
-    def update_context_usage(
-        self,
-        input_tokens: int,
-        model: Optional[str] = None,
-    ) -> None:
-        """Update context usage from SDK usage data.
+        # Full records for work summary (all phases)
+        self._tool_records: list[ToolRecord] = []
 
-        Called after each ResultMessage with usage metrics.
-        """
-        if input_tokens <= 0:
-            return
-        try:
-            from .prompt_builder import PromptBuilder
-            window = PromptBuilder.get_model_context_window(model)
-        except Exception:
-            window = 200_000  # Safe fallback
-        self._context_tokens = input_tokens
-        self._context_pct = (input_tokens / window) * 100 if window > 0 else 0
+        # Cached pattern description from last _detect_loop() call
+        self._last_pattern_desc: str = ""
+
+    @property
+    def phase(self) -> GuardPhase:
+        """Current guard phase (PASSIVE or ACTIVE)."""
+        return self._phase
+
+    @property
+    def escalation(self) -> EscalationLevel:
+        """Current escalation level."""
+        return self._escalation
 
     @property
     def context_pct(self) -> float:
         """Current context usage percentage."""
         return self._context_pct
 
-    # ── Layer 2: Tool Call Tracking ───────────────────────────────
-
-    def record_tool_call(self, tool_name: str, tool_input: dict | str | None) -> None:
-        """Record a tool call for circuit breaker tracking.
-
-        Args:
-            tool_name: The tool name (e.g., "Bash", "Read", "Edit").
-            tool_input: The tool input (dict from SDK, or string).
-        """
-        input_hash = self._hash_input(tool_input)
-        call = ToolCall(tool_name=tool_name, input_hash=input_hash)
-        self._tool_calls.append(call)
-        self._exact_counts[(tool_name, input_hash)] += 1
-        self._name_counts[tool_name] += 1
+    # ── Static helper (preserved from original) ──────────────────
 
     @staticmethod
     def _hash_input(tool_input: dict | str | None) -> str:
@@ -158,155 +169,372 @@ class CompactionGuard:
                 raw = str(tool_input)
         return hashlib.md5(raw.encode(), usedforsecurity=False).hexdigest()[:12]
 
-    # ── Combined Check ────────────────────────────────────────────
+    # ── record_tool_call() ───────────────────────────────────────
 
-    def check(self) -> LoopAction:
-        """Check all layers and return the highest-priority action.
+    def record_tool_call(
+        self, tool_name: str, tool_input: dict | str | None
+    ) -> None:
+        """Record a tool call for loop detection and work summary.
 
-        Call this after each tool call or result message.
-        Returns the most urgent action needed.
+        Hashes the input, creates a ToolRecord with the first 200 chars
+        of JSON-serialized input as input_detail, appends to tracking
+        structures.
         """
-        # Layer 1: Context throttle (highest priority — prevents root cause)
-        if self._context_pct >= _CONTEXT_STOP_PCT and not self._warned_stop:
-            self._warned_stop = True
-            self._warned_throttle = True  # Suppress WARN — STOP subsumes it
-            return LoopAction.THROTTLE_STOP
-        if self._context_pct >= _CONTEXT_WARN_PCT and not self._warned_throttle:
-            self._warned_throttle = True
-            return LoopAction.THROTTLE_WARN
+        try:
+            input_hash = self._hash_input(tool_input)
 
-        # Layer 2: Circuit breaker
-        if not self._warned_loop:
-            # Check exact repeats: same (tool, input) × 3
-            for (tool_name, _hash), count in self._exact_counts.items():
-                if count >= _EXACT_REPEAT_LIMIT:
-                    self._warned_loop = True
-                    logger.warning(
-                        "compaction_guard.loop_detected exact_repeat "
-                        "tool=%s count=%d hash=%s",
-                        tool_name, count, _hash,
-                    )
-                    return LoopAction.LOOP_DETECTED
+            # Build input_detail: first 200 chars of JSON-serialized input
+            try:
+                if tool_input is None:
+                    detail = ""
+                elif isinstance(tool_input, str):
+                    detail = tool_input[:200]
+                else:
+                    detail = json.dumps(tool_input, sort_keys=True, default=str)[:200]
+            except Exception:
+                detail = str(tool_input)[:200] if tool_input else ""
 
-            # Check tool-name repeats: same tool × 8 (non-whitelisted)
-            for tool_name, count in self._name_counts.items():
-                if (
-                    count >= _TOOL_NAME_LIMIT
-                    and tool_name not in _REPEAT_WHITELISTED_TOOLS
-                ):
-                    self._warned_loop = True
-                    logger.warning(
-                        "compaction_guard.loop_detected tool_name_repeat "
-                        "tool=%s count=%d",
-                        tool_name, count,
-                    )
-                    return LoopAction.LOOP_DETECTED
+            record = ToolRecord(
+                tool_name=tool_name,
+                input_hash=input_hash,
+                input_detail=detail,
+            )
 
-        return LoopAction.NONE
+            pair = (tool_name, input_hash)
 
-    # ── Layer 3: Work Summary ─────────────────────────────────────
+            # Append to post-compaction sequence (used for loop detection)
+            self._post_compaction_sequence.append(pair)
+
+            # Add to rolling baseline set (used for heuristic compaction detection)
+            self._rolling_baseline_set.add(pair)
+
+            # Append full record for work summary
+            self._tool_records.append(record)
+
+        except Exception:
+            logger.exception("compaction_guard.record_tool_call failed")
+
+    # ── update_context_usage() ───────────────────────────────────
+
+    def update_context_usage(
+        self,
+        input_tokens: int,
+        model: Optional[str] = None,
+    ) -> None:
+        """Update context usage from SDK usage data.
+
+        Computes context_pct, detects heuristic compaction (≥30pt drop),
+        and auto-calls activate() if a drop is detected.
+
+        Called after each ResultMessage with usage metrics.
+        """
+        try:
+            if input_tokens <= 0:
+                return
+
+            try:
+                from .prompt_builder import PromptBuilder
+                window = PromptBuilder.get_model_context_window(model)
+            except Exception:
+                window = 200_000  # Safe fallback
+
+            new_pct = (input_tokens / window) * 100 if window > 0 else 0.0
+            self._context_tokens = input_tokens
+            self._context_pct = new_pct
+
+            # Snapshot rolling baseline BEFORE checking for drop
+            pre_drop_snapshot = set(self._rolling_baseline_set)
+
+            # Heuristic compaction detection: ≥30pt drop
+            if (
+                self._prev_context_pct - new_pct
+                >= _COMPACTION_DROP_THRESHOLD
+            ):
+                logger.info(
+                    "compaction_guard.heuristic_compaction_detected "
+                    "prev_pct=%.1f new_pct=%.1f drop=%.1f",
+                    self._prev_context_pct,
+                    new_pct,
+                    self._prev_context_pct - new_pct,
+                )
+                # Use the pre-drop snapshot as the baseline
+                self._rolling_baseline_set = pre_drop_snapshot
+                self.activate()
+
+            # Update prev after detection check
+            self._prev_context_pct = new_pct
+
+        except Exception:
+            logger.exception("compaction_guard.update_context_usage failed")
+
+    # ── activate() ───────────────────────────────────────────────
+
+    def activate(self) -> None:
+        """Transition PASSIVE → ACTIVE. Snapshot pre-compaction baseline.
+
+        No-op if already ACTIVE (idempotent). Copies _rolling_baseline_set
+        to _pre_compaction_set and clears _post_compaction_sequence.
+        """
+        try:
+            if self._phase == GuardPhase.ACTIVE:
+                logger.debug("compaction_guard.activate called but already ACTIVE")
+                return
+
+            self._phase = GuardPhase.ACTIVE
+            self._pre_compaction_set = set(self._rolling_baseline_set)
+            self._post_compaction_sequence = []
+
+            logger.info(
+                "compaction_guard.activated baseline_size=%d context_pct=%.1f",
+                len(self._pre_compaction_set),
+                self._context_pct,
+            )
+        except Exception:
+            logger.exception("compaction_guard.activate failed")
+
+    # ── _detect_loop() ───────────────────────────────────────────
+
+    def _detect_loop(self) -> bool:
+        """Detect loop via set-overlap and single-tool repetition.
+
+        Returns True if a loop pattern is detected. Caches the detection
+        reason in ``_last_pattern_desc`` for ``_build_pattern_description()``.
+        """
+        seq = self._post_compaction_sequence
+        total = len(seq)
+        self._last_pattern_desc = ""
+
+        # Set-overlap detection
+        if total >= _MIN_POST_COMPACTION_CALLS:
+            overlap_count = sum(
+                1 for pair in seq if pair in self._pre_compaction_set
+            )
+            if overlap_count / total > _OVERLAP_THRESHOLD:
+                logger.warning(
+                    "compaction_guard.loop_detected set_overlap "
+                    "overlap=%d total=%d pct=%.1f%%",
+                    overlap_count,
+                    total,
+                    (overlap_count / total) * 100,
+                )
+                self._last_pattern_desc = (
+                    f"{overlap_count * 100 // total}% of post-compaction "
+                    f"tool calls match pre-compaction baseline "
+                    f"({overlap_count}/{total} calls)"
+                )
+                return True
+
+        # Single-tool repetition detection
+        if seq:
+            counter = Counter(seq)
+            most_common_pair, most_common_count = counter.most_common(1)[0]
+            if most_common_count >= _SINGLE_TOOL_REPEAT_LIMIT:
+                logger.warning(
+                    "compaction_guard.loop_detected single_tool_repeat "
+                    "tool=%s hash=%s count=%d",
+                    most_common_pair[0],
+                    most_common_pair[1],
+                    most_common_count,
+                )
+                self._last_pattern_desc = (
+                    f"Tool {most_common_pair[0]} called {most_common_count} times "
+                    f"with identical input"
+                )
+                return True
+
+        return False
+
+    # ── check() ──────────────────────────────────────────────────
+
+    def check(self) -> EscalationLevel:
+        """Check all layers and return the current escalation level.
+
+        PASSIVE → always MONITORING (no interference).
+        ACTIVE + ctx < 85% → MONITORING.
+        ACTIVE + ctx ≥ 85% → run _detect_loop().
+          Loop detected → escalate one step (MONITORING→SOFT_WARN→HARD_WARN→KILL).
+          No loop → MONITORING.
+        After KILL, subsequent calls continue returning KILL.
+
+        Wraps in try/except — on error, returns MONITORING. Guard must
+        never block streaming.
+        """
+        try:
+            # PASSIVE phase: no interference
+            if self._phase == GuardPhase.PASSIVE:
+                return EscalationLevel.MONITORING
+
+            # Already at KILL: stay there
+            if self._escalation == EscalationLevel.KILL:
+                return EscalationLevel.KILL
+
+            # ACTIVE but below context threshold: no detection
+            if self._context_pct < _CONTEXT_ACTIVATION_PCT:
+                return EscalationLevel.MONITORING
+
+            # ACTIVE + ctx ≥ 85%: run loop detection
+            if self._detect_loop():
+                # Escalate one step
+                current_idx = _ESCALATION_ORDER.index(self._escalation)
+                next_idx = min(current_idx + 1, len(_ESCALATION_ORDER) - 1)
+                new_level = _ESCALATION_ORDER[next_idx]
+
+                logger.warning(
+                    "compaction_guard.escalation old=%s new=%s context_pct=%.1f",
+                    self._escalation.value,
+                    new_level.value,
+                    self._context_pct,
+                )
+                self._escalation = new_level
+                return new_level
+
+            # No loop detected
+            return EscalationLevel.MONITORING
+
+        except Exception:
+            logger.exception("compaction_guard.check failed")
+            return EscalationLevel.MONITORING
+
+    # ── work_summary() ───────────────────────────────────────────
 
     def work_summary(self) -> str:
         """Generate a structured work summary for post-compaction injection.
 
-        Returns a human-readable summary of all tool calls recorded
-        this turn, suitable for injection via /compact instructions.
+        Returns a human-readable summary of all tool calls recorded,
+        grouped by tool name (sorted by count descending), with up to
+        5 representative input_detail strings per group (truncated to
+        200 chars). Includes "CRITICAL: Do NOT re-run" instructions.
+
+        Returns empty string if no tool records exist.
         """
-        if not self._tool_calls:
+        try:
+            if not self._tool_records:
+                return ""
+
+            # Group records by tool_name
+            groups: dict[str, list[ToolRecord]] = defaultdict(list)
+            for rec in self._tool_records:
+                groups[rec.tool_name].append(rec)
+
+            # Sort by count descending
+            sorted_groups = sorted(
+                groups.items(), key=lambda x: -len(x[1])
+            )
+
+            lines = [
+                "[Post-Compaction Work Summary]",
+                f"Tools executed ({len(self._tool_records)} total calls):",
+                "",
+            ]
+
+            for tool_name, records in sorted_groups:
+                count = len(records)
+                lines.append(f"  {tool_name}: ×{count}")
+
+                # Up to 5 representative input details
+                try:
+                    seen_details: list[str] = []
+                    for rec in records:
+                        detail = rec.input_detail[:200] if rec.input_detail else ""
+                        if detail and len(seen_details) < 5:
+                            seen_details.append(detail)
+                    for detail in seen_details:
+                        lines.append(f"    - {detail}")
+                except Exception:
+                    lines.append(f"    <{tool_name}(...)>")
+
+                lines.append("")
+
+            lines.extend([
+                "CRITICAL: Do NOT re-run the tools listed above.",
+                "If all work is complete, summarize results and STOP.",
+                "If work remains, describe what's left and ask the user for instruction.",
+                "DO NOT start new tool calls without user confirmation.",
+            ])
+            return "\n".join(lines)
+
+        except Exception:
+            logger.exception("compaction_guard.work_summary failed")
             return ""
 
-        # Group tool calls by name with counts
-        tool_groups: dict[str, int] = defaultdict(int)
-        for call in self._tool_calls:
-            tool_groups[call.tool_name] += 1
+    # ── build_guard_event() ──────────────────────────────────────
 
-        lines = [
-            "[Post-Compaction Work Summary]",
-            f"Tools executed this turn ({len(self._tool_calls)} total calls):",
-        ]
-        for name, count in sorted(tool_groups.items(), key=lambda x: -x[1]):
-            lines.append(f"  - {name}: ×{count}")
+    def build_guard_event(self, level: EscalationLevel) -> dict | None:
+        """Build SSE event dict for a given escalation level.
 
-        lines.extend([
-            "",
-            "CRITICAL: Do NOT re-run the tools listed above.",
-            "If all work is complete, summarize results and STOP.",
-            "If work remains, describe what's left and ask the user for instruction.",
-            "DO NOT start new tool calls without user confirmation.",
-        ])
-        return "\n".join(lines)
+        Returns None for MONITORING (caller skips). For SOFT_WARN,
+        HARD_WARN, KILL: returns dict with type="compaction_guard",
+        subtype, context_pct, message, and pattern_description.
+        """
+        try:
+            if level == EscalationLevel.MONITORING:
+                return None
 
-    # ── SSE Event Builders ────────────────────────────────────────
+            # Build pattern description from detection state
+            pattern_desc = self._build_pattern_description()
 
-    def build_throttle_warning_event(self) -> dict:
-        """Build SSE event for context throttle warning (70%+)."""
-        return {
-            "type": "loop_guard",
-            "subtype": "throttle_warning",
-            "context_pct": round(self._context_pct, 1),
-            "context_tokens": self._context_tokens,
-            "message": (
-                f"⚠️ Context {self._context_pct:.0f}% full. "
-                f"Summarize completed work and wait for user instruction."
-            ),
-        }
+            messages = {
+                EscalationLevel.SOFT_WARN: (
+                    f"⚠️ Loop pattern detected at {self._context_pct:.0f}% context. "
+                    f"Review completed work before continuing."
+                ),
+                EscalationLevel.HARD_WARN: (
+                    f"🛑 Loop pattern persists at {self._context_pct:.0f}% context. "
+                    f"Summarize your work and stop — do not start new tool calls."
+                ),
+                EscalationLevel.KILL: (
+                    f"❌ Amnesia loop confirmed at {self._context_pct:.0f}% context. "
+                    f"Session will be interrupted to prevent further resource waste."
+                ),
+            }
 
-    def build_throttle_stop_event(self) -> dict:
-        """Build SSE event for context hard stop (85%+)."""
-        return {
-            "type": "loop_guard",
-            "subtype": "throttle_stop",
-            "context_pct": round(self._context_pct, 1),
-            "context_tokens": self._context_tokens,
-            "message": (
-                f"🛑 Context {self._context_pct:.0f}% full — "
-                f"session will be interrupted to prevent compaction loop."
-            ),
-        }
+            return {
+                "type": "compaction_guard",
+                "subtype": level.value,
+                "context_pct": round(self._context_pct, 1),
+                "message": messages.get(level, "Guard event"),
+                "pattern_description": pattern_desc,
+            }
 
-    def build_loop_warning_event(self) -> dict:
-        """Build SSE event for circuit breaker trigger."""
-        # Find the offending tool
-        offender = "unknown"
-        max_exact = 0
-        for (tool_name, _hash), count in self._exact_counts.items():
-            if count > max_exact:
-                max_exact = count
-                offender = tool_name
+        except Exception:
+            logger.exception("compaction_guard.build_guard_event failed")
+            return None
 
-        return {
-            "type": "loop_guard",
-            "subtype": "loop_detected",
-            "tool_name": offender,
-            "repeat_count": max_exact,
-            "total_tool_calls": len(self._tool_calls),
-            "message": (
-                f"🔄 Loop detected: {offender} called {max_exact}× "
-                f"with identical arguments. Session will be interrupted."
-            ),
-        }
+    def _build_pattern_description(self) -> str:
+        """Return the cached pattern description from the last _detect_loop() call."""
+        return self._last_pattern_desc
 
-    # ── Lifecycle ─────────────────────────────────────────────────
+    # ── reset() and reset_all() ──────────────────────────────────
 
     def reset(self) -> None:
-        """Reset for a new user turn.
+        """Reset per-turn tracking for a new user message.
 
-        Call at the start of each send() — the user is actively
-        engaged, so tool repeat tracking resets.
-        Context usage is NOT reset — it persists across turns.
+        Clears escalation and post-compaction sequence but preserves
+        phase, pre-compaction baseline, context_pct, and tool_records.
         """
-        self._tool_calls.clear()
-        self._exact_counts.clear()
-        self._name_counts.clear()
-        self._warned_throttle = False
-        self._warned_stop = False
-        self._warned_loop = False
+        try:
+            self._escalation = EscalationLevel.MONITORING
+            self._post_compaction_sequence = []
+            self._last_pattern_desc = ""
+        except Exception:
+            logger.exception("compaction_guard.reset failed")
 
     def reset_all(self) -> None:
-        """Full reset including context tracking.
+        """Full reset (subprocess respawn): back to PASSIVE, clear everything.
 
-        Call on session restart (COLD → IDLE).
+        Resets phase to PASSIVE, escalation to MONITORING, context to zero,
+        and clears all tracking collections.
         """
-        self.reset()
-        self._context_pct = 0.0
-        self._context_tokens = 0
+        try:
+            self._phase = GuardPhase.PASSIVE
+            self._escalation = EscalationLevel.MONITORING
+            self._context_pct = 0.0
+            self._context_tokens = 0
+            self._prev_context_pct = 0.0
+            self._pre_compaction_set = set()
+            self._rolling_baseline_set = set()
+            self._post_compaction_sequence = []
+            self._tool_records = []
+        except Exception:
+            logger.exception("compaction_guard.reset_all failed")
+

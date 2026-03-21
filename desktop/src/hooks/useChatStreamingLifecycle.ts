@@ -38,6 +38,7 @@ import type {
   ContentBlock,
   StreamEvent,
   SystemPromptMetadata,
+  CompactionGuardEvent,
 } from '../types';
 import type { PendingQuestion } from '../pages/chat/types';
 import type { UnifiedTab } from './useUnifiedTabState';
@@ -631,6 +632,12 @@ export interface ChatStreamingLifecycle {
   promptMetadata: SystemPromptMetadata | null;
   /** Set the prompt metadata display mirror (used by tab switch restore). */
   setPromptMetadata: React.Dispatch<React.SetStateAction<SystemPromptMetadata | null>>;
+
+  // Compaction guard (delivered via SSE compaction_guard event)
+  /** Non-null when the backend emits a compaction_guard SSE event (soft_warn, hard_warn, kill). */
+  compactionGuard: CompactionGuardEvent | null;
+  /** Set the compaction guard display mirror (used by tab switch restore). */
+  setCompactionGuard: React.Dispatch<React.SetStateAction<CompactionGuardEvent | null>>;
 }
 
 /** Context warning payload from the backend context monitor. */
@@ -725,6 +732,10 @@ export function useChatStreamingLifecycle(
 
   // --- System prompt metadata (delivered via SSE, same pipeline as contextWarning) ---
   const [promptMetadata, setPromptMetadata] = useState<SystemPromptMetadata | null>(null);
+
+  // --- Compaction guard (delivered via SSE compaction_guard event) ---
+  const [compactionGuard, setCompactionGuard] = useState<CompactionGuardEvent | null>(null);
+
   const clearContextWarning = useCallback(() => {
     const tabId = activeTabIdRef.current;
     if (tabId) {
@@ -1443,6 +1454,33 @@ export function useChatStreamingLifecycle(
             setContextWarning(warning);
           }
         }
+        // Compaction guard — backend emits when the guard escalates
+        // (soft_warn, hard_warn, kill). Same display mirror pattern as context_warning:
+        // write to tabMapRef, mirror to React state only for the active tab.
+        else if (event.type === 'compaction_guard') {
+          const subtype = event.subtype as 'soft_warn' | 'hard_warn' | 'kill' | undefined;
+          // Ignore unknown subtypes gracefully (don't crash the stream handler)
+          if (subtype === 'soft_warn' || subtype === 'hard_warn' || subtype === 'kill') {
+            // SSE event uses snake_case (context_pct, pattern_description)
+            // but CompactionGuardEvent uses camelCase — convert inline.
+            const raw = event as unknown as Record<string, unknown>;
+            const guardEvent: CompactionGuardEvent = {
+              subtype,
+              contextPct: (raw.context_pct as number) ?? (event.contextPct as number) ?? 0,
+              message: event.message ?? 'Guard event',
+              patternDescription: (raw.pattern_description as string) ?? event.patternDescription,
+            };
+            const cgTab = capturedTabId
+              ? tabMapRef.current.get(capturedTabId)
+              : undefined;
+            if (cgTab) {
+              cgTab.compactionGuard = guardEvent;
+            }
+            if (capturedTabId === null || capturedTabId === activeTabIdRef.current) {
+              setCompactionGuard(guardEvent);
+            }
+          }
+        }
         // System prompt metadata — backend emits after each turn alongside
         // context_warning.  Same display mirror pattern: write to tabMapRef,
         // mirror to React state only for the active tab.
@@ -1785,5 +1823,7 @@ export function useChatStreamingLifecycle(
     clearContextWarning,
     promptMetadata,
     setPromptMetadata,
+    compactionGuard,
+    setCompactionGuard,
   };
 }
