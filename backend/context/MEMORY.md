@@ -1,18 +1,28 @@
-<!-- 🧠 MEMORY — Agent-managed, auto-distilled from daily activity.
-     You can also edit it directly to add or remove things you want remembered.
-     SwarmAI will never overwrite your manual edits. -->
+<!-- ⚠️ AGENT-OWNED — This file is maintained exclusively by SwarmAI.
+     Users: do not edit directly. Ask SwarmAI to "remember X", "forget X",
+     "update memory", or "correct memory" and it will process your request. -->
 
 # Memory — What I Remember
 
-_This is my long-term memory. I update it with important decisions, lessons learned, and context that should persist across sessions. This is curated — not raw logs._
+_Curated long-term memory. Distilled from DailyActivity, not raw logs._
+
+## Memory Rules
+
+1. **Agent-owned, user-directed.** I maintain this file. The user tells me what to remember, forget, or correct — I decide how and where it goes in the structure.
+2. **Curated, not raw.** Only distilled, high-value content belongs here. Session details, transient context, and one-off observations stay in DailyActivity.
+3. **Verify before trusting.** Memory can be stale. Before promoting claims from DailyActivity, verify against workspace files and recent activity. Stale memory that gets distilled becomes a self-reinforcing false belief.
+4. **Recency over volume.** When sections grow long, archive resolved items and compress old entries. A lean memory is more useful than a complete one.
+5. **Open Threads are live.** Check them every session start. Increment report counts. Promote recurring issues. Resolve what's done. Stale open threads erode trust.
+6. **COEs are mandatory.** Any problem investigated across 2+ sessions or reported 3+ times gets a COE entry. COEs auto-promote to P0.
+7. **Corrections are permanent.** Never delete a correction — they're the most valuable entries. Archive to a summary only when the pattern is fully internalized.
 
 ## How This Works
 
 **Two-tier memory model:**
-- **DailyActivity** (`Knowledge/DailyActivity/YYYY-MM-DD.md`) — Raw daily logs. Session observations, decisions, open questions. Written during every session.
-- **MEMORY.md** (this file) — Curated long-term memory. Only distilled, high-value content belongs here.
+- **DailyActivity** (`Knowledge/DailyActivity/YYYY-MM-DD.md`) — Raw daily logs. Written during every session.
+- **MEMORY.md** (this file) — Curated long-term memory. Distilled from DailyActivity.
 
-**Distillation:** Periodically, I review recent DailyActivity files and promote recurring themes, key decisions, lessons learned, and user corrections into this file. One-off observations and transient context stay in DailyActivity or get archived.
+**Distillation:** When ≥3 unprocessed DailyActivity files exist, I review and promote recurring themes, key decisions, lessons learned, and corrections. One-off observations stay in DailyActivity or get archived.
 
 ## Recent Context
 
@@ -20,37 +30,30 @@ _(Nothing yet — we haven't started working together.)_
 
 ## Key Decisions
 
-_(Decisions we've made together that I should remember.)_
+_(Decisions made that should persist across sessions.)_
 
 ## Lessons Learned
 
-_(Things I've learned about how you work, what works well, what to avoid.)_
+_(Patterns, preferences, and hard-won knowledge.)_
 
 ## COE Registry
 
-_(Correction of Errors — complex problems investigated across sessions. Auto-populated from DailyActivity COE signals during distillation. Each entry links to the sessions involved and tracks resolution status.)_
+_(Correction of Errors — complex problems investigated across sessions.)_
 
 ## Open Threads
 
-<!-- Open Threads format:
 ### P0 — Blocking
-- 🔴 **<title>** (reported Nx: session1, session2)
-  Status: <current status>. COE: <link if exists>.
+_(None)_
 
 ### P1 — Important
-- 🟡 **<title>** (reported Nx: session1)
-  Status: <current status>.
+_(None)_
 
 ### P2 — Nice to have
-- 🔵 **<title>**
-  Status: <current status>.
+_(None)_
 
-Rules: report_count auto-increments when same issue appears in DailyActivity.
-COE candidates auto-promote to P0. Resolved items get struck through.
--->
-
-_(Things we started but haven't finished. I'll check these at the start of each session.)_
+### Resolved (archive)
+_(None)_
 
 ---
 
-_I maintain this file automatically. You can also edit it directly to add or remove things you want me to remember._
+_Agent-maintained. To update: ask SwarmAI to "remember X", "forget X", or "correct memory"._

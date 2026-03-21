@@ -17,6 +17,19 @@ Examples:
 - Valid until: 2026-03-15
 -->
 
+## Standing Rules
+
+_(Permanent rules that apply every session. Remove when no longer needed.)_
+
+<!--
+Examples of standing rules:
+- Always write tests before implementing features
+- When working on the API, use OpenAPI spec format first
+- Never deploy on Fridays
+- Prefer TypeScript over JavaScript for new files
+- When I say "ship it", commit + push without asking
+-->
+
 ---
 
 _Edit this file anytime. Standing rules stay until you remove them. Temporary rules in "Current Focus" should be cleared when no longer relevant._
