@@ -1490,9 +1490,18 @@ export function useChatStreamingLifecycle(
               : undefined;
             if (cgTab) {
               cgTab.compactionGuard = guardEvent;
+              // HARD_WARN and KILL trigger backend interrupt() which ends the
+              // stream.  Clear streaming state immediately so the tab doesn't
+              // show "Running" forever after the guard fires.
+              if (subtype === 'hard_warn' || subtype === 'kill') {
+                cgTab.isStreaming = false;
+              }
             }
             if (capturedTabId === null || capturedTabId === activeTabIdRef.current) {
               setCompactionGuard(guardEvent);
+              if (subtype === 'hard_warn' || subtype === 'kill') {
+                setIsStreaming(false, capturedTabId ?? undefined);
+              }
             }
           }
         }

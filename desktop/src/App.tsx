@@ -12,6 +12,7 @@ import { ThemeProvider } from './contexts/ThemeContext';
 import { ToastProvider } from './contexts/ToastContext';
 import { HealthProvider } from './contexts/HealthContext';
 import { BackendStartupOverlay, UpdateNotification, ShutdownOverlay } from './components/common';
+import { getBackendPort } from './services/tauri';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { ToastStack } from './components/common/ToastStack';
 import ThreeColumnLayout from './components/layout/ThreeColumnLayout';
@@ -48,28 +49,30 @@ export default function App() {
   // Graceful shutdown on app close
   useEffect(() => {
     let unlisten: (() => void) | undefined;
-    try {
-      import('@tauri-apps/api/event').then(({ listen }) => {
-        listen('tauri://close-requested', async () => {
+
+    const setupTauriCloseHandler = async () => {
+      try {
+        const { listen } = await import('@tauri-apps/api/event');
+        const { getCurrentWindow } = await import('@tauri-apps/api/window');
+        unlisten = await listen('tauri://close-requested', async () => {
           try {
-            await fetch('/shutdown', { method: 'POST' });
+            const port = getBackendPort();
+            await fetch(`http://localhost:${port}/shutdown`, { method: 'POST' });
           } catch {
             // Backend may already be down
           }
-          import('@tauri-apps/api/window').then(async ({ getCurrentWindow }) => {
-            await getCurrentWindow().close();
-          });
-        }).then(fn => { unlisten = fn; });
-      }).catch(() => {
-        // Not in Tauri — use beforeunload fallback only
-      });
-    } catch {
-      // Not in Tauri environment
-    }
+          await getCurrentWindow().close();
+        });
+      } catch {
+        // Not in Tauri environment — beforeunload fallback only
+      }
+    };
+    setupTauriCloseHandler();
 
-    // Web fallback
+    // Web/dev fallback
     const handleBeforeUnload = () => {
-      navigator.sendBeacon('/shutdown');
+      const port = getBackendPort();
+      navigator.sendBeacon(`http://localhost:${port}/shutdown`);
     };
     window.addEventListener('beforeunload', handleBeforeUnload);
 
