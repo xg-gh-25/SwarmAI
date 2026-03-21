@@ -24,7 +24,7 @@
  */
 
 import { useState, useRef, useMemo, useCallback, useEffect } from 'react';
-import type { Message, UnifiedAttachment, SystemPromptMetadata, CompactionGuardEvent } from '../types/index';
+import type { Message, UnifiedAttachment, ContentBlock, SystemPromptMetadata, CompactionGuardEvent } from '../types/index';
 import type { PendingQuestion, OpenTab } from '../pages/chat/types';
 import type { ContextWarning } from './useChatStreamingLifecycle';
 import {
@@ -136,6 +136,14 @@ export interface UnifiedTab {
     userMessage: string | null;
     content: unknown[] | null;
   } | null;
+  /** Queued message payload — stored when user sends while streaming.
+   *  Drained automatically when the current stream completes or is stopped. */
+  queuedMessage?: {
+    text: string;
+    attachments: UnifiedAttachment[];
+    displayContent: ContentBlock[];
+    messageId: string;
+  };
 }
 
 /** Fields persisted to ~/.swarm-ai/open_tabs.json (re-exported from tabPersistence service). */
@@ -404,6 +412,11 @@ export function useUnifiedTabState(
         }
       }
 
+      // Best-effort backend cleanup — fire and forget
+      if (tab.sessionId) {
+        api.delete(`/chat/sessions/${tab.sessionId}`).catch(() => {});
+      }
+
       // Capture ordered keys before removal for reselection
       const keys = [...map.keys()];
       const closedIndex = keys.indexOf(tabId);
@@ -429,6 +442,18 @@ export function useUnifiedTabState(
   const selectTab = useCallback(
     (tabId: string) => {
       if (tabMapRef.current.has(tabId)) {
+        // Abort previous tab's SSE connection if streaming
+        const prevTabId = activeTabIdRef.current;
+        if (prevTabId && prevTabId !== tabId) {
+          const prevTab = tabMapRef.current.get(prevTabId);
+          if (prevTab?.abortController && prevTab.isStreaming) {
+            try {
+              prevTab.abortController.abort();
+            } catch {
+              // already aborted
+            }
+          }
+        }
         setActiveTabIdBoth(tabId);
         bump();
       }
@@ -602,6 +627,34 @@ export function useUnifiedTabState(
       bump();
       fileRestoreDone.current = true; // Mark done AFTER successful hydration
       console.log(`[useUnifiedTabState] Restored ${data.tabs.length} tabs from open_tabs.json`);
+
+      // Validate restored session IDs against backend
+      const validateSessions = async () => {
+        const invalidIds: string[] = [];
+        for (const [tId, t] of map.entries()) {
+          if (t.sessionId) {
+            try {
+              const response = await api.get(`/chat/sessions/${t.sessionId}`);
+              if (response.status === 404) {
+                invalidIds.push(tId);
+              }
+            } catch {
+              // Backend unreachable — keep tab, don't remove
+            }
+          }
+        }
+        for (const id of invalidIds) {
+          map.delete(id);
+        }
+        if (map.size === 0) {
+          const newTab = createDefaultTab(defaultAgentId);
+          map.set(newTab.id, newTab);
+          setActiveTabIdBoth(newTab.id);
+        }
+        if (invalidIds.length > 0) bump();
+      };
+      validateSessions();
+
       return true;
     },
     [bump, setActiveTabIdBoth],

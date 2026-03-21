@@ -227,6 +227,7 @@ async def sse_with_heartbeat(
     message_generator: AsyncIterator[dict],
     heartbeat_interval: int = SSE_HEARTBEAT_INTERVAL,
     request: Optional[Request] = None,
+    stop_event: Optional[asyncio.Event] = None,
 ) -> AsyncIterator[str]:
     """Wrap an async message generator with heartbeat support.
 
@@ -290,6 +291,10 @@ async def sse_with_heartbeat(
             except asyncio.TimeoutError:
                 # No message received within heartbeat interval, send heartbeat
                 if not generator_done:
+                    # Check if session was stopped
+                    if stop_event is not None and stop_event.is_set():
+                        logger.info("SSE stop event received, ending stream")
+                        break
                     # Check if client disconnected
                     if request is not None:
                         try:
@@ -412,8 +417,12 @@ async def chat_stream(request: Request):
                     suggested_action="Please try again or contact support",
                 )
 
+    # Get unit's stop event for SSE notification
+    _unit = _get_router().get_unit(chat_request.session_id) if chat_request.session_id else None
+    _stop_evt = _unit.stop_event if _unit else None
+
     return StreamingResponse(
-        sse_with_heartbeat(message_generator(), request=request),
+        sse_with_heartbeat(message_generator(), request=request, stop_event=_stop_evt),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -485,8 +494,11 @@ async def answer_question(request: Request):
                 suggested_action="Please try again or contact support",
             )
 
+    _unit = _get_router().get_unit(answer_request.session_id) if answer_request.session_id else None
+    _stop_evt = _unit.stop_event if _unit else None
+
     return StreamingResponse(
-        sse_with_heartbeat(message_generator()),
+        sse_with_heartbeat(message_generator(), request=request, stop_event=_stop_evt),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -816,8 +828,11 @@ async def cmd_permission_continue(request: Request):
                 suggested_action="Please try again or contact support",
             )
 
+    _unit = _get_router().get_unit(permission_request.session_id) if permission_request.session_id else None
+    _stop_evt = _unit.stop_event if _unit else None
+
     return StreamingResponse(
-        sse_with_heartbeat(message_generator()),
+        sse_with_heartbeat(message_generator(), request=request, stop_event=_stop_evt),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

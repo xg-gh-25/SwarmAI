@@ -242,6 +242,9 @@ class SessionUnit:
             Callable[[str, SessionState, SessionState], None]
         ] = on_state_change
 
+        # ── SSE stop notification ─────────────────────────────────
+        self._stop_event: asyncio.Event = asyncio.Event()
+
     # ── Properties ────────────────────────────────────────────────
 
     @property
@@ -271,6 +274,11 @@ class SessionUnit:
         if self._wrapper is not None:
             return self._wrapper.pid
         return None
+
+    @property
+    def stop_event(self) -> asyncio.Event:
+        """Per-session event signaling SSE consumers to stop."""
+        return self._stop_event
 
     # ── State management ─────────────────────────────────────────
 
@@ -431,6 +439,9 @@ class SessionUnit:
         )
 
         # ── Layer 1: Auto-recover stuck STREAMING sessions ─────────
+        # Reset stop event for new message
+        self._stop_event = asyncio.Event()
+
         # If a previous request got stuck (SDK never sent ResultMessage),
         # the unit stays in STREAMING forever.  Instead of rejecting the
         # new message with an error, force-recover to COLD and proceed.
@@ -1312,6 +1323,7 @@ class SessionUnit:
         if self.state not in (SessionState.STREAMING, SessionState.WAITING_INPUT):
             return self.is_alive
 
+        self._stop_event.set()
         self._interrupted = True
 
         if self._client is None:
@@ -1380,9 +1392,7 @@ class SessionUnit:
             async for event in self._stream_response(answer):
                 yield event
         except Exception:
-            self._transition(SessionState.DEAD)
-            self._cleanup_internal()
-            self._transition(SessionState.COLD)
+            await self._crash_to_cold_async(clear_identity=False)
             raise
 
     async def continue_with_permission(
@@ -1420,9 +1430,7 @@ class SessionUnit:
             async for event in self._read_formatted_response():
                 yield event
         except Exception:
-            self._transition(SessionState.DEAD)
-            self._cleanup_internal()
-            self._transition(SessionState.COLD)
+            await self._crash_to_cold_async(clear_identity=False)
             raise
 
     async def reclaim_for_mcp_swap(self) -> None:
@@ -1656,9 +1664,8 @@ class SessionUnit:
     async def _crash_to_cold_async(self, *, clear_identity: bool = False) -> None:
         """Async transition DEAD → COLD with proper wrapper cleanup.
 
-        Unlike the deleted sync ``_crash_to_cold()``, this method calls
-        ``await _force_kill()`` which properly closes the wrapper's file
-        descriptors via ``__aexit__()`` before clearing references.
+        Calls ``await _force_kill()`` which properly closes the wrapper's
+        file descriptors via ``__aexit__()`` before clearing references.
 
         Args:
             clear_identity: If True, also clears ``_sdk_session_id``
@@ -1699,7 +1706,7 @@ class SessionUnit:
         by ``send()`` auto-recovery when the previous request left the
         unit stuck in STREAMING.
 
-        Now async — uses ``_crash_to_cold_async()`` which calls
+        Uses ``_crash_to_cold_async()`` which calls
         ``_force_kill()`` to properly close wrapper file descriptors
         via ``__aexit__()``.
         """

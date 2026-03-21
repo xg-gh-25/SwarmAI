@@ -671,6 +671,8 @@ export interface ChatStreamingLifecycleDeps {
   tabMapRef: React.RefObject<Map<string, UnifiedTab>>;
   /** Direct ref to the active tab ID for synchronous reads in stream handlers. */
   activeTabIdRef: React.RefObject<string | null>;
+  /** Callback to drain a queued message after a stream completes or is stopped. */
+  onDrainQueue?: (tabId: string) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -1713,6 +1715,11 @@ export function useChatStreamingLifecycle(
         setIsStreaming(false, capturedTabId ?? undefined);
         incrementStreamGen();
 
+        // Clean up sessionStorage pending state on stream error
+        if (tabState?.sessionId) {
+          removePendingState(tabState.sessionId);
+        }
+
         // Fix 8: Update tab status to 'error'
         if (capturedTabId) {
           updateTabStatus(capturedTabId, 'error');
@@ -1745,6 +1752,11 @@ export function useChatStreamingLifecycle(
         // for the case where session_resuming consumed hasReceivedData
         // before isResuming was set (ordering race in the event handler).
         tabState.isResuming = false;
+
+        // Clean up sessionStorage pending state on stream completion
+        if (tabState.sessionId) {
+          removePendingState(tabState.sessionId);
+        }
       }
 
       if (streamGenRef.current !== capturedGen) return; // stale — no-op

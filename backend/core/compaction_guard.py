@@ -87,6 +87,15 @@ _SINGLE_TOOL_REPEAT_LIMIT = 5
 _COMPACTION_DROP_THRESHOLD = 30
 """Context % drop between consecutive updates that triggers heuristic compaction detection."""
 
+PRODUCTIVE_TOOLS: set[str] = {"Edit", "Write", "MultiEdit", "Bash", "NotebookEdit"}
+"""Tools that produce output — progress indicators."""
+
+_NONPRODUCTIVE_SOFT_WARN: int = 15
+"""Consecutive non-productive calls before SOFT_WARN."""
+
+_NONPRODUCTIVE_HARD_WARN: int = 30
+"""Consecutive non-productive calls before HARD_WARN."""
+
 
 # ── Escalation ordering (for strict one-step progression) ────────
 
@@ -121,6 +130,7 @@ class CompactionGuard:
         self._context_pct: float = 0.0
         self._context_tokens: int = 0
         self._prev_context_pct: float = 0.0  # For heuristic compaction detection
+        self._context_window: int = 200_000
 
         # Tool tracking — sets and sequences
         self._pre_compaction_set: set[tuple[str, str]] = set()
@@ -132,6 +142,10 @@ class CompactionGuard:
 
         # Cached pattern description from last _detect_loop() call
         self._last_pattern_desc: str = ""
+
+        # Progress tracking — productive vs non-productive
+        self._consecutive_nonproductive: int = 0
+        self._has_productive_call: bool = False
 
     @property
     def phase(self) -> GuardPhase:
@@ -168,6 +182,18 @@ class CompactionGuard:
             except (TypeError, ValueError):
                 raw = str(tool_input)
         return hashlib.md5(raw.encode(), usedforsecurity=False).hexdigest()[:12]
+
+    def _compute_activation_pct(self, window: int) -> float:
+        """Compute context activation threshold scaled to window size.
+
+        Linear interpolation: 200K → 85%, 1M → 40%.
+        For windows ≤ 200K, returns 85.0 (original behavior).
+        For windows > 1M, clamps at 40.0.
+        """
+        if window <= 200_000:
+            return 85.0
+        ratio = min((window - 200_000) / 800_000, 1.0)
+        return 85.0 - (ratio * 45.0)
 
     # ── record_tool_call() ───────────────────────────────────────
 
@@ -211,6 +237,13 @@ class CompactionGuard:
             # Append full record for work summary
             self._tool_records.append(record)
 
+            # Progress tracking — productive vs non-productive
+            if tool_name in PRODUCTIVE_TOOLS:
+                self._consecutive_nonproductive = 0
+                self._has_productive_call = True
+            else:
+                self._consecutive_nonproductive += 1
+
         except Exception:
             logger.exception("compaction_guard.record_tool_call failed")
 
@@ -238,6 +271,7 @@ class CompactionGuard:
             except Exception:
                 window = 200_000  # Safe fallback
 
+            self._context_window = window
             new_pct = (input_tokens / window) * 100 if window > 0 else 0.0
             self._context_tokens = input_tokens
             self._context_pct = new_pct
@@ -350,11 +384,15 @@ class CompactionGuard:
         """Check all layers and return the current escalation level.
 
         PASSIVE → always MONITORING (no interference).
-        ACTIVE + ctx < 85% → MONITORING.
-        ACTIVE + ctx ≥ 85% → run _detect_loop().
+        ACTIVE + progress stall (15/30 non-productive) → SOFT_WARN/HARD_WARN.
+        ACTIVE + ctx < dynamic threshold → MONITORING.
+        ACTIVE + ctx ≥ dynamic threshold → run _detect_loop().
           Loop detected → escalate one step (MONITORING→SOFT_WARN→HARD_WARN→KILL).
           No loop → MONITORING.
         After KILL, subsequent calls continue returning KILL.
+
+        The dynamic threshold scales with context window size:
+        200K → 85%, 1M → 40% (via _compute_activation_pct).
 
         Wraps in try/except — on error, returns MONITORING. Guard must
         never block streaming.
@@ -368,8 +406,36 @@ class CompactionGuard:
             if self._escalation == EscalationLevel.KILL:
                 return EscalationLevel.KILL
 
+            # Progress-based detection — fires regardless of context %
+            # Only in ACTIVE phase (after compaction detected)
+            if self._phase == GuardPhase.ACTIVE:
+                progress_level = None
+                if (
+                    self._consecutive_nonproductive >= _NONPRODUCTIVE_HARD_WARN
+                    and self._escalation.value in ("monitoring", "soft_warn")
+                ):
+                    progress_level = EscalationLevel.HARD_WARN
+                elif (
+                    self._consecutive_nonproductive >= _NONPRODUCTIVE_SOFT_WARN
+                    and self._escalation == EscalationLevel.MONITORING
+                ):
+                    progress_level = EscalationLevel.SOFT_WARN
+
+                if progress_level is not None:
+                    logger.warning(
+                        "compaction_guard.progress_escalation nonproductive=%d → %s",
+                        self._consecutive_nonproductive, progress_level.value,
+                    )
+                    self._escalation = progress_level
+                    self._last_pattern_desc = (
+                        f"{self._consecutive_nonproductive} consecutive non-productive "
+                        f"tool calls with zero Edit/Write/Bash"
+                    )
+                    return progress_level
+
             # ACTIVE but below context threshold: no detection
-            if self._context_pct < _CONTEXT_ACTIVATION_PCT:
+            activation_pct = self._compute_activation_pct(self._context_window)
+            if self._context_pct < activation_pct:
                 return EscalationLevel.MONITORING
 
             # ACTIVE + ctx ≥ 85%: run loop detection
@@ -509,11 +575,10 @@ class CompactionGuard:
     def reset(self) -> None:
         """Reset per-turn tracking for a new user message.
 
-        Clears escalation and post-compaction sequence but preserves
+        Clears post-compaction sequence but preserves escalation level,
         phase, pre-compaction baseline, context_pct, and tool_records.
         """
         try:
-            self._escalation = EscalationLevel.MONITORING
             self._post_compaction_sequence = []
             self._last_pattern_desc = ""
         except Exception:
@@ -535,6 +600,9 @@ class CompactionGuard:
             self._rolling_baseline_set = set()
             self._post_compaction_sequence = []
             self._tool_records = []
+            self._consecutive_nonproductive = 0
+            self._has_productive_call = False
+            self._context_window = 200_000
         except Exception:
             logger.exception("compaction_guard.reset_all failed")
 

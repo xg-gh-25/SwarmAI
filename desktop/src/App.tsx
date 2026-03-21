@@ -45,6 +45,40 @@ export default function App() {
     // In production mode, BackendStartupOverlay handles backend initialization
   }, []);
 
+  // Graceful shutdown on app close
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    try {
+      import('@tauri-apps/api/event').then(({ listen }) => {
+        listen('tauri://close-requested', async () => {
+          try {
+            await fetch('/shutdown', { method: 'POST' });
+          } catch {
+            // Backend may already be down
+          }
+          import('@tauri-apps/api/window').then(async ({ getCurrentWindow }) => {
+            await getCurrentWindow().close();
+          });
+        }).then(fn => { unlisten = fn; });
+      }).catch(() => {
+        // Not in Tauri — use beforeunload fallback only
+      });
+    } catch {
+      // Not in Tauri environment
+    }
+
+    // Web fallback
+    const handleBeforeUnload = () => {
+      navigator.sendBeacon('/shutdown');
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+
+    return () => {
+      unlisten?.();
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, []);
+
   return (
     <ThemeProvider>
       <QueryClientProvider client={queryClient}>

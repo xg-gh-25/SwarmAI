@@ -7,7 +7,7 @@ unfixed code, confirming that the bugs exist.
 Bug conditions tested:
 - C1: vm_stat memory inflation (inactive pages included in available)
 - C1b: compute_max_tabs accuracy (inflated available → wrong tab count)
-- C2: wrapper FD leak on crash path (_crash_to_cold skips __aexit__)
+- C2: wrapper FD leak on crash path (_crash_to_cold_async skips __aexit__)
 - C3: slot race condition (concurrent _acquire_slot exceeds max_tabs)
 
 Testing methodology:
