@@ -117,6 +117,12 @@ class SpawnBudgetResponse(BaseModel):
     headroom_mb: float
 
 
+class MaxTabsResponse(BaseModel):
+    """Dynamic tab limit and memory pressure level."""
+    max_tabs: int
+    memory_pressure: str  # ok | warning | critical
+
+
 class SystemResourcesResponse(BaseModel):
     """Full resource observability surface."""
     memory: SystemMemoryResponse
@@ -298,6 +304,27 @@ async def get_system_resources() -> SystemResourcesResponse:
         total_subprocess_rss_mb=round(total_rss, 1),
         timestamp=datetime.now(timezone.utc).isoformat(),
     )
+
+
+@router.get("/max-tabs", response_model=MaxTabsResponse)
+async def get_max_tabs() -> MaxTabsResponse:
+    """Get dynamic tab limit and current memory pressure level.
+
+    Invalidates the memory cache first so the response reflects
+    up-to-date system conditions.  On failure, returns a safe
+    fallback of 1 tab with critical pressure.
+    """
+    from core.resource_monitor import resource_monitor
+    try:
+        resource_monitor.invalidate_cache()
+        mem = resource_monitor.system_memory()
+        return MaxTabsResponse(
+            max_tabs=resource_monitor.compute_max_tabs(),
+            memory_pressure=mem.pressure_level,
+        )
+    except Exception:
+        logger.exception("Failed to compute max tabs")
+        return MaxTabsResponse(max_tabs=1, memory_pressure="critical")
 
 
 @router.post("/reset-to-defaults", response_model=ResetToDefaultsResponse)

@@ -28,9 +28,11 @@ export interface ChatErrorMessageProps {
     suggestedAction?: string;
     retryAfter?: number;
   };
+  /** Callback for QUEUE_TIMEOUT retry — re-sends the saved message when a slot opens. */
+  onRetry?: () => void;
 }
 
-export function ChatErrorMessage({ error }: ChatErrorMessageProps) {
+export function ChatErrorMessage({ error, onRetry }: ChatErrorMessageProps) {
   const { triggerHealthCheck } = useHealth();
 
   // SERVICE_UNAVAILABLE triggers immediate health check
@@ -49,7 +51,10 @@ export function ChatErrorMessage({ error }: ChatErrorMessageProps) {
       <div className="flex items-center gap-2 mb-1">
         <span className="material-symbols-outlined text-red-400 text-lg">
           {error.code === 'SDK_SUBPROCESS_TIMEOUT' || error.code === 'AGENT_TIMEOUT'
-            ? 'schedule' : 'error'}
+            ? 'schedule'
+            : error.code === 'QUEUE_TIMEOUT'
+              ? 'hourglass_top'
+              : 'error'}
         </span>
         <span className="text-red-400 font-semibold text-sm">
           {error.code === 'SDK_SUBPROCESS_TIMEOUT'
@@ -62,7 +67,9 @@ export function ChatErrorMessage({ error }: ChatErrorMessageProps) {
                   ? 'Service Unavailable'
                   : error.code === 'CREDENTIALS_EXPIRED'
                     ? 'Credentials Expired'
-                    : error.code ?? 'Error'}
+                    : error.code === 'QUEUE_TIMEOUT'
+                      ? 'Slots Busy'
+                      : error.code ?? 'Error'}
         </span>
       </div>
 
@@ -87,6 +94,16 @@ export function ChatErrorMessage({ error }: ChatErrorMessageProps) {
 
       {error.code === 'RATE_LIMIT_EXCEEDED' && error.retryAfter && (
         <RateLimitCountdownInline retryAfterSec={error.retryAfter} />
+      )}
+
+      {error.code === 'QUEUE_TIMEOUT' && onRetry && (
+        <button
+          type="button"
+          onClick={onRetry}
+          className="mt-3 px-4 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-sm rounded transition-colors"
+        >
+          ↻ Retry when slot opens
+        </button>
       )}
     </div>
   );

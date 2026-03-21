@@ -32,13 +32,41 @@ import {
   type OpenTabsFileData,
   type PersistedTab,
 } from '../services/tabPersistence';
+import api from '../services/api';
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
-/** Maximum number of concurrently open tabs. */
-export const MAX_OPEN_TABS = 6;
+/**
+ * Hard ceiling for tab restore — all saved tabs up to this count are restored
+ * from open_tabs.json regardless of current system resources.
+ */
+export const MAX_TABS_HARD_CEILING = 4;
+
+/**
+ * Fallback max tabs value used when the `GET /api/system/max-tabs` call fails.
+ * Conservative default to prevent unbounded tab creation when the backend is
+ * unreachable.
+ */
+export const MAX_OPEN_TABS_FALLBACK = 2;
+
+/**
+ * @deprecated Use `MAX_TABS_HARD_CEILING` for restore limits or the dynamic
+ * value from `fetchMaxTabs()` for new tab creation. Kept as an alias for
+ * backward compatibility with existing test imports.
+ */
+export const MAX_OPEN_TABS = MAX_TABS_HARD_CEILING;
+
+// ---------------------------------------------------------------------------
+// Dynamic tab limit types
+// ---------------------------------------------------------------------------
+
+/** Response shape from `GET /api/system/max-tabs`. */
+export interface MaxTabsInfo {
+  maxTabs: number;
+  memoryPressure: 'ok' | 'warning' | 'critical';
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -97,6 +125,17 @@ export interface UnifiedTab {
   pendingPermissionRequestId?: string | null;
   /** Per-tab attachment list managed by useUnifiedAttachments (runtime-only, NOT serialized). */
   attachments: UnifiedAttachment[];
+  /** Set true by handleStop — signals stream/error handlers to suppress
+   *  error display for the interrupted stream. Cleared on next send. */
+  userStopped?: boolean;
+  /** Retry payload from QUEUE_TIMEOUT — stored so ChatPage can offer a "Retry" button.
+   *  Set when backend returns QUEUE_TIMEOUT error with retryPayload. */
+  queueTimeoutRetry?: {
+    sessionId: string;
+    agentId: string;
+    userMessage: string | null;
+    content: unknown[] | null;
+  } | null;
 }
 
 /** Fields persisted to ~/.swarm-ai/open_tabs.json (re-exported from tabPersistence service). */
@@ -140,6 +179,13 @@ export interface UseUnifiedTabStateReturn {
   // --- File-based tab restore ---
   /** Loads tab state from ~/.swarm-ai/open_tabs.json. Returns true if tabs were restored. */
   restoreFromFile: () => Promise<boolean>;
+
+  // --- Dynamic tab limit ---
+  /** Fetches the current max tabs value from the backend API and updates the cached ref.
+   *  Returns the fetched MaxTabsInfo, or a fallback on failure. */
+  fetchMaxTabs: () => Promise<MaxTabsInfo>;
+  /** Last known max tabs info from the most recent fetchMaxTabs() call. */
+  maxTabsInfo: MaxTabsInfo;
 
   // --- Direct ref access (for synchronous reads in stream handlers) ---
   tabMapRef: React.RefObject<Map<string, UnifiedTab>>;
@@ -248,6 +294,45 @@ export function useUnifiedTabState(
     console.log('[useUnifiedTabState] Init with default tab, awaiting file restore');
   }
 
+  // ---- Dynamic tab limit (cache-based, Option B) --------------------------
+  // Cached max tabs value from the last successful API fetch. Initialized to
+  // the fallback so addTab() works before the first fetch completes.
+  const maxTabsRef = useRef<MaxTabsInfo>({
+    maxTabs: MAX_OPEN_TABS_FALLBACK,
+    memoryPressure: 'ok',
+  });
+  const [maxTabsInfo, setMaxTabsInfo] = useState<MaxTabsInfo>({
+    maxTabs: MAX_OPEN_TABS_FALLBACK,
+    memoryPressure: 'ok',
+  });
+
+  /**
+   * Fetches the current max tabs value from `GET /api/system/max-tabs` and
+   * updates the cached ref. Called by ChatPage on mount and periodically.
+   * On failure, falls back to `MAX_OPEN_TABS_FALLBACK`.
+   */
+  const fetchMaxTabs = useCallback(async (): Promise<MaxTabsInfo> => {
+    try {
+      const response = await api.get('/system/max-tabs');
+      const data = response.data;
+      const info: MaxTabsInfo = {
+        maxTabs: typeof data.max_tabs === 'number' ? data.max_tabs : MAX_OPEN_TABS_FALLBACK,
+        memoryPressure: (['ok', 'warning', 'critical'].includes(data.memory_pressure)
+          ? data.memory_pressure
+          : 'ok') as MaxTabsInfo['memoryPressure'],
+      };
+      maxTabsRef.current = info;
+      setMaxTabsInfo(info);
+      return info;
+    } catch {
+      console.warn('[useUnifiedTabState] Failed to fetch max-tabs, keeping last known value');
+      // Keep the previous maxTabsRef value on transient errors — don't
+      // downgrade to fallback if we had a successful fetch before.
+      // Only use fallback if no prior fetch succeeded (initial state).
+      return maxTabsRef.current;
+    }
+  }, []);
+
   // ---- Derived views via useMemo (keyed on renderCounter) -----------------
 
   const openTabs: OpenTab[] = useMemo(() => {
@@ -285,7 +370,8 @@ export function useUnifiedTabState(
   const addTab = useCallback(
     (agentId: string): OpenTab | undefined => {
       const map = tabMapRef.current;
-      if (map.size >= MAX_OPEN_TABS) return undefined;
+      const dynamicMax = maxTabsRef.current.maxTabs;
+      if (map.size >= dynamicMax) return undefined;
 
       const newTab = createDefaultTab(agentId);
       map.set(newTab.id, newTab);
@@ -501,7 +587,7 @@ export function useUnifiedTabState(
 
       // Clear default tab and hydrate from file
       map.clear();
-      for (const saved of data.tabs.slice(0, MAX_OPEN_TABS)) {
+      for (const saved of data.tabs.slice(0, MAX_TABS_HARD_CEILING)) {
         map.set(saved.id, hydrateTab(saved));
       }
 
@@ -608,6 +694,10 @@ export function useUnifiedTabState(
 
     // File-based tab restore
     restoreFromFile,
+
+    // Dynamic tab limit
+    fetchMaxTabs,
+    maxTabsInfo,
 
     // Direct ref access
     tabMapRef,

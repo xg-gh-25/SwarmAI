@@ -42,7 +42,7 @@ import { FilePreviewModal } from '../components/workspace/FilePreviewModal';
 import { useRateLimiter, useRateLimitCountdown } from '../hooks';
 import { useUnifiedAttachments } from '../hooks/useUnifiedAttachments';
 import { useTSCCState } from '../hooks/useTSCCState';
-import { useUnifiedTabState, MAX_OPEN_TABS } from '../hooks/useUnifiedTabState';
+import { useUnifiedTabState, MAX_TABS_HARD_CEILING, MAX_OPEN_TABS_FALLBACK } from '../hooks/useUnifiedTabState';
 import { useChatStreamingLifecycle, formatElapsed, ELAPSED_DISPLAY_THRESHOLD_MS } from '../hooks/useChatStreamingLifecycle';
 import { ChatHeader, ChatInput, MessageBubble, WelcomeScreen } from './chat/components';
 import { RadarSidebar } from './chat/components/RightSidebar';
@@ -52,12 +52,12 @@ import { EXPLORER_ATTACH_FILE, EXPLORER_ASK_ABOUT_FILE } from '../constants/expl
 import { CLAUDE_NATIVE_IMAGE_MIMES } from '../utils/fileClassification';
 
 /**
- * Re-export ``deriveStreamingActivity`` and ``MAX_OPEN_TABS`` from the
+ * Re-export ``deriveStreamingActivity`` and tab constants from the
  * extracted hooks so existing test imports (``from '../pages/ChatPage'``)
  * continue to resolve.
  */
 export { deriveStreamingActivity, formatElapsed, ELAPSED_DISPLAY_THRESHOLD_MS, MIN_ACTIVITY_DISPLAY_MS } from '../hooks/useChatStreamingLifecycle';
-export { MAX_OPEN_TABS } from '../hooks/useUnifiedTabState';
+export { MAX_OPEN_TABS, MAX_TABS_HARD_CEILING, MAX_OPEN_TABS_FALLBACK } from '../hooks/useUnifiedTabState';
 
 /** Convert a backend ChatMessage to the frontend Message shape. */
 function toDisplayMessage(msg: { id: string; role: string; content: ContentBlock[]; createdAt: string; model?: string }): Message {
@@ -170,6 +170,8 @@ export default function ChatPage() {
     restoreTab,
     initTabState,
     restoreFromFile,
+    fetchMaxTabs,
+    maxTabsInfo,
   } = useUnifiedTabState(selectedAgentId || 'default');
 
   // File attachment — unified hook replaces both useFileAttachment and LayoutContext.attachedFiles
@@ -368,11 +370,11 @@ export default function ChatPage() {
 
   // Handle new session - creates new tab with "New Session" title (Req 2.2, 2.3)
   // Fix 6: Save current tab state before creating new tab, initialize new tab in per-tab map
-  // Fix 7: Guard against exceeding MAX_OPEN_TABS
+  // Fix 7: Guard against exceeding dynamic max tabs limit
   const handleNewSession = useCallback(() => {
     if (!selectedAgentId) return;
-    if (tabMapRef.current.size >= MAX_OPEN_TABS) {
-      addToast({ severity: 'info', message: 'Maximum tabs reached. Close a tab to open a new one.', autoDismiss: true });
+    if (tabMapRef.current.size >= maxTabsInfo.maxTabs) {
+      addToast({ severity: 'info', message: 'System resources are limited. Close a tab or free memory to open another.', autoDismiss: true });
       return;
     }
     // Save current React state into the active tab's map entry before switching.
@@ -396,7 +398,7 @@ export default function ChatPage() {
     setContextWarning(null);
     setIsStreaming(false, newTab!.id); // New tab is not streaming
     setIsExpanded(false); // New tab always starts in compact mode
-  }, [selectedAgentId, addTab, initTabState, tabMapRef, updateTabState, activeTabIdRef, setIsStreaming, setContextWarning]);
+  }, [selectedAgentId, addTab, initTabState, tabMapRef, updateTabState, activeTabIdRef, setIsStreaming, setContextWarning, maxTabsInfo.maxTabs, addToast]);
 
   // Handle tab selection - switches active tab and loads session messages (Req 1.6)
   // Fix 6: Save current tab state, restore target tab state from per-tab map
@@ -754,6 +756,21 @@ export default function ChatPage() {
     doRestore();
     return () => { mounted = false; };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps — mount-only
+
+  // ── Dynamic tab limit polling (Req 5.1, 6.4) ────────────────────────
+  // Fetch max tabs on mount and poll every 30 seconds for memory pressure.
+  // The fetched value updates maxTabsInfo (used for "+" button disabled state
+  // and memory pressure indicator). Polling stops on unmount.
+  useEffect(() => {
+    // Initial fetch on mount
+    fetchMaxTabs();
+
+    const interval = setInterval(() => {
+      fetchMaxTabs();
+    }, 30_000);
+
+    return () => clearInterval(interval);
+  }, [fetchMaxTabs]);
 
   // Initialize with default agent — validate the selected agent exists in the DB.
   // Since selectedAgentId defaults to 'default' (the built-in SwarmAgent),
@@ -1170,6 +1187,11 @@ export default function ChatPage() {
     // so a second rapid click/Enter will be caught by the guard above.
     setIsStreaming(true, activeTabIdRef.current ?? undefined);
 
+    // Clear userStopped from a previous stop — this is a fresh send.
+    if (activeTabForGuard) {
+      activeTabForGuard.userStopped = false;
+    }
+
     if (messageText.trim().startsWith('/plugin')) {
       setIsStreaming(false, activeTabIdRef.current ?? undefined);
       setInputValue('');
@@ -1352,6 +1374,62 @@ export default function ChatPage() {
     }
   };
 
+  // Handle QUEUE_TIMEOUT retry — re-sends the saved message when user clicks Retry.
+  // Reads the retryPayload that was stashed in tabState by useChatStreamingLifecycle
+  // when the backend returned QUEUE_TIMEOUT with a retryPayload.
+  const handleRetryQueueTimeout = useCallback(() => {
+    const tabId = activeTabIdRef.current;
+    if (!tabId) return;
+    const tabState = tabMapRef.current.get(tabId);
+    const retry = tabState?.queueTimeoutRetry;
+    if (!retry || !selectedAgentId) return;
+
+    // Clear the retry payload so button disappears
+    if (tabState) tabState.queueTimeoutRetry = null;
+
+    // Remove the error message from the chat (last message should be the error)
+    setMessages((prev) => {
+      const last = prev[prev.length - 1];
+      if (last?.isError) return prev.slice(0, -1);
+      return prev;
+    });
+
+    // Re-initiate the stream with the saved payload
+    incrementStreamGen();
+    setIsStreaming(true, tabId);
+    if (tabId) updateTabStatus(tabId, 'streaming');
+
+    const assistantMessageId = Date.now().toString();
+    const assistantPlaceholder: Message = { id: assistantMessageId, role: 'assistant', content: [], timestamp: new Date().toISOString() };
+    setMessages((prev) => [...prev, assistantPlaceholder]);
+
+    // Sync placeholder to tabMapRef
+    if (tabState) {
+      tabState.messages = [...tabState.messages.filter(m => !m.isError), assistantPlaceholder];
+    }
+
+    const abort = chatService.streamChat(
+      {
+        agentId: retry.agentId ?? selectedAgentId,
+        sessionId: retry.sessionId,
+        ...(retry.content ? { content: retry.content as ContentBlock[] } : { message: retry.userMessage ?? '' }),
+        enableSkills,
+        enableMCP,
+      },
+      wrappedCreateStreamHandler(assistantMessageId),
+      createErrorHandler(assistantMessageId, tabId),
+      createCompleteHandler(tabId),
+    );
+
+    // Store abort function
+    updateTabState(tabId, {
+      abortController: { abort: () => { abort(); }, signal: { aborted: false } } as unknown as AbortController,
+      hasReceivedData: false,
+      isReconnecting: false,
+      reconnectionAttempt: 0,
+    });
+  }, [selectedAgentId, enableSkills, enableMCP, incrementStreamGen, setIsStreaming, setMessages, updateTabStatus, wrappedCreateStreamHandler, createErrorHandler, createCompleteHandler, activeTabIdRef, tabMapRef]);
+
   // Handle inline permission decision — called from InlinePermissionRequest component
   // via ContentBlockRenderer → AssistantMessageView → MessageBubble prop chain.
   const handlePermissionDecision = async (requestId: string, decision: 'approve' | 'deny') => {
@@ -1470,9 +1548,13 @@ export default function ChatPage() {
     const tabSessionId = currentTabId ? tabMapRef.current.get(currentTabId)?.sessionId : undefined;
     if (!tabSessionId) return;
     try {
-      // Use the active tab's abort controller from the tab map (per-tab isolation)
+      // Mark this tab as user-stopped BEFORE aborting — stream/error handlers
+      // check this flag to suppress error display for the interrupted stream.
       if (currentTabId) {
         const tabState = tabMapRef.current.get(currentTabId);
+        if (tabState) {
+          tabState.userStopped = true;
+        }
         if (tabState?.abortController) {
           try { tabState.abortController.abort(); } catch { /* already aborted */ }
           tabState.abortController = null;
@@ -1532,6 +1614,8 @@ export default function ChatPage() {
         onTabClose={handleTabClose}
         onNewSession={handleNewSession}
         tabStatuses={tabStatuses}
+        isNewTabDisabled={openTabs.length >= maxTabsInfo.maxTabs}
+        memoryPressure={maxTabsInfo.memoryPressure}
       />
 
       <div className="flex flex-1 overflow-hidden">
@@ -1613,16 +1697,18 @@ export default function ChatPage() {
                     if (msg.isError) {
                       const textBlock = msg.content.find(b => b.type === 'text');
                       const errorText = textBlock && 'text' in textBlock ? textBlock.text : 'An error occurred';
+                      const errorCode = (msg as unknown as Record<string, unknown>).errorCode as string | undefined;
                       return (
                         <ChatErrorMessage
                           key={msg.id}
                           error={{
-                            code: (msg as unknown as Record<string, unknown>).errorCode as string | undefined,
+                            code: errorCode,
                             message: errorText,
                             detail: (msg as unknown as Record<string, unknown>).errorDetail as string | undefined,
                             suggestedAction: (msg as unknown as Record<string, unknown>).suggestedAction as string | undefined,
                             retryAfter: (msg as unknown as Record<string, unknown>).retryAfter as number | undefined,
                           }}
+                          onRetry={errorCode === 'QUEUE_TIMEOUT' ? handleRetryQueueTimeout : undefined}
                         />
                       );
                     }
