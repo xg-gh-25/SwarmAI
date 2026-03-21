@@ -259,27 +259,29 @@ class SessionRouter:
             max_tabs = resource_monitor.compute_max_tabs()
 
             if self.alive_count < max_tabs:
-                budget = resource_monitor.spawn_budget()
-                if not budget.can_spawn:
-                    logger.warning(
-                        "session_router: slot available but spawn budget denied "
-                        "session_id=%s reason=%s",
-                        requesting_unit.session_id, budget.reason,
-                    )
-                    if await self._evict_idle(exclude=requesting_unit):
-                        resource_monitor.invalidate_cache()
-                        budget = resource_monitor.spawn_budget()
-                        if budget.can_spawn:
-                            return "ready"
-                    from .exceptions import ResourceExhaustedException
-                    raise ResourceExhaustedException(
-                        message=budget.reason,
-                        detail=(
-                            f"available={budget.available_mb:.0f}MB, "
-                            f"cost={budget.estimated_cost_mb:.0f}MB, "
-                            f"headroom={budget.headroom_mb:.0f}MB"
-                        ),
-                    )
+                # First tab is sacred — always allow at least one session
+                if self.alive_count > 0:
+                    budget = resource_monitor.spawn_budget()
+                    if not budget.can_spawn:
+                        logger.warning(
+                            "session_router: slot available but spawn budget denied "
+                            "session_id=%s reason=%s",
+                            requesting_unit.session_id, budget.reason,
+                        )
+                        if await self._evict_idle(exclude=requesting_unit):
+                            resource_monitor.invalidate_cache()
+                            budget = resource_monitor.spawn_budget()
+                            if budget.can_spawn:
+                                return "ready"
+                        from .exceptions import ResourceExhaustedException
+                        raise ResourceExhaustedException(
+                            message=budget.reason,
+                            detail=(
+                                f"available={budget.available_mb:.0f}MB, "
+                                f"cost={budget.estimated_cost_mb:.0f}MB, "
+                                f"headroom={budget.headroom_mb:.0f}MB"
+                            ),
+                        )
                 return "ready"
 
             if await self._evict_idle(exclude=requesting_unit):
