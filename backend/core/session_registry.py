@@ -171,6 +171,27 @@ async def disconnect_all() -> None:
     logger.info("All sessions disconnected via session_registry")
 
 
+async def start_lifecycle() -> None:
+    """Start the LifecycleManager background loop.
+
+    Called from ``main.py`` lifespan after hooks are configured.
+    Safe to call multiple times (idempotent).
+    """
+    if lifecycle_manager is not None:
+        await lifecycle_manager.start()
+    logger.info("Lifecycle manager started via session_registry")
+
+
+async def stop_lifecycle() -> None:
+    """Stop the LifecycleManager background loop and drain hooks.
+
+    Called from ``main.py`` lifespan shutdown before ``disconnect_all()``.
+    """
+    if lifecycle_manager is not None:
+        await lifecycle_manager.stop()
+    logger.info("Lifecycle manager stopped via session_registry")
+
+
 # ── Skill Creator (delegates to skill_creator module) ─────────────
 
 async def run_skill_creator(

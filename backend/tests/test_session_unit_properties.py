@@ -526,17 +526,22 @@ class TestBufferOverflowRecovery:
         )
         assert should_recover is True
 
-    def test_crash_to_cold_resets_state_for_recovery(self):
-        """_crash_to_cold() transitions to COLD, enabling a fresh spawn."""
+    @pytest.mark.asyncio
+    async def test_crash_to_cold_resets_state_for_recovery(self):
+        """_crash_to_cold_async() transitions to COLD, enabling a fresh spawn."""
         unit = SessionUnit(session_id="test-bo-crash", agent_id="default")
         unit._transition(SessionState.IDLE)       # COLD→IDLE
         unit._transition(SessionState.STREAMING)   # IDLE→STREAMING
 
         # Give it mock subprocess refs
         unit._client = MagicMock()
-        unit._wrapper = MagicMock()
+        mock_wrapper = MagicMock()
+        mock_wrapper.__aexit__ = AsyncMock(return_value=None)
+        mock_wrapper.pid = 12345
+        unit._wrapper = mock_wrapper
 
-        unit._crash_to_cold()
+        with patch("core.session_unit.os.getpgid", side_effect=ProcessLookupError):
+            await unit._crash_to_cold_async()
 
         assert unit.state == SessionState.COLD
         assert unit._client is None

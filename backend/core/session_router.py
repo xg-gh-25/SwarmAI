@@ -5,9 +5,6 @@ Enforces a dynamic concurrency cap computed from available system RAM
 via ``ResourceMonitor.compute_max_tabs()`` by evicting idle units or
 queuing requests when all slots are occupied by protected units.
 
-The legacy ``MAX_CONCURRENT=2`` class attribute is retained for backward
-compatibility but is no longer used in the hot path.
-
 This module contains ONLY routing and cap logic.  No subprocess lifecycle,
 prompt building, or hook execution lives here.
 
@@ -139,9 +136,7 @@ class SessionRouter:
     """Routes chat requests to SessionUnits with dynamic concurrency cap.
 
     The concurrency limit is computed at runtime from available system RAM
-    via ``ResourceMonitor.compute_max_tabs()`` (range [1, 4]).  The legacy
-    ``MAX_CONCURRENT=2`` class attribute is kept for backward compatibility
-    but is no longer read in the hot path (``_acquire_slot()``).
+    via ``ResourceMonitor.compute_max_tabs()`` (range [1, 4]).
 
     Public API surface consumed by ``routers/chat.py``.
 
@@ -154,7 +149,6 @@ class SessionRouter:
     - Existing alive sessions are never killed when the dynamic limit shrinks.
     """
 
-    MAX_CONCURRENT: int = 2
     QUEUE_TIMEOUT: float = 60.0
 
     def __init__(
@@ -168,6 +162,7 @@ class SessionRouter:
         self._lifecycle_manager = None  # Set by session_registry after init
         self._slot_available: asyncio.Event = asyncio.Event()
         self._slot_available.set()  # Initially available
+        self._slot_lock: asyncio.Lock = asyncio.Lock()
         self._queue: list[asyncio.Future] = []
 
     # ── Unit management ───────────────────────────────────────────
@@ -243,66 +238,89 @@ class SessionRouter:
     async def _acquire_slot(self, requesting_unit: SessionUnit) -> str:
         """Acquire a concurrency slot. Evict IDLE or queue with timeout.
 
+        Uses asyncio.Lock to prevent check-then-act race where multiple
+        coroutines pass the alive_count < max_tabs check simultaneously.
+
+        Uses deadline-based timeout for the queue wait loop so repeated
+        wake-and-recheck cycles don't extend beyond QUEUE_TIMEOUT total.
+
         Returns:
             "ready" — slot acquired, proceed with send
-            "queued" — was queued, now ready (caller should have yielded queued event)
-            "timeout" — queue timed out, both slots busy
+            "queued" — was queued, now ready
+            "timeout" — queue timed out, all slots busy
         """
+        # Fast path: already alive — no slot needed
         if requesting_unit.is_alive:
             return "ready"
 
         from .resource_monitor import resource_monitor
-        max_tabs = resource_monitor.compute_max_tabs()
 
-        if self.alive_count < max_tabs:
-            # Slot available by count — also check spawn budget so we
-            # don't spawn into memory pressure even if under dynamic limit.
-            budget = resource_monitor.spawn_budget()
-            if not budget.can_spawn:
-                logger.warning(
-                    "session_router: slot available but spawn budget denied "
-                    "session_id=%s reason=%s",
-                    requesting_unit.session_id, budget.reason,
+        async with self._slot_lock:
+            max_tabs = resource_monitor.compute_max_tabs()
+
+            if self.alive_count < max_tabs:
+                budget = resource_monitor.spawn_budget()
+                if not budget.can_spawn:
+                    logger.warning(
+                        "session_router: slot available but spawn budget denied "
+                        "session_id=%s reason=%s",
+                        requesting_unit.session_id, budget.reason,
+                    )
+                    if await self._evict_idle(exclude=requesting_unit):
+                        resource_monitor.invalidate_cache()
+                        budget = resource_monitor.spawn_budget()
+                        if budget.can_spawn:
+                            return "ready"
+                    from .exceptions import ResourceExhaustedException
+                    raise ResourceExhaustedException(
+                        message=budget.reason,
+                        detail=(
+                            f"available={budget.available_mb:.0f}MB, "
+                            f"cost={budget.estimated_cost_mb:.0f}MB, "
+                            f"headroom={budget.headroom_mb:.0f}MB"
+                        ),
+                    )
+                return "ready"
+
+            if await self._evict_idle(exclude=requesting_unit):
+                return "ready"
+
+        # All slots occupied by protected units — queue with deadline
+        deadline = time.monotonic() + self.QUEUE_TIMEOUT
+        logger.info(
+            "session_router: all slots occupied, queuing session %s (timeout=%.0fs)",
+            requesting_unit.session_id, self.QUEUE_TIMEOUT,
+        )
+
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break  # deadline exceeded
+
+            try:
+                self._slot_available.clear()
+                await asyncio.wait_for(
+                    self._slot_available.wait(), timeout=remaining,
                 )
-                # Try to free memory via eviction first
-                if await self._evict_idle(exclude=requesting_unit):
-                    resource_monitor.invalidate_cache()
+            except asyncio.TimeoutError:
+                break  # deadline exceeded
+
+            # Re-check under lock after wake
+            async with self._slot_lock:
+                max_tabs = resource_monitor.compute_max_tabs()
+                if self.alive_count < max_tabs:
                     budget = resource_monitor.spawn_budget()
                     if budget.can_spawn:
-                        return "ready"
-                # Still not enough — raise instead of silently spawning
-                from .exceptions import ResourceExhaustedException
-                raise ResourceExhaustedException(
-                    message=budget.reason,
-                    detail=(
-                        f"available={budget.available_mb:.0f}MB, "
-                        f"cost={budget.estimated_cost_mb:.0f}MB, "
-                        f"headroom={budget.headroom_mb:.0f}MB"
-                    ),
-                )
-            return "ready"
+                        return "queued"
+                if await self._evict_idle(exclude=requesting_unit):
+                    return "queued"
+            # Slot claimed by another coroutine — loop back to wait
 
-        # Try to evict the oldest IDLE unit
-        if await self._evict_idle(exclude=requesting_unit):
-            return "ready"
-
-        # All slots occupied by protected units — queue
-        logger.info(
-            "session_router: all %d/%d slots occupied, queuing session %s (timeout=%.0fs)",
-            self.alive_count, max_tabs, requesting_unit.session_id, self.QUEUE_TIMEOUT,
+        logger.warning(
+            "session_router: queue timeout for session %s after %.0fs",
+            requesting_unit.session_id, self.QUEUE_TIMEOUT,
         )
-        try:
-            self._slot_available.clear()
-            await asyncio.wait_for(
-                self._slot_available.wait(), timeout=self.QUEUE_TIMEOUT,
-            )
-            return "queued"
-        except asyncio.TimeoutError:
-            logger.warning(
-                "session_router: queue timeout for session %s after %.0fs",
-                requesting_unit.session_id, self.QUEUE_TIMEOUT,
-            )
-            return "timeout"
+        return "timeout"
 
     async def _evict_idle(self, exclude: SessionUnit) -> bool:
         """Evict the oldest IDLE unit to free a slot.

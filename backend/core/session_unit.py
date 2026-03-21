@@ -27,6 +27,7 @@ import asyncio
 import logging
 import os
 import signal
+import subprocess
 import time
 import traceback
 from enum import Enum
@@ -48,6 +49,33 @@ logger = logging.getLogger(__name__)
 # so ALL spawns across ALL SessionUnit instances must serialize.
 # If you need multiple SessionRouter instances (e.g., tests), mock this lock.
 _spawn_lock = asyncio.Lock()
+
+
+def _kill_child_pids(parent_pid: int) -> int:
+    """SIGKILL all direct children of *parent_pid*. Returns count killed.
+
+    Uses ``pgrep -P`` to enumerate children.  Best-effort — failures
+    are silently swallowed since the caller retries with a second pass.
+    """
+    killed = 0
+    try:
+        result = subprocess.run(
+            ["pgrep", "-P", str(parent_pid)],
+            capture_output=True, text=True, timeout=3,
+        )
+        for line in result.stdout.strip().split("\n"):
+            child_pid_str = line.strip()
+            if not child_pid_str:
+                continue
+            try:
+                child_pid = int(child_pid_str)
+                os.kill(child_pid, signal.SIGKILL)
+                killed += 1
+            except (ValueError, ProcessLookupError, PermissionError):
+                pass
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        pass
+    return killed
 
 
 # ---------------------------------------------------------------------------
@@ -415,7 +443,7 @@ class SessionUnit:
                 self.session_id, self.state.value,
                 stall or 0,
             )
-            self.force_unstick_streaming()
+            await self.force_unstick_streaming()
             # After force_unstick, state is COLD — fall through to spawn
 
         if self.state == SessionState.WAITING_INPUT:
@@ -498,7 +526,7 @@ class SessionUnit:
                 return
 
             # ── Non-retriable error — crash to DEAD ──────────────
-            self._crash_to_cold(clear_identity=True)
+            await self._crash_to_cold_async(clear_identity=True)
             friendly, suggested = _sanitize_sdk_error(error_str)
             yield _build_error_event(
                 code="CONVERSATION_ERROR",
@@ -549,7 +577,7 @@ class SessionUnit:
                 self.MAX_RETRY_ATTEMPTS,
                 error_str[:120],
             )
-            self._crash_to_cold()
+            await self._crash_to_cold_async()
             while (
                 _is_retriable_error(error_str)
                 and self._retry_count < self.MAX_RETRY_ATTEMPTS
@@ -576,7 +604,7 @@ class SessionUnit:
                     return  # success — state is IDLE
                 except Exception as retry_exc:
                     error_str = str(retry_exc)
-                    self._crash_to_cold()
+                    await self._crash_to_cold_async()
 
             # All retries exhausted
             friendly, suggested = _sanitize_sdk_error(error_str)
@@ -589,7 +617,7 @@ class SessionUnit:
             yield {"_abort": True}
         else:
             # Non-retriable spawn error
-            self._crash_to_cold(clear_identity=True)
+            await self._crash_to_cold_async(clear_identity=True)
             friendly, suggested = _sanitize_sdk_error(error_str)
             yield _build_error_event(
                 code="SPAWN_FAILED",
@@ -630,7 +658,7 @@ class SessionUnit:
         )
         self._buffer_overflow_recovery = True
         resume_sid = self._sdk_session_id
-        self._crash_to_cold()
+        await self._crash_to_cold_async()
         await asyncio.sleep(2.0)  # brief cooldown
 
         retry_options = self._build_retry_options(options, resume_sid)
@@ -640,7 +668,7 @@ class SessionUnit:
             # Capture traceback immediately — awaits in async generators
             # can clear sys.exc_info() before format_exc() runs.
             spawn_tb = traceback.format_exc()
-            self._crash_to_cold(clear_identity=True)
+            await self._crash_to_cold_async(clear_identity=True)
             friendly, suggested = _sanitize_sdk_error(str(spawn_exc))
             yield _build_error_event(
                 code="SPAWN_FAILED",
@@ -754,7 +782,7 @@ class SessionUnit:
                 is_oom,
             )
 
-            self._crash_to_cold()
+            await self._crash_to_cold_async()
             await asyncio.sleep(backoff)
 
             # Re-check spawn budget after backoff
@@ -768,7 +796,7 @@ class SessionUnit:
                         self._retry_count, self.session_id,
                         budget.reason,
                     )
-                    self._crash_to_cold(clear_identity=True)
+                    await self._crash_to_cold_async(clear_identity=True)
                     yield _build_error_event(
                         code="RESOURCE_EXHAUSTED",
                         message=(
@@ -803,7 +831,7 @@ class SessionUnit:
                     )
                     continue
                 else:
-                    self._crash_to_cold(clear_identity=True)
+                    await self._crash_to_cold_async(clear_identity=True)
                     friendly, suggested = _sanitize_sdk_error(error_str)
                     yield _build_error_event(
                         code="SPAWN_FAILED",
@@ -831,7 +859,7 @@ class SessionUnit:
                 continue
 
         # All retries exhausted
-        self._crash_to_cold(clear_identity=True)
+        await self._crash_to_cold_async(clear_identity=True)
         yield _build_error_event(
             code="ALL_RETRIES_EXHAUSTED",
             message=(
@@ -1493,9 +1521,7 @@ class SessionUnit:
                 pid, self.session_id,
             )
             if self.is_alive:
-                self._transition(SessionState.DEAD)
-                self._cleanup_internal()
-                self._transition(SessionState.COLD)
+                await self._crash_to_cold_async(clear_identity=False)
             return False
 
     async def kill(self) -> None:
@@ -1544,12 +1570,20 @@ class SessionUnit:
                     )
                 else:
                     # UNSAFE: child shares our pgid — killpg would kill us too.
-                    # Fall back to direct kill of the child PID only.
+                    # Two-pass child kill to prevent MCP server orphans:
+                    # Pass 1: enumerate and kill known children
+                    # Pass 2: kill parent, then re-enumerate for stragglers
+
+                    # Pass 1: kill known children (MCP servers)
+                    pass1 = _kill_child_pids(pid)
+                    # Kill parent (stops it from spawning new children)
                     os.kill(pid, signal.SIGKILL)
+                    # Pass 2: kill any stragglers spawned between pass 1 and parent kill
+                    pass2 = _kill_child_pids(pid)
                     logger.info(
-                        "session_unit.force_kill session_id=%s pid=%d "
-                        "(shared pgid=%d, skipped killpg)",
-                        self.session_id, pid, pgid,
+                        "session_unit.force_kill_children session_id=%s pid=%d "
+                        "pass1=%d pass2=%d (shared pgid=%d)",
+                        self.session_id, pid, pass1, pass2, pgid,
                     )
             except (ProcessLookupError, PermissionError):
                 logger.debug(
@@ -1575,7 +1609,15 @@ class SessionUnit:
         # Also try graceful wrapper cleanup
         if self._wrapper is not None:
             try:
-                await self._wrapper.__aexit__(None, None, None)
+                await asyncio.wait_for(
+                    self._wrapper.__aexit__(None, None, None),
+                    timeout=5.0,
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "Wrapper __aexit__ timed out after 5s for session %s",
+                    self.session_id,
+                )
             except Exception:
                 logger.debug(
                     "Wrapper cleanup error for session %s (expected)",
@@ -1611,20 +1653,19 @@ class SessionUnit:
         self._cleanup_internal()
         self._sdk_session_id = None
 
-    def _crash_to_cold(self, *, clear_identity: bool = False) -> None:
-        """Transition DEAD → COLD with appropriate cleanup.
+    async def _crash_to_cold_async(self, *, clear_identity: bool = False) -> None:
+        """Async transition DEAD → COLD with proper wrapper cleanup.
 
-        Consolidates the repeated ``DEAD → cleanup → COLD`` pattern
-        used in ``send()`` error paths.
+        Unlike the deleted sync ``_crash_to_cold()``, this method calls
+        ``await _force_kill()`` which properly closes the wrapper's file
+        descriptors via ``__aexit__()`` before clearing references.
 
         Args:
-            clear_identity: If ``True``, also clears ``_sdk_session_id``
+            clear_identity: If True, also clears ``_sdk_session_id``
                 via ``_full_cleanup()`` (non-retriable crashes).
-                If ``False``, uses ``_cleanup_internal()`` which
-                preserves ``_sdk_session_id`` for resume (retriable
-                errors and eviction).
         """
         self._transition(SessionState.DEAD)
+        await self._force_kill()
         if clear_identity:
             self._full_cleanup()
         else:
@@ -1647,7 +1688,7 @@ class SessionUnit:
             return None
         return time.time() - self._last_event_time
 
-    def force_unstick_streaming(self) -> None:
+    async def force_unstick_streaming(self) -> None:
         """Force a stuck STREAMING session back to COLD.
 
         Kills the subprocess and transitions STREAMING → DEAD → COLD,
@@ -1658,10 +1699,9 @@ class SessionUnit:
         by ``send()`` auto-recovery when the previous request left the
         unit stuck in STREAMING.
 
-        Note: uses synchronous ``os.kill`` (not ``_force_kill``) because
-        this method is called from sync contexts (LifecycleManager loop,
-        send() preamble).  The wrapper ``__aexit__`` cleanup is skipped —
-        acceptable since the process is force-killed anyway.
+        Now async — uses ``_crash_to_cold_async()`` which calls
+        ``_force_kill()`` to properly close wrapper file descriptors
+        via ``__aexit__()``.
         """
         if self.state != SessionState.STREAMING:
             return
@@ -1672,16 +1712,7 @@ class SessionUnit:
             self.pid,
             self.streaming_stall_seconds or 0,
         )
-        # Kill the subprocess BEFORE clearing references to prevent orphans.
-        # Uses os.kill directly since this is a sync method.
-        pid = self.pid
-        if pid:
-            try:
-                os.kill(pid, signal.SIGKILL)
-            except (ProcessLookupError, PermissionError, OSError):
-                pass  # Already dead — fine
-        # Transition DEAD → COLD, keep _sdk_session_id for --resume
-        self._crash_to_cold(clear_identity=False)
+        await self._crash_to_cold_async(clear_identity=False)
 
     def clear_session_identity(self) -> None:
         """Clear ``_sdk_session_id`` so the unit cannot resume.

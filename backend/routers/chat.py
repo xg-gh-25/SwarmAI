@@ -39,7 +39,6 @@ import os as _os
 import logging as _logging
 
 _chat_logger = _logging.getLogger(__name__)
-_lifecycle_started = False
 
 # Lazy-initialized singletons — resolved on first chat request
 _session_router = None
@@ -226,7 +225,8 @@ def create_sse_heartbeat() -> str:
 
 async def sse_with_heartbeat(
     message_generator: AsyncIterator[dict],
-    heartbeat_interval: int = SSE_HEARTBEAT_INTERVAL
+    heartbeat_interval: int = SSE_HEARTBEAT_INTERVAL,
+    request: Optional[Request] = None,
 ) -> AsyncIterator[str]:
     """Wrap an async message generator with heartbeat support.
 
@@ -290,6 +290,14 @@ async def sse_with_heartbeat(
             except asyncio.TimeoutError:
                 # No message received within heartbeat interval, send heartbeat
                 if not generator_done:
+                    # Check if client disconnected
+                    if request is not None:
+                        try:
+                            if await request.is_disconnected():
+                                logger.info("SSE client disconnected, stopping stream")
+                                break
+                        except Exception:
+                            pass  # is_disconnected() can fail — don't break the loop
                     logger.debug("Sending SSE heartbeat")
                     yield create_sse_heartbeat()
             except Exception as unexpected_err:
@@ -331,12 +339,7 @@ async def chat_stream(request: Request):
     if chat_request.content:
         validate_content(chat_request.content)
 
-    # Start LifecycleManager on first request (needs async context)
-    global _lifecycle_started
     _get_router()  # Ensure session infrastructure initialized
-    if not _lifecycle_started and _lifecycle_manager:
-        _lifecycle_started = True
-        await _lifecycle_manager.start()
 
     # Verify agent exists (lightweight check — no config assembly)
     if not await agent_exists(chat_request.agent_id):
@@ -360,6 +363,10 @@ async def chat_stream(request: Request):
             ):
                 logger.debug(f"Yielding message: {msg.get('type')}")
                 yield msg
+        except asyncio.CancelledError:
+            logger.info("Chat stream cancelled (client disconnected)")
+            # Don't re-raise — let the generator close cleanly
+            return
         except asyncio.TimeoutError:
             logger.error("Agent response timed out")
             yield {
@@ -406,7 +413,7 @@ async def chat_stream(request: Request):
                 )
 
     return StreamingResponse(
-        sse_with_heartbeat(message_generator()),
+        sse_with_heartbeat(message_generator(), request=request),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

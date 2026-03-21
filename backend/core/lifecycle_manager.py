@@ -19,11 +19,13 @@ Design reference:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import signal
 import subprocess
 import time
+from pathlib import Path
 from typing import Optional, TYPE_CHECKING
 
 from .session_unit import SessionState
@@ -204,6 +206,7 @@ class LifecycleManager:
                     # Reap orphans every 10th cycle (~10 min)
                     if cycle % 10 == 0:
                         await self._reap_orphans()
+                        await self._purge_stale_cold()
                 except Exception as exc:
                     logger.error("Maintenance loop error: %s", exc, exc_info=True)
         except asyncio.CancelledError:
@@ -246,7 +249,7 @@ class LifecycleManager:
                     stall,
                     self.STREAMING_TIMEOUT_SECONDS,
                 )
-                unit.force_unstick_streaming()
+                await unit.force_unstick_streaming()
 
     async def _fire_idle_hooks(self) -> None:
         """Fire hooks for IDLE units past the grace period (Gap 2 fix).
@@ -318,6 +321,28 @@ class LifecycleManager:
                         unit._hooks_enqueued = True
                 unit._cleanup_internal()
                 unit._transition(SessionState.COLD)
+
+    # ── Stale COLD unit purge ──────────────────────────────────────
+
+    async def _purge_stale_cold(self) -> None:
+        """Remove COLD units idle > 1 hour from the router's unit dict.
+
+        Prevents unbounded growth of the _units dict from sessions that
+        were evicted or killed and never returned to.
+        """
+        now = time.time()
+        stale_ids = [
+            u.session_id for u in self._router.list_units()
+            if u.state == SessionState.COLD
+            and (now - u.last_used) > 3600  # 1 hour
+        ]
+        for sid in stale_ids:
+            self._router._units.pop(sid, None)
+        if stale_ids:
+            logger.info(
+                "lifecycle_manager.purge_stale_cold removed %d stale unit(s)",
+                len(stale_ids),
+            )
 
     # ── Memory pressure relief ─────────────────────────────────────
 
@@ -525,13 +550,50 @@ class LifecycleManager:
         pids.update(self._tracked_child_pids)
         return pids
 
+    def _get_mcp_server_patterns(self) -> list[str]:
+        """Get MCP server process name patterns for orphan reaping.
+
+        Reads mcp-dev.json to extract command basenames dynamically.
+        Falls back to a static list if config read fails.
+        """
+        _FALLBACK_PATTERNS = [
+            "builder-mcp", "aws-sentral-mcp", "aws-outlook-mcp",
+            "slack-mcp", "taskei-p-mcp",
+        ]
+        try:
+            from core.initialization_manager import initialization_manager
+
+            ws_path = initialization_manager.get_cached_workspace_path()
+            if not ws_path:
+                return _FALLBACK_PATTERNS
+
+            mcp_config_path = Path(ws_path) / ".claude" / "mcps" / "mcp-dev.json"
+            if not mcp_config_path.exists():
+                return _FALLBACK_PATTERNS
+
+            config = json.loads(mcp_config_path.read_text(encoding="utf-8"))
+            servers = config.get("mcpServers", {})
+            patterns = []
+            for name, server_config in servers.items():
+                cmd = server_config.get("command", "")
+                if cmd:
+                    # Extract basename: "/Users/x/.toolbox/bin/builder-mcp" → "builder-mcp"
+                    basename = Path(cmd).name
+                    if basename and basename not in patterns:
+                        patterns.append(basename)
+            return patterns if patterns else _FALLBACK_PATTERNS
+        except Exception as exc:
+            logger.debug("Failed to read MCP config for reaper patterns: %s", exc)
+            return _FALLBACK_PATTERNS
+
     async def _reap_orphans(self) -> None:
         """Find and kill orphaned processes not owned by any SessionUnit.
 
-        Three categories:
+        Four categories:
         1. Claude CLI processes (bundled SDK binary) — always reap unowned
         2. Dev backend (``python main.py``) — only if orphaned (ppid=1)
         3. Zombie pytest — only if orphaned (ppid=1)
+        4. MCP server processes (dynamic from config) — only if orphaned (ppid=1)
 
         Re-snapshots known_pids before each pattern to minimize the
         TOCTOU window between PID discovery and kill.
@@ -551,5 +613,16 @@ class LifecycleManager:
                 self._snapshot_known_pids(),
                 require_orphaned=True,
             )
+
+            # ── MCP server orphan reaping ──────────────────────────────────
+            # Read MCP server names dynamically from config, fall back to
+            # static list if config read fails.
+            mcp_patterns = self._get_mcp_server_patterns()
+            for pattern in mcp_patterns:
+                await self._reap_by_pattern(
+                    pattern, f"mcp_{pattern}",
+                    self._snapshot_known_pids(),
+                    require_orphaned=True,
+                )
         except Exception as exc:
             logger.warning("Orphan reaper failed (non-fatal): %s", exc)
