@@ -72,7 +72,7 @@ class TestC1VmStatMemoryInflation:
     @patch("core.resource_monitor._HAS_PSUTIL", False)
     @patch("core.resource_monitor.subprocess.run")
     def test_available_memory_excludes_full_inactive(self, mock_run):
-        """Available memory should include free + speculative + 50% inactive, not 100% inactive."""
+        """Used memory = active + wired only (not inactive/compressed/purgeable)."""
         mock_run.side_effect = _make_subprocess_side_effect()
 
         from core.resource_monitor import ResourceMonitor
@@ -80,17 +80,16 @@ class TestC1VmStatMemoryInflation:
         mem = monitor._read_memory_macos_fallback()
 
         page_size = 16384
-        expected_free = 12800 * page_size       # 200 MB
-        expected_spec = 3200 * page_size        # 50 MB
-        expected_inactive_half = (576000 * page_size) // 2  # 4500 MB (50% of 9000MB)
-        expected_available = expected_free + expected_spec + expected_inactive_half  # ~4750 MB
+        expected_active = 500000 * page_size   # from VM_STAT_OUTPUT
+        expected_wired = 200000 * page_size
+        expected_used = expected_active + expected_wired
 
-        # Should be ~4750MB (free + speculative + 50% inactive)
-        # NOT ~9250MB (100% inactive — old bug)
-        # NOT ~250MB (0% inactive — too conservative)
-        assert abs(mem.available - expected_available) < 50 * 1024 * 1024, (
-            f"Available memory should be ~{expected_available / (1024**2):.0f}MB "
-            f"(free + speculative + 50%% inactive), got {mem.available / (1024**2):.0f}MB."
+        # Used should be active + wired only (~10.7GB)
+        # NOT total - (free + spec) which would be ~35.6GB
+        # NOT total - (free + spec + inactive) which was the old inflated value
+        assert abs(mem.used - expected_used) < 50 * 1024 * 1024, (
+            f"Used memory should be ~{expected_used / (1024**3):.1f}GB "
+            f"(active + wired), got {mem.used / (1024**3):.1f}GB."
         )
 
 
@@ -99,37 +98,28 @@ class TestC1VmStatMemoryInflation:
 # ---------------------------------------------------------------------------
 
 class TestC1bComputeMaxTabsAccuracy:
-    """C1b: compute_max_tabs should not return inflated value from 100% inactive.
+    """C1b: compute_max_tabs uses active+wired for used, matching Activity Monitor.
 
-    Bug: Including 100% of inactive memory (9250MB available) causes
-    compute_max_tabs to return 4 even under heavy memory pressure.
-    Correct: With 50% inactive (~4750MB available), formula gives
-    max(1, min(floor((4750-1024)/500), 4)) = 4 on a lightly loaded system,
-    but NOT because of inflated inactive pages.
+    With active=500K pages + wired=200K pages = ~10.7GB used on 36GB machine,
+    that's ~29% used. Headroom to 80% = ~18.5GB. max_tabs = min(4, 18500/500) = 4.
 
     Validates: Requirements 1.2, 2.2
     """
 
     @patch("core.resource_monitor._HAS_PSUTIL", False)
     @patch("core.resource_monitor.subprocess.run")
-    def test_max_tabs_not_inflated_by_full_inactive(self, mock_run):
-        """compute_max_tabs should not be inflated by counting 100% of inactive pages."""
+    def test_max_tabs_with_accurate_memory(self, mock_run):
+        """compute_max_tabs should return 4 when machine is only 29% used."""
         mock_run.side_effect = _make_subprocess_side_effect()
 
         from core.resource_monitor import ResourceMonitor
         monitor = ResourceMonitor()
         max_tabs = monitor.compute_max_tabs()
 
-        # With ~4750MB available (50% inactive): max(1, min(floor((4750-1024)/500), 4)) = 4
-        # This is correct for a system with 9GB inactive (half is reclaimable)
-        # The key assertion: the result should NOT be driven by counting
-        # 100% of inactive (which would give 9250MB → always 4 regardless of real pressure)
-        # Verify the available memory used is ~4750MB, not ~9250MB
-        mem = monitor._read_memory_macos_fallback()
-        available_mb = mem.available / (1024 * 1024)
-        assert available_mb < 6000, (
-            f"Available memory is {available_mb:.0f}MB — should be ~4750MB "
-            f"(50%% inactive), not ~9250MB (100%% inactive)."
+        # active+wired = ~10.7GB used on 36GB = 29%
+        # headroom to 80% = 36*0.8 - 10.7 = ~18GB → 18000/500 = 36 → clamped to 4
+        assert max_tabs == 4, (
+            f"compute_max_tabs() should return 4 with ~29% used, got {max_tabs}"
         )
 
 
@@ -352,13 +342,12 @@ class TestP3ComputeMaxTabsFormulaPreservation:
         total_bytes = 36 * 1024**3  # 36GB
         total_mb = total_bytes / (1024 * 1024)
         used_mb = total_mb * (used_pct / 100.0)
+        used_bytes = int(used_mb * 1024 * 1024)
+        available_bytes = total_bytes - used_bytes
         headroom_mb = total_mb * 0.80 - used_mb
         expected = max(1, min(int(headroom_mb / 500), 4))
 
         monitor = ResourceMonitor()
-        used_bytes = int(used_mb * 1024 * 1024)
-        available_bytes = total_bytes - used_bytes
-
         monitor._cached_memory = SystemMemory(
             total=total_bytes,
             available=available_bytes,
@@ -369,8 +358,8 @@ class TestP3ComputeMaxTabsFormulaPreservation:
 
         result = monitor.compute_max_tabs()
         assert result == expected, (
-            f"For used_pct={used_pct:.1f}%%: "
-            f"headroom_to_80%%={headroom_mb:.0f}MB, "
+            f"For used_pct={used_pct:.1f}%: "
+            f"headroom_to_80%={headroom_mb:.0f}MB, "
             f"expected {expected}, got {result}"
         )
 
