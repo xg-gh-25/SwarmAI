@@ -398,8 +398,36 @@ class CompactionGuard:
         never block streaming.
         """
         try:
-            # PASSIVE phase: no interference
+            # PASSIVE phase: no interference from loop detection.
+            # But progress stall detection still applies — a dead loop
+            # is a dead loop regardless of compaction history.
+            # Progress stall in PASSIVE caps at HARD_WARN (no KILL).
             if self._phase == GuardPhase.PASSIVE:
+                if self._consecutive_nonproductive >= _NONPRODUCTIVE_HARD_WARN:
+                    new_level = EscalationLevel.HARD_WARN
+                    logger.warning(
+                        "compaction_guard.passive_progress_stall nonproductive=%d → %s",
+                        self._consecutive_nonproductive, new_level.value,
+                    )
+                    self._escalation = new_level
+                    self._last_pattern_desc = (
+                        f"{self._consecutive_nonproductive} consecutive non-productive "
+                        f"tool calls with zero Edit/Write/Bash (PASSIVE phase)"
+                    )
+                    return new_level
+                elif self._consecutive_nonproductive >= _NONPRODUCTIVE_SOFT_WARN:
+                    if self._escalation == EscalationLevel.MONITORING:
+                        new_level = EscalationLevel.SOFT_WARN
+                        logger.warning(
+                            "compaction_guard.passive_progress_stall nonproductive=%d → %s",
+                            self._consecutive_nonproductive, new_level.value,
+                        )
+                        self._escalation = new_level
+                        self._last_pattern_desc = (
+                            f"{self._consecutive_nonproductive} consecutive non-productive "
+                            f"tool calls with zero Edit/Write/Bash (PASSIVE phase)"
+                        )
+                        return new_level
                 return EscalationLevel.MONITORING
 
             # Already at KILL: stay there
