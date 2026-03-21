@@ -305,9 +305,9 @@ class ResourceMonitor:
 
     def compute_max_tabs(self) -> int:
         """Compute dynamic tab limit: how many tabs can open without
-        pushing machine memory past 80%.
+        pushing machine memory past 85%.
 
-        Formula: ``max(1, min(floor(headroom_to_80pct / 500), 4))``
+        Formula: ``max(1, min(floor(headroom_to_85pct / 500), 4))``
 
         Each tab costs ~500MB (CLI subprocess + MCP servers).
         The machine should never exceed 80% memory usage from SwarmAI
@@ -322,7 +322,7 @@ class ResourceMonitor:
         raw = int(headroom_mb / self._SPAWN_COST_MB)
         result = max(1, min(raw, self._MAX_TABS_CEILING))
         logger.info(
-            "compute_max_tabs: used=%.0fMB/%.0fMB (%.1f%%) headroom_to_80%%=%.0fMB "
+            "compute_max_tabs: used=%.0fMB/%.0fMB (%.1f%%) headroom_to_85%%=%.0fMB "
             "raw=%d result=%d pressure=%s",
             used_mb, total_mb, mem.percent_used,
             headroom_mb, raw, result, mem.pressure_level,

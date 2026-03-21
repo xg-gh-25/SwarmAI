@@ -412,10 +412,9 @@ export function useUnifiedTabState(
         }
       }
 
-      // Best-effort backend cleanup — fire and forget
-      if (tab.sessionId) {
-        api.delete(`/chat/sessions/${tab.sessionId}`).catch(() => {});
-      }
+      // Best-effort backend cleanup removed — backend LifecycleManager
+      // handles abandoned sessions via TTL (12hr) and orphan reaper (10min).
+      // Frontend-initiated DELETE is unreliable (crash, network failure).
 
       // Capture ordered keys before removal for reselection
       const keys = [...map.keys()];
