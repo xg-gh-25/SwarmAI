@@ -466,6 +466,13 @@ export interface StreamEvent {
   code?: string;
   detail?: string;
   suggestedAction?: string;
+  // Queue timeout retry payload
+  retryPayload?: {
+    sessionId: string;
+    agentId: string;
+    userMessage: string | null;
+    content: unknown[] | null;
+  };
   // Context warning fields (context_warning event)
   level?: 'ok' | 'warn' | 'critical';
   pct?: number;

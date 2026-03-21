@@ -1,8 +1,12 @@
-"""SessionRouter — thin routing layer with concurrency cap enforcement.
+"""SessionRouter — thin routing layer with dynamic concurrency cap enforcement.
 
 Routes chat requests to the correct ``SessionUnit`` by session ID.
-Enforces the concurrency cap (MAX_CONCURRENT=2) by evicting idle units
-or queuing requests when all slots are occupied by protected units.
+Enforces a dynamic concurrency cap computed from available system RAM
+via ``ResourceMonitor.compute_max_tabs()`` by evicting idle units or
+queuing requests when all slots are occupied by protected units.
+
+The legacy ``MAX_CONCURRENT=2`` class attribute is retained for backward
+compatibility but is no longer used in the hot path.
 
 This module contains ONLY routing and cap logic.  No subprocess lifecycle,
 prompt building, or hook execution lives here.
@@ -13,6 +17,7 @@ Public symbols:
 
 Design reference:
     ``.kiro/specs/multi-session-rearchitecture/design.md`` §2 SessionRouter
+    ``.kiro/specs/dynamic-tab-scaling/design.md`` §2 SessionRouter._acquire_slot()
 """
 from __future__ import annotations
 
@@ -131,7 +136,12 @@ async def _convert_unsupported_blocks_to_path_hints(
 
 
 class SessionRouter:
-    """Routes chat requests to SessionUnits. Enforces MAX_CONCURRENT=2.
+    """Routes chat requests to SessionUnits with dynamic concurrency cap.
+
+    The concurrency limit is computed at runtime from available system RAM
+    via ``ResourceMonitor.compute_max_tabs()`` (range [1, 4]).  The legacy
+    ``MAX_CONCURRENT=2`` class attribute is kept for backward compatibility
+    but is no longer read in the hot path (``_acquire_slot()``).
 
     Public API surface consumed by ``routers/chat.py``.
 
@@ -141,6 +151,7 @@ class SessionRouter:
     - Never touches subprocess directly (delegates to SessionUnit).
     - Concurrency cap is the ONLY cross-unit concern.
     - STREAMING/WAITING_INPUT units are NEVER evicted.
+    - Existing alive sessions are never killed when the dynamic limit shrinks.
     """
 
     MAX_CONCURRENT: int = 2
@@ -240,10 +251,12 @@ class SessionRouter:
         if requesting_unit.is_alive:
             return "ready"
 
-        if self.alive_count < self.MAX_CONCURRENT:
+        from .resource_monitor import resource_monitor
+        max_tabs = resource_monitor.compute_max_tabs()
+
+        if self.alive_count < max_tabs:
             # Slot available by count — also check spawn budget so we
-            # don't spawn into memory pressure even if under MAX_CONCURRENT.
-            from .resource_monitor import resource_monitor
+            # don't spawn into memory pressure even if under dynamic limit.
             budget = resource_monitor.spawn_budget()
             if not budget.can_spawn:
                 logger.warning(
@@ -275,8 +288,8 @@ class SessionRouter:
 
         # All slots occupied by protected units — queue
         logger.info(
-            "session_router: all %d slots occupied, queuing session %s (timeout=%.0fs)",
-            self.MAX_CONCURRENT, requesting_unit.session_id, self.QUEUE_TIMEOUT,
+            "session_router: all %d/%d slots occupied, queuing session %s (timeout=%.0fs)",
+            self.alive_count, max_tabs, requesting_unit.session_id, self.QUEUE_TIMEOUT,
         )
         try:
             self._slot_available.clear()
@@ -378,12 +391,37 @@ class SessionRouter:
 
         unit = self.get_or_create_unit(session_id, agent_id)
 
+        # ── Persist user message BEFORE slot acquisition ──
+        # Critical: If slot acquisition times out (QUEUE_TIMEOUT), the
+        # method returns early.  The user message MUST already be in DB
+        # so that cold resume (Mechanism B) can inject it later.
+        # Without this, the 3rd tab's message is silently lost.
+        from database import db
+        from .session_manager import session_manager
+
+        user_content = content if content else (
+            [{"type": "text", "text": user_message}] if user_message else None
+        )
+        if user_content:
+            title = (user_message or "Chat")[:50]
+            await session_manager.store_session(session_id, agent_id, title)
+            await db.messages.put({
+                "id": str(uuid4()),
+                "session_id": session_id,
+                "role": "user",
+                "content": user_content,
+                "model": None,
+                "created_at": datetime.now().isoformat(),
+            })
+
         # Acquire concurrency slot — may queue with SSE indicator
         # Check if we need to queue BEFORE blocking, so we can emit the
         # queued event immediately (user sees "Waiting..." not silence)
+        from .resource_monitor import resource_monitor as _rm_check
+        _current_max = _rm_check.compute_max_tabs()
         needs_queue = (
             not unit.is_alive
-            and self.alive_count >= self.MAX_CONCURRENT
+            and self.alive_count >= _current_max
             and not any(
                 u.state == SessionState.IDLE and u is not unit
                 for u in self._units.values()
@@ -394,11 +432,19 @@ class SessionRouter:
 
         slot_result = await self._acquire_slot(unit)
         if slot_result == "timeout":
-            yield _build_error_event(
+            error_event = _build_error_event(
                 code="QUEUE_TIMEOUT",
-                message="Both chat slots are busy. Please wait a moment and try again.",
-                suggested_action="Your conversation is saved. The other tabs are still processing.",
+                message="All chat slots are busy. Please wait a moment and try again.",
+                suggested_action="Your message is saved. Send again when a slot opens.",
             )
+            # Include retry payload so frontend can re-send the exact message
+            error_event["retryPayload"] = {
+                "sessionId": session_id,
+                "agentId": agent_id,
+                "userMessage": user_message,
+                "content": content,
+            }
+            yield error_event
             return
 
         # Build query content
@@ -432,7 +478,6 @@ class SessionRouter:
         #   conversation into system prompt) from live resume (Mechanism A:
         #   pass resume=sdk_session_id to the SDK so the CLI restores its own
         #   conversation state).  See also: resume_session_id kwarg below.
-        from database import db
         is_cold_resume = (
             unit.state == SessionState.COLD
             and unit._sdk_session_id is None
@@ -464,22 +509,7 @@ class SessionRouter:
             from . import session_registry
             session_registry.system_prompt_metadata[session_id] = _spm
 
-        # Delegate to SessionUnit — wrap with message persistence
-        from .session_manager import session_manager
-
-        # Save user message to DB
-
-        user_content = content if content else [{"type": "text", "text": user_message}]
-        title = (user_message or "Chat")[:50]
-        await session_manager.store_session(session_id, agent_id, title)
-        await db.messages.put({
-            "id": str(uuid4()),
-            "session_id": session_id,
-            "role": "user",
-            "content": user_content,
-            "model": None,
-            "created_at": datetime.now().isoformat(),
-        })
+        # Delegate to SessionUnit — stream response
 
         # ── Attachment persistence: save base64 files to Attachments/ ──
         # Claude CLI doesn't support multimodal content blocks via stdin.

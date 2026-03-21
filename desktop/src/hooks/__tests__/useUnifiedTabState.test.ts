@@ -19,6 +19,7 @@ import { renderHook, act } from '@testing-library/react';
 import {
   useUnifiedTabState,
   MAX_OPEN_TABS,
+  MAX_OPEN_TABS_FALLBACK,
 } from '../useUnifiedTabState';
 import type { UnifiedTab, TabStatus, SerializableTab } from '../useUnifiedTabState';
 
@@ -510,20 +511,22 @@ describe('Property-Based Tests', () => {
 
 describe('Unit Tests — Edge Cases', () => {
   // Validates: Requirement 2.3
-  it('addTab at MAX_OPEN_TABS returns undefined', () => {
+  // Note: addTab() uses the cached dynamic limit (MAX_OPEN_TABS_FALLBACK before
+  // any API fetch), not the static MAX_OPEN_TABS constant.
+  it('addTab at dynamic limit returns undefined', () => {
     const { result } = renderHook(() => useUnifiedTabState(DEFAULT_AGENT));
 
-    // Fill to MAX_OPEN_TABS (starts with 1)
-    for (let i = 1; i < MAX_OPEN_TABS; i++) {
+    // Fill to MAX_OPEN_TABS_FALLBACK (starts with 1)
+    for (let i = 1; i < MAX_OPEN_TABS_FALLBACK; i++) {
       act(() => { result.current.addTab(`agent-${i}`); });
     }
-    expect(result.current.openTabs.length).toBe(MAX_OPEN_TABS);
+    expect(result.current.openTabs.length).toBe(MAX_OPEN_TABS_FALLBACK);
 
     // Next addTab should return undefined
     let overflow: ReturnType<typeof result.current.addTab>;
     act(() => { overflow = result.current.addTab('overflow'); });
     expect(overflow!).toBeUndefined();
-    expect(result.current.openTabs.length).toBe(MAX_OPEN_TABS);
+    expect(result.current.openTabs.length).toBe(MAX_OPEN_TABS_FALLBACK);
   });
 
   // Validates: Requirement 2.7

@@ -391,14 +391,14 @@ describe('Streaming Lifecycle Preservation Tests (Property 10)', () => {
   // ── Req 3.13: Below 6 tabs, "+" creates new tabs normally ──
 
   describe('Observation: Tab creation below limit (Req 3.13)', () => {
-    it('tab count below MAX_OPEN_TABS allows creation', () => {
-      const MAX_OPEN_TABS = 6;
+    it('tab count below MAX_TABS_HARD_CEILING allows creation', () => {
+      const MAX_TABS_HARD_CEILING = 4;
       fc.assert(
         fc.property(
-          fc.integer({ min: 0, max: MAX_OPEN_TABS - 1 }),
+          fc.integer({ min: 0, max: MAX_TABS_HARD_CEILING - 1 }),
           (currentCount) => {
             // Below limit, creation should be allowed
-            return currentCount < MAX_OPEN_TABS;
+            return currentCount < MAX_TABS_HARD_CEILING;
           }
         ),
         { numRuns: 20 }

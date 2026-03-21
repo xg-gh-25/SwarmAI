@@ -1295,7 +1295,11 @@ class SessionUnit:
 
         try:
             await asyncio.wait_for(self._client.interrupt(), timeout=timeout)
-            self._transition(SessionState.IDLE)
+            # Guard: _read_formatted_response may have already transitioned
+            # STREAMING → IDLE via the _interrupted check before we get here.
+            # IDLE → IDLE is not a valid transition, so skip if already IDLE.
+            if self.state != SessionState.IDLE:
+                self._transition(SessionState.IDLE)
             self.last_used = time.time()
             logger.info(
                 "session_unit.interrupt succeeded session_id=%s pid=%s",

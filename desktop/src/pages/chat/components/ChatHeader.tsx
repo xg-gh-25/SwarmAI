@@ -14,6 +14,12 @@ interface ChatHeaderProps {
 
   // Fix 8: Tab status indicators
   tabStatuses?: Record<string, TabStatus>;
+
+  // Dynamic tab scaling — disabled "+" button and memory pressure indicator
+  /** True when open tab count >= dynamic max tabs (disables the "+" button). */
+  isNewTabDisabled?: boolean;
+  /** Current memory pressure level from backend polling. */
+  memoryPressure?: 'ok' | 'warning' | 'critical';
 }
 
 /**
@@ -36,6 +42,8 @@ export function ChatHeader({
   onTabClose,
   onNewSession,
   tabStatuses,
+  isNewTabDisabled,
+  memoryPressure,
 }: ChatHeaderProps) {
   const { t } = useTranslation();
   const { health } = useHealth();
@@ -74,12 +82,44 @@ export function ChatHeader({
             {t('health.initializing', 'Starting up...')}
           </div>
         )}
-        {/* New Session Button (+) - Validates: Requirement 2.1 */}
+        {/* Memory pressure indicator — informational only, no auto-close (Req 6.1–6.5) */}
+        {memoryPressure === 'warning' && (
+          <div
+            className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-amber-500/10 text-amber-400 text-xs font-medium mr-1"
+            role="status"
+            aria-label={t('chat.memoryWarning', 'Memory pressure: warning')}
+          >
+            <span className="w-2 h-2 rounded-full bg-amber-500" />
+            {t('chat.memoryWarning', 'Memory')}
+          </div>
+        )}
+        {memoryPressure === 'critical' && (
+          <div
+            className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-red-500/10 text-red-400 text-xs font-medium mr-1"
+            role="status"
+            aria-label={t('chat.memoryCritical', 'Memory pressure: critical')}
+          >
+            <span className="w-2 h-2 rounded-full bg-red-500" />
+            {t('chat.memoryCritical', 'Memory')}
+          </div>
+        )}
+        {/* New Session Button (+) - Validates: Requirement 2.1, 5.1, 5.2, 5.3 */}
         <button
           onClick={onNewSession}
-          className="p-2 rounded-lg text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)] transition-colors"
-          title={t('chat.newSession', 'New Session (⌘N)')}
-          aria-label={t('chat.newSession', 'New Session')}
+          disabled={isNewTabDisabled}
+          className={`p-2 rounded-lg transition-colors ${
+            isNewTabDisabled
+              ? 'text-[var(--color-text-disabled,var(--color-text-muted))] opacity-50 cursor-not-allowed'
+              : 'text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)]'
+          }`}
+          title={isNewTabDisabled
+            ? t('chat.tabLimitReached', 'System resources are limited. Close a tab or free memory to open another.')
+            : t('chat.newSession', 'New Session (⌘N)')
+          }
+          aria-label={isNewTabDisabled
+            ? t('chat.tabLimitReached', 'System resources are limited. Close a tab or free memory to open another.')
+            : t('chat.newSession', 'New Session')
+          }
         >
           <span className="material-symbols-outlined text-[18px]">add</span>
         </button>

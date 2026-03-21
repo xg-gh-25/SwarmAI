@@ -1307,6 +1307,14 @@ export function useChatStreamingLifecycle(
             );
           }
         } else if (event.type === 'error') {
+          // Suppress error events from a user-stopped stream — the abort
+          // can race with backend error delivery, producing a spurious
+          // "An unknown error occurred" that forces a redundant resend.
+          if (tabState?.userStopped) {
+            console.log('[StreamHandler] Suppressing error from user-stopped stream', { capturedTabId });
+            return;
+          }
+
           const errorMsg =
             event.message ||
             event.error ||
@@ -1370,6 +1378,11 @@ export function useChatStreamingLifecycle(
 
           if (tabState) {
             tabState.messages = applyError(tabState.messages);
+
+            // QUEUE_TIMEOUT: store retry payload so ChatPage can offer "Retry" button
+            if (event.code === 'QUEUE_TIMEOUT' && event.retryPayload) {
+              tabState.queueTimeoutRetry = event.retryPayload;
+            }
           }
 
           if (isActiveTab) {
@@ -1534,6 +1547,18 @@ export function useChatStreamingLifecycle(
           ? tabMapRef.current.get(capturedTabId)
           : undefined;
         const isActiveTab = capturedTabId === null || capturedTabId === activeTabIdRef.current;
+
+        // Suppress connection errors from a user-stopped stream — the abort
+        // races with the SSE reader's catch block and fires onError with a
+        // generic error that would show a confusing message on the next send.
+        if (tabState?.userStopped) {
+          console.log('[ErrorHandler] Suppressing connection error from user-stopped stream', { capturedTabId });
+          // Still clean up streaming state
+          setIsStreaming(false, capturedTabId ?? undefined);
+          incrementStreamGen();
+          if (capturedTabId) updateTabStatus(capturedTabId, 'idle');
+          return;
+        }
 
         // --- Connection-phase reconnection logic ---
         // If no data has been received yet (connection-phase failure) and
