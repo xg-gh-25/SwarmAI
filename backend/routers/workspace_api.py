@@ -1074,16 +1074,11 @@ async def create_file(request: FolderCreateRequest):
     expanded_path = await _get_workspace_path()
     target = _validate_relative_path(request.path, expanded_path)
 
-    # Reject creation inside system-managed folders
+    # Note: We intentionally allow file creation inside system-managed folders
+    # (Knowledge/, Projects/, etc.).  SYSTEM_MANAGED_FOLDERS protects the
+    # folder *structure* from being deleted/renamed, not from having files
+    # added to it — that's the whole point of these directories.
     rel_path = request.path.replace("\\", "/").strip("/")
-    rel_parts = rel_path.split("/")
-    for i in range(len(rel_parts)):
-        prefix = "/".join(rel_parts[: i + 1])
-        if prefix in SYSTEM_MANAGED_FOLDERS:
-            raise HTTPException(
-                status_code=403,
-                detail=f"Cannot create inside system-managed directory: {prefix}",
-            )
 
     if target.exists():
         raise HTTPException(status_code=409, detail="File already exists")
@@ -1291,16 +1286,11 @@ async def rename_item(request: FolderRenameRequest):
             detail=f"Cannot delete/rename system-managed directory: {normalized_old}",
         )
 
-    # Reject move INTO a system-managed directory (same check as create_file)
+    # Note: We intentionally do NOT block moves INTO system-managed folders.
+    # SYSTEM_MANAGED_FOLDERS protects the folders themselves from being
+    # renamed/deleted (checked above for old_path).  Users should be able
+    # to move files into Knowledge/, Knowledge/Designs/, Projects/, etc.
     normalized_new = request.new_path.replace("\\", "/").strip("/")
-    new_parts = normalized_new.split("/")
-    for i in range(len(new_parts) - 1):  # exclude the item itself
-        prefix = "/".join(new_parts[: i + 1])
-        if prefix in SYSTEM_MANAGED_FOLDERS:
-            raise HTTPException(
-                status_code=403,
-                detail=f"Cannot move into system-managed directory: {prefix}",
-            )
 
     old_target = _validate_relative_path(request.old_path, expanded_path)
     new_target = _validate_relative_path(request.new_path, expanded_path)
