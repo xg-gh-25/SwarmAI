@@ -108,11 +108,16 @@ def configure_hooks(
 # ── Startup / Shutdown ────────────────────────────────────────────
 
 def kill_all_claude_processes() -> int:
-    """Kill ALL claude CLI processes unconditionally.
+    """Kill SwarmAI's own leftover claude CLI processes at startup.
 
-    Called at **startup** — no claude processes should be running before
-    the backend starts.  More aggressive than orphan reaping which only
-    kills orphans/our-children.
+    Uses ``pgrep -f "claude_agent_sdk/_bundled/claude"`` to match ONLY
+    the bundled Claude CLI from SwarmAI's PyInstaller package.  This
+    avoids killing the user's own ``claude`` processes (e.g., Claude
+    Code CLI in terminal, Kiro's claude subprocess, or any other app
+    that spawns a process named ``claude``).
+
+    Called at **startup** — leftover processes from a crashed previous
+    SwarmAI instance are guaranteed stale.
 
     COE 2026-03-15: At startup, leftover processes from a crashed previous
     instance are guaranteed stale.  Kill them all.
@@ -124,16 +129,21 @@ def kill_all_claude_processes() -> int:
 
     killed = 0
     try:
+        # Match ONLY SwarmAI's bundled claude binary — NOT user's claude CLI
         result = subprocess.run(
-            ["pgrep", "-x", "claude"],
+            ["pgrep", "-f", "claude_agent_sdk/_bundled/claude"],
             capture_output=True, text=True, timeout=5,
         )
         if result.returncode != 0 or not result.stdout.strip():
             return 0
 
         pids = [int(p) for p in result.stdout.strip().split("\n") if p.strip()]
+        my_pid = os.getpid()
         for pid in pids:
+            if pid == my_pid:
+                continue
             try:
+                # Kill children first (MCP servers), then parent
                 try:
                     subprocess.run(
                         ["pkill", "-9", "-P", str(pid)],
@@ -143,7 +153,7 @@ def kill_all_claude_processes() -> int:
                     pass
                 os.kill(pid, signal.SIGKILL)
                 killed += 1
-                logger.info("Startup: killed leftover claude process pid=%d", pid)
+                logger.info("Startup: killed leftover SwarmAI claude pid=%d", pid)
             except (ProcessLookupError, PermissionError):
                 pass
             except Exception as exc:
@@ -155,7 +165,7 @@ def kill_all_claude_processes() -> int:
 
     if killed:
         logger.warning(
-            "Startup: killed %d leftover claude process(es) from previous instance",
+            "Startup: killed %d leftover SwarmAI claude process(es)",
             killed,
         )
     return killed
