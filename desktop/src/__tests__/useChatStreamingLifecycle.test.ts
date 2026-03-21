@@ -47,7 +47,7 @@
  *     removes 404 sessions and keeps network errors, graceful degradation on
  *     quota exceeded
  *
- *   - Fix 7: MAX_OPEN_TABS guard — unified hook enforces the 6-tab limit,
+ *   - Fix 7: MAX_OPEN_TABS guard — unified hook enforces the 4-tab limit,
  *     tab creation re-enabled after close
  *   - Fix 8: Tab status indicators — updateTabStatus syncs unified Tab_Map
  *     tabStatuses useState, guard skips re-render on same status, tab status
@@ -2356,8 +2356,8 @@ describe('Fix 7: Tab limit enforcement', () => {
     resetTestState();
   });
   describe('MAX_OPEN_TABS constant', () => {
-    it('is 6', () => {
-      expect(MAX_OPEN_TABS).toBe(6);
+    it('is 4 (hard ceiling, deprecated alias for MAX_TABS_HARD_CEILING)', () => {
+      expect(MAX_OPEN_TABS).toBe(4);
     });
   });
 

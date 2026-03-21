@@ -9,6 +9,7 @@ Public symbols:
 
 - ``resource_monitor`` — Module-level singleton instance.
 - ``ResourceMonitor``  — Class (rarely used directly; prefer the singleton).
+- ``ResourceMonitor.compute_max_tabs`` — Dynamic tab limit from available RAM.
 - ``SystemMemory``     — Frozen dataclass for system RAM state.
 - ``ProcessMetrics``   — Frozen dataclass for per-subprocess metrics.
 - ``SpawnBudget``      — Frozen dataclass for can-spawn decision + reasoning.
@@ -19,10 +20,9 @@ Design reference:
 from __future__ import annotations
 
 import logging
-import os
 import subprocess
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -107,6 +107,13 @@ class ResourceMonitor:
     _DEFAULT_SPAWN_COST_MB: float = 500.0  # Conservative baseline from COE data
     _HEADROOM_MB: float = 512.0  # Always keep this much free
     _MAX_SPAWN_SAMPLES: int = 20  # Rolling window for spawn cost estimation
+
+    # ── Dynamic tab limit constants ─────────────────────────────
+    # Larger than _HEADROOM_MB because compute_max_tabs() is a planning
+    # function (how many tabs *should* we allow?) while spawn_budget() is
+    # a safety gate (can we spawn *right now?*).
+    _TAB_HEADROOM_MB: float = 1024.0
+    _MAX_TABS_CEILING: int = 4
 
     def __init__(self) -> None:
         self._cached_memory: Optional[SystemMemory] = None
@@ -268,6 +275,28 @@ class ResourceMonitor:
             self._spawn_cost_samples.pop(0)
         logger.debug("Spawn cost recorded: %.1fMB (samples=%d)",
                      cost_mb, len(self._spawn_cost_samples))
+
+    # ── Dynamic tab limit ───────────────────────────────────────
+
+    def compute_max_tabs(self) -> int:
+        """Compute dynamic tab limit from available RAM.
+
+        Formula: ``max(1, min(floor((available_mb - 1024) / 500), 4))``
+
+        Uses ``system_memory()`` which has psutil + macOS ``vm_stat``
+        fallback.  On failure, ``system_memory()`` returns pessimistic
+        fallback (1600 MB available), which yields
+        ``floor((1600 - 1024) / 500) = floor(1.152) = 1``.
+
+        The 1024 MB headroom (``_TAB_HEADROOM_MB``) is larger than
+        ``_HEADROOM_MB`` (512) because this is a *planning* function —
+        all planned tabs may spawn concurrently — while ``spawn_budget()``
+        is a per-spawn safety gate.
+        """
+        mem = self.system_memory()
+        available_mb = mem.available / (1024 * 1024)
+        raw = int((available_mb - self._TAB_HEADROOM_MB) // self._DEFAULT_SPAWN_COST_MB)
+        return max(1, min(raw, self._MAX_TABS_CEILING))
 
     # ── Process metrics ─────────────────────────────────────────
 
