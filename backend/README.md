@@ -52,9 +52,6 @@ ANTHROPIC_BASE_URL=https://your-proxy.example.com
 # Set to true if you want to use Bedrock (requires AWS credentials)
 CLAUDE_CODE_USE_BEDROCK=false
 
-# Disable experimental beta features in Claude Code
-CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=false
-
 # Default Claude model to use
 DEFAULT_MODEL=claude-sonnet-4-5-20250929
 ```

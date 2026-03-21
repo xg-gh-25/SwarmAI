@@ -2,7 +2,7 @@
 
 Single source of truth for non-secret application settings (Bedrock toggle,
 AWS region, model selection, available models, model mapping, base URL,
-experimental betas flag, sandbox settings).
+sandbox settings).
 
 Key design decisions:
 
@@ -68,7 +68,6 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "claude-opus-4-5-20251101": "us.anthropic.claude-opus-4-5-20251101-v1:0",
     },
     "anthropic_base_url": None,
-    "claude_code_disable_experimental_betas": True,
     "sandbox_additional_write_paths": "",
     "sandbox_enabled_default": True,
     "sandbox_auto_allow_bash": True,
