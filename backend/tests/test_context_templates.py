@@ -59,8 +59,8 @@ class TestTemplateMarkers:
 
     def test_memory_agent_managed_marker(self):
         content = _read_template("MEMORY.md")
-        assert "🧠 MEMORY" in content, (
-            "MEMORY.md missing 🧠 MEMORY marker"
+        assert "⚠️ AGENT-OWNED" in content, (
+            "MEMORY.md missing ⚠️ AGENT-OWNED marker"
         )
 
 
@@ -83,7 +83,7 @@ class TestSoulTemplate:
 
     def test_continuity_section(self):
         content = _read_template("SOUL.md")
-        assert "## Continuity" in content
+        assert "## 🚨 CRITICAL: Continuity" in content
         assert "context files ARE your memory" in content
 
 
