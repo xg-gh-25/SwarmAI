@@ -336,39 +336,41 @@ class TestP2FallbackFailurePreservation:
 # ---------------------------------------------------------------------------
 
 class TestP3ComputeMaxTabsFormulaPreservation:
-    """P3: compute_max_tabs formula is max(1, min(floor((avail-1024)/500), 4)).
+    """P3: compute_max_tabs uses 80% rule: max(1, min(floor(headroom_to_80pct / 500), 4)).
 
-    Uses Hypothesis to verify the formula across random available_mb values.
+    Uses Hypothesis to verify the formula across random used_pct values.
 
     **Validates: Requirements 3.3**
     """
 
-    @given(available_mb=st.floats(min_value=0, max_value=100000, allow_nan=False, allow_infinity=False))
+    @given(used_pct=st.floats(min_value=0, max_value=99, allow_nan=False, allow_infinity=False))
     @settings(max_examples=50, deadline=None)
-    def test_formula_matches_expected(self, available_mb):
-        """compute_max_tabs output matches the formula exactly for any available_mb."""
+    def test_formula_matches_expected(self, used_pct):
+        """compute_max_tabs output matches the 80% headroom formula."""
         from core.resource_monitor import ResourceMonitor, SystemMemory
 
-        expected = max(1, min(int((available_mb - 1024) // 500), 4))
+        total_bytes = 36 * 1024**3  # 36GB
+        total_mb = total_bytes / (1024 * 1024)
+        used_mb = total_mb * (used_pct / 100.0)
+        headroom_mb = total_mb * 0.80 - used_mb
+        expected = max(1, min(int(headroom_mb / 500), 4))
 
         monitor = ResourceMonitor()
-        # Inject a fake cached memory so system_memory() returns our value
-        available_bytes = int(available_mb * 1024 * 1024)
-        total_bytes = 36 * 1024**3
-        used_bytes = total_bytes - available_bytes
-        pct = round((used_bytes / total_bytes) * 100, 1) if total_bytes else 90.0
+        used_bytes = int(used_mb * 1024 * 1024)
+        available_bytes = total_bytes - used_bytes
 
         monitor._cached_memory = SystemMemory(
             total=total_bytes,
             available=available_bytes,
             used=used_bytes,
-            percent_used=pct,
+            percent_used=round(used_pct, 1),
         )
-        monitor._cache_time = __import__("time").time()  # fresh cache
+        monitor._cache_time = __import__("time").time()
 
         result = monitor.compute_max_tabs()
         assert result == expected, (
-            f"For available_mb={available_mb:.1f}: "
+            f"For used_pct={used_pct:.1f}%%: "
+            f"headroom_to_80%%={headroom_mb:.0f}MB, "
             f"expected {expected}, got {result}"
         )
 

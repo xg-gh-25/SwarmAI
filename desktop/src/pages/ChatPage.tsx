@@ -381,7 +381,7 @@ export default function ChatPage() {
   const handleNewSession = useCallback(() => {
     if (!selectedAgentId) return;
     if (tabMapRef.current.size >= maxTabsInfo.maxTabs) {
-      addToast({ severity: 'info', message: 'System resources are limited. Close a tab or free memory to open another.', autoDismiss: true });
+      addToast({ severity: 'info', message: 'Memory usage is high. Close an idle tab or quit other apps to free memory, then try again.', autoDismiss: true });
       return;
     }
     // Save current React state into the active tab's map entry before switching.
