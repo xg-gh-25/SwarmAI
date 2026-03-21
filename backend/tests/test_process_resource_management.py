@@ -630,8 +630,8 @@ class TestP10ExistingReaperPatterns:
         # Find the claude pattern call
         claude_calls = [c for c in calls_log if "claude" in c["pattern"]]
         assert len(claude_calls) >= 1, "Should have at least one 'claude' pattern call"
-        assert claude_calls[0]["require_orphaned"] is False, (
-            "claude pattern should NOT require orphaned (ppid==1)"
+        assert claude_calls[0]["require_orphaned"] is True, (
+            "claude pattern should require orphaned (ppid==1) to avoid killing active sessions"
         )
 
         # Find the python main.py pattern call
