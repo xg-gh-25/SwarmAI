@@ -505,7 +505,11 @@ class SessionRouter:
         )
         if is_cold_resume:
             msg_count = await db.messages.count_by_session(session_id)
-            if msg_count > 0:
+            # msg_count > 1 because the current user message was already
+            # persisted above (before slot acquisition).  A truly new session
+            # has exactly 1 message (the one we just saved).  Cold resume
+            # requires at least 2 (prior conversation + current message).
+            if msg_count > 1:
                 agent_config["needs_context_injection"] = True
                 agent_config["resume_app_session_id"] = session_id
                 yield {"type": "session_resuming", "sessionId": session_id}
