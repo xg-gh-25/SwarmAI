@@ -191,23 +191,15 @@ class ResourceMonitor:
 
             free = stats.get("Pages free", 0)
             speculative = stats.get("Pages speculative", 0)
-            inactive = stats.get("Pages inactive", 0)
-            # macOS "inactive" pages are file-backed/compressed memory.
-            # They ARE reclaimable under pressure but not instantly free.
-            # Including all of them (old behavior) inflated available by ~9GB.
-            # Including none of them (too conservative) reports 95%+ used.
-            # Compromise: count 50% of inactive as reclaimable — matches
-            # psutil's heuristic on macOS and Apple's memory_pressure tool.
-            available = free + speculative + (inactive // 2)
-            logger.debug(
-                "vm_stat: free=%dMB speculative=%dMB inactive=%dMB "
-                "(counted 50%% inactive=%dMB) → available=%dMB",
-                free // (1024 * 1024),
-                speculative // (1024 * 1024),
-                inactive // (1024 * 1024),
-                (inactive // 2) // (1024 * 1024),
-                available // (1024 * 1024),
-            )
+            active = stats.get("Pages active", 0)
+            wired = stats.get("Pages wired down", 0)
+
+            # Calculate "used" as active + wired — matches macOS Activity
+            # Monitor's "Memory Used" and Kiro's system health report.
+            # Inactive/compressed/purgeable pages are reclaimable by the OS
+            # and should NOT count as "used" for resource gating decisions.
+            used = active + wired
+            available = total - used if 'total' in dir() else free + speculative
 
             # Get total from sysctl
             sysctl_result = subprocess.run(
@@ -215,7 +207,18 @@ class ResourceMonitor:
                 capture_output=True, text=True, timeout=5,
             )
             total = int(sysctl_result.stdout.strip())
-            used = total - available
+            used = active + wired  # recalculate with real total
+            available = total - used
+
+            logger.debug(
+                "vm_stat: active=%dMB wired=%dMB → used=%dMB (%.1f%%), "
+                "available=%dMB",
+                active // (1024 * 1024),
+                wired // (1024 * 1024),
+                used // (1024 * 1024),
+                (used / total * 100) if total else 0,
+                available // (1024 * 1024),
+            )
 
             return SystemMemory(
                 total=total,
@@ -259,8 +262,8 @@ class ResourceMonitor:
                 return SpawnBudget(
                     can_spawn=False,
                     reason=(
-                        f"Opening a new tab would push memory to {projected_pct:.0f}%% "
-                        f"(limit: {self._MEMORY_THRESHOLD_PCT:.0f}%%). "
+                        f"Opening a new tab would push memory to {projected_pct:.0f}% "
+                        f"(limit: {self._MEMORY_THRESHOLD_PCT:.0f}%). "
                         f"Close an idle tab or other apps to free memory."
                     ),
                     available_mb=round(total_mb - used_mb, 1),
