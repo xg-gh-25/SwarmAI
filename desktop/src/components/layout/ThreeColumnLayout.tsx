@@ -283,20 +283,20 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
         { params: { path: file.path } },
       );
 
-      // Fetch committed version for diff when file has git changes
+      // Always fetch committed (HEAD) version for Show Changes diff.
+      // Previously gated on gitStatus, but files opened via swarm:open-file
+      // events (chat links) don't carry gitStatus, so committedContent was
+      // never fetched for them.  The try/catch handles untracked/new files.
       let committedContent: string | undefined;
-      if (gitStatus) {
-        try {
-          const committedResponse = await api.get<{ content: string }>(
-            '/workspace/file/committed',
-            { params: { path: file.path } },
-          );
-          committedContent = committedResponse.data.content;
-        } catch (err) {
-          // Untracked or binary file -- fall back to empty string
-          console.warn('Failed to fetch committed version:', err);
-          committedContent = '';
-        }
+      try {
+        const committedResponse = await api.get<{ content: string }>(
+          '/workspace/file/committed',
+          { params: { path: file.path } },
+        );
+        committedContent = committedResponse.data.content;
+      } catch {
+        // Untracked, new, or binary file — no committed version available.
+        // Leave undefined so originalContent falls back to initialContent.
       }
 
       liveContentRef.current = null; // Reset live content tracking for new file

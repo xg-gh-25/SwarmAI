@@ -291,6 +291,10 @@ export default function FileEditorCore({
 }: FileEditorCoreProps) {
   const [content, setContent] = useState(initialContent);
   const [originalContent, setOriginalContent] = useState(committedContent ?? initialContent);
+  // Tracks the last content successfully saved to disk, so hasUnsavedEdits
+  // resets after save without destroying the committed (HEAD) baseline in
+  // originalContent.  Null means "nothing saved yet — use initialContent".
+  const [savedContent, setSavedContent] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
   const [showUnsavedWarning, setShowUnsavedWarning] = useState(false);
   const [showDiff, setShowDiff] = useState(false);
@@ -327,7 +331,7 @@ export default function FileEditorCore({
   }, [filePath]);
 
   const isDirty = isDirtyState(content, originalContent);
-  const hasUnsavedEdits = isDirtyState(content, initialContent);
+  const hasUnsavedEdits = isDirtyState(content, savedContent ?? initialContent);
   const language = detectLanguage(fileName);
   const isMarkdown = /\.md$/i.test(fileName);
 
@@ -380,7 +384,9 @@ export default function FileEditorCore({
     setIsSaving(true);
     try {
       await onSave(content);
-      setOriginalContent(content);
+      // Track saved content separately so hasUnsavedEdits resets,
+      // but originalContent (committed/HEAD baseline) stays intact for Show Changes.
+      setSavedContent(content);
 
       // L2: Auto-diff feedback — fetch diff after save and notify parent
       if (onSaveWithDiff) {
@@ -420,6 +426,7 @@ export default function FileEditorCore({
   useEffect(() => {
     setContent(initialContent);
     setOriginalContent(committedContent ?? initialContent);
+    setSavedContent(null);
     setShowUnsavedWarning(false);
     setShowDiff(false);
     setShowMarkdownPreview(false);
