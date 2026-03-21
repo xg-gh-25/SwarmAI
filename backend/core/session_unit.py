@@ -766,12 +766,32 @@ class SessionUnit:
         error_str = initial_error_str
         # Capture SDK session ID before cleanup for --resume
         resume_session_id = self._sdk_session_id
+        _consecutive_timeouts = 0
 
         while (
             _is_retriable_error(error_str)
             and self._retry_count < self.MAX_RETRY_ATTEMPTS
         ):
             self._retry_count += 1
+
+            # Track consecutive timeouts to abandon --resume when it's broken
+            is_timeout = "timeout" in error_str.lower() or "streaming timeout" in error_str.lower()
+            if is_timeout:
+                _consecutive_timeouts += 1
+            else:
+                _consecutive_timeouts = 0
+
+            # After 2 consecutive timeouts with --resume, the resume target
+            # is likely broken (e.g., OOM'd predecessor, corrupted session).
+            # Abandon resume and start fresh to avoid sitting in a 10-minute
+            # retry loop watching nothing happen.
+            if _consecutive_timeouts >= 2 and resume_session_id:
+                logger.warning(
+                    "session_unit: %d consecutive timeouts with --resume, "
+                    "abandoning resume for session %s",
+                    _consecutive_timeouts, self.session_id,
+                )
+                resume_session_id = None
 
             # OOM-aware backoff: SIGKILL gets flat 30s cooldown
             is_oom = _is_oom_signal(error_str)
