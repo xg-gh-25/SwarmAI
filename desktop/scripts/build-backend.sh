@@ -240,6 +240,7 @@ hiddenimports += collect_submodules('slowapi')
 hiddenimports += collect_submodules('claude_agent_sdk')
 hiddenimports += collect_submodules('boto3')
 hiddenimports += collect_submodules('botocore')
+hiddenimports += ['psutil']
 
 # Collect data files (including bundled CLI binary from claude_agent_sdk)
 datas = []
