@@ -198,7 +198,7 @@ def _configure_claude_environment(config: AppConfigManager) -> None:
         os.environ.pop("ANTHROPIC_BASE_URL", None)
 
     # 3. Experimental betas flag
-    if config.get("claude_code_disable_experimental_betas", True):
+    if config.get("claude_code_disable_experimental_betas", False):
         os.environ["CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS"] = "true"
     else:
         os.environ.pop("CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS", None)
