@@ -1101,25 +1101,41 @@ class SessionUnit:
         # Wrap each __anext__() call with a timeout so the stream
         # CANNOT stay stuck.  On timeout, we raise — the caller's
         # retry logic handles recovery with --resume.
+        #
+        # First message uses a shorter timeout because the subprocess
+        # should send an init/system message quickly after spawn.
+        # --resume needs more time (restoring session history + large
+        # Bedrock payload), so it gets 60s vs 30s for fresh start.
+        INIT_TIMEOUT_FRESH = 90.0   # Fresh start: 90s for first message (cross-region Bedrock)
+        INIT_TIMEOUT_RESUME = 180.0 # --resume: 180s for first message (session restore + large payload)
         MESSAGE_TIMEOUT = self.STREAMING_TIMEOUT_SECONDS  # 5 min between messages
+
+        is_resume = self._sdk_session_id is not None
+        first_message_timeout = INIT_TIMEOUT_RESUME if is_resume else INIT_TIMEOUT_FRESH
+        is_first_message = True
+
         response_iter = self._client.receive_response().__aiter__()
         while True:
+            current_timeout = first_message_timeout if is_first_message else MESSAGE_TIMEOUT
             try:
                 message = await asyncio.wait_for(
                     response_iter.__anext__(),
-                    timeout=MESSAGE_TIMEOUT,
+                    timeout=current_timeout,
                 )
+                is_first_message = False  # Got a message — switch to normal timeout
             except StopAsyncIteration:
                 break
             except asyncio.TimeoutError:
+                phase = "init" if is_first_message else "streaming"
                 logger.error(
-                    "session_unit.streaming_timeout session_id=%s — "
-                    "no SDK message for %.0fs, breaking stream",
-                    self.session_id, MESSAGE_TIMEOUT,
+                    "session_unit.%s_timeout session_id=%s — "
+                    "no SDK message for %.0fs (resume=%s), breaking stream",
+                    phase, self.session_id, current_timeout, is_resume,
                 )
                 raise RuntimeError(
-                    f"Streaming timeout: no SDK response for "
-                    f"{MESSAGE_TIMEOUT:.0f}s (session_id={self.session_id})"
+                    f"Streaming timeout ({phase}): no SDK response for "
+                    f"{current_timeout:.0f}s (session_id={self.session_id}, "
+                    f"resume={is_resume})"
                 )
 
             # ── Heartbeat: track liveness for diagnostics ──────────
