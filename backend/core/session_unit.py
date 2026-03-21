@@ -1104,19 +1104,17 @@ class SessionUnit:
         #
         # First message uses a shorter timeout because the subprocess
         # should send an init/system message quickly after spawn.
-        # --resume needs more time (restoring session history + large
-        # Bedrock payload), so it gets 60s vs 30s for fresh start.
-        INIT_TIMEOUT_FRESH = 90.0   # Fresh start: 90s for first message (cross-region Bedrock)
-        INIT_TIMEOUT_RESUME = 180.0 # --resume: 180s for first message (session restore + large payload)
+        # 180s accommodates cross-region Bedrock + --resume session restore.
+        # Single timeout for both fresh and resume — simpler, fewer states.
+        INIT_TIMEOUT = 180.0    # First message: 180s (cross-region Bedrock)
         MESSAGE_TIMEOUT = self.STREAMING_TIMEOUT_SECONDS  # 5 min between messages
 
         is_resume = self._sdk_session_id is not None
-        first_message_timeout = INIT_TIMEOUT_RESUME if is_resume else INIT_TIMEOUT_FRESH
         is_first_message = True
 
         response_iter = self._client.receive_response().__aiter__()
         while True:
-            current_timeout = first_message_timeout if is_first_message else MESSAGE_TIMEOUT
+            current_timeout = INIT_TIMEOUT if is_first_message else MESSAGE_TIMEOUT
             try:
                 message = await asyncio.wait_for(
                     response_iter.__anext__(),
