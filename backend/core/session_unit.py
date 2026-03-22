@@ -259,6 +259,13 @@ class SessionUnit:
         # ── SSE stop notification ─────────────────────────────────
         self._stop_event: asyncio.Event = asyncio.Event()
 
+        # ── Send generation counter (stale-interrupt guard) ────────
+        # Monotonically incremented at the start of each send().
+        # interrupt() captures this at entry and skips state
+        # transitions / kills if the generation has advanced — meaning
+        # a new send() started while the old interrupt was in-flight.
+        self._send_generation: int = 0
+
     # ── Properties ────────────────────────────────────────────────
 
     @property
@@ -452,14 +459,14 @@ class SessionUnit:
             _sanitize_sdk_error,
         )
 
-        # ── Layer 1: Auto-recover stuck STREAMING sessions ─────────
-        # Clear (don't replace) the stop event — the SSE endpoint already
-        # holds a reference to this object.  Creating a new Event() would
-        # leave the SSE consumer watching a stale object that's still set
-        # from the previous interrupt(), causing the new stream to die
-        # immediately.  See: 2026-03-22 12:40:09 "SSE stop event received"
-        # bug where the new stream was killed 7s after spawn.
+        # ── Layer 0: Advance generation + clear stale interrupt state ─
+        # Must happen BEFORE anything else so a concurrent interrupt()
+        # that resumes from an await sees the bumped counter and aborts.
+        # All three clears are synchronous (no await between them), so
+        # no other coroutine can interleave and re-set them.
+        self._send_generation += 1
         self._stop_event.clear()
+        self._interrupted = False
 
         # If a previous request got stuck (SDK never sent ResultMessage),
         # the unit stays in STREAMING forever.  Instead of rejecting the
@@ -494,7 +501,7 @@ class SessionUnit:
         # each new user message should get a fresh recovery attempt
         # if it triggers a different buffer overflow.
         self._retry_count = 0
-        self._interrupted = False
+        # _interrupted already cleared in Layer 0 above
         self._buffer_overflow_recovery = False
         self._compaction_guard.reset()  # New user turn — reset tool tracking
         self._content_emitted = False   # Track if meaningful content is emitted
@@ -1502,6 +1509,12 @@ class SessionUnit:
 
         Returns True if subprocess stayed alive (IDLE).
 
+        **Stale-interrupt guard:** Captures ``_send_generation`` at entry.
+        If a new ``send()`` starts while this method is awaiting
+        ``_client.interrupt()``, the generation advances and this method
+        skips all state transitions and kills — preventing the stale
+        interrupt from destroying the new stream's subprocess.
+
         Parameters
         ----------
         timeout:
@@ -1511,18 +1524,42 @@ class SessionUnit:
         if self.state not in (SessionState.STREAMING, SessionState.WAITING_INPUT):
             return self.is_alive
 
+        # Capture generation BEFORE any mutation.  If send() runs while
+        # we're awaiting below, it bumps _send_generation — our snapshot
+        # becomes stale and we bail out instead of killing the new stream.
+        gen_at_entry = self._send_generation
+
         self._stop_event.set()
         self._interrupted = True
 
         if self._client is None:
-            # No client — just transition to DEAD
+            # No client — just transition to DEAD (no race: no subprocess)
             self._transition(SessionState.DEAD)
             self._cleanup_internal()
             self._transition(SessionState.COLD)
             return False
 
+        # Capture client reference — send() may replace self._client
+        # with a new subprocess while we're awaiting.
+        client = self._client
+
         try:
-            await asyncio.wait_for(self._client.interrupt(), timeout=timeout)
+            await asyncio.wait_for(client.interrupt(), timeout=timeout)
+
+            # ── Stale-interrupt check ─────────────────────────────
+            if self._send_generation != gen_at_entry:
+                logger.info(
+                    "session_unit.interrupt stale (gen %d→%d) — new send() "
+                    "started, skipping state transition session_id=%s",
+                    gen_at_entry, self._send_generation, self.session_id,
+                )
+                # Undo mutations we made before the await — send() already
+                # cleared these, but clear again defensively in case a
+                # second stale interrupt re-set them.
+                self._stop_event.clear()
+                self._interrupted = False
+                return self.is_alive
+
             # Guard: _read_formatted_response may have already transitioned
             # STREAMING → IDLE via the _interrupted check before we get here.
             # IDLE → IDLE is not a valid transition, so skip if already IDLE.
@@ -1541,6 +1578,16 @@ class SessionUnit:
             )
             return True
         except asyncio.TimeoutError:
+            # ── Stale-interrupt check before kill ─────────────────
+            if self._send_generation != gen_at_entry:
+                logger.info(
+                    "session_unit.interrupt stale timeout (gen %d→%d) — "
+                    "new send() started, not killing session_id=%s",
+                    gen_at_entry, self._send_generation, self.session_id,
+                )
+                self._stop_event.clear()
+                self._interrupted = False
+                return self.is_alive
             logger.warning(
                 "session_unit.interrupt timed out after %.1fs, killing "
                 "session_id=%s pid=%s",
@@ -1549,6 +1596,16 @@ class SessionUnit:
             await self.kill()
             return False
         except Exception as exc:
+            # ── Stale-interrupt check before kill ─────────────────
+            if self._send_generation != gen_at_entry:
+                logger.info(
+                    "session_unit.interrupt stale error (gen %d→%d) — "
+                    "new send() started, not killing session_id=%s",
+                    gen_at_entry, self._send_generation, self.session_id,
+                )
+                self._stop_event.clear()
+                self._interrupted = False
+                return self.is_alive
             logger.warning(
                 "session_unit.interrupt failed for session %s: %s",
                 self.session_id, exc,
