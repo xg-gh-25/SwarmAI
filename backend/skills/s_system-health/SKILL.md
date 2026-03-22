@@ -30,100 +30,148 @@ description: >
 
 Run ALL data collection in parallel (single bash call where possible) to minimize latency.
 
-#### macOS — Single Collection Script
+#### CRITICAL: Sandbox Constraints
+
+The Claude SDK sandbox blocks `ps`, `pgrep`, `top`, and all process-listing OS commands ("operation not permitted"). **ALL process inspection must use psutil** via the SwarmAI backend venv. This is a hard constraint — no fallback to OS tools for process data.
+
+Additionally: if you are executing this skill, the SwarmAI app IS running. You are inside it. Don't report "app not running" when you're the one generating the report.
+
+#### macOS/Linux — Unified Collection via psutil (Single Script)
+
+**IMPORTANT**: Always activate the SwarmAI venv first. System Python does NOT have psutil.
 
 ```bash
-echo "=== SYSTEM ==="
-sysctl -n hw.memsize  # total RAM in bytes
-sysctl -n hw.ncpu     # CPU core count
-uname -m              # architecture
+source /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/backend/.venv/bin/activate && python3 << 'PYEOF'
+import psutil, json, collections
 
-echo "=== BATTERY ==="
-pmset -g batt 2>/dev/null || echo "NO_BATTERY"
-
-echo "=== MEMORY_PSUTIL ==="
-python3 -c "
-import psutil, json
+# === SYSTEM ===
 vm = psutil.virtual_memory()
-print(json.dumps({
-    'total_gb': round(vm.total/1024**3, 1),
-    'used_gb': round(vm.used/1024**3, 1),
-    'available_gb': round(vm.available/1024**3, 1),
-    'percent': vm.percent,
-    'active_gb': round(vm.active/1024**3, 1) if hasattr(vm, 'active') else None,
-    'wired_gb': round(vm.wired/1024**3, 1) if hasattr(vm, 'wired') else None,
-}))
-" 2>/dev/null || echo "PSUTIL_UNAVAILABLE"
+cpu_pct = psutil.cpu_percent(interval=1)
+load1, load5, load15 = psutil.getloadavg()
+cores = psutil.cpu_count()
+disk = psutil.disk_usage("/")
+batt = psutil.sensors_battery()
 
-echo "=== DISK ==="
-df -h / | tail -1
+system = {
+    "ram_total_gb": round(vm.total/1024**3, 1),
+    "ram_used_gb": round(vm.used/1024**3, 1),
+    "ram_avail_gb": round(vm.available/1024**3, 1),
+    "ram_pct": vm.percent,
+    "cpu_pct": cpu_pct,
+    "load": [round(load1,1), round(load5,1), round(load15,1)],
+    "cores": cores,
+    "disk_total_gb": round(disk.total/1024**3, 0),
+    "disk_used_gb": round(disk.used/1024**3, 0),
+    "disk_pct": disk.percent,
+    "battery_pct": batt.percent if batt else None,
+    "plugged": batt.power_plugged if batt else None,
+}
+print("=== SYSTEM ===")
+print(json.dumps(system))
 
-echo "=== TOP_MEM ==="
-ps axo pid,rss,%mem,comm -m | head -16
+# === BATTERY ===
+print("=== BATTERY ===")
+if batt:
+    status = "AC" if batt.power_plugged else "discharging"
+    print(f"{batt.percent}% ({status})")
+else:
+    print("NO_BATTERY")
 
-echo "=== TOP_CPU ==="
-ps axo pid,%cpu,comm -r | head -11
+# === TOP PROCESSES (by RSS) ===
+# Classify into app groups
+def classify(name, cmd):
+    cl = cmd.lower()
+    nl = name.lower()
+    if "kiro" in cl or "kiro" in nl: return "Kiro IDE"
+    if "SwarmAI" in cmd or "swarmai" in cl: return "SwarmAI (Tauri)"
+    if "google chrome" in nl or ("chrome" in nl and "helper" in nl): return "Chrome"
+    if "microsoft teams" in nl or "teams" in nl: return "Microsoft Teams"
+    if "slack" in nl and "mcp" not in cl: return "Slack"
+    if "claude" in nl and "mcp" not in cl: return "Claude CLI"
+    if "builder-mcp" in cl: return "MCP: builder"
+    if "sentral-mcp" in cl or "sentral" in cl: return "MCP: sentral"
+    if "slack-mcp" in cl: return "MCP: slack"
+    if "outlook-mcp" in cl: return "MCP: outlook"
+    if "taskei" in cl: return "MCP: taskei"
+    if "node" in nl and "mcp" in cl: return "MCP: shim/node"
+    if "main.py" in cmd and ("backend" in cmd or "uvicorn" in cl): return "SwarmAI Backend"
+    if "docker" in nl: return "Docker"
+    if "code" in nl and "visual" in cmd: return "VS Code"
+    if "firefox" in nl: return "Firefox"
+    return name  # ungrouped
 
-echo "=== SWARM_PROCESSES ==="
-# SwarmAI ecosystem: Tauri app, backend sidecar, Claude CLI subprocesses, MCP servers
-ps axo pid,ppid,rss,%cpu,%mem,etime,comm | grep -E "swarm|claude|tauri|mcp|python.*main\.py" | grep -v grep
+apps = collections.defaultdict(lambda: {"rss_mb": 0, "count": 0, "cpu": 0.0})
+for p in psutil.process_iter(["pid", "name", "cmdline", "memory_info", "cpu_percent"]):
+    try:
+        info = p.info
+        name = info["name"] or "unknown"
+        cmd = " ".join(info["cmdline"] or [])
+        rss = (info["memory_info"].rss if info["memory_info"] else 0) / 1024 / 1024
+        cpu = info["cpu_percent"] or 0.0
+        label = classify(name, cmd)
+        apps[label]["rss_mb"] += rss
+        apps[label]["count"] += 1
+        apps[label]["cpu"] += cpu
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        pass
 
-echo "=== MCP_CHILDREN ==="
-# Find MCP server processes spawned by Claude CLI
-pgrep -f "claude|mcp" | xargs -I{} ps -o pid,ppid,rss,%cpu,comm -p {} 2>/dev/null | grep -v "PID"
+print("=== TOP_MEM ===")
+for name, info in sorted(apps.items(), key=lambda x: -x[1]["rss_mb"])[:10]:
+    print(f"{name}|{info['count']}|{info['rss_mb']:.0f}|{info['cpu']:.1f}")
 
-echo "=== ORPHAN_CHECK ==="
-# Orphaned processes (PPID=1) that look like our ecosystem
-ps axo pid,ppid,rss,%cpu,comm | awk '$2 == 1' | grep -iE "claude|mcp|python|node" | head -10
+print("=== TOP_CPU ===")
+for name, info in sorted(apps.items(), key=lambda x: -x[1]["cpu"])[:5]:
+    if info["cpu"] > 0.1:
+        print(f"{name}|{info['count']}|{info['cpu']:.1f}")
 
-echo "=== LOAD ==="
-sysctl -n vm.loadavg 2>/dev/null || uptime
+# === SWARM BREAKDOWN ===
+print("=== SWARM_BREAKDOWN ===")
+swarm_labels = ["SwarmAI (Tauri)", "SwarmAI Backend", "Claude CLI",
+                "MCP: builder", "MCP: sentral", "MCP: slack", "MCP: outlook", "MCP: taskei", "MCP: shim/node"]
+swarm_total = 0
+for label in swarm_labels:
+    if label in apps and apps[label]["rss_mb"] > 1:
+        info = apps[label]
+        swarm_total += info["rss_mb"]
+        print(f"{label}|{info['count']}|{info['rss_mb']:.0f}|{info['cpu']:.1f}")
+print(f"TOTAL|0|{swarm_total:.0f}|0")
+
+# === ORPHAN CHECK ===
+print("=== ORPHAN_CHECK ===")
+orphan_count = 0
+for p in psutil.process_iter(["pid", "ppid", "name", "cmdline", "memory_info", "status"]):
+    try:
+        info = p.info
+        if info["ppid"] == 1:
+            cmd = " ".join(info["cmdline"] or [])
+            rss = (info["memory_info"].rss if info["memory_info"] else 0) / 1024 / 1024
+            if any(kw in cmd.lower() for kw in ["python", "node", "claude", "mcp", "npm", "deno"]):
+                print(f"{info['pid']}|{info['name']}|{rss:.0f}|{info['status']}|{cmd[:80]}")
+                orphan_count += 1
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        pass
+if orphan_count == 0:
+    print("NONE")
+PYEOF
 ```
 
-#### macOS — SwarmAI Backend API (if running)
+> **NOTE**: psutil's `boot_time()` and `swap_memory()` may throw `PermissionError`/`OSError` in sandbox. Skip them — they're not essential. Focus on `virtual_memory()`, `cpu_percent()`, `getloadavg()`, `disk_usage()`, `sensors_battery()`, and `process_iter()`.
+
+#### SwarmAI Backend API
 
 ```bash
-# Hit the SwarmAI resource endpoint for accurate session-level data
-curl -s http://localhost:23816/api/system/resources 2>/dev/null || echo "BACKEND_UNAVAILABLE"
-curl -s http://localhost:23816/api/system/max-tabs 2>/dev/null || echo "MAX_TABS_UNAVAILABLE"
-curl -s http://localhost:23816/api/system/status 2>/dev/null || echo "STATUS_UNAVAILABLE"
+# Backend health — correct endpoint is /health (NOT /api/system/health)
+# Port depends on launch mode: 18321 (dev.sh) or 23816 (production build)
+# Try both, use whichever responds
+curl -s http://127.0.0.1:18321/health 2>/dev/null || curl -s http://127.0.0.1:23816/health 2>/dev/null || echo "BACKEND_UNAVAILABLE"
+
+# Session-level data (if backend is reachable)
+curl -s http://127.0.0.1:18321/api/system/resources 2>/dev/null || curl -s http://127.0.0.1:23816/api/system/resources 2>/dev/null || echo "RESOURCES_UNAVAILABLE"
 ```
 
-#### Linux — Single Collection Script
+> **IMPORTANT**: If you are running this skill, the app IS running — you are executing inside it. Never report "SwarmAI not running" when you are the one generating the report. The backend health check is to verify the API layer specifically, not the app itself.
 
-```bash
-echo "=== SYSTEM ==="
-nproc
-uname -m
-cat /proc/meminfo | head -5
-
-echo "=== BATTERY ==="
-cat /sys/class/power_supply/BAT0/capacity 2>/dev/null || echo "NO_BATTERY"
-cat /sys/class/power_supply/BAT0/status 2>/dev/null
-
-echo "=== MEMORY ==="
-free -h
-
-echo "=== DISK ==="
-df -h / | tail -1
-
-echo "=== TOP_MEM ==="
-ps axo pid,rss,%mem,comm --sort=-%mem | head -16
-
-echo "=== TOP_CPU ==="
-ps axo pid,%cpu,comm --sort=-%cpu | head -11
-
-echo "=== SWARM_PROCESSES ==="
-ps axo pid,ppid,rss,%cpu,%mem,etime,comm | grep -E "swarm|claude|tauri|mcp|python.*main\.py" | grep -v grep
-
-echo "=== ORPHAN_CHECK ==="
-ps axo pid,ppid,rss,%cpu,comm | awk '$2 == 1' | grep -iE "claude|mcp|python|node" | head -10
-
-echo "=== LOAD ==="
-cat /proc/loadavg
-```
-
-> **Validation**: If psutil unavailable on macOS, fall back to `vm_stat` with `active + wired` formula (NOT free + inactive). See Lessons Learned below.
+> **Validation**: If psutil unavailable (shouldn't happen with venv), fall back to `vm_stat` with `active + wired` formula (NOT free + inactive). See Lessons Learned below.
 
 ### Step 1: Format the Full Report
 
@@ -237,8 +285,8 @@ Apply these thresholds to determine status and generate suggestions:
 
 **Data sources (in priority order):**
 1. SwarmAI `/api/system/resources` endpoint (most accurate — has session IDs, states, spawn budget)
-2. SwarmAI `/api/system/status` endpoint (component health)
-3. `ps` output filtered for swarm/claude/mcp/tauri/python (fallback if backend unavailable)
+2. psutil `process_iter()` via SwarmAI venv (always works in sandbox — `ps`/`pgrep` do NOT work)
+3. Never use `ps`, `pgrep`, `top` — they are blocked by Claude SDK sandbox
 
 **What to show:**
 - Backend sidecar process (python main.py)
@@ -443,6 +491,12 @@ These lessons come from actual production bugs in SwarmAI (March 2026). They are
 
 6. **Memory pressure threshold is 85%, not 80%** — Changed 2026-03-22 after psutil installation. Warning at 75%, critical at 85%.
 
+7. **Claude SDK sandbox blocks `ps`, `pgrep`, `top`** — All process-listing OS commands return "operation not permitted". The ONLY way to inspect processes from inside SwarmAI is `psutil.process_iter()` via the backend venv. This is a hard constraint, not a preference.
+
+8. **If you're executing, the app is running** — The agent runs inside SwarmAI. Checking "is the app running?" is tautological. The backend health endpoint (`/health`) verifies the API layer; the Tauri shell is guaranteed alive if you can execute anything at all.
+
+9. **Backend port varies: 18321 (dev) vs 23816 (prod)** — `./dev.sh` uses 18321. Production build uses 23816. Always try both. The correct health endpoint is `/health` (not `/api/system/health`).
+
 ---
 
 ## Troubleshooting
@@ -451,19 +505,20 @@ These lessons come from actual production bugs in SwarmAI (March 2026). They are
 
 | Issue | Cause | Fix |
 |-------|-------|-----|
-| psutil not found | Not installed in system Python | Use `vm_stat` fallback with `active + wired` formula |
-| Backend API returns connection refused | SwarmAI not running or crashed | Fall back to `ps` output; note backend is down |
-| RSS values from `ps` don't match API | `ps` shows instantaneous; API caches 5s | Use API values when available |
-| Process names truncated in `ps` | Default column width | Use `ps axo pid,rss,comm` for full names |
-| MCP process names vary | Depends on config | Read from `mcp-dev.json` or match `mcp` in command |
+| psutil not found | System Python doesn't have it | Activate SwarmAI venv first: `source .../backend/.venv/bin/activate` |
+| `ps`/`pgrep` "operation not permitted" | Claude SDK sandbox blocks process listing | Use psutil `process_iter()` instead — always works |
+| Backend API returns connection refused | Backend sidecar crashed or port mismatch | Try both ports (18321 dev, 23816 prod). You ARE the app — it's running |
+| psutil `boot_time()` PermissionError | Sandbox blocks `sysctl()` | Skip boot_time — not essential for health report |
+| psutil `swap_memory()` OSError | Sandbox blocks swap inspection | Skip swap — not essential |
+| MCP process names vary | Depends on config | Match `mcp` keyword in cmdline via psutil |
 
 ### Linux
 
 | Issue | Cause | Fix |
 |-------|-------|-----|
-| `free` shows low "available" but high "buff/cache" | Linux caches aggressively; normal | Use "available" column, NOT "free" |
-| No SwarmAI processes found | App not running | Report "SwarmAI not running" in section 3 |
-| Load average seems high | Includes I/O wait | Compare to core count from `nproc` |
+| `free` shows low "available" but high "buff/cache" | Linux caches aggressively; normal | Use psutil — it handles this correctly |
+| No SwarmAI processes found | Processes exist but classify() missed them | Check cmdline patterns in psutil output |
+| Load average seems high | Includes I/O wait | Compare to core count from `psutil.cpu_count()` |
 
 ---
 
@@ -485,9 +540,11 @@ Before presenting the report, verify:
 
 | Don't | Do Instead |
 |-------|------------|
-| Show raw vm_stat or /proc/meminfo | Use psutil or convert to GB |
+| Show raw vm_stat or /proc/meminfo | Use psutil via SwarmAI venv |
 | Use `inactive` pages as "available" | Use `active + wired` as "used" |
-| Skip SwarmAI section if backend is down | Fall back to `ps` output |
+| Use `ps`, `pgrep`, `top` for process data | Use psutil `process_iter()` — sandbox blocks OS tools |
+| Report "SwarmAI not running" | You ARE the app. Check backend API, not app existence |
+| Skip SwarmAI section if backend API is down | Use psutil process data as fallback |
 | Ignore orphaned processes | Always check PPID=1 |
 | Just say "memory is high" | Say "28.1GB / 36GB (78%) — close Chrome (2.8GB) to drop to 70%" |
 | Suggest killing system processes | Only suggest for user apps and orphans |

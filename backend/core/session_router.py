@@ -523,6 +523,7 @@ class SessionRouter:
             enable_skills=enable_skills,
             enable_mcp=enable_mcp,
             resume_session_id=unit._sdk_session_id,
+            session_context={"sdk_session_id": session_id},
             channel_context=channel_context,
             editor_context=editor_context,
         )

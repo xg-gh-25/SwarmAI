@@ -1112,15 +1112,79 @@ class SessionUnit:
         is_resume = self._sdk_session_id is not None
         is_first_message = True
 
+        # ── Permission queue watcher ──────────────────────────────
+        # The dangerous_command_gate hook blocks inside PreToolUse
+        # awaiting a user decision.  While it blocks, the SDK cannot
+        # produce new messages.  We race the SDK iterator against the
+        # PermissionManager session queue so we can surface the
+        # cmd_permission_request to the frontend via SSE.
+        from core.permission_manager import permission_manager as _pm
+        perm_queue = _pm.get_session_queue(self.session_id)
+
         response_iter = self._client.receive_response().__aiter__()
         while True:
             current_timeout = INIT_TIMEOUT if is_first_message else MESSAGE_TIMEOUT
-            try:
-                message = await asyncio.wait_for(
+
+            # Race: SDK message vs permission request from hook
+            sdk_task = asyncio.ensure_future(
+                asyncio.wait_for(
                     response_iter.__anext__(),
                     timeout=current_timeout,
                 )
-                is_first_message = False  # Got a message — switch to normal timeout
+            )
+            perm_task = asyncio.ensure_future(perm_queue.get())
+
+            try:
+                done, pending = await asyncio.wait(
+                    [sdk_task, perm_task],
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+            except Exception:
+                # Cleanup on unexpected errors
+                sdk_task.cancel()
+                perm_task.cancel()
+                raise
+
+            # Cancel the loser
+            for task in pending:
+                task.cancel()
+                try:
+                    await task
+                except (asyncio.CancelledError, StopAsyncIteration, asyncio.TimeoutError):
+                    pass
+
+            # ── Permission request won the race ───────────────────
+            if perm_task in done:
+                try:
+                    perm_request = perm_task.result()
+                except Exception:
+                    # Queue.get shouldn't fail, but be safe
+                    continue
+
+                logger.info(
+                    "session_unit.permission_surfaced session_id=%s "
+                    "request_id=%s command=%s",
+                    self.session_id,
+                    perm_request.get("requestId", "?"),
+                    str(perm_request.get("toolInput", {}).get("command", ""))[:60],
+                )
+                yield {
+                    "type": "cmd_permission_request",
+                    "requestId": perm_request["requestId"],
+                    "sessionId": perm_request.get("sessionId", self.session_id),
+                    "toolName": perm_request.get("toolName", "Bash"),
+                    "toolInput": perm_request.get("toolInput", {}),
+                    "reason": perm_request.get("reason", ""),
+                    "options": perm_request.get("options", ["approve", "deny"]),
+                }
+                self._transition(SessionState.WAITING_INPUT)
+                self.last_used = time.time()
+                return
+
+            # ── SDK message won the race ──────────────────────────
+            try:
+                message = sdk_task.result()
+                is_first_message = False
             except StopAsyncIteration:
                 break
             except asyncio.TimeoutError:
@@ -1437,6 +1501,12 @@ class SessionUnit:
         State: WAITING_INPUT → STREAMING → IDLE/WAITING_INPUT.
 
         Yields formatted SSE events (same format as send/_stream_response).
+
+        The dangerous_command_gate hook is blocking inside PreToolUse,
+        awaiting ``PermissionManager.wait_for_permission_decision()``.
+        We signal the decision here, which unblocks the hook. The hook
+        returns allow/deny to the SDK, the SDK continues processing,
+        and we resume reading the response stream.
         """
         if self.state != SessionState.WAITING_INPUT:
             raise RuntimeError(
@@ -1449,11 +1519,17 @@ class SessionUnit:
                 f"(session_id={self.session_id})"
             )
 
-        # The SDK permission flow: the subprocess is already waiting for
-        # the decision (signaled via PermissionManager). We just need to
-        # resume reading the response stream with the same formatting as
-        # _stream_response.
-        #
+        # Signal the blocked hook — this unblocks
+        # dangerous_command_gate's await on wait_for_permission_decision().
+        from core.permission_manager import permission_manager as _pm
+        decision = "approve" if allowed else "deny"
+        _pm.set_permission_decision(request_id, decision)
+        logger.info(
+            "session_unit.permission_decision session_id=%s "
+            "request_id=%s decision=%s",
+            self.session_id, request_id, decision,
+        )
+
         # User responded — reset compaction guard so tool counts
         # don't accumulate across the permission boundary.
         self._compaction_guard.reset()

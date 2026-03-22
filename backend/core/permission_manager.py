@@ -82,12 +82,16 @@ class PermissionManager:
         """Remove a pending permission request after it's been resolved."""
         self._pending_requests.pop(request_id, None)
 
-    async def wait_for_permission_decision(self, request_id: str, timeout: int = 300) -> str:
+    async def wait_for_permission_decision(self, request_id: str, timeout: int = 7200) -> str:
         """Wait for user permission decision.
 
         Args:
             request_id: The permission request ID
-            timeout: Timeout in seconds (default 5 minutes)
+            timeout: Timeout in seconds (default 2 hours).
+                     Long timeout because the user may be away (lunch,
+                     meeting) and should be able to approve on return.
+                     The subprocess stays alive in WAITING_INPUT state
+                     (protected from eviction).
 
         Returns:
             'approve' or 'deny'

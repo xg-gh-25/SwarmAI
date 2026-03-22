@@ -16,10 +16,10 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 
-/** Total timeout in milliseconds (5 minutes — matches backend). */
-const TIMEOUT_MS = 300_000;
+/** Total timeout in milliseconds (2 hours — user may be away at lunch/meeting). */
+const TIMEOUT_MS = 7_200_000;
 /** Show countdown when remaining time <= this value (ms). */
-const COUNTDOWN_THRESHOLD_MS = 60_000;
+const COUNTDOWN_THRESHOLD_MS = 300_000;
 
 interface InlinePermissionRequestProps {
   requestId: string;
@@ -89,6 +89,11 @@ export function InlinePermissionRequest({
 
   const showCountdown = isPending && !effectiveDecision && remainingMs <= COUNTDOWN_THRESHOLD_MS && remainingMs > 0;
   const remainingSec = Math.ceil(remainingMs / 1000);
+  const formatRemaining = (sec: number) => {
+    if (sec >= 3600) return `${Math.floor(sec / 3600)}h ${Math.floor((sec % 3600) / 60)}m`;
+    if (sec >= 60) return `${Math.floor(sec / 60)}m ${sec % 60}s`;
+    return `${sec}s`;
+  };
 
   // Decided state — compact display
   if (effectiveDecision) {
@@ -121,7 +126,7 @@ export function InlinePermissionRequest({
         <span className="text-sm font-medium text-[var(--color-text)]">Permission Required</span>
         {showCountdown && (
           <span className="ml-auto text-xs text-amber-400 font-mono tabular-nums">
-            {remainingSec}s
+            {formatRemaining(remainingSec)}
           </span>
         )}
       </div>
@@ -157,7 +162,7 @@ export function InlinePermissionRequest({
           Approve
         </button>
         <span className="ml-auto text-[10px] text-[var(--color-text-muted)]">
-          Auto-deny in {Math.ceil(remainingMs / 1000)}s
+          Auto-deny in {formatRemaining(Math.ceil(remainingMs / 1000))}
         </span>
       </div>
     </div>
