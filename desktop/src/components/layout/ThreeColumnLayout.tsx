@@ -141,7 +141,7 @@ function SwarmAILogo() {
       title="SwarmAI"
       data-testid="swarm-logo"
     >
-      <img src="/swarmai-icon-3.png" alt="SwarmAI" className="w-full h-full object-contain" />
+      <img src="/swarm-avatar.svg" alt="SwarmAI" className="w-full h-full object-contain" />
     </div>
   );
 }
