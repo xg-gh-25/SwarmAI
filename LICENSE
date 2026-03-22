@@ -1,0 +1,30 @@
+# Dual License
+
+This project is dual-licensed:
+
+1. **AGPL v3** — for open-source use (see [LICENSE-AGPL](./LICENSE-AGPL))
+2. **Commercial License** — for proprietary / closed-source usage (see [LICENSE-COMMERCIAL](./LICENSE-COMMERCIAL))
+
+## Which license applies to you?
+
+| Use Case | License | Cost |
+|----------|---------|------|
+| Personal / open-source projects | AGPL v3 | Free |
+| Academic / research | AGPL v3 | Free |
+| Internal company use (source stays open) | AGPL v3 | Free |
+| Closed-source product integration | Commercial | Paid |
+| Hosted / managed service (SaaS) | Commercial | Paid |
+| Redistribution without source disclosure | Commercial | Paid |
+
+## Commercial Licensing
+
+For commercial licensing inquiries, contact:
+
+📧 **xiao_gang_wang@me.com**
+
+## Summary
+
+- If you use, modify, or distribute SwarmAI and make your changes available
+  under AGPL v3, you can use it for free.
+- If you want to use SwarmAI in a closed-source product, embed it in a
+  proprietary service, or avoid AGPL obligations, you need a commercial license.
