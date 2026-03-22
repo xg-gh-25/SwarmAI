@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#1a1a2e"/>
+      <stop offset="100%" style="stop-color:#16213e"/>
+    </linearGradient>
+    <linearGradient id="glow" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#f59e0b"/>
+      <stop offset="100%" style="stop-color:#d97706"/>
+    </linearGradient>
+  </defs>
+  <circle cx="100" cy="100" r="100" fill="url(#bg)"/>
+  <!-- Hexagon grid (swarm pattern) -->
+  <g opacity="0.15" stroke="#f59e0b" stroke-width="0.8" fill="none">
+    <polygon points="100,30 120,42 120,66 100,78 80,66 80,42"/>
+    <polygon points="60,54 80,42 80,66 60,78 40,66 40,42"/>
+    <polygon points="140,54 160,42 160,66 140,78 120,66 120,42"/>
+    <polygon points="60,90 80,78 80,102 60,114 40,102 40,78"/>
+    <polygon points="140,90 160,78 160,102 140,114 120,102 120,78"/>
+    <polygon points="100,102 120,90 120,114 100,126 80,114 80,90"/>
+    <polygon points="100,138 120,126 120,150 100,162 80,150 80,126"/>
+  </g>
+  <!-- Bee body -->
+  <ellipse cx="100" cy="105" rx="22" ry="28" fill="url(#glow)" opacity="0.9"/>
+  <!-- Stripes -->
+  <rect x="78" y="95" width="44" height="6" rx="3" fill="#1a1a2e" opacity="0.7"/>
+  <rect x="78" y="107" width="44" height="6" rx="3" fill="#1a1a2e" opacity="0.7"/>
+  <rect x="78" y="119" width="44" height="6" rx="3" fill="#1a1a2e" opacity="0.7"/>
+  <!-- Wings -->
+  <ellipse cx="78" cy="88" rx="18" ry="12" fill="#60a5fa" opacity="0.3" transform="rotate(-20,78,88)"/>
+  <ellipse cx="122" cy="88" rx="18" ry="12" fill="#60a5fa" opacity="0.3" transform="rotate(20,122,88)"/>
+  <!-- Head -->
+  <circle cx="100" cy="76" r="14" fill="#fbbf24"/>
+  <!-- Eyes -->
+  <circle cx="94" cy="73" r="3" fill="#1a1a2e"/>
+  <circle cx="106" cy="73" r="3" fill="#1a1a2e"/>
+  <!-- Antennae -->
+  <line x1="94" y1="63" x2="85" y2="50" stroke="#fbbf24" stroke-width="2" stroke-linecap="round"/>
+  <line x1="106" y1="63" x2="115" y2="50" stroke="#fbbf24" stroke-width="2" stroke-linecap="round"/>
+  <circle cx="85" cy="49" r="3" fill="#f59e0b"/>
+  <circle cx="115" cy="49" r="3" fill="#f59e0b"/>
+  <!-- Swarm text -->
+  <text x="100" y="160" text-anchor="middle" font-family="system-ui,-apple-system,sans-serif" font-size="16" font-weight="700" fill="#f59e0b" letter-spacing="2">SWARM</text>
+</svg>
