@@ -33,33 +33,18 @@ vi.stubGlobal('XMLHttpRequest', vi.fn().mockImplementation(() => ({
 })));
 
 // Mock modal components to prevent HTTP requests from their internal pages
-vi.mock('../modals/WorkspacesModal', () => ({
-  default: ({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) => 
-    isOpen ? <div data-testid="workspaces-modal"><button onClick={onClose}>Close</button></div> : null,
-}));
-
-vi.mock('../modals/SwarmCoreModal', () => ({
-  default: ({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) => 
-    isOpen ? <div data-testid="swarmcore-modal"><button onClick={onClose}>Close</button></div> : null,
-}));
-
 vi.mock('../modals/SkillsModal', () => ({
-  default: ({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) => 
+  default: ({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) =>
     isOpen ? <div data-testid="skills-modal"><button onClick={onClose}>Close</button></div> : null,
 }));
 
 vi.mock('../modals/MCPSettingsModal', () => ({
-  default: ({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) => 
+  default: ({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) =>
     isOpen ? <div data-testid="mcp-modal"><button onClick={onClose}>Close</button></div> : null,
 }));
 
-vi.mock('../modals/AgentsModal', () => ({
-  default: ({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) => 
-    isOpen ? <div data-testid="agents-modal"><button onClick={onClose}>Close</button></div> : null,
-}));
-
 vi.mock('../modals/SettingsModal', () => ({
-  default: ({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) => 
+  default: ({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) =>
     isOpen ? <div data-testid="settings-modal"><button onClick={onClose}>Close</button></div> : null,
 }));
 
@@ -623,13 +608,12 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
    * preserving the underlying layout.
    */
   describe('Feature: three-column-layout, Property 4: Navigation Modal Opening', () => {
-    const navModalTypes = ['skills', 'mcp', 'agents', 'settings'] as const;
+    const navModalTypes = ['skills', 'mcp', 'settings'] as const;
     type NavModalType = typeof navModalTypes[number];
 
     const modalToNavTestId: Record<NavModalType, string> = {
       skills: 'nav-skills',
       mcp: 'nav-mcp',
-      agents: 'nav-agents',
       settings: 'nav-settings',
     };
 
@@ -822,13 +806,12 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
    * Left_Sidebar SHALL display the active visual indicator (highlighted state).
    */
   describe('Feature: three-column-layout, Property 5: Active Navigation Indicator', () => {
-    const navModalTypes = ['skills', 'mcp', 'agents', 'settings'] as const;
+    const navModalTypes = ['skills', 'mcp', 'settings'] as const;
     type NavModalType = typeof navModalTypes[number];
 
     const modalToNavTestId: Record<NavModalType, string> = {
       skills: 'nav-skills',
       mcp: 'nav-mcp',
-      agents: 'nav-agents',
       settings: 'nav-settings',
     };
 
@@ -1057,15 +1040,11 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
    * **Validates: Requirements 1.1**
    *
    * For any render of the LeftSidebar component, the navigation items SHALL appear
-   * in exactly this order: Workspaces, SwarmCore, Agents, Skills, MCP Servers,
-   * with no items missing or duplicated.
+   * in exactly this order: Skills, MCP Servers, with no items missing or duplicated.
    */
   describe('Feature: left-navigation-redesign, Property 1: Navigation Item Order Consistency', () => {
-    // Expected navigation items in exact order per Requirements 1.1
+    // Expected navigation items in exact order
     const expectedNavOrder = [
-      { testId: 'nav-workspaces', label: 'Workspaces' },
-      { testId: 'nav-swarmcore', label: 'SwarmCore' },
-      { testId: 'nav-agents', label: 'Agents' },
       { testId: 'nav-skills', label: 'Skills' },
       { testId: 'nav-mcp', label: 'MCP Servers' },
     ] as const;
@@ -1114,7 +1093,7 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
       };
     }
 
-    it('should display all 5 navigation items in exact order for any render', () => {
+    it('should display all navigation items in exact order for any render', () => {
       fc.assert(
         fc.property(fc.integer({ min: 1, max: 100 }), (_iteration) => {
           mockStorage.clear();
@@ -1125,17 +1104,17 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
 
           const result = verifyNavigationOrder();
 
-          // Property: All 5 modal navigation items SHALL be present
+          // Property: All modal navigation items SHALL be present
           expect(result.allItemsPresent).toBe(true);
 
-          // Property: Modal nav items SHALL appear in exact order: Workspaces, SwarmCore, Agents, Skills, MCP Servers
+          // Property: Modal nav items SHALL appear in exact order: Skills, MCP Servers
           expect(result.correctOrder).toBe(true);
 
           // Property: No items SHALL be duplicated
           expect(result.noDuplicates).toBe(true);
 
-          // Property: At least 5 modal nav items SHALL be present (section nav items may also exist)
-          expect(result.foundItems.length).toBeGreaterThanOrEqual(5);
+          // Property: At least 2 modal nav items SHALL be present
+          expect(result.foundItems.length).toBeGreaterThanOrEqual(2);
 
           unmount();
         }),
@@ -1245,7 +1224,7 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
     });
 
     it('should maintain navigation order when modals are opened', () => {
-      const navModalTypes = ['workspaces', 'swarmcore', 'agents', 'skills', 'mcp'] as const;
+      const navModalTypes = ['skills', 'mcp'] as const;
       const navModalTypeArb = fc.constantFrom(...navModalTypes);
 
       fc.assert(
@@ -1328,11 +1307,8 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
    * in the activeModal state being set to that item's modalType value.
    */
   describe('Feature: left-navigation-redesign, Property 2: Navigation Click Opens Corresponding Modal', () => {
-    // All navigation items including new workspaces and swarmcore
+    // All navigation items (v1 navbar)
     const allNavItems = [
-      { testId: 'nav-workspaces', modalType: 'workspaces', label: 'Workspaces' },
-      { testId: 'nav-swarmcore', modalType: 'swarmcore', label: 'SwarmCore' },
-      { testId: 'nav-agents', modalType: 'agents', label: 'Agents' },
       { testId: 'nav-skills', modalType: 'skills', label: 'Skills' },
       { testId: 'nav-mcp', modalType: 'mcp', label: 'MCP Servers' },
     ] as const;
@@ -1536,65 +1512,6 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
      *
      * Specifically test the new workspaces navigation item.
      */
-    it('should open workspaces modal when workspaces navigation is clicked', () => {
-      fc.assert(
-        fc.property(fc.integer({ min: 1, max: 100 }), (_iteration: number) => {
-          mockStorage.clear();
-
-          const { unmount } = renderWithCleanup(
-            <div data-testid="chat-content">Chat Content</div>
-          );
-
-          const workspacesButton = screen.getByTestId('nav-workspaces');
-
-          // Property: Initially not active
-          expect(workspacesButton.getAttribute('aria-pressed')).toBe('false');
-
-          act(() => {
-            workspacesButton.click();
-          });
-
-          // Property: After click, workspaces modal SHALL be active
-          expect(workspacesButton.getAttribute('aria-pressed')).toBe('true');
-
-          unmount();
-        }),
-        { numRuns: 100 }
-      );
-    });
-
-    /**
-     * **Validates: Requirements 2.3, 4.1, 5.1**
-     *
-     * Specifically test the new swarmcore navigation item.
-     */
-    it('should open swarmcore modal when swarmcore navigation is clicked', () => {
-      fc.assert(
-        fc.property(fc.integer({ min: 1, max: 100 }), (_iteration: number) => {
-          mockStorage.clear();
-
-          const { unmount } = renderWithCleanup(
-            <div data-testid="chat-content">Chat Content</div>
-          );
-
-          const swarmcoreButton = screen.getByTestId('nav-swarmcore');
-
-          // Property: Initially not active
-          expect(swarmcoreButton.getAttribute('aria-pressed')).toBe('false');
-
-          act(() => {
-            swarmcoreButton.click();
-          });
-
-          // Property: After click, swarmcore modal SHALL be active
-          expect(swarmcoreButton.getAttribute('aria-pressed')).toBe('true');
-
-          unmount();
-        }),
-        { numRuns: 100 }
-      );
-    });
-
     /**
      * **Validates: Requirements 2.3, 4.1, 5.1**
      *
@@ -1680,11 +1597,8 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
    * SHALL display the active state.
    */
   describe('Feature: left-navigation-redesign, Property 5: Active State Reflects Open Modal', () => {
-    // All 5 navigation items per the redesign
+    // v1 navigation items
     const allNavItems = [
-      { testId: 'nav-workspaces', modalType: 'workspaces', label: 'Workspaces' },
-      { testId: 'nav-swarmcore', modalType: 'swarmcore', label: 'SwarmCore' },
-      { testId: 'nav-agents', modalType: 'agents', label: 'Agents' },
       { testId: 'nav-skills', modalType: 'skills', label: 'Skills' },
       { testId: 'nav-mcp', modalType: 'mcp', label: 'MCP Servers' },
     ] as const;

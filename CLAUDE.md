@@ -73,7 +73,7 @@ backend/
 │   ├── session_manager.py         # Conversation session storage (DB + in-memory cache)
 │   ├── initialization_manager.py  # Startup orchestration, workspace caching
 │   ├── swarm_workspace_manager.py # SwarmWS filesystem (verify_integrity, projects)
-│   ├── context_directory_loader.py# Centralized .context/ loader (10 files, L0/L1 cache)
+│   ├── context_directory_loader.py# Centralized .context/ loader (11 files P0-P10, L0/L1 cache)
 │   ├── system_prompt.py           # Non-file prompt sections (safety, datetime, runtime)
 │   ├── claude_environment.py      # SDK env config, credential validation
 │   ├── app_config_manager.py      # In-memory config cache (config.json, zero-IO reads)
@@ -100,23 +100,17 @@ backend/
 desktop/src/
 ├── pages/
 │   ├── ChatPage.tsx               # Main chat interface (multi-tab, streaming, TSCC)
-│   ├── TasksPage.tsx              # Task management
 │   ├── SettingsPage.tsx           # API & app configuration
-│   ├── AgentsPage.tsx             # Agent configuration
-│   ├── SkillsPage.tsx             # Skill management
-│   ├── MCPPage.tsx                # MCP server management
-│   ├── PluginsPage.tsx            # Plugin marketplace
-│   └── ChannelsPage.tsx           # Channel gateway (Feishu, etc.)
+│   └── SkillsPage.tsx             # Skill browser (opened as modal from nav)
 ├── hooks/
 │   ├── useUnifiedTabState.ts      # Single source of truth for all tab state
 │   ├── useChatStreamingLifecycle.ts # SSE streaming, messages, session management
+│   ├── useUnifiedAttachments.ts   # File attachment state management
 │   ├── useTSCCState.ts            # Thread-scoped cognitive context
-│   ├── useRightSidebarGroup.ts    # Sidebar mutual exclusion
-│   ├── useFileAttachment.ts       # File upload processing
 │   └── useRunningTaskCount.ts     # Background task tracking
 ├── services/                      # API layer with snake_case ↔ camelCase conversion
 ├── components/                    # UI components (chat, workspace, modals, common)
-└── contexts/                      # React contexts (Layout, Explorer, Theme)
+└── contexts/                      # React contexts (Layout, Explorer, Theme, Health)
 ```
 
 ## API Naming Convention (CRITICAL)
@@ -169,10 +163,12 @@ Key fields in `session_context`: `app_session_id` (stable, from frontend) and `s
 
 All agent context lives in `~/.swarm-ai/SwarmWS/.context/` — filesystem-only, no DB for context content.
 
-10 source files assembled into the system prompt on every session start:
+11 source files (P0-P10) assembled into the system prompt on every session start:
 - P0–P2 (SWARMAI, IDENTITY, SOUL): system defaults, never truncated, readonly (0o444)
 - P3 (AGENT): system default, truncatable
-- P4–P9 (USER, STEERING, TOOLS, MEMORY, KNOWLEDGE, PROJECTS): user-customized, copy-only-if-missing (0o644)
+- P4–P6 (USER, STEERING, TOOLS): user-customized, copy-only-if-missing (0o644)
+- P7–P8 (MEMORY, EVOLUTION): agent-owned, copy-only-if-missing (0o644)
+- P9–P10 (KNOWLEDGE, PROJECTS): user-customized, copy-only-if-missing (0o644)
 
 Key behaviors:
 - `ContextDirectoryLoader.ensure_directory()` runs at session start — two-mode copy (system overwrite vs user preserve)

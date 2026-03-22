@@ -306,8 +306,13 @@ export function RadarSidebar({
 
       {/* Header row: mode label, toggle, feature tip */}
       <div className="flex items-center gap-2 px-3 py-2 border-b border-[var(--color-border)]">
-        <span className="text-[10.5px] font-semibold uppercase tracking-[0.8px] text-[var(--color-text-muted)] flex-1">
-          {mode === 'radar' ? 'Radar' : 'History'}
+        <span className="flex items-center gap-1.5 flex-1">
+          <span className="material-symbols-outlined text-[13px] text-[var(--color-text-secondary)]">
+            {mode === 'radar' ? 'radar' : 'history'}
+          </span>
+          <span className="text-[11px] font-bold uppercase tracking-[0.6px] text-[var(--color-text-secondary)]">
+            {mode === 'radar' ? 'Radar' : 'History'}
+          </span>
         </span>
 
         {/* Mode toggle button */}
@@ -321,7 +326,7 @@ export function RadarSidebar({
             mode === 'radar' ? 'Switch to History' : 'Switch to Radar'
           }
         >
-          <span className="material-symbols-outlined text-lg text-[var(--color-text-muted)]">
+          <span className="material-symbols-outlined text-[14px] text-[var(--color-text-muted)]">
             swap_horiz
           </span>
         </button>
@@ -341,8 +346,8 @@ export function RadarSidebar({
             aria-expanded={tipOpen}
             aria-haspopup="true"
           >
-            <span className="material-symbols-outlined text-lg text-[var(--color-text-muted)]">
-              lightbulb
+            <span className="material-symbols-outlined text-[14px] text-[var(--color-text-muted)]">
+              info
             </span>
           </button>
 

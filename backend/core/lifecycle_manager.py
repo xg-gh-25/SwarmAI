@@ -250,6 +250,10 @@ class LifecycleManager:
         Non-fatal — failures are logged and skipped.  The cost is one
         ``psutil.Process(pid).children(recursive=True)`` per alive unit
         per cycle, which is ~1ms each.
+
+        Note: to_thread calls are intentionally sequential, not parallel.
+        At ~1ms per unit in a 60s maintenance loop, the ~4ms total for
+        MAX_CONCURRENT=2 units doesn't justify asyncio.gather complexity.
         """
         try:
             from .resource_monitor import resource_monitor

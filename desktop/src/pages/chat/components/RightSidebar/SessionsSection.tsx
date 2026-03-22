@@ -130,7 +130,7 @@ export function SessionsSection({
 
               {/* Title + agent name */}
               <span className="flex flex-col min-w-0 flex-1">
-                <span className="text-xs text-[var(--color-text)] truncate">
+                <span className="text-[13px] leading-5 text-[var(--color-text)] truncate">
                   {tab.title || 'New Chat'}
                 </span>
                 {tab.agentId && (

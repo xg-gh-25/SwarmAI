@@ -289,9 +289,12 @@ export function ChatInput({
       // Build the text to insert based on payload type
       let text: string;
       if (payload.type === 'radar-todo') {
-        text = payload.context
-          ? `[ToDo] ${payload.title}\n${payload.context}`
-          : `[ToDo] ${payload.title}`;
+        // Include todo ID so agent can retrieve full work packet via todo_db.py get <id>
+        const idPrefix = payload.id.slice(0, 8);
+        text = `[ToDo:${idPrefix}] ${payload.title}`;
+        if (payload.context) {
+          text += `\n${payload.context}`;
+        }
       } else {
         text = `[Artifact] ${payload.title} (${payload.path})`;
       }

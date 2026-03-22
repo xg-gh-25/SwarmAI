@@ -188,7 +188,7 @@ export function TodoSection({ workspaceId, onCountChange }: TodoSectionProps) {
             type: 'radar-todo',
             id: todo.id,
             title: todo.title,
-            context: todo.description ?? undefined,
+            context: todo.linkedContext ?? todo.description ?? undefined,
           };
           const dotColor =
             PRIORITY_COLORS[todo.priority] ?? PRIORITY_COLORS.none;
@@ -206,7 +206,7 @@ export function TodoSection({ workspaceId, onCountChange }: TodoSectionProps) {
               />
 
               {/* Title */}
-              <span className="text-xs text-[var(--color-text)] truncate flex-1">
+              <span className="text-[13px] leading-5 text-[var(--color-text)] truncate flex-1">
                 {todo.title}
               </span>
 

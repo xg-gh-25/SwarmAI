@@ -150,8 +150,15 @@ def _is_artifact_file(file_path: str) -> bool:
     if any(part.startswith(".") for part in Path(file_path).parts):
         return False
 
-    # Positive filter: must be under a known artifact directory
-    return any(file_path.startswith(prefix) for prefix in _ARTIFACT_DIRS)
+    # Positive filter: must be under a known artifact directory.
+    # Use Path.parts[0] instead of str.startswith() to avoid false matches
+    # on paths like "Knowledge_backup/foo.md" matching "Knowledge/".
+    parts = Path(file_path).parts
+    if len(parts) < 2:
+        # Bare filename (no parent directory) — not under any artifact dir
+        return False
+    first_dir = parts[0] + "/"
+    return first_dir in _ARTIFACT_DIRS
 
 
 def _parse_git_log(raw_output: str) -> list[dict[str, str]]:
@@ -185,7 +192,8 @@ def _parse_git_log(raw_output: str) -> list[dict[str, str]]:
             #   (blank)                      ← separator
             #   Knowledge/DailyActivity/...  ← file
             #
-            # Resetting here would drop every file.
+            # Resetting here would drop every file.  This was a
+            # regression in the original parser, not a design choice.
             continue
 
         # ISO 8601 timestamp line (strict match)

@@ -31,9 +31,12 @@ export default function ExplorerHeader({ onCollapseToggle }: ExplorerHeaderProps
       data-testid="explorer-header"
     >
       <div className="flex items-center justify-between px-3.5 pt-2 pb-1.5">
-        {/* Static title — Requirements: 9.1 — mockup: uppercase, dim, wide tracking */}
-        <span className="text-[10.5px] font-semibold uppercase tracking-[0.8px] text-[var(--color-text-muted)]">
-          SwarmWS
+        {/* Section title — distinct from Radar via folder icon + bolder style */}
+        <span className="flex items-center gap-1.5">
+          <span className="material-symbols-outlined text-[13px] text-[var(--color-text-secondary)]">folder_open</span>
+          <span className="text-[11px] font-bold uppercase tracking-[0.6px] text-[var(--color-text-secondary)]">
+            SwarmWS
+          </span>
         </span>
 
         <div className="flex items-center gap-1">

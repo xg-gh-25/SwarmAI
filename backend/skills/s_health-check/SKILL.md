@@ -28,17 +28,43 @@ Verify that SwarmAI critical subsystems are working after a build. Run all check
 
 Run checks in parallel where possible (1-3 have no dependencies). Use Bash tool for each.
 
-### 1. Backend Health
+### 1. Backend Health (Dynamic Port Discovery)
 ```bash
-# Try both dev port (8000) and prod port (23578)
-for PORT in 8000 23578; do
-  RESP=$(curl -s --max-time 2 "http://localhost:$PORT/api/health" 2>/dev/null)
-  if echo "$RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); exit(0 if d.get('status')=='ok' else 1)" 2>/dev/null; then
-    echo "OK Backend UP on port $PORT"
-    exit 0
-  fi
-done
-echo "FAIL Backend not reachable on 8000 or 23578"
+# Port is RANDOM in production (Tauri portpicker). Dev mode uses 8000.
+# Discover dynamically via psutil socket inspection.
+source /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/backend/.venv/bin/activate && python3 << 'PYEOF'
+import psutil, urllib.request, json
+
+def find_backend_port():
+    for p in psutil.process_iter(["pid", "name", "cmdline"]):
+        try:
+            info = p.info
+            name = info["name"] or ""
+            cmd = " ".join(info["cmdline"] or [])
+            is_sidecar = name.startswith("python-backend")
+            is_dev = ("main.py" in cmd and "--port" in cmd and "backend" in cmd)
+            if is_sidecar or is_dev:
+                for c in p.net_connections(kind="tcp"):
+                    if c.status == "LISTEN":
+                        return info["pid"], c.laddr.port, "production" if is_sidecar else "dev"
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+    return None, None, None
+
+pid, port, mode = find_backend_port()
+if port:
+    try:
+        resp = urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=2)
+        data = json.loads(resp.read())
+        if data.get("status") == "healthy":
+            print(f"OK Backend UP on port {port} (PID {pid}, {mode})")
+        else:
+            print(f"FAIL Backend on port {port} returned: {data}")
+    except Exception as e:
+        print(f"FAIL Backend process found (PID {pid}, port {port}) but /health unreachable: {e}")
+else:
+    print("FAIL Backend process not found (no python-backend or main.py --port)")
+PYEOF
 ```
 
 ### 2. Context Files
@@ -90,27 +116,42 @@ PYEOF
 
 ### 4. MCP Servers Connected (requires running backend)
 ```bash
-# Try both ports
-for PORT in 8000 23578; do
-  RESP=$(curl -s --max-time 2 "http://localhost:$PORT/api/mcp/status" 2>/dev/null)
-  if [ -n "$RESP" ]; then
-    echo "$RESP" | python3 -c "
-import sys,json
-try:
-  data = json.load(sys.stdin)
-  servers = data if isinstance(data, list) else data.get('servers', [])
-  for s in servers:
-    name = s.get('name','?')
-    status = s.get('status','?')
-    icon = 'OK' if status == 'connected' else 'FAIL'
-    print(f'  {icon} {name}: {status}')
-  if not servers: print('  WARN No MCP servers reported')
-except: print('  WARN Cannot parse MCP status')
-"
-    exit 0
-  fi
-done
-echo "SKIP Backend not running — cannot check MCP connections"
+# Uses dynamic port discovery from Check 1
+source /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/backend/.venv/bin/activate && python3 << 'PYEOF'
+import psutil, urllib.request, json
+
+def find_backend_port():
+    for p in psutil.process_iter(["pid", "name", "cmdline"]):
+        try:
+            info = p.info
+            name = info["name"] or ""
+            cmd = " ".join(info["cmdline"] or [])
+            if name.startswith("python-backend") or ("main.py" in cmd and "--port" in cmd and "backend" in cmd):
+                for c in p.net_connections(kind="tcp"):
+                    if c.status == "LISTEN":
+                        return c.laddr.port
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+    return None
+
+port = find_backend_port()
+if port:
+    try:
+        resp = urllib.request.urlopen(f"http://127.0.0.1:{port}/api/mcp/status", timeout=2)
+        data = json.loads(resp.read())
+        servers = data if isinstance(data, list) else data.get("servers", [])
+        for s in servers:
+            name = s.get("name", "?")
+            status = s.get("status", "?")
+            icon = "OK" if status == "connected" else "FAIL"
+            print(f"  {icon} {name}: {status}")
+        if not servers:
+            print("  WARN No MCP servers reported")
+    except Exception as e:
+        print(f"  WARN Cannot reach MCP status: {e}")
+else:
+    print("SKIP Backend not running — cannot check MCP connections")
+PYEOF
 ```
 
 ### 5. DailyActivity Pipeline
@@ -132,11 +173,12 @@ PYEOF
 
 ### 6. Streaming Config
 ```bash
-AGENT_MGR="$HOME/Desktop/SwarmAI-Workspace/swarmai/backend/core/agent_manager.py"
-if grep -q "include_partial_messages.*True" "$AGENT_MGR" 2>/dev/null; then
-  echo "OK include_partial_messages=True"
+# agent_manager.py was replaced by session_unit.py in v7 re-architecture (March 2026)
+SESSION_UNIT="$HOME/Desktop/SwarmAI-Workspace/swarmai/backend/core/session_unit.py"
+if grep -q "include_partial_messages.*True\|output_format.*streaming" "$SESSION_UNIT" 2>/dev/null; then
+  echo "OK Streaming config found in session_unit.py"
 else
-  echo "FAIL include_partial_messages not True — streaming will feel non-streaming"
+  echo "WARN Cannot verify streaming config in session_unit.py — check manually"
 fi
 ```
 

@@ -7,7 +7,7 @@ fileMatchPattern: "desktop/src/pages/ChatPage.tsx,desktop/src/hooks/useChatStrea
 
 ## Architecture Overview
 
-Each chat tab is a standalone session with its own end-to-end lifecycle. The system supports 3-6 concurrent tabs processing different tasks in parallel. Tabs MUST NOT interfere with each other at any layer.
+Each chat tab is a standalone session with its own end-to-end lifecycle. The system supports 1-4 concurrent tabs (RAM-adaptive) processing different tasks in parallel. Tabs MUST NOT interfere with each other at any layer.
 
 ### State Ownership Model
 

@@ -2,149 +2,196 @@
 
 # SwarmAI
 
-### Your AI Team, 24/7
+### Work smarter. Move faster. Stress less.
 
-*Work Smarter. Stress Less.*
+*Remembers everything. Learns every session. Gets better every time.*
 
-**A Persistent Agentic Operating System for Knowledge Work**
-
-SwarmAI gives you a supervised team of AI agents that plan, execute, and follow through on real work — emails, meetings, tasks, documents, and projects — inside a single persistent workspace where context accumulates and productivity compounds.
-
-![SwarmAI Home](./assets/swarmai-home-mockup.png)
+English | [中文](./README.zh-CN.md)
 
 [![Python](https://img.shields.io/badge/Python-3.12+-3776AB?style=flat&logo=python&logoColor=white)](https://www.python.org/)
 [![React](https://img.shields.io/badge/React-19-61DAFB?style=flat&logo=react&logoColor=black)](https://react.dev/)
 [![Tauri](https://img.shields.io/badge/Tauri-2.0-FFC131?style=flat&logo=tauri&logoColor=white)](https://tauri.app/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-009688?style=flat&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6?style=flat&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![Claude](https://img.shields.io/badge/Claude-Agent_SDK-191919?style=flat&logo=anthropic&logoColor=white)](https://github.com/anthropics/claude-code)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat)](./LICENSE)
 
+![SwarmAI Home](./assets/swarmai-home-mockup.png)
+
 </div>
 
 ---
 
-## Why SwarmAI?
+## The Problem
 
-Most AI tools reset every session. SwarmAI doesn't.
+Every AI tool resets when you close it. Context is lost. Decisions are forgotten. You re-explain the same things session after session.
 
-It maintains **persistent local memory** across projects and workflows. You delegate intent signals, your AI team executes under governance, and outcomes become durable knowledge that compounds over time.
+SwarmAI doesn't.
+
+It maintains a **persistent local workspace** where context accumulates, memory compounds, and the AI genuinely gets better at helping you over time. Not through fine-tuning — through structured knowledge that survives every session restart.
 
 **You supervise. Agents execute. Memory persists. Work compounds.**
 
-<div align="center">
+---
 
-| 🧠 You Supervise | 🤖 Agents Execute | 📁 Memory Persists | 📈 Work Compounds |
-|:---:|:---:|:---:|:---:|
-| Define goals & guardrails | Plan, coordinate, carry out work | Context accumulates across sessions | Outputs become reusable knowledge |
+## What Makes SwarmAI Different
 
-</div>
+### 1. Context Engineering — Not Just a Chat Window
+
+Most AI tools dump a system prompt and hope for the best. SwarmAI assembles a **11-file priority chain (P0-P10)** into every session — identity, personality, behavioral rules, user preferences, persistent memory, domain knowledge, project context, and session overrides.
+
+- **Priority-based truncation** — when context gets tight, low-priority files trim first; your memory and identity never get cut
+- **Token budget management** — dynamic allocation based on model context window (40K for 1M models, 25K for 200K models)
+- **L0/L1 caching** — compiled context cached with git-based freshness checks, rebuilt only when source files change
+
+The result: every conversation starts with full awareness of who you are, what you're working on, and what happened in previous sessions.
+
+### 2. Memory Pipeline — It Actually Remembers
+
+Three-layer memory system that distills raw session activity into durable knowledge:
+
+```
+Session Activity → DailyActivity/ (raw logs) → Distillation → MEMORY.md (curated long-term memory)
+```
+
+- **DailyActivity** — every session's decisions, deliverables, and lessons captured automatically
+- **Distillation** — recurring themes, key decisions, and user corrections promoted to long-term memory; one-off noise filtered out
+- **MEMORY.md** — curated memory the agent reads at every session start: open threads, lessons learned, COE registry, key decisions
+- **Git as truth** — memory claims cross-referenced against actual codebase to prevent false memories from compounding
+
+You never re-explain context. The AI knows your projects, your preferences, your recent decisions, and your open threads — every time.
+
+### 3. Self-Evolution — It Gets Better
+
+SwarmAI doesn't just use skills — it builds new ones when it hits capability gaps.
+
+- **EVOLUTION.md** — persistent registry of capabilities built, optimizations learned, corrections captured, and failed attempts
+- **Automatic gap detection** — when the agent can't do something, it can create a new skill, test it, and register it for future sessions
+- **Correction capture** — mistakes are recorded as high-value entries so the same error never happens twice
+- **50+ built-in skills** — browser automation, PDF manipulation, spreadsheets, Slack, Outlook, Apple Reminders, web research, code review, and more
+
+### 4. Three-Column Command Center — Seamless Integration
+
+SwarmAI isn't three separate panels. It's **one integrated system** where the Chat Center orchestrates everything:
+
+```
+ SwarmWS (left)          Chat Center (center)         Swarm Radar (right)
+ ┌──────────────┐   ┌───────────────────────────┐   ┌──────────────────┐
+ │ Knowledge/   │   │  "Summarize today's notes" │   │ ToDos            │
+ │ Projects/    │◄──│  "Create a todo for X"     │──►│ Active Sessions  │
+ │ Notes/       │   │  "Save this to memory"     │   │ Artifacts        │
+ │ DailyActivity│   │  "Check my open threads"   │   │ Background Jobs  │
+ └──────────────┘   └───────────────────────────┘   └──────────────────┘
+     drag-to-chat ──────► context injection ◄────── drag-to-chat
+```
+
+- **Chat controls SwarmWS** — the agent reads, writes, organizes, and git-commits your workspace files directly. Say "save this as a note" and it appears in `Knowledge/Notes/`. Say "remember this" and it goes to persistent memory.
+- **Chat controls Radar** — "create a todo for the auth refactor" adds it to your Radar ToDo list. "What's on my radar?" shows your open items. The agent manages your attention dashboard as naturally as conversation.
+- **Drag-to-chat** — drag any file from SwarmWS or any ToDo/artifact from Radar into a chat tab. The agent gets full context and starts executing immediately. No copy-paste, no re-explaining.
+- **Everything is connected** — when the agent writes a file, it shows up in the explorer. When it creates a ToDo, it appears in Radar. When you complete work, DailyActivity captures it automatically. The three panels are views of one unified workspace.
+
+### 5. Multi-Tab Parallel Sessions
+
+Not a single chat thread — a **parallel command center**:
+
+- **1-4 concurrent tabs** (RAM-adaptive) — each with isolated state, independent streaming, and per-tab abort
+- **Tab persistence** — tabs survive app restarts with full conversation history
+- **Session isolation** — Tab 1 crashing does not affect Tab 2. Each tab has its own subprocess, state machine, and error recovery.
+
+### 6. Security — Human Always in Control
+
+Defense-in-depth: tool logger (audit trail) + command blocker (13 dangerous patterns) + human approval (permission dialog with persistent approvals) + skill access control. Plus workspace isolation, bash sandboxing, and error sanitization.
 
 ---
 
-## Core Layout
+## How It Looks
 
-SwarmAI follows a three-column layout with embedded cognitive context:
+SwarmAI follows a three-column layout:
 
-
-| Area | Role |
-|------|------|
-| **Left — SwarmWS Explorer** | Persistent workspace memory, knowledge, and project context |
-| **Center — Chat Threads** | Command and execution surface with multi-tab support |
-| **Right — Swarm Radar** | Unified attention and action control panel |
+| Left | Center | Right |
+|------|--------|-------|
+| **SwarmWS Explorer** — workspace files, knowledge, projects | **Chat Tabs** — multi-session command surface | **Swarm Radar** — ToDos, sessions, artifacts, jobs |
 
 ![SwarmAI Chat Interface](./assets/swarmai-chat-mockup.png)
 
 ---
 
-## Product Architecture
+## SwarmAI vs The Landscape
 
-### 1️⃣ Chat Command Center — Execution Surface
+### vs Claude Code (CLI)
 
-Chat is the primary command surface where you interact with your AI team.
+Claude Code is a powerful CLI coding agent. SwarmAI wraps the same Claude Agent SDK in a desktop app and adds everything the CLI doesn't have:
 
-- **Multi-Tab Sessions**: Run parallel conversations across multiple tabs
-- **Execution Threads**: Each thread is a live workspace, not a passive chat log
-- **Explore → Execute**: Start with brainstorming, convert to governed execution when ready
-- **Full Audit Trail**: Transparent activity logs and outcome summaries
-- **Persistent Messages**: Conversations survive app restarts with full history
+| | SwarmAI | Claude Code |
+|---|---------|------------|
+| **Persistent memory** | 3-layer pipeline (DailyActivity -> distillation -> MEMORY.md) | CLAUDE.md only, manual |
+| **Context system** | 11-file P0-P10 priority chain with token budgets | Single system prompt |
+| **Multi-session** | 1-4 parallel tabs with isolated state (RAM-adaptive) | One session at a time |
+| **Self-evolution** | Builds new skills, captures corrections across sessions | No cross-session learning |
+| **Visual workspace** | File explorer, radar dashboard, drag-to-chat | Terminal only |
+| **Skills** | 50+ built-in (browser, PDF, Slack, Outlook, research...) | Tool use only |
 
-### 2️⃣ SwarmWS — Persistent Workspace Memory
+**TL;DR**: Claude Code is a coding assistant. SwarmAI is an agentic operating system for all knowledge work.
 
-A single, non-deletable workspace that acts as your long-term memory container.
+### vs Kiro (IDE)
 
-- **Shared Knowledge** (`Knowledge/`): Reusable assets, notes, and distilled memory
-- **Active Work** (`Projects/`): Self-contained execution and knowledge containers
-- **Hierarchical Context**: Context files at workspace, section, and project levels
-- **Automatic Integrity**: System-managed templates, idempotent initialization, self-healing
+Kiro is an AI-first IDE with spec-driven development. SwarmAI is complementary — we use Kiro for code, SwarmAI for everything else:
 
-### 3️⃣ Swarm Radar — Attention & Action Control
+| | SwarmAI | Kiro |
+|---|---------|------|
+| **Focus** | General knowledge work + agentic OS | Code development (IDE) |
+| **Memory** | Cross-session memory pipeline | Per-project specs |
+| **Workspace** | Personal knowledge base (Notes, Reports, Projects) | Code repository |
+| **Multi-session** | Parallel chat tabs | Single agent session |
+| **Skills** | 50+ (email, calendar, research, browser...) | Code-focused tools |
 
-The right sidebar cockpit showing all work items across their lifecycle.
+### vs Cursor / Windsurf
 
-- **Needs Attention**: ToDos and items requiring your input
-- **In Progress**: Active execution tasks with live status
-- **Waiting Input**: Agent requests for clarification or permission
-- **Completed**: Recently finished outcomes within an archive window
-- **Autonomous Jobs**: Background and recurring agent work
+Code editors with AI autocomplete. Fundamentally different category:
 
-### 4️⃣ TSCC — Thread-Scoped Cognitive Context
+| | SwarmAI | Cursor/Windsurf |
+|---|---------|----------------|
+| **Category** | Agentic OS | AI code editor |
+| **Scope** | All knowledge work | Code editing |
+| **Memory** | Persistent across all sessions | Per-project context |
+| **Execution** | Full agent (browse, email, research, create docs) | Code suggestions + chat |
+| **Self-evolution** | Builds new capabilities | Static feature set |
 
-A collapsible panel above the chat input showing live AI cognition.
+### vs OpenClaw
 
-- Where am I working? (workspace/project scope)
-- What is the AI doing right now?
-- Which agents and capabilities are active?
-- What sources ground the reasoning?
-- What is the current working conclusion?
+[OpenClaw](https://github.com/openclaw/openclaw) optimizes for **breadth** (21+ channels, 5,400+ skills, mobile, voice). SwarmAI optimizes for **depth**:
 
-### 5️⃣ SwarmAgent — Governed Multi-Agent Orchestration
+| | SwarmAI | OpenClaw |
+|---|---------|----------|
+| **Philosophy** | Deep workspace — context compounds | Wide connector — AI everywhere |
+| **Memory** | 3-layer pipeline + self-evolution | Session pruning, no distillation |
+| **Context** | 11-file priority chain, token budgets, L0/L1 cache | Standard system prompt |
+| **Channels** | Desktop + Slack + Feishu | 21+ messaging platforms |
+| **Skills** | 50+ curated + self-built | 5,400+ marketplace |
+| **Voice/Mobile** | -- | Wake word + iOS/Android |
 
-A central orchestrator that coordinates specialized subagents under human supervision.
-
-- **Skills & MCP Tools**: Extensible capabilities via skills, MCP servers, and plugins
-- **Human-in-the-Loop**: Permission gates before sensitive or irreversible actions
-- **Observable Execution**: TSCC shows which agents, tools, and sources are active
-- **AWS Bedrock & Anthropic API**: Flexible model provider configuration
+**Where SwarmAI leads**: context depth, memory persistence, self-evolution, multi-tab isolation.
+**Where OpenClaw leads**: platform reach, skill marketplace, voice, mobile.
 
 ---
 
-## Desktop Application
+## Quick Start
 
-### System Requirements
+### Install
 
-| Item | Requirement |
-|------|-------------|
-| Operating System | macOS 10.15+, Windows 10+, Linux (Ubuntu 20.04+) |
-| Processor | Apple Silicon (M1+) or Intel x86_64 |
-| Memory | 8GB RAM (16GB recommended) |
-| Disk Space | 500MB available |
-| Network | Internet connection required |
+**macOS**: Download `.dmg` from [Releases](https://github.com/xg-gh-25/SwarmAI/releases) → drag to Applications. If blocked: `xattr -cr /Applications/SwarmAI.app`
 
-### Quick Installation
+**Windows**: Download `.msi` from [Releases](https://github.com/xg-gh-25/SwarmAI/releases) → run installer. Requires [Git Bash](https://git-scm.com/downloads/win).
 
-#### macOS
+### Configure
 
-1. Download the latest `.dmg` from [GitHub Releases](https://github.com/xg-gh-25/SwarmAI/releases)
-2. Open the DMG and drag SwarmAI.app to Applications
-3. If macOS blocks the app: `xattr -cr /Applications/SwarmAI.app`
-
-#### Windows
-
-1. Download the latest `.msi` from [GitHub Releases](https://github.com/xg-gh-25/SwarmAI/releases)
-2. Run the installer (click "More info" → "Run anyway" if SmartScreen warns)
-3. Requires [Git Bash](https://git-scm.com/downloads/win) as a system dependency
-
-#### Configure API
-
-After launching, open Settings to configure your AI provider:
-
-- **Anthropic API**: Enter your API Key
-- **AWS Bedrock**: Enable Bedrock toggle, configure AWS region, ensure credentials are set via `aws configure` or credential chain
+1. Launch SwarmAI
+2. Open Settings (gear icon, bottom of left sidebar)
+3. Choose your AI provider:
+   - **AWS Bedrock** (recommended): Enable toggle, select region, ensure `aws configure` is done
+   - **Anthropic API**: Enter API key
+4. Send a test message — if you get a response, you're ready
 
 ### Build from Source
-
-**Prerequisites:** Node.js 18+, Python 3.11+, Rust ([rustup.rs](https://rustup.rs/)), uv (`curl -LsSf https://astral.sh/uv/install.sh | sh`)
 
 ```bash
 git clone https://github.com/xg-gh-25/SwarmAI.git
@@ -157,21 +204,7 @@ npm run tauri:dev     # Development mode
 npm run build:all     # Production build
 ```
 
-### Data Storage
-
-All data is stored locally in `~/.swarm-ai/`:
-
-| Type | Path |
-|------|------|
-| Database | `~/.swarm-ai/data.db` |
-| Configuration | `~/.swarm-ai/config.json` |
-| Workspaces | `~/.swarm-ai/SwarmWS/` |
-| Context Files | `~/.swarm-ai/SwarmWS/.context/` |
-| Skills | `~/.swarm-ai/skills/` |
-| Plugin Skills | `~/.swarm-ai/plugin-skills/` |
-| Command Permissions | `~/.swarm-ai/cmd_permissions/` |
-| Logs | `~/.swarm-ai/logs/` |
-| Tab State | `~/.swarm-ai/open_tabs.json` |
+Prerequisites: Node.js 18+, Python 3.11+, Rust ([rustup.rs](https://rustup.rs/)), uv (`curl -LsSf https://astral.sh/uv/install.sh | sh`)
 
 ---
 
@@ -179,92 +212,48 @@ All data is stored locally in `~/.swarm-ai/`:
 
 | Component | Technology |
 |-----------|------------|
-| Desktop Framework | Tauri 2.0 + React 19 + TypeScript 5.x |
-| Backend | FastAPI (PyInstaller sidecar) |
+| Desktop | Tauri 2.0 (Rust) + React 19 + TypeScript 5.x |
+| Backend | FastAPI (Python sidecar) |
 | AI Engine | Claude Agent SDK + AWS Bedrock / Anthropic API |
-| Database | SQLite (pre-seeded for fast startup, WAL mode) |
+| Database | SQLite (WAL mode, pre-seeded) |
 | Styling | Tailwind CSS 4.x + CSS custom properties |
-| State Management | TanStack Query + useUnifiedTabState hook |
-| Build Tools | Vite + Rust + PyInstaller |
-| Testing | Vitest + fast-check (PBT) + pytest + Hypothesis |
+| Testing | Vitest + fast-check + pytest + Hypothesis |
 
 ---
 
-## Security
-
-Defense-in-depth with four PreToolUse hook layers:
-
-| Layer | Protection |
-|-------|------------|
-| **Tool Logger** | Logs all tool invocations (observability, never blocks) |
-| **Command Blocker** | Regex blocks 13 dangerous bash patterns (rm -rf /, fork bombs, etc.) |
-| **Human Approval** | Glob-based detection → SSE permission dialog → persistent filesystem-backed approvals |
-| **Skill Access Control** | Validates skill invocations against agent's allowed list |
-
-Additional: workspace isolation, file path validation, bash sandboxing, error sanitization in production.
-
----
-
-## Project Structure
+## Architecture
 
 ```
 SwarmAI/
-├── desktop/                 # Desktop app (Tauri 2.0 + React)
-│   ├── src/                 # React frontend
-│   │   ├── pages/           # Route components (ChatPage, TasksPage, SettingsPage, etc.)
-│   │   ├── hooks/           # Custom hooks (useUnifiedTabState, useChatStreamingLifecycle)
-│   │   ├── services/        # API service layer with case conversion
-│   │   └── components/      # UI components
-│   ├── src-tauri/           # Tauri/Rust sidecar management
-│   └── resources/           # Bundled assets (seed.db)
+├── desktop/                 # Tauri 2.0 + React frontend
+│   ├── src/
+│   │   ├── pages/           # ChatPage (main), SettingsPage, SkillsPage
+│   │   ├── hooks/           # useUnifiedTabState, useChatStreamingLifecycle
+│   │   ├── services/        # API layer with case conversion
+│   │   └── components/      # Layout, chat, workspace explorer, modals
+│   └── src-tauri/           # Rust sidecar management
 │
 ├── backend/                 # FastAPI backend (Python)
-│   ├── main.py              # Entry point with fast startup / full init paths
-│   ├── core/                # Business logic (session_router, session_unit, prompt_builder,
-│   │                        #   context_directory_loader, skill_manager, security_hooks, etc.)
-│   ├── routers/             # API routes (agents, chat, skills, mcp, plugins, settings, etc.)
-│   ├── context/             # Default context file templates (12 files)
-│   ├── skills/              # Built-in skill definitions
-│   ├── database/            # SQLite with migrations
-│   └── schemas/             # Pydantic models
+│   ├── core/                # SessionRouter, SessionUnit, PromptBuilder,
+│   │                        #   ContextDirectoryLoader, SkillManager, SecurityHooks
+│   ├── routers/             # API routes (chat, skills, mcp, settings, workspace)
+│   ├── hooks/               # Post-session hooks (DailyActivity, auto-commit, distillation)
+│   ├── skills/              # Built-in skill definitions (50+)
+│   └── database/            # SQLite with migrations
 │
-├── .kiro/specs/             # Architecture docs and product specifications
 └── assets/                  # Images and mockups
 ```
 
----
+### Data Storage (all local)
 
-## SwarmAI vs OpenClaw
-
-[OpenClaw](https://github.com/openclaw/openclaw) is an open-source local-first AI assistant (300k+ GitHub stars) with broad platform reach. Here's how SwarmAI differs:
-
-| Dimension | SwarmAI | OpenClaw |
-|-----------|---------|----------|
-| **Philosophy** | Deep workspace — context compounds | Wide connector — AI everywhere |
-| **Runtime** | Tauri 2.0 desktop app | Node.js Gateway daemon |
-| **AI Engine** | Claude (Bedrock / Anthropic) | OpenAI primary, multi-provider |
-| **Channels** | 2 (Slack, Feishu) | 21+ (WhatsApp, Telegram, Discord, Signal, ...) |
-| **Skills** | 42 built-in + user skills | 5,400+ via ClawHub marketplace |
-| **Voice** | -- | Wake word + continuous voice |
-| **Mobile** | -- | iOS / Android node devices |
-
-### Where SwarmAI leads
-
-- **Context & Memory depth** — 11-file priority chain (P0-P10), token budget management, 3-layer memory pipeline (DailyActivity -> distillation -> MEMORY.md) with code-enforced lifecycle hooks. OpenClaw uses session pruning with no structured knowledge distillation.
-- **Self-evolution engine** — Detects capability gaps, builds new skills, persists learnings to EVOLUTION.md across sessions. Guardrailed with approval gates and per-session trigger limits.
-- **Multi-tab session isolation** — 3-6 concurrent tabs with 8 strict isolation principles. Per-tab abort controllers, stream handlers, and session identity.
-- **Desktop-native experience** — Tauri provides deeper OS integration than a background daemon.
-
-### Where OpenClaw leads
-
-- **Platform reach** — 21+ messaging integrations vs 2. If "AI on every touchpoint" is the goal, OpenClaw wins on coverage.
-- **Skill ecosystem** — ClawHub's 5,400+ community skills with auto-search-and-pull far exceeds SwarmAI's curated 42.
-- **Voice & mobile** — Wake word detection, continuous voice mode, and mobile node devices are capabilities SwarmAI doesn't yet have.
-- **Visual Canvas** — Live Canvas with A2UI provides an agent-driven visual workspace.
-
-### TL;DR
-
-SwarmAI optimizes for **depth** — making AI truly understand your work and compound value over time. OpenClaw optimizes for **breadth** — putting AI on every device and channel you use. Different problems, complementary strengths.
+| Type | Path |
+|------|------|
+| Database | `~/.swarm-ai/data.db` |
+| Configuration | `~/.swarm-ai/config.json` |
+| Workspace | `~/.swarm-ai/SwarmWS/` |
+| Context Files | `~/.swarm-ai/SwarmWS/.context/` |
+| Skills | `~/.swarm-ai/skills/` |
+| Tab State | `~/.swarm-ai/open_tabs.json` |
 
 ---
 
@@ -278,8 +267,8 @@ Issues and Pull Requests are welcome.
 
 <div align="center">
 
-**SwarmAI — Your AI Team, 24/7**
+**SwarmAI — Work smarter. Move faster. Stress less.**
 
-*You supervise. Agents execute. Memory persists. Work compounds.*
+*Remembers everything. Learns every session. Gets better every time.*
 
 </div>

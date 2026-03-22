@@ -2,7 +2,7 @@
 import platform
 import secrets
 from pathlib import Path
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from functools import lru_cache
 
 # Calculate project root directory (backend's parent directory)
@@ -95,9 +95,7 @@ class Settings(BaseSettings):
     #   - sandbox_enabled_default, sandbox_auto_allow_bash, sandbox_excluded_commands
     #   - sandbox_allow_unsandboxed, sandbox_additional_write_paths, sandbox_allowed_hosts
 
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
 
 @lru_cache()

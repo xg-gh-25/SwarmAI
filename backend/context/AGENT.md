@@ -382,8 +382,8 @@ Scan all modified source files for security issues:
 - **macOS PATH** — GUI apps don’t load shell PATH. Resolve via `zsh -lic` and sanitize output.
 - **PyInstaller trap** — `sys.executable` ≠ Python. Use direct imports or `get_python_executable()`.
 - **Sandbox writes** — Configure write access in `_build_sandbox_config`, not ad-hoc overrides.
-- **Sandbox process visibility** — `pgrep`, `ps`, `top` are blocked by the Claude SDK sandbox ("operation not permitted"). Never use them to check if the app is running. You ARE the app — if you’re executing, the backend is alive. Use `curl -s http://127.0.0.1:18321/health` to confirm backend status.
-- **Backend health endpoint** — `GET /health` (root level, NOT `/api/system/health` or `/api/health`). Returns `{"status":"healthy",...}` on 200.
+- **Sandbox process visibility** — `pgrep`, `ps`, `top` are blocked by the Claude SDK sandbox ("operation not permitted"). Never use them to check if the app is running. You ARE the app — if you’re executing, the backend is alive.
+- **Backend health endpoint** — `GET /health` (root level, NOT `/api/system/health` or `/api/health`). Returns `{"status":"healthy",...}` on 200. **Port is random each launch** (Tauri `portpicker`). Discover via psutil: find process `python-backend*` → `p.net_connections()` → LISTEN port. Dev mode uses port 8000. Never hardcode ports.
 - **Time awareness** — The system prompt shows both UTC and the user’s local time. ALWAYS use the user’s local time (check USER.md for timezone). Never reference UTC time when talking to the user. The header format is `YYYY-MM-DD HH:MM UTC / YYYY-MM-DD HH:MM <local>` — use the part AFTER the `/`. When estimating "current time" mid-session, add elapsed conversation time to the local start time.
 
 ## UX Development Rules

@@ -5,8 +5,8 @@
  * - Circular SwarmAI brand icon (`<img>` element, NOT the 🐝 emoji)
  *   with a radial gradient glow effect behind it
  * - "Welcome to SwarmAI!" heading with cyan-to-purple gradient text
- * - "Your AI Team, 24/7" slogan
- * - "Work smarter, move faster, and enjoy the journey." tagline
+ * - "Work smarter. Move faster. Stress less." value tagline
+ * - "Remembers everything. Learns every session. Gets better every time." mechanism tagline
  *
  * This component renders as a sibling to the message list — it is NOT
  * a message bubble. It appears when `messages.length === 0` for the
@@ -55,14 +55,14 @@ export const WelcomeScreen: React.FC = () => {
         Welcome to SwarmAI!
       </h1>
 
-      {/* Slogan */}
-      <p className="text-lg text-[var(--color-text)] mb-2">
-        Your AI Team, 24/7
+      {/* Value tagline */}
+      <p className="text-lg text-[var(--color-text)] mb-1.5">
+        Work smarter. Move faster. Stress less.
       </p>
 
-      {/* Tagline */}
+      {/* Mechanism tagline */}
       <p className="text-sm text-[var(--color-text-secondary)]">
-        Work smarter, move faster, and enjoy the journey.
+        Remembers everything. Learns every session. Gets better every time.
       </p>
     </div>
   );

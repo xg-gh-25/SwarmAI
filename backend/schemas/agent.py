@@ -1,7 +1,7 @@
 """Agent-related Pydantic models."""
 import json
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from typing import Literal
 from datetime import datetime
 
@@ -72,19 +72,18 @@ class AgentConfig(BaseModel):
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "name": "Data Analyst Agent",
-                "description": "Specialized in data analysis and visualization",
-                "model": "sonnet",
-                "permission_mode": "acceptEdits",
-                "max_turns": 20,
-                "allowed_skills": ["s_xlsx", "s_docx"],
-                "mcp_ids": ["postgres-mcp"],
-                "enable_web_tools": True,
-            }
+    model_config = ConfigDict(json_schema_extra={
+        "example": {
+            "name": "Data Analyst Agent",
+            "description": "Specialized in data analysis and visualization",
+            "model": "sonnet",
+            "permission_mode": "acceptEdits",
+            "max_turns": 20,
+            "allowed_skills": ["s_xlsx", "s_docx"],
+            "mcp_ids": ["postgres-mcp"],
+            "enable_web_tools": True,
         }
+    })
 
 
 class SandboxNetworkConfigRequest(BaseModel):

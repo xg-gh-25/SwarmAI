@@ -157,16 +157,55 @@ PYEOF
 
 > **NOTE**: psutil's `boot_time()` and `swap_memory()` may throw `PermissionError`/`OSError` in sandbox. Skip them — they're not essential. Focus on `virtual_memory()`, `cpu_percent()`, `getloadavg()`, `disk_usage()`, `sensors_battery()`, and `process_iter()`.
 
-#### SwarmAI Backend API
+#### SwarmAI Backend API — Dynamic Port Discovery
 
-```bash
-# Backend health — correct endpoint is /health (NOT /api/system/health)
-# Port depends on launch mode: 18321 (dev.sh) or 23816 (production build)
-# Try both, use whichever responds
-curl -s http://127.0.0.1:18321/health 2>/dev/null || curl -s http://127.0.0.1:23816/health 2>/dev/null || echo "BACKEND_UNAVAILABLE"
+The backend port is **random on every launch** (Tauri uses `portpicker::pick_unused_port()`). Dev mode uses port 8000. **Never hardcode production ports.** Always discover dynamically via psutil socket inspection.
 
-# Session-level data (if backend is reachable)
-curl -s http://127.0.0.1:18321/api/system/resources 2>/dev/null || curl -s http://127.0.0.1:23816/api/system/resources 2>/dev/null || echo "RESOURCES_UNAVAILABLE"
+Add the following to the psutil collection script above, **after the ORPHAN_CHECK section**:
+
+```python
+# === BACKEND API (dynamic port discovery) ===
+def find_swarmai_backend_port():
+    """Find SwarmAI backend port via process name + listening socket.
+    1. 'python-backend*' process = Tauri production sidecar
+    2. 'main.py --port' in backend dir = dev.sh mode
+    3. Return first TCP LISTEN port on the matched process
+    """
+    for p in psutil.process_iter(["pid", "name", "cmdline"]):
+        try:
+            info = p.info
+            name = info["name"] or ""
+            cmd = " ".join(info["cmdline"] or [])
+            is_sidecar = name.startswith("python-backend")
+            is_dev = ("main.py" in cmd and "--port" in cmd and "backend" in cmd)
+            if is_sidecar or is_dev:
+                for c in p.net_connections(kind="tcp"):
+                    if c.status == "LISTEN":
+                        return {"pid": info["pid"], "port": c.laddr.port,
+                                "mode": "production" if is_sidecar else "dev"}
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+    return None
+
+backend = find_swarmai_backend_port()
+print("=== BACKEND_API ===")
+if backend:
+    import urllib.request
+    try:
+        resp = urllib.request.urlopen(
+            f"http://127.0.0.1:{backend['port']}/health", timeout=2)
+        health = resp.read().decode()
+        print(f"PORT={backend['port']}|PID={backend['pid']}|MODE={backend['mode']}|HEALTH={health}")
+        try:
+            resp2 = urllib.request.urlopen(
+                f"http://127.0.0.1:{backend['port']}/api/system/resources", timeout=2)
+            print(f"RESOURCES={resp2.read().decode()}")
+        except:
+            print("RESOURCES=UNAVAILABLE")
+    except Exception as e:
+        print(f"PORT={backend['port']}|PID={backend['pid']}|MODE={backend['mode']}|HEALTH=UNREACHABLE|ERR={e}")
+else:
+    print("BACKEND_NOT_FOUND")
 ```
 
 > **IMPORTANT**: If you are running this skill, the app IS running — you are executing inside it. Never report "SwarmAI not running" when you are the one generating the report. The backend health check is to verify the API layer specifically, not the app itself.
@@ -495,7 +534,7 @@ These lessons come from actual production bugs in SwarmAI (March 2026). They are
 
 8. **If you're executing, the app is running** — The agent runs inside SwarmAI. Checking "is the app running?" is tautological. The backend health endpoint (`/health`) verifies the API layer; the Tauri shell is guaranteed alive if you can execute anything at all.
 
-9. **Backend port varies: 18321 (dev) vs 23816 (prod)** — `./dev.sh` uses 18321. Production build uses 23816. Always try both. The correct health endpoint is `/health` (not `/api/system/health`).
+9. **Backend port is random in production, 8000 in dev** — Tauri uses `portpicker::pick_unused_port()` on every launch. `./dev.sh` defaults to 8000. Never hardcode ports — discover dynamically via psutil `process_iter()` + `net_connections()`. The correct health endpoint is `/health` (not `/api/system/health`).
 
 ---
 
@@ -507,7 +546,7 @@ These lessons come from actual production bugs in SwarmAI (March 2026). They are
 |-------|-------|-----|
 | psutil not found | System Python doesn't have it | Activate SwarmAI venv first: `source .../backend/.venv/bin/activate` |
 | `ps`/`pgrep` "operation not permitted" | Claude SDK sandbox blocks process listing | Use psutil `process_iter()` instead — always works |
-| Backend API returns connection refused | Backend sidecar crashed or port mismatch | Try both ports (18321 dev, 23816 prod). You ARE the app — it's running |
+| Backend API returns connection refused | Backend sidecar crashed or port changed | Use `find_swarmai_backend_port()` (psutil socket discovery). Port is random each launch. You ARE the app — it's running |
 | psutil `boot_time()` PermissionError | Sandbox blocks `sysctl()` | Skip boot_time — not essential for health report |
 | psutil `swap_memory()` OSError | Sandbox blocks swap inspection | Skip swap — not essential |
 | MCP process names vary | Depends on config | Match `mcp` keyword in cmdline via psutil |

@@ -12,10 +12,7 @@ import { classifyFileForPreview } from '../../utils/fileUtils';
 import type { FilePreviewType } from '../../utils/fileUtils';
 import SkillsModal from '../modals/SkillsModal';
 import MCPSettingsModal from '../modals/MCPSettingsModal';
-import AgentsModal from '../modals/AgentsModal';
 import SettingsModal from '../modals/SettingsModal';
-import WorkspacesModal from '../modals/WorkspacesModal';
-import SwarmCoreModal from '../modals/SwarmCoreModal';
 import WorkspaceSettingsModal from '../modals/WorkspaceSettingsModal';
 import type { FileTreeItem } from '../workspace-explorer/FileTreeNode';
 import type { GitStatus } from '../../types';
@@ -72,17 +69,13 @@ function TopBar() {
 }
 
 // Left Sidebar - narrow navigation column with icon-only navigation
-// Requirements: 2.1, 2.2, 2.3, 2.4, 2.6
 function LeftSidebar() {
-  const { activeModal, openModal } = useLayout();
+  const { activeModal, openModal, workspaceExplorerCollapsed, setWorkspaceExplorerCollapsed } = useLayout();
 
   // Modal-based navigation items
   const navItems: { icon: string; label: string; modalType: ModalType }[] = [
-    { icon: 'workspaces', label: 'Workspaces', modalType: 'workspaces' },
-    { icon: 'grid_view', label: 'SwarmCore', modalType: 'swarmcore' },
-    { icon: 'smart_toy', label: 'Agents', modalType: 'agents' },
-    { icon: 'auto_awesome', label: 'Skills', modalType: 'skills' },
-    { icon: 'hub', label: 'MCP Servers', modalType: 'mcp' },
+    { icon: 'extension', label: 'Skills', modalType: 'skills' },
+    { icon: 'device_hub', label: 'MCP Servers', modalType: 'mcp' },
   ];
 
   return (
@@ -91,13 +84,19 @@ function LeftSidebar() {
       style={{ width: LEFT_SIDEBAR_WIDTH }}
       data-testid="left-sidebar"
     >
-      {/* Logo/Brand area */}
-      <div className="h-10 flex items-center justify-center border-b border-[var(--color-border)]">
+      {/* Logo/Brand area — click toggles workspace explorer */}
+      <button
+        className="h-10 flex items-center justify-center border-b border-[var(--color-border)] w-full hover:bg-[var(--color-hover)] transition-colors"
+        onClick={() => setWorkspaceExplorerCollapsed(!workspaceExplorerCollapsed)}
+        title={workspaceExplorerCollapsed ? 'Show workspace explorer' : 'Hide workspace explorer'}
+        aria-label="Toggle workspace explorer"
+        data-testid="logo-toggle"
+      >
         <SwarmAILogo />
-      </div>
+      </button>
 
       {/* Navigation icons */}
-      <nav className="flex-1 py-1.5 space-y-0.5 overflow-y-auto flex flex-col items-center" data-testid="nav-icons">
+      <nav className="flex-1 pt-2 pb-1 space-y-1 overflow-y-auto flex flex-col items-center" data-testid="nav-icons">
         {navItems.map((item) => (
           <NavIconButton
             key={item.modalType}
@@ -110,10 +109,10 @@ function LeftSidebar() {
         ))}
       </nav>
 
-      {/* Bottom section - Settings and GitHub link */}
-      <div className="py-1.5 border-t border-[var(--color-border)] space-y-0.5 flex flex-col items-center">
+      {/* Bottom section - Settings and GitHub */}
+      <div className="pt-1.5 pb-2 border-t border-[var(--color-border)] space-y-1 flex flex-col items-center">
         <NavIconButton
-          icon="settings"
+          icon="tune"
           label="Settings"
           isActive={activeModal === 'settings'}
           onClick={() => openModal('settings')}
@@ -587,11 +586,8 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
       />
 
       {/* Management Page Modals */}
-      <WorkspacesModal isOpen={activeModal === 'workspaces'} onClose={closeModal} />
-      <SwarmCoreModal isOpen={activeModal === 'swarmcore'} onClose={closeModal} />
       <SkillsModal isOpen={activeModal === 'skills'} onClose={closeModal} />
       <MCPSettingsModal isOpen={activeModal === 'mcp'} onClose={closeModal} />
-      <AgentsModal isOpen={activeModal === 'agents'} onClose={closeModal} />
       <SettingsModal isOpen={activeModal === 'settings'} onClose={closeModal} />
       <WorkspaceSettingsModal
         isOpen={activeModal === 'workspace-settings'}

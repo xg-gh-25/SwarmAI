@@ -1,6 +1,5 @@
 """Test fixtures and configuration for backend tests."""
 import pytest
-import asyncio
 import tempfile
 import os
 import shutil
@@ -54,13 +53,10 @@ _TABLES_TO_CLEAR = [
 ]
 
 
-@pytest.fixture(scope="session")
-def event_loop():
-    """Create an event loop for the test session."""
-    loop = asyncio.get_event_loop_policy().new_event_loop()
-    yield loop
-    loop.close()
-    # Clean up temp database file
+@pytest.fixture(scope="session", autouse=True)
+def _cleanup_test_db():
+    """Clean up temp database file after the test session."""
+    yield
     try:
         os.unlink(_test_db_path)
     except OSError:
