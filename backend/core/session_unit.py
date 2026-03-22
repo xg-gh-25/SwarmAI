@@ -230,6 +230,14 @@ class SessionUnit:
         from .compaction_guard import CompactionGuard
         self._compaction_guard: CompactionGuard = CompactionGuard()
 
+        # ── Hook session context ──────────────────────────────────────
+        # Mutable dict shared with hook closures (dangerous_command_gate,
+        # pre_compact_hook).  Hooks capture this dict BY REFERENCE, so
+        # updating it in-place before each send() ensures hooks always
+        # use the current session_id — even when the subprocess is reused
+        # across multiple run_conversation() calls.
+        self._hook_session_context: Optional[dict] = None
+
         # ── Zombie detection — set True when meaningful content emitted ──
         self._content_emitted: bool = False
 

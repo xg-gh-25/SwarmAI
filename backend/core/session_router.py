@@ -518,12 +518,22 @@ class SessionRouter:
         # resume).  On cold resume this is always None — that's correct: the
         # subprocess is dead, so there's no SDK session to resume.  Instead,
         # cold resume injects prior conversation via system prompt (Mechanism B).
+        # Use a STABLE mutable dict for session_context so hook closures
+        # (dangerous_command_gate, pre_compact_hook) always see the current
+        # session_id — even when the subprocess is reused across sends.
+        # On first call, create the dict and store it on the unit.
+        # On subsequent calls, update the existing dict in-place.
+        if unit._hook_session_context is None:
+            unit._hook_session_context = {"sdk_session_id": session_id}
+        else:
+            unit._hook_session_context["sdk_session_id"] = session_id
+
         options = await self._prompt_builder.build_options(
             agent_config=agent_config,
             enable_skills=enable_skills,
             enable_mcp=enable_mcp,
             resume_session_id=unit._sdk_session_id,
-            session_context={"sdk_session_id": session_id},
+            session_context=unit._hook_session_context,
             channel_context=channel_context,
             editor_context=editor_context,
         )
