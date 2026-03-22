@@ -92,13 +92,18 @@ const toCamelCase = (data: Record<string, unknown>): SystemStatus => {
 
 const STATUS_TIMEOUT_MS = 5000;
 
+export interface MaxTabsInfo {
+  maxTabs: number;
+  memoryPressure: 'ok' | 'warning' | 'critical';
+}
+
 export const systemService = {
   /**
    * Get current system initialization status.
-   * 
+   *
    * Fetches status from /api/system/status endpoint with a 5-second timeout.
    * Converts snake_case response to camelCase for TypeScript consumption.
-   * 
+   *
    * @throws Error if the API call fails or times out
    */
   async getStatus(): Promise<SystemStatus> {
@@ -113,5 +118,22 @@ export const systemService = {
     } finally {
       clearTimeout(timeoutId);
     }
+  },
+
+  /**
+   * Get the dynamic max-tabs limit based on available system RAM.
+   *
+   * Returns 1–4 depending on memory headroom. Each tab requires ~500MB
+   * for CLI + MCP subprocesses.
+   */
+  async getMaxTabs(): Promise<MaxTabsInfo> {
+    const response = await api.get<Record<string, unknown>>('/system/max-tabs');
+    const data = response.data;
+    return {
+      maxTabs: typeof data.max_tabs === 'number' ? data.max_tabs : 2,
+      memoryPressure: (['ok', 'warning', 'critical'].includes(data.memory_pressure as string)
+        ? data.memory_pressure
+        : 'ok') as MaxTabsInfo['memoryPressure'],
+    };
   },
 };

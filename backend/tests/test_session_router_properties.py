@@ -118,15 +118,14 @@ class TestConcurrencyCapInvariant:
     # Feature: multi-session-rearchitecture, Property 4: Concurrency cap
 
     After each _acquire_slot call completes, alive_count must not exceed
-    MAX_CONCURRENT (2).
+    the dynamic cap from ``compute_max_tabs()`` (range [1, 4]).
 
     **Validates: Requirements 2.1**
     """
 
     def test_alive_count_never_exceeds_max(self):
-        """alive_count stays within MAX_CONCURRENT."""
+        """alive_count stays within the dynamic concurrency cap."""
         router = _make_router()
-        assert router.MAX_CONCURRENT == 2
 
         # Create 2 alive units
         for i in range(2):
