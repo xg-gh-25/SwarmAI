@@ -1378,6 +1378,12 @@ export function useChatStreamingLifecycle(
           // "An unknown error occurred" that forces a redundant resend.
           if (tabState?.userStopped) {
             console.log('[StreamHandler] Suppressing error from user-stopped stream', { capturedTabId });
+            // Clean up streaming state — same as createErrorHandler suppression.
+            // Without this, a leaked error event could leave the tab in a
+            // half-streaming state (isStreaming=true but no UI indicators).
+            setIsStreaming(false, capturedTabId ?? undefined);
+            incrementStreamGen();
+            if (capturedTabId) updateTabStatus(capturedTabId, 'idle');
             return;
           }
 

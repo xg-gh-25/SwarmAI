@@ -1356,9 +1356,15 @@ export default function ChatPage() {
     // so a second rapid click/Enter will be caught by the guard above.
     setIsStreaming(true, activeTabIdRef.current ?? undefined);
 
-    // Clear userStopped from a previous stop — this is a fresh send.
+    // Clear userStopped and reset streaming-related state from a previous
+    // stop — this is a fresh send. Without this, stale flags from the old
+    // stream can suppress errors or break indicators on the new stream.
     if (activeTabForGuard) {
       activeTabForGuard.userStopped = false;
+      activeTabForGuard.hasReceivedData = false;
+      activeTabForGuard.isReconnecting = false;
+      activeTabForGuard.reconnectionAttempt = 0;
+      activeTabForGuard.isResuming = false;
     }
 
     if (messageText.trim().startsWith('/plugin')) {
@@ -1827,60 +1833,84 @@ export default function ChatPage() {
     }
   };
 
-  // Handle stop
-  const handleStop = async () => {
+  // Handle stop — UI feedback is SYNCHRONOUS (no waiting for backend).
+  // Backend stop is fire-and-forget (best effort). This eliminates the
+  // race window where error events from the interrupted stream leak
+  // through before the UI has updated.
+  const handleStop = () => {
     const currentTabId = activeTabIdRef.current;
     const tabSessionId = currentTabId ? tabMapRef.current.get(currentTabId)?.sessionId : undefined;
     if (!tabSessionId) return;
-    try {
-      // Mark this tab as user-stopped BEFORE aborting — stream/error handlers
-      // check this flag to suppress error display for the interrupted stream.
-      if (currentTabId) {
-        const tabState = tabMapRef.current.get(currentTabId);
-        if (tabState) {
-          tabState.userStopped = true;
-        }
-        if (tabState?.abortController) {
-          try { tabState.abortController.abort(); } catch { /* already aborted */ }
-          tabState.abortController = null;
-        }
+
+    // 1. Mark stopped + abort SSE FIRST (synchronous, before any async work)
+    if (currentTabId) {
+      const tabState = tabMapRef.current.get(currentTabId);
+      if (tabState) {
+        tabState.userStopped = true;
       }
-      await chatService.stopSession(tabSessionId);
-      // Preserve partial content: append stop indicator to the last assistant
-      // message instead of creating a separate message (Requirement 3.3).
-      setMessages((prev) => {
-        const lastAssistantIndex = prev.reduce(
-          (lastIdx, m, i) => m.role === 'assistant' ? i : lastIdx, -1,
+      if (tabState?.abortController) {
+        try { tabState.abortController.abort(); } catch { /* already aborted */ }
+        tabState.abortController = null;
+      }
+    }
+
+    // 2. Update streaming state immediately — don't wait for backend
+    setIsStreaming(false, currentTabId ?? undefined);
+    incrementStreamGen();
+    if (currentTabId) updateTabStatus(currentTabId, 'idle');
+
+    // 3. Append "Stopped" indicator to messages (synchronous)
+    setMessages((prev) => {
+      const lastAssistantIndex = prev.reduce(
+        (lastIdx, m, i) => m.role === 'assistant' ? i : lastIdx, -1,
+      );
+      if (lastAssistantIndex >= 0) {
+        const updated = [...prev];
+        const lastMsg = { ...updated[lastAssistantIndex] };
+        lastMsg.content = [
+          ...lastMsg.content,
+          { type: 'text' as const, text: '\n\n---\n*Stopped*' },
+        ];
+        updated[lastAssistantIndex] = lastMsg;
+        return updated;
+      }
+      // Edge case: no assistant message exists — fall back to appending a new one
+      return [...prev, {
+        id: Date.now().toString(),
+        role: 'assistant' as const,
+        content: [{ type: 'text' as const, text: '\n\n---\n*Stopped*' }],
+        timestamp: new Date().toISOString(),
+      }];
+    });
+
+    // 4. Also sync "Stopped" to tabMapRef (authoritative store)
+    if (currentTabId) {
+      const tabState = tabMapRef.current.get(currentTabId);
+      if (tabState && tabState.messages.length > 0) {
+        const lastIdx = tabState.messages.reduce(
+          (acc: number, m: Message, i: number) => m.role === 'assistant' ? i : acc, -1,
         );
-        if (lastAssistantIndex >= 0) {
-          const updated = [...prev];
-          const lastMsg = { ...updated[lastAssistantIndex] };
+        if (lastIdx >= 0) {
+          const updated = [...tabState.messages];
+          const lastMsg = { ...updated[lastIdx] };
           lastMsg.content = [
             ...lastMsg.content,
             { type: 'text' as const, text: '\n\n---\n*Stopped*' },
           ];
-          updated[lastAssistantIndex] = lastMsg;
-          return updated;
+          updated[lastIdx] = lastMsg;
+          tabState.messages = updated;
         }
-        // Edge case: no assistant message exists — fall back to appending a new one
-        return [...prev, {
-          id: Date.now().toString(),
-          role: 'assistant' as const,
-          content: [{ type: 'text' as const, text: '\n\n---\n*Stopped*' }],
-          timestamp: new Date().toISOString(),
-        }];
-      });
-    } catch (error) {
-      console.error('Failed to stop session:', error);
-    } finally {
-      setIsStreaming(false, currentTabId ?? undefined);
-      // Update tab status to idle
-      if (currentTabId) updateTabStatus(currentTabId, 'idle');
-
-      // Drain site B: auto-send queued message after stop
-      if (currentTabId) {
-        setTimeout(() => drainQueuedMessage(currentTabId), 0);
       }
+    }
+
+    // 5. Backend stop — fire-and-forget (best effort, don't await)
+    chatService.stopSession(tabSessionId).catch((err) => {
+      console.warn('[handleStop] Backend stop failed (best effort):', err);
+    });
+
+    // 6. Drain site B: auto-send queued message after stop
+    if (currentTabId) {
+      setTimeout(() => drainQueuedMessage(currentTabId), 0);
     }
   };
 
