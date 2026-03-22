@@ -36,7 +36,7 @@ export const WelcomeScreen: React.FC = () => {
           aria-hidden="true"
         />
         <img
-          src="/swarmai-icon-3.png"
+          src="/swarm-avatar.svg"
           alt="SwarmAI icon"
           className="relative w-16 h-16 rounded-full"
           draggable={false}
