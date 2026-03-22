@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useState, useCallback, useMemo, ReactNode } from 'react';
 
 // Modal types that can be opened from the left sidebar
-export type ModalType = 'workspaces' | 'swarmcore' | 'skills' | 'mcp' | 'agents' | 'settings' | 'file-editor' | 'workspace-settings';
+export type ModalType = 'skills' | 'mcp' | 'settings' | 'file-editor' | 'workspace-settings';
 
 // Workspace scope - 'all' for all workspaces or a specific workspace ID
 export type WorkspaceScope = 'all' | string;

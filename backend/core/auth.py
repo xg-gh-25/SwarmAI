@@ -1,15 +1,23 @@
-"""JWT authentication utilities."""
+"""JWT authentication and password hashing utilities."""
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from typing import Optional
-from jose import jwt, JWTError
-from passlib.context import CryptContext
+import bcrypt
+import jwt
+from jwt.exceptions import PyJWTError as JWTError
 
 from config import settings
 
-# Password hashing context
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+def hash_password(password: str) -> str:
+    """Hash a password using bcrypt."""
+    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+
+
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    """Verify a password against its bcrypt hash."""
+    return bcrypt.checkpw(plain_password.encode("utf-8"), hashed_password.encode("utf-8"))
 
 
 class TokenPayload:
@@ -26,16 +34,6 @@ class TokenPayload:
         self.exp = exp  # Expiration time
         self.token_type = token_type  # "access" or "refresh"
         self.iat = iat or datetime.now(timezone.utc)
-
-
-def hash_password(password: str) -> str:
-    """Hash a password using bcrypt."""
-    return pwd_context.hash(password)
-
-
-def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Verify a password against its hash."""
-    return pwd_context.verify(plain_password, hashed_password)
 
 
 def create_access_token(user_id: str, expires_delta: Optional[timedelta] = None) -> str:

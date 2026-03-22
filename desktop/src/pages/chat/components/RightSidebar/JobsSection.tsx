@@ -151,7 +151,7 @@ export function JobsSection({ onCountChange }: JobsSectionProps = {}) {
             />
 
             {/* Job name */}
-            <span className="text-xs text-[var(--color-text)] truncate flex-1">
+            <span className="text-[13px] leading-5 text-[var(--color-text)] truncate flex-1">
               {job.name}
             </span>
 

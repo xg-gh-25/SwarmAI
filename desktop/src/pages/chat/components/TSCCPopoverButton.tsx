@@ -15,7 +15,8 @@
  * and closes the popover when the sessionId changes or becomes undefined.
  */
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import type { SystemPromptMetadata } from '../../../types';
 import { SystemPromptModule } from './TSCCModules';
 
@@ -71,9 +72,40 @@ export function TSCCPopoverButton({ sessionId, metadata }: TSCCPopoverButtonProp
     };
   }, [isOpen]);
 
+  // Compute fixed position from button rect so popover escapes overflow-hidden ancestors
+  const [popoverStyle, setPopoverStyle] = useState<React.CSSProperties>({});
+
+  const updatePopoverPosition = useCallback(() => {
+    const btn = buttonRef.current;
+    if (!btn) return;
+    const rect = btn.getBoundingClientRect();
+    // Position above the button, aligned to its left edge
+    setPopoverStyle({
+      position: 'fixed',
+      bottom: window.innerHeight - rect.top + 8,
+      left: Math.max(8, rect.left), // clamp to viewport left edge
+      zIndex: 9999,
+    });
+  }, []);
+
   const handleToggle = () => {
-    setIsOpen((prev) => !prev);
+    setIsOpen((prev) => {
+      if (!prev) updatePopoverPosition();
+      return !prev;
+    });
   };
+
+  // Re-position on scroll/resize while open
+  useEffect(() => {
+    if (!isOpen) return;
+    const reposition = () => updatePopoverPosition();
+    window.addEventListener('resize', reposition);
+    window.addEventListener('scroll', reposition, true);
+    return () => {
+      window.removeEventListener('resize', reposition);
+      window.removeEventListener('scroll', reposition, true);
+    };
+  }, [isOpen, updatePopoverPosition]);
 
   return (
     <div className="relative">
@@ -99,20 +131,20 @@ export function TSCCPopoverButton({ sessionId, metadata }: TSCCPopoverButtonProp
         </span>
       </button>
 
-      {isOpen && sessionId && (
+      {isOpen && sessionId && createPortal(
         <div
           ref={popoverRef}
+          style={popoverStyle}
           className="
-            absolute bottom-full left-0 mb-2
-            w-72 max-h-[320px] overflow-y-auto
+            w-80 max-h-[400px] overflow-y-auto
             bg-[var(--color-card)] border border-[var(--color-border)]
-            rounded-lg shadow-lg
+            rounded-lg shadow-xl
             p-3 space-y-3
-            z-50
           "
         >
           <SystemPromptModule sessionId={sessionId} metadata={metadata} />
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   );

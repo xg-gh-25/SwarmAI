@@ -1,6 +1,6 @@
 """Marketplace and Plugin schemas."""
 from typing import Optional, Literal
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from datetime import datetime
 
 
@@ -34,6 +34,9 @@ class AvailablePluginInfo(BaseModel):
 
 class MarketplaceResponse(BaseModel):
     """Schema for marketplace response."""
+
+    model_config = ConfigDict(from_attributes=True)
+
     id: str
     name: str
     description: Optional[str] = None
@@ -45,9 +48,6 @@ class MarketplaceResponse(BaseModel):
     cached_plugins: list[AvailablePluginInfo] = Field(default_factory=list)
     created_at: str
     updated_at: str
-
-    class Config:
-        from_attributes = True
 
 
 # ============== Plugin Schemas ==============
@@ -84,6 +84,9 @@ class PluginInstallRequest(BaseModel):
 
 class PluginResponse(BaseModel):
     """Schema for plugin response."""
+
+    model_config = ConfigDict(from_attributes=True)
+
     id: str
     name: str
     description: Optional[str] = None
@@ -105,9 +108,6 @@ class PluginResponse(BaseModel):
     install_path: Optional[str] = None
     installed_at: str
     updated_at: str
-
-    class Config:
-        from_attributes = True
 
 
 class AvailablePlugin(BaseModel):

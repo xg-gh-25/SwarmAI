@@ -61,33 +61,18 @@ vi.mock('@tauri-apps/plugin-fs', () => ({
 }));
 
 // Mock modal components to prevent HTTP requests from their internal pages
-vi.mock('../modals/WorkspacesModal', () => ({
-  default: ({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) => 
-    isOpen ? <div data-testid="workspaces-modal"><button onClick={onClose}>Close</button></div> : null,
-}));
-
-vi.mock('../modals/SwarmCoreModal', () => ({
-  default: ({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) => 
-    isOpen ? <div data-testid="swarmcore-modal"><button onClick={onClose}>Close</button></div> : null,
-}));
-
 vi.mock('../modals/SkillsModal', () => ({
-  default: ({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) => 
+  default: ({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) =>
     isOpen ? <div data-testid="skills-modal"><button onClick={onClose}>Close</button></div> : null,
 }));
 
 vi.mock('../modals/MCPSettingsModal', () => ({
-  default: ({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) => 
+  default: ({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) =>
     isOpen ? <div data-testid="mcp-modal"><button onClick={onClose}>Close</button></div> : null,
 }));
 
-vi.mock('../modals/AgentsModal', () => ({
-  default: ({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) => 
-    isOpen ? <div data-testid="agents-modal"><button onClick={onClose}>Close</button></div> : null,
-}));
-
 vi.mock('../modals/SettingsModal', () => ({
-  default: ({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) => 
+  default: ({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) =>
     isOpen ? <div data-testid="settings-modal"><button onClick={onClose}>Close</button></div> : null,
 }));
 
