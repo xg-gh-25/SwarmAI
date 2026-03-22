@@ -17,7 +17,7 @@ import { useTranslation } from 'react-i18next';
 import axios from 'axios';
 import { getBackendPort, initializeBackend } from '../../services/tauri';
 import { systemService, SystemStatus } from '../../services/system';
-import logo from '../../assets/logo.png';
+import logo from '../../assets/swarm-avatar.svg';
 
 // ============================================================================
 // Constants
