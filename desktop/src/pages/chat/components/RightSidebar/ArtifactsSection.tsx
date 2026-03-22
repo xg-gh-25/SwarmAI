@@ -16,7 +16,7 @@
  * - ``formatRelativeTime``   — Converts ISO timestamp to relative string
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { radarService } from '../../../../services/radar';
 import { DragHandle } from './shared/DragHandle';
 import type { RadarArtifact } from './types';
@@ -98,13 +98,15 @@ interface ArtifactsSectionProps {
   workspaceId: string | null;
   /** Callback invoked when the user clicks an artifact row. */
   onPreviewFile?: (path: string) => void;
+  /** Report item count to parent for badge display. */
+  onCountChange?: (count: number) => void;
 }
 
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 
-export function ArtifactsSection({ workspaceId, onPreviewFile }: ArtifactsSectionProps) {
+export function ArtifactsSection({ workspaceId, onPreviewFile, onCountChange }: ArtifactsSectionProps) {
   // Default to dispatching swarm:open-file (handled by ThreeColumnLayout)
   const handleOpen = useCallback(
     (path: string) => (onPreviewFile ?? dispatchOpenFile)(path),
@@ -151,6 +153,15 @@ export function ArtifactsSection({ workspaceId, onPreviewFile }: ArtifactsSectio
       clearInterval(interval);
     };
   }, [workspaceId]);
+
+  // Report count to parent
+  const prevCountRef = useRef(-1);
+  useEffect(() => {
+    if (onCountChange && artifacts.length !== prevCountRef.current) {
+      prevCountRef.current = artifacts.length;
+      onCountChange(artifacts.length);
+    }
+  }, [artifacts.length, onCountChange]);
 
   // --- Loading state ---
   if (loading) {

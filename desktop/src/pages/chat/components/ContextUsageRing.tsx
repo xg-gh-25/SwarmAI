@@ -1,7 +1,7 @@
 /**
  * ContextUsageRing — shared SVG circular progress ring for context window usage.
  *
- * Used in both TopBar (with label) and ChatInput bottom row (icon only).
+ * Rendered in ChatInput bottom row (size=20, showLabel).
  * Single source of truth for color thresholds:
  *   green (#22c55e) < 60%, yellow (#eab308) 60–80%, red (#ef4444) > 80%, gray for null.
  *

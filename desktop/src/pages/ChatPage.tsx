@@ -20,7 +20,7 @@
  *
  * @module ChatPage
  */
-import { useState, useRef, useEffect, useCallback, useMemo, useLayoutEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useMemo, useLayoutEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
@@ -1905,7 +1905,6 @@ export default function ChatPage() {
         onNewSession={handleNewSession}
         tabStatuses={tabStatuses}
         isNewTabDisabled={openTabs.length >= maxTabsInfo.maxTabs}
-        memoryPressure={maxTabsInfo.memoryPressure}
       />
 
       <div className="flex flex-1 overflow-hidden">
@@ -2002,64 +2001,84 @@ export default function ChatPage() {
                         />
                       );
                     }
-                    // Only pass isStreaming to the last assistant message
+                    // Only pass isStreaming to the last assistant message.
+                    // Use lastAssistantIdx (not messages.length-1) so queued
+                    // user messages appended after the streaming assistant
+                    // don't strip the streaming indicators.
                     const isLastAssistantForStreaming = isStreaming
                       && msg.role === 'assistant'
-                      && idx === messages.length - 1;
+                      && idx === lastAssistantIdx;
+                    // Render streaming status indicators immediately after the
+                    // streaming assistant message so they stay visually attached
+                    // to the response — above any queued user messages.
+                    const activeTabForIndicator = activeTabIdRef.current ? tabMapRef.current.get(activeTabIdRef.current) : undefined;
+                    const streamingIndicator = isLastAssistantForStreaming ? (
+                      <>
+                        {activeTabForIndicator?.isReconnecting && (
+                          <div className="flex items-center gap-2 text-[var(--color-text-muted)]">
+                            <Spinner size="sm" />
+                            <span className="text-sm">{t('chat.reconnecting', 'Reconnecting...')}</span>
+                          </div>
+                        )}
+                        {activeTabForIndicator?.isResuming && (
+                          <div className="flex items-center gap-2 text-[var(--color-text-muted)]">
+                            <Spinner size="sm" />
+                            <span className="text-sm">{t('chat.resuming', 'Resuming session...')}</span>
+                          </div>
+                        )}
+                        {!activeTabForIndicator?.isResuming && (
+                          <div className="flex items-center gap-2 text-[var(--color-text-muted)]">
+                            <Spinner size="sm" />
+                            <span className="text-sm">
+                              {displayedActivity?.toolName
+                                ? (displayedActivity.toolContext
+                                    ? t('chat.runningToolWithContext', {
+                                        tool: displayedActivity.toolName,
+                                        context: displayedActivity.toolContext,
+                                        count: displayedActivity.toolCount,
+                                      })
+                                    : displayedActivity.toolCount > 1
+                                      ? t('chat.runningToolWithCount', {
+                                          tool: displayedActivity.toolName,
+                                          count: displayedActivity.toolCount,
+                                        })
+                                      : t('chat.runningTool', { tool: displayedActivity.toolName }))
+                                : displayedActivity?.hasContent
+                                  ? t('chat.processing')
+                                  : elapsedSeconds >= ELAPSED_DISPLAY_THRESHOLD_MS / 1000
+                                    ? t('chat.thinkingWithElapsed', { elapsed: formatElapsed(elapsedSeconds) })
+                                    : t('chat.thinking')}
+                            </span>
+                          </div>
+                        )}
+                      </>
+                    ) : null;
                     return (
-                      <MessageBubble
-                        key={msg.id}
-                        message={msg}
-                        onAnswerQuestion={handleAnswerQuestion}
-                        onPermissionDecision={handlePermissionDecision}
-                        pendingToolUseId={pendingQuestion?.toolUseId}
-                        pendingPermissionRequestId={pendingPermissionRequestId ?? undefined}
-                        isStreaming={isLastAssistantForStreaming}
-                        sessionId={sessionId}
-                        isLastAssistant={idx === lastAssistantIdx}
-                        contextWarning={contextWarning}
-                        onCancelQueued={msg.isQueued && activeTabIdRef.current ? () => handleCancelQueued(activeTabIdRef.current!) : undefined}
-                      />
+                      <React.Fragment key={msg.id}>
+                        <MessageBubble
+                          message={msg}
+                          onAnswerQuestion={handleAnswerQuestion}
+                          onPermissionDecision={handlePermissionDecision}
+                          pendingToolUseId={pendingQuestion?.toolUseId}
+                          pendingPermissionRequestId={pendingPermissionRequestId ?? undefined}
+                          isStreaming={isLastAssistantForStreaming}
+                          sessionId={sessionId}
+                          isLastAssistant={idx === lastAssistantIdx}
+                          contextWarning={contextWarning}
+                          onCancelQueued={msg.isQueued && activeTabIdRef.current ? () => handleCancelQueued(activeTabIdRef.current!) : undefined}
+                        />
+                        {streamingIndicator}
+                      </React.Fragment>
                     );
                   })
                 )}
-                {/* Reconnecting indicator — reads from tabMapRef (authoritative) for the active tab */}
-                {activeTabIdRef.current && tabMapRef.current.get(activeTabIdRef.current)?.isReconnecting && (
+                {/* Fallback streaming indicator — only when isStreaming is true but
+                    no assistant message exists yet (gap between setIsStreaming(true)
+                    and assistant placeholder being added to messages). */}
+                {isStreaming && lastAssistantIdx < 0 && (
                   <div className="flex items-center gap-2 text-[var(--color-text-muted)]">
                     <Spinner size="sm" />
-                    <span className="text-sm">{t('chat.reconnecting', 'Reconnecting...')}</span>
-                  </div>
-                )}
-                {/* Resuming indicator — cold-start resume when subprocess was killed after long idle */}
-                {activeTabIdRef.current && tabMapRef.current.get(activeTabIdRef.current)?.isResuming && (
-                  <div className="flex items-center gap-2 text-[var(--color-text-muted)]">
-                    <Spinner size="sm" />
-                    <span className="text-sm">{t('chat.resuming', 'Resuming session...')}</span>
-                  </div>
-                )}
-                {isStreaming && !(activeTabIdRef.current && tabMapRef.current.get(activeTabIdRef.current)?.isResuming) && (
-                  <div className="flex items-center gap-2 text-[var(--color-text-muted)]">
-                    <Spinner size="sm" />
-                    <span className="text-sm">
-                      {displayedActivity?.toolName
-                        ? (displayedActivity.toolContext
-                            ? t('chat.runningToolWithContext', {
-                                tool: displayedActivity.toolName,
-                                context: displayedActivity.toolContext,
-                                count: displayedActivity.toolCount,
-                              })
-                            : displayedActivity.toolCount > 1
-                              ? t('chat.runningToolWithCount', {
-                                  tool: displayedActivity.toolName,
-                                  count: displayedActivity.toolCount,
-                                })
-                              : t('chat.runningTool', { tool: displayedActivity.toolName }))
-                        : displayedActivity?.hasContent
-                          ? t('chat.processing')
-                          : elapsedSeconds >= ELAPSED_DISPLAY_THRESHOLD_MS / 1000
-                            ? t('chat.thinkingWithElapsed', { elapsed: formatElapsed(elapsedSeconds) })
-                            : t('chat.thinking')}
-                    </span>
+                    <span className="text-sm">{t('chat.thinking')}</span>
                   </div>
                 )}
                 <div ref={messagesEndRef} />
@@ -2090,8 +2109,8 @@ export default function ChatPage() {
                 fileError={fileError}
                 canAddMore={canAddMore}
                 sessionId={sessionId}
-                promptMetadata={promptMetadata}
                 contextPct={contextWarning?.pct ?? null}
+                promptMetadata={promptMetadata}
                 disabled={health.status === 'disconnected' || isLimited('/chat')}
                 activeTabIdRef={activeTabIdRef}
                 inputValueMapRef={inputValueMapRef}
