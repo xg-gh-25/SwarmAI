@@ -37,12 +37,46 @@ from core.session_manager import session_manager
 # ── Multi-session architecture ────────────────────────────────────
 import os as _os
 import logging as _logging
+from typing import Optional
 
 _chat_logger = _logging.getLogger(__name__)
 
 # Lazy-initialized singletons — resolved on first chat request
 _session_router = None
 _lifecycle_manager = None
+
+
+def _recover_streaming_on_disconnect(session_id: Optional[str]) -> None:
+    """Transition a STREAMING session to IDLE after SSE client disconnect.
+
+    When the SSE connection drops (network blip, browser stall timeout,
+    tab close), the consumer_task in sse_with_heartbeat is cancelled,
+    propagating CancelledError into message_generator. Without this
+    cleanup, the session stays in STREAMING — the next send() triggers
+    force_unstick_streaming → kill → respawn --resume, replaying the
+    previous turn's completed output as if it were new content.
+
+    This is a best-effort, fire-and-forget cleanup. Errors are logged
+    but never propagated.
+    """
+    if not session_id or _session_router is None:
+        return
+    try:
+        from core.session_unit import SessionState
+        unit = _session_router.get_unit(session_id)
+        if unit and unit.state == SessionState.STREAMING:
+            unit._transition(SessionState.IDLE)
+            unit.last_used = __import__("time").time()
+            _chat_logger.info(
+                "SSE disconnect recovery: session %s transitioned "
+                "STREAMING → IDLE",
+                session_id,
+            )
+    except Exception as e:
+        _chat_logger.warning(
+            "SSE disconnect recovery failed for session %s: %s",
+            session_id, e,
+        )
 
 
 def _get_router():
@@ -370,7 +404,9 @@ async def chat_stream(request: Request):
                 yield msg
         except asyncio.CancelledError:
             logger.info("Chat stream cancelled (client disconnected)")
-            # Don't re-raise — let the generator close cleanly
+            # Transition session STREAMING → IDLE so the next send()
+            # doesn't force-unstick and replay the previous turn via --resume.
+            _recover_streaming_on_disconnect(chat_request.session_id)
             return
         except asyncio.TimeoutError:
             logger.error("Agent response timed out")
@@ -473,6 +509,10 @@ async def answer_question(request: Request):
             ):
                 logger.debug(f"Yielding message: {msg.get('type')}")
                 yield msg
+        except asyncio.CancelledError:
+            logger.info("Answer-question stream cancelled (client disconnected)")
+            _recover_streaming_on_disconnect(answer_request.session_id)
+            return
         except asyncio.TimeoutError:
             logger.error("Agent response timed out")
             yield {
@@ -828,6 +868,10 @@ async def cmd_permission_continue(request: Request):
             ):
                 logger.debug(f"Yielding message: {msg.get('type')}")
                 yield msg
+        except asyncio.CancelledError:
+            logger.info("Permission-continue stream cancelled (client disconnected)")
+            _recover_streaming_on_disconnect(permission_request.session_id)
+            return
         except asyncio.TimeoutError:
             logger.error("Agent response timed out")
             yield {
