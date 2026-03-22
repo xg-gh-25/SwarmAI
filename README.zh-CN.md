@@ -16,7 +16,7 @@
 [![License](https://img.shields.io/badge/License-AGPL_v3-blue.svg?style=flat)](./LICENSE-AGPL)
 [![Commercial](https://img.shields.io/badge/License-Commercial-orange.svg?style=flat)](./LICENSE-COMMERCIAL)
 
-![SwarmAI Home](./assets/swarmai-home-mockup.png)
+![SwarmAI Chat Interface](./assets/swarm-0.png)
 
 </div>
 
@@ -112,7 +112,9 @@ SwarmAI 采用三栏布局：
 |----|----|----|
 | **SwarmWS Explorer** — 工作空间文件、知识、项目 | **Chat Tabs** — 多会话指挥界面 | **Swarm Radar** — ToDos、会话、Artifacts、任务 |
 
-![SwarmAI Chat Interface](./assets/swarmai-chat-mockup.png)
+![SwarmAI Chat Interface](./assets/swarm-2.png)
+
+![SwarmAI Chat Interface](./assets/swarm-3.png)
 
 ---
 
