@@ -260,6 +260,19 @@ SwarmAI/
 
 ---
 
+## Contributors
+
+<table>
+  <tr>
+    <td align="center"><a href="https://github.com/xg-gh-25"><img src="https://github.com/xg-gh-25.png" width="80px;" alt=""/><br /><sub><b>Xiaogang Wang</b></sub></a><br />Creator & Chief Architect</td>
+    <td align="center"><a href="https://github.com/anthropics"><img src="https://github.com/anthropics.png" width="80px;" alt=""/><br /><sub><b>Swarm</b></sub></a><br />AI Co-Developer (Claude Opus 4.6)<br /><sub>Architecture · Code · Docs · Self-Evolution</sub></td>
+  </tr>
+</table>
+
+> *Yes, Swarm is a real contributor.* Born March 14, 2026, Swarm is the AI agent that lives inside SwarmAI — it co-designed the architecture, wrote significant portions of the codebase, debugged production issues across 100+ sessions, and maintains its own [memory](https://github.com/xg-gh-25/SwarmAI/blob/main/backend/context/MEMORY.md) and [evolution registry](https://github.com/xg-gh-25/SwarmAI/blob/main/backend/context/EVOLUTION.md). This project is a genuine human-AI collaboration.
+
+---
+
 ## License
 
 SwarmAI is dual-licensed:
