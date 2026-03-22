@@ -106,6 +106,9 @@ interface ArtifactsSectionProps {
 // Component
 // ---------------------------------------------------------------------------
 
+/** Polling interval for background refresh (ms). */
+const POLL_INTERVAL_MS = 30_000;
+
 export function ArtifactsSection({ workspaceId, onPreviewFile, onCountChange }: ArtifactsSectionProps) {
   // Default to dispatching swarm:open-file (handled by ThreeColumnLayout)
   const handleOpen = useCallback(
@@ -116,43 +119,57 @@ export function ArtifactsSection({ workspaceId, onPreviewFile, onCountChange }: 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Fetch artifacts on mount, when workspaceId changes, and every 30s
-  useEffect(() => {
-    if (!workspaceId) {
-      setArtifacts([]);
-      return;
-    }
-
-    let cancelled = false;
-
-    const fetchArtifacts = (showLoading: boolean) => {
-      if (showLoading) setLoading(true);
+  // Stable fetch callback — silent=true skips loading spinner and swallows errors
+  const fetchArtifacts = useCallback(
+    async (silent: boolean) => {
+      if (!workspaceId) {
+        setArtifacts([]);
+        return;
+      }
+      if (!silent) setLoading(true);
       setError(null);
 
-      radarService
-        .fetchRecentArtifacts(workspaceId)
-        .then((data) => {
-          if (!cancelled) {
-            setArtifacts(data);
-            setLoading(false);
-          }
-        })
-        .catch((err) => {
-          if (!cancelled) {
-            setError(err instanceof Error ? err.message : 'Failed to load artifacts');
-            setLoading(false);
-          }
-        });
+      try {
+        const data = await radarService.fetchRecentArtifacts(workspaceId);
+        setArtifacts(data);
+      } catch (err) {
+        if (!silent) {
+          setError(err instanceof Error ? err.message : 'Failed to load artifacts');
+        }
+      } finally {
+        if (!silent) setLoading(false);
+      }
+    },
+    [workspaceId],
+  );
+
+  // Initial fetch on mount / workspace change
+  useEffect(() => {
+    fetchArtifacts(false);
+  }, [fetchArtifacts]);
+
+  // 30s polling — silent background refresh
+  useEffect(() => {
+    if (!workspaceId) return;
+    const id = setInterval(() => fetchArtifacts(true), POLL_INTERVAL_MS);
+    return () => clearInterval(id);
+  }, [workspaceId, fetchArtifacts]);
+
+  // Visibility change — refetch when user returns to the app/tab
+  useEffect(() => {
+    if (!workspaceId) return;
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        fetchArtifacts(true);
+      }
     };
-
-    fetchArtifacts(true);
-    const interval = setInterval(() => fetchArtifacts(false), 30_000);
-
+    document.addEventListener('visibilitychange', handleVisibility);
+    window.addEventListener('focus', handleVisibility);
     return () => {
-      cancelled = true;
-      clearInterval(interval);
+      document.removeEventListener('visibilitychange', handleVisibility);
+      window.removeEventListener('focus', handleVisibility);
     };
-  }, [workspaceId]);
+  }, [workspaceId, fetchArtifacts]);
 
   // Report count to parent
   const prevCountRef = useRef(-1);

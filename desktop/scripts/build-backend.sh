@@ -193,16 +193,16 @@ uv pip install \
     "python-multipart>=0.0.12" \
     "pydantic>=2.10.0" \
     "pydantic-settings>=2.6.0" \
-    "claude-agent-sdk>=0.1.34" \
+    "claude-agent-sdk>=0.1.48" \
     "aiosqlite>=0.20.0" \
-    "python-jose[cryptography]>=3.3.0" \
-    "passlib[bcrypt]>=1.7.4" \
+    "PyJWT>=2.8.0" \
     "bcrypt>=4.0.0" \
     "slowapi>=0.1.9" \
     "boto3>=1.35.0" \
+    "psutil>=5.9.0" \
     "pyyaml>=6.0.0" \
     "anyio>=4.0.0" \
-    "lark-oapi>=1.5.3" 
+    "lark-oapi>=1.5.3"
     # "mcp>=1.0.0,<2.0.0"
 
 # Verify key local modules are accessible from current directory
@@ -275,6 +275,8 @@ local_modules = [
     'routers.tasks',
     'routers.todos',
     'routers.tscc',
+    'routers.artifacts',
+    'routers.memory',
     'routers.workspace',
     'routers.workspace_api',
     'routers.workspace_config',
@@ -293,7 +295,6 @@ local_modules = [
     'schemas.permission',
     'schemas.project',
     'schemas.search',
-    'schemas.settings',
     'schemas.skill',
     'schemas.task',
     'schemas.todo',
@@ -353,6 +354,7 @@ local_modules = [
     'core.todo_manager',
     'core.tool_summarizer',
     'core.tscc_state_manager',
+    'core.compaction_guard',
     # Hooks
     'hooks',
     'hooks.auto_commit_hook',
@@ -365,6 +367,17 @@ local_modules = [
     'middleware.auth',
     'middleware.error_handler',
     'middleware.rate_limit',
+    # Channels
+    'channels',
+    'channels.base',
+    'channels.gateway',
+    'channels.registry',
+    'channels.adapters.feishu',
+    # Utils
+    'utils',
+    'utils.bundle_paths',
+    'utils.diff_parser',
+    'utils.mcp_validation',
 ]
 
 a = Analysis(

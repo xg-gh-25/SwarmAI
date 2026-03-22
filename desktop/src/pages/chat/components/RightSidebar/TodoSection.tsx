@@ -18,7 +18,7 @@
  * - ``sortByPriorityThenDate`` — Sorts by priority desc, then createdAt desc
  */
 
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import type { RadarTodo } from '../../../../types';
 import { radarService } from '../../../../services/radar';
 import { DragHandle } from './shared/DragHandle';
@@ -30,6 +30,9 @@ import type { DropPayload } from './types';
 
 /** Default number of items shown before "See more" expansion. */
 const DISPLAY_LIMIT = 5;
+
+/** Polling interval for background refresh (ms). */
+const POLL_INTERVAL_MS = 30_000;
 
 /** Numeric weight per priority level (higher = more important). */
 export const PRIORITY_WEIGHT: Record<string, number> = {
@@ -98,39 +101,65 @@ export function TodoSection({ workspaceId, onCountChange }: TodoSectionProps) {
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState(false);
 
-  // Fetch active todos on mount and when workspaceId changes
-  useEffect(() => {
-    // Reset expansion state on mount / workspace change
-    setExpanded(false);
+  // Track whether initial load has completed (show spinner only for first load)
+  const hasLoadedRef = useRef(false);
 
-    if (!workspaceId) {
-      setTodos([]);
-      return;
-    }
+  // Stable fetch callback — silent=true skips the loading spinner (for polls)
+  const fetchTodos = useCallback(
+    async (silent: boolean) => {
+      if (!workspaceId) {
+        setTodos([]);
+        return;
+      }
+      if (!silent) setLoading(true);
+      setError(null);
 
-    let cancelled = false;
-    setLoading(true);
-    setError(null);
-
-    radarService
-      .fetchActiveTodos(workspaceId)
-      .then((data) => {
-        if (!cancelled) {
-          setTodos(data);
-          setLoading(false);
-        }
-      })
-      .catch((err) => {
-        if (!cancelled) {
+      try {
+        const data = await radarService.fetchActiveTodos(workspaceId);
+        setTodos(data);
+        hasLoadedRef.current = true;
+      } catch (err) {
+        // Only show error on initial load — silent polls swallow errors
+        if (!silent) {
           setError(err instanceof Error ? err.message : 'Failed to load todos');
-          setLoading(false);
         }
-      });
+      } finally {
+        if (!silent) setLoading(false);
+      }
+    },
+    [workspaceId],
+  );
 
-    return () => {
-      cancelled = true;
+  // Initial fetch + reset on workspace change
+  useEffect(() => {
+    setExpanded(false);
+    hasLoadedRef.current = false;
+    fetchTodos(false);
+  }, [fetchTodos]);
+
+  // 30s polling — silent background refresh
+  useEffect(() => {
+    if (!workspaceId) return;
+    const id = setInterval(() => fetchTodos(true), POLL_INTERVAL_MS);
+    return () => clearInterval(id);
+  }, [workspaceId, fetchTodos]);
+
+  // Visibility change — refetch when user returns to the app/tab
+  useEffect(() => {
+    if (!workspaceId) return;
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        fetchTodos(true);
+      }
     };
-  }, [workspaceId]);
+    document.addEventListener('visibilitychange', handleVisibility);
+    // Also refetch on window focus (covers alt-tab without visibility change)
+    window.addEventListener('focus', handleVisibility);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibility);
+      window.removeEventListener('focus', handleVisibility);
+    };
+  }, [workspaceId, fetchTodos]);
 
   // Derive active, sorted list
   const activeTodos = useMemo(
