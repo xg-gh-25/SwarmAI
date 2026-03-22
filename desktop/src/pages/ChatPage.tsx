@@ -176,7 +176,7 @@ export default function ChatPage() {
 
   // File attachment — unified hook replaces both useFileAttachment and LayoutContext.attachedFiles
   const { attachments, addFiles, addWorkspaceFiles, removeAttachment, clearAll: clearAttachments,
-    isProcessing: isProcessingFiles, error: fileError, canAddMore } = useUnifiedAttachments(
+    isProcessing: isProcessingFiles, error: fileError, canAddMore, restoreAttachments } = useUnifiedAttachments(
     activeTabId, tabMapRef
   );
 
@@ -245,6 +245,7 @@ export default function ChatPage() {
     clearContextWarning: _clearContextWarning,
     promptMetadata,
     setPromptMetadata,
+    isLikelyStalled,
   } = useChatStreamingLifecycle({
     queryClient,
     getSession: (sid: string) => chatService.getSession(sid),
@@ -1517,6 +1518,36 @@ export default function ChatPage() {
     }
   }, [buildContentArray, selectedAgentId, enableSkills, enableMCP, setIsStreaming, setMessages, updateTabStatus, incrementStreamGen, resetUserScroll, createStreamHandler, createErrorHandler, createCompleteHandler, tabMapRef, activeTabIdRef]);
 
+  // Bridge the ref so useChatStreamingLifecycle can drain via deps.onDrainQueue.
+  // Must be assigned after drainQueuedMessage is defined (circular dep with hook).
+  drainQueueRef.current = drainQueuedMessage;
+
+  // Cancel a queued message: remove from chat, restore text + attachments to input.
+  const handleCancelQueued = useCallback((tabId: string) => {
+    const tabState = tabMapRef.current.get(tabId);
+    if (!tabState?.queuedMessage) return;
+
+    const queued = tabState.queuedMessage;
+
+    // Remove from React state (display)
+    setMessages((prev) => prev.filter((m) => m.id !== queued.messageId));
+    // Remove from tabMapRef (authoritative)
+    if (tabState.messages) {
+      tabState.messages = tabState.messages.filter((m) => m.id !== queued.messageId);
+    }
+
+    // Clear queue
+    tabState.queuedMessage = undefined;
+
+    // Restore text to input
+    setInputValue(queued.text);
+
+    // Restore attachments to the attachment bar
+    if (queued.attachments.length > 0) {
+      restoreAttachments(queued.attachments);
+    }
+  }, [setMessages, setInputValue, tabMapRef, restoreAttachments]);
+
   // Handle answering AskUserQuestion
   const handleAnswerQuestion = (toolUseId: string, answers: Record<string, string>) => {
     const tabId = activeTabIdRef.current ?? undefined;
@@ -1937,6 +1968,7 @@ export default function ChatPage() {
                         sessionId={sessionId}
                         isLastAssistant={idx === lastAssistantIdx}
                         contextWarning={contextWarning}
+                        onCancelQueued={msg.isQueued && activeTabIdRef.current ? () => handleCancelQueued(activeTabIdRef.current!) : undefined}
                       />
                     );
                   })
@@ -2016,6 +2048,7 @@ export default function ChatPage() {
                 onInputValueChange={(tabId: string, value: string) => {
                   inputValueMapRef.current.set(tabId, value);
                 }}
+                isLikelyStalled={isLikelyStalled}
               />
             </>
           )}

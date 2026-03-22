@@ -58,6 +58,16 @@ const RECONNECT_BASE_DELAY_MS = 1000;
 /** Maximum delay cap in ms for exponential backoff. */
 const RECONNECT_MAX_DELAY_MS = 30000;
 
+// ---------------------------------------------------------------------------
+// Stall detection constants
+// ---------------------------------------------------------------------------
+
+/** Stall threshold during text generation — no real (non-heartbeat) event for this long. */
+const STALL_THRESHOLD_TEXT_MS = 60_000;
+
+/** Stall threshold during tool execution — tools like Bash/Read can take minutes. */
+const STALL_THRESHOLD_TOOL_MS = 180_000;
+
 /**
  * Compute the reconnection delay for a given attempt using exponential backoff.
  *
@@ -638,6 +648,10 @@ export interface ChatStreamingLifecycle {
   compactionGuard: CompactionGuardEvent | null;
   /** Set the compaction guard display mirror (used by tab switch restore). */
   setCompactionGuard: React.Dispatch<React.SetStateAction<CompactionGuardEvent | null>>;
+
+  // Hang detection — true when streaming but no real (non-heartbeat) SDK events for >60s
+  /** True when the active stream has received only heartbeats for >60s. */
+  isLikelyStalled: boolean;
 }
 
 /** Context warning payload from the backend context monitor. */
@@ -719,6 +733,33 @@ export function useChatStreamingLifecycle(
   const userScrolledUpRef = useRef<boolean>(false); // Fix 2: auto-scroll detection
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const streamStartTimeRef = useRef<number | null>(null); // Fix 9: elapsed time counter
+
+  // --- Hang detection: track last real (non-heartbeat) SSE event ---
+  // Context-aware: tool execution can legitimately take minutes (npm test,
+  // large file reads), so we use a longer threshold when a tool is in flight.
+  const lastRealEventRef = useRef<number>(Date.now());
+  const pendingToolUseRef = useRef<boolean>(false);
+  const [isLikelyStalled, setIsLikelyStalled] = useState(false);
+
+  // Poll for stall state while streaming (10s interval).
+  // Heartbeats keep the SSE connection alive but mask SDK hangs from the
+  // frontend. This timer checks whether we've received any real SDK event
+  // (text, tool_use, tool_result, result, etc.) within the threshold.
+  useEffect(() => {
+    if (!isStreaming) {
+      setIsLikelyStalled(false);
+      pendingToolUseRef.current = false;
+      return;
+    }
+    const interval = setInterval(() => {
+      const threshold = pendingToolUseRef.current
+        ? STALL_THRESHOLD_TOOL_MS
+        : STALL_THRESHOLD_TEXT_MS;
+      const stalled = Date.now() - lastRealEventRef.current > threshold;
+      setIsLikelyStalled(stalled);
+    }, 10_000);
+    return () => clearInterval(interval);
+  }, [isStreaming]);
 
   // Pending states
   const [pendingQuestion, setPendingQuestion] =
@@ -1050,6 +1091,21 @@ export function useChatStreamingLifecycle(
           });
         }
 
+        // Track last real (non-heartbeat) event for stall detection.
+        // Heartbeats keep the SSE connection alive but don't indicate SDK
+        // progress. Only real events reset the stall timer.
+        if (event.type !== 'heartbeat') {
+          lastRealEventRef.current = Date.now();
+        }
+
+        // Track tool execution state for context-aware stall thresholds.
+        // tool_use → tool is running (may take minutes), tool_result → done.
+        if (event.type === 'tool_use') {
+          pendingToolUseRef.current = true;
+        } else if (event.type === 'tool_result') {
+          pendingToolUseRef.current = false;
+        }
+
         if (event.type === 'session_start' && event.sessionId) {
           // Update per-tab map. Keep isStreaming true — the tab is still
           // actively streaming after session_start. The pending phase ends
@@ -1307,6 +1363,13 @@ export function useChatStreamingLifecycle(
               capturedTabId,
               isActiveTab ? 'idle' : 'complete_unread',
             );
+          }
+
+          // Drain site A: auto-send queued message on stream completion.
+          // setTimeout(0) ensures React has flushed idle state and stream
+          // cleanup is complete before starting a new stream.
+          if (capturedTabId && tabState?.queuedMessage) {
+            setTimeout(() => deps.onDrainQueue?.(capturedTabId), 0);
           }
         } else if (event.type === 'error') {
           // Suppress error events from a user-stopped stream — the abort
@@ -1871,5 +1934,6 @@ export function useChatStreamingLifecycle(
     setPromptMetadata,
     compactionGuard,
     setCompactionGuard,
+    isLikelyStalled,
   };
 }

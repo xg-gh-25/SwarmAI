@@ -42,6 +42,8 @@ export interface UseUnifiedAttachmentsReturn {
   removeAttachment: (id: string) => void;
   /** Clear all attachments for the current tab. */
   clearAll: () => void;
+  /** Restore attachments from a cancelled queued message. */
+  restoreAttachments: (attachments: UnifiedAttachment[]) => void;
   /** True while any file is being read/encoded. */
   isProcessing: boolean;
   /** Last error message (null if none). */
@@ -371,6 +373,18 @@ export function useUnifiedAttachments(
     setError(null);
   }, [tabIdRef, updateAttachments]);
 
+  // ---- restoreAttachments (cancel queued message flow) --------------------
+
+  const restoreAttachments = useCallback(
+    (restored: UnifiedAttachment[]): void => {
+      const tid = tabIdRef.current;
+      if (!tid) return;
+      updateAttachments(tid, () => [...restored]);
+      setError(null);
+    },
+    [tabIdRef, updateAttachments],
+  );
+
   // ---- Computed values ----------------------------------------------------
 
   const canAddMore = displayAttachments.length < MAX_ATTACHMENTS;
@@ -383,6 +397,7 @@ export function useUnifiedAttachments(
     addWorkspaceFiles,
     removeAttachment,
     clearAll,
+    restoreAttachments,
     isProcessing,
     error,
     canAddMore,
