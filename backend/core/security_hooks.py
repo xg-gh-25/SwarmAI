@@ -154,7 +154,13 @@ def create_dangerous_command_gate(
             return {}
 
         # --- HITL prompt flow ---
-        actual_session_id = session_context.get("sdk_session_id")
+        # Read session ID dynamically from the (mutable) session_context dict.
+        # The hook closure captures session_context at creation time, but the
+        # dict's contents may be updated by SessionRouter on each send() when
+        # the subprocess is reused (IDLE → STREAMING).  Using the live value
+        # ensures the permission request routes to the correct per-session
+        # queue that _read_formatted_response is watching.
+        actual_session_id = session_context.get("sdk_session_id") or session_key
         request_id = f"perm_{uuid4().hex[:12]}"
         tool_input_data = input_data.get("tool_input", {})
 
