@@ -6,6 +6,7 @@
  */
 
 import { useEffect, useState } from 'react';
+import { useZoom } from './hooks/useZoom';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ThemeProvider } from './contexts/ThemeContext';
@@ -37,6 +38,9 @@ const isDev = import.meta.env.DEV;
 export default function App() {
   // Track if backend is ready - prevents routes from mounting before backend is initialized
   const [isBackendReady, setIsBackendReady] = useState(isDev);
+
+  // App-wide zoom: Cmd+Plus / Cmd+Minus / Cmd+0
+  useZoom();
 
   // Log mode on startup
   useEffect(() => {

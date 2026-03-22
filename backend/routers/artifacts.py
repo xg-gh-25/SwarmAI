@@ -132,7 +132,15 @@ def _parse_git_log(raw_output: str) -> list[dict[str, str]]:
     for line in raw_output.splitlines():
         stripped = line.strip()
         if not stripped:
-            current_timestamp = None
+            # Blank lines separate commit blocks, but do NOT reset the
+            # timestamp.  ``git log --format=%aI --name-only`` inserts a
+            # blank line between the format output and the file list:
+            #
+            #   2026-03-22T13:32:02+08:00   ← timestamp
+            #   (blank)                      ← separator
+            #   Knowledge/DailyActivity/...  ← file
+            #
+            # Resetting here would drop every file.
             continue
 
         # ISO 8601 timestamp line (strict match)
