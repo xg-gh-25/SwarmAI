@@ -742,6 +742,27 @@ async def handle_cmd_permission_response(request: PermissionResponseRequest):
     # Signal any waiting tasks
     _pm.set_permission_decision(request.request_id, request.decision)
 
+    # On deny: the hook unblocks and returns deny to the SDK, but nobody
+    # is reading _read_formatted_response anymore (we returned from it
+    # after yielding cmd_permission_request and transitioning to
+    # WAITING_INPUT).  Interrupt the session to cleanly abort the
+    # response cycle so the session transitions WAITING_INPUT → IDLE.
+    if request.decision == "deny":
+        unit = _get_router().get_unit(request.session_id)
+        if unit and unit.state.value == "waiting_input":
+            try:
+                await unit.interrupt()
+                logger.info(
+                    "Session %s interrupted after permission deny "
+                    "(WAITING_INPUT → IDLE)",
+                    request.session_id,
+                )
+            except Exception as e:
+                logger.warning(
+                    "Failed to interrupt session %s after deny: %s",
+                    request.session_id, e,
+                )
+
     return PermissionRequestResponse(
         status="recorded",
         request_id=request.request_id
