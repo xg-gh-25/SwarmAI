@@ -25,6 +25,7 @@ import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
 import type { Message, ContentBlock, StreamEvent, Agent, AgentCreateRequest, ChatSession } from '../types';
+import { MAX_ATTACHMENTS } from '../types';
 import { chatService } from '../services/chat';
 import { agentsService } from '../services/agents';
 import { skillsService } from '../services/skills';
@@ -465,7 +466,7 @@ export default function ChatPage() {
         }
         // Guard 1: Suppress auto-scroll during tab switch — prevents the
         // [messages] effect from calling scrollToBottom() before the
-        // double-rAF scroll restore fires.
+        // useLayoutEffect scroll restore fires.
         userScrolledUpRef.current = true;
 
         setMessages(tabState.messages);
@@ -481,32 +482,17 @@ export default function ChatPage() {
         // the source tab's streaming state. Just bump to re-derive.
         bumpStreamingDerivation();
 
-        // Guard 2: Double-rAF scroll restore — ensures React has committed
-        // new messages to the DOM before setting scrollTop.
-        const savedScrollPosition = tabState.scrollPosition;
-        const restoreTabId = tabId; // capture for closure
-        requestAnimationFrame(() => {
-          requestAnimationFrame(() => {
-            // Async guard: if user switched tabs during rAF delay, no-op
-            if (activeTabIdRef.current !== restoreTabId) return;
+        // Mark this switch as handled — prevents the sync-active-tab effect
+        // from redundantly calling setMessages with the same data (extra render).
+        tabSelectHandledRef.current = true;
 
-            const container = messagesContainerRef.current;
-            if (!container) return;
-
-            if (savedScrollPosition !== undefined) {
-              container.scrollTop = savedScrollPosition;
-            } else {
-              // New tab or no saved position — scroll to bottom
-              messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
-            }
-
-            // Guard 4: Recompute userScrolledUpRef based on restored position
-            // to avoid stale auto-scroll suppression from the previous tab.
-            const threshold = 100;
-            const isNearBottom = container.scrollTop + container.clientHeight >= container.scrollHeight - threshold;
-            userScrolledUpRef.current = !isNearBottom;
-          });
-        });
+        // Guard 2: Schedule scroll restore via useLayoutEffect (fires
+        // synchronously after React commits DOM changes but BEFORE browser
+        // paint — eliminates the 2-3 frame visual flash from double-rAF).
+        pendingScrollRestoreRef.current = {
+          tabId,
+          scrollPosition: tabState.scrollPosition,
+        };
       }
       // Restore per-tab pending permission state from tabMapRef
       const targetTabState = getTabState(tabId);
@@ -623,6 +609,10 @@ export default function ChatPage() {
   // Scroll to bottom on new messages — conditional on user scroll position (Fix 2)
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const prevScrollHeightRef = useRef(0);
+  /** Pending scroll restore from tab switch — consumed by useLayoutEffect. */
+  const pendingScrollRestoreRef = useRef<{ tabId: string; scrollPosition?: number } | null>(null);
+  /** Flag to skip redundant sync-active-tab effect after handleTabSelect. */
+  const tabSelectHandledRef = useRef(false);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -658,6 +648,33 @@ export default function ChatPage() {
       prevScrollHeightRef.current = 0;
     }
   }, [messages]); // eslint-disable-line react-hooks/exhaustive-deps — fires after prepend
+
+  // Tab-switch scroll restoration — fires synchronously after React commits
+  // the new messages to the DOM but BEFORE the browser paints. This eliminates
+  // the 2-3 frame flash where messages render at scrollTop=0 then jump to the
+  // correct position (the "big jump" bug on first tab switch).
+  useLayoutEffect(() => {
+    const pending = pendingScrollRestoreRef.current;
+    if (!pending) return;
+    // Only consume if this render is for the correct tab
+    if (activeTabIdRef.current !== pending.tabId) return;
+    pendingScrollRestoreRef.current = null;
+
+    const container = messagesContainerRef.current;
+    if (!container) return;
+
+    if (pending.scrollPosition !== undefined) {
+      container.scrollTop = pending.scrollPosition;
+    } else {
+      // New tab or no saved position — scroll to bottom
+      container.scrollTop = container.scrollHeight;
+    }
+
+    // Recompute userScrolledUpRef based on restored position
+    const threshold = 100;
+    const isNearBottom = container.scrollTop + container.clientHeight >= container.scrollHeight - threshold;
+    userScrolledUpRef.current = !isNearBottom;
+  }, [messages]); // eslint-disable-line react-hooks/exhaustive-deps — fires on messages change from tab switch
 
   // Log time-to-interactive when messagesReady becomes true (Req 8.4)
   useEffect(() => {
@@ -944,11 +961,18 @@ export default function ChatPage() {
     if (prevActiveTabIdRef.current === activeTabId) return;
     prevActiveTabIdRef.current = activeTabId;
 
+    // Skip if handleTabSelect already synced state for this tab switch.
+    // Reset the flag for the next switch.
+    if (tabSelectHandledRef.current) {
+      tabSelectHandledRef.current = false;
+      return;
+    }
+
     // Guard: skip during initial restore — doRestore handles message loading
     // directly and will set messagesReady when done. Without this, the else
     // branch below fires before the tab map is fully populated, wiping messages.
     if (isLoadingHistory) return;
-    
+
     // Read tab metadata from the map (stable, not from openTabs which triggers re-renders)
     const activeTabState = tabMapRef.current.get(activeTabId);
     if (!activeTabState) return;
@@ -1234,34 +1258,60 @@ export default function ChatPage() {
       const trimmedText = messageText.trim();
       if (!trimmedText && !hasAttachments) return;
 
-      const displayText = trimmedText || '[Attachments]';
-      const displayContent: ContentBlock[] = [{ type: 'text', text: displayText }];
-      if (hasAttachments && trimmedText) {
-        displayContent.push({ type: 'text', text: `📎 ${currentAttachments.map((a) => a.name).join(', ')}` });
+      const displayText = trimmedText || '';
+      const displayContent: ContentBlock[] = [];
+      if (displayText) {
+        displayContent.push({ type: 'text', text: displayText });
+      }
+      if (hasAttachments) {
+        displayContent.push({ type: 'text', text: `📎 ${currentAttachments.filter((a) => !a.error && !a.isLoading).map((a) => a.name).join(', ')}` });
       }
 
-      // REPLACE PATH: if a message is already queued, update in-place
+      // APPEND PATH: if a message is already queued, concatenate new text
+      // and merge attachments. User's first thought shouldn't vanish silently.
       const existingQueued = activeTabForGuard.queuedMessage;
       if (existingQueued) {
+        const combinedText = trimmedText
+          ? `${existingQueued.text}\n\n${messageText}`
+          : existingQueued.text;
+        const newAttachments = (currentAttachments || []).filter((a) => !a.error && !a.isLoading);
+        const combinedAttachments = [
+          ...existingQueued.attachments,
+          ...newAttachments,
+        ].slice(0, MAX_ATTACHMENTS); // enforce limit across appends
+        const combinedDisplayText = trimmedText
+          ? `${existingQueued.text.trim()}\n\n${trimmedText}`
+          : existingQueued.text.trim();
+        const combinedDisplayContent: ContentBlock[] = [];
+        if (combinedDisplayText) {
+          combinedDisplayContent.push({ type: 'text', text: combinedDisplayText });
+        }
+        if (combinedAttachments.length > 0) {
+          combinedDisplayContent.push({
+            type: 'text',
+            text: `📎 ${combinedAttachments.map((a) => a.name).join(', ')}`,
+          });
+        }
+
         setMessages((prev) =>
           prev.map((m) =>
             m.id === existingQueued.messageId
-              ? { ...m, content: displayContent, timestamp: new Date().toISOString() }
+              ? { ...m, content: combinedDisplayContent, timestamp: new Date().toISOString() }
               : m
           )
         );
         if (activeTabForGuard.messages) {
           activeTabForGuard.messages = activeTabForGuard.messages.map((m) =>
             m.id === existingQueued.messageId
-              ? { ...m, content: displayContent, timestamp: new Date().toISOString() }
+              ? { ...m, content: combinedDisplayContent, timestamp: new Date().toISOString() }
               : m
           );
         }
 
         activeTabForGuard.queuedMessage = {
-          text: messageText,
-          attachments: [...(currentAttachments || [])],
-          displayContent,
+          text: combinedText,
+          attachments: combinedAttachments,
+          displayContent: combinedDisplayContent,
           messageId: existingQueued.messageId,
         };
 
@@ -1289,7 +1339,7 @@ export default function ChatPage() {
 
       activeTabForGuard.queuedMessage = {
         text: messageText,
-        attachments: [...(currentAttachments || [])],
+        attachments: (currentAttachments || []).filter((a) => !a.error && !a.isLoading),
         displayContent,
         messageId: queuedMessageId,
       };
