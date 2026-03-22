@@ -16,6 +16,7 @@
  * - ``RadarViewProps``  — Props interface for RadarView
  */
 
+import { useState, useCallback } from 'react';
 import { CollapsibleSection } from './shared/CollapsibleSection';
 import { TodoSection } from './TodoSection';
 import { ArtifactsSection } from './ArtifactsSection';
@@ -56,6 +57,14 @@ export function RadarView({
   onSwitchToHistory,
   onPreviewFile,
 }: RadarViewProps) {
+  const [todoCount, setTodoCount] = useState(0);
+  const [artifactCount, setArtifactCount] = useState(0);
+  const [jobCount, setJobCount] = useState(0);
+
+  const handleTodoCount = useCallback((n: number) => setTodoCount(n), []);
+  const handleArtifactCount = useCallback((n: number) => setArtifactCount(n), []);
+  const handleJobCount = useCallback((n: number) => setJobCount(n), []);
+
   return (
     <div>
       {/* ToDo — expanded by default */}
@@ -63,11 +72,11 @@ export function RadarView({
         name="todo"
         icon="checklist"
         label="ToDo"
-        count={0}
+        count={todoCount}
         statusHint=""
         defaultExpanded={true}
       >
-        <TodoSection workspaceId={workspaceId} />
+        <TodoSection workspaceId={workspaceId} onCountChange={handleTodoCount} />
       </CollapsibleSection>
 
       {/* Artifacts — collapsed by default */}
@@ -75,13 +84,14 @@ export function RadarView({
         name="artifacts"
         icon="folder_open"
         label="Artifacts"
-        count={0}
+        count={artifactCount}
         statusHint=""
         defaultExpanded={false}
       >
         <ArtifactsSection
           workspaceId={workspaceId}
           onPreviewFile={onPreviewFile}
+          onCountChange={handleArtifactCount}
         />
       </CollapsibleSection>
 
@@ -90,7 +100,7 @@ export function RadarView({
         name="sessions"
         icon="chat_bubble"
         label="Sessions"
-        count={0}
+        count={openTabs.length}
         statusHint=""
         defaultExpanded={false}
       >
@@ -107,11 +117,11 @@ export function RadarView({
         name="jobs"
         icon="smart_toy"
         label="Jobs"
-        count={0}
+        count={jobCount}
         statusHint=""
         defaultExpanded={false}
       >
-        <JobsSection />
+        <JobsSection onCountChange={handleJobCount} />
       </CollapsibleSection>
     </div>
   );

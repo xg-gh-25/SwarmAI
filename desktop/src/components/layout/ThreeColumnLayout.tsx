@@ -1,6 +1,6 @@
 import { ReactNode, useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { LayoutProvider, useLayout, LAYOUT_CONSTANTS, ModalType, useSessionMeta } from '../../contexts/LayoutContext';
+import { LayoutProvider, useLayout, LAYOUT_CONSTANTS, ModalType } from '../../contexts/LayoutContext';
 import { ExplorerProvider, useTreeData } from '../../contexts/ExplorerContext';
 import { WorkspaceExplorer } from '../workspace-explorer';
 import { BottomBar } from './BottomBar';
@@ -21,7 +21,6 @@ import type { FileTreeItem } from '../workspace-explorer/FileTreeNode';
 import type { GitStatus } from '../../types';
 import api from '../../services/api';
 import { useToast } from '../../contexts/ToastContext';
-import { ContextUsageRing } from '../../pages/chat/components/ContextUsageRing';
 import { copyToClipboard } from '../../utils/clipboard';
 
 // Left sidebar width constant
@@ -34,12 +33,10 @@ interface ThreeColumnLayoutProps {
   children: ReactNode;
 }
 
-// TopBar -- Session context bar replacing the old file search.
-// Shows: session topic, context usage %, attached files, active agent.
+// TopBar -- App-level intelligence bar.
+// Shows: context ring (left), token usage metrics (right).
 // Remains draggable for Tauri window move (macOS).
 function TopBar() {
-  const { activeSessionMeta } = useSessionMeta();
-
   const handleMouseDown = async (e: React.MouseEvent) => {
     if (e.button === 0 && e.clientX > 80) {
       try {
@@ -49,8 +46,6 @@ function TopBar() {
       }
     }
   };
-
-  const meta = activeSessionMeta;
 
   return (
     <div
@@ -62,36 +57,16 @@ function TopBar() {
       {/* Spacer for macOS traffic lights */}
       <div className="w-20 flex-shrink-0" />
 
-      {/* Session context info -- centered */}
-      <div className="flex-1 flex items-center justify-center gap-3 text-[11px] text-[var(--color-text-muted)]" role="status" aria-label="Session context">
-        {meta ? (
-          <>
-            <span className="flex items-center gap-1.5 text-[var(--color-text-secondary)] font-medium truncate min-w-0" style={{ maxWidth: 'clamp(120px, 25vw, 360px)', letterSpacing: '-0.02em' }} aria-label={`Session: ${meta.topic || 'New Session'}`}>
-              <span className="material-symbols-outlined text-[13px]" aria-hidden="true">chat_bubble</span>
-              {meta.topic || 'New Session'}
-            </span>
-            <div className="w-px h-3 bg-[var(--color-border)] flex-shrink-0" aria-hidden="true" />
-            <span className="flex items-center gap-1" aria-label={`Context usage: ${meta.contextPct != null ? Math.round(meta.contextPct) + '%' : 'unknown'}`}>
-              <ContextUsageRing pct={meta.contextPct} size={20} showLabel />
-            </span>
-            <div className="w-px h-3 bg-[var(--color-border)] flex-shrink-0" aria-hidden="true" />
-            <span className="flex items-center gap-1" aria-label={`${meta.fileCount} attached files`}>
-              <span className="material-symbols-outlined text-[13px]" aria-hidden="true">attach_file</span>
-              {meta.fileCount}
-            </span>
-            <div className="w-px h-3 bg-[var(--color-border)] flex-shrink-0" aria-hidden="true" />
-            <span className="flex items-center gap-1" aria-label={`Agent: ${meta.agentName}`}>
-              <span className="material-symbols-outlined text-[13px]" aria-hidden="true">smart_toy</span>
-              {meta.agentName}
-            </span>
-          </>
-        ) : (
-          <span className="text-[var(--color-text-dim)]">SwarmAI</span>
-        )}
-      </div>
+      {/* Center: drag region (flexible spacer) */}
+      <div className="flex-1" />
 
-      {/* Right spacer for symmetry */}
-      <div className="w-20 flex-shrink-0" />
+      {/* Right: token usage metrics */}
+      <div className="flex items-center gap-2 mr-8 text-[11px] text-[var(--color-text-muted)]" role="status" aria-label="Token usage">
+        <span className="text-[13px]">&#x1FA99;</span>
+        <span>Today <strong className="text-[var(--color-text-secondary)]">--</strong></span>
+        <span className="text-[var(--color-border)]">|</span>
+        <span>MTD <strong className="text-[var(--color-text-secondary)]">--</strong></span>
+      </div>
     </div>
   );
 }

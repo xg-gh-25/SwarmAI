@@ -60,6 +60,25 @@ for _type_name, _extensions in EXTENSION_TYPE_MAP.items():
     for _ext in _extensions:
         _EXT_TO_TYPE[_ext] = _type_name
 
+# Directories that contain user-facing session output (positive filter).
+# Only files under these prefixes appear in the Radar Artifacts section.
+_ARTIFACT_DIRS: tuple[str, ...] = (
+    "Knowledge/",
+    "Designs/",
+    "Notes/",
+    "Projects/",
+    "Attachments/",
+)
+
+# Exact filenames to always exclude even if they match a directory above.
+_EXCLUDED_NAMES: set[str] = {
+    "L1_SYSTEM_PROMPTS.md",
+    "L0_SYSTEM_PROMPTS.md",
+}
+
+# Extensions to always exclude (logs, lockfiles, etc.).
+_EXCLUDED_EXTENSIONS: set[str] = {".log", ".lock", ".pyc"}
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Response model
@@ -109,6 +128,32 @@ def _classify_extension(file_path: str) -> str:
     return _EXT_TO_TYPE.get(ext, "other")
 
 
+def _is_artifact_file(file_path: str) -> bool:
+    """Return True if the file is a user-facing session output artifact.
+
+    Filters to files under Knowledge/, Designs/, Notes/, Projects/, or
+    Attachments/. Excludes log files, cache files, and system-generated
+    files like L1_SYSTEM_PROMPTS.md.
+    """
+    name = Path(file_path).name
+    ext = Path(file_path).suffix.lower()
+
+    # Exclude by extension
+    if ext in _EXCLUDED_EXTENSIONS:
+        return False
+
+    # Exclude specific system filenames
+    if name in _EXCLUDED_NAMES:
+        return False
+
+    # Exclude hidden directories (e.g. .context/, .claude/)
+    if any(part.startswith(".") for part in Path(file_path).parts):
+        return False
+
+    # Positive filter: must be under a known artifact directory
+    return any(file_path.startswith(prefix) for prefix in _ARTIFACT_DIRS)
+
+
 def _parse_git_log(raw_output: str) -> list[dict[str, str]]:
     """Parse raw ``git log`` output into deduplicated artifact records.
 
@@ -150,7 +195,7 @@ def _parse_git_log(raw_output: str) -> list[dict[str, str]]:
 
         # File path line — only record if we have a timestamp
         if current_timestamp and stripped:
-            if stripped not in seen:
+            if stripped not in seen and _is_artifact_file(stripped):
                 seen[stripped] = current_timestamp
 
     # Build response sorted by timestamp descending

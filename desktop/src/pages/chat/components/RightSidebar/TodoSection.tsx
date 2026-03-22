@@ -18,7 +18,7 @@
  * - ``sortByPriorityThenDate`` — Sorts by priority desc, then createdAt desc
  */
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import type { RadarTodo } from '../../../../types';
 import { radarService } from '../../../../services/radar';
 import { DragHandle } from './shared/DragHandle';
@@ -84,13 +84,15 @@ export function sortByPriorityThenDate(todos: RadarTodo[]): RadarTodo[] {
 
 interface TodoSectionProps {
   workspaceId: string | null;
+  /** Report item count to parent for badge display. */
+  onCountChange?: (count: number) => void;
 }
 
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 
-export function TodoSection({ workspaceId }: TodoSectionProps) {
+export function TodoSection({ workspaceId, onCountChange }: TodoSectionProps) {
   const [todos, setTodos] = useState<RadarTodo[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -135,6 +137,15 @@ export function TodoSection({ workspaceId }: TodoSectionProps) {
     () => sortByPriorityThenDate(filterActiveTodos(todos)),
     [todos],
   );
+
+  // Report count to parent — use ref to avoid re-render loops
+  const prevCountRef = useRef(-1);
+  useEffect(() => {
+    if (onCountChange && activeTodos.length !== prevCountRef.current) {
+      prevCountRef.current = activeTodos.length;
+      onCountChange(activeTodos.length);
+    }
+  }, [activeTodos.length, onCountChange]);
 
   const visibleTodos = expanded
     ? activeTodos

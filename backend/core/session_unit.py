@@ -211,6 +211,12 @@ class SessionUnit:
         # Reset on every STREAMING transition so next IDLE fires fresh.
         self._hooks_enqueued: bool = False
 
+        # ── Memory watermark ──────────────────────────────────────
+        # Peak tree RSS (CLI + all MCP children) observed during lifetime.
+        # Updated every maintenance cycle by LifecycleManager.
+        # Logged on session kill/evict for post-mortem analysis.
+        self._peak_tree_rss_bytes: int = 0
+
         # ── Buffer overflow recovery ────────────────────────────────
         # Set True when a tool response exceeds the CLI's 10MB JSONRPC
         # buffer.  On the next send, a recovery instruction is prepended
@@ -1440,6 +1446,49 @@ class SessionUnit:
             self._transition(SessionState.IDLE)
             self.last_used = time.time()
 
+    # ── SSE disconnect recovery ─────────────────────────────────────
+
+    def recover_from_disconnect(self) -> bool:
+        """Transition STREAMING → IDLE after SSE client disconnect.
+
+        Returns True if the transition happened.  No-op if not STREAMING.
+
+        This is the public API for ``chat.py``'s disconnect handler —
+        avoids calling ``_transition()`` from outside the unit.
+        """
+        if self.state != SessionState.STREAMING:
+            return False
+        self._transition(SessionState.IDLE)
+        self.last_used = time.time()
+        return True
+
+    async def flush_subprocess_pipe(self, timeout: float = 3.0) -> None:
+        """Interrupt the CLI subprocess to flush stale pipe events.
+
+        Called after ``recover_from_disconnect()`` as a background task.
+        The unit is IDLE; the subprocess may still be running a tool
+        whose stdout output would contaminate the next ``send()``.
+
+        Bypasses ``interrupt()`` which is state-gated on STREAMING.
+        If the client interrupt times out, kills the subprocess for
+        a clean respawn on next ``send()``.
+        """
+        if self.state != SessionState.IDLE or self._client is None:
+            return
+        try:
+            await asyncio.wait_for(self._client.interrupt(), timeout=timeout)
+            logger.info(
+                "session_unit.flush_pipe session_id=%s — pipe flushed",
+                self.session_id,
+            )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "session_unit.flush_pipe session_id=%s — interrupt timed out, "
+                "killing for clean respawn",
+                self.session_id,
+            )
+            await self.kill()
+
     # ── Interactive methods (task 3.3) ─────────────────────────────
 
     async def interrupt(self, timeout: float = 5.0) -> bool:
@@ -1797,6 +1846,7 @@ class SessionUnit:
         self._interrupted = False
         self._retry_count = 0
         self._model_name = None
+        self._peak_tree_rss_bytes = 0
 
     def _full_cleanup(self) -> None:
         """Full cleanup for non-retriable crashes where the session should NOT be resumable.

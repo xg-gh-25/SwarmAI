@@ -557,22 +557,21 @@ export function ChatInput({
             </button>
           </div>
 
-          {/* Bottom Row - Attachment button + TSCC button + Commands hint */}
+          {/* Bottom Row - attachment left, context/TSCC right */}
           <div className="flex items-center justify-between mt-3 pt-3 border-t border-[var(--color-border)]/50">
+            {/* Left: Attachment button */}
             <div className="flex items-center gap-2">
               <FileAttachmentButton onFilesSelected={onAddFiles} disabled={isProcessingFiles || disabled} canAddMore={canAddMore} />
-              <TSCCPopoverButton sessionId={sessionId ?? null} metadata={promptMetadata ?? null} />
-              <ContextUsageRing pct={contextPct ?? null} />
-            </div>
-            <div className="flex items-center gap-3">
               {lineCount > 5 && (
                 <span className="text-xs text-[var(--color-text-muted)]">
                   {lineCount} lines
                 </span>
               )}
-              <span className="text-xs text-[var(--color-text-muted)]">
-                Type <kbd className="px-1.5 py-0.5 bg-[var(--color-hover)] rounded text-xs mx-1">/</kbd> for commands
-              </span>
+            </div>
+            {/* Right: Context ring + TSCC */}
+            <div className="flex items-center gap-2">
+              <ContextUsageRing pct={contextPct ?? null} size={20} showLabel />
+              <TSCCPopoverButton sessionId={sessionId ?? null} metadata={promptMetadata ?? null} />
             </div>
           </div>
 
