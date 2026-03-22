@@ -16,7 +16,7 @@ English | [中文](./README.zh-CN.md)
 [![License](https://img.shields.io/badge/License-AGPL_v3-blue.svg?style=flat)](./LICENSE-AGPL)
 [![Commercial](https://img.shields.io/badge/License-Commercial-orange.svg?style=flat)](./LICENSE-COMMERCIAL)
 
-![SwarmAI Home](./assets/swarmai-home-mockup.png)
+![SwarmAI Home](./assets/swarm-0.png)
 
 </div>
 
@@ -112,7 +112,9 @@ SwarmAI follows a three-column layout:
 |------|--------|-------|
 | **SwarmWS Explorer** — workspace files, knowledge, projects | **Chat Tabs** — multi-session command surface | **Swarm Radar** — ToDos, sessions, artifacts, jobs |
 
-![SwarmAI Chat Interface](./assets/swarmai-chat-mockup.png)
+![SwarmAI Chat Interface](./assets/swarm-2.png)
+
+![SwarmAI Chat Interface](./assets/swarm-3.png)
 
 ---
 
