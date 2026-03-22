@@ -57,7 +57,7 @@ function TopBar() {
       {/* Center: drag region (flexible spacer) */}
       <div className="flex-1" />
 
-      {/* Right: token usage metrics */}
+      {/* Right: token usage metrics — TODO: wire to backend token tracking API (placeholder only) */}
       <div className="flex items-center gap-2 mr-8 text-[11px] text-[var(--color-text-muted)]" role="status" aria-label="Token usage">
         <span className="text-[13px]">&#x1FA99;</span>
         <span>Today <strong className="text-[var(--color-text-secondary)]">--</strong></span>
