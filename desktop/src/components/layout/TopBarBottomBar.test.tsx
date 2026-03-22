@@ -108,84 +108,19 @@ function setupMocks(overrides: {
 // ---------- TopBar Tests ----------
 
 describe('TopBar', () => {
-  it('shows fallback "SwarmAI" when no session meta is set', () => {
+  it('renders token usage placeholder', () => {
     setupMocks({ sessionMeta: null });
     render(<TopBar />);
-    expect(screen.getByText('SwarmAI')).toBeDefined();
+    expect(screen.getByText('Today')).toBeDefined();
+    expect(screen.getByText('MTD')).toBeDefined();
   });
 
-  it('renders session topic when meta is provided', () => {
-    setupMocks({ sessionMeta: { topic: 'My Chat' } });
-    render(<TopBar />);
-    expect(screen.getByText('My Chat')).toBeDefined();
-  });
-
-  it('renders "New Session" when topic is empty string', () => {
-    setupMocks({ sessionMeta: { topic: '' } });
-    render(<TopBar />);
-    expect(screen.getByText('New Session')).toBeDefined();
-  });
-
-  it('renders context percentage in SVG ring', () => {
+  it('does not render context ring (moved to ChatInput)', () => {
     setupMocks({ sessionMeta: { contextPct: 72 } });
     render(<TopBar />);
-    // SVG ring shows just the number (no "%" suffix)
-    expect(screen.getByText('72')).toBeDefined();
-  });
-
-  it('renders no label when contextPct is null', () => {
-    setupMocks({ sessionMeta: { contextPct: null } });
-    render(<TopBar />);
-    const pctLabel = screen.getByLabelText(/Context usage: unknown/);
-    expect(pctLabel).toBeDefined();
-    // Ring renders with "No context data yet" tooltip, no numeric label inside
-    const ring = pctLabel.querySelector('[title="No context data yet"]');
-    expect(ring).toBeDefined();
-  });
-
-  it('renders file count', () => {
-    setupMocks({ sessionMeta: { fileCount: 5 } });
-    render(<TopBar />);
-    expect(screen.getByText('5')).toBeDefined();
-  });
-
-  it('renders agent name', () => {
-    setupMocks({ sessionMeta: { agentName: 'TestAgent' } });
-    render(<TopBar />);
-    expect(screen.getByText('TestAgent')).toBeDefined();
-  });
-
-  it('renders SVG ring with red stroke when context > 80%', () => {
-    setupMocks({ sessionMeta: { contextPct: 85 } });
-    render(<TopBar />);
-    const pctLabel = screen.getByLabelText(/Context usage: 85%/);
-    expect(pctLabel).toBeDefined();
-    expect(pctLabel.textContent).toContain('85');
-    const svg = pctLabel.querySelector('svg');
-    const progressCircle = svg?.querySelectorAll('circle')[1];
-    expect(progressCircle?.getAttribute('stroke')).toBe('#ef4444');
-  });
-
-  it('renders SVG ring with yellow stroke when context > 60%', () => {
-    setupMocks({ sessionMeta: { contextPct: 65 } });
-    render(<TopBar />);
-    const pctLabel = screen.getByLabelText(/Context usage: 65%/);
-    expect(pctLabel).toBeDefined();
-    expect(pctLabel.textContent).toContain('65');
-    const svg = pctLabel.querySelector('svg');
-    const progressCircle = svg?.querySelectorAll('circle')[1];
-    expect(progressCircle?.getAttribute('stroke')).toBe('#eab308');
-  });
-
-  it('renders SVG ring with green stroke when context <= 60%', () => {
-    setupMocks({ sessionMeta: { contextPct: 40 } });
-    render(<TopBar />);
-    const pctLabel = screen.getByLabelText(/Context usage: 40%/);
-    expect(pctLabel).toBeDefined();
-    expect(pctLabel.textContent).toContain('40');
-    const svg = pctLabel.querySelector('svg');
-    const progressCircle = svg?.querySelectorAll('circle')[1];
-    expect(progressCircle?.getAttribute('stroke')).toBe('#22c55e');
+    // No SVG ring in TopBar anymore
+    const bar = screen.getByTestId('top-bar');
+    expect(bar.querySelector('svg')).toBeNull();
   });
 
   it('has data-tauri-drag-region for window dragging', () => {

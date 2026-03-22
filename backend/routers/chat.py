@@ -76,12 +76,8 @@ def _recover_streaming_on_disconnect(session_id: Optional[str]) -> None:
     if not session_id or _session_router is None:
         return
     try:
-        from core.session_unit import SessionState
         unit = _session_router.get_unit(session_id)
-        if unit and unit.state == SessionState.STREAMING:
-            # Phase 1: immediate state transition
-            unit._transition(SessionState.IDLE)
-            unit.last_used = __import__("time").time()
+        if unit and unit.recover_from_disconnect():
             _chat_logger.info(
                 "SSE disconnect recovery: session %s transitioned "
                 "STREAMING → IDLE",
@@ -106,51 +102,14 @@ async def _cleanup_subprocess_after_disconnect(
     unit: "SessionUnit",  # noqa: F821 — forward ref, resolved at runtime
     session_id: str,
 ) -> None:
-    """Background task: interrupt subprocess pipe after SSE disconnect.
+    """Background task: flush subprocess pipe after SSE disconnect.
 
     The state machine has already been transitioned to IDLE by
-    ``_recover_streaming_on_disconnect``.  This task calls the SDK
-    client's ``interrupt()`` directly (bypassing ``SessionUnit.interrupt``
-    which is state-gated and would early-return on IDLE) to flush the
-    subprocess's stdout pipe of any stale events from the interrupted
-    turn.
-
-    If the SDK interrupt times out (subprocess unresponsive), the
-    subprocess is killed so the next ``send()`` spawns fresh from COLD.
+    ``recover_from_disconnect()``.  This delegates to the unit's
+    ``flush_subprocess_pipe()`` which handles interrupt + kill fallback.
     """
     try:
-        # Guard: if a new send() already picked up the unit (IDLE→STREAMING),
-        # or the subprocess died, don't interfere.
-        from core.session_unit import SessionState
-        if unit.state != SessionState.IDLE:
-            _chat_logger.debug(
-                "SSE disconnect cleanup skipped: session %s already in %s",
-                session_id, unit.state.value,
-            )
-            return
-        if unit._client is None:
-            return
-
-        await asyncio.wait_for(unit._client.interrupt(), timeout=3.0)
-        _chat_logger.info(
-            "SSE disconnect cleanup: subprocess pipe flushed for "
-            "session %s",
-            session_id,
-        )
-    except asyncio.TimeoutError:
-        _chat_logger.warning(
-            "SSE disconnect cleanup: interrupt timed out for session %s "
-            "— killing subprocess for clean respawn",
-            session_id,
-        )
-        try:
-            await unit.kill()
-        except Exception as kill_err:
-            _chat_logger.warning(
-                "SSE disconnect cleanup: kill also failed for "
-                "session %s: %s",
-                session_id, kill_err,
-            )
+        await unit.flush_subprocess_pipe(timeout=3.0)
     except asyncio.CancelledError:
         pass  # App shutting down — don't log noise
     except Exception as e:
@@ -805,9 +764,9 @@ async def delete_session(session_id: str):
             suggested_action="Please check the session ID and try again"
         )
 
-    # 4. Clean up system prompt metadata to prevent unbounded memory growth
-    from core import session_registry
-    session_registry.system_prompt_metadata.pop(session_id, None)
+    # 4. Clean up per-session state to prevent unbounded memory growth
+    from core.lifecycle_manager import LifecycleManager
+    LifecycleManager._release_session_state(session_id)
 
 
 @router.post("/cmd-permission-response", response_model=PermissionRequestResponse)

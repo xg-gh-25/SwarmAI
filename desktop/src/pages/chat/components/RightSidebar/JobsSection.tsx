@@ -16,7 +16,7 @@
  * - ``countActiveJobs``       — Returns count of non-completed jobs
  */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import type { RadarAutonomousJob } from '../../../../types';
 import { radarService } from '../../../../services/radar';
 
@@ -57,7 +57,12 @@ export function countActiveJobs(jobs: RadarAutonomousJob[]): number {
 // Component
 // ---------------------------------------------------------------------------
 
-export function JobsSection() {
+interface JobsSectionProps {
+  /** Report item count to parent for badge display. */
+  onCountChange?: (count: number) => void;
+}
+
+export function JobsSection({ onCountChange }: JobsSectionProps = {}) {
   const [jobs, setJobs] = useState<RadarAutonomousJob[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -87,6 +92,16 @@ export function JobsSection() {
       cancelled = true;
     };
   }, []);
+
+  // Report count to parent
+  const prevCountRef = useRef(-1);
+  useEffect(() => {
+    const active = countActiveJobs(jobs);
+    if (onCountChange && active !== prevCountRef.current) {
+      prevCountRef.current = active;
+      onCountChange(active);
+    }
+  }, [jobs, onCountChange]);
 
   // --- Loading state ---
   if (loading) {

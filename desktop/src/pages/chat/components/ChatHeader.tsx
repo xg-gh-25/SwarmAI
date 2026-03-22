@@ -15,11 +15,9 @@ interface ChatHeaderProps {
   // Fix 8: Tab status indicators
   tabStatuses?: Record<string, TabStatus>;
 
-  // Dynamic tab scaling — disabled "+" button and memory pressure indicator
+  // Dynamic tab scaling — disabled "+" button when at limit
   /** True when open tab count >= dynamic max tabs (disables the "+" button). */
   isNewTabDisabled?: boolean;
-  /** Current memory pressure level from backend polling. */
-  memoryPressure?: 'ok' | 'warning' | 'critical';
 }
 
 /**
@@ -43,7 +41,6 @@ export function ChatHeader({
   onNewSession,
   tabStatuses,
   isNewTabDisabled,
-  memoryPressure,
 }: ChatHeaderProps) {
   const { t } = useTranslation();
   const { health } = useHealth();
@@ -80,27 +77,6 @@ export function ChatHeader({
           >
             <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
             {t('health.initializing', 'Starting up...')}
-          </div>
-        )}
-        {/* Memory pressure indicator — informational only, no auto-close (Req 6.1–6.5) */}
-        {memoryPressure === 'warning' && (
-          <div
-            className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-amber-500/10 text-amber-400 text-xs font-medium mr-1"
-            role="status"
-            aria-label={t('chat.memoryWarning', 'Memory pressure: warning')}
-          >
-            <span className="w-2 h-2 rounded-full bg-amber-500" />
-            {t('chat.memoryWarning', 'Memory')}
-          </div>
-        )}
-        {memoryPressure === 'critical' && (
-          <div
-            className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-red-500/10 text-red-400 text-xs font-medium mr-1"
-            role="status"
-            aria-label={t('chat.memoryCritical', 'Memory pressure: critical')}
-          >
-            <span className="w-2 h-2 rounded-full bg-red-500" />
-            {t('chat.memoryCritical', 'Memory')}
           </div>
         )}
         {/* New Session Button (+) - Validates: Requirement 2.1, 5.1, 5.2, 5.3 */}

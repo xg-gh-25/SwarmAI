@@ -1,6 +1,7 @@
 """LifecycleManager — background maintenance, TTL cleanup, and hook serialization.
 
 Single background loop responsible for:
+- Per-session memory sampling (CLI + MCP tree RSS, peak watermark, 1.5GB warning)
 - Streaming timeout watchdog (5min no SDK events → force-unstick)
 - TTL-based session cleanup (12hr idle → kill)
 - Serialized hook execution (auto-commit, daily activity, distillation, evolution)
@@ -203,9 +204,10 @@ class LifecycleManager:
 
         Every LOOP_INTERVAL seconds:
         1. Health check all units (detect dead subprocesses)
-        2. Fire hooks for units idle > IDLE_HOOK_GRACE (Gap 2 fix)
-        3. Kill units idle > TTL_SECONDS
-        4. Clean up DEAD units → COLD (with hook firing)
+        2. Sample per-session memory (CLI + MCP tree RSS)
+        3. Fire hooks for units idle > IDLE_HOOK_GRACE (Gap 2 fix)
+        4. Kill units idle > TTL_SECONDS
+        5. Clean up DEAD units → COLD (with hook firing)
         """
         logger.info("Maintenance loop started")
         cycle = 0
@@ -215,6 +217,7 @@ class LifecycleManager:
                 cycle += 1
                 try:
                     await self._health_check_all()
+                    await self._sample_process_memory()
                     await self._check_streaming_timeout()
                     await self._fire_idle_hooks()
                     await self._check_ttl()
@@ -234,6 +237,66 @@ class LifecycleManager:
         for unit in self._router.list_units():
             if unit.is_alive:
                 await unit.health_check()
+
+    async def _sample_process_memory(self) -> None:
+        """Sample per-session memory (CLI + MCP children) for observability.
+
+        Runs every maintenance cycle (60s).  For each alive unit:
+        1. Calls ``resource_monitor.process_tree_rss(pid)`` to get total
+           RSS of the CLI subprocess + all its MCP children.
+        2. Updates the unit's ``_peak_tree_rss_bytes`` watermark.
+        3. Logs a per-session summary line for post-mortem analysis.
+
+        Non-fatal — failures are logged and skipped.  The cost is one
+        ``psutil.Process(pid).children(recursive=True)`` per alive unit
+        per cycle, which is ~1ms each.
+        """
+        try:
+            from .resource_monitor import resource_monitor
+
+            alive_units = [u for u in self._router.list_units() if u.is_alive and u.pid]
+            if not alive_units:
+                return
+
+            total_tree_rss = 0
+            entries = []
+
+            for unit in alive_units:
+                tree_rss = await asyncio.to_thread(
+                    resource_monitor.process_tree_rss, unit.pid,
+                )
+                if tree_rss <= 0:
+                    continue
+
+                # Update peak watermark; warn on first 1.5GB crossing
+                prev_peak = unit._peak_tree_rss_bytes
+                if tree_rss > prev_peak:
+                    unit._peak_tree_rss_bytes = tree_rss
+                    if tree_rss > 1_500_000_000 and prev_peak <= 1_500_000_000:
+                        logger.warning(
+                            "lifecycle_manager.memory_warning session=%s "
+                            "tree_rss=%dMB — crossed 1.5GB threshold",
+                            unit.session_id[:8],
+                            tree_rss // (1024 * 1024),
+                        )
+
+                total_tree_rss += tree_rss
+                rss_mb = tree_rss / (1024 * 1024)
+                peak_mb = unit._peak_tree_rss_bytes / (1024 * 1024)
+                entries.append(
+                    f"{unit.session_id[:8]}={rss_mb:.0f}MB"
+                    f"(peak={peak_mb:.0f}MB,{unit.state.name})"
+                )
+
+            if entries:
+                total_mb = total_tree_rss / (1024 * 1024)
+                logger.info(
+                    "lifecycle_manager.memory_sample total=%dMB sessions=[%s]",
+                    int(total_mb),
+                    ", ".join(entries),
+                )
+        except Exception as exc:
+            logger.debug("_sample_process_memory failed (non-fatal): %s", exc)
 
     async def _check_streaming_timeout(self) -> None:
         """Force-unstick sessions that have been STREAMING with no SDK
@@ -309,18 +372,41 @@ class LifecycleManager:
                 idle_seconds = now - unit.last_used
                 if idle_seconds > self.TTL_SECONDS:
                     logger.info(
-                        "lifecycle_manager.ttl_kill session_id=%s idle=%.0fs",
+                        "lifecycle_manager.ttl_kill session_id=%s idle=%.0fs "
+                        "peak_rss=%dMB",
                         unit.session_id, idle_seconds,
+                        unit._peak_tree_rss_bytes // (1024 * 1024),
                     )
                     # Hooks may already have fired via _fire_idle_hooks.
                     # Only fire again if they haven't (e.g., executor wired late).
                     if not unit._hooks_enqueued:
                         await self.enqueue_hooks_for_unit(unit)
                     await unit.kill()
+                    self._release_session_state(unit.session_id)
 
-                    # Clean up system prompt metadata
-                    from . import session_registry
-                    session_registry.system_prompt_metadata.pop(unit.session_id, None)
+    @staticmethod
+    def _release_session_state(session_id: str) -> None:
+        """Release all per-session state outside SessionUnit.
+
+        Called on every session end path (TTL kill, crash→COLD, purge).
+        Prevents unbounded growth of module-level dicts that key by session_id.
+
+        Targets:
+        - session_registry.system_prompt_metadata  (prompt text, ~50KB each)
+        - permission_manager._approved_commands    (command hashes)
+        - permission_manager._session_queues       (asyncio.Queue)
+        """
+        try:
+            from . import session_registry
+            session_registry.system_prompt_metadata.pop(session_id, None)
+        except Exception as exc:
+            logger.debug("_release_session_state metadata cleanup failed: %s", exc)
+        try:
+            from .permission_manager import permission_manager
+            permission_manager.clear_session_approvals(session_id)
+            permission_manager.remove_session_queue(session_id)
+        except Exception as exc:
+            logger.debug("_release_session_state permission cleanup failed: %s", exc)
 
     async def _cleanup_dead(self) -> None:
         """Transition DEAD units to COLD. Fire hooks if not yet fired (Gap 3 fix).
@@ -336,6 +422,7 @@ class LifecycleManager:
                     if ctx:
                         self.enqueue_hooks(ctx)
                         unit._hooks_enqueued = True
+                self._release_session_state(unit.session_id)
                 unit._cleanup_internal()
                 unit._transition(SessionState.COLD)
 
@@ -354,6 +441,7 @@ class LifecycleManager:
             and (now - u.last_used) > 3600  # 1 hour
         ]
         for sid in stale_ids:
+            self._release_session_state(sid)
             self._router._units.pop(sid, None)
         if stale_ids:
             logger.info(
