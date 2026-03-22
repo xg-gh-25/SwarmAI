@@ -9,15 +9,19 @@ Two-phase design:
   ACTIVE (after compaction detected) — monitors for loop patterns using set-overlap
     detection and single-tool repetition, with graduated escalation.
 
-Graduated escalation (ACTIVE phase only, gated by 85% context threshold):
+Graduated escalation:
   MONITORING  — no action needed
   SOFT_WARN   — first detection: remind agent of completed work
   HARD_WARN   — second detection: instruct agent to summarize and stop
   KILL        — third detection: caller interrupts the streaming session
 
-Loop detection uses two complementary strategies:
-  1. Set-overlap: >60% of post-compaction calls match pre-compaction baseline (min 5 calls)
-  2. Single-tool repetition: any (tool_name, input_hash) pair appears ≥5 times
+Loop detection uses three complementary strategies:
+  1. Diversity stall (all phases): sliding window of last 20/40 calls,
+     fires when unique (tool, input_hash) ratio drops below 30%.
+     Catches real loops (same files/patterns repeating) but NOT normal
+     code research (reading different files, grepping different patterns).
+  2. Set-overlap (ACTIVE only): >60% of post-compaction calls match pre-compaction baseline
+  3. Single-tool repetition (ACTIVE only): any (tool_name, input_hash) pair appears ≥5 times
 
 Public symbols:
 
@@ -87,14 +91,19 @@ _SINGLE_TOOL_REPEAT_LIMIT = 5
 _COMPACTION_DROP_THRESHOLD = 30
 """Context % drop between consecutive updates that triggers heuristic compaction detection."""
 
-PRODUCTIVE_TOOLS: set[str] = {"Edit", "Write", "MultiEdit", "Bash", "NotebookEdit"}
-"""Tools that produce output — progress indicators."""
+_STALL_WINDOW: int = 20
+"""Sliding window size for diversity-based stall detection."""
 
-_NONPRODUCTIVE_SOFT_WARN: int = 15
-"""Consecutive non-productive calls before SOFT_WARN."""
+_STALL_DIVERSITY_PCT: float = 0.30
+"""If unique calls / window < this ratio, the agent is stalling.
 
-_NONPRODUCTIVE_HARD_WARN: int = 30
-"""Consecutive non-productive calls before HARD_WARN."""
+20 calls with <6 unique (tool, input_hash) pairs = stalling.
+Example stall: Read A, Read A, Read A... (1 unique / 20 = 5%)
+Example healthy: Read A, Grep B, Read C, Read D... (20 unique / 20 = 100%)
+"""
+
+_STALL_ESCALATION_WINDOW: int = 40
+"""Larger window — if diversity still low at this count, escalate to HARD_WARN."""
 
 
 # ── Escalation ordering (for strict one-step progression) ────────
@@ -143,9 +152,8 @@ class CompactionGuard:
         # Cached pattern description from last _detect_loop() call
         self._last_pattern_desc: str = ""
 
-        # Progress tracking — productive vs non-productive
-        self._consecutive_nonproductive: int = 0
-        self._has_productive_call: bool = False
+        # Diversity-based stall detection — sliding window of recent calls
+        self._recent_calls: list[tuple[str, str]] = []
 
     @property
     def phase(self) -> GuardPhase:
@@ -237,12 +245,10 @@ class CompactionGuard:
             # Append full record for work summary
             self._tool_records.append(record)
 
-            # Progress tracking — productive vs non-productive
-            if tool_name in PRODUCTIVE_TOOLS:
-                self._consecutive_nonproductive = 0
-                self._has_productive_call = True
-            else:
-                self._consecutive_nonproductive += 1
+            # Sliding window for diversity-based stall detection
+            self._recent_calls.append(pair)
+            if len(self._recent_calls) > _STALL_ESCALATION_WINDOW:
+                self._recent_calls = self._recent_calls[-_STALL_ESCALATION_WINDOW:]
 
         except Exception:
             logger.exception("compaction_guard.record_tool_call failed")
@@ -378,18 +384,62 @@ class CompactionGuard:
 
         return False
 
+    # ── _is_stalled() ────────────────────────────────────────────
+
+    def _is_stalled(self) -> tuple[bool, int, int, int]:
+        """Detect stall via low diversity in the sliding window of recent calls.
+
+        A stall means the agent is repeating the same operations — reading
+        the same files, grepping the same patterns. This is the BEHAVIORAL
+        signal of a dead loop, not the tool classification signal.
+
+        Returns (is_stalled, window_size, unique_count, total_calls).
+        Two tiers:
+        - _STALL_WINDOW (20) calls with <30% diversity → soft stall
+        - _STALL_ESCALATION_WINDOW (40) calls with <30% diversity → hard stall
+        """
+        total = len(self._recent_calls)
+        if total < _STALL_WINDOW:
+            return False, 0, 0, total
+
+        # Check the standard window first
+        window = self._recent_calls[-_STALL_WINDOW:]
+        unique = len(set(window))
+        threshold = int(_STALL_WINDOW * _STALL_DIVERSITY_PCT)
+
+        if unique < threshold:
+            return True, _STALL_WINDOW, unique, total
+
+        return False, _STALL_WINDOW, unique, total
+
+    def _is_hard_stalled(self) -> bool:
+        """Escalation-window stall: 40 calls with low diversity."""
+        total = len(self._recent_calls)
+        if total < _STALL_ESCALATION_WINDOW:
+            return False
+        window = self._recent_calls[-_STALL_ESCALATION_WINDOW:]
+        unique = len(set(window))
+        threshold = int(_STALL_ESCALATION_WINDOW * _STALL_DIVERSITY_PCT)
+        return unique < threshold
+
     # ── check() ──────────────────────────────────────────────────
 
     def check(self) -> EscalationLevel:
         """Check all layers and return the current escalation level.
 
-        PASSIVE → always MONITORING (no interference).
-        ACTIVE + progress stall (15/30 non-productive) → SOFT_WARN/HARD_WARN.
-        ACTIVE + ctx < dynamic threshold → MONITORING.
-        ACTIVE + ctx ≥ dynamic threshold → run _detect_loop().
-          Loop detected → escalate one step (MONITORING→SOFT_WARN→HARD_WARN→KILL).
-          No loop → MONITORING.
-        After KILL, subsequent calls continue returning KILL.
+        Detection strategy (both PASSIVE and ACTIVE phases):
+        1. Diversity-based stall: low unique/total ratio in sliding window.
+           This catches real dead loops (same calls repeating) but NOT normal
+           code research (reading different files, grepping different patterns).
+           - 20 calls with <30% diversity (< 6 unique) → SOFT_WARN
+           - 40 calls with <30% diversity (< 12 unique) → HARD_WARN
+           - PASSIVE phase caps at HARD_WARN (no KILL without compaction evidence)
+
+        ACTIVE phase adds:
+        2. Context threshold + loop detection:
+           - Set-overlap >60% matching baseline → escalate one step
+           - Single-tool repetition ≥5 → escalate one step
+           - Can reach KILL
 
         The dynamic threshold scales with context window size:
         200K → 85%, 1M → 40% (via _compute_activation_pct).
@@ -398,75 +448,63 @@ class CompactionGuard:
         never block streaming.
         """
         try:
-            # PASSIVE phase: no interference from loop detection.
-            # But progress stall detection still applies — a dead loop
-            # is a dead loop regardless of compaction history.
-            # Progress stall in PASSIVE caps at HARD_WARN (no KILL).
-            if self._phase == GuardPhase.PASSIVE:
-                if self._consecutive_nonproductive >= _NONPRODUCTIVE_HARD_WARN:
-                    new_level = EscalationLevel.HARD_WARN
-                    logger.warning(
-                        "compaction_guard.passive_progress_stall nonproductive=%d → %s",
-                        self._consecutive_nonproductive, new_level.value,
-                    )
-                    self._escalation = new_level
-                    self._last_pattern_desc = (
-                        f"{self._consecutive_nonproductive} consecutive non-productive "
-                        f"tool calls with zero Edit/Write/Bash (PASSIVE phase)"
-                    )
-                    return new_level
-                elif self._consecutive_nonproductive >= _NONPRODUCTIVE_SOFT_WARN:
-                    if self._escalation == EscalationLevel.MONITORING:
-                        new_level = EscalationLevel.SOFT_WARN
-                        logger.warning(
-                            "compaction_guard.passive_progress_stall nonproductive=%d → %s",
-                            self._consecutive_nonproductive, new_level.value,
-                        )
-                        self._escalation = new_level
-                        self._last_pattern_desc = (
-                            f"{self._consecutive_nonproductive} consecutive non-productive "
-                            f"tool calls with zero Edit/Write/Bash (PASSIVE phase)"
-                        )
-                        return new_level
-                return EscalationLevel.MONITORING
-
             # Already at KILL: stay there
             if self._escalation == EscalationLevel.KILL:
                 return EscalationLevel.KILL
 
-            # Progress-based detection — fires regardless of context %
-            # Only in ACTIVE phase (after compaction detected)
-            if self._phase == GuardPhase.ACTIVE:
-                progress_level = None
-                if (
-                    self._consecutive_nonproductive >= _NONPRODUCTIVE_HARD_WARN
-                    and self._escalation.value in ("monitoring", "soft_warn")
-                ):
-                    progress_level = EscalationLevel.HARD_WARN
-                elif (
-                    self._consecutive_nonproductive >= _NONPRODUCTIVE_SOFT_WARN
-                    and self._escalation == EscalationLevel.MONITORING
-                ):
-                    progress_level = EscalationLevel.SOFT_WARN
+            # ── Layer 1: Diversity-based stall detection (all phases) ──
+            stalled, window_sz, unique_ct, total_calls = self._is_stalled()
+            if stalled:
+                if self._is_hard_stalled():
+                    # 40+ calls with low diversity — serious stall
+                    if self._escalation in (
+                        EscalationLevel.MONITORING,
+                        EscalationLevel.SOFT_WARN,
+                    ):
+                        new_level = EscalationLevel.HARD_WARN
+                        logger.warning(
+                            "compaction_guard.diversity_stall "
+                            "unique=%d/%d (%.0f%%) over %d calls → %s",
+                            unique_ct, window_sz,
+                            (unique_ct / window_sz * 100) if window_sz else 0,
+                            total_calls, new_level.value,
+                        )
+                        self._escalation = new_level
+                        self._last_pattern_desc = (
+                            f"Low call diversity: {unique_ct} unique operations "
+                            f"in last {_STALL_ESCALATION_WINDOW} calls — "
+                            f"agent is repeating the same operations"
+                        )
+                        return new_level
+                else:
+                    # 20+ calls with low diversity — early warning
+                    if self._escalation == EscalationLevel.MONITORING:
+                        new_level = EscalationLevel.SOFT_WARN
+                        logger.warning(
+                            "compaction_guard.diversity_stall "
+                            "unique=%d/%d (%.0f%%) over %d calls → %s",
+                            unique_ct, window_sz,
+                            (unique_ct / window_sz * 100) if window_sz else 0,
+                            total_calls, new_level.value,
+                        )
+                        self._escalation = new_level
+                        self._last_pattern_desc = (
+                            f"Low call diversity: {unique_ct} unique operations "
+                            f"in last {window_sz} calls — "
+                            f"agent may be repeating operations"
+                        )
+                        return new_level
 
-                if progress_level is not None:
-                    logger.warning(
-                        "compaction_guard.progress_escalation nonproductive=%d → %s",
-                        self._consecutive_nonproductive, progress_level.value,
-                    )
-                    self._escalation = progress_level
-                    self._last_pattern_desc = (
-                        f"{self._consecutive_nonproductive} consecutive non-productive "
-                        f"tool calls with zero Edit/Write/Bash"
-                    )
-                    return progress_level
+            # ── PASSIVE phase: diversity stall is the only detector ────
+            if self._phase == GuardPhase.PASSIVE:
+                return EscalationLevel.MONITORING
 
-            # ACTIVE but below context threshold: no detection
+            # ── ACTIVE phase: context threshold + loop detection ───────
             activation_pct = self._compute_activation_pct(self._context_window)
             if self._context_pct < activation_pct:
                 return EscalationLevel.MONITORING
 
-            # ACTIVE + ctx ≥ 85%: run loop detection
+            # ACTIVE + ctx ≥ threshold: run loop detection
             if self._detect_loop():
                 # Escalate one step
                 current_idx = _ESCALATION_ORDER.index(self._escalation)
@@ -628,8 +666,7 @@ class CompactionGuard:
             self._rolling_baseline_set = set()
             self._post_compaction_sequence = []
             self._tool_records = []
-            self._consecutive_nonproductive = 0
-            self._has_productive_call = False
+            self._recent_calls = []
             self._context_window = 200_000
         except Exception:
             logger.exception("compaction_guard.reset_all failed")

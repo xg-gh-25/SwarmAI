@@ -525,12 +525,13 @@ class TestBuildGuardEvent:
 class TestResetLifecycle:
     """Sub-task 1.10: Lifecycle reset methods."""
 
-    def test_reset_clears_escalation(self):
+    def test_reset_preserves_escalation(self):
+        """reset() preserves escalation level (bugfix: was incorrectly clearing it)."""
         guard = CompactionGuard()
         guard._phase = GuardPhase.ACTIVE
         guard._escalation = EscalationLevel.HARD_WARN
         guard.reset()
-        assert guard.escalation == EscalationLevel.MONITORING
+        assert guard.escalation == EscalationLevel.HARD_WARN
 
     def test_reset_clears_post_compaction_sequence(self):
         guard = CompactionGuard()

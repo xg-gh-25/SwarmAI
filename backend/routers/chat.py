@@ -47,7 +47,8 @@ _lifecycle_manager = None
 
 
 def _recover_streaming_on_disconnect(session_id: Optional[str]) -> None:
-    """Transition a STREAMING session to IDLE after SSE client disconnect.
+    """Transition a STREAMING session to IDLE after SSE client disconnect
+    and schedule subprocess pipe cleanup.
 
     When the SSE connection drops (network blip, browser stall timeout,
     tab close), the consumer_task in sse_with_heartbeat is cancelled,
@@ -55,6 +56,19 @@ def _recover_streaming_on_disconnect(session_id: Optional[str]) -> None:
     cleanup, the session stays in STREAMING — the next send() triggers
     force_unstick_streaming → kill → respawn --resume, replaying the
     previous turn's completed output as if it were new content.
+
+    Two-phase cleanup:
+
+    1. **Immediate** — transition STREAMING → IDLE so the next ``send()``
+       follows the normal IDLE → STREAMING path instead of the
+       force_unstick → kill → --resume replay path.
+    2. **Background** — schedule ``_cleanup_subprocess_after_disconnect``
+       to interrupt the CLI subprocess.  The subprocess may still be
+       running a tool from the interrupted turn; its stdout pipe may
+       contain stale events that would contaminate the next ``send()``'s
+       ``receive_response()`` iterator.  Interrupting flushes the pipe;
+       if the interrupt times out the subprocess is killed so the next
+       ``send()`` spawns fresh from COLD.
 
     This is a best-effort, fire-and-forget cleanup. Errors are logged
     but never propagated.
@@ -65,6 +79,7 @@ def _recover_streaming_on_disconnect(session_id: Optional[str]) -> None:
         from core.session_unit import SessionState
         unit = _session_router.get_unit(session_id)
         if unit and unit.state == SessionState.STREAMING:
+            # Phase 1: immediate state transition
             unit._transition(SessionState.IDLE)
             unit.last_used = __import__("time").time()
             _chat_logger.info(
@@ -72,9 +87,75 @@ def _recover_streaming_on_disconnect(session_id: Optional[str]) -> None:
                 "STREAMING → IDLE",
                 session_id,
             )
+            # Phase 2: schedule subprocess pipe cleanup
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(
+                    _cleanup_subprocess_after_disconnect(unit, session_id)
+                )
+            except RuntimeError:
+                pass  # No running event loop — skip async cleanup
     except Exception as e:
         _chat_logger.warning(
             "SSE disconnect recovery failed for session %s: %s",
+            session_id, e,
+        )
+
+
+async def _cleanup_subprocess_after_disconnect(
+    unit: "SessionUnit",  # noqa: F821 — forward ref, resolved at runtime
+    session_id: str,
+) -> None:
+    """Background task: interrupt subprocess pipe after SSE disconnect.
+
+    The state machine has already been transitioned to IDLE by
+    ``_recover_streaming_on_disconnect``.  This task calls the SDK
+    client's ``interrupt()`` directly (bypassing ``SessionUnit.interrupt``
+    which is state-gated and would early-return on IDLE) to flush the
+    subprocess's stdout pipe of any stale events from the interrupted
+    turn.
+
+    If the SDK interrupt times out (subprocess unresponsive), the
+    subprocess is killed so the next ``send()`` spawns fresh from COLD.
+    """
+    try:
+        # Guard: if a new send() already picked up the unit (IDLE→STREAMING),
+        # or the subprocess died, don't interfere.
+        from core.session_unit import SessionState
+        if unit.state != SessionState.IDLE:
+            _chat_logger.debug(
+                "SSE disconnect cleanup skipped: session %s already in %s",
+                session_id, unit.state.value,
+            )
+            return
+        if unit._client is None:
+            return
+
+        await asyncio.wait_for(unit._client.interrupt(), timeout=3.0)
+        _chat_logger.info(
+            "SSE disconnect cleanup: subprocess pipe flushed for "
+            "session %s",
+            session_id,
+        )
+    except asyncio.TimeoutError:
+        _chat_logger.warning(
+            "SSE disconnect cleanup: interrupt timed out for session %s "
+            "— killing subprocess for clean respawn",
+            session_id,
+        )
+        try:
+            await unit.kill()
+        except Exception as kill_err:
+            _chat_logger.warning(
+                "SSE disconnect cleanup: kill also failed for "
+                "session %s: %s",
+                session_id, kill_err,
+            )
+    except asyncio.CancelledError:
+        pass  # App shutting down — don't log noise
+    except Exception as e:
+        _chat_logger.warning(
+            "SSE disconnect cleanup failed for session %s: %s",
             session_id, e,
         )
 

@@ -31,6 +31,7 @@ from core.compaction_guard import (
     EscalationLevel,
     GuardPhase,
     _CONTEXT_ACTIVATION_PCT,
+    _STALL_WINDOW,
 )
 
 
@@ -78,28 +79,44 @@ class TestBugConditionExploration:
         # On unfixed code: reset() sets _escalation = MONITORING → FAIL
         assert guard.escalation == EscalationLevel.SOFT_WARN
 
-    # ── 1c: Progress Detection ───────────────────────────────────
+    # ── 1c: Diversity-Based Stall Detection ─────────────────────
 
-    def test_progress_detection_fires(self):
-        """15+ consecutive non-productive calls should trigger escalation.
+    def test_diversity_stall_detection_fires(self):
+        """Low-diversity call window triggers escalation.
 
         **Validates: Requirements 1.3, 2.3**
 
-        On unfixed code: no progress tracker → returns MONITORING → FAIL.
-        After fix: 20 consecutive Read calls → at least SOFT_WARN.
+        After fix: 20 identical Read calls = 1 unique / 20 = 5% diversity
+        → well below 30% threshold → at least SOFT_WARN.
+
+        Normal research (20 different files) would NOT trigger this.
         """
         guard = CompactionGuard()
         guard._phase = GuardPhase.ACTIVE
-        # Record 20 consecutive Read calls
-        for _ in range(20):
+        # Record 20 identical Read calls (same file = real dead loop)
+        for _ in range(_STALL_WINDOW):
             guard.record_tool_call("Read", {"path": "test.py"})
         level = guard.check()
-        # On unfixed code: no progress tracker → returns MONITORING → FAIL
         assert level in (
             EscalationLevel.SOFT_WARN,
             EscalationLevel.HARD_WARN,
             EscalationLevel.KILL,
         )
+
+    def test_diverse_reads_do_not_trigger(self):
+        """Reading 20 DIFFERENT files is healthy research, not a stall.
+
+        This is the false-positive case that the old non-productive counter
+        would incorrectly flag. The new diversity-based approach allows it.
+        """
+        guard = CompactionGuard()
+        guard._phase = GuardPhase.ACTIVE
+        # Record 20 different Read calls (different files = research)
+        for i in range(_STALL_WINDOW):
+            guard.record_tool_call("Read", {"path": f"file_{i}.py"})
+        level = guard.check()
+        # Should NOT trigger — high diversity
+        assert level == EscalationLevel.MONITORING
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -128,17 +145,17 @@ class TestPreservation:
 
     # ── 2b: PASSIVE Phase ────────────────────────────────────────
 
-    def test_passive_phase_returns_monitoring(self):
-        """PASSIVE phase always returns MONITORING regardless of state.
+    def test_passive_phase_returns_monitoring_for_diverse_calls(self):
+        """PASSIVE phase returns MONITORING for diverse tool calls.
 
         **Validates: Requirements 3.2**
 
-        Even with high context and many tool calls, PASSIVE → MONITORING.
+        Even with high context, diverse tool calls are healthy research.
         """
         guard = CompactionGuard()  # starts PASSIVE
         guard._context_pct = 95.0  # high context
-        for _ in range(10):
-            guard.record_tool_call("Read", {"path": "x"})
+        for i in range(15):
+            guard.record_tool_call("Read", {"path": f"file_{i}.py"})
         assert guard.check() == EscalationLevel.MONITORING
 
     # ── 2c: reset_all Full Reset ─────────────────────────────────

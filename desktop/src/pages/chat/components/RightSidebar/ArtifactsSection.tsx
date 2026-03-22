@@ -16,11 +16,25 @@
  * - ``formatRelativeTime``   — Converts ISO timestamp to relative string
  */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { radarService } from '../../../../services/radar';
 import { DragHandle } from './shared/DragHandle';
 import type { RadarArtifact } from './types';
 import type { DropPayload } from './types';
+
+/**
+ * Open a file in the FileEditorPanel via the global ``swarm:open-file`` event.
+ *
+ * This is the same mechanism used by MarkdownRenderer for clickable file paths
+ * in chat messages.  ThreeColumnLayout listens for this event and routes the
+ * file through resolve → open logic (text files in-panel, PDFs/Office via
+ * system app).
+ */
+function dispatchOpenFile(path: string): void {
+  document.dispatchEvent(
+    new CustomEvent('swarm:open-file', { detail: { path } }),
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -91,11 +105,16 @@ interface ArtifactsSectionProps {
 // ---------------------------------------------------------------------------
 
 export function ArtifactsSection({ workspaceId, onPreviewFile }: ArtifactsSectionProps) {
+  // Default to dispatching swarm:open-file (handled by ThreeColumnLayout)
+  const handleOpen = useCallback(
+    (path: string) => (onPreviewFile ?? dispatchOpenFile)(path),
+    [onPreviewFile],
+  );
   const [artifacts, setArtifacts] = useState<RadarArtifact[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Fetch artifacts on mount and when workspaceId changes
+  // Fetch artifacts on mount, when workspaceId changes, and every 30s
   useEffect(() => {
     if (!workspaceId) {
       setArtifacts([]);
@@ -103,26 +122,33 @@ export function ArtifactsSection({ workspaceId, onPreviewFile }: ArtifactsSectio
     }
 
     let cancelled = false;
-    setLoading(true);
-    setError(null);
 
-    radarService
-      .fetchRecentArtifacts(workspaceId)
-      .then((data) => {
-        if (!cancelled) {
-          setArtifacts(data);
-          setLoading(false);
-        }
-      })
-      .catch((err) => {
-        if (!cancelled) {
-          setError(err instanceof Error ? err.message : 'Failed to load artifacts');
-          setLoading(false);
-        }
-      });
+    const fetchArtifacts = (showLoading: boolean) => {
+      if (showLoading) setLoading(true);
+      setError(null);
+
+      radarService
+        .fetchRecentArtifacts(workspaceId)
+        .then((data) => {
+          if (!cancelled) {
+            setArtifacts(data);
+            setLoading(false);
+          }
+        })
+        .catch((err) => {
+          if (!cancelled) {
+            setError(err instanceof Error ? err.message : 'Failed to load artifacts');
+            setLoading(false);
+          }
+        });
+    };
+
+    fetchArtifacts(true);
+    const interval = setInterval(() => fetchArtifacts(false), 30_000);
 
     return () => {
       cancelled = true;
+      clearInterval(interval);
     };
   }, [workspaceId]);
 
@@ -168,13 +194,13 @@ export function ArtifactsSection({ workspaceId, onPreviewFile }: ArtifactsSectio
           <li
             key={artifact.path}
             className="group flex items-center gap-2 px-1 py-1 rounded hover:bg-[var(--color-hover)] transition-colors cursor-pointer"
-            onClick={() => onPreviewFile?.(artifact.path)}
+            onClick={() => handleOpen(artifact.path)}
             role="button"
             tabIndex={0}
             onKeyDown={(e) => {
               if (e.key === 'Enter' || e.key === ' ') {
                 e.preventDefault();
-                onPreviewFile?.(artifact.path);
+                handleOpen(artifact.path);
               }
             }}
           >

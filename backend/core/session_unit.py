@@ -447,8 +447,13 @@ class SessionUnit:
         )
 
         # ── Layer 1: Auto-recover stuck STREAMING sessions ─────────
-        # Reset stop event for new message
-        self._stop_event = asyncio.Event()
+        # Clear (don't replace) the stop event — the SSE endpoint already
+        # holds a reference to this object.  Creating a new Event() would
+        # leave the SSE consumer watching a stale object that's still set
+        # from the previous interrupt(), causing the new stream to die
+        # immediately.  See: 2026-03-22 12:40:09 "SSE stop event received"
+        # bug where the new stream was killed 7s after spawn.
+        self._stop_event.clear()
 
         # If a previous request got stuck (SDK never sent ResultMessage),
         # the unit stays in STREAMING forever.  Instead of rejecting the
@@ -1373,6 +1378,34 @@ class SessionUnit:
                 # ── Context usage & metadata bridge ────────────────
                 for meta_event in self._emit_post_stream_metadata(usage):
                     yield meta_event
+
+                # ── Post-interrupt corruption detection ────────────
+                # After a CompactionGuard interrupt, the CLI subprocess
+                # may stay alive but return empty ResultMessages instantly
+                # (<2s, no content).  The subprocess is "warm but broken."
+                # Kill it so the retry logic can respawn a fresh process.
+                # See: 2026-03-22 12:36:08 instant idle after interrupt.
+                streaming_dur = (
+                    time.time() - self._streaming_start_time
+                    if self._streaming_start_time else 0.0
+                )
+                if (
+                    streaming_dur < 2.0
+                    and not self._content_emitted
+                    and not is_error
+                ):
+                    logger.warning(
+                        "session_unit.empty_result_detected "
+                        "session_id=%s duration=%.3fs — subprocess "
+                        "degraded after interrupt, killing for respawn",
+                        self.session_id, streaming_dur,
+                    )
+                    await self.kill()
+                    raise RuntimeError(
+                        f"Empty result from degraded subprocess: "
+                        f"stream ended in {streaming_dur:.1f}s with no "
+                        f"content (session_id={self.session_id})"
+                    )
 
                 self._transition(SessionState.IDLE)
                 self.last_used = time.time()

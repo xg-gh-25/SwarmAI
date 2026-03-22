@@ -41,6 +41,7 @@ import type {
   CompactionGuardEvent,
 } from '../types';
 import type { PendingQuestion } from '../pages/chat/types';
+import { chatService } from '../services/chat';
 import type { UnifiedTab } from './useUnifiedTabState';
 import { type TabStatus } from './useUnifiedTabState';
 import { useToast } from '../contexts/ToastContext';
@@ -1707,6 +1708,23 @@ export function useChatStreamingLifecycle(
               `[Reconnect] Tab ${capturedTabId}: all ${RECONNECT_MAX_ATTEMPTS} attempts exhausted`,
             );
           }
+        }
+
+        // --- Gap 2 fix: explicitly stop backend session ---
+        // The backend's disconnect recovery (_recover_streaming_on_disconnect)
+        // may not have fired yet — the frontend stall timer (45s) can detect
+        // the problem before the backend's heartbeat loop (15s interval)
+        // notices the dead TCP connection.  Without this, the user sends a
+        // new message while the backend is still in STREAMING → force_unstick
+        // → kill → --resume → replays old output.
+        //
+        // Fire-and-forget: if stop fails, the backend disconnect recovery
+        // or the force_unstick fallback in send() still handles it.
+        const stopSessionId = tabState?.sessionId;
+        if (stopSessionId) {
+          chatService.stopSession(stopSessionId).catch(() => {
+            // Best-effort — backend disconnect recovery is the fallback
+          });
         }
 
         // If this was a successful reconnection that then failed mid-stream,
