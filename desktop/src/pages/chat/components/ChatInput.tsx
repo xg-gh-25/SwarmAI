@@ -39,6 +39,8 @@ interface ChatInputProps {
   inputValueMapRef?: React.MutableRefObject<Map<string, string>>;
   /** Callback to propagate draft text changes to the per-tab storage layer. */
   onInputValueChange?: (tabId: string, value: string) => void;
+  /** True when streaming but no real SDK events received for >60s (session likely stalled). */
+  isLikelyStalled?: boolean;
 }
 
 const MAX_ROWS = 20;
@@ -68,6 +70,7 @@ export function ChatInput({
   activeTabIdRef,
   inputValueMapRef,
   onInputValueChange,
+  isLikelyStalled = false,
 }: ChatInputProps) {
   const { t } = useTranslation();
   const [showCommandSuggestions, setShowCommandSuggestions] = useState(false);
@@ -360,6 +363,13 @@ export function ChatInput({
       }
     }
 
+    // Escape to stop generation (when streaming, and slash commands not open)
+    if (e.key === 'Escape' && isStreaming) {
+      e.preventDefault();
+      onStop();
+      return;
+    }
+
     // Normal enter to send
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
@@ -467,7 +477,8 @@ export function ChatInput({
               </div>
             )}
 
-            {/* Text Input — disabled during streaming or when backend is disconnected */}
+            {/* Text Input — always enabled during streaming so users can queue follow-ups.
+                Only disabled when backend is disconnected. */}
             <textarea
               ref={textareaRef}
               data-testid="chat-input"
@@ -475,12 +486,20 @@ export function ChatInput({
               onChange={handleInputChange}
               onKeyDown={handleKeyDown}
               onPaste={handlePaste}
-              placeholder={disabled ? t('chat.disconnectedPlaceholder', 'Backend offline...') : isStreaming ? t('chat.streamingPlaceholder', 'Waiting for response...') : 'Ask Swarm anything...'}
+              placeholder={
+                disabled
+                  ? t('chat.disconnectedPlaceholder', 'Backend offline...')
+                  : isLikelyStalled
+                    ? 'Session may be stalled \u2014 send a message to recover'
+                    : isStreaming
+                      ? 'Type to queue a follow-up...'
+                      : 'Ask Swarm anything...'
+              }
               rows={2}
-              disabled={isStreaming || disabled}
+              disabled={disabled}
               className={clsx(
                 'flex-1 bg-transparent text-[var(--color-text)] placeholder:text-[var(--color-text-dim)] resize-none focus:outline-none py-2',
-                (isStreaming || disabled) && 'opacity-50 cursor-not-allowed'
+                disabled && 'opacity-50 cursor-not-allowed'
               )}
             />
 
@@ -499,37 +518,49 @@ export function ChatInput({
               </button>
             )}
 
-            {/* Send Button */}
+            {/* Stop button — same size as send for consistent hit target,
+                muted color for visual hierarchy. Always rendered to avoid layout
+                shift; invisible when not streaming. */}
             <button
-              onClick={isStreaming ? onStop : handleSend}
-              disabled={(!isStreaming && !canSend) || disabled}
+              onClick={onStop}
+              className={clsx(
+                'w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 transition-colors',
+                isStreaming
+                  ? 'text-[var(--color-text-muted)] hover:text-red-500 hover:bg-red-500/10'
+                  : 'invisible'
+              )}
+              title="Stop generation (Esc)"
+              tabIndex={isStreaming ? 0 : -1}
+              aria-hidden={!isStreaming}
+            >
+              <span className="material-symbols-outlined text-[16px]">stop</span>
+            </button>
+
+            {/* Send button — always primary, queues during streaming */}
+            <button
+              onClick={handleSend}
+              disabled={!canSend || disabled}
               className={clsx(
                 'w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 transition-colors shadow-[0_1px_2px_rgba(0,0,0,0.2)]',
-                isStreaming
-                  ? 'bg-red-500 hover:bg-red-600'
-                  : 'bg-gradient-to-b from-[#3d7ef0] to-[#2b6cee] hover:from-[#5a94f5] hover:to-[#3d7ef0]',
-                ((!isStreaming && !canSend) || disabled) && 'opacity-50 cursor-not-allowed'
+                'bg-gradient-to-b from-[#3d7ef0] to-[#2b6cee] hover:from-[#5a94f5] hover:to-[#3d7ef0]',
+                (!canSend || disabled) && 'opacity-50 cursor-not-allowed'
               )}
               title={
                 isStreaming
-                  ? 'Stop generation'
+                  ? 'Queue message'
                   : attachments.length > 0
                       ? 'Send with attachments'
                       : 'Send message'
               }
             >
-              {isStreaming ? (
-                <span className="material-symbols-outlined text-white text-[16px]">stop</span>
-              ) : (
-                <span className="material-symbols-outlined text-white text-[16px]">arrow_upward</span>
-              )}
+              <span className="material-symbols-outlined text-white text-[16px]">arrow_upward</span>
             </button>
           </div>
 
           {/* Bottom Row - Attachment button + TSCC button + Commands hint */}
           <div className="flex items-center justify-between mt-3 pt-3 border-t border-[var(--color-border)]/50">
             <div className="flex items-center gap-2">
-              <FileAttachmentButton onFilesSelected={onAddFiles} disabled={isProcessingFiles || isStreaming || disabled} canAddMore={canAddMore} />
+              <FileAttachmentButton onFilesSelected={onAddFiles} disabled={isProcessingFiles || disabled} canAddMore={canAddMore} />
               <TSCCPopoverButton sessionId={sessionId ?? null} metadata={promptMetadata ?? null} />
               <ContextUsageRing pct={contextPct ?? null} />
             </div>

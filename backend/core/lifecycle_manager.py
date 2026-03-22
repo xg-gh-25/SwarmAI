@@ -432,7 +432,7 @@ class LifecycleManager:
             from pathlib import Path
             from .session_manager import session_manager
             from database import db
-            from config import SWARM_WS_DIR
+            from .initialization_manager import initialization_manager
 
             cutoff = (datetime.now() - timedelta(hours=24)).isoformat()
             sessions = await session_manager.list_sessions(limit=50)
@@ -441,7 +441,8 @@ class LifecycleManager:
 
             # Check today's DailyActivity file for already-processed session IDs
             today_str = datetime.now().strftime("%Y-%m-%d")
-            da_path = Path(SWARM_WS_DIR) / "Knowledge" / "DailyActivity" / f"{today_str}.md"
+            ws_path = Path(initialization_manager.get_cached_workspace_path())
+            da_path = ws_path / "Knowledge" / "DailyActivity" / f"{today_str}.md"
             da_content = ""
             if da_path.exists():
                 try:
