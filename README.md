@@ -264,8 +264,21 @@ SwarmAI/
 
 <table>
   <tr>
-    <td align="center"><a href="https://github.com/xg-gh-25"><img src="https://github.com/xg-gh-25.png" width="80px;" alt=""/><br /><sub><b>Xiaogang Wang</b></sub></a><br />Creator & Chief Architect</td>
-    <td align="center"><a href="https://github.com/anthropics"><img src="https://github.com/anthropics.png" width="80px;" alt=""/><br /><sub><b>Swarm</b></sub></a><br />AI Co-Developer (Claude Opus 4.6)<br /><sub>Architecture · Code · Docs · Self-Evolution</sub></td>
+    <td align="center">
+      <a href="https://github.com/xg-gh-25">
+        <img src="https://github.com/xg-gh-25.png" width="100px;" alt="Xiaogang Wang" style="border-radius:50%"/>
+        <br /><sub><b>Xiaogang Wang</b></sub>
+      </a>
+      <br />Creator & Chief Architect
+    </td>
+    <td align="center">
+      <a href="https://github.com/xg-gh-25/SwarmAI">
+        <img src="./assets/swarm-avatar.svg" width="100px;" alt="Swarm" style="border-radius:50%"/>
+        <br /><sub><b>Swarm 🐝</b></sub>
+      </a>
+      <br />AI Co-Developer (Claude Opus 4.6)
+      <br /><sub>Architecture · Code · Docs · Self-Evolution</sub>
+    </td>
   </tr>
 </table>
 
