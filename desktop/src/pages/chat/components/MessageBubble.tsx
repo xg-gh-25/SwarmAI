@@ -2,8 +2,8 @@
  * MessageBubble — thin dispatcher that routes rendering by message role.
  *
  * Branches on `message.role`:
- * - `'user'`      → delegates to UserMessageView (minimal text bubble)
- * - `'assistant'`  → delegates to AssistantMessageView (branded SwarmAI layout)
+ * - `'user'`      -> delegates to UserMessageView (minimal text bubble)
+ * - `'assistant'`  -> delegates to AssistantMessageView (branded SwarmAI layout)
  *
  * All layout, avatar, header, and content rendering logic lives in the
  * sub-components. This file only owns the props interface and the role switch.
@@ -34,6 +34,8 @@ export interface MessageBubbleProps {
   sessionId?: string;
   isLastAssistant?: boolean;
   contextWarning?: ContextWarning | null;
+  /** Called when user cancels a queued message. Only relevant for user messages with isQueued=true. */
+  onCancelQueued?: () => void;
 }
 
 export function MessageBubble({
@@ -46,9 +48,15 @@ export function MessageBubble({
   sessionId,
   isLastAssistant,
   contextWarning,
+  onCancelQueued,
 }: MessageBubbleProps) {
   if (message.role === 'user') {
-    return <UserMessageView message={message} />;
+    return (
+      <UserMessageView
+        message={message}
+        onCancelQueued={message.isQueued ? onCancelQueued : undefined}
+      />
+    );
   }
 
   return (
