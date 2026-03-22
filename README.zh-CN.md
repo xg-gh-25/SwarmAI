@@ -13,7 +13,8 @@
 [![Tauri](https://img.shields.io/badge/Tauri-2.0-FFC131?style=flat&logo=tauri&logoColor=white)](https://tauri.app/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-009688?style=flat&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![Claude](https://img.shields.io/badge/Claude-Agent_SDK-191919?style=flat&logo=anthropic&logoColor=white)](https://github.com/anthropics/claude-code)
-[![License](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat)](./LICENSE)
+[![License](https://img.shields.io/badge/License-AGPL_v3-blue.svg?style=flat)](./LICENSE-AGPL)
+[![Commercial](https://img.shields.io/badge/License-Commercial-orange.svg?style=flat)](./LICENSE-COMMERCIAL)
 
 ![SwarmAI Home](./assets/swarmai-home-mockup.png)
 
@@ -257,9 +258,22 @@ SwarmAI/
 
 ---
 
+## 许可证
+
+SwarmAI 采用双许可证模式：
+
+- **AGPL v3** — 开源免费使用（[LICENSE-AGPL](./LICENSE-AGPL)）
+- **商业许可证** — 闭源 / SaaS 使用（[LICENSE-COMMERCIAL](./LICENSE-COMMERCIAL)）
+
+商业授权咨询：📧 **xiao_gang_wang@me.com**
+
+---
+
 ## 贡献
 
-欢迎提交 Issue 和 Pull Request。
+欢迎提交 Issue 和 Pull Request。详见 [CONTRIBUTING.md](./CONTRIBUTING.md)。
+
+参与贡献即表示您同意以 AGPL v3 许可您的贡献，并授权项目维护者在商业许可证下提供您的贡献。
 
 - **GitHub**: https://github.com/xg-gh-25/SwarmAI
 

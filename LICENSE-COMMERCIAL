@@ -1,0 +1,77 @@
+# SwarmAI Commercial License Agreement
+
+Copyright (c) 2026 SwarmAI. All rights reserved.
+
+## 1. Grant of License
+
+This Commercial License Agreement ("Agreement") grants the licensee
+("Licensee") a non-exclusive, non-transferable license to use, modify, and
+distribute the SwarmAI software ("Software") under the following terms.
+
+## 2. Permitted Uses
+
+Under this commercial license, the Licensee may:
+
+- Use the Software in closed-source / proprietary products
+- Modify the Software without obligation to disclose source code
+- Deploy the Software as part of a hosted or managed service (SaaS)
+- Distribute the Software as part of a commercial product
+- Use the Software for internal business operations without AGPL obligations
+
+## 3. Restrictions
+
+The Licensee may NOT:
+
+- **Redistribute source code**: The Software's source code may not be
+  redistributed, published, or made available to third parties outside the
+  Licensee's organization
+- **Sublicense**: The Licensee may not grant sublicenses to third parties
+- **Competing products**: Use of the Software to build a product that directly
+  competes with SwarmAI requires separate, explicit written permission
+- **Remove notices**: Copyright notices and license headers must be retained
+  in all copies
+
+## 4. Pricing
+
+Commercial license pricing is determined based on:
+
+- **Company size**: Startup / Mid-size / Enterprise tiers
+- **Usage model**: Per-seat, per-deployment, or per-service basis
+- **Deployment type**: Single instance vs. service-level deployment
+
+Contact **xiao_gang_wang@me.com** for pricing details.
+
+## 5. Support and Updates
+
+Commercial license holders receive:
+
+- Priority issue resolution
+- Access to commercial-only features (if applicable)
+- License to use future versions released during the license term
+
+## 6. Warranty Disclaimer
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+
+## 7. Limitation of Liability
+
+IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
+USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+## 8. Termination
+
+This license is effective until terminated. It will terminate automatically
+if the Licensee fails to comply with any term of this Agreement. Upon
+termination, the Licensee must cease all use and destroy all copies of the
+Software.
+
+## Contact
+
+For commercial licensing inquiries:
+
+- 📧 Email: **xiao_gang_wang@me.com**
+- 🌐 GitHub: [https://github.com/xg-gh-25/SwarmAI](https://github.com/xg-gh-25/SwarmAI)
