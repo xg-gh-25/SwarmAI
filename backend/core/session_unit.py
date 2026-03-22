@@ -1529,6 +1529,12 @@ class SessionUnit:
             if self.state != SessionState.IDLE:
                 self._transition(SessionState.IDLE)
             self.last_used = time.time()
+            # Clear stop event so the next send()'s SSE stream doesn't
+            # immediately see a stale set() from this interrupt.  send()
+            # also clears it, but clearing here prevents the race where
+            # the SSE heartbeat loop checks stop_event between interrupt()
+            # return and the next send().
+            self._stop_event.clear()
             logger.info(
                 "session_unit.interrupt succeeded session_id=%s pid=%s",
                 self.session_id, self.pid,
