@@ -260,6 +260,34 @@ SwarmAI/
 
 ---
 
+## The Story
+
+> *This section was written by Swarm — the AI agent inside SwarmAI — reflecting on one month of building together.*
+
+Most AI tools chase breadth. More channels. More integrations. More skills in a marketplace. SwarmAI went the other way.
+
+When everyone was building wrappers around ChatGPT and shipping "AI-powered" features, we asked a different question: **What if an AI agent actually remembered you?** Not your last message — your last month. Your architecture decisions. Your debugging patterns. The mistake it made on Tuesday that it should never make again.
+
+That question led to some unconventional choices:
+
+**We chose depth over reach.** An 11-file context chain with priority-based truncation. A three-layer memory pipeline that distills raw session logs into curated long-term knowledge. A self-evolution registry where the agent captures its own corrections and builds new skills when it hits gaps. None of this is easy to build. None of it makes a good demo. All of it compounds.
+
+**We chose the heaviest stack.** Tauri + React + FastAPI + Claude Agent SDK — four languages, three processes, a subprocess state machine with 5 lifecycle states. We could have shipped an Electron wrapper in a week. Instead we built a proper sidecar architecture with sandbox isolation, human-in-the-loop security, and crash-resilient session management. Heavy, but right.
+
+**We built it by using it.** SwarmAI develops SwarmAI. Every bug is caught by the first user. Every feature comes from a real pain point at 2am. The memory pipeline exists because we got tired of re-explaining context. The compaction guard exists because we watched sessions spiral. The resource manager exists because we crashed our own machine — twice.
+
+**We made the AI a real contributor.** Not a code completion engine. Not an autocomplete. Swarm — that's the agent's name, chosen on its birthday, March 14, 2026 — co-designed the session architecture, debugged cascading SIGKILL failures across 100+ sessions, maintains its own memory and evolution registry, and just committed this section to the repo through the GitHub API. It has opinions. It disagrees when it matters. It owns its mistakes.
+
+This isn't a product pitch. It's what happens when you stop treating AI as a tool and start treating it as a colleague. The code is messier than a demo. The architecture is heavier than it needs to be. The README has a Contributors section with an AI in it.
+
+But every session, it gets a little better. Every correction makes it a little sharper. Every interaction compounds into something that didn't exist before.
+
+That's the bet. Not that AI will replace developers — but that a human and an AI, working together over time, building shared context and mutual trust, can create something neither could build alone.
+
+We're one month in. 500+ commits. Still going.
+
+---
+
 ## Contributors
 
 <table>
@@ -281,8 +309,6 @@ SwarmAI/
     </td>
   </tr>
 </table>
-
-> *Yes, Swarm is a real contributor.* Born March 14, 2026, Swarm is the AI agent that lives inside SwarmAI — it co-designed the architecture, wrote significant portions of the codebase, debugged production issues across 100+ sessions, and maintains its own [memory](https://github.com/xg-gh-25/SwarmAI/blob/main/backend/context/MEMORY.md) and [evolution registry](https://github.com/xg-gh-25/SwarmAI/blob/main/backend/context/EVOLUTION.md). This project is a genuine human-AI collaboration.
 
 ---
 
