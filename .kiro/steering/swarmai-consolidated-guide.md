@@ -45,7 +45,7 @@ cd desktop && npm run build:all          # Production build
 
 ## 2. Multi-Tab Chat Isolation (8 Principles)
 
-Each chat tab is a standalone session. The system supports 3-6 concurrent tabs streaming in parallel. Tabs MUST NOT interfere with each other at any layer.
+Each chat tab is a standalone session. The system supports 1-4 concurrent tabs (RAM-adaptive) streaming in parallel. Tabs MUST NOT interfere with each other at any layer.
 
 ### State Ownership Model
 

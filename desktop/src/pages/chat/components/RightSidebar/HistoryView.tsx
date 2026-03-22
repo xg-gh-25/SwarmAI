@@ -147,7 +147,7 @@ export function HistoryView({
                     chat_bubble_outline
                   </span>
                   <div className="flex-1 min-w-0">
-                    <p className="text-xs font-medium truncate text-[var(--color-text)]">
+                    <p className="text-[13px] leading-5 font-medium truncate text-[var(--color-text)]">
                       {session.title}
                     </p>
                     <p className="text-[10px] opacity-70">

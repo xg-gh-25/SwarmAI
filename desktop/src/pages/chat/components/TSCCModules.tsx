@@ -47,7 +47,7 @@ function FullPromptModal({
     >
       <div
         className="
-          w-[90vw] max-w-2xl max-h-[80vh] flex flex-col
+          w-[92vw] max-w-5xl max-h-[90vh] flex flex-col
           bg-[var(--color-card)] border border-[var(--color-border)]
           rounded-lg shadow-xl overflow-hidden
         "
@@ -65,8 +65,8 @@ function FullPromptModal({
             <span className="material-symbols-outlined text-base">close</span>
           </button>
         </div>
-        <div className="flex-1 overflow-y-auto p-4">
-          <pre className="text-xs text-[var(--color-text)] whitespace-pre-wrap font-mono leading-relaxed">
+        <div className="flex-1 overflow-y-auto p-5">
+          <pre className="text-[13px] text-[var(--color-text)] whitespace-pre-wrap font-mono leading-relaxed">
             {fullText || '(empty)'}
           </pre>
         </div>

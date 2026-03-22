@@ -127,12 +127,33 @@ Send a test message in the Chat page — if you get an AI response, you're all s
 
 ---
 
-## 4. Start Using SwarmAI
+## 4. Your First 5 Minutes
 
-1. The Chat page is your command center — type naturally to explore or execute work
-2. Open multiple tabs for parallel conversations
-3. Check Swarm Radar (right sidebar) for ToDos, active tasks, and completed work
-4. Use SwarmWS Explorer (left sidebar) to browse workspace memory and projects
+### The Layout
+
+SwarmAI has three columns:
+- **Left — SwarmWS Explorer**: Your persistent workspace. Knowledge, notes, projects — all git-tracked. Click the Swarm logo to toggle it.
+- **Center — Chat Tabs**: Your command surface. Open multiple tabs (`Cmd+N`) for parallel conversations.
+- **Right — Swarm Radar**: Live dashboard — ToDos, active sessions, recent artifacts, background jobs.
+
+### Try These
+
+1. **Ask anything** — "What can you do?" to see the 50+ built-in skills
+2. **Open a second tab** — `Cmd+N` to run a parallel conversation
+3. **Browse Skills** — click the puzzle icon in the left sidebar to see all capabilities
+4. **Check MCP Servers** — click the hub icon to see connected tool servers (Slack, Outlook, etc.)
+5. **Explore your workspace** — SwarmWS Explorer shows your Knowledge/, Projects/, and context files
+6. **Say "remember this"** — the agent saves to persistent memory, available in every future session
+
+### How Memory Works
+
+SwarmAI remembers across sessions automatically:
+- **DailyActivity/** — raw session logs captured after every conversation
+- **MEMORY.md** — curated long-term memory (key decisions, lessons, open threads)
+- **EVOLUTION.md** — capabilities the agent has built and corrections it has learned
+- **.context/** — 11 files that define who the agent is and what it knows about you
+
+Everything is local, git-tracked, and yours. No cloud sync, no data leaving your machine.
 
 ---
 

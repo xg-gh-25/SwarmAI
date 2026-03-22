@@ -18,10 +18,6 @@ import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { ToastStack } from './components/common/ToastStack';
 import ThreeColumnLayout from './components/layout/ThreeColumnLayout';
 import ChatPage from './pages/ChatPage';
-import TasksPage from './pages/TasksPage';
-import PluginsPage from './pages/PluginsPage';
-import ChannelsPage from './pages/ChannelsPage';
-import SwarmCorePage from './pages/SwarmCorePage';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -108,26 +104,6 @@ export default function App() {
                 <Route path="/" element={
                   <ThreeColumnLayout>
                     <ChatPage />
-                  </ThreeColumnLayout>
-                } />
-                <Route path="/dashboard" element={
-                  <ThreeColumnLayout>
-                    <SwarmCorePage />
-                  </ThreeColumnLayout>
-                } />
-                <Route path="/tasks" element={
-                  <ThreeColumnLayout>
-                    <TasksPage />
-                  </ThreeColumnLayout>
-                } />
-                <Route path="/plugins" element={
-                  <ThreeColumnLayout>
-                    <PluginsPage />
-                  </ThreeColumnLayout>
-                } />
-                <Route path="/channels" element={
-                  <ThreeColumnLayout>
-                    <ChannelsPage />
                   </ThreeColumnLayout>
                 } />
               </Routes>

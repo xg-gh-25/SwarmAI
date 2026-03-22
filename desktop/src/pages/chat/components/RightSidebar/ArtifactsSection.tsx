@@ -224,7 +224,7 @@ export function ArtifactsSection({ workspaceId, onPreviewFile, onCountChange }: 
             </span>
 
             {/* Title (filename) */}
-            <span className="text-xs text-[var(--color-text)] truncate flex-1">
+            <span className="text-[13px] leading-5 text-[var(--color-text)] truncate flex-1">
               {artifact.title}
             </span>
 
