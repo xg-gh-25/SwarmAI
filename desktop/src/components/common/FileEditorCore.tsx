@@ -413,7 +413,7 @@ export default function FileEditorCore({
     } finally {
       setIsSaving(false);
     }
-  }, [content, onSave, onClose, variant, filePath, onSaveWithDiff]);
+  }, [content, onSave, onClose, variant, filePath, fileName, onSaveWithDiff]);
 
   const handleSearchClose = useCallback(() => {
     setShowSearch(false);
@@ -495,16 +495,22 @@ export default function FileEditorCore({
   }, [showDiff, readonly, handleSave, isFocusWithinEditor]);
 
   // Cmd+F / Ctrl+F — open search
+  // Always intercept when editor is visible: in modal mode the overlay blocks
+  // other interactions anyway; in panel mode, the editor is the primary editing
+  // surface so CMD+F should target it regardless of current focus.
+  // Skipped in diff view and markdown preview (search bar operates on raw content only).
   useEffect(() => {
+    if (showDiff || showMarkdownPreview) return; // no search in diff/preview modes
     const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === 'f' && isFocusWithinEditor(e)) {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
         e.preventDefault();
+        e.stopPropagation();
         setShowSearch(true);
       }
     };
-    document.addEventListener('keydown', handleKeyDown);
-    return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [isFocusWithinEditor]);
+    document.addEventListener('keydown', handleKeyDown, true); // capture phase
+    return () => document.removeEventListener('keydown', handleKeyDown, true);
+  }, [showDiff, showMarkdownPreview]);
 
   const handleCancel = useCallback(() => {
     if (hasUnsavedEdits) {
@@ -568,6 +574,28 @@ export default function FileEditorCore({
   const handleToggleDiff = useCallback(() => {
     setShowDiff((prev) => !prev);
   }, []);
+
+  // Scroll textarea so the current search match is visible.
+  // Does NOT steal focus — the search input keeps focus so user can
+  // press Enter repeatedly to navigate matches.
+  const scrollToMatch = useCallback((matchIndex: number) => {
+    if (!textareaRef.current || searchMatches.length === 0) return;
+    const match = searchMatches[matchIndex];
+    if (!match) return;
+    const ta = textareaRef.current;
+    // Scroll to approximately 1/3 from top of viewport
+    const lineHeight = 24; // leading-6 = 1.5rem = 24px
+    const targetScroll = match.lineIndex * lineHeight - ta.clientHeight / 3;
+    ta.scrollTop = Math.max(0, targetScroll);
+  }, [searchMatches]);
+
+  // When currentMatchIndex changes, scroll the viewport to that match.
+  // Separated from the state setter to avoid side effects inside updaters.
+  useEffect(() => {
+    if (showSearch && searchMatches.length > 0) {
+      scrollToMatch(currentMatchIndex);
+    }
+  }, [currentMatchIndex, showSearch, searchMatches.length, scrollToMatch]);
 
   const handleSearchNext = useCallback(() => {
     if (searchMatches.length === 0) return;
@@ -856,7 +884,7 @@ export default function FileEditorCore({
                   <pre
                     className={clsx(
                       'absolute inset-0 m-0 p-4 overflow-y-scroll overflow-x-hidden',
-                      'font-mono text-sm leading-6 whitespace-pre-wrap',
+                      'font-mono text-sm leading-6 whitespace-pre-wrap break-words',
                       'pointer-events-none z-[1]',
                       '[word-break:break-all]'
                     )}
@@ -904,8 +932,8 @@ export default function FileEditorCore({
                   onKeyUp={handleSelect}
                   readOnly={readonly || review.isReviewMode}
                   className={clsx(
-                    'absolute inset-0 w-full h-full m-0 p-4 resize-none appearance-none',
-                    'font-mono text-sm leading-6 whitespace-pre-wrap',
+                    'absolute inset-0 m-0 p-4 resize-none appearance-none',
+                    'font-mono text-sm leading-6 whitespace-pre-wrap break-words',
                     'bg-transparent text-transparent caret-[var(--color-text)]',
                     'border-none outline-none',
                     'overflow-y-scroll overflow-x-hidden',
