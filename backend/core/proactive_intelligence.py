@@ -814,6 +814,18 @@ def _save_learning_state(workspace_dir: Path, state: LearningState) -> None:
             pass
 
 
+def _sanitize_prompt_field(s: str, max_len: int = 200) -> str:
+    """Sanitize a string before injecting into a system prompt.
+
+    Strips control characters and collapses excessive markdown formatting
+    to prevent prompt injection from user-writable files (signal_digest.json,
+    .job-results.jsonl).
+    """
+    s = re.sub(r"[\x00-\x1f\x7f]", "", s)
+    s = re.sub(r"[*_]{3,}", "**", s)
+    return s[:max_len].strip()
+
+
 def _get_signal_highlights(working_directory: str, max_items: int = 3) -> list[str]:
     """Read signal_digest.json and return formatted highlights for the session briefing.
 
@@ -865,20 +877,10 @@ def _get_signal_highlights(working_directory: str, max_items: int = 3) -> list[s
         source = item.get("source", "")
         urgency = item.get("urgency", "")
 
-        # Sanitize fields injected into system prompt — strip markdown
-        # formatting characters and control chars that could alter prompt
-        # interpretation.  signal_digest.json is user-writable.
-        def _sanitize(s: str, max_len: int = 200) -> str:
-            # Strip control characters and excessive markdown
-            s = re.sub(r"[\x00-\x1f\x7f]", "", s)
-            # Collapse multiple asterisks/underscores (prevent bold/italic injection)
-            s = re.sub(r"[*_]{3,}", "**", s)
-            return s[:max_len].strip()
-
-        title = _sanitize(title, 100)
-        summary = _sanitize(summary, 150)
-        source = _sanitize(source, 50)
-        urgency = _sanitize(urgency, 20)
+        title = _sanitize_prompt_field(title, 100)
+        summary = _sanitize_prompt_field(summary, 150)
+        source = _sanitize_prompt_field(source, 50)
+        urgency = _sanitize_prompt_field(urgency, 20)
 
         prefix = f"[{urgency}]" if urgency else ""
         source_tag = f" ({source})" if source else ""
@@ -944,21 +946,29 @@ def _get_job_result_highlights(working_directory: str, max_items: int = 5) -> li
 
     lines = []
     for entry in recent[:max_items]:
-        job_name = entry.get("job_name", entry.get("job_id", "Unknown"))
-        status = entry.get("status", "unknown")
-        summary = entry.get("summary", "")[:100].strip()
+        job_name = _sanitize_prompt_field(
+            str(entry.get("job_name", entry.get("job_id", "Unknown"))), 60
+        )
+        status = _sanitize_prompt_field(str(entry.get("status", "unknown")), 20)
         tokens = entry.get("tokens_used", 0)
         duration = entry.get("duration_seconds", 0)
 
         icon = "✅" if status == "success" else "❌" if status == "failed" else "⏭️"
-        detail = f" ({duration:.0f}s" if duration else ""
-        if tokens:
-            detail += f", {tokens} tok"
-        detail += ")" if detail else ""
 
-        line = f"  - {icon} **{job_name}**: {status}{detail}"
-        if summary and status == "failed":
-            line += f" — {summary}"
+        # Build detail parenthetical — always balanced parens
+        parts: list[str] = []
+        if duration:
+            parts.append(f"{duration:.0f}s")
+        if tokens:
+            parts.append(f"{tokens} tok")
+        detail = f" ({', '.join(parts)})" if parts else ""
+
+        line = f"  - {icon} {job_name}: {status}{detail}"
+        if status == "failed":
+            raw_summary = str(entry.get("summary", ""))[:100].strip()
+            summary = _sanitize_prompt_field(raw_summary, 100)
+            if summary:
+                line += f" — {summary}"
         lines.append(line)
 
     return lines

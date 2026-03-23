@@ -77,17 +77,26 @@ function formatRelativeTime(isoString: string | null): string {
   }
 }
 
-/** Format a cron expression into a human-readable description. */
+/** Format a cron expression into a human-readable description.
+ *  No timezone conversion — shows raw cron semantics to avoid lies. */
 function formatSchedule(schedule: string | null): string {
   if (!schedule) return '';
   if (schedule.startsWith('after:')) return `after ${schedule.slice(6)}`;
-  // Basic cron → human mapping for common patterns
-  if (schedule === '0 0 * * 1-5') return 'Weekdays 8am';
-  if (schedule.match(/^0 \d+(,\d+)* \* \* \*$/)) {
-    const hours = schedule.split(' ')[1].split(',');
-    return `${hours.length}x daily`;
+
+  // Parse "min hour * * DOW" patterns for readable output
+  const parts = schedule.split(' ');
+  if (parts.length === 5) {
+    const [, hourField, , , dow] = parts;
+    const hours = hourField.split(',');
+
+    // Multiple hours per day
+    if (hours.length > 1 && dow === '*') return `${hours.length}x daily`;
+    // Weekly (Sunday = 0)
+    if (dow === '0') return 'Weekly';
+    // Weekdays
+    if (dow === '1-5') return `Weekdays ${hours[0]}:00 UTC`;
   }
-  if (schedule.match(/^0 \d+ \* \* 0$/)) return 'Weekly';
+
   return schedule;
 }
 
@@ -206,9 +215,11 @@ export function JobsSection({ onCountChange }: JobsSectionProps = {}) {
                   {schedule}
                 </span>
               )}
-              <span className="text-[10px] text-[var(--color-text-muted)]">
-                · {relTime}
-              </span>
+              {job.lastRunAt && (
+                <span className="text-[10px] text-[var(--color-text-muted)]">
+                  · {relTime}
+                </span>
+              )}
               {job.totalRuns > 0 && (
                 <span className="text-[10px] text-[var(--color-text-muted)]">
                   · {job.totalRuns} runs
