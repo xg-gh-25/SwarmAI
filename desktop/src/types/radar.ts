@@ -163,6 +163,9 @@ export interface RadarAutonomousJob {
   lastRunAt: string | null;
   nextRunAt: string | null;
   description: string | null;
+  totalRuns: number;
+  consecutiveFailures: number;
+  lastStatus: string | null;
 }
 
 // ---------------------------------------------------------------------------

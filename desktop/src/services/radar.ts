@@ -113,6 +113,9 @@ export function jobToCamelCase(job: Record<string, unknown>): RadarAutonomousJob
     lastRunAt: (job.last_run_at as string) ?? null,
     nextRunAt: (job.next_run_at as string) ?? null,
     description: (job.description as string) ?? null,
+    totalRuns: (job.total_runs as number) ?? 0,
+    consecutiveFailures: (job.consecutive_failures as number) ?? 0,
+    lastStatus: (job.last_status as string) ?? null,
   };
 }
 

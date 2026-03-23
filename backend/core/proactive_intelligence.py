@@ -892,6 +892,78 @@ def _get_signal_highlights(working_directory: str, max_items: int = 3) -> list[s
     return lines
 
 
+def _get_job_result_highlights(working_directory: str, max_items: int = 5) -> list[str]:
+    """Read .job-results.jsonl and return formatted highlights for the session briefing.
+
+    Filters to results from the last 24 hours. Returns up to *max_items*
+    formatted lines showing recent job outcomes (success/failure).
+
+    Returns an empty list if the JSONL file doesn't exist or has no recent results
+    (the job system may not have run yet — this is a graceful no-op).
+    """
+    jsonl_path = (
+        Path(working_directory) / "Knowledge" / "JobResults" / ".job-results.jsonl"
+    )
+    if not jsonl_path.exists():
+        return []
+
+    try:
+        raw = jsonl_path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return []
+
+    if not raw:
+        return []
+
+    # Parse JSONL — each line is a JSON object
+    cutoff = time.time() - 24 * 3600
+    recent: list[dict] = []
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+
+        run_at = entry.get("run_at", "")
+        if isinstance(run_at, str) and run_at:
+            try:
+                dt = datetime.fromisoformat(run_at.replace("Z", "+00:00"))
+                if dt.timestamp() >= cutoff:
+                    recent.append(entry)
+            except (ValueError, TypeError):
+                continue
+
+    if not recent:
+        return []
+
+    # Most recent first
+    recent.sort(key=lambda x: x.get("run_at", ""), reverse=True)
+
+    lines = []
+    for entry in recent[:max_items]:
+        job_name = entry.get("job_name", entry.get("job_id", "Unknown"))
+        status = entry.get("status", "unknown")
+        summary = entry.get("summary", "")[:100].strip()
+        tokens = entry.get("tokens_used", 0)
+        duration = entry.get("duration_seconds", 0)
+
+        icon = "✅" if status == "success" else "❌" if status == "failed" else "⏭️"
+        detail = f" ({duration:.0f}s" if duration else ""
+        if tokens:
+            detail += f", {tokens} tok"
+        detail += ")" if detail else ""
+
+        line = f"  - {icon} **{job_name}**: {status}{detail}"
+        if summary and status == "failed":
+            line += f" — {summary}"
+        lines.append(line)
+
+    return lines
+
+
 def _update_effectiveness(
     learning_state: "LearningState",
     last_suggested: list[str],
@@ -1220,6 +1292,11 @@ def build_session_briefing(
         signal_lines = _get_signal_highlights(str(workspace))
         if signal_lines:
             sections.append("**External signals since last session:**\n" + "\n".join(signal_lines))
+
+        # L4: Recent job results from .job-results.jsonl
+        job_lines = _get_job_result_highlights(str(workspace))
+        if job_lines:
+            sections.append("**Recent job results (last 24h):**\n" + "\n".join(job_lines))
 
         # L3: Surface learning insight
         learning_insight = learning_state.learning_summary()

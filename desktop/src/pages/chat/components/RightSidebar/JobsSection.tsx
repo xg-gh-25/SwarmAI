@@ -1,13 +1,14 @@
 /**
  * Jobs section for the Radar sidebar.
  *
- * Displays autonomous job status fetched via
- * ``radarService.fetchAutonomousJobs`` (no workspace_id param — the API
- * returns all jobs globally).  Each row shows the job name, a colored
- * status indicator (running=green pulsing, paused=gray, error=red,
- * completed=blue), and a category label (system / user_defined).
+ * Displays autonomous job status fetched from the backend, which reads
+ * real job definitions (jobs.yaml) and runtime state (state.json) from
+ * the SwarmWS scheduler directory.
  *
- * Jobs are NOT draggable — no ``DragHandle`` is rendered.
+ * Each row shows: status indicator (color-coded), job name, schedule,
+ * last run time (relative), run count, and failure state.
+ *
+ * Jobs are NOT draggable — no DragHandle is rendered.
  *
  * Key exports:
  * - ``JobsSection``           — The section component
@@ -32,8 +33,8 @@ export const JOB_STATUS_CONFIG: Record<
   RadarAutonomousJob['status'],
   { color: string; label: string; pulse: boolean }
 > = {
-  running:   { color: 'var(--color-success, #22c55e)', label: 'Running',   pulse: true },
-  paused:    { color: 'var(--color-text-muted, #9ca3af)', label: 'Paused',  pulse: false },
+  running:   { color: 'var(--color-success, #22c55e)', label: 'Healthy',   pulse: true },
+  paused:    { color: 'var(--color-text-muted, #9ca3af)', label: 'Disabled', pulse: false },
   error:     { color: 'var(--color-error, #ef4444)',   label: 'Error',     pulse: false },
   completed: { color: 'var(--color-info, #3b82f6)',    label: 'Completed', pulse: false },
 };
@@ -48,9 +49,46 @@ export const JOB_CATEGORY_LABELS: Record<RadarAutonomousJob['category'], string>
 // Pure helpers (exported for testing)
 // ---------------------------------------------------------------------------
 
-/** Count active (non-completed) jobs for the badge. */
+/** Count active (non-completed, non-paused) jobs for the badge. */
 export function countActiveJobs(jobs: RadarAutonomousJob[]): number {
-  return jobs.filter((j) => j.status !== 'completed').length;
+  return jobs.filter((j) => j.status !== 'completed' && j.status !== 'paused').length;
+}
+
+/** Format a relative time string from an ISO timestamp. */
+function formatRelativeTime(isoString: string | null): string {
+  if (!isoString) return 'never';
+  try {
+    const date = new Date(isoString);
+    const now = Date.now();
+    const diffMs = now - date.getTime();
+    if (diffMs < 0) return 'just now';
+
+    const minutes = Math.floor(diffMs / 60_000);
+    if (minutes < 1) return 'just now';
+    if (minutes < 60) return `${minutes}m ago`;
+
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `${hours}h ago`;
+
+    const days = Math.floor(hours / 24);
+    return `${days}d ago`;
+  } catch {
+    return 'unknown';
+  }
+}
+
+/** Format a cron expression into a human-readable description. */
+function formatSchedule(schedule: string | null): string {
+  if (!schedule) return '';
+  if (schedule.startsWith('after:')) return `after ${schedule.slice(6)}`;
+  // Basic cron → human mapping for common patterns
+  if (schedule === '0 0 * * 1-5') return 'Weekdays 8am';
+  if (schedule.match(/^0 \d+(,\d+)* \* \* \*$/)) {
+    const hours = schedule.split(' ')[1].split(',');
+    return `${hours.length}x daily`;
+  }
+  if (schedule.match(/^0 \d+ \* \* 0$/)) return 'Weekly';
+  return schedule;
 }
 
 // ---------------------------------------------------------------------------
@@ -125,40 +163,63 @@ export function JobsSection({ onCountChange }: JobsSectionProps = {}) {
   if (jobs.length === 0) {
     return (
       <p className="text-xs text-[var(--color-text-muted)] py-2">
-        No autonomous jobs
+        No scheduled jobs configured
       </p>
     );
   }
 
   // --- Item list ---
   return (
-    <ul className="space-y-1">
+    <ul className="space-y-0.5">
       {jobs.map((job) => {
         const cfg = JOB_STATUS_CONFIG[job.status] ?? JOB_STATUS_CONFIG.paused;
         const categoryLabel =
           JOB_CATEGORY_LABELS[job.category] ?? JOB_CATEGORY_LABELS.system;
+        const relTime = formatRelativeTime(job.lastRunAt);
+        const schedule = formatSchedule(job.schedule);
+        const hasFailures = job.consecutiveFailures > 0;
 
         return (
           <li
             key={job.id}
-            className="flex items-center gap-2 px-1 py-1 rounded hover:bg-[var(--color-hover)] transition-colors"
+            className="px-1.5 py-1.5 rounded hover:bg-[var(--color-hover)] transition-colors"
           >
-            {/* Status indicator dot */}
-            <span
-              className={`shrink-0 w-2 h-2 rounded-full${cfg.pulse ? ' animate-pulse' : ''}`}
-              style={{ backgroundColor: cfg.color }}
-              title={cfg.label}
-            />
+            {/* Row 1: status dot + name + category */}
+            <div className="flex items-center gap-2">
+              <span
+                className={`shrink-0 w-2 h-2 rounded-full${cfg.pulse ? ' animate-pulse' : ''}`}
+                style={{ backgroundColor: cfg.color }}
+                title={cfg.label}
+              />
+              <span className="text-[13px] leading-5 text-[var(--color-text)] truncate flex-1">
+                {job.name}
+              </span>
+              <span className="shrink-0 text-[10px] text-[var(--color-text-muted)] px-1 py-0.5 rounded bg-[var(--color-surface, transparent)]">
+                {categoryLabel}
+              </span>
+            </div>
 
-            {/* Job name */}
-            <span className="text-[13px] leading-5 text-[var(--color-text)] truncate flex-1">
-              {job.name}
-            </span>
-
-            {/* Category label */}
-            <span className="shrink-0 text-[10px] text-[var(--color-text-muted)] px-1 py-0.5 rounded bg-[var(--color-surface, transparent)]">
-              {categoryLabel}
-            </span>
+            {/* Row 2: schedule + last run + runs count */}
+            <div className="flex items-center gap-2 ml-4 mt-0.5">
+              {schedule && (
+                <span className="text-[10px] text-[var(--color-text-muted)]">
+                  {schedule}
+                </span>
+              )}
+              <span className="text-[10px] text-[var(--color-text-muted)]">
+                · {relTime}
+              </span>
+              {job.totalRuns > 0 && (
+                <span className="text-[10px] text-[var(--color-text-muted)]">
+                  · {job.totalRuns} runs
+                </span>
+              )}
+              {hasFailures && (
+                <span className="text-[10px] text-[var(--color-error)]" title={`${job.consecutiveFailures} consecutive failures`}>
+                  · {job.consecutiveFailures}× fail
+                </span>
+              )}
+            </div>
           </li>
         );
       })}
