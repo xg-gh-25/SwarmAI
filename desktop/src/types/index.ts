@@ -281,8 +281,6 @@ export interface Message {
     eventType: string;
     data: Record<string, unknown>;
   };
-  /** When true, this message is queued to be sent after the current stream completes. */
-  isQueued?: boolean;
 }
 
 export interface ChatRequest {
