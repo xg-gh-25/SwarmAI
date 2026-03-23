@@ -20,7 +20,10 @@ from typing import Any
 
 from fastapi import APIRouter
 
-import yaml
+try:
+    import yaml
+except ImportError:
+    yaml = None  # type: ignore[assignment]
 
 from schemas.autonomous_job import (
     AutonomousJobCategory,
@@ -45,6 +48,9 @@ def _load_jobs_yaml() -> list[dict[str, Any]]:
     Returns raw dicts. Silently returns empty list if files don't exist
     (scheduler not set up yet).
     """
+    if yaml is None:
+        return []
+
     all_jobs: list[dict[str, Any]] = []
     seen_ids: set[str] = set()
 
@@ -59,7 +65,7 @@ def _load_jobs_yaml() -> list[dict[str, Any]]:
                     continue
                 all_jobs.append(jd)
                 seen_ids.add(job_id)
-        except Exception as e:
+        except (yaml.YAMLError, OSError, UnicodeDecodeError) as e:
             logger.warning("Failed to load %s: %s", path.name, e)
 
     return all_jobs
@@ -85,17 +91,14 @@ def _derive_status(job_def: dict, job_state: dict | None) -> AutonomousJobStatus
     Logic:
       - disabled in yaml → paused
       - consecutive_failures >= 3 → error (circuit breaker tripped)
-      - last_status == "failed" → error
-      - enabled + no failures → running (scheduled and healthy)
+      - 1-2 consecutive failures → running (transient, not worth alarming)
+      - enabled + healthy → running
     """
     if not job_def.get("enabled", True):
         return AutonomousJobStatus.PAUSED
 
-    if job_state:
-        if job_state.get("consecutive_failures", 0) >= 3:
-            return AutonomousJobStatus.ERROR
-        if job_state.get("last_status") == "failed":
-            return AutonomousJobStatus.ERROR
+    if job_state and job_state.get("consecutive_failures", 0) >= 3:
+        return AutonomousJobStatus.ERROR
 
     return AutonomousJobStatus.RUNNING
 
@@ -142,7 +145,7 @@ async def list_autonomous_jobs() -> list[AutonomousJobResponse]:
             schedule=jd.get("schedule"),
             last_run_at=last_run_at,
             next_run_at=None,  # Would need cron-next calc — omit for now
-            description=None,
+            description=jd.get("description"),
             total_runs=js.get("total_runs", 0),
             consecutive_failures=js.get("consecutive_failures", 0),
             last_status=js.get("last_status", "never"),

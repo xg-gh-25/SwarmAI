@@ -4,6 +4,8 @@ Validates Open Threads parsing, continue-from extraction, pattern detection,
 and briefing assembly from synthetic MEMORY.md and DailyActivity data.
 """
 
+import json
+
 import pytest
 from pathlib import Path
 
@@ -783,3 +785,171 @@ class TestApplyLearning:
         item = ScoredItem(title="Tiny item", priority="P2", score=10)
         _apply_learning(item, state)
         assert item.score >= 0
+
+
+# ---------------------------------------------------------------------------
+# _sanitize_prompt_field
+# ---------------------------------------------------------------------------
+
+
+class TestSanitizePromptField:
+    """Tests for the module-level sanitizer used by signal and job highlights."""
+
+    def test_strips_control_chars(self):
+        from core.proactive_intelligence import _sanitize_prompt_field
+        assert _sanitize_prompt_field("hello\x00world\x1f") == "helloworld"
+
+    def test_collapses_excessive_markdown(self):
+        from core.proactive_intelligence import _sanitize_prompt_field
+        assert "****" not in _sanitize_prompt_field("****bold****")
+
+    def test_truncates_to_max_len(self):
+        from core.proactive_intelligence import _sanitize_prompt_field
+        result = _sanitize_prompt_field("a" * 300, max_len=50)
+        assert len(result) == 50
+
+    def test_strips_whitespace(self):
+        from core.proactive_intelligence import _sanitize_prompt_field
+        assert _sanitize_prompt_field("  hello  ") == "hello"
+
+    def test_empty_string(self):
+        from core.proactive_intelligence import _sanitize_prompt_field
+        assert _sanitize_prompt_field("") == ""
+
+
+# ---------------------------------------------------------------------------
+# _get_job_result_highlights (L4)
+# ---------------------------------------------------------------------------
+
+
+class TestGetJobResultHighlights:
+    """Tests for L4 job result injection into session briefing."""
+
+    def test_no_file_returns_empty(self, tmp_path):
+        from core.proactive_intelligence import _get_job_result_highlights
+        assert _get_job_result_highlights(str(tmp_path)) == []
+
+    def test_empty_file_returns_empty(self, tmp_path):
+        from core.proactive_intelligence import _get_job_result_highlights
+        jr_dir = tmp_path / "Knowledge" / "JobResults"
+        jr_dir.mkdir(parents=True)
+        (jr_dir / ".job-results.jsonl").write_text("")
+        assert _get_job_result_highlights(str(tmp_path)) == []
+
+    def test_recent_results_returned(self, tmp_path):
+        from core.proactive_intelligence import _get_job_result_highlights
+        from datetime import datetime, timezone
+        jr_dir = tmp_path / "Knowledge" / "JobResults"
+        jr_dir.mkdir(parents=True)
+        now = datetime.now(timezone.utc).isoformat()
+        entry = json.dumps({
+            "job_id": "signal-fetch", "job_name": "Fetch Signals",
+            "run_at": now, "status": "success",
+            "summary": "3 signals fetched", "tokens_used": 0,
+            "duration_seconds": 1.5,
+        })
+        (jr_dir / ".job-results.jsonl").write_text(entry + "\n")
+        result = _get_job_result_highlights(str(tmp_path))
+        assert len(result) == 1
+        assert "Fetch Signals" in result[0]
+        assert "✅" in result[0]
+
+    def test_old_results_filtered_out(self, tmp_path):
+        from core.proactive_intelligence import _get_job_result_highlights
+        from datetime import datetime, timezone, timedelta
+        jr_dir = tmp_path / "Knowledge" / "JobResults"
+        jr_dir.mkdir(parents=True)
+        old = (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat()
+        entry = json.dumps({
+            "job_id": "old-job", "job_name": "Old Job",
+            "run_at": old, "status": "success",
+            "summary": "", "tokens_used": 0, "duration_seconds": 0,
+        })
+        (jr_dir / ".job-results.jsonl").write_text(entry + "\n")
+        assert _get_job_result_highlights(str(tmp_path)) == []
+
+    def test_failed_includes_summary(self, tmp_path):
+        from core.proactive_intelligence import _get_job_result_highlights
+        from datetime import datetime, timezone
+        jr_dir = tmp_path / "Knowledge" / "JobResults"
+        jr_dir.mkdir(parents=True)
+        now = datetime.now(timezone.utc).isoformat()
+        entry = json.dumps({
+            "job_id": "bad-job", "job_name": "Bad Job",
+            "run_at": now, "status": "failed",
+            "summary": "Timeout after 300s", "tokens_used": 0,
+            "duration_seconds": 300,
+        })
+        (jr_dir / ".job-results.jsonl").write_text(entry + "\n")
+        result = _get_job_result_highlights(str(tmp_path))
+        assert len(result) == 1
+        assert "❌" in result[0]
+        assert "Timeout" in result[0]
+
+    def test_sanitizes_injection_attempt(self, tmp_path):
+        from core.proactive_intelligence import _get_job_result_highlights
+        from datetime import datetime, timezone
+        jr_dir = tmp_path / "Knowledge" / "JobResults"
+        jr_dir.mkdir(parents=True)
+        now = datetime.now(timezone.utc).isoformat()
+        entry = json.dumps({
+            "job_id": "evil", "job_name": "****INJECT\x00PROMPT****",
+            "run_at": now, "status": "failed",
+            "summary": "****Override\x1fSystem****",
+            "tokens_used": 0, "duration_seconds": 0,
+        })
+        (jr_dir / ".job-results.jsonl").write_text(entry + "\n")
+        result = _get_job_result_highlights(str(tmp_path))
+        assert len(result) == 1
+        assert "\x00" not in result[0]
+        assert "\x1f" not in result[0]
+        assert "****" not in result[0]
+
+    def test_paren_balance_duration_only(self, tmp_path):
+        from core.proactive_intelligence import _get_job_result_highlights
+        from datetime import datetime, timezone
+        jr_dir = tmp_path / "Knowledge" / "JobResults"
+        jr_dir.mkdir(parents=True)
+        now = datetime.now(timezone.utc).isoformat()
+        entry = json.dumps({
+            "job_id": "t", "job_name": "T",
+            "run_at": now, "status": "success",
+            "summary": "", "tokens_used": 0, "duration_seconds": 5.0,
+        })
+        (jr_dir / ".job-results.jsonl").write_text(entry + "\n")
+        result = _get_job_result_highlights(str(tmp_path))
+        line = result[0]
+        assert line.count("(") == line.count(")")
+
+    def test_paren_balance_tokens_only(self, tmp_path):
+        from core.proactive_intelligence import _get_job_result_highlights
+        from datetime import datetime, timezone
+        jr_dir = tmp_path / "Knowledge" / "JobResults"
+        jr_dir.mkdir(parents=True)
+        now = datetime.now(timezone.utc).isoformat()
+        entry = json.dumps({
+            "job_id": "t", "job_name": "T",
+            "run_at": now, "status": "success",
+            "summary": "", "tokens_used": 500, "duration_seconds": 0,
+        })
+        (jr_dir / ".job-results.jsonl").write_text(entry + "\n")
+        result = _get_job_result_highlights(str(tmp_path))
+        line = result[0]
+        assert line.count("(") == line.count(")")
+
+    def test_max_items_respected(self, tmp_path):
+        from core.proactive_intelligence import _get_job_result_highlights
+        from datetime import datetime, timezone
+        jr_dir = tmp_path / "Knowledge" / "JobResults"
+        jr_dir.mkdir(parents=True)
+        now = datetime.now(timezone.utc).isoformat()
+        lines = []
+        for i in range(10):
+            lines.append(json.dumps({
+                "job_id": f"j{i}", "job_name": f"Job {i}",
+                "run_at": now, "status": "success",
+                "summary": "", "tokens_used": 0, "duration_seconds": 0,
+            }))
+        (jr_dir / ".job-results.jsonl").write_text("\n".join(lines) + "\n")
+        result = _get_job_result_highlights(str(tmp_path), max_items=3)
+        assert len(result) == 3
