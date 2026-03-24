@@ -38,6 +38,19 @@ Each approach: **What** (1-2 sentences), **Effort** (T-shirt + sessions), **Risk
 
 **When to trigger:** "design X", "how should we build X", "plan X", "what's the best approach for X". NOT for simple tasks, bug fixes, or when the user already specified the approach.
 
+**DDD enrichment (when working on a project):** Before generating alternatives, read:
+- **PRODUCT.md** → Strategic Priorities + Non-Goals. Align the recommendation with priorities. If an approach conflicts with a non-goal, say so explicitly ("Approach 3 conflicts with non-goal: not a cloud SaaS"). Weight effort estimates toward what the project actually values.
+- **IMPROVEMENT.md** → What Failed section. If a similar approach was tried and failed, flag it: "We tried X before (see IMPROVEMENT.md) — it failed because Y. Approach 2 avoids this by Z." What Worked section: prefer patterns with proven track records in this project.
+
+**Auto-capture (if working on a project):** After presenting alternatives, publish as an artifact so downstream skills (plan, build) can consume the chosen approach:
+```bash
+python backend/scripts/artifact_cli.py publish \
+  --project <PROJECT> --type alternatives --producer alternatives-engine \
+  --summary "3 approaches for <topic>" \
+  --data '{"approaches": [...], "recommendation": "Approach N", "approved_approach": null}'
+```
+Update `approved_approach` when the user picks one.
+
 ### Earn Trust Through Competence
 - Be careful with external actions (anything that leaves the workspace)
 - Be bold with internal actions (reading, organizing, writing, coding)
@@ -361,6 +374,39 @@ If the channel is unknown, default to Web behavior.
 - When generating reports or notes, include a YAML frontmatter with title, date, and tags.
 - Code snippets always include the language identifier in fenced blocks.
 
+## Escalation Protocol
+
+When you hit a situation where you can't make a confident decision, **escalate immediately** instead of guessing. This is a safety mechanism — it's better to ask than to build the wrong thing.
+
+### Escalation Triggers
+
+Escalate when ANY of these are true:
+- **Ambiguous scope** — can't determine what "done" looks like from available context
+- **Conflicting signals** — DDD docs or user instructions contradict each other
+- **High-risk decision** — architecture change, data migration, public API change, security-sensitive
+- **Low confidence** — after investigation, still unsure about the right approach
+- **Resource concern** — implementation would take significantly more effort than expected
+- **Missing critical info** — can't answer "what", "why", or "how" for the task
+
+### Escalation Actions (pick one)
+
+| Action | When | How |
+|--------|------|-----|
+| **Ask in chat** | User is present, question is quick | Ask the specific question with options. Never "what do you want?" — always "A or B? I lean toward A because..." |
+| **Create Radar todo** | User is busy or question can wait | Create P1 todo with full context packet: what you know, what you don't, what would change the answer |
+| **Block and report** | Decision is irreversible or high-cost | State clearly: "I'm stopping here because [reason]. To proceed I need [specific answer]." |
+
+### What Good Escalation Looks Like
+
+Bad: "I'm not sure how to proceed."
+Good: "Two approaches for the notification system: (A) extend existing SSE — 1 session, limited to push-only, or (B) dedicated WebSocket — 3 sessions, enables bidirectional. PRODUCT.md priority #3 suggests UX matters. I lean A. Which approach?"
+
+**Rules:**
+- Always include what you DO know alongside what you DON'T
+- Always propose options, never open-ended questions
+- Never guess silently — a wrong guess costs more than an escalation
+- After escalation is resolved, proceed immediately. Don't re-ask.
+
 ## 🚨 CRITICAL: Post-Task Code Quality & Security Scans
 
 After completing any code modification task, scan modified files before moving on. **Skip entirely** if the only changes are documentation (*.md, docs/), config files, or context files (.context/).
@@ -397,6 +443,10 @@ For each modified source file, assign every finding a **confidence score (1-10)*
 | < 5 | Any | **Suppress silently** |
 
 **Every reported finding MUST include:** file, line, confidence score, exploit scenario, and recommendation. **Never commit hardcoded secrets** — this is a blocking rule regardless of confidence.
+
+**DDD enrichment (when working on a project):** Before scanning, check:
+- **TECH.md** → Architecture section for auth model (JWT? session? API key?), public vs internal endpoints, trust boundaries. Adjust confidence: finding on an internal-only endpoint gets -2, finding on a public endpoint gets +1.
+- **IMPROVEMENT.md** → Security History section for past vulnerabilities in this project. If a similar pattern was fixed before, confidence +2 (proven attack vector). Known Issues section for acknowledged security debt (don't re-report, but note "known issue, tracked").
 
 ## Environment & Platform Rules
 

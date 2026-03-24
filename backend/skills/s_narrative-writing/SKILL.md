@@ -6,6 +6,8 @@ description: >
   DO NOT USE: for casual notes or quick summaries (just write directly).
 version: 1.0.0
 tags: [skill, narrative-writing, narratives, technical-documentation, six-pager, pr-faq, working-backwards, document-structure, data-presentation]
+consumes_artifacts: [research, alternatives]
+produces_artifact: design_doc
 ---
 
 # Narrative Writing

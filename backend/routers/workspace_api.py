@@ -34,6 +34,7 @@ Helper models (request bodies):
 """
 
 import base64
+import functools
 import hashlib
 import json
 import logging
@@ -668,9 +669,15 @@ def _resolve_file_path(
     """
     normalized = os.path.normpath(path)
 
-    # ── Absolute path — trust the user, resolve directly ──
+    # ── Absolute path — allow only under user's home directory ──
     if os.path.isabs(normalized):
         target = Path(normalized).resolve()
+        home = Path.home().resolve()
+        if not _is_path_under(target, home):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Absolute path must be under user home directory: {path}",
+            )
         is_external = not _is_path_under(target, workspace_root)
         return target, is_external
 
@@ -688,28 +695,39 @@ def _resolve_file_path(
     return target, is_external
 
 
-def _find_git_root(file_path: Path) -> Optional[Path]:
-    """Find the git repository root containing the given file.
+@functools.lru_cache(maxsize=64)
+def _find_git_root_cached(parent_dir: str) -> Optional[str]:
+    """Cached git root lookup by parent directory string.
 
-    Runs ``git rev-parse --show-toplevel`` from the file's parent directory.
-    Returns the git root Path, or None if the file is not inside a git repo.
+    Caching by *str* (not Path) so the LRU key is hashable.
+    Returns the git root as a string, or None.
     """
-    parent = file_path.parent if file_path.is_file() else file_path
-    if not parent.is_dir():
-        return None
     try:
         result = subprocess.run(
             ["git", "rev-parse", "--show-toplevel"],
-            cwd=str(parent),
+            cwd=parent_dir,
             capture_output=True,
             text=True,
             timeout=5,
         )
         if result.returncode == 0:
-            return Path(result.stdout.strip())
+            return result.stdout.strip()
     except (OSError, subprocess.TimeoutExpired):
         pass
     return None
+
+
+def _find_git_root(file_path: Path) -> Optional[Path]:
+    """Find the git repository root containing the given file.
+
+    Uses an LRU cache keyed on parent directory to avoid repeated
+    ``git rev-parse`` subprocess calls for files in the same repo.
+    """
+    parent = file_path.parent if file_path.is_file() else file_path
+    if not parent.is_dir():
+        return None
+    root_str = _find_git_root_cached(str(parent))
+    return Path(root_str) if root_str else None
 
 
 def _is_symlink_traversal(workspace_root: Path, relative_path: str) -> bool:

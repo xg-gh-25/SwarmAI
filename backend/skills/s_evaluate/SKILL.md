@@ -176,51 +176,97 @@ Test: QA against acceptance criteria
 
 ## Escalation Protocol Integration
 
-Use the escalation protocol levels (L0/L2) for transparent decision-making:
+Use the escalation protocol (`backend/core/escalation.py`) for transparent
+decision-making at every evaluation. Three levels, three outcomes:
 
-### L0 INFORM (pipeline continues, FYI only)
+### L0 INFORM — "Clear call, FYI"
 
-When the evaluation is clear and confident (ROI unambiguous), prefix your
-recommendation with `[INFORM]` and proceed:
+**When:** ROI >= 3.5 AND confidence is high AND no blockers.
 
-```markdown
-> [INFORM] **GO: Build payment retry** — ROI 4.1, directly serves priority #1,
-> proven pattern from IMPROVEMENT.md, 2-session effort.
-> Evidence: PRODUCT.md "checkout reliability is #1", IMPROVEMENT.md "saga pattern worked for order flow"
+Emit an INFORM annotation and continue the pipeline:
+
+```python
+from core.escalation import inform, build_sse_event, save_escalation
+esc = inform(
+    title="GO: Build payment retry",
+    situation="ROI 4.1, directly serves priority #1, proven pattern from IMPROVEMENT.md.",
+    trigger="CLEAR_EVALUATION",
+    pipeline_stage="evaluate",
+    project="<PROJECT>",
+    evidence=["PRODUCT.md: checkout reliability is #1", "IMPROVEMENT.md: saga pattern worked"],
+)
+save_escalation(WORKSPACE_ROOT, esc)
 ```
 
-### L2 BLOCK (pipeline pauses, needs human input)
+**Triggers:** `CLEAR_EVALUATION`
 
-ESCALATE instead of GO/DEFER/REJECT when ANY of these are true:
+### L1 CONSULT — "I think X, override within 24h"
 
+**When:** ROI 2.5-3.5 (borderline) OR confidence medium OR non-obvious tradeoff.
+
+Swarm proceeds with its recommendation. Human has 24h to override via Radar todo.
+
+```python
+from core.escalation import consult, Option, build_sse_event, save_escalation, create_radar_todo
+esc = consult(
+    title="DEFER recommended: UI performance investigation",
+    situation="ROI 2.8 — aligned with priorities but effort is high (architectural). Historical: no prior attempt. Proceeding with DEFER unless overridden.",
+    options=[
+        Option(label="DEFER (recommended)", description="Add to backlog, revisit next sprint", risk="low", is_recommendation=True),
+        Option(label="GO", description="Start research phase now", risk="medium"),
+        Option(label="Discuss", description="I need more context from you"),
+    ],
+    trigger="LOW_CONFIDENCE_ROI",
+    recommendation="DEFER — effort-to-impact ratio doesn't justify immediate action",
+    pipeline_stage="evaluate",
+    project="<PROJECT>",
+    evidence=["PRODUCT.md: priority #3", "TECH.md: requires new pattern"],
+    timeout_hours=24,
+)
+save_escalation(WORKSPACE_ROOT, esc)
+create_radar_todo(esc)
+```
+
+**Triggers:** `LOW_CONFIDENCE_ROI`, `CONFLICTING_PRIORITIES`
+
+### L2 BLOCK — "I'm stuck, need your input"
+
+**When:** ANY of these are true:
 - **Ambiguous scope**: Can't determine what "done" looks like
 - **Conflicting requirements**: PRODUCT.md says X, TECH.md says not-X
-- **High-risk decision**: Architecture change, data migration, public API change
-- **Low confidence**: ROI score between 2.0-3.5 AND historical score is negative
-- **Resource contention**: PROJECT.md shows too many open items already
 - **Missing information**: Can't answer 2+ of the 4 questions
+- **High-risk decision**: Architecture change, data migration, public API change
+- **Resource contention**: PROJECT.md shows too many open items
 
-When escalating, use this format:
+Pipeline PAUSES. Creates a high-priority Radar todo.
 
-```markdown
-> [BLOCK] **Cannot evaluate: ambiguous scope**
->
-> I need your input before proceeding. Here's what I know and what I don't:
->
-> **Known:** Strategic alignment is high (4/5), PRODUCT.md confirms this is priority #2.
-> **Unknown:** "Improve performance" — of what? API latency? UI render time? Build speed?
-> **What would change the answer:** If API latency, ROI = GO (proven pattern). If UI render, ROI = DEFER (needs research first).
->
-> **Options:**
-> 1. Focus on API latency (my recommendation if forced to choose)
-> 2. Focus on UI render time
-> 3. Let me research both before deciding
+```python
+from core.escalation import block, Option, build_sse_event, save_escalation, create_radar_todo
+esc = block(
+    title="Cannot evaluate: ambiguous scope",
+    situation="'Improve performance' — of what? API latency, UI render, or build speed? Each leads to a different recommendation.",
+    options=[
+        Option(label="Focus on API latency", description="Proven pattern, 2 sessions", risk="low", is_recommendation=True),
+        Option(label="Focus on UI render", description="Needs research first, 4+ sessions", risk="medium"),
+        Option(label="Research both first", description="1-session investigation, then decide"),
+        Option(label="Discuss", description="Let me explain more context"),
+    ],
+    trigger="AMBIGUOUS_SCOPE",
+    recommendation="API latency — if forced to choose",
+    pipeline_stage="evaluate",
+    project="<PROJECT>",
+    evidence=["PRODUCT.md: 'performance' listed but not specified"],
+)
+save_escalation(WORKSPACE_ROOT, esc)
+create_radar_todo(esc)
 ```
 
-### Escalation to Artifact (L1+ with project)
+**Triggers:** `AMBIGUOUS_SCOPE`, `CONFLICTING_PRIORITIES`, `MISSING_INFORMATION`
 
-When escalating with a project, also publish a partial evaluation artifact
-so the context is preserved for async resolution:
+### Escalation to Artifact
+
+When escalating with a project (L1/L2), also publish a partial evaluation
+artifact so context is preserved for async resolution:
 
 ```bash
 python backend/scripts/artifact_cli.py publish \
