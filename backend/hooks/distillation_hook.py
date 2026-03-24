@@ -100,6 +100,33 @@ _COMPETENCE_PATTERNS = re.compile(
 )
 
 
+def _extract_repo_paths(tech_md_content: str) -> list[Path]:
+    """Extract git repository paths from a TECH.md file.
+
+    Looks for common patterns:
+    - ``Clone: `git clone <url>` ``
+    - ``Local: /path/to/repo``
+    - ``Codebase location: /path/to/repo``
+    - Any absolute path ending in a git-repo-like directory
+
+    Returns a list of Path objects (may be empty, may not exist on disk).
+    """
+    candidates: list[Path] = []
+    for line in tech_md_content.splitlines():
+        # Match lines that reference repo locations
+        if any(kw in line for kw in ("Clone:", "local:", "Local:",
+                                      "Codebase", "codebase", "repo",
+                                      "source", "Source")):
+            # Extract absolute paths
+            paths = re.findall(r"(/[^\s`\"']+)", line)
+            for p in paths:
+                # Clean trailing punctuation
+                p = p.rstrip("/),;.")
+                if len(p) > 5:  # Skip trivially short paths
+                    candidates.append(Path(p))
+    return candidates
+
+
 class DistillationTriggerHook:
     """Checks undistilled DailyActivity count and runs direct distillation.
 
@@ -636,25 +663,27 @@ class DistillationTriggerHook:
 
     @staticmethod
     def _get_source_repo_path() -> Path | None:
-        """Resolve the SwarmAI source repo path for git verification.
+        """Resolve a source repo path for git verification.
 
-        Checks known paths and TECH.md config. Returns None if no git
-        repo is found (verification is skipped gracefully).
+        Scans ALL projects' TECH.md for repo paths (not just SwarmAI).
+        No hardcoded paths — discovery is purely config-driven.
+        Returns the first valid git repo found, or None.
         """
-        candidates = [
-            Path("/Users/gawan/Desktop/SwarmAI-Workspace/swarmai"),
-        ]
-        # Try TECH.md for configured path
+        candidates: list[Path] = []
+
         try:
             ws = Path(initialization_manager.get_cached_workspace_path())
-            tech_md = ws / "Projects" / "SwarmAI" / "TECH.md"
-            if tech_md.exists():
-                content = tech_md.read_text(encoding="utf-8")
-                for line in content.splitlines():
-                    if "Clone:" in line or "local:" in line.lower():
-                        paths = re.findall(r"(/\S+/swarmai/?)", line)
-                        for p in paths:
-                            candidates.insert(0, Path(p))
+            projects_dir = ws / "Projects"
+            if projects_dir.is_dir():
+                for project_dir in sorted(projects_dir.iterdir()):
+                    tech_md = project_dir / "TECH.md"
+                    if not tech_md.is_file():
+                        continue
+                    try:
+                        content = tech_md.read_text(encoding="utf-8")
+                        candidates.extend(_extract_repo_paths(content))
+                    except (OSError, UnicodeDecodeError):
+                        continue
         except Exception:
             pass
 
@@ -724,11 +753,26 @@ class DistillationTriggerHook:
             except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
                 return True  # Can't verify — give benefit of the doubt
 
-        # Also check file names — maybe the feature exists but commit messages don't mention it
+        # Tier 2: check file names — feature exists but commit messages don't mention it
         for word in search_words[:2]:
             try:
                 result = subprocess.run(
                     ["git", "ls-files", f"*{word}*"],
+                    cwd=str(repo_path),
+                    capture_output=True, text=True, timeout=5,
+                )
+                if result.returncode == 0 and result.stdout.strip():
+                    return True
+            except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+                return True
+
+        # Tier 3: search code content — class names, function defs, module refs.
+        # git grep is fast (uses index) and catches cases where neither commit
+        # messages nor file names mention the subject explicitly.
+        for word in search_words[:2]:
+            try:
+                result = subprocess.run(
+                    ["git", "grep", "-l", "-i", "--max-count=1", word],
                     cwd=str(repo_path),
                     capture_output=True, text=True, timeout=5,
                 )
