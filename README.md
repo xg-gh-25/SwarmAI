@@ -87,16 +87,53 @@ Give SwarmAI a one-sentence requirement, and it drives the full development life
   [done] REFLECT    3 lessons written to IMPROVEMENT.md.
 ```
 
-**8 stages, 7 artifact types, 5 pipeline profiles** (full/trivial/research/docs/bugfix). The agent classifies every decision as *mechanical* (auto-approve), *taste* (batch-review at delivery), or *judgment* (block and ask). Safety without noise.
+**8 stages, 7 artifact types, 5 pipeline profiles** (full/trivial/research/docs/bugfix).
 
-- **DDD Knowledge Layer** — 4 documents per project (PRODUCT.md, TECH.md, IMPROVEMENT.md, PROJECT.md) give the agent autonomous judgment: *Should we? Can we? Have we tried? Should we now?*
-- **ROI Gate** — scores every requirement before committing pipeline resources. Low-value tasks get deferred, not executed.
-- **Escalation Protocol** — 3 levels (INFORM / CONSULT / BLOCK). The agent acts confidently within its competence boundary and escalates cleanly outside it.
-- **Per-run artifact isolation** — each pipeline run gets its own `.artifacts/runs/<id>/` directory. Self-contained, portable, git-diffable.
-- **Budget tracking** — token consumption tracked per stage, auto-checkpoints before context exhaustion, historical calibration from past runs.
-- **Background execution** — pipelines run as scheduled jobs. Checkpoints create Radar todos visible even when you're away.
+#### DDD + SDD + TDD — The Methodology Stack
 
-This is the implementation of [AIDLC Phase 3 (AI-Management)](./Knowledge/AIDLC/2026-03-24-aidlc-phase3-high-level-design.md) — where AI makes autonomous decisions and humans step in when needed.
+Three methodologies form a closed loop that makes autonomous execution possible:
+
+```
+DDD  → "What should we build?"     → 4 project docs (business understanding)
+SDD  → "Here's the spec"           → design doc with acceptance criteria
+TDD  → "Proof we built it"         → acceptance tests (binary pass/fail)
+```
+
+**DDD (Domain-Driven Design)** — 4 documents per project give the agent autonomous judgment:
+
+| Document | Question | Example |
+|---|---|---|
+| **PRODUCT.md** | Should we do this? | "Checkout reliability is priority #1" |
+| **TECH.md** | Can we do this? | "FastAPI + httpx, pytest for testing" |
+| **IMPROVEMENT.md** | Have we tried this? | "Saga pattern was too complex last time" |
+| **PROJECT.md** | Should we do it now? | "Sprint focus: payment reliability" |
+
+**TDD (Test-Driven Development)** — the pipeline generates acceptance tests *before* writing code:
+
+```
+1. RED    — Generate tests from acceptance criteria. All fail.
+2. GREEN  — Write code until all tests pass.
+3. VERIFY — Run full suite. No regressions.
+4. SHIP   — Human reviews taste decisions at delivery gate.
+```
+
+This is the key Phase 3 insight: when no human reviews every line, **the test suite IS the quality gate.** Tests before code, not after. The agent knows exactly what "done" looks like.
+
+#### Safety Mechanisms
+
+- **ROI Gate** — scores every requirement before committing resources. Low-value tasks get deferred, not executed.
+- **Decision Classification** — every decision tagged *mechanical* (auto), *taste* (batch at delivery), or *judgment* (block). Safety without noise.
+- **Escalation Protocol** — 3 levels (INFORM / CONSULT / BLOCK). Acts confidently within competence, escalates cleanly outside it.
+- **WTF Gate** — QA halts if fixes get risky. A QA skill that creates more bugs than it fixes is worse than no QA.
+
+#### Infrastructure
+
+- **Per-run artifact isolation** — `.artifacts/runs/<id>/` per pipeline. Self-contained, portable, git-diffable.
+- **Budget tracking** — token consumption per stage, auto-checkpoint before exhaustion, historical calibration.
+- **Background execution** — pipelines as scheduled jobs. Checkpoints create Radar todos visible even when you're away.
+- **Pipeline Validator** — structural enforcement script catches skipped stages, missing artifacts, and uncalibrated budgets.
+
+This is the implementation of [AIDLC Phase 3 (AI-Management)](https://github.com/xg-gh-25/SwarmAI/blob/main/docs/AIDLC-Phase3-Design.md) — where AI makes autonomous decisions and humans step in when needed.
 
 ### 5. Three-Column Command Center — Seamless Integration
 
