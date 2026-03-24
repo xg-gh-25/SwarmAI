@@ -82,8 +82,9 @@ else:
 def classify(name, cmd):
     cl = cmd.lower()
     nl = name.lower()
-    if "swarm-jobs" in cl or "scheduler.py" in cl or "self_tune.py" in cl: return "Swarm Jobs (Scheduler)"
-    if "job_manager" in cl: return "Swarm Jobs (Manager)"
+    # Swarm Jobs: match the actual script paths, not "swarm" in system prompts
+    if "services/swarm-jobs" in cl or "/swarm-jobs/scheduler.py" in cl or "/swarm-jobs/self_tune.py" in cl: return "Swarm Jobs (Scheduler)"
+    if "/swarm-jobs/job_manager" in cl: return "Swarm Jobs (Manager)"
     if "kiro" in cl or "kiro" in nl: return "Kiro IDE"
     if "SwarmAI" in cmd or "swarmai" in cl: return "SwarmAI (Tauri)"
     if "google chrome" in nl or ("chrome" in nl and "helper" in nl): return "Chrome"
