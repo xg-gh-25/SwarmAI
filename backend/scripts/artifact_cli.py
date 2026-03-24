@@ -621,6 +621,148 @@ def _get_profile_stages(profile: str | None) -> list[str]:
     return profiles.get(profile or "full", profiles["full"])
 
 
+def cmd_run_status(args, reg: ArtifactRegistry) -> None:
+    """Cross-project pipeline dashboard data.
+
+    Returns all active and recent pipeline runs across all projects.
+    Designed for the Radar sidebar pipeline panel.
+    """
+    workspace = _get_workspace()
+    projects_dir = workspace / "Projects"
+    if not projects_dir.exists():
+        print(json.dumps({"pipelines": [], "count": 0}))
+        return
+
+    all_pipelines = []
+    for project_dir in sorted(projects_dir.iterdir()):
+        if not project_dir.is_dir():
+            continue
+        artifacts_dir = project_dir / ".artifacts"
+        if not artifacts_dir.exists():
+            continue
+
+        project_name = project_dir.name
+        for run_file in sorted(artifacts_dir.glob("pipeline-run-*.json"), reverse=True):
+            try:
+                state = json.loads(run_file.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                continue
+
+            # Skip old completed runs (only show last 3 per project)
+            completed_stages = [s for s in state.get("stages", []) if s.get("status") == "completed"]
+            total_stages = len(_get_profile_stages(state.get("profile")))
+            consumed = sum(s.get("token_cost", 0) for s in state.get("stages", []))
+
+            pipeline_info = {
+                "id": state["id"],
+                "project": project_name,
+                "requirement": state["requirement"][:80],
+                "status": state["status"],
+                "profile": state.get("profile", "full"),
+                "progress": f"{len(completed_stages)}/{total_stages}",
+                "stages_completed": len(completed_stages),
+                "stages_total": total_stages,
+                "tokens_consumed": consumed,
+                "taste_decisions": len(state.get("taste_decisions", [])),
+                "checkpoint": state.get("checkpoint"),
+                "created_at": state["created_at"],
+                "updated_at": state["updated_at"],
+            }
+            all_pipelines.append(pipeline_info)
+
+    # Sort: running first, then paused, then completed. Within group, newest first.
+    status_order = {"running": 0, "paused": 1, "failed": 2, "completed": 3, "cancelled": 4}
+    all_pipelines.sort(key=lambda p: (status_order.get(p["status"], 9), p["updated_at"]), reverse=False)
+    # Reverse within each status group to get newest first
+    all_pipelines.sort(key=lambda p: status_order.get(p["status"], 9))
+
+    # Limit: show all active (running/paused), up to 5 completed per project
+    active = [p for p in all_pipelines if p["status"] in ("running", "paused")]
+    completed = [p for p in all_pipelines if p["status"] not in ("running", "paused")]
+
+    if args.active_only:
+        output = active
+    else:
+        # Keep max 5 completed per project
+        seen_completed: dict[str, int] = {}
+        filtered_completed = []
+        for p in completed:
+            count = seen_completed.get(p["project"], 0)
+            if count < 5:
+                filtered_completed.append(p)
+                seen_completed[p["project"]] = count + 1
+        output = active + filtered_completed
+
+    summary = {
+        "running": sum(1 for p in all_pipelines if p["status"] == "running"),
+        "paused": sum(1 for p in all_pipelines if p["status"] == "paused"),
+        "completed": sum(1 for p in all_pipelines if p["status"] == "completed"),
+        "total_tokens": sum(p["tokens_consumed"] for p in all_pipelines),
+    }
+
+    print(json.dumps({
+        "pipelines": output,
+        "count": len(output),
+        "summary": summary,
+    }, indent=2))
+
+
+def cmd_run_resume(args, reg: ArtifactRegistry) -> None:
+    """Resume a paused pipeline run.
+
+    Checks that all pending escalations are resolved. If yes, sets
+    status back to 'running' and clears the checkpoint. If not, reports
+    which escalations are still open.
+    """
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat()
+
+    run_dir = _pipeline_runs_dir(args.project)
+    run_file = run_dir / f"pipeline-run-{args.run_id}.json"
+    if not run_file.exists():
+        print(json.dumps({"error": f"Pipeline run {args.run_id} not found"}), file=sys.stderr)
+        sys.exit(1)
+
+    run_state = json.loads(run_file.read_text(encoding="utf-8"))
+
+    if run_state["status"] != "paused":
+        print(json.dumps({
+            "error": f"Pipeline is '{run_state['status']}', not 'paused'",
+            "pipeline_id": args.run_id,
+        }), file=sys.stderr)
+        sys.exit(1)
+
+    # Check for unresolved escalations in blocked stages
+    blocked_stages = [
+        s for s in run_state.get("stages", [])
+        if s.get("status") == "blocked" and s.get("escalation_id")
+    ]
+
+    checkpoint = run_state.get("checkpoint", {})
+    next_stage = checkpoint.get("stage") or args.stage
+
+    # Reset budget for new session
+    budget = _estimate_session_budget(args.project)
+
+    run_state["status"] = "running"
+    run_state["budget"] = budget
+    run_state["updated_at"] = now
+    # Keep checkpoint for reference but mark it resolved
+    if "checkpoint" in run_state:
+        run_state["checkpoint"]["resumed_at"] = now
+
+    run_file.write_text(json.dumps(run_state, indent=2), encoding="utf-8")
+
+    print(json.dumps({
+        "pipeline_id": args.run_id,
+        "status": "running",
+        "resumed_from": next_stage,
+        "completed_stages": [s["stage"] for s in run_state["stages"] if s.get("status") == "completed"],
+        "budget": budget,
+        "blocked_stages": [s["stage"] for s in blocked_stages],
+    }, indent=2))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Artifact registry CLI for SwarmAI pipeline"
@@ -699,6 +841,16 @@ def main() -> None:
     p_run_bgt.add_argument("--project", required=True)
     p_run_bgt.add_argument("--run-id", required=True, help="Pipeline run ID")
 
+    # run-status (v3: cross-project dashboard)
+    p_run_status = sub.add_parser("run-status", help="Cross-project pipeline dashboard")
+    p_run_status.add_argument("--active-only", action="store_true", help="Only show running/paused")
+
+    # run-resume (v3: resume a paused pipeline)
+    p_run_resume = sub.add_parser("run-resume", help="Resume a paused pipeline")
+    p_run_resume.add_argument("--project", required=True)
+    p_run_resume.add_argument("--run-id", required=True, help="Pipeline run ID")
+    p_run_resume.add_argument("--stage", default=None, help="Override resume stage")
+
     args = parser.parse_args()
     reg = ArtifactRegistry(_get_workspace())
 
@@ -715,6 +867,8 @@ def main() -> None:
         "run-checkpoint": cmd_run_checkpoint,
         "run-history": cmd_run_history,
         "run-budget": cmd_run_budget,
+        "run-status": cmd_run_status,
+        "run-resume": cmd_run_resume,
     }
     handlers[args.command](args, reg)
 

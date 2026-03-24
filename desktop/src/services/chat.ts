@@ -160,7 +160,6 @@ export const parseSSEEvent = (data: string): StreamEvent => {
  */
 async function consumeSSEStream(
   reader: ReadableStreamDefaultReader<Uint8Array>,
-  stall: { timer: ReturnType<typeof setTimeout> | undefined; cleared: boolean },
   startStallTimer: (r: ReadableStreamDefaultReader<Uint8Array>) => void,
   clearStallTimer: () => void,
   onMessage: (event: StreamEvent) => void,
@@ -251,7 +250,7 @@ function createStallDetection(
     if (stall.cleared) return;
     if (stall.timer !== undefined) clearTimeout(stall.timer);
     stall.timer = setTimeout(() => {
-      const msg = `Stream stalled${label ? ` (${label})` : ''}: no data received for 45 seconds`;
+      const msg = `Stream stalled${label ? ` (${label})` : ''}: no data received for ${STALL_TIMEOUT_MS / 1000} seconds`;
       console.warn(`[SSE] ${msg}`);
       readerRef.cancel().catch(() => {});
       onError(new Error(msg));
@@ -311,7 +310,7 @@ export const chatService = {
         }
         const reader = response.body?.getReader();
         if (!reader) throw new Error('No response body');
-        await consumeSSEStream(reader, stall, startStallTimer, clearStallTimer, onMessage, onComplete);
+        await consumeSSEStream(reader, startStallTimer, clearStallTimer, onMessage, onComplete);
       })
       .catch((error) => {
         clearStallTimer();
@@ -420,7 +419,7 @@ export const chatService = {
         }
         const reader = response.body?.getReader();
         if (!reader) throw new Error('No response body');
-        await consumeSSEStream(reader, stall, startStallTimer, clearStallTimer, onMessage, onComplete);
+        await consumeSSEStream(reader, startStallTimer, clearStallTimer, onMessage, onComplete);
       })
       .catch((error) => {
         clearStallTimer();
@@ -487,7 +486,7 @@ export const chatService = {
         }
         const reader = response.body?.getReader();
         if (!reader) throw new Error('No response body');
-        await consumeSSEStream(reader, stall, startStallTimer, clearStallTimer, onMessage, onComplete);
+        await consumeSSEStream(reader, startStallTimer, clearStallTimer, onMessage, onComplete);
       })
       .catch((error) => {
         clearStallTimer();

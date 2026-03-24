@@ -260,8 +260,11 @@ class ImprovementWritebackHook:
         Uses fcntl.flock for cross-process safety (same pattern as
         locked_write.py).  The asyncio.Lock in execute() handles
         in-process concurrency; this handles hook-vs-skill races.
+
+        Note: fcntl is Unix-only (macOS/Linux). This is acceptable
+        because SwarmAI targets macOS/Linux desktops exclusively.
         """
-        import fcntl
+        import fcntl  # Unix-only — SwarmAI targets macOS/Linux
 
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
