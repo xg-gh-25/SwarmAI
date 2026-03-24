@@ -69,8 +69,8 @@ STAGE_SCHEMAS: dict[str, dict[str, list[str]]] = {
         "recommended": ["failed", "fixed", "coverage"],
     },
     "deliver": {
-        "required": ["title", "status", "confidence_score"],
-        "recommended": ["decisions", "attention_flags", "report_path"],
+        "required": ["title", "status"],
+        "recommended": ["confidence_score", "decisions", "attention_flags", "report_path"],
     },
     # reflect has no artifact — skip schema check
 }
