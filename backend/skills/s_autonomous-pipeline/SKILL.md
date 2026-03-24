@@ -1,14 +1,17 @@
 ---
-name: Pipeline
+name: Autonomous Pipeline
 description: >
-  Orchestrate the full Skill Lifecycle Pipeline from a one-sentence requirement
-  to a PR-ready delivery. Drives stages sequentially: Evaluate, Think, Plan,
-  Build, Review, Test, Deliver, Reflect. Classifies every decision as mechanical
-  (auto-approve), taste (batch at delivery gate), or judgment (block for human).
-  Checkpoints on L2 BLOCK, retry exhaustion, or context budget limits. Resumes
-  from checkpoint in a fresh session.
-  TRIGGER: "run pipeline", "pipeline for", "full pipeline", "build end-to-end",
-  "execute pipeline", "resume pipeline", "continue pipeline", "pipeline status".
+  Orchestrate the full AIDLC Autonomous Pipeline from a one-sentence requirement
+  to a PR-ready delivery with TDD methodology. DDD drives judgment (should we?),
+  SDD produces specs (what exactly?), TDD verifies delivery (did we?).
+  Drives stages sequentially: Evaluate, Think, Plan, Build (TDD red-green),
+  Review, Test, Deliver (with report), Reflect. Classifies every decision as
+  mechanical (auto-approve), taste (batch at delivery gate), or judgment
+  (block for human). Checkpoints on L2 BLOCK, retry exhaustion, or context
+  budget limits. Resumes from checkpoint in a fresh session.
+  TRIGGER: "run pipeline", "autonomous pipeline", "pipeline for", "full pipeline",
+  "build end-to-end", "execute pipeline", "resume pipeline", "continue pipeline",
+  "pipeline status".
   DO NOT USE: for a single stage (use the specific skill: evaluate, deep-research,
   code-review, qa, deliver). Not for tasks without a clear requirement.
   SIBLINGS: evaluate = the GO/DEFER gate alone | qa = testing alone |
@@ -208,7 +211,7 @@ Follow the s_evaluate workflow:
 Publish artifact:
 ```bash
 python backend/scripts/artifact_cli.py publish --project <PROJECT> \
-  --type evaluation --producer s_pipeline \
+  --type evaluation --producer s_autonomous-pipeline \
   --summary "<GO/DEFER/REJECT>: <one-line>" \
   --data '{"requirement":"...","scores":{...},"recommendation":"GO","scope":"standard","acceptance_criteria":[...]}'
 python backend/scripts/artifact_cli.py advance --project <PROJECT> --state think
@@ -231,7 +234,7 @@ If ESCALATE → L2 BLOCK → checkpoint.
 Publish artifact:
 ```bash
 python backend/scripts/artifact_cli.py publish --project <PROJECT> \
-  --type research --producer s_pipeline \
+  --type research --producer s_autonomous-pipeline \
   --summary "3 alternatives for <topic>. Recommending: <approach>" \
   --data '{"key_findings":[...],"alternatives":[...],"recommendation":"...","sources":[...]}'
 python backend/scripts/artifact_cli.py advance --project <PROJECT> --state plan
@@ -251,28 +254,54 @@ python backend/scripts/artifact_cli.py advance --project <PROJECT> --state plan
 Publish artifact:
 ```bash
 python backend/scripts/artifact_cli.py publish --project <PROJECT> \
-  --type design_doc --producer s_pipeline \
+  --type design_doc --producer s_autonomous-pipeline \
   --summary "Design: <approach> for <requirement>" \
   --data '{"approach":"...","acceptance_criteria":[...],"data_model":"...","api_contract":"...","files_to_change":[...]}'
 python backend/scripts/artifact_cli.py advance --project <PROJECT> --state build
 ```
 
-#### BUILD
+#### BUILD (TDD Red-Green Cycle)
 
-1. Read TECH.md for conventions, test commands, code style
-2. Implement changes guided by the design_doc artifact
-3. **Completeness bias:** when the complete implementation costs minutes more
-   than the shortcut, do the complete thing. Cover edge cases, add tests for
-   new code paths, handle errors. Don't leave TODOs.
-4. Use atomic commits: one commit per logical change
-5. Track all files changed
+The BUILD stage follows TDD methodology: tests before code, code until tests pass.
+
+**Step 1: RED — Generate tests from acceptance criteria**
+
+1. Read acceptance criteria from the evaluation artifact (or design_doc if PLAN ran)
+2. Read TECH.md for test framework (pytest, vitest) and conventions
+3. Generate test stubs — one test per acceptance criterion minimum:
+   ```
+   # For each criterion in acceptance_criteria:
+   #   -> Write a test that WILL FAIL (nothing implemented yet)
+   #   -> Name: test_<criterion_slug>
+   #   -> Assert the expected behavior from the criterion
+   ```
+4. Run the tests — **all must FAIL** (this proves the tests are meaningful)
+5. If any test passes before implementation → the test is trivial or wrong, rewrite it
+
+**Step 2: GREEN — Implement until all tests pass**
+
+6. Read TECH.md for code conventions, patterns, and style
+7. Implement changes guided by the design_doc artifact (if available)
+8. Run tests after each logical change — watch failures decrease
+9. **Completeness bias:** when the complete implementation costs minutes more
+   than the shortcut, do the complete thing. Cover edge cases, handle errors.
+10. Use atomic commits: one commit per logical change
+
+**Step 3: VERIFY — Full suite, zero regressions**
+
+11. Run the FULL test suite (new + existing) — all must pass
+12. If existing tests break → fix production code, NOT the existing tests
+13. Track all files changed and test results
+
+**The TDD constraint:** Fix code, not tests. Tests are derived from the accepted
+design. Changing a test = changing the spec = go back to PLAN.
 
 Publish artifact:
 ```bash
 python backend/scripts/artifact_cli.py publish --project <PROJECT> \
-  --type changeset --producer s_pipeline \
-  --summary "<N> files changed, <M> commits" \
-  --data '{"branch":"...","commits":[...],"files_changed":[...],"diff_summary":"..."}'
+  --type changeset --producer s_autonomous-pipeline \
+  --summary "<N> files changed, <M> commits, TDD: <red>/<green>/<verify>" \
+  --data '{"branch":"...","commits":[...],"files_changed":[...],"diff_summary":"...","tdd":{"acceptance_criteria_count":N,"tests_generated":M,"red_failures":K,"green_pass":true,"regressions":0}}'
 python backend/scripts/artifact_cli.py advance --project <PROJECT> --state review
 ```
 
@@ -290,7 +319,7 @@ python backend/scripts/artifact_cli.py advance --project <PROJECT> --state revie
 Publish artifact:
 ```bash
 python backend/scripts/artifact_cli.py publish --project <PROJECT> \
-  --type review --producer s_pipeline \
+  --type review --producer s_autonomous-pipeline \
   --summary "Review: <N findings>, <M auto-fixed>" \
   --data '{"findings":[...],"approved":true/false,"security_findings":[...]}'
 python backend/scripts/artifact_cli.py advance --project <PROJECT> --state test
@@ -317,7 +346,7 @@ python backend/scripts/artifact_cli.py advance --project <PROJECT> --state test
 Publish artifact:
 ```bash
 python backend/scripts/artifact_cli.py publish --project <PROJECT> \
-  --type test_report --producer s_pipeline \
+  --type test_report --producer s_autonomous-pipeline \
   --summary "Tests: <passed>/<total> pass, <fixed> bugs fixed" \
   --data '{"passed":N,"failed":M,"fixed":K,"skipped":J,"bugs":[...],"coverage":"..."}'
 python backend/scripts/artifact_cli.py advance --project <PROJECT> --state deliver
@@ -327,18 +356,105 @@ python backend/scripts/artifact_cli.py advance --project <PROJECT> --state deliv
 
 **Run the Delivery Gate first** (see Step 4 below), then:
 
-1. Assemble delivery report: summary, pipeline path, what was built, key
-   decisions, quality summary, attention flags
-2. Generate PR description (if changeset exists)
-3. Update PROJECT.md with delivery entry
-4. Check for unresolved issues from upstream stages
+1. **Confidence scoring** — assess how confident you are the delivery matches the requirement:
+   ```
+   confidence_score (1-10):
+     +3 if all acceptance criteria have passing tests
+     +2 if review found 0 critical issues
+     +2 if TDD red-green cycle completed cleanly
+     +1 if no taste decisions were overridden
+     +1 if zero regressions on existing tests
+     +1 if design_doc was available (not just evaluation)
+     -2 if any acceptance criterion lacks a test
+     -2 if WTF gate triggered (even if resolved)
+     -1 per unresolved warning from validator
+   ```
+   If confidence < 7 → flag for human review even without judgment decisions.
+
+2. **Generate pipeline report** as markdown in the project's artifacts directory.
+   Save to: `Projects/<PROJECT>/.artifacts/runs/<RUN_ID>/REPORT.md`
+
+   The report follows this template (every run produces one):
+
+   ```markdown
+   # Autonomous Pipeline Report: <title>
+
+   **Run ID:** run_<id> | **Project:** <PROJECT> | **Profile:** <profile>
+   **Date:** <ISO date> | **Confidence:** <score>/10
+
+   ## 1. Requirement
+   <original requirement text>
+
+   ## 2. Evaluation
+   | Dimension | Score | Rationale |
+   |---|---|---|
+   | Strategic | X/5 | ... |
+   | Feasibility | X/5 | ... |
+   | ROI | X.X | GO/DEFER/REJECT |
+
+   **Scope:** <classification> | **Acceptance Criteria:** <list>
+
+   ## 3. Methodology: DDD + SDD + TDD
+   - **DDD docs loaded:** <which docs, what was learned>
+   - **Approach:** <chosen approach from THINK/PLAN or direct>
+   - **TDD cycle:** RED (<N> tests generated, all failed) → GREEN (code until pass) → VERIFY (full suite)
+
+   ## 4. Pipeline Execution
+   | Stage | Status | Artifact | Key Output |
+   |---|---|---|---|
+   | EVALUATE | done | art_xxx | GO, ROI X.X |
+   | THINK | done/skip | art_xxx | ... |
+   | ... | ... | ... | ... |
+
+   ## 5. TDD Results
+   | Metric | Value |
+   |---|---|
+   | Acceptance criteria | N |
+   | Tests generated | M |
+   | Tests per criterion | X.X |
+   | Bugs caught (RED phase) | K |
+   | Regressions | 0 |
+   | Total test suite | N tests, all passing |
+
+   ## 6. Decision Log
+   | Stage | Decision | Classification | Reasoning |
+   |---|---|---|---|
+   | BUILD | ... | mechanical | ... |
+
+   ## 7. Quality Gates
+   | Gate | Result |
+   |---|---|
+   | REVIEW (code quality) | N findings, M auto-fixed |
+   | REVIEW (security) | clean / N findings |
+   | TEST (TDD) | pass |
+   | VALIDATOR | 6/6 checks |
+   | Confidence | X/10 |
+
+   ## 8. Files Changed
+   - `path/to/file.py` (created, N lines)
+   - `path/to/other.py` (modified)
+
+   ## 9. Lessons (from REFLECT)
+   - Lesson 1
+   - Lesson 2
+
+   ## 10. Known Gaps & Attention Flags
+   <any warnings, low-confidence items, or deferred issues>
+
+   ---
+   Generated by SwarmAI Autonomous Pipeline | <date>
+   ```
+
+3. Generate PR description (if changeset exists)
+4. Update PROJECT.md with delivery entry
+5. Check for unresolved issues from upstream stages
 
 Publish artifact:
 ```bash
 python backend/scripts/artifact_cli.py publish --project <PROJECT> \
-  --type delivery --producer s_pipeline \
-  --summary "Delivery: <feature title>" \
-  --data '{"title":"...","summary":"...","decisions":[...],"quality":{...},"attention_flags":[...]}'
+  --type delivery --producer s_autonomous-pipeline \
+  --summary "Delivery: <feature title> (confidence: <N>/10)" \
+  --data '{"title":"...","summary":"...","decisions":[...],"quality":{...},"attention_flags":[],"confidence_score":N,"confidence_breakdown":{...},"report_path":"runs/<RUN_ID>/REPORT.md"}'
 python backend/scripts/artifact_cli.py advance --project <PROJECT> --state reflect
 ```
 
@@ -375,29 +491,46 @@ Log each decision in the pipeline run state:
 }
 ```
 
-### 3e. Verify Stage Output
+### 3e. Verify Stage Output (Pipeline Validator)
 
-After execution, verify before advancing:
+After execution, run the **pipeline validator** to structurally enforce invariants:
 
-1. **Artifact published?** Check the artifact_cli publish succeeded.
-2. **Meets minimum quality?** Stage-specific checks:
+```bash
+python backend/scripts/pipeline_validator.py check \
+  --project <PROJECT> --run-id <RUN_ID> --stage <STAGE>
+```
 
-| Stage | Verify |
-|-------|--------|
-| evaluate | Has recommendation + scope + ROI score |
-| think | Has key_findings (non-empty) + alternatives with tradeoffs |
-| plan | Has acceptance_criteria (>= 1) + chosen approach |
-| build | Has commits (non-empty) + files_changed |
-| review | Has findings list (even if empty) + approved boolean |
-| test | Has pass/fail counts + acceptance criteria coverage |
-| deliver | Has pr_description + decision_log + attention_flags |
-| reflect | (always passes) |
+This checks 6 invariants automatically:
 
-3. **Log transition summary:** Write 1-2 sentences about what this stage
-   decided, for the next stage's context.
+| # | Check | Severity | What It Catches |
+|---|-------|----------|-----------------|
+| 1 | **Stage order** | BLOCK | Skipped stages, out-of-order execution |
+| 2 | **Artifact exists** | BLOCK | Missing artifact publish (except reflect) |
+| 3 | **Artifact schema** | BLOCK/WARN | Required fields missing (BLOCK), recommended missing (WARN) |
+| 4 | **Decision logged** | WARN | No decisions classified (except reflect/deliver) |
+| 5 | **Budget recorded** | WARN | token_cost is 0 — needed for calibration |
+| 6 | **Profile respected** | BLOCK | Stage not in selected profile |
 
-If verification fails → **retry** (increment retry count, re-execute stage).
-If retry count >= max_retries → **checkpoint** with all failure details.
+**Response format:**
+```json
+{"valid": true, "stage": "evaluate", "errors": [], "warnings": [...],
+ "checks_passed": 6, "checks_total": 6}
+```
+
+**Handle the result:**
+- `valid: true` → advance to next stage. Log any warnings for delivery report.
+- `valid: false` → fix the errors before advancing:
+  - Missing artifact? Publish it.
+  - Schema violation? Update the artifact data.
+  - Stage order? You skipped a stage — go back.
+  - Profile violation? Wrong stage for this profile — skip it.
+- If fix attempts >= max_retries → **checkpoint** with all failure details.
+
+**Full-run validation** (use at pipeline end or for debugging):
+```bash
+python backend/scripts/pipeline_validator.py summary \
+  --project <PROJECT> --run-id <RUN_ID>
+```
 
 ### 3f. Handle Result
 
@@ -442,27 +575,31 @@ downstream stages.
 After reflect stage:
 
 1. Update pipeline run status to "completed"
-2. Present the completion summary:
+2. Present the completion summary in chat:
 
 ```
 Pipeline COMPLETE (run_<id>) -- <N> stages, <M> skipped, <K> escalations
+Confidence: <score>/10
 
   Artifacts:
     evaluation  -> art_xxxx (GO, ROI 4.2)
     research    -> art_xxxx (3 alternatives, chose: <approach>)
     design_doc  -> art_xxxx (<approach>, 5 acceptance criteria)
-    changeset   -> art_xxxx (47 lines, 2 files, branch: feat/<feature>)
+    changeset   -> art_xxxx (47 lines, 2 files, TDD: 5 red → all green)
     review      -> art_xxxx (clean, 0 findings)
-    test_report -> art_xxxx (5/5 pass, 94% coverage)
-    delivery    -> art_xxxx (PR ready, decision log attached)
+    test_report -> art_xxxx (5/5 pass, 0 regressions)
+    delivery    -> art_xxxx (PR ready, confidence 9/10)
 
+  TDD: <N> criteria → <M> tests generated → <K> bugs caught → all green
   Decisions: <X> mechanical, <Y> taste (all approved), <Z> judgment
   Lessons: <N> written to IMPROVEMENT.md
 
-  PR: ready for merge. No attention flags.
+  Report: .artifacts/runs/<run_id>/REPORT.md
 ```
 
 3. Save the final pipeline-run JSON to `.artifacts/`
+4. The REPORT.md (generated in DELIVER) is the permanent record — always
+   saved to `.artifacts/runs/<RUN_ID>/REPORT.md` alongside the run.json
 
 ---
 
@@ -488,17 +625,33 @@ This returns:
 
 ### After Each Stage
 
-Update the stage's `token_cost` field in the pipeline run. This is an estimate
-based on the work done (DDD docs read + artifacts consumed + code generated).
-Rough heuristics:
+Update the stage's `token_cost` field in the pipeline run. Estimate from work done:
 
-- Reading a DDD doc: ~2K tokens
-- Consuming an artifact: ~3-5K tokens
-- Generating code: ~500 tokens per 10 lines changed
-- Running tests + analyzing output: ~10-15K tokens
-- Writing an artifact: ~2-3K tokens
+**Token estimation formula:**
+```
+token_cost = base_stage_cost
+           + (ddd_docs_read * 2000)
+           + (artifacts_consumed * 3500)
+           + (lines_of_code_changed * 50)
+           + (test_count * 200)
+           + (tool_calls * 1500)
+```
 
-These don't need to be exact — they calibrate over time via `run-history`.
+**Base stage costs (when no historical data):**
+
+| Stage | Base | Typical Range | Notes |
+|-------|------|---------------|-------|
+| evaluate | 6K | 4-10K | DDD reads + scoring |
+| think | 10K | 5-20K | Research + alternatives |
+| plan | 8K | 5-15K | Design doc generation |
+| build | 40K | 15-80K | TDD cycle: tests + code + verify |
+| review | 15K | 8-25K | Code review + security scan |
+| test | 25K | 10-50K | Run suite + fix failures |
+| deliver | 8K | 5-15K | Report generation + gate |
+| reflect | 3K | 2-5K | Lesson extraction |
+
+After 5+ completed runs, `run-history` provides calibrated averages per stage
+(with 20% buffer). Historical data always overrides base estimates.
 
 ### Historical Calibration
 
@@ -587,24 +740,31 @@ Stage status indicators:
 
 1. **Execute inline, never invoke skills.** You ARE the pipeline. Run each
    stage's behavior directly. Do not use `/evaluate` or `/qa` as slash commands.
-2. **Classify every decision.** No unclassified decisions. If unsure, default
+2. **TDD is mandatory in BUILD.** Generate tests from acceptance criteria FIRST.
+   Run them RED (all fail). Write code until GREEN (all pass). Verify FULL suite
+   (zero regressions). Fix code, not tests. Changing tests = changing the spec.
+3. **Classify every decision.** No unclassified decisions. If unsure, default
    to "taste" (surface at delivery gate rather than block or ignore).
-3. **Verify before advancing.** Never skip verification. Garbage in one stage
-   becomes garbage in all downstream stages.
-4. **Completeness bias.** When the complete implementation costs minutes more
+4. **Verify before advancing.** Run pipeline_validator.py after every stage.
+   Never skip verification. Garbage in one stage becomes garbage in all downstream.
+5. **Completeness bias.** When the complete implementation costs minutes more
    than the shortcut, do the complete thing. (gstack "Boil the Lake" principle.)
-5. **Atomic commits.** One commit per logical change in BUILD and TEST stages.
+6. **Atomic commits.** One commit per logical change in BUILD and TEST stages.
    This enables rollback if a fix breaks something.
-6. **Never loop forever.** Respect max_retries. Checkpoint on exhaustion.
+7. **Never loop forever.** Respect max_retries. Checkpoint on exhaustion.
    Three attempts at the same stage is enough.
-7. **Taste decisions batch at delivery.** Don't interrupt the user mid-pipeline
+8. **Taste decisions batch at delivery.** Don't interrupt the user mid-pipeline
    for taste decisions. Accumulate them, present once at the delivery gate.
-8. **Judgment decisions block immediately.** Don't continue past a judgment
+9. **Judgment decisions block immediately.** Don't continue past a judgment
    decision. The whole point is that the agent genuinely doesn't know.
-9. **Pipeline state is the artifact registry.** Use artifact_cli for ALL state
-   operations. No separate state store.
-10. **DEFER/REJECT at evaluate ends the pipeline.** Don't continue stages after
+10. **Pipeline state is the artifact registry.** Use artifact_cli for ALL state
+    operations. No separate state store.
+11. **DEFER/REJECT at evaluate ends the pipeline.** Don't continue stages after
     the evaluate stage says stop.
+12. **Always generate REPORT.md.** Every pipeline run produces a markdown report
+    at `.artifacts/runs/<RUN_ID>/REPORT.md`. This is the permanent record.
+13. **Confidence score at delivery.** Score 1-10 based on TDD coverage, review
+    results, and validator output. Below 7 → flag for human review.
 
 ## Artifact Operations Reference
 
@@ -616,7 +776,7 @@ python backend/scripts/artifact_cli.py discover --project <PROJECT> --types <typ
 
 # Publish an artifact
 python backend/scripts/artifact_cli.py publish --project <PROJECT> \
-  --type <type> --producer s_pipeline --summary "<summary>" --data '<json>'
+  --type <type> --producer s_autonomous-pipeline --summary "<summary>" --data '<json>'
 
 # Get pipeline state
 python backend/scripts/artifact_cli.py state --project <PROJECT>

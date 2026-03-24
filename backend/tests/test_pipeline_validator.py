@@ -1,0 +1,454 @@
+"""Tests for pipeline_validator.py — 6 structural invariant checks.
+
+Tests the validator against synthetic pipeline runs with known
+good/bad data to verify all 6 checks fire correctly.
+
+Key properties tested:
+    - Stage order enforcement across all 5 profiles
+    - Artifact existence (required for all stages except reflect)
+    - Artifact schema (required vs recommended fields)
+    - Decision logging (required for non-optional stages)
+    - Budget recording (token_cost > 0)
+    - Profile respect (stage must be in selected profile)
+    - Summary command validates all stages
+    - Edge cases: missing run, missing stage record, corrupt data
+"""
+
+import json
+import os
+import sys
+from pathlib import Path
+
+import pytest
+
+# Add backend to path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from scripts.pipeline_validator import (
+    DECISION_OPTIONAL_STAGES,
+    NO_ARTIFACT_STAGES,
+    STAGE_SCHEMAS,
+    _check_artifact_exists,
+    _check_budget_recorded,
+    _check_decision_logged,
+    _check_profile_respected,
+    _check_stage_order,
+    validate,
+)
+from core.pipeline_profiles import get_profile_stages, PIPELINE_PROFILES
+
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def workspace(tmp_path, monkeypatch):
+    """Create a temporary workspace with a project and pipeline run."""
+    ws = tmp_path / "SwarmWS"
+    project_dir = ws / "Projects" / "TestProject" / ".artifacts"
+    runs_dir = project_dir / "runs" / "run_test1"
+    runs_dir.mkdir(parents=True)
+    monkeypatch.setenv("SWARM_WORKSPACE", str(ws))
+    return ws
+
+
+def _make_run(runs_dir: Path, run_id: str = "run_test1", profile: str = "full",
+              stages: list | None = None, status: str = "running") -> dict:
+    """Create a run.json file and return the run dict."""
+    run = {
+        "id": run_id,
+        "project": "TestProject",
+        "requirement": "Test requirement",
+        "profile": profile,
+        "status": status,
+        "stages": stages or [],
+        "taste_decisions": [],
+        "budget": {"session_total": 800000, "consumed": 0, "remaining": 800000,
+                   "stage_estimates": {}, "calibration_source": "defaults"},
+        "created_at": "2026-03-24T00:00:00Z",
+        "updated_at": "2026-03-24T00:00:00Z",
+        "completed_at": None,
+    }
+    run_file = runs_dir / "run.json"
+    run_file.parent.mkdir(parents=True, exist_ok=True)
+    run_file.write_text(json.dumps(run))
+    return run
+
+
+def _make_artifact(artifacts_dir: Path, run_id: str, artifact_id: str,
+                   artifact_type: str, data: dict) -> None:
+    """Create an artifact file and register in manifest."""
+    # Write artifact data file in runs/<run_id>/
+    run_dir = artifacts_dir / "runs" / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    filename = f"{artifact_type}-20260324.json"
+    (run_dir / filename).write_text(json.dumps(data))
+
+    # Update manifest
+    manifest_file = artifacts_dir / "manifest.json"
+    if manifest_file.exists():
+        manifest = json.loads(manifest_file.read_text())
+    else:
+        manifest = {"artifacts": [], "pipeline_state": "evaluate"}
+
+    manifest["artifacts"].append({
+        "id": artifact_id,
+        "type": artifact_type,
+        "file": f"runs/{run_id}/{filename}",
+        "producer": "test",
+        "summary": "test artifact",
+        "created_at": "2026-03-24T00:00:00Z",
+        "run_id": run_id,
+    })
+    manifest_file.write_text(json.dumps(manifest))
+
+
+_SENTINEL = object()
+
+def _stage_record(stage: str, status: str = "completed",
+                  artifact_id: str | None = "art_test",
+                  token_cost: int = 5000,
+                  decisions: list | object = _SENTINEL) -> dict:
+    """Build a stage record dict."""
+    if decisions is _SENTINEL:
+        decisions = [
+            {"description": "test decision", "classification": "mechanical",
+             "reasoning": "test"}
+        ]
+    return {
+        "stage": stage,
+        "status": status,
+        "artifact_id": artifact_id,
+        "started_at": "2026-03-24T00:00:00Z",
+        "completed_at": "2026-03-24T00:01:00Z",
+        "token_cost": token_cost,
+        "retry_count": 0,
+        "notes": f"{stage} completed",
+        "decisions": decisions,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Check 1: Stage Order
+# ---------------------------------------------------------------------------
+
+class TestStageOrder:
+    def test_first_stage_always_valid(self):
+        """First stage in any profile is always valid."""
+        for profile_name, stages in PIPELINE_PROFILES.items():
+            result = _check_stage_order(
+                stages[0], profile_name,
+                [_stage_record(stages[0])]
+            )
+            assert result is True, f"First stage '{stages[0]}' in '{profile_name}' should be valid"
+
+    def test_second_stage_requires_first(self):
+        """Second stage requires first to be completed."""
+        stages_list = [
+            _stage_record("evaluate", status="completed"),
+            _stage_record("build", status="running"),
+        ]
+        # In trivial profile: evaluate -> build
+        assert _check_stage_order("build", "trivial", stages_list) is True
+
+    def test_skipped_stage_before_fails(self):
+        """Skipping a required prior stage fails order check."""
+        # In full profile: evaluate -> think -> plan -> build
+        # Missing think and plan
+        stages_list = [
+            _stage_record("evaluate", status="completed"),
+            _stage_record("build", status="running"),
+        ]
+        assert _check_stage_order("build", "full", stages_list) is False
+
+    def test_skipped_status_counts_as_done(self):
+        """Stages with status 'skipped' count as completed for order."""
+        stages_list = [
+            _stage_record("evaluate", status="completed"),
+            _stage_record("think", status="skipped"),
+            _stage_record("plan", status="skipped"),
+            _stage_record("build", status="running"),
+        ]
+        assert _check_stage_order("build", "full", stages_list) is True
+
+    def test_stage_not_in_profile(self):
+        """Stage not in profile fails order check."""
+        stages_list = [_stage_record("think")]
+        # think is NOT in trivial profile
+        assert _check_stage_order("think", "trivial", stages_list) is False
+
+
+# ---------------------------------------------------------------------------
+# Check 2: Artifact Exists
+# ---------------------------------------------------------------------------
+
+class TestArtifactExists:
+    def test_with_artifact_id(self):
+        assert _check_artifact_exists("build", {"artifact_id": "art_123"}) is True
+
+    def test_missing_artifact_id(self):
+        assert _check_artifact_exists("build", {"artifact_id": None}) is False
+
+    def test_empty_artifact_id(self):
+        assert _check_artifact_exists("build", {"artifact_id": ""}) is False
+
+    def test_reflect_exempt(self):
+        """reflect never needs an artifact."""
+        assert _check_artifact_exists("reflect", {"artifact_id": None}) is True
+
+    def test_all_non_reflect_require_artifact(self):
+        """Every stage except reflect requires an artifact."""
+        for stage in ["evaluate", "think", "plan", "build", "review", "test", "deliver"]:
+            assert _check_artifact_exists(stage, {"artifact_id": None}) is False
+
+
+# ---------------------------------------------------------------------------
+# Check 3: Artifact Schema (tested via validate integration)
+# ---------------------------------------------------------------------------
+
+class TestArtifactSchema:
+    def test_evaluate_required_fields(self, workspace):
+        """Evaluate artifact must have recommendation and scope."""
+        artifacts_dir = workspace / "Projects" / "TestProject" / ".artifacts"
+        runs_dir = artifacts_dir / "runs" / "run_test1"
+
+        _make_artifact(artifacts_dir, "run_test1", "art_eval", "evaluation",
+                       {"recommendation": "GO", "scope": "trivial"})
+        _make_run(runs_dir, stages=[
+            _stage_record("evaluate", artifact_id="art_eval"),
+        ])
+
+        result = validate("TestProject", "run_test1", "evaluate")
+        assert result["valid"] is True
+        assert len(result["errors"]) == 0
+
+    def test_evaluate_missing_required(self, workspace):
+        """Missing required field produces BLOCK error."""
+        artifacts_dir = workspace / "Projects" / "TestProject" / ".artifacts"
+        runs_dir = artifacts_dir / "runs" / "run_test1"
+
+        # Missing 'scope'
+        _make_artifact(artifacts_dir, "run_test1", "art_eval", "evaluation",
+                       {"recommendation": "GO"})
+        _make_run(runs_dir, stages=[
+            _stage_record("evaluate", artifact_id="art_eval"),
+        ])
+
+        result = validate("TestProject", "run_test1", "evaluate")
+        assert result["valid"] is False
+        assert any("scope" in e for e in result["errors"])
+
+    def test_missing_recommended_is_warning(self, workspace):
+        """Missing recommended field produces warning, not error."""
+        artifacts_dir = workspace / "Projects" / "TestProject" / ".artifacts"
+        runs_dir = artifacts_dir / "runs" / "run_test1"
+
+        # Has required fields but missing recommended 'acceptance_criteria'
+        _make_artifact(artifacts_dir, "run_test1", "art_eval", "evaluation",
+                       {"recommendation": "GO", "scope": "trivial"})
+        _make_run(runs_dir, stages=[
+            _stage_record("evaluate", artifact_id="art_eval"),
+        ])
+
+        result = validate("TestProject", "run_test1", "evaluate")
+        assert result["valid"] is True  # Still valid
+        assert any("acceptance_criteria" in w for w in result["warnings"])
+
+    def test_all_stages_have_schemas(self):
+        """Every non-reflect stage has a schema defined."""
+        for stage in ["evaluate", "think", "plan", "build", "review", "test", "deliver"]:
+            assert stage in STAGE_SCHEMAS, f"Missing schema for {stage}"
+
+
+# ---------------------------------------------------------------------------
+# Check 4: Decision Logged
+# ---------------------------------------------------------------------------
+
+class TestDecisionLogged:
+    def test_with_decisions(self):
+        record = _stage_record("build", decisions=[
+            {"description": "x", "classification": "mechanical", "reasoning": "y"}
+        ])
+        assert _check_decision_logged("build", record) is True
+
+    def test_no_decisions(self):
+        record = _stage_record("build", decisions=[])
+        assert _check_decision_logged("build", record) is False
+
+    def test_reflect_optional(self):
+        """Reflect doesn't require decisions."""
+        record = _stage_record("reflect", decisions=[])
+        assert _check_decision_logged("reflect", record) is True
+
+    def test_deliver_optional(self):
+        """Deliver doesn't require decisions."""
+        record = _stage_record("deliver", decisions=[])
+        assert _check_decision_logged("deliver", record) is True
+
+    def test_optional_stages_match_constant(self):
+        """DECISION_OPTIONAL_STAGES contains exactly reflect and deliver."""
+        assert DECISION_OPTIONAL_STAGES == {"reflect", "deliver"}
+
+
+# ---------------------------------------------------------------------------
+# Check 5: Budget Recorded
+# ---------------------------------------------------------------------------
+
+class TestBudgetRecorded:
+    def test_positive_cost(self):
+        assert _check_budget_recorded({"token_cost": 5000}) is True
+
+    def test_zero_cost(self):
+        assert _check_budget_recorded({"token_cost": 0}) is False
+
+    def test_missing_cost(self):
+        assert _check_budget_recorded({}) is False
+
+    def test_negative_cost(self):
+        """Negative cost is technically > 0 check — this is False."""
+        assert _check_budget_recorded({"token_cost": -1}) is False
+
+
+# ---------------------------------------------------------------------------
+# Check 6: Profile Respected
+# ---------------------------------------------------------------------------
+
+class TestProfileRespected:
+    def test_stage_in_profile(self):
+        assert _check_profile_respected("evaluate", "full") is True
+        assert _check_profile_respected("build", "trivial") is True
+
+    def test_stage_not_in_profile(self):
+        assert _check_profile_respected("think", "trivial") is False
+        assert _check_profile_respected("build", "research") is False
+        assert _check_profile_respected("test", "docs") is False
+
+    def test_all_profiles_include_evaluate(self):
+        """Evaluate is in every profile."""
+        for profile in PIPELINE_PROFILES:
+            assert _check_profile_respected("evaluate", profile) is True
+
+    def test_all_profiles_include_reflect(self):
+        """Reflect is in every profile."""
+        for profile in PIPELINE_PROFILES:
+            assert _check_profile_respected("reflect", profile) is True
+
+
+# ---------------------------------------------------------------------------
+# Integration: validate() full pipeline
+# ---------------------------------------------------------------------------
+
+class TestValidateIntegration:
+    def test_missing_run(self, workspace):
+        """Non-existent run returns error."""
+        result = validate("TestProject", "run_nonexistent", "evaluate")
+        assert result["valid"] is False
+        assert "not found" in result["errors"][0]
+
+    def test_missing_stage_record(self, workspace):
+        """Stage not in run's stages list returns error."""
+        artifacts_dir = workspace / "Projects" / "TestProject" / ".artifacts"
+        runs_dir = artifacts_dir / "runs" / "run_test1"
+        _make_run(runs_dir, stages=[_stage_record("evaluate")])
+
+        result = validate("TestProject", "run_test1", "build")
+        assert result["valid"] is False
+        assert "No stage record" in result["errors"][0]
+
+    def test_perfect_stage(self, workspace):
+        """A well-formed stage passes all 6 checks."""
+        artifacts_dir = workspace / "Projects" / "TestProject" / ".artifacts"
+        runs_dir = artifacts_dir / "runs" / "run_test1"
+
+        _make_artifact(artifacts_dir, "run_test1", "art_eval", "evaluation",
+                       {"recommendation": "GO", "scope": "standard",
+                        "acceptance_criteria": ["a"], "scores": {"s": 5}})
+        _make_run(runs_dir, stages=[
+            _stage_record("evaluate", artifact_id="art_eval"),
+        ])
+
+        result = validate("TestProject", "run_test1", "evaluate")
+        assert result["valid"] is True
+        assert result["checks_passed"] == 6
+        assert result["checks_total"] == 6
+        assert len(result["errors"]) == 0
+        assert len(result["warnings"]) == 0
+
+    def test_reflect_passes_with_nothing(self, workspace):
+        """Reflect stage passes with no artifact, no decisions, any token_cost."""
+        artifacts_dir = workspace / "Projects" / "TestProject" / ".artifacts"
+        runs_dir = artifacts_dir / "runs" / "run_test1"
+
+        full_stages = [_stage_record(s) for s in get_profile_stages("full")[:-1]]
+        full_stages.append(_stage_record("reflect", artifact_id=None, decisions=[]))
+        _make_run(runs_dir, stages=full_stages)
+
+        result = validate("TestProject", "run_test1", "reflect")
+        assert result["valid"] is True
+        assert result["checks_passed"] == 6
+
+    def test_warnings_dont_block(self, workspace):
+        """Warnings don't make valid=false, and checks_passed stays at 6."""
+        artifacts_dir = workspace / "Projects" / "TestProject" / ".artifacts"
+        runs_dir = artifacts_dir / "runs" / "run_test1"
+
+        _make_artifact(artifacts_dir, "run_test1", "art_eval", "evaluation",
+                       {"recommendation": "GO", "scope": "standard"})
+        _make_run(runs_dir, stages=[
+            _stage_record("evaluate", artifact_id="art_eval", token_cost=0, decisions=[]),
+        ])
+
+        result = validate("TestProject", "run_test1", "evaluate")
+        assert result["valid"] is True  # No BLOCK errors
+        assert result["checks_passed"] == 6  # Warnings don't reduce count
+        assert len(result["warnings"]) >= 2  # Missing decisions + zero budget
+
+    def test_multiple_errors_accumulate(self, workspace):
+        """Multiple violations all appear in errors list."""
+        artifacts_dir = workspace / "Projects" / "TestProject" / ".artifacts"
+        runs_dir = artifacts_dir / "runs" / "run_test1"
+
+        # think stage in trivial profile (violation) + no artifact (violation)
+        _make_run(runs_dir, profile="trivial", stages=[
+            _stage_record("think", artifact_id=None),
+        ])
+
+        result = validate("TestProject", "run_test1", "think")
+        assert result["valid"] is False
+        assert len(result["errors"]) >= 2  # Profile + artifact
+
+
+# ---------------------------------------------------------------------------
+# Summary command integration
+# ---------------------------------------------------------------------------
+
+class TestSummary:
+    def test_summary_validates_all_stages(self, workspace):
+        """Summary validates all completed/running stages."""
+        artifacts_dir = workspace / "Projects" / "TestProject" / ".artifacts"
+        runs_dir = artifacts_dir / "runs" / "run_test1"
+
+        _make_artifact(artifacts_dir, "run_test1", "art_eval", "evaluation",
+                       {"recommendation": "GO", "scope": "standard"})
+        _make_artifact(artifacts_dir, "run_test1", "art_build", "changeset",
+                       {"files_changed": ["a.py"]})
+
+        _make_run(runs_dir, profile="trivial", stages=[
+            _stage_record("evaluate", artifact_id="art_eval"),
+            _stage_record("build", artifact_id="art_build"),
+        ])
+
+        # Import and call the summary logic directly
+        from scripts.pipeline_validator import _load_run
+        run = _load_run("TestProject", "run_test1")
+        assert run is not None
+
+        results = []
+        for stage_rec in run["stages"]:
+            if stage_rec["status"] in ("completed", "running"):
+                r = validate("TestProject", "run_test1", stage_rec["stage"])
+                results.append(r)
+
+        assert len(results) == 2
+        assert all(r["valid"] for r in results)
