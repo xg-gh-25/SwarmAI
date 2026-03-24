@@ -333,7 +333,9 @@ def _escalations_dir(workspace_root: Path, project: str) -> Path:
 
 
 def save_escalation(workspace_root: Path, esc: Escalation) -> None:
-    """Persist an escalation to disk.  No-op if no project."""
+    """Persist an escalation to disk atomically.  No-op if no project."""
+    import tempfile
+
     if not esc.project:
         return
     esc_dir = _escalations_dir(workspace_root, esc.project)
@@ -342,7 +344,18 @@ def save_escalation(workspace_root: Path, esc: Escalation) -> None:
     data = asdict(esc)
     # Convert Option dataclasses to dicts for JSON serialization
     data["options"] = [asdict(o) if hasattr(o, "__dataclass_fields__") else o for o in esc.options]
-    path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    # Atomic write: temp file + rename prevents corruption on crash
+    fd, tmp_path = tempfile.mkstemp(dir=str(esc_dir), suffix=".tmp")
+    try:
+        with open(fd, "w", encoding="utf-8") as f:
+            f.write(json.dumps(data, indent=2))
+        Path(tmp_path).replace(path)
+    except BaseException:
+        try:
+            Path(tmp_path).unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
     logger.info("escalation.saved id=%s project=%s level=%d", esc.id, esc.project, esc.level)
 
 
@@ -404,9 +417,6 @@ def create_radar_todo(esc: Escalation, db_path: Path | None = None) -> str | Non
         return None
 
     try:
-        conn = _sqlite3.connect(str(db), timeout=5.0)
-        conn.execute("PRAGMA journal_mode=WAL")
-
         todo_id = str(uuid4())
         now = _now_iso()
         level_name = Level(esc.level).name
@@ -434,25 +444,26 @@ def create_radar_todo(esc: Escalation, db_path: Path | None = None) -> str | Non
         )
         description = f"{esc.situation}\n\nOptions:\n{options_text}" if options_text else esc.situation
 
-        conn.execute(
-            """INSERT INTO todos (id, workspace_id, title, description, source,
-               source_type, status, priority, due_date, linked_context, task_id,
-               created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, NULL, ?, ?)""",
-            (
-                todo_id, _WORKSPACE_ID,
-                f"[{level_name}] {esc.title}",
-                description,
-                f"escalation:{esc.id}",
-                "ai_detected",
-                priority,
-                esc.timeout_at,  # due_date = timeout for visual urgency
-                linked_context,
-                now, now,
-            ),
-        )
-        conn.commit()
-        conn.close()
+        with _sqlite3.connect(str(db), timeout=5.0) as conn:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute(
+                """INSERT INTO todos (id, workspace_id, title, description, source,
+                   source_type, status, priority, due_date, linked_context, task_id,
+                   created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, NULL, ?, ?)""",
+                (
+                    todo_id, _WORKSPACE_ID,
+                    f"[{level_name}] {esc.title}",
+                    description,
+                    f"escalation:{esc.id}",
+                    "ai_detected",
+                    priority,
+                    esc.timeout_at,  # due_date = timeout for visual urgency
+                    linked_context,
+                    now, now,
+                ),
+            )
+            conn.commit()
 
         logger.info(
             "escalation.radar_todo id=%s esc=%s level=%s priority=%s",
@@ -500,7 +511,7 @@ def resolve_expired(workspace_root: Path, project: str) -> list[Escalation]:
         save_escalation(workspace_root, resolved_esc)
 
         # Also mark the Radar todo as handled
-        _mark_todo_handled(esc.id)
+        mark_todo_handled(esc.id)
 
         resolved_list.append(resolved_esc)
         logger.info(
@@ -511,7 +522,7 @@ def resolve_expired(workspace_root: Path, project: str) -> list[Escalation]:
     return resolved_list
 
 
-def _mark_todo_handled(escalation_id: str, db_path: Path | None = None) -> None:
+def mark_todo_handled(escalation_id: str, db_path: Path | None = None) -> None:
     """Mark the Radar todo associated with an escalation as handled."""
     import sqlite3 as _sqlite3
 
@@ -520,13 +531,12 @@ def _mark_todo_handled(escalation_id: str, db_path: Path | None = None) -> None:
         return
 
     try:
-        conn = _sqlite3.connect(str(db), timeout=5.0)
-        conn.execute("PRAGMA journal_mode=WAL")
-        conn.execute(
-            "UPDATE todos SET status = 'handled', updated_at = ? WHERE source = ?",
-            (_now_iso(), f"escalation:{escalation_id}"),
-        )
-        conn.commit()
-        conn.close()
+        with _sqlite3.connect(str(db), timeout=5.0) as conn:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute(
+                "UPDATE todos SET status = 'handled', updated_at = ? WHERE source = ?",
+                (_now_iso(), f"escalation:{escalation_id}"),
+            )
+            conn.commit()
     except Exception as exc:
         logger.warning("escalation.mark_todo_handled failed esc=%s: %s", escalation_id, exc)

@@ -25,7 +25,7 @@ from core.escalation import (
     resolve,
     resolve_expired,
     save_escalation,
-    _mark_todo_handled,
+    mark_todo_handled,
 )
 
 logger = logging.getLogger(__name__)
@@ -91,7 +91,7 @@ async def resolve_escalation(project: str, escalation_id: str, body: ResolveRequ
     save_escalation(_WORKSPACE_ROOT, resolved_esc)
 
     # Mark associated Radar todo as handled
-    _mark_todo_handled(escalation_id)
+    mark_todo_handled(escalation_id)
 
     logger.info(
         "escalation.resolved id=%s resolution=%s resolved_by=%s project=%s",

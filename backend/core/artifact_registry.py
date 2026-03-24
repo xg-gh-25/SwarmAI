@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import logging
+import tempfile
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -44,6 +45,7 @@ ARTIFACT_TYPES = frozenset({
     "test_report",
     "delivery",
     "release",
+    "checkpoint",
 })
 
 PIPELINE_STATES = (
@@ -341,13 +343,28 @@ class ArtifactRegistry:
             return None
 
     def _write_manifest(self, project: str, manifest: dict) -> None:
-        """Write manifest.json, creating .artifacts/ if needed."""
+        """Write manifest.json atomically (write-to-temp + rename).
+
+        Prevents data loss if the process crashes mid-write.
+        """
         path = self._manifest_path(project)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            json.dumps(manifest, indent=2, default=str),
-            encoding="utf-8",
+        data = json.dumps(manifest, indent=2, default=str)
+        # Write to temp file in same directory, then atomic rename
+        fd, tmp_path = tempfile.mkstemp(
+            dir=str(path.parent), suffix=".tmp", prefix=".manifest-"
         )
+        try:
+            with open(fd, "w", encoding="utf-8") as f:
+                f.write(data)
+            Path(tmp_path).replace(path)
+        except BaseException:
+            # Clean up temp file on any failure
+            try:
+                Path(tmp_path).unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise
 
     # ── Learn feedback ──────────────────────────────────────────────
 
