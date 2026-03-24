@@ -1338,17 +1338,25 @@ export function useChatStreamingLifecycle(
             tabState.sessionId = sid;
           }
 
-          if (isActiveTab) {
+          // Result is the definitive signal that the conversation turn is
+          // complete. Sync tabState.messages → React state as a safety net:
+          // if any prior text_delta/assistant events skipped setMessages()
+          // (e.g. transient isActiveTab mismatch during React batching),
+          // the final content would be stuck in the mutable ref.
+          // This authoritative sync ensures displayed content matches truth.
+          if (isActiveTab && tabState) {
+            if (sid) setSessionId(sid);
+            setMessages(tabState.messages);
+            queryClient.invalidateQueries({ queryKey: ['radar', 'wipTasks'] });
+            queryClient.invalidateQueries({ queryKey: ['radar', 'completedTasks'] });
+          } else if (isActiveTab) {
             if (sid) setSessionId(sid);
             queryClient.invalidateQueries({ queryKey: ['radar', 'wipTasks'] });
             queryClient.invalidateQueries({ queryKey: ['radar', 'completedTasks'] });
           }
 
-          // Result is the definitive signal that the conversation turn is
-          // complete. Clear streaming state for this tab so the spinner
-          // stops and the input re-enables. Without this, the tab stays
-          // in "processing..." state until the SSE [DONE] signal fires
-          // the createCompleteHandler — which may be stale or delayed.
+          // Clear streaming state for this tab so the spinner stops and
+          // the input re-enables.
           setIsStreaming(false, capturedTabId ?? undefined);
           incrementStreamGen();
 

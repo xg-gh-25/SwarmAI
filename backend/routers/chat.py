@@ -344,7 +344,10 @@ async def sse_with_heartbeat(
                 )
 
                 if item_type == "done":
-                    # Generator finished, exit loop
+                    # Generator finished — send explicit [DONE] sentinel
+                    # so the frontend doesn't rely on HTTP stream close
+                    # (which may be delayed by buffering in uvicorn/OS/webview).
+                    yield "data: [DONE]\n\n"
                     break
                 elif item_type == "message":
                     try:
