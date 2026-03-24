@@ -86,7 +86,8 @@ function formatSchedule(schedule: string | null): string {
   // Parse "min hour * * DOW" patterns for readable output
   const parts = schedule.split(' ');
   if (parts.length === 5) {
-    const [, hourField, , , dow] = parts;
+    const hourField = parts[1];
+    const dow = parts[4];
     const hours = hourField.split(',');
 
     // Multiple hours per day

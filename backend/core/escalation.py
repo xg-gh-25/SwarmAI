@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import json
 import logging
+import tempfile
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import IntEnum
@@ -334,8 +335,6 @@ def _escalations_dir(workspace_root: Path, project: str) -> Path:
 
 def save_escalation(workspace_root: Path, esc: Escalation) -> None:
     """Persist an escalation to disk atomically.  No-op if no project."""
-    import tempfile
-
     if not esc.project:
         return
     esc_dir = _escalations_dir(workspace_root, esc.project)
