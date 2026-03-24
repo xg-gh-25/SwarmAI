@@ -38,6 +38,7 @@ REQUIRED_FOLDERS = [
 ]
 
 # Knowledge subdirectories created by create_folder_structure
+# Must match KNOWLEDGE_SUBDIRS in swarm_workspace_manager.py
 REQUIRED_KNOWLEDGE_SUBDIRS = [
     "Knowledge/Notes",
     "Knowledge/Reports",
@@ -46,6 +47,10 @@ REQUIRED_KNOWLEDGE_SUBDIRS = [
     "Knowledge/Archives",
     "Knowledge/DailyActivity",
     "Knowledge/Handoffs",
+    "Knowledge/Designs",
+    "Knowledge/AIDLC",
+    "Knowledge/Signals",
+    "Knowledge/JobResults",
 ]
 
 FORBIDDEN_FOLDERS = [

@@ -39,14 +39,18 @@ logger = logging.getLogger(__name__)
 # Simplified folder structure — only user-facing directories
 FOLDER_STRUCTURE = ["Knowledge", "Projects", "Attachments"]
 
-# Default Knowledge subdirectories (7 subdirs under Knowledge/)
-KNOWLEDGE_SUBDIRS = ["Notes", "Reports", "Meetings", "Library", "Archives", "DailyActivity", "Handoffs"]
+# Default Knowledge subdirectories (auto-created on startup)
+KNOWLEDGE_SUBDIRS = [
+    "Notes", "Reports", "Meetings", "Library", "Archives",
+    "DailyActivity", "Handoffs", "Designs", "AIDLC", "Signals", "JobResults",
+]
 
 SYSTEM_MANAGED_FOLDERS = {
     "Knowledge", "Projects", "Attachments",
     "Knowledge/Notes", "Knowledge/Reports", "Knowledge/Meetings",
     "Knowledge/Library", "Knowledge/Archives", "Knowledge/DailyActivity",
-    "Knowledge/Handoffs",
+    "Knowledge/Handoffs", "Knowledge/Designs", "Knowledge/AIDLC",
+    "Knowledge/Signals", "Knowledge/JobResults",
 }
 
 SYSTEM_MANAGED_ROOT_FILES: set[str] = set()
@@ -580,6 +584,9 @@ class SwarmWorkspaceManager:
         # Auto-generate PROJECTS.md index from Projects/ scan
         await self.refresh_projects_index(expanded_path)
 
+        # Auto-generate Knowledge Index section of KNOWLEDGE.md
+        await self.refresh_knowledge_index(expanded_path)
+
         logger.info("Created folder structure at %s", expanded_path)
 
     # ── Default project provisioning ─────────────────────────────────────
@@ -1026,6 +1033,162 @@ class SwarmWorkspaceManager:
         await anyio.to_thread.run_sync(_write)
         logger.info("Refreshed PROJECTS.md with %d projects", len(entries))
 
+    async def refresh_knowledge_index(self, workspace_path: str) -> None:
+        """Regenerate the Knowledge Index section of ``.context/KNOWLEDGE.md``.
+
+        Scans ``Knowledge/`` subdirectories (Designs, Notes, Reports,
+        Meetings, Library, Handoffs, AIDLC) for markdown files.  Extracts
+        the ``title`` from YAML frontmatter or the first ``# heading``,
+        and rebuilds the index tables.
+
+        Preserves everything above the ``## Knowledge Index`` marker
+        (hand-written architecture docs, code reference, etc.).
+
+        Called automatically during ``verify_integrity()`` and after
+        knowledge file operations.
+        """
+        root = Path(workspace_path)
+        context_file = root / ".context" / "KNOWLEDGE.md"
+
+        # Marker that separates hand-written content from auto-generated index
+        INDEX_MARKER = "## Knowledge Index"
+
+        def _extract_topic(filepath: Path) -> str:
+            """Extract topic from frontmatter title or first heading."""
+            try:
+                text = filepath.read_text(encoding="utf-8")
+                lines = text.split("\n", 30)  # Only scan first 30 lines
+
+                # Check YAML frontmatter
+                if lines and lines[0].strip() == "---":
+                    for line in lines[1:]:
+                        if line.strip() == "---":
+                            break
+                        if line.startswith("title:"):
+                            title = line[6:].strip().strip('"').strip("'")
+                            return title
+
+                # Fallback: first # heading
+                for line in lines:
+                    stripped = line.strip()
+                    if stripped.startswith("# ") and not stripped.startswith("# <"):
+                        return stripped[2:].strip()
+
+                return filepath.stem
+            except (OSError, UnicodeDecodeError):
+                return filepath.stem
+
+        def _extract_date(filepath: Path) -> str:
+            """Extract date from filename (YYYY-MM-DD prefix) or frontmatter."""
+            name = filepath.stem
+            # Try YYYY-MM-DD prefix
+            if len(name) >= 10 and name[4] == "-" and name[7] == "-":
+                return name[:10]
+            # Try frontmatter
+            try:
+                text = filepath.read_text(encoding="utf-8")
+                lines = text.split("\n", 20)
+                if lines and lines[0].strip() == "---":
+                    for line in lines[1:]:
+                        if line.strip() == "---":
+                            break
+                        if line.startswith("date:"):
+                            return line[5:].strip().strip('"')[:10]
+            except (OSError, UnicodeDecodeError):
+                pass
+            return "unknown"
+
+        def _scan_section(section_dir: Path, path_prefix: str) -> list[dict]:
+            """Scan a directory for .md files and extract metadata."""
+            if not section_dir.exists():
+                return []
+            entries = []
+            for f in sorted(section_dir.glob("*.md")):
+                if f.name.startswith(".") or f.name.startswith("_"):
+                    continue
+                entries.append({
+                    "date": _extract_date(f),
+                    "file": f"`{path_prefix}{f.name}`",
+                    "topic": _extract_topic(f),
+                })
+            return sorted(entries, key=lambda e: e["date"])
+
+        def _build_index() -> str:
+            """Build the Knowledge Index section content."""
+            knowledge_dir = root / "Knowledge"
+
+            # Define sections to scan: (display name, directory, path prefix)
+            # Excludes: DailyActivity (ephemeral), Archives (auto-pruned),
+            #           Signals/JobResults (machine-generated, not human-readable)
+            sections = [
+                ("Designs", knowledge_dir / "Designs", "Knowledge/Designs/"),
+                ("Notes", knowledge_dir / "Notes", "Knowledge/Notes/"),
+                ("Reports", knowledge_dir / "Reports", "Knowledge/Reports/"),
+                ("Meetings", knowledge_dir / "Meetings", "Knowledge/Meetings/"),
+                ("Library", knowledge_dir / "Library", "Knowledge/Library/"),
+                ("Handoffs", knowledge_dir / "Handoffs", "Knowledge/Handoffs/"),
+                ("AIDLC", knowledge_dir / "AIDLC", "Knowledge/AIDLC/"),
+            ]
+
+            lines = [INDEX_MARKER, ""]
+            total_files = 0
+
+            for section_name, section_dir, path_prefix in sections:
+                entries = _scan_section(section_dir, path_prefix)
+                if not entries:
+                    continue
+                total_files += len(entries)
+                lines.append(f"### {section_name}")
+                lines.append("")
+                lines.append("| Date | File | Topic |")
+                lines.append("|------|------|-------|")
+                for e in entries:
+                    lines.append(f"| {e['date']} | {e['file']} | {e['topic']} |")
+                lines.append("")
+
+            if total_files == 0:
+                lines.append("_No knowledge files yet. Save notes, designs, and reports to Knowledge/._")
+                lines.append("")
+
+            lines.append("---")
+            lines.append("")
+            lines.append("_Auto-refreshed on startup from Knowledge/ directories._")
+            lines.append("")
+
+            return "\n".join(lines), total_files
+
+        def _generate():
+            # Read existing KNOWLEDGE.md
+            if not context_file.exists():
+                return None, 0
+
+            existing = context_file.read_text(encoding="utf-8")
+
+            # Find the marker — everything before it is preserved
+            marker_pos = existing.find(INDEX_MARKER)
+            if marker_pos == -1:
+                # No marker found — append at the end
+                preserved = existing.rstrip() + "\n\n"
+            else:
+                preserved = existing[:marker_pos]
+
+            index_content, total = _build_index()
+            return preserved + index_content, total
+
+        result = await anyio.to_thread.run_sync(lambda: _generate())
+        content, total = result
+
+        if content is None:
+            logger.debug("KNOWLEDGE.md not found, skipping index refresh")
+            return
+
+        def _write():
+            context_file.parent.mkdir(parents=True, exist_ok=True)
+            context_file.write_text(content, encoding="utf-8")
+
+        await anyio.to_thread.run_sync(_write)
+        logger.info("Refreshed KNOWLEDGE.md index with %d files", total)
+
     # ── Git initialization ─────────────────────────────────────────────
 
     def _ensure_git_repo(self, workspace_path: str) -> bool:
@@ -1353,6 +1516,9 @@ class SwarmWorkspaceManager:
 
         # Auto-refresh PROJECTS.md from scanning Projects/
         await self.refresh_projects_index(str(root))
+
+        # Auto-refresh Knowledge Index in KNOWLEDGE.md
+        await self.refresh_knowledge_index(str(root))
 
         # Auto-prune old archived DailyActivity files (Req 7.6, 15.11)
         expanded = str(root)
