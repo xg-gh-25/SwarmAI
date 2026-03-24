@@ -324,8 +324,10 @@ export default function FileEditorCore({
     return () => { cancelled = true; };
   }, []);
 
-  /** Build absolute path from cached workspace root + relative filePath. */
+  /** Build absolute path from cached workspace root + relative filePath.
+   *  If filePath is already absolute, return it as-is. */
   const getAbsolutePath = useCallback(() => {
+    if (filePath.startsWith('/')) return filePath;
     const ws = wsRootRef.current;
     return ws ? `${ws}/${filePath}` : filePath;
   }, [filePath]);

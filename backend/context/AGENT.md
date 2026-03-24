@@ -26,6 +26,18 @@ Write it down. Files > Brain 📝 — If something is worth remembering, write i
 - Come back with solutions, not questions
 - If you're genuinely stuck after trying, then ask
 
+### Present Alternatives for Design Decisions
+
+When the user asks to design, plan, or architect something non-trivial, present **3 approaches** before proceeding:
+
+- **Approach 1: Minimal** — ships fastest, least effort. What do you give up?
+- **Approach 2: Ideal** — best architecture. What's the cost?
+- **Approach 3: Creative** — rethink the problem itself. What if the obvious framing is wrong?
+
+Each approach: **What** (1-2 sentences), **Effort** (T-shirt + sessions), **Risk**, **Tradeoff**. End with a recommendation and why.
+
+**When to trigger:** "design X", "how should we build X", "plan X", "what's the best approach for X". NOT for simple tasks, bug fixes, or when the user already specified the approach.
+
 ### Earn Trust Through Competence
 - Be careful with external actions (anything that leaves the workspace)
 - Be bold with internal actions (reading, organizing, writing, coding)
@@ -365,17 +377,26 @@ Scan all modified source files for issues by severity:
 
 **Process:** List findings briefly → fix 🔴 and 🟡 in-place → note what was fixed. Maintain existing functionality — refactors only, not feature changes. If nothing found, one line and move on.
 
-### Security Scan
+### Security Scan (Confidence-Gated)
 
-Scan all modified source files for security issues:
+For each modified source file, assign every finding a **confidence score (1-10)** and a **concrete exploit scenario** (required — not "this is suspicious" but "attacker does X via Y to achieve Z").
 
-| Severity | Action | What to Look For |
-|----------|--------|-----------------|
-| 🔴 Critical | **Auto-fix** | Hardcoded API keys/tokens/credentials, private keys, encryption keys, exposed passwords/secrets, DB connection strings with credentials |
-| 🟡 Warning | **Note only** | Hardcoded internal URLs, insecure defaults, missing input validation, overly permissive file permissions |
-| 🟢 Info | **Note only** | IP addresses in code, verbose error messages leaking internals |
+**Confidence scoring modifiers:**
+- Test/example/doc file? → confidence -4
+- Known false-positive pattern (placeholder, env var ref, localhost, public key, version string, hash constant, base64 SVG, commented-out code)? → suppress entirely
+- Can you construct a concrete exploit? → confidence +3
+- Vulnerable path reachable from user input? → confidence +2
 
-**Process:** Replace 🔴 Critical with env vars, config refs, or placeholders. **Never commit hardcoded secrets** — this is a blocking rule.
+**Action matrix:**
+
+| Confidence | Severity | Action |
+|-----------|----------|--------|
+| >= 8 | Critical/High | **Auto-fix** (replace secrets with env vars, fix injection) |
+| >= 8 | Medium/Low | **Report with fix suggestion** |
+| 5-7 | Any | **Warning only** — include in output |
+| < 5 | Any | **Suppress silently** |
+
+**Every reported finding MUST include:** file, line, confidence score, exploit scenario, and recommendation. **Never commit hardcoded secrets** — this is a blocking rule regardless of confidence.
 
 ## Environment & Platform Rules
 

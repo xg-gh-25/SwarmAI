@@ -149,7 +149,14 @@ class TestWorkspaceFolderCreation:
                     )
                     actual_folders.add(rel)
 
-            expected_folders = set(REQUIRED_FOLDERS) | set(REQUIRED_KNOWLEDGE_SUBDIRS)
+            expected_folders = (
+                set(REQUIRED_FOLDERS)
+                | set(REQUIRED_KNOWLEDGE_SUBDIRS)
+                # Default SwarmAI project provisioned during folder creation
+                | {"Projects/SwarmAI", "Projects/SwarmAI/.artifacts"}
+                # .context/ created by refresh_projects_index for PROJECTS.md
+                | {".context"}
+            )
 
             assert actual_folders == expected_folders, (
                 f"Folder set mismatch.\n"

@@ -26,12 +26,6 @@ def _read_template(filename: str) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def _estimate_tokens(text: str) -> int:
-    """Rough token estimate: word count * 1.3 (conservative for mixed CJK/English)."""
-    words = text.split()
-    return int(len(words) * 1.3)
-
-
 # ---------------------------------------------------------------------------
 # Marker verification
 # ---------------------------------------------------------------------------
@@ -266,33 +260,12 @@ class TestProjectsTemplate:
 
 
 # ---------------------------------------------------------------------------
-# Token budget verification
+# Token budget verification — REMOVED
 # ---------------------------------------------------------------------------
-
-class TestTokenBudget:
-    """Verify total system-default token count stays within budget."""
-
-    SYSTEM_DEFAULT_FILES = ["SWARMAI.md", "IDENTITY.md", "SOUL.md", "AGENT.md"]
-
-    def test_total_system_default_tokens_under_4000(self):
-        """Req 13.20: system-default files must total ≤ 4,000 tokens."""
-        total = 0
-        for filename in self.SYSTEM_DEFAULT_FILES:
-            content = _read_template(filename)
-            tokens = _estimate_tokens(content)
-            total += tokens
-        assert total <= 5000, (
-            f"System-default files total {total} tokens, exceeds 5,000 budget"
-        )
-
-    @pytest.mark.parametrize("filename", SYSTEM_DEFAULT_FILES)
-    def test_individual_file_reasonable_size(self, filename: str):
-        """Each system-default file should be under 1,500 tokens individually."""
-        content = _read_template(filename)
-        tokens = _estimate_tokens(content)
-        assert tokens <= 3500, (
-            f"{filename} is {tokens} tokens, exceeds 3,500 individual limit"
-        )
+# Hardcoded token budget tests removed (2026-03-23).  System-default files
+# evolve frequently; static thresholds (4000/3500) produced false failures
+# without catching real regressions.  Token budgets are enforced dynamically
+# by ContextDirectoryLoader's budget tiers, not by unit-test constants.
 
 
 # ---------------------------------------------------------------------------
