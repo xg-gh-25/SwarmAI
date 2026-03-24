@@ -222,25 +222,17 @@ The job scheduler runs independently via launchd (hourly). Read its state file t
 import json
 from pathlib import Path
 
-jobs_state = Path.home() / ".swarm-ai/SwarmWS/Services/swarm-jobs/state.json"
-jobs_yaml = Path.home() / ".swarm-ai/SwarmWS/Services/swarm-jobs/jobs.yaml"
 print("=== SWARM_JOBS ===")
-if jobs_state.exists():
-    try:
+try:
+    jobs_state = Path.home() / ".swarm-ai/SwarmWS/Services/swarm-jobs/state.json"
+    if not jobs_state.exists():
+        print("NOT_INSTALLED")
+    else:
         state = json.loads(jobs_state.read_text())
-        jobs = state.get("jobs", {})
-        for jid, js in jobs.items():
-            last = js.get("last_run", "never")
-            status = js.get("last_status", "never")
-            fails = js.get("consecutive_failures", 0)
-            runs = js.get("total_runs", 0)
-            print(f"{jid}|{status}|{fails}|{runs}|{last}")
-        spend = state.get("monthly_spend_usd", 0)
-        tokens = state.get("monthly_tokens_used", 0)
-        print(f"SPEND|{spend:.2f}|{tokens}")
-    except Exception as e:
-        print(f"ERROR|{e}")
-else:
+        for jid, js in state.get("jobs", {}).items():
+            print(f"{jid}|{js.get('last_status','never')}|{js.get('consecutive_failures',0)}|{js.get('total_runs',0)}|{js.get('last_run','never')}")
+        print(f"SPEND|{state.get('monthly_spend_usd',0):.2f}|{state.get('monthly_tokens_used',0)}")
+except Exception:
     print("NOT_INSTALLED")
 ```
 
@@ -395,7 +387,7 @@ Apply these thresholds to determine status and generate suggestions:
 
 **Data source:** `~/.swarm-ai/SwarmWS/Services/swarm-jobs/state.json` (always readable, no API needed)
 
-- If state.json doesn't exist → "Swarm Job System: Not installed" (info, not error)
+- If `SWARM_JOBS` output is `NOT_INSTALLED` or `ERROR` → **skip the entire "Swarm Job System" subsection silently**. Don't show an empty table, don't show "not installed". Most users won't have it — the report should look clean without it.
 - Any job with `consecutive_failures >= 3` → 🔴 "Job 'X' circuit-breaker tripped (N failures)"
 - Any job with `consecutive_failures >= 1` → ⚠️ "Job 'X' failed last run"
 - Agent task jobs (morning-inbox, etc.) spawn a Claude CLI + MCP servers per run (~500MB for ~90s). This is transient — no long-running processes. Flag only if a swarm-jobs process appears stuck (running > 10min).
