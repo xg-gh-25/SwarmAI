@@ -333,11 +333,14 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
    */
   const openWithSystemApp = useCallback(async (filePath: string) => {
     let absolutePath = filePath;
-    try {
-      const configResp = await api.get<{ file_path?: string; filePath?: string }>('/workspace');
-      const wsRoot = configResp.data.file_path ?? configResp.data.filePath ?? '';
-      absolutePath = wsRoot ? `${wsRoot}/${filePath}` : filePath;
-    } catch { /* use relative path as fallback */ }
+    // Only prepend workspace root for relative paths
+    if (!filePath.startsWith('/')) {
+      try {
+        const configResp = await api.get<{ file_path?: string; filePath?: string }>('/workspace');
+        const wsRoot = configResp.data.file_path ?? configResp.data.filePath ?? '';
+        absolutePath = wsRoot ? `${wsRoot}/${filePath}` : filePath;
+      } catch { /* use relative path as fallback */ }
+    }
 
     try {
       const { openPath } = await import('@tauri-apps/plugin-opener');

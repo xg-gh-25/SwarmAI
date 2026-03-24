@@ -645,6 +645,73 @@ def _is_path_under(child: Path, parent: Path) -> bool:
     return child_parts[: len(parent_parts)] == parent_parts
 
 
+def _resolve_file_path(
+    path: str, workspace_root: Path
+) -> tuple[Path, bool]:
+    """Resolve a file path to an absolute target with external flag.
+
+    Handles both absolute paths (``/Users/.../foo.py``) and workspace-relative
+    paths (``Knowledge/Notes/foo.md``).
+
+    Args:
+        path: Absolute or workspace-relative file path.
+        workspace_root: Resolved workspace root directory.
+
+    Returns:
+        ``(target, is_external)`` — *target* is the resolved absolute path,
+        *is_external* is True when the file lives outside the workspace
+        (either an absolute path pointing elsewhere, or a symlink traversal).
+
+    Raises:
+        HTTPException 400: For relative paths with ``..`` traversal that
+            don't resolve through a trusted workspace symlink.
+    """
+    normalized = os.path.normpath(path)
+
+    # ── Absolute path — trust the user, resolve directly ──
+    if os.path.isabs(normalized):
+        target = Path(normalized).resolve()
+        is_external = not _is_path_under(target, workspace_root)
+        return target, is_external
+
+    # ── Relative path — apply traversal guard ──
+    if ".." in path.split("/"):
+        raise HTTPException(status_code=400, detail=f"Path traversal not allowed: {path}")
+
+    target = (workspace_root / path).resolve()
+    is_external = not _is_path_under(target, workspace_root)
+
+    # Relative path that escapes the workspace must go through a symlink
+    if is_external and not _is_symlink_traversal(workspace_root, path):
+        raise HTTPException(status_code=400, detail=f"Path outside workspace: {path}")
+
+    return target, is_external
+
+
+def _find_git_root(file_path: Path) -> Optional[Path]:
+    """Find the git repository root containing the given file.
+
+    Runs ``git rev-parse --show-toplevel`` from the file's parent directory.
+    Returns the git root Path, or None if the file is not inside a git repo.
+    """
+    parent = file_path.parent if file_path.is_file() else file_path
+    if not parent.is_dir():
+        return None
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=str(parent),
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0:
+            return Path(result.stdout.strip())
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    return None
+
+
 def _is_symlink_traversal(workspace_root: Path, relative_path: str) -> bool:
     """Return True if *relative_path* reaches outside the workspace through a
     symlink that itself lives inside the workspace (e.g., Projects/SwarmAI/...).
@@ -683,35 +750,24 @@ def _is_symlink_traversal(workspace_root: Path, relative_path: str) -> bool:
 
 @router.get("/workspace/file")
 async def get_workspace_file(
-    path: str = Query(..., description="Relative path within the workspace"),
+    path: str = Query(..., description="Absolute or workspace-relative file path"),
 ):
-    """Read a file's content by its workspace-relative path.
+    """Read a file's content by path.
 
-    Used by the explorer's file editor modal and binary preview modal.
-    The ``path`` parameter is the same relative path returned by
-    ``GET /workspace/tree``.
+    Accepts both absolute paths (``/Users/.../foo.py``) and workspace-relative
+    paths (``Knowledge/Notes/foo.md``).  Absolute paths allow the file editor
+    to open any file on the user's machine — essential for opening source
+    files referenced in chat messages.
 
     Returns ``{ "content": "...", "encoding": "utf-8" }`` for text files.
-    Returns ``{ "content": "<base64>", "encoding": "base64", "mime_type": "...", "size": N }`` for binary files.
-    Returns 404 if the file does not exist or is outside the workspace.
-    Returns 400 if the path attempts directory traversal.
+    Returns ``{ "content": "<base64>", "encoding": "base64", ... }`` for binary files.
+    Returns 404 if the file does not exist.
+    Returns 400 if a relative path attempts directory traversal.
     Returns 413 if the file exceeds 50 MB.
     """
-    # Reject obvious traversal attempts
-    if ".." in path.split("/"):
-        raise HTTPException(status_code=400, detail=f"Path traversal not allowed: {path}")
-
     expanded_path = await _get_workspace_path()
     workspace_root = Path(expanded_path)
-    target = (workspace_root / path).resolve()
-
-    # Ensure resolved path is still under workspace root OR reached via a
-    # symlink that lives inside the workspace (e.g., Projects/SwarmAI → ...).
-    if not _is_path_under(target, workspace_root):
-        if not _is_symlink_traversal(workspace_root, path):
-            raise HTTPException(status_code=400, detail=f"Path outside workspace: {path}")
-        if not target.is_file():
-            raise HTTPException(status_code=400, detail=f"Not a regular file: {path}")
+    target, is_external = _resolve_file_path(path, workspace_root)
 
     if not target.is_file():
         raise HTTPException(status_code=404, detail=f"File not found: {path}")
@@ -744,10 +800,13 @@ async def get_workspace_file(
     except OSError as exc:
         raise HTTPException(status_code=500, detail=f"Failed to read file: {exc}")
 
-    # Projected skill files and context files are always readonly
-    path_parts = Path(path).parts
-    is_skill_file = len(path_parts) >= 2 and path_parts[0] == ".claude" and path_parts[1] == "skills"
-    is_readonly = _is_readonly_context_file(path) or is_skill_file
+    # Projected skill files and context files are always readonly (workspace-internal only)
+    is_readonly = False
+    if not is_external:
+        path_parts = Path(path).parts
+        is_skill_file = len(path_parts) >= 2 and path_parts[0] == ".claude" and path_parts[1] == "skills"
+        is_readonly = _is_readonly_context_file(path) or is_skill_file
+
     return {
         "content": content,
         "path": path,
@@ -776,12 +835,16 @@ async def resolve_workspace_file(
     expanded_path = await _get_workspace_path()
     workspace_root = Path(expanded_path)
 
-    # --- Stage 0: Absolute path → convert to workspace-relative via symlink ---
+    # --- Stage 0: Absolute path handling ---
     # The agent often outputs absolute paths like /Users/.../swarmai/backend/foo.py.
-    # If the path is under a project symlink target, convert it to Projects/{name}/...
+    # First try to convert to workspace-relative via project symlinks.
+    # If no match but the file exists, return the absolute path as-is so
+    # the file editor can open any file on the host.
     normalized = os.path.normpath(path)
     if os.path.isabs(normalized):
         abs_path = Path(normalized).resolve()
+
+        # Try to convert to a workspace-relative path via project symlinks
         projects_dir = workspace_root / "Projects"
         if projects_dir.is_dir():
             for project in sorted(projects_dir.iterdir()):
@@ -797,12 +860,17 @@ async def resolve_workspace_file(
                 except ValueError:
                     continue
             else:
-                # Absolute path not under any project — reject
-                raise HTTPException(status_code=400, detail=f"Path traversal not allowed: {path}")
+                # No project match — return absolute path as-is if file exists
+                if abs_path.is_file():
+                    return {"resolved_path": str(abs_path)}
+                raise HTTPException(status_code=404, detail=f"File not found: {path}")
         else:
-            raise HTTPException(status_code=400, detail=f"Path traversal not allowed: {path}")
+            # No Projects/ dir — return absolute path as-is if file exists
+            if abs_path.is_file():
+                return {"resolved_path": str(abs_path)}
+            raise HTTPException(status_code=404, detail=f"File not found: {path}")
 
-    # Reject ".." traversal after normalization
+    # Reject ".." traversal after normalization (relative paths only)
     if normalized.startswith(".."):
         raise HTTPException(status_code=400, detail=f"Path traversal not allowed: {path}")
 
@@ -850,25 +918,17 @@ async def resolve_workspace_file(
 
 @router.get("/workspace/file/raw")
 async def get_workspace_file_raw(
-    path: str = Query(..., description="Relative path within the workspace"),
+    path: str = Query(..., description="Absolute or workspace-relative file path"),
 ):
-    """Serve a workspace file as raw binary with proper Content-Type.
+    """Serve a file as raw binary with proper Content-Type.
 
     Used by the markdown preview to render local images directly via
     ``<img src="http://localhost:{port}/api/workspace/file/raw?path=...">``.
+    Accepts both absolute and workspace-relative paths.
     """
-    if ".." in path.split("/"):
-        raise HTTPException(status_code=400, detail=f"Path traversal not allowed: {path}")
-
     expanded_path = await _get_workspace_path()
     workspace_root = Path(expanded_path)
-    target = (workspace_root / path).resolve()
-
-    if not _is_path_under(target, workspace_root):
-        if not _is_symlink_traversal(workspace_root, path):
-            raise HTTPException(status_code=400, detail=f"Path outside workspace: {path}")
-        if not target.is_file():
-            raise HTTPException(status_code=400, detail=f"Not a regular file: {path}")
+    target, _is_ext = _resolve_file_path(path, workspace_root)
 
     if not target.is_file():
         raise HTTPException(status_code=404, detail=f"File not found: {path}")
@@ -884,38 +944,38 @@ async def get_workspace_file_raw(
 
 @router.get("/workspace/file/diff")
 async def get_workspace_file_diff(
-    path: str = Query(..., description="Relative path within the workspace"),
+    path: str = Query(..., description="Absolute or workspace-relative file path"),
 ):
     """Return a structured diff summary of uncommitted changes for a file.
 
     Used by the file editor panel's auto-diff feature (L2) to inject an
-    edit summary into the chat input after saving. Runs ``git diff`` on the
-    file and parses the output into hunks with section-aware descriptions.
+    edit summary into the chat input after saving. Finds the containing git
+    repo automatically — works for both workspace files and external source files.
 
     Returns ``{"path": ..., "hunks": [...], "summary": "...", "raw_diff": "..."}``.
     """
-    if ".." in path.split("/"):
-        raise HTTPException(status_code=400, detail="Path traversal not allowed")
-
     expanded_path = await _get_workspace_path()
     workspace_root = Path(expanded_path)
-    target = (workspace_root / path).resolve()
-
-    if not _is_path_under(target, workspace_root):
-        if not _is_symlink_traversal(workspace_root, path):
-            raise HTTPException(status_code=400, detail="Path outside workspace")
+    target, _is_ext = _resolve_file_path(path, workspace_root)
 
     if not target.is_file():
         raise HTTPException(status_code=404, detail=f"File not found: {path}")
 
-    git_dir = workspace_root / ".git"
-    if not git_dir.is_dir():
+    # Find the git repo containing this file (workspace or external)
+    git_root = _find_git_root(target)
+    if git_root is None:
+        return {"path": path, "hunks": [], "summary": "", "raw_diff": ""}
+
+    # Compute path relative to the git root for the diff command
+    try:
+        git_relative = str(target.resolve().relative_to(git_root))
+    except ValueError:
         return {"path": path, "hunks": [], "summary": "", "raw_diff": ""}
 
     try:
         result = subprocess.run(
-            ["git", "diff", "--unified=3", "--", path],
-            cwd=str(workspace_root),
+            ["git", "diff", "--unified=3", "--", git_relative],
+            cwd=str(git_root),
             capture_output=True,
             text=True,
             timeout=5,
@@ -953,43 +1013,40 @@ async def get_workspace_file_diff(
 
 @router.get("/workspace/file/committed")
 async def get_workspace_file_committed(
-    path: str = Query(..., description="Relative path within the workspace"),
+    path: str = Query(..., description="Absolute or workspace-relative file path"),
 ):
     """Return the last committed version of a file via ``git show HEAD:<path>``.
 
-    Used by the file editor modal to compute diffs between the committed
-    version and the current disk content for files with git changes.
+    Finds the containing git repo automatically — works for both workspace
+    files and external source files.
 
     Returns ``{"content": "<committed text>"}`` for tracked files.
     Returns ``{"content": ""}`` for untracked files (no committed version).
-    Returns 400 for binary files or path traversal attempts.
-    Returns 404 if the file doesn't exist in the workspace.
+    Returns 400 for binary files or relative path traversal attempts.
+    Returns 404 if the file doesn't exist on disk.
     """
-    # Reject traversal attempts
-    if ".." in path.split("/"):
-        raise HTTPException(status_code=400, detail=f"Path traversal not allowed: {path}")
-
     expanded_path = await _get_workspace_path()
     workspace_root = Path(expanded_path)
-
-    # Verify the file exists on disk
-    target = (workspace_root / path).resolve()
-    if not _is_path_under(target, workspace_root):
-        if not _is_symlink_traversal(workspace_root, path):
-            raise HTTPException(status_code=400, detail=f"Path outside workspace: {path}")
+    target, _is_ext = _resolve_file_path(path, workspace_root)
 
     if not target.is_file():
         raise HTTPException(status_code=404, detail=f"File not found: {path}")
 
-    # Check if workspace is a git repo
-    git_dir = workspace_root / ".git"
-    if not git_dir.is_dir():
+    # Find the git repo containing this file
+    git_root = _find_git_root(target)
+    if git_root is None:
+        return {"content": ""}
+
+    # Compute path relative to the git root
+    try:
+        git_relative = str(target.resolve().relative_to(git_root))
+    except ValueError:
         return {"content": ""}
 
     try:
         result = subprocess.run(
-            ["git", "show", f"HEAD:{path}"],
-            cwd=str(workspace_root),
+            ["git", "show", f"HEAD:{git_relative}"],
+            cwd=str(git_root),
             capture_output=True,
             timeout=10,
         )
@@ -1011,35 +1068,28 @@ async def get_workspace_file_committed(
 
 @router.put("/workspace/file")
 async def put_workspace_file(
-    path: str = Query(..., description="Relative path within the workspace"),
+    path: str = Query(..., description="Absolute or workspace-relative file path"),
     body: dict = None,
 ):
-    """Write text content to a file by its workspace-relative path.
+    """Write text content to a file by path.
 
-    Used by the explorer's file editor modal to save edited files.
+    Accepts both absolute paths and workspace-relative paths so the file
+    editor can save any file the user has open.
     Expects ``{ "content": "<utf-8 text>" }`` in the request body.
     """
     if body is None or "content" not in body:
         raise HTTPException(status_code=400, detail="Request body must include 'content'")
 
-    if ".." in path.split("/"):
-        raise HTTPException(status_code=400, detail="Path traversal not allowed")
-
-    # Skill files are read-only (managed by ProjectionLayer, overwritten on each launch)
-    if path.startswith(".claude/skills/") or path.startswith(".claude\\skills\\"):
-        raise HTTPException(status_code=403, detail="Skill files are read-only")
-
-    # System-default context files are read-only (0o444, overwritten on startup)
-    if _is_readonly_context_file(path):
-        raise HTTPException(status_code=403, detail="System-default context files are read-only")
-
     expanded_path = await _get_workspace_path()
     workspace_root = Path(expanded_path)
-    target = (workspace_root / path).resolve()
+    target, is_external = _resolve_file_path(path, workspace_root)
 
-    if not _is_path_under(target, workspace_root):
-        if not _is_symlink_traversal(workspace_root, path):
-            raise HTTPException(status_code=400, detail="Path outside workspace")
+    # Readonly guards only apply to workspace-internal paths
+    if not is_external:
+        if path.startswith(".claude/skills/") or path.startswith(".claude\\skills\\"):
+            raise HTTPException(status_code=403, detail="Skill files are read-only")
+        if _is_readonly_context_file(path):
+            raise HTTPException(status_code=403, detail="System-default context files are read-only")
 
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -1047,7 +1097,9 @@ async def put_workspace_file(
     except OSError as exc:
         raise HTTPException(status_code=500, detail=f"Failed to write file: {exc}")
 
-    _invalidate_tree_cache()
+    # Only invalidate tree cache for workspace-internal writes
+    if not is_external:
+        _invalidate_tree_cache()
     return {"success": True, "path": path}
 
 

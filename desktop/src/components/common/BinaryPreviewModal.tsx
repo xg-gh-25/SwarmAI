@@ -267,6 +267,8 @@ export default function BinaryPreviewModal({
   }, []);
 
   const getAbsolutePath = useCallback(async (): Promise<string> => {
+    // If filePath is already absolute, return it as-is
+    if (filePath.startsWith('/')) return filePath;
     const configResp = await api.get<{ file_path?: string; filePath?: string }>('/workspace');
     const wsRoot = configResp.data.file_path ?? configResp.data.filePath ?? '';
     return wsRoot ? `${wsRoot}/${filePath}` : filePath;

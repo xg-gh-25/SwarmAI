@@ -57,6 +57,251 @@ PROJECT_SYSTEM_FILES = {".project.json"}
 
 PROJECT_SYSTEM_FOLDERS: set[str] = set()
 
+# The SwarmAI project ships with every workspace. Users can edit its DDD
+# docs but cannot delete or rename the project itself.
+DEFAULT_PROJECT_NAME = "SwarmAI"
+
+# DDD document templates for new projects.  Each key is a filename, each
+# value is the template content with ``{project_name}`` placeholders.
+DDD_TEMPLATES: dict[str, str] = {
+    "PRODUCT.md": """# {project_name} -- Product Context
+
+## Vision
+
+_What is this project and why does it exist? One paragraph._
+
+## Strategic Priorities
+
+1. _Priority 1_
+2. _Priority 2_
+3. _Priority 3_
+
+## Success Criteria
+
+- _How do you know this project is succeeding?_
+
+## Non-Goals
+
+- _What are you explicitly NOT doing?_
+""",
+    "TECH.md": """# {project_name} -- Technical Context
+
+## Architecture
+
+_System overview, key components, data flow._
+
+## Stack
+
+- **Language:** _e.g., Python 3.12, TypeScript 5_
+- **Framework:** _e.g., FastAPI, Next.js_
+- **Database:** _e.g., SQLite, PostgreSQL_
+- **Testing:** _e.g., pytest, vitest_
+
+## Codebase Location
+
+_Absolute path or repo URL to the project's source code._
+
+## Dev Commands
+
+- **Start:** _e.g., npm run dev, ./dev.sh_
+- **Test:** _e.g., pytest, npm test_
+- **Build:** _e.g., npm run build_
+
+## Conventions
+
+_Naming, file structure, commit message format._
+
+## Key Files
+
+| Domain | Files |
+|--------|-------|
+| _..._ | _..._ |
+""",
+    "IMPROVEMENT.md": """# {project_name} -- Lessons & Patterns
+
+## What Worked
+
+_Patterns that succeeded. Will grow through usage._
+
+## What Failed
+
+_Patterns that failed, root causes, what to do instead. Will grow through usage._
+
+## Known Issues
+
+_Recurring problems to watch for._
+""",
+    "PROJECT.md": """# {project_name} -- Current Context
+
+## Current Focus
+
+_What are you working on right now?_
+
+## Open Items
+
+- [ ] _Active work item_
+
+## Recent Decisions
+
+- _YYYY-MM-DD: Decision and rationale_
+
+## Blocked By
+
+_Nothing currently blocking._
+""",
+}
+
+# Default SwarmAI project DDD content (richer than templates, serves as
+# example for users).
+SWARMAI_PROJECT_DDD: dict[str, str] = {
+    "PRODUCT.md": """\
+# SwarmAI -- Product Context
+
+## Vision
+
+SwarmAI is a personal AI command center that compounds value across every \
+interaction. Not a chatbot -- a colleague that remembers, learns, evolves, \
+and gets things done.
+
+Your AI Team, 24/7.
+
+## What Makes SwarmAI Different
+
+Most AI assistants are stateless -- every conversation starts from scratch. \
+SwarmAI is designed around **persistent context**:
+
+- **Memory that persists** -- Decisions, lessons, and preferences survive across sessions.
+- **Skills that compound** -- 40+ built-in skills, and Swarm builds new ones when it hits capability gaps.
+- **Projects that accumulate knowledge** -- DDD documents give Swarm deep domain understanding.
+- **Proactive intelligence** -- Session briefings, signal highlights, temporal awareness.
+
+## Strategic Priorities
+
+1. **Core stability** -- Multi-session architecture, resource management, streaming reliability
+2. **Self-evolution** -- Memory pipeline, proactive intelligence, signal processing, skill ecosystem
+3. **User experience** -- Fast iteration cycles, clear error messages, intuitive UX
+4. **Autonomy progression** -- From AI-Assistant (Phase 1) to AI-Driven (Phase 2) to AI-Management (Phase 3)
+
+## Success Criteria
+
+- Sessions never crash or lose context unexpectedly
+- Swarm remembers decisions and lessons across sessions without being told
+- New skills can be created by Swarm in under 30 minutes
+- Users spend more time doing, less time re-explaining
+- Context compounds: session 50 is meaningfully more productive than session 5
+
+## Non-Goals
+
+- **Not a cloud SaaS** -- Desktop-first, local-first. Your data stays on your machine.
+- **Not a general chatbot** -- Opinionated, workspace-scoped. Built for people who ship, not people who chat.
+- **Not code-only** -- Handles research, writing, communication, planning, scheduling. A full teammate, not a coding copilot.
+- **Not a framework** -- SwarmAI is a product. It has opinions about how AI assistance should work.
+
+## Target Users
+
+All Knowledge-Workers, Developers and Leaders who want an AI teammate, not \
+an AI tool. People who work across multiple projects, value accumulated \
+context, and prefer action over conversation.
+""",
+    "TECH.md": """\
+# SwarmAI -- Technical Context
+
+## Architecture
+
+Desktop app with three layers: a Tauri 2.0 shell (Rust), a React frontend \
+(TypeScript), and a Python FastAPI backend running as a sidecar process. The \
+backend spawns Claude Agent SDK subprocesses for AI capabilities via AWS Bedrock.
+
+## Stack
+
+| Layer | Technology |
+|-------|-----------|
+| **Shell** | Tauri 2.0 (Rust) |
+| **Frontend** | React 18, Vite 6, TanStack Query, Tailwind CSS, CodeMirror 6 |
+| **Backend** | Python 3.12, FastAPI, asyncio, Pydantic v2 |
+| **AI** | Claude Agent SDK, Claude 4.6 via AWS Bedrock, 1M context window |
+| **Database** | SQLite (WAL mode) at `~/.swarm-ai/data.db` |
+| **Testing** | pytest + Hypothesis (backend), vitest (frontend) |
+| **Build** | PyInstaller (backend bundle), Tauri CLI (app package) |
+| **License** | AGPL v3 + Commercial dual-license |
+
+## Codebase Location
+
+_Set this to your local SwarmAI source path after cloning._
+
+- **GitHub:** https://github.com/xg-gh-25/SwarmAI
+
+## Dev Commands
+
+- **Full dev:** `cd desktop && npm run tauri:dev` or `./dev.sh`
+- **Backend only:** `./dev.sh backend`
+- **Frontend tests:** `cd desktop && npm test -- --run`
+- **Backend tests:** `cd backend && pytest`
+- **Build:** `cd desktop && npm run build:all`
+
+## Conventions
+
+- **Backend:** snake_case (Python/Pydantic)
+- **Frontend:** camelCase (TypeScript)
+- **API boundary:** Backend sends snake_case, frontend converts to camelCase
+- **Files:** Date-prefixed (YYYY-MM-DD-description.md)
+- **Commits:** Conventional format, co-authored with Swarm
+- **Testing:** Property-based (Hypothesis) preferred over example-based
+- **Refactoring:** Strangler fig pattern for modules >500 lines
+
+## Environment Notes
+
+- Backend port is random each launch (Tauri portpicker). Never hardcode ports.
+- Claude Agent SDK spawns a CLI subprocess per session. Each costs ~500MB RAM.
+- SQLite in WAL mode. Direct access from agent sandbox is reliable for CRUD.
+""",
+    "IMPROVEMENT.md": """\
+# SwarmAI -- Lessons & Patterns
+
+_This document captures what worked, what failed, and what to watch for. \
+Swarm updates it automatically after significant sessions. Edit directly anytime._
+
+## What Worked
+
+- **Filesystem-first for skills and context** -- No database for skills or context \
+files. Portable, git-tracked, human-readable. Never regretted.
+- **Prevention over recovery** -- Timeouts, state guards, and guaranteed transitions \
+beat elaborate error handling. Make failure structurally impossible.
+- **Property-based testing** -- Hypothesis tests catch edge cases that example-based \
+tests miss. Especially valuable for workspace and context management.
+
+## What Failed
+
+_Patterns that failed, root causes, and what to do instead. Grows through usage._
+
+## Known Issues
+
+_Recurring problems to watch for. Grows through usage._
+""",
+    "PROJECT.md": """\
+# SwarmAI -- Current Context
+
+_Tracks what's actively being worked on. Swarm reads this before every task. \
+Update as your focus shifts._
+
+## Current Focus
+
+- [ ] _Your current task or feature_
+
+## Open Items
+
+- [ ] _Item 1_
+
+## Recent Decisions
+
+- _YYYY-MM-DD: Decision and rationale_
+
+## Blocked By
+
+_Nothing currently blocking._
+""",
+}
+
 DEPTH_LIMITS = {
     "project_user": 3,
 }
@@ -329,7 +574,269 @@ class SwarmWorkspaceManager:
                 lambda: gitignore.write_text(GITIGNORE_CONTENT, encoding="utf-8")
             )
 
+        # Provision the default SwarmAI project with DDD structure
+        await self._ensure_default_project(root)
+
+        # Auto-generate PROJECTS.md index from Projects/ scan
+        await self.refresh_projects_index(expanded_path)
+
         logger.info("Created folder structure at %s", expanded_path)
+
+    # ── Default project provisioning ─────────────────────────────────────
+
+    async def _ensure_default_project(self, root: Path) -> None:
+        """Provision the default SwarmAI project with DDD structure.
+
+        Creates ``Projects/SwarmAI/`` with PRODUCT.md, TECH.md,
+        IMPROVEMENT.md, PROJECT.md, and ``.artifacts/manifest.json``.
+        Only writes files that don't already exist (preserves user edits).
+        Called during ``create_folder_structure`` and ``verify_integrity``.
+        """
+        project_dir = root / "Projects" / DEFAULT_PROJECT_NAME
+
+        def _provision():
+            project_dir.mkdir(parents=True, exist_ok=True)
+
+            # Write DDD docs (only if missing — user edits are preserved)
+            for filename, content in SWARMAI_PROJECT_DDD.items():
+                filepath = project_dir / filename
+                if not filepath.exists():
+                    filepath.write_text(content, encoding="utf-8")
+
+            # Ensure .artifacts/ with manifest.json
+            artifacts_dir = project_dir / ".artifacts"
+            artifacts_dir.mkdir(exist_ok=True)
+            manifest = artifacts_dir / "manifest.json"
+            if not manifest.exists():
+                manifest.write_text(json.dumps({
+                    "project": DEFAULT_PROJECT_NAME,
+                    "pipeline_state": "think",
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                    "artifacts": [],
+                }, indent=2), encoding="utf-8")
+
+            # Ensure .project.json metadata (for project CRUD compatibility)
+            project_meta = project_dir / ".project.json"
+            if not project_meta.exists():
+                now = datetime.now(timezone.utc).isoformat()
+                meta = {
+                    "id": "swarmai-default",
+                    "name": DEFAULT_PROJECT_NAME,
+                    "description": "SwarmAI self-building project (default, not deletable)",
+                    "created_at": now,
+                    "updated_at": now,
+                    "status": "active",
+                    "tags": ["default", "self-building"],
+                    "priority": "high",
+                    "schema_version": CURRENT_SCHEMA_VERSION,
+                    "version": 1,
+                    "update_history": [{
+                        "version": 1, "timestamp": now,
+                        "action": "created", "changes": {},
+                        "source": "system",
+                    }],
+                }
+                project_meta.write_text(
+                    json.dumps(meta, indent=2), encoding="utf-8"
+                )
+
+        await anyio.to_thread.run_sync(_provision)
+        logger.info("Ensured default project '%s' at %s", DEFAULT_PROJECT_NAME, project_dir)
+
+    async def provision_project_ddd(
+        self, project_name: str, workspace_path: str = None
+    ) -> list[str]:
+        """Create DDD document templates for a project.
+
+        Writes PRODUCT.md, TECH.md, IMPROVEMENT.md, PROJECT.md and
+        ``.artifacts/manifest.json`` into the project directory.  Only
+        writes files that don't already exist (preserves user edits).
+
+        Args:
+            project_name: Name of the project (must already exist under Projects/).
+            workspace_path: Workspace root.  If None, uses default.
+
+        Returns:
+            List of filenames that were created (empty list if all existed).
+
+        Raises:
+            ValueError: If project directory doesn't exist.
+        """
+        workspace_path = self._resolve_workspace_path(workspace_path)
+        project_dir = Path(workspace_path) / "Projects" / project_name
+
+        if not project_dir.exists():
+            raise ValueError(f"Project directory not found: {project_dir}")
+
+        def _create_ddd():
+            created = []
+            for filename, template in DDD_TEMPLATES.items():
+                filepath = project_dir / filename
+                if not filepath.exists():
+                    filepath.write_text(
+                        template.format(project_name=project_name),
+                        encoding="utf-8",
+                    )
+                    created.append(filename)
+
+            # Ensure .artifacts/ with manifest.json
+            artifacts_dir = project_dir / ".artifacts"
+            artifacts_dir.mkdir(exist_ok=True)
+            manifest = artifacts_dir / "manifest.json"
+            if not manifest.exists():
+                manifest.write_text(json.dumps({
+                    "project": project_name,
+                    "pipeline_state": "think",
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                    "artifacts": [],
+                }, indent=2), encoding="utf-8")
+                created.append(".artifacts/manifest.json")
+
+            return created
+
+        created = await anyio.to_thread.run_sync(_create_ddd)
+        if created:
+            logger.info(
+                "Created DDD docs for project '%s': %s",
+                project_name, ", ".join(created),
+            )
+        return created
+
+    # ── PROJECTS.md auto-refresh ──────────────────────────────────────
+
+    async def refresh_projects_index(self, workspace_path: str) -> None:
+        """Regenerate ``.context/PROJECTS.md`` by scanning ``Projects/``.
+
+        Produces a lightweight index with one entry per project.  Each entry
+        shows: name, pipeline state, DDD doc status, and a reference link
+        to the project's folder.  The detailed context lives in each
+        project's own DDD documents — PROJECTS.md is just the directory.
+
+        Called automatically during ``verify_integrity()`` and after
+        project CRUD operations.
+        """
+        root = Path(workspace_path)
+        projects_dir = root / "Projects"
+        context_file = root / ".context" / "PROJECTS.md"
+
+        def _generate():
+            entries = []
+            if not projects_dir.exists():
+                return entries
+            for candidate in sorted(projects_dir.iterdir()):
+                if not candidate.is_dir() or candidate.name.startswith("."):
+                    continue
+                name = candidate.name
+
+                # Detect project type
+                is_default = name == DEFAULT_PROJECT_NAME
+                project_type = "Default" if is_default else "User"
+
+                # Read pipeline state from manifest
+                manifest = candidate / ".artifacts" / "manifest.json"
+                pipeline_state = "-"
+                if manifest.exists():
+                    try:
+                        data = json.loads(manifest.read_text(encoding="utf-8"))
+                        pipeline_state = data.get("pipeline_state", "-")
+                    except (json.JSONDecodeError, OSError):
+                        pass
+
+                # Check which DDD docs exist
+                ddd_docs = []
+                for doc in ["PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md"]:
+                    if (candidate / doc).exists():
+                        ddd_docs.append(doc.replace(".md", ""))
+                ddd_status = ", ".join(ddd_docs) if ddd_docs else "none"
+
+                # Read one-line vision from PRODUCT.md
+                vision = ""
+                product_md = candidate / "PRODUCT.md"
+                if product_md.exists():
+                    try:
+                        for line in product_md.read_text(encoding="utf-8").splitlines():
+                            line = line.strip()
+                            if line and not line.startswith("#") and not line.startswith("_"):
+                                vision = line[:80].rsplit(" ", 1)[0] if len(line) > 80 else line
+                                break
+                    except OSError:
+                        pass
+
+                entries.append({
+                    "name": name,
+                    "type": project_type,
+                    "pipeline": pipeline_state,
+                    "ddd": ddd_status,
+                    "vision": vision,
+                })
+            return entries
+
+        entries = await anyio.to_thread.run_sync(_generate)
+
+        # Build PROJECTS.md content
+        lines = [
+            "# Projects -- What's In Flight",
+            "",
+            "**AGENT DIRECTIVE:** When working on a task related to any project "
+            "below, READ the project's DDD documents BEFORE starting work. "
+            "Use `Projects/<name>/TECH.md` for coding/testing, "
+            "`PRODUCT.md` for design decisions, `IMPROVEMENT.md` for lessons, "
+            "`PROJECT.md` for current context. Determine the active project "
+            "from file paths being edited, user mentions, or chat thread "
+            "binding. No project context? Skip this -- everything works "
+            "without DDD. After completing work, UPDATE IMPROVEMENT.md "
+            "with lessons and PROJECT.md with decisions/status.",
+            "",
+        ]
+
+        if entries:
+            lines.append("## Active Projects")
+            lines.append("")
+            lines.append("| Project | Type | Pipeline | DDD Docs |")
+            lines.append("|---------|------|----------|----------|")
+            for e in entries:
+                lines.append(
+                    f"| **{e['name']}** | {e['type']} | {e['pipeline']} "
+                    f"| {e['ddd']} |"
+                )
+            lines.append("")
+
+            # Detailed entries with references
+            for e in entries:
+                lines.append(f"### {e['name']}")
+                if e["vision"]:
+                    lines.append(f"_{e['vision']}_")
+                lines.append(f"- **Pipeline:** {e['pipeline']}")
+                lines.append(f"- **DDD:** {e['ddd']}")
+                lines.append(
+                    f"- **Context:** `Projects/{e['name']}/` "
+                    f"-- read PRODUCT.md, TECH.md, IMPROVEMENT.md, PROJECT.md"
+                )
+                lines.append("")
+        else:
+            lines.append("_No projects yet. Tell Swarm: \"Create project MyApp\"_")
+            lines.append("")
+
+        lines.append("## Project Management")
+        lines.append("")
+        lines.append("- **Create:** \"Create project X\" or \"New project X at /path\"")
+        lines.append("- **Edit:** Edit DDD docs directly or ask Swarm to update them")
+        lines.append("- **Delete:** \"Remove project X\" (SwarmAI project cannot be deleted)")
+        lines.append("- **Guide:** See `Projects/README.md` for DDD structure and usage")
+        lines.append("")
+        lines.append("---")
+        lines.append("")
+        lines.append("_Auto-refreshed on startup and after project changes._")
+        lines.append("")
+
+        content = "\n".join(lines)
+
+        def _write():
+            context_file.parent.mkdir(parents=True, exist_ok=True)
+            context_file.write_text(content, encoding="utf-8")
+
+        await anyio.to_thread.run_sync(_write)
+        logger.info("Refreshed PROJECTS.md with %d projects", len(entries))
 
     # ── Git initialization ─────────────────────────────────────────────
 
@@ -652,6 +1159,12 @@ class SwarmWorkspaceManager:
                     logger.info("Appended missing .gitignore entries: %s", missing_entries)
             except OSError as exc:
                 logger.warning("Failed to update .gitignore: %s", exc)
+
+        # Ensure default SwarmAI project exists with DDD structure
+        await self._ensure_default_project(root)
+
+        # Auto-refresh PROJECTS.md from scanning Projects/
+        await self.refresh_projects_index(str(root))
 
         # Auto-prune old archived DailyActivity files (Req 7.6, 15.11)
         expanded = str(root)
@@ -1009,8 +1522,14 @@ class SwarmWorkspaceManager:
                 lambda fp=folder_path: fp.mkdir(parents=True, exist_ok=True)
             )
 
+        # Provision DDD document templates for the new project
+        await self.provision_project_ddd(project_name, workspace_path)
+
         # Update in-memory UUID index
         self._uuid_index[project_id] = project_dir
+
+        # Auto-refresh PROJECTS.md index
+        await self.refresh_projects_index(workspace_path)
 
         logger.info("Created project '%s' with id %s", project_name, project_id)
         return metadata
@@ -1068,6 +1587,12 @@ class SwarmWorkspaceManager:
             renaming = new_name is not None and new_name != old_name
 
             if renaming:
+                # Block renaming the default SwarmAI project
+                if old_name == DEFAULT_PROJECT_NAME or project_id == "swarmai-default":
+                    raise ValueError(
+                        f"The '{DEFAULT_PROJECT_NAME}' project cannot be renamed. "
+                        "You can edit its DDD documents freely."
+                    )
                 self._validate_project_name(new_name, workspace_path, exclude_dir=project_dir.name)
 
             # Save original for revert on rename failure
@@ -1214,6 +1739,9 @@ class SwarmWorkspaceManager:
     ) -> bool:
         """Delete a project by UUID.
 
+        The default SwarmAI project (id ``"swarmai-default"`` or directory
+        name ``SwarmAI``) cannot be deleted — raises ``ValueError``.
+
         Acquires the per-project ``asyncio.Lock`` before removing the
         directory to prevent races with concurrent reads/writes.
 
@@ -1225,8 +1753,15 @@ class SwarmWorkspaceManager:
             True if the project was deleted.
 
         Raises:
-            ValueError: If no project with the given ID is found.
+            ValueError: If no project with the given ID is found, or if
+                attempting to delete the default SwarmAI project.
         """
+        if project_id == "swarmai-default":
+            raise ValueError(
+                f"The '{DEFAULT_PROJECT_NAME}' project is the default project "
+                "and cannot be deleted. You can edit its DDD documents freely."
+            )
+
         workspace_path = self._resolve_workspace_path(workspace_path)
         lock = self._get_project_lock(project_id)
 
@@ -1234,6 +1769,12 @@ class SwarmWorkspaceManager:
             def _find_and_delete():
                 project_dir = self._find_project_dir(project_id, workspace_path)
                 name = project_dir.name
+                # Block deletion of the default project by directory name too
+                if name == DEFAULT_PROJECT_NAME:
+                    raise ValueError(
+                        f"The '{DEFAULT_PROJECT_NAME}' project is the default "
+                        "project and cannot be deleted."
+                    )
                 shutil.rmtree(project_dir)
                 return name
 
@@ -1242,6 +1783,9 @@ class SwarmWorkspaceManager:
         # Clean up in-memory caches (outside lock — lock object itself is being removed)
         self._uuid_index.pop(project_id, None)
         self._project_locks.pop(project_id, None)
+
+        # Auto-refresh PROJECTS.md index
+        await self.refresh_projects_index(workspace_path)
 
         logger.info("Deleted project '%s' (id: %s)", deleted_name, project_id)
         return True

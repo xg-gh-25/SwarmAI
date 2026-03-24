@@ -440,6 +440,7 @@ async def lifespan(app: FastAPI):
     from hooks.auto_commit_hook import WorkspaceAutoCommitHook
     from hooks.distillation_hook import DistillationTriggerHook
     from hooks.evolution_maintenance_hook import EvolutionMaintenanceHook
+    from hooks.improvement_writeback_hook import ImprovementWritebackHook
     from routers.memory import set_compliance_tracker
 
     summarization_pipeline = SummarizationPipeline()
@@ -458,10 +459,15 @@ async def lifespan(app: FastAPI):
     hook_manager.register(WorkspaceAutoCommitHook(git_lock=hook_executor.git_lock))
     hook_manager.register(DistillationTriggerHook())
     hook_manager.register(EvolutionMaintenanceHook())
+    # IMPROVEMENT.md write-back: closes the DDD learning loop.
+    # Runs after auto-commit so workspace state is settled.
+    hook_manager.register(ImprovementWritebackHook(
+        workspace_path=app_config.get("workspace_path", str(Path.home() / ".swarm-ai" / "SwarmWS")),
+    ))
 
     # Wire hooks into session_registry (new architecture)
     set_compliance_tracker(compliance_tracker)
-    logger.info("Session lifecycle hooks registered (4 hooks, background executor)")
+    logger.info("Session lifecycle hooks registered (5 hooks, background executor)")
 
     # ── Initialize new session architecture ──────────────────────────
     session_registry.initialize(app_config)
