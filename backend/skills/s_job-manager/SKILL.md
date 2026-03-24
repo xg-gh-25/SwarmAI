@@ -161,7 +161,7 @@ Examples:
 
 - **Always confirm** before create/edit/delete — these are external actions
 - System jobs (`signal-fetch`, `signal-digest`, `weekly-maintenance`) are **read-only** from this skill
-- Default budget for agent_task: `$0.20` per run (configurable)
+- Default budget for agent_task: `$5.00` per run (configurable)
 - Default timeout: `180s` (configurable)
 - Jobs are disabled by default if user says "set up" or "configure" (enable after testing)
 - Suggest `--run-now` after creation so user can validate before the next scheduled run
