@@ -104,9 +104,27 @@ class ImprovementWritebackHook:
     async def _detect_project(self, session_id: str) -> str | None:
         """Detect which project a session was working on.
 
-        Heuristic: scan assistant messages for file paths under Projects/.
-        Returns the most-referenced project name, or None.
+        Priority:
+          1. Session's chat thread binding (most reliable)
+          2. Most-edited file paths under Projects/ (from tool_use blocks)
+          3. Most-referenced project name in message text (fallback)
+
+        Returns the project name, or None.
         """
+        # Priority 1: check chat thread binding for explicit project
+        try:
+            session = await db.sessions.get(session_id)
+            if session:
+                thread_id = session.get("chat_thread_id") if isinstance(session, dict) else getattr(session, "chat_thread_id", None)
+                if thread_id:
+                    thread = await db.chat_threads.get(thread_id)
+                    if thread:
+                        project = thread.get("project") if isinstance(thread, dict) else getattr(thread, "project", None)
+                        if project:
+                            return project
+        except Exception:
+            pass  # Thread binding not available — fall through to heuristics
+
         messages = await db.messages.list_by_session_paginated(
             session_id, limit=100
         )

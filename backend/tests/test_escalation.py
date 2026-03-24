@@ -511,13 +511,9 @@ class TestTimeoutResolution:
         todo_id = create_radar_todo(esc, db_path=todo_db)
         assert todo_id is not None
 
-        import core.escalation as esc_mod
-        original_db = esc_mod._DB_PATH
-        esc_mod._DB_PATH = todo_db
-        try:
+        from unittest.mock import patch
+        with patch("core.escalation._get_db_path", return_value=todo_db):
             resolve_expired(workspace, "P")
-        finally:
-            esc_mod._DB_PATH = original_db
 
         conn = sqlite3.connect(str(todo_db))
         conn.row_factory = sqlite3.Row
@@ -541,7 +537,7 @@ class TestEscalationAPI:
 
     @pytest.fixture
     def client(self, workspace, monkeypatch):
-        monkeypatch.setattr("routers.escalations._WORKSPACE_ROOT", workspace)
+        monkeypatch.setattr("routers.escalations._get_workspace_root", lambda: workspace)
         from routers.escalations import router
         from fastapi import FastAPI
         from fastapi.testclient import TestClient

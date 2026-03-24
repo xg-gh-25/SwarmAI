@@ -270,7 +270,7 @@ export const chatService = {
   ): () => void {
     const controller = new AbortController();
     const port = getBackendPort();
-    const { stall, clearStallTimer, startStallTimer } = createStallDetection(onError, 'streamChat');
+    const { clearStallTimer, startStallTimer } = createStallDetection(onError, 'streamChat');
 
     // Build request body - support both message and content
     const requestBody: Record<string, unknown> = {
@@ -393,7 +393,7 @@ export const chatService = {
   ): () => void {
     const controller = new AbortController();
     const port = getBackendPort();
-    const { stall, clearStallTimer, startStallTimer } = createStallDetection(onError, 'answer-question');
+    const { clearStallTimer, startStallTimer } = createStallDetection(onError, 'answer-question');
 
     fetch(`http://localhost:${port}/api/chat/answer-question`, {
       method: 'POST',
@@ -460,7 +460,7 @@ export const chatService = {
   ): () => void {
     const controller = new AbortController();
     const port = getBackendPort();
-    const { stall, clearStallTimer, startStallTimer } = createStallDetection(onError, 'cmd-permission-continue');
+    const { clearStallTimer, startStallTimer } = createStallDetection(onError, 'cmd-permission-continue');
 
     fetch(`http://localhost:${port}/api/chat/cmd-permission-continue`, {
       method: 'POST',

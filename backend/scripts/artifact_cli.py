@@ -46,6 +46,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from core.artifact_registry import ArtifactRegistry
+from core.pipeline_profiles import get_profile_stages
 
 
 def _get_workspace() -> Path:
@@ -670,16 +671,7 @@ def cmd_run_budget(args, reg: ArtifactRegistry) -> None:
     print(json.dumps(result, indent=2))
 
 
-def _get_profile_stages(profile: str | None) -> list[str]:
-    """Get the ordered stage list for a pipeline profile."""
-    profiles = {
-        "full": ["evaluate", "think", "plan", "build", "review", "test", "deliver", "reflect"],
-        "trivial": ["evaluate", "build", "review", "test", "deliver", "reflect"],
-        "research": ["evaluate", "think", "reflect"],
-        "docs": ["evaluate", "think", "plan", "deliver", "reflect"],
-        "bugfix": ["evaluate", "plan", "build", "review", "test", "deliver", "reflect"],
-    }
-    return profiles.get(profile or "full", profiles["full"])
+_get_profile_stages = get_profile_stages  # alias for backward compat within this file
 
 
 def _status_entry(state: dict, project_name: str) -> dict:
@@ -751,11 +743,11 @@ def cmd_run_status(args, reg: ArtifactRegistry) -> None:
             except (json.JSONDecodeError, OSError, KeyError):
                 continue
 
-    # Sort: running first, then paused, then completed. Within group, newest first.
+    # Sort: running first, then paused, then completed. Within each group, newest first.
+    # ISO timestamps sort lexicographically, so negate by prepending complement for descending.
     status_order = {"running": 0, "paused": 1, "failed": 2, "completed": 3, "cancelled": 4}
-    all_pipelines.sort(key=lambda p: (status_order.get(p["status"], 9), p["updated_at"]), reverse=False)
-    # Reverse within each status group to get newest first
-    all_pipelines.sort(key=lambda p: status_order.get(p["status"], 9))
+    all_pipelines.sort(key=lambda p: p.get("updated_at", ""), reverse=True)  # newest first
+    all_pipelines.sort(key=lambda p: status_order.get(p["status"], 9))  # stable: preserves newest-first within group
 
     # Limit: show all active (running/paused), up to 5 completed per project
     active = [p for p in all_pipelines if p["status"] in ("running", "paused")]

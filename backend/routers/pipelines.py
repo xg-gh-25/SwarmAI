@@ -20,6 +20,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Query
 
+from core.pipeline_profiles import get_profile_stages
 from schemas.pipeline_run import (
     PipelineCheckpoint,
     PipelineDashboard,
@@ -36,18 +37,9 @@ def _get_swarmws() -> Path:
     """Resolve SwarmWS path. Function (not constant) for testability."""
     return Path.home() / ".swarm-ai" / "SwarmWS"
 
-# Pipeline profile → stage list (must match artifact_cli.py _get_profile_stages)
-_PROFILE_STAGES = {
-    "full": ["evaluate", "think", "plan", "build", "review", "test", "deliver", "reflect"],
-    "trivial": ["evaluate", "build", "review", "test", "deliver", "reflect"],
-    "research": ["evaluate", "think", "reflect"],
-    "docs": ["evaluate", "think", "plan", "deliver", "reflect"],
-    "bugfix": ["evaluate", "plan", "build", "review", "test", "deliver", "reflect"],
-}
-
 
 def _get_profile_stage_count(profile: str | None) -> int:
-    return len(_PROFILE_STAGES.get(profile or "full", _PROFILE_STAGES["full"]))
+    return len(get_profile_stages(profile))
 
 
 def _load_pipeline_runs() -> list[dict]:

@@ -393,8 +393,12 @@ def get_open_escalations(workspace_root: Path, project: str) -> list[Escalation]
 # Radar Todo Integration (L1 + L2 — creates a self-contained work packet)
 # ─────────────────────────────────────────────────────────────────────────────
 
-_DB_PATH = Path.home() / ".swarm-ai" / "data.db"
 _WORKSPACE_ID = "swarmws"
+
+
+def _get_db_path() -> Path:
+    """Resolve database path. Function (not constant) for testability."""
+    return Path.home() / ".swarm-ai" / "data.db"
 
 
 def create_radar_todo(esc: Escalation, db_path: Path | None = None) -> str | None:
@@ -410,7 +414,7 @@ def create_radar_todo(esc: Escalation, db_path: Path | None = None) -> str | Non
 
     import sqlite3 as _sqlite3
 
-    db = db_path or _DB_PATH
+    db = db_path or _get_db_path()
     if not db.exists():
         logger.warning("escalation.radar_todo: DB not found at %s", db)
         return None
@@ -470,7 +474,7 @@ def create_radar_todo(esc: Escalation, db_path: Path | None = None) -> str | Non
         )
         return todo_id
 
-    except Exception as exc:
+    except (_sqlite3.Error, OSError, ValueError) as exc:
         logger.warning("escalation.radar_todo failed esc=%s: %s", esc.id, exc)
         return None
 
@@ -525,7 +529,7 @@ def mark_todo_handled(escalation_id: str, db_path: Path | None = None) -> None:
     """Mark the Radar todo associated with an escalation as handled."""
     import sqlite3 as _sqlite3
 
-    db = db_path or _DB_PATH
+    db = db_path or _get_db_path()
     if not db.exists():
         return
 
@@ -537,5 +541,5 @@ def mark_todo_handled(escalation_id: str, db_path: Path | None = None) -> None:
                 (_now_iso(), f"escalation:{escalation_id}"),
             )
             conn.commit()
-    except Exception as exc:
+    except (_sqlite3.Error, OSError) as exc:
         logger.warning("escalation.mark_todo_handled failed esc=%s: %s", escalation_id, exc)
