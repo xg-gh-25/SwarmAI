@@ -515,3 +515,121 @@ class TestRunCheckpoint:
         assert result["status"] == "paused"
         # radar_todo may be None or have an error — that's fine
         assert result["checkpoint_artifact"] is not None
+
+
+# ── v3 Tests: Status, Resume, Multi-Project ─────────────────────────
+
+
+class TestRunStatus:
+    def test_empty_status(self, workspace):
+        result = _run_cli(workspace, "run-status")
+        assert result["count"] == 0
+        assert result["summary"]["running"] == 0
+
+    def test_status_shows_active_runs(self, workspace):
+        _run_cli(workspace, "run-create", "--project", "TestProject",
+                 "--requirement", "Active task", "--profile", "full")
+        result = _run_cli(workspace, "run-status")
+        assert result["count"] == 1
+        assert result["pipelines"][0]["status"] == "running"
+        assert result["pipelines"][0]["progress"] == "0/8"
+
+    def test_status_active_only_filter(self, workspace):
+        # Create running + completed runs
+        r1 = _run_cli(workspace, "run-create", "--project", "TestProject",
+                       "--requirement", "Running")
+        r2 = _run_cli(workspace, "run-create", "--project", "TestProject",
+                       "--requirement", "Done")
+        _run_cli(workspace, "run-update", "--project", "TestProject",
+                 "--run-id", r2["pipeline_id"], "--status", "completed")
+
+        all_result = _run_cli(workspace, "run-status")
+        active_result = _run_cli(workspace, "run-status", "--active-only")
+
+        assert all_result["count"] == 2
+        assert active_result["count"] == 1
+        assert active_result["pipelines"][0]["status"] == "running"
+
+    def test_status_multi_project(self, workspace):
+        """Status spans all projects."""
+        # Create second project
+        proj2 = workspace / "Projects" / "OtherProject" / ".artifacts"
+        proj2.mkdir(parents=True)
+
+        _run_cli(workspace, "run-create", "--project", "TestProject",
+                 "--requirement", "Task A")
+        _run_cli(workspace, "run-create", "--project", "OtherProject",
+                 "--requirement", "Task B")
+
+        result = _run_cli(workspace, "run-status")
+        assert result["count"] == 2
+        projects = {p["project"] for p in result["pipelines"]}
+        assert projects == {"TestProject", "OtherProject"}
+
+    def test_status_summary_counts(self, workspace):
+        r1 = _run_cli(workspace, "run-create", "--project", "TestProject",
+                       "--requirement", "R1")
+        r2 = _run_cli(workspace, "run-create", "--project", "TestProject",
+                       "--requirement", "R2")
+        _run_cli(workspace, "run-update", "--project", "TestProject",
+                 "--run-id", r2["pipeline_id"], "--status", "paused")
+
+        result = _run_cli(workspace, "run-status")
+        assert result["summary"]["running"] == 1
+        assert result["summary"]["paused"] == 1
+
+
+class TestRunResume:
+    @pytest.fixture
+    def paused_run(self, workspace):
+        r = _run_cli(workspace, "run-create", "--project", "TestProject",
+                     "--requirement", "Resume test")
+        rid = r["pipeline_id"]
+        _run_cli(workspace, "run-update", "--project", "TestProject",
+                 "--run-id", rid,
+                 "--stage-json", json.dumps({
+                     "stage": "evaluate", "status": "completed",
+                     "artifact_id": "art_e", "escalation_id": None,
+                     "started_at": None, "completed_at": None,
+                     "token_cost": 8000, "retry_count": 0,
+                     "notes": "GO", "decisions": [],
+                 }))
+        _run_cli(workspace, "run-checkpoint", "--project", "TestProject",
+                 "--run-id", rid, "--stage", "think",
+                 "--reason", "Test checkpoint for resume")
+        return rid
+
+    def test_resume_sets_running(self, workspace, paused_run):
+        result = _run_cli(workspace, "run-resume",
+                          "--project", "TestProject", "--run-id", paused_run)
+        assert result["status"] == "running"
+        assert result["resumed_from"] == "think"
+        assert "evaluate" in result["completed_stages"]
+
+    def test_resume_resets_budget(self, workspace, paused_run):
+        result = _run_cli(workspace, "run-resume",
+                          "--project", "TestProject", "--run-id", paused_run)
+        assert result["budget"]["session_total"] == 800_000
+        assert result["budget"]["remaining"] == 800_000
+
+    def test_resume_non_paused_fails(self, workspace):
+        r = _run_cli(workspace, "run-create", "--project", "TestProject",
+                     "--requirement", "Not paused")
+        import subprocess, sys
+        cli_path = Path(__file__).resolve().parent.parent / "scripts" / "artifact_cli.py"
+        proc = subprocess.run(
+            [sys.executable, str(cli_path), "run-resume",
+             "--project", "TestProject", "--run-id", r["pipeline_id"]],
+            capture_output=True, text=True,
+            env={"SWARM_WORKSPACE": str(workspace), "PATH": "/usr/bin:/bin",
+                 "PYTHONPATH": str(Path(__file__).resolve().parent.parent)},
+            cwd=str(Path(__file__).resolve().parent.parent),
+        )
+        assert proc.returncode == 1
+
+    def test_resume_marks_checkpoint_resolved(self, workspace, paused_run):
+        _run_cli(workspace, "run-resume",
+                 "--project", "TestProject", "--run-id", paused_run)
+        state = _run_cli(workspace, "run-get",
+                         "--project", "TestProject", "--run-id", paused_run)
+        assert state["checkpoint"]["resumed_at"] is not None
