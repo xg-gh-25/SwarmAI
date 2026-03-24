@@ -24,7 +24,7 @@ import React, { useState, useRef, useEffect, useCallback, useMemo, useLayoutEffe
 import { useTranslation } from 'react-i18next';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
-import type { Message, ContentBlock, StreamEvent, Agent, AgentCreateRequest, ChatSession } from '../types';
+import type { Message, ContentBlock, Agent, AgentCreateRequest, ChatSession } from '../types';
 import { MAX_ATTACHMENTS } from '../types';
 import { chatService } from '../services/chat';
 import { agentsService } from '../services/agents';
@@ -1524,12 +1524,24 @@ export default function ChatPage() {
       );
     }
 
+    // Helper: clean up streaming state on drain failure.
+    // The result handler keeps isStreaming=true when a queued message exists
+    // (seamless indicator), so we must clean up if drain can't start a stream.
+    const cleanupStreamingState = () => {
+      setIsStreaming(false, tabId);
+      updateTabStatus(tabId, 'idle');
+    };
+
     try {
       // Build content NOW (deferred from queue time — async, reads files)
       const content = await buildContentArray(queued.text, queued.attachments);
-      if (content.length === 0) return;
+      if (content.length === 0) {
+        cleanupStreamingState();
+        return;
+      }
 
-      // Set streaming state — trusted internal call, bypasses all guards
+      // Set streaming state — idempotent if result handler already kept it
+      // true, but ensures correctness if drain is called from other sites.
       setIsStreaming(true, tabId);
       if (tabId) updateTabStatus(tabId, 'streaming');
       incrementStreamGen();
@@ -1570,6 +1582,7 @@ export default function ChatPage() {
     } catch (e) {
       // Send failed — restore queue so user doesn't lose their message
       tabState.queuedMessage = queued;
+      cleanupStreamingState();
       console.error('[queue-drain] failed, queue restored:', e);
     }
   }, [buildContentArray, selectedAgentId, enableSkills, enableMCP, setIsStreaming, setMessages, updateTabStatus, incrementStreamGen, resetUserScroll, createStreamHandler, createErrorHandler, createCompleteHandler, tabMapRef, activeTabIdRef]);
@@ -1802,22 +1815,9 @@ export default function ChatPage() {
     const streamHandler = createStreamHandler(assistantMessageId, capturedTabId);
     const abort = chatService.streamCmdPermissionContinue(
       { sessionId: tabSessionId, requestId, decision, enableSkills, enableMCP },
-      (event: StreamEvent) => {
-        if (event.type === 'cmd_permission_acknowledged') {
-          // Sync removal to tabMapRef (authoritative store) so background
-          // tab switches don't restore the stale placeholder ghost.
-          if (capturedTabId) {
-            const tabState = tabMapRef.current.get(capturedTabId);
-            if (tabState) {
-              tabState.messages = tabState.messages.filter((msg) => msg.id !== assistantMessageId);
-            }
-          }
-          setMessages((prev) => prev.filter((msg) => msg.id !== assistantMessageId));
-          setIsStreaming(false, capturedTabId);
-        } else {
-          streamHandler(event);
-        }
-      },
+      // All events go to the standard stream handler — the backend never
+      // emits 'cmd_permission_acknowledged', so no special-casing needed.
+      streamHandler,
       (error) => { createErrorHandler(assistantMessageId, capturedTabId)(error); if (capturedTabId) permissionLoadingTabs.current.delete(capturedTabId); },
       () => { createCompleteHandler(capturedTabId)(); if (capturedTabId) permissionLoadingTabs.current.delete(capturedTabId); }
     );
