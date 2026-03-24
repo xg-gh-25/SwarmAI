@@ -461,7 +461,7 @@ def cmd_run_checkpoint(args, reg: ArtifactRegistry) -> None:
             project=args.project,
             artifact_type="checkpoint",
             data=checkpoint_data,
-            producer="s_pipeline",
+            producer="s_autonomous-pipeline",
             summary=f"Pipeline paused at {args.stage}: {args.reason}",
             topic=args.run_id,
             run_id=args.run_id,
