@@ -255,27 +255,46 @@ class ImprovementWritebackHook:
         lessons: dict,
         context: HookContext,
     ) -> None:
-        """Append extracted lessons to IMPROVEMENT.md under the right sections."""
-        content = improvement_path.read_text(encoding="utf-8")
+        """Append extracted lessons to IMPROVEMENT.md under the right sections.
+
+        Uses fcntl.flock for cross-process safety (same pattern as
+        locked_write.py).  The asyncio.Lock in execute() handles
+        in-process concurrency; this handles hook-vs-skill races.
+        """
+        import fcntl
+
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        modified = False
 
-        for item in lessons.get("worked", []):
-            entry = f"- **{today}** (session {context.session_id[:8]}): {item}"
-            content, changed = self._insert_after_header(
-                content, SECTION_WHAT_WORKED, entry
-            )
-            modified = modified or changed
+        fd = None
+        try:
+            fd = open(improvement_path, "r+", encoding="utf-8")
+            fcntl.flock(fd, fcntl.LOCK_EX)
 
-        for item in lessons.get("failed", []):
-            entry = f"- **{today}** (session {context.session_id[:8]}): {item}"
-            content, changed = self._insert_after_header(
-                content, SECTION_WHAT_FAILED, entry
-            )
-            modified = modified or changed
+            content = fd.read()
+            modified = False
 
-        if modified:
-            improvement_path.write_text(content, encoding="utf-8")
+            for item in lessons.get("worked", []):
+                entry = f"- **{today}** (session {context.session_id[:8]}): {item}"
+                content, changed = self._insert_after_header(
+                    content, SECTION_WHAT_WORKED, entry
+                )
+                modified = modified or changed
+
+            for item in lessons.get("failed", []):
+                entry = f"- **{today}** (session {context.session_id[:8]}): {item}"
+                content, changed = self._insert_after_header(
+                    content, SECTION_WHAT_FAILED, entry
+                )
+                modified = modified or changed
+
+            if modified:
+                fd.seek(0)
+                fd.write(content)
+                fd.truncate()
+        finally:
+            if fd is not None:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+                fd.close()
 
     @staticmethod
     def _insert_after_header(

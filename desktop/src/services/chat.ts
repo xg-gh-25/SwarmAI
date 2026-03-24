@@ -151,6 +151,116 @@ export const parseSSEEvent = (data: string): StreamEvent => {
   return event;
 };
 
+/**
+ * Shared SSE read loop — reads from a fetch ReadableStream, parses SSE events,
+ * dispatches to onMessage, and handles stall detection + buffer flushing.
+ *
+ * Eliminates the 3x duplication of the buffer/flush/stall-timer logic across
+ * streamChat, streamAnswerQuestion, and streamCmdPermissionContinue.
+ */
+async function consumeSSEStream(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  stall: { timer: ReturnType<typeof setTimeout> | undefined; cleared: boolean },
+  startStallTimer: (r: ReadableStreamDefaultReader<Uint8Array>) => void,
+  clearStallTimer: () => void,
+  onMessage: (event: StreamEvent) => void,
+  onComplete: () => void,
+): Promise<void> {
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  startStallTimer(reader);
+
+  while (true) {
+    const { done, value } = await reader.read();
+
+    if (done) {
+      // Flush TextDecoder's internal buffer (multi-byte sequences)
+      // and process any remaining SSE lines before completing.
+      const remaining = decoder.decode() + buffer;
+      if (remaining.trim()) {
+        for (const line of remaining.split('\n')) {
+          if (line.startsWith('data: ')) {
+            const data = line.slice(6);
+            if (data === '[DONE]') break;
+            try {
+              const event = parseSSEEvent(data);
+              if (event.type !== 'heartbeat') {
+                try { onMessage(event); } catch { /* swallow */ }
+              }
+            } catch { /* incomplete data */ }
+          }
+        }
+      }
+      clearStallTimer();
+      onComplete();
+      break;
+    }
+
+    // Data received — reset stall timer (includes heartbeats)
+    startStallTimer(reader);
+
+    buffer += decoder.decode(value, { stream: true });
+
+    // Process SSE events
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+
+    for (const line of lines) {
+      if (line.startsWith('data: ')) {
+        const data = line.slice(6);
+        if (data === '[DONE]') {
+          clearStallTimer();
+          onComplete();
+          return;
+        }
+        try {
+          const event = parseSSEEvent(data);
+          if (event.type === 'heartbeat') {
+            continue;
+          }
+          try {
+            onMessage(event);
+          } catch (handlerError) {
+            console.error('[SSE] Error in onMessage handler:', handlerError, 'Event:', event.type);
+          }
+        } catch {
+          // Ignore parse errors for incomplete data
+        }
+      }
+    }
+  }
+}
+
+/** Create stall detection state + helpers for an SSE stream. */
+function createStallDetection(
+  onError: (error: Error) => void,
+  label: string = '',
+) {
+  const stall = { timer: undefined as ReturnType<typeof setTimeout> | undefined, cleared: false };
+
+  const clearStallTimer = () => {
+    stall.cleared = true;
+    if (stall.timer !== undefined) {
+      clearTimeout(stall.timer);
+      stall.timer = undefined;
+    }
+  };
+
+  const startStallTimer = (readerRef: ReadableStreamDefaultReader<Uint8Array>) => {
+    if (stall.cleared) return;
+    if (stall.timer !== undefined) clearTimeout(stall.timer);
+    stall.timer = setTimeout(() => {
+      const msg = `Stream stalled${label ? ` (${label})` : ''}: no data received for 45 seconds`;
+      console.warn(`[SSE] ${msg}`);
+      readerRef.cancel().catch(() => {});
+      onError(new Error(msg));
+    }, STALL_TIMEOUT_MS);
+  };
+
+  return { stall, clearStallTimer, startStallTimer };
+}
+
 export const chatService = {
   // Stream chat messages using SSE
   streamChat(
@@ -161,21 +271,7 @@ export const chatService = {
   ): () => void {
     const controller = new AbortController();
     const port = getBackendPort();
-
-    // --- Stall detection state (R2.6) ---
-    // Shared between the fetch promise chain and the cleanup function.
-    // The timer resets on every reader.read() that returns data (including
-    // heartbeats). If 45s elapses with no data, the reader is cancelled
-    // and onError fires, feeding into the reconnection logic.
-    const stall = { timer: undefined as ReturnType<typeof setTimeout> | undefined, cleared: false };
-
-    const clearStallTimer = () => {
-      stall.cleared = true;
-      if (stall.timer !== undefined) {
-        clearTimeout(stall.timer);
-        stall.timer = undefined;
-      }
-    };
+    const { stall, clearStallTimer, startStallTimer } = createStallDetection(onError, 'streamChat');
 
     // Build request body - support both message and content
     const requestBody: Record<string, unknown> = {
@@ -200,122 +296,29 @@ export const chatService = {
 
     fetch(`http://localhost:${port}/api/chat/stream`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(requestBody),
       signal: controller.signal,
     })
       .then(async (response) => {
         if (!response.ok) {
-          // Extract backend error detail if available
           let errorMessage = `HTTP error! status: ${response.status}`;
           try {
             const errorData = await response.json();
             errorMessage = errorData.detail || errorData.message || errorMessage;
-          } catch {
-            // JSON parse failed — keep generic message
-          }
+          } catch { /* JSON parse failed */ }
           throw new Error(errorMessage);
         }
-
         const reader = response.body?.getReader();
-        if (!reader) {
-          throw new Error('No response body');
-        }
-
-        const decoder = new TextDecoder();
-        let buffer = '';
-
-        // --- Stall detection (R2.6) ---
-        // Start the stall timer and define a reset helper. The timer
-        // fires onError if no data arrives within STALL_TIMEOUT_MS.
-        const startStallTimer = (readerRef: ReadableStreamDefaultReader<Uint8Array>) => {
-          if (stall.cleared) return;
-          if (stall.timer !== undefined) clearTimeout(stall.timer);
-          stall.timer = setTimeout(() => {
-            console.warn('[SSE] Stream stalled: no data received for 45 seconds');
-            readerRef.cancel().catch(() => { /* ignore cancel errors */ });
-            onError(new Error('Stream stalled: no data received for 45 seconds'));
-          }, STALL_TIMEOUT_MS);
-        };
-        startStallTimer(reader);
-
-        while (true) {
-          const { done, value } = await reader.read();
-
-          if (done) {
-            // Flush TextDecoder's internal buffer (multi-byte sequences)
-            // and process any remaining SSE lines before completing.
-            const remaining = decoder.decode() + buffer;
-            if (remaining.trim()) {
-              for (const line of remaining.split('\n')) {
-                if (line.startsWith('data: ')) {
-                  const data = line.slice(6);
-                  if (data === '[DONE]') break;
-                  try {
-                    const event = parseSSEEvent(data);
-                    if (event.type !== 'heartbeat') {
-                      try { onMessage(event); } catch { /* swallow */ }
-                    }
-                  } catch { /* incomplete data */ }
-                }
-              }
-            }
-            clearStallTimer();
-            onComplete();
-            break;
-          }
-
-          // Data received — reset stall timer (includes heartbeats)
-          startStallTimer(reader);
-
-          buffer += decoder.decode(value, { stream: true });
-
-          // Process SSE events
-          const lines = buffer.split('\n');
-          buffer = lines.pop() || '';
-
-          for (const line of lines) {
-            if (line.startsWith('data: ')) {
-              const data = line.slice(6);
-              if (data === '[DONE]') {
-                clearStallTimer();
-                onComplete();
-                return;
-              }
-              try {
-                const event = parseSSEEvent(data);
-                // Ignore heartbeat messages - they're just for keeping the connection alive
-                if (event.type === 'heartbeat') {
-                  continue;
-                }
-                try {
-                  onMessage(event);
-                } catch (handlerError) {
-                  console.error('[SSE] Error in onMessage handler:', handlerError, 'Event:', event.type);
-                  // Don't break the loop — continue processing remaining events
-                }
-              } catch {
-                // Ignore parse errors for incomplete data
-              }
-            }
-          }
-        }
+        if (!reader) throw new Error('No response body');
+        await consumeSSEStream(reader, stall, startStallTimer, clearStallTimer, onMessage, onComplete);
       })
       .catch((error) => {
-        // Clear stall timer on any error/abort exit path
         clearStallTimer();
-        if (error.name !== 'AbortError') {
-          onError(error);
-        }
+        if (error.name !== 'AbortError') onError(error);
       });
 
-    // Return cleanup function — clears stall timer and aborts fetch
-    return () => {
-      clearStallTimer();
-      controller.abort();
-    };
+    return () => { clearStallTimer(); controller.abort(); };
   },
 
   // List chat sessions
@@ -391,19 +394,11 @@ export const chatService = {
   ): () => void {
     const controller = new AbortController();
     const port = getBackendPort();
-
-    // Stall detection state (R2.6) — same pattern as streamChat
-    const stall = { timer: undefined as ReturnType<typeof setTimeout> | undefined, cleared: false };
-    const clearStallTimer = () => {
-      stall.cleared = true;
-      if (stall.timer !== undefined) { clearTimeout(stall.timer); stall.timer = undefined; }
-    };
+    const { stall, clearStallTimer, startStallTimer } = createStallDetection(onError, 'answer-question');
 
     fetch(`http://localhost:${port}/api/chat/answer-question`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         agent_id: request.agentId,
         session_id: request.sessionId,
@@ -420,98 +415,19 @@ export const chatService = {
           try {
             const errorData = await response.json();
             errorMessage = errorData.detail || errorData.message || errorMessage;
-          } catch {
-            // JSON parse failed — keep generic message
-          }
+          } catch { /* JSON parse failed */ }
           throw new Error(errorMessage);
         }
-
         const reader = response.body?.getReader();
-        if (!reader) {
-          throw new Error('No response body');
-        }
-
-        const decoder = new TextDecoder();
-        let buffer = '';
-
-        // Start stall timer (R2.6)
-        const startStallTimerAQ = (readerRef: ReadableStreamDefaultReader<Uint8Array>) => {
-          if (stall.cleared) return;
-          if (stall.timer !== undefined) clearTimeout(stall.timer);
-          stall.timer = setTimeout(() => {
-            console.warn('[SSE] Stream stalled (answer-question): no data received for 45 seconds');
-            readerRef.cancel().catch(() => {});
-            onError(new Error('Stream stalled: no data received for 45 seconds'));
-          }, STALL_TIMEOUT_MS);
-        };
-        startStallTimerAQ(reader);
-
-        while (true) {
-          const { done, value } = await reader.read();
-
-          if (done) {
-            // Flush remaining buffer before completing
-            const remaining = decoder.decode() + buffer;
-            if (remaining.trim()) {
-              for (const line of remaining.split('\n')) {
-                if (line.startsWith('data: ')) {
-                  const data = line.slice(6);
-                  if (data === '[DONE]') break;
-                  try {
-                    const event = parseSSEEvent(data);
-                    if (event.type !== 'heartbeat') {
-                      try { onMessage(event); } catch { /* swallow */ }
-                    }
-                  } catch { /* incomplete data */ }
-                }
-              }
-            }
-            clearStallTimer();
-            onComplete();
-            break;
-          }
-
-          // Data received — reset stall timer
-          startStallTimerAQ(reader);
-
-          buffer += decoder.decode(value, { stream: true });
-
-          const lines = buffer.split('\n');
-          buffer = lines.pop() || '';
-
-          for (const line of lines) {
-            if (line.startsWith('data: ')) {
-              const data = line.slice(6);
-              if (data === '[DONE]') {
-                clearStallTimer();
-                onComplete();
-                return;
-              }
-              try {
-                const event = parseSSEEvent(data);
-                // Ignore heartbeat messages - they're just for keeping the connection alive
-                if (event.type === 'heartbeat') {
-                  continue;
-                }
-                onMessage(event);
-              } catch {
-                // Ignore parse errors
-              }
-            }
-          }
-        }
+        if (!reader) throw new Error('No response body');
+        await consumeSSEStream(reader, stall, startStallTimer, clearStallTimer, onMessage, onComplete);
       })
       .catch((error) => {
         clearStallTimer();
-        if (error.name !== 'AbortError') {
-          onError(error);
-        }
+        if (error.name !== 'AbortError') onError(error);
       });
 
-    return () => {
-      clearStallTimer();
-      controller.abort();
-    };
+    return () => { clearStallTimer(); controller.abort(); };
   },
 
   // Submit command permission decision for dangerous command approval (non-streaming)
@@ -545,19 +461,11 @@ export const chatService = {
   ): () => void {
     const controller = new AbortController();
     const port = getBackendPort();
-
-    // Stall detection state (R2.6) — same pattern as streamChat
-    const stall = { timer: undefined as ReturnType<typeof setTimeout> | undefined, cleared: false };
-    const clearStallTimer = () => {
-      stall.cleared = true;
-      if (stall.timer !== undefined) { clearTimeout(stall.timer); stall.timer = undefined; }
-    };
+    const { stall, clearStallTimer, startStallTimer } = createStallDetection(onError, 'cmd-permission-continue');
 
     fetch(`http://localhost:${port}/api/chat/cmd-permission-continue`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         session_id: request.sessionId,
         request_id: request.requestId,
@@ -574,97 +482,18 @@ export const chatService = {
           try {
             const errorData = await response.json();
             errorMessage = errorData.detail || errorData.message || errorMessage;
-          } catch {
-            // JSON parse failed — keep generic message
-          }
+          } catch { /* JSON parse failed */ }
           throw new Error(errorMessage);
         }
-
         const reader = response.body?.getReader();
-        if (!reader) {
-          throw new Error('No response body');
-        }
-
-        const decoder = new TextDecoder();
-        let buffer = '';
-
-        // Start stall timer (R2.6)
-        const startStallTimerPC = (readerRef: ReadableStreamDefaultReader<Uint8Array>) => {
-          if (stall.cleared) return;
-          if (stall.timer !== undefined) clearTimeout(stall.timer);
-          stall.timer = setTimeout(() => {
-            console.warn('[SSE] Stream stalled (cmd-permission-continue): no data received for 45 seconds');
-            readerRef.cancel().catch(() => {});
-            onError(new Error('Stream stalled: no data received for 45 seconds'));
-          }, STALL_TIMEOUT_MS);
-        };
-        startStallTimerPC(reader);
-
-        while (true) {
-          const { done, value } = await reader.read();
-
-          if (done) {
-            // Flush remaining buffer before completing
-            const remaining = decoder.decode() + buffer;
-            if (remaining.trim()) {
-              for (const line of remaining.split('\n')) {
-                if (line.startsWith('data: ')) {
-                  const data = line.slice(6);
-                  if (data === '[DONE]') break;
-                  try {
-                    const event = parseSSEEvent(data);
-                    if (event.type !== 'heartbeat') {
-                      try { onMessage(event); } catch { /* swallow */ }
-                    }
-                  } catch { /* incomplete data */ }
-                }
-              }
-            }
-            clearStallTimer();
-            onComplete();
-            break;
-          }
-
-          // Data received — reset stall timer
-          startStallTimerPC(reader);
-
-          buffer += decoder.decode(value, { stream: true });
-
-          const lines = buffer.split('\n');
-          buffer = lines.pop() || '';
-
-          for (const line of lines) {
-            if (line.startsWith('data: ')) {
-              const data = line.slice(6);
-              if (data === '[DONE]') {
-                clearStallTimer();
-                onComplete();
-                return;
-              }
-              try {
-                const event = parseSSEEvent(data);
-                // Ignore heartbeat messages - they're just for keeping the connection alive
-                if (event.type === 'heartbeat') {
-                  continue;
-                }
-                onMessage(event);
-              } catch {
-                // Ignore parse errors
-              }
-            }
-          }
-        }
+        if (!reader) throw new Error('No response body');
+        await consumeSSEStream(reader, stall, startStallTimer, clearStallTimer, onMessage, onComplete);
       })
       .catch((error) => {
         clearStallTimer();
-        if (error.name !== 'AbortError') {
-          onError(error);
-        }
+        if (error.name !== 'AbortError') onError(error);
       });
 
-    return () => {
-      clearStallTimer();
-      controller.abort();
-    };
+    return () => { clearStallTimer(); controller.abort(); };
   },
 };

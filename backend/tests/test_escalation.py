@@ -30,7 +30,7 @@ from core.escalation import (
     resolve,
     resolve_expired,
     save_escalation,
-    _mark_todo_handled,
+    mark_todo_handled,
 )
 
 
@@ -411,7 +411,7 @@ class TestRadarTodo:
         todo_id = create_radar_todo(esc, db_path=todo_db)
         assert todo_id is not None
 
-        _mark_todo_handled(esc.id, db_path=todo_db)
+        mark_todo_handled(esc.id, db_path=todo_db)
 
         conn = sqlite3.connect(str(todo_db))
         conn.row_factory = sqlite3.Row
@@ -421,7 +421,7 @@ class TestRadarTodo:
 
     def test_mark_todo_handled_noop_missing_db(self, tmp_path: Path):
         # Should not raise
-        _mark_todo_handled("esc_nope", db_path=tmp_path / "nope.db")
+        mark_todo_handled("esc_nope", db_path=tmp_path / "nope.db")
 
     def test_todo_description_includes_options(self, todo_db: Path):
         opts = [
