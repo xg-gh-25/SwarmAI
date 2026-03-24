@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import subprocess
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from core.session_hooks import HookContext
@@ -147,37 +147,44 @@ class DailyActivityExtractionHook:
 
     @staticmethod
     def _capture_git_activity(session_start_iso: str) -> list[str]:
-        """Capture git commits made since session start from the source repo.
+        """Capture git commits made since session start from source repos.
 
-        Reads ``TECH.md`` for the source repo path, falling back to the
-        hardcoded SwarmAI dev path.  Returns empty list on any failure
-        (non-blocking — git capture is best-effort).
+        Scans ALL projects' TECH.md for repo paths — no hardcoded paths.
+        Returns commits from the first repo that has recent activity.
+        Empty list on any failure (non-blocking, best-effort).
         """
         try:
             since = datetime.fromisoformat(session_start_iso.replace("Z", "+00:00"))
         except (ValueError, TypeError):
-            # Fallback: use 2 hours ago if session_start_time is unparseable
-            since = datetime.now() - __import__("datetime").timedelta(hours=2)
+            since = datetime.now() - timedelta(hours=2)
 
-        # Try known source repo paths
-        candidates = [
-            Path("/Users/gawan/Desktop/SwarmAI-Workspace/swarmai"),
-        ]
-        # Also check TECH.md for configured codebase location
+        # Discover repos from all projects' TECH.md files
+        candidates: list[Path] = []
         try:
             from core.initialization_manager import initialization_manager
             ws = Path(initialization_manager.get_cached_workspace_path())
-            tech_md = ws / "Projects" / "SwarmAI" / "TECH.md"
-            if tech_md.exists():
-                content = tech_md.read_text(encoding="utf-8")
-                # Look for git clone path or codebase location
-                for line in content.splitlines():
-                    if "Clone:" in line or "local:" in line.lower():
-                        # Extract path-like strings
-                        import re
-                        paths = re.findall(r"(/\S+/swarmai/?)", line)
-                        for p in paths:
-                            candidates.insert(0, Path(p))
+            projects_dir = ws / "Projects"
+            if projects_dir.is_dir():
+                for project_dir in sorted(projects_dir.iterdir()):
+                    tech_md = project_dir / "TECH.md"
+                    if not tech_md.is_file():
+                        continue
+                    try:
+                        content = tech_md.read_text(encoding="utf-8")
+                        for line in content.splitlines():
+                            if any(kw in line for kw in (
+                                "Clone:", "local:", "Local:",
+                                "Codebase", "codebase", "repo",
+                                "source", "Source",
+                            )):
+                                import re
+                                paths = re.findall(r"(/[^\s`\"']+)", line)
+                                for p in paths:
+                                    p = p.rstrip("/),;.")
+                                    if len(p) > 5:
+                                        candidates.append(Path(p))
+                    except (OSError, UnicodeDecodeError):
+                        continue
         except Exception:
             pass
 

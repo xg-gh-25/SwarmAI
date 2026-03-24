@@ -215,6 +215,32 @@ class TestGitVerifiedDistillation:
         )
         assert result is True
 
+    def test_verify_claim_via_code_content(self, git_repo: Path):
+        """Claims should be verified via git grep (code content search).
+
+        Even if commit messages and file names don't match, finding the
+        subject word in actual code content should verify the claim.
+        """
+        from hooks.distillation_hook import DistillationTriggerHook
+
+        # Write code content that mentions "proactive" but filename doesn't
+        import subprocess
+        (git_repo / "core.py").write_text("class ProactiveIntelligence:\n    pass\n")
+        subprocess.run(["git", "add", "."], cwd=git_repo, capture_output=True, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "add core module"],
+            cwd=git_repo, capture_output=True, check=True,
+        )
+
+        hook = DistillationTriggerHook()
+        # "ProactiveIntelligence" is in code content but not in
+        # commit message "add core module" or filename "core.py"
+        result = hook._verify_claim_against_git(
+            "ProactiveIntelligence class implemented",
+            git_repo,
+        )
+        assert result is True
+
     def test_unverified_claims_tagged(self, workspace: Path, git_repo: Path):
         """Implementation claims that fail git verification should be tagged
         [UNVERIFIED] in the promoted MEMORY.md entry."""
@@ -290,7 +316,58 @@ class TestGitVerifiedDistillation:
 
 
 # ===========================================================================
-# Test Group 3: Regression -- existing behavior preserved
+# Test Group 3: Multi-project repo discovery
+# ===========================================================================
+
+class TestRepoDiscovery:
+    """Repo path discovery should scan all projects, not just SwarmAI."""
+
+    def test_extract_repo_paths_from_tech_md(self):
+        """_extract_repo_paths should find paths from TECH.md content."""
+        from hooks.distillation_hook import _extract_repo_paths
+
+        content = (
+            "## Codebase Location\n"
+            "- **Local:** `/Users/dev/projects/myapp`\n"
+            "- **Clone:** `git clone https://github.com/org/myapp.git`\n"
+        )
+        paths = _extract_repo_paths(content)
+        assert any(str(p) == "/Users/dev/projects/myapp" for p in paths)
+
+    def test_extract_repo_paths_empty_for_no_paths(self):
+        """No paths extracted from content without repo references."""
+        from hooks.distillation_hook import _extract_repo_paths
+
+        content = "# My Project\n\nJust a description, no paths.\n"
+        paths = _extract_repo_paths(content)
+        assert paths == []
+
+    def test_get_source_repo_scans_all_projects(self, tmp_path: Path, git_repo: Path):
+        """_get_source_repo_path should find repos from any project's TECH.md."""
+        from hooks.distillation_hook import DistillationTriggerHook
+
+        # Create a fake workspace with two projects
+        ws = tmp_path / "ws"
+        (ws / "Projects" / "ProjectA").mkdir(parents=True)
+        (ws / "Projects" / "ProjectB").mkdir(parents=True)
+
+        # ProjectA has no TECH.md
+        # ProjectB has TECH.md pointing to our git_repo
+        (ws / "Projects" / "ProjectB" / "TECH.md").write_text(
+            f"## Codebase\n- **Local:** `{git_repo}`\n"
+        )
+
+        with patch(
+            "hooks.distillation_hook.initialization_manager"
+        ) as mock_init:
+            mock_init.get_cached_workspace_path.return_value = str(ws)
+            result = DistillationTriggerHook._get_source_repo_path()
+
+        assert result == git_repo
+
+
+# ===========================================================================
+# Test Group 4: Regression -- existing behavior preserved
 # ===========================================================================
 
 class TestDistillationRegression:
