@@ -35,7 +35,7 @@ _start_backend() {
         echo "[swarm] Creating venv..."
         uv venv .venv
         source .venv/bin/activate
-        uv sync
+        uv sync --group dev
     else
         source .venv/bin/activate
     fi
