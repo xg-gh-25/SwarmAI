@@ -133,7 +133,7 @@ This is the key Phase 3 insight: when no human reviews every line, **the test su
 - **Background execution** — pipelines as scheduled jobs. Checkpoints create Radar todos visible even when you're away.
 - **Pipeline Validator** — structural enforcement script catches skipped stages, missing artifacts, and uncalibrated budgets.
 
-This is the implementation of [AIDLC Phase 3 (AI-Management)](https://github.com/xg-gh-25/SwarmAI/blob/main/docs/AIDLC-Phase3-Design.md) — where AI makes autonomous decisions and humans step in when needed.
+This is the implementation of [AIDLC Phase 3 (AI-Management)](./docs/AIDLC-Phase3-Design.md) — where AI makes autonomous decisions and humans step in when needed.
 
 ### 5. Three-Column Command Center — Seamless Integration
 
