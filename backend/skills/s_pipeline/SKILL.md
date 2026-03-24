@@ -656,4 +656,64 @@ python backend/scripts/artifact_cli.py run-checkpoint --project <PROJECT> --run-
 
 # Historical token costs for calibration
 python backend/scripts/artifact_cli.py run-history --project <PROJECT> [--limit 10]
+
+# ── v3: Dashboard, Resume, Background Jobs ──
+
+# Cross-project pipeline dashboard (all projects)
+python backend/scripts/artifact_cli.py run-status [--active-only]
+
+# Resume a paused pipeline (after escalation resolved)
+python backend/scripts/artifact_cli.py run-resume --project <PROJECT> --run-id <RUN_ID>
+
+# Create a background pipeline job (runs via scheduler)
+python3 ~/.swarm-ai/SwarmWS/Services/swarm-jobs/job_manager.py pipeline \
+  --project <PROJECT> --requirement "<what to build>" \
+  [--schedule "0 9 * * 1-5"] [--profile full] [--budget 2.00] [--one-shot]
+```
+
+## Background Execution (v3)
+
+Pipelines can run as background jobs via the Swarm Job System. This decouples
+pipeline execution from interactive chat sessions.
+
+### Creating a Background Pipeline
+
+```bash
+# Recurring: run every weekday at 9am
+python3 ~/.swarm-ai/SwarmWS/Services/swarm-jobs/job_manager.py pipeline \
+  --project SwarmAI --requirement "Run QA on recent changes" \
+  --profile bugfix --schedule "0 1 * * 1-5"
+
+# One-shot: run once (for a specific feature)
+python3 ~/.swarm-ai/SwarmWS/Services/swarm-jobs/job_manager.py pipeline \
+  --project ClientApp --requirement "Add payment retry logic" \
+  --profile full --budget 3.00 --one-shot
+```
+
+The job system spawns a headless Claude CLI session that runs the pipeline
+orchestrator. Checkpoints create Radar todos visible in the sidebar.
+
+### Monitoring
+
+```bash
+# All active pipelines across all projects
+python backend/scripts/artifact_cli.py run-status --active-only
+
+# Full dashboard (active + recent completed)
+python backend/scripts/artifact_cli.py run-status
+```
+
+### Resuming After Escalation
+
+When a background pipeline checkpoints (L2 BLOCK or budget), a Radar todo appears.
+After the user resolves the issue:
+
+```bash
+# Mark the pipeline as resumable
+python backend/scripts/artifact_cli.py run-resume --project <PROJECT> --run-id <RUN_ID>
+
+# Then either:
+# 1. Drag the Radar todo into chat → agent resumes the pipeline
+# 2. Say "resume pipeline for <PROJECT>" → agent reads checkpoint and continues
+# 3. Wait for next scheduler run → background job picks up the resumed pipeline
 ```
