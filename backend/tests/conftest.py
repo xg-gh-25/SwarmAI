@@ -7,11 +7,15 @@ structural defenses prevent this from crashing the system during peak usage:
 1. Auto-xdist injection — if pytest-xdist is installed and user didn't pass
    -n explicitly, auto-inject -n auto to split across CPU cores. Each worker
    handles ~440 tests at ~2GB peak instead of 9GB total.
-2. GC after every test — prevents monotonic RSS growth from accumulated objects
-3. Memory watchdog plugin — monitors RSS every test, triggers aggressive GC
-   at 1.5GB, aborts the session at 2.5GB before macOS jetsam kills processes
+2. Periodic RSS sampling (every 25 tests) — triggers aggressive GC only when
+   RSS exceeds 1.5GB, avoiding the ~85s overhead of gc.collect on every test.
+3. Memory watchdog plugin — monitors RSS periodically, triggers aggressive GC
+   at 1.5GB, aborts the session at 2.5GB before macOS jetsam kills processes.
 4. Subprocess fallback — when xdist isn't available, the safe_test_runner.py
-   script splits tests into batches of 200 via subprocess invocations
+   script splits tests into batches of 200 via subprocess invocations.
+
+DB reset uses a single executescript() call to clear all 21 tables in one
+round-trip instead of 21 individual execute() + commit() calls.
 
 Thresholds are tuned for a 36GB machine running 2 chat sessions + MCPs (~3GB)
 + browser/IDE (~5GB). The 2.5GB abort leaves 25GB+ for the rest of the system.
@@ -109,16 +113,17 @@ def _aggressive_gc() -> int:
 class MemoryWatchdogPlugin:
     """Pytest plugin that monitors RSS and prevents memory explosions.
 
-    Checks after EVERY test (not every 50) — psutil.Process().memory_info()
-    costs ~50μs which adds <0.1s per 1759 tests. The cost of NOT checking
-    is a 9GB spike that crashes the system.
+    Samples RSS every ``_CHECK_INTERVAL`` tests (not every test) to avoid
+    the ~85s cumulative overhead of calling ``gc.collect(2)`` 1700+ times.
+    Full GC only fires when RSS exceeds the 1.5GB threshold.
 
     Defense layers:
-    - Every test: gc.collect(2) to prevent RSS pile-up
-    - Every test: RSS check against thresholds
+    - Every _CHECK_INTERVAL tests: RSS check against thresholds
     - At 1.5GB: aggressive multi-generation GC
     - At 2.5GB: abort with clear error + xdist recommendation
     """
+
+    _CHECK_INTERVAL = 25  # sample RSS every N tests (psutil ~50μs, negligible)
 
     def __init__(self):
         self._test_count = 0
@@ -127,9 +132,12 @@ class MemoryWatchdogPlugin:
         self._last_warning_at = 0  # test count at last warning (rate-limit logs)
 
     def pytest_runtest_teardown(self, item):
-        """Run after every test teardown — GC + RSS check."""
-        gc.collect(2)  # Full collection, all generations
+        """Run after every test teardown — periodic RSS check + GC."""
         self._test_count += 1
+
+        # Only sample RSS periodically — avoids gc.collect overhead on every test
+        if self._test_count % self._CHECK_INTERVAL != 0:
+            return
 
         rss = _get_rss()
         if rss == 0:
@@ -276,12 +284,11 @@ async def reset_database():
     # Ensure schema exists (idempotent)
     await _test_db.initialize()
 
-    # Clear all tables before the test
+    # Clear all tables in a single batch (one round-trip instead of 21)
     import aiosqlite
+    _delete_script = ";\n".join(f"DELETE FROM {t}" for t in _TABLES_TO_CLEAR)
     async with aiosqlite.connect(str(_test_db.db_path)) as conn:
-        for table in _TABLES_TO_CLEAR:
-            await conn.execute(f"DELETE FROM {table}")
-        await conn.commit()
+        await conn.executescript(_delete_script)
 
     # Seed the default agent (the app and tests expect it to exist)
     from datetime import datetime
