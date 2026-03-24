@@ -82,6 +82,8 @@ else:
 def classify(name, cmd):
     cl = cmd.lower()
     nl = name.lower()
+    if "swarm-jobs" in cl or "scheduler.py" in cl or "self_tune.py" in cl: return "Swarm Jobs (Scheduler)"
+    if "job_manager" in cl: return "Swarm Jobs (Manager)"
     if "kiro" in cl or "kiro" in nl: return "Kiro IDE"
     if "SwarmAI" in cmd or "swarmai" in cl: return "SwarmAI (Tauri)"
     if "google chrome" in nl or ("chrome" in nl and "helper" in nl): return "Chrome"
@@ -127,7 +129,8 @@ for name, info in sorted(apps.items(), key=lambda x: -x[1]["cpu"])[:5]:
 # === SWARM BREAKDOWN ===
 print("=== SWARM_BREAKDOWN ===")
 swarm_labels = ["SwarmAI (Tauri)", "SwarmAI Backend", "Claude CLI",
-                "MCP: builder", "MCP: sentral", "MCP: slack", "MCP: outlook", "MCP: taskei", "MCP: shim/node"]
+                "MCP: builder", "MCP: sentral", "MCP: slack", "MCP: outlook", "MCP: taskei", "MCP: shim/node",
+                "Swarm Jobs (Scheduler)", "Swarm Jobs (Manager)"]
 swarm_total = 0
 for label in swarm_labels:
     if label in apps and apps[label]["rss_mb"] > 1:
@@ -210,6 +213,37 @@ else:
 
 > **IMPORTANT**: If you are running this skill, the app IS running — you are executing inside it. Never report "SwarmAI not running" when you are the one generating the report. The backend health check is to verify the API layer specifically, not the app itself.
 
+#### Swarm Job System Health
+
+The job scheduler runs independently via launchd (hourly). Read its state file to report job health without needing the scheduler process to be running:
+
+```python
+# === SWARM JOBS ===
+import json
+from pathlib import Path
+
+jobs_state = Path.home() / ".swarm-ai/SwarmWS/Services/swarm-jobs/state.json"
+jobs_yaml = Path.home() / ".swarm-ai/SwarmWS/Services/swarm-jobs/jobs.yaml"
+print("=== SWARM_JOBS ===")
+if jobs_state.exists():
+    try:
+        state = json.loads(jobs_state.read_text())
+        jobs = state.get("jobs", {})
+        for jid, js in jobs.items():
+            last = js.get("last_run", "never")
+            status = js.get("last_status", "never")
+            fails = js.get("consecutive_failures", 0)
+            runs = js.get("total_runs", 0)
+            print(f"{jid}|{status}|{fails}|{runs}|{last}")
+        spend = state.get("monthly_spend_usd", 0)
+        tokens = state.get("monthly_tokens_used", 0)
+        print(f"SPEND|{spend:.2f}|{tokens}")
+    except Exception as e:
+        print(f"ERROR|{e}")
+else:
+    print("NOT_INSTALLED")
+```
+
 > **Validation**: If psutil unavailable (shouldn't happen with venv), fall back to `vm_stat` with `active + wired` formula (NOT free + inactive). See Lessons Learned below.
 
 ### Step 1: Format the Full Report
@@ -266,6 +300,18 @@ Output a **single structured report** with 4 sections. Use this exact format:
 **Memory Pressure:** ok (50.6% used, threshold 85%)
 **Spawn Budget:** ✅ Can spawn (headroom: 12,400MB, cost: ~500MB)
 **Orphaned Processes:** None detected
+
+### Swarm Job System
+
+| Job | Status | Runs | Failures | Last Run |
+|-----|--------|------|----------|----------|
+| signal-fetch | ✅ success | 13 | 0 | 2026-03-23 20:07 |
+| signal-digest | ✅ success | 7 | 0 | 2026-03-23 21:07 |
+| self-tune | ✅ success | 2 | 0 | 2026-03-24 04:05 |
+| weekly-maintenance | ✅ success | 1 | 0 | 2026-03-22 06:17 |
+| morning-inbox | 🔴 disabled | 0 | 0 | never |
+
+**Monthly spend:** $0.52 | **Scheduler:** launchd (hourly)
 
 ## 4. Suggestions
 
@@ -344,6 +390,17 @@ Apply these thresholds to determine status and generate suggestions:
 - Orphaned MCP processes found → 🔴 "Leaked MCP servers — kill them to free memory"
 - Spawn budget can_spawn=false → ⚠️ "Cannot open new tabs — close idle tabs or other apps"
 - Backend unavailable → 🔴 "SwarmAI backend not responding — app may need restart"
+
+#### Swarm Job System Rules
+
+**Data source:** `~/.swarm-ai/SwarmWS/Services/swarm-jobs/state.json` (always readable, no API needed)
+
+- If state.json doesn't exist → "Swarm Job System: Not installed" (info, not error)
+- Any job with `consecutive_failures >= 3` → 🔴 "Job 'X' circuit-breaker tripped (N failures)"
+- Any job with `consecutive_failures >= 1` → ⚠️ "Job 'X' failed last run"
+- Agent task jobs (morning-inbox, etc.) spawn a Claude CLI + MCP servers per run (~500MB for ~90s). This is transient — no long-running processes. Flag only if a swarm-jobs process appears stuck (running > 10min).
+- Monthly spend > $50 → ⚠️ "Job system monthly spend at $X"
+- All jobs healthy → "Job system: ✅ all jobs healthy"
 
 #### Suggestions Rules
 
@@ -522,7 +579,7 @@ These lessons come from actual production bugs in SwarmAI (March 2026). They are
 
 2. **psutil is the source of truth for memory** — It's cross-platform, battle-tested, and matches Activity Monitor. Don't parse OS-specific tools unless psutil is unavailable.
 
-3. **SwarmAI spawns ~500MB per Claude CLI session** — Each tab costs ~500MB (CLI + MCP children). On a 16GB machine, 2 tabs + backend + MCPs = ~2GB. On 36GB, 4 tabs = ~3GB.
+3. **SwarmAI spawns ~500MB per Claude CLI session** — Each tab costs ~500MB (CLI + MCP children). On a 16GB machine, 2 tabs + backend + MCPs = ~2GB. On 36GB, 4 tabs = ~3GB. **Job system agent_task jobs also spawn a Claude CLI + MCPs (~500MB) but are transient (90-180s max). They won't show in steady-state unless stuck.**
 
 4. **MCP orphans are the silent killer** — When Claude CLI crashes with shared PGID, MCP children (5+ per session) survive as orphans. They accumulate memory and CPU. Always check for PPID=1 processes matching our patterns.
 
@@ -566,7 +623,7 @@ These lessons come from actual production bugs in SwarmAI (March 2026). They are
 ### Output Validation Checklist
 
 Before presenting the report, verify:
-- [ ] All 4 sections present (Desktop Overview, Worst Offenders, SwarmAI Details, Suggestions)
+- [ ] All 4 sections present (Desktop Overview, Worst Offenders, SwarmAI Details + Job System, Suggestions)
 - [ ] RAM percentage matches psutil (or active+wired fallback) — NOT vm_stat inactive
 - [ ] SwarmAI section tried API first, fell back to ps only if unavailable
 - [ ] Orphan check included (PPID=1 matching claude/mcp/node/python)
