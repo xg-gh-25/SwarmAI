@@ -96,6 +96,10 @@ def _is_retriable_error(raw_error: str) -> bool:
         r"Streaming timeout.*no SDK response",
         # Zombie subprocess — stream ended instantly with no content after interrupt
         r"Zombie subprocess detected",
+        # Null byte in CLI arguments — intermittent, caused by concurrent file
+        # reads during context assembly or env pollution.  The null byte is
+        # stripped on retry (defense-in-depth in session_unit._spawn).
+        r"embedded null byte",
     ]
     for pattern in retriable_patterns:
         if re.search(pattern, raw_error, re.IGNORECASE):

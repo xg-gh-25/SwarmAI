@@ -1025,6 +1025,21 @@ class SessionUnit:
                 ),
             )
 
+        # ── Sanitize: strip null bytes from system prompt & model ────
+        # Null bytes (\x00) are invalid in POSIX process arguments and
+        # environment variables.  If any creep into the system prompt
+        # (e.g. from binary files read during context assembly, corrupt
+        # DB entries, or __pycache__ .pyc files in .claude/skills/),
+        # subprocess.Popen raises "embedded null byte" at spawn time.
+        # Defense-in-depth: strip them here regardless of source.
+        if options.system_prompt and "\x00" in options.system_prompt:
+            logger.warning(
+                "session_unit.spawn: stripping %d null bytes from system_prompt "
+                "(session_id=%s)",
+                options.system_prompt.count("\x00"), self.session_id,
+            )
+            options.system_prompt = options.system_prompt.replace("\x00", "")
+
         async with _spawn_lock:
             async with _env_lock:
                 if config is not None:
@@ -1068,6 +1083,17 @@ class SessionUnit:
             raise RuntimeError(
                 f"No client available for session {self.session_id}"
             )
+
+        # ── Sanitize query content: strip null bytes ─────────────
+        if isinstance(query_content, str) and "\x00" in query_content:
+            logger.warning("session_unit: stripping null bytes from query_content")
+            query_content = query_content.replace("\x00", "")
+        elif isinstance(query_content, list):
+            for block in query_content:
+                if isinstance(block, dict) and isinstance(block.get("text"), str):
+                    if "\x00" in block["text"]:
+                        logger.warning("session_unit: stripping null bytes from content block")
+                        block["text"] = block["text"].replace("\x00", "")
 
         # Send the query
         if isinstance(query_content, list):

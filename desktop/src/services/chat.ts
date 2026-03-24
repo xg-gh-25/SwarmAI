@@ -245,6 +245,23 @@ export const chatService = {
           const { done, value } = await reader.read();
 
           if (done) {
+            // Flush TextDecoder's internal buffer (multi-byte sequences)
+            // and process any remaining SSE lines before completing.
+            const remaining = decoder.decode() + buffer;
+            if (remaining.trim()) {
+              for (const line of remaining.split('\n')) {
+                if (line.startsWith('data: ')) {
+                  const data = line.slice(6);
+                  if (data === '[DONE]') break;
+                  try {
+                    const event = parseSSEEvent(data);
+                    if (event.type !== 'heartbeat') {
+                      try { onMessage(event); } catch { /* swallow */ }
+                    }
+                  } catch { /* incomplete data */ }
+                }
+              }
+            }
             clearStallTimer();
             onComplete();
             break;
@@ -433,6 +450,22 @@ export const chatService = {
           const { done, value } = await reader.read();
 
           if (done) {
+            // Flush remaining buffer before completing
+            const remaining = decoder.decode() + buffer;
+            if (remaining.trim()) {
+              for (const line of remaining.split('\n')) {
+                if (line.startsWith('data: ')) {
+                  const data = line.slice(6);
+                  if (data === '[DONE]') break;
+                  try {
+                    const event = parseSSEEvent(data);
+                    if (event.type !== 'heartbeat') {
+                      try { onMessage(event); } catch { /* swallow */ }
+                    }
+                  } catch { /* incomplete data */ }
+                }
+              }
+            }
             clearStallTimer();
             onComplete();
             break;
@@ -571,6 +604,22 @@ export const chatService = {
           const { done, value } = await reader.read();
 
           if (done) {
+            // Flush remaining buffer before completing
+            const remaining = decoder.decode() + buffer;
+            if (remaining.trim()) {
+              for (const line of remaining.split('\n')) {
+                if (line.startsWith('data: ')) {
+                  const data = line.slice(6);
+                  if (data === '[DONE]') break;
+                  try {
+                    const event = parseSSEEvent(data);
+                    if (event.type !== 'heartbeat') {
+                      try { onMessage(event); } catch { /* swallow */ }
+                    }
+                  } catch { /* incomplete data */ }
+                }
+              }
+            }
             clearStallTimer();
             onComplete();
             break;
