@@ -75,7 +75,7 @@ _start_backend() {
         _log "Creating venv..."
         uv venv .venv
         source .venv/bin/activate
-        uv sync
+        uv sync --group dev
     else
         source .venv/bin/activate
     fi
