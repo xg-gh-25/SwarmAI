@@ -1355,9 +1355,18 @@ export function useChatStreamingLifecycle(
             queryClient.invalidateQueries({ queryKey: ['radar', 'completedTasks'] });
           }
 
-          // Clear streaming state for this tab so the spinner stops and
-          // the input re-enables.
-          setIsStreaming(false, capturedTabId ?? undefined);
+          // Drain site A: if a queued message is waiting, keep streaming
+          // state TRUE to avoid a false→true flicker that kills the
+          // "Running…" / "Progressing…" indicator.  The drain will
+          // seamlessly continue the stream with a new conversation turn.
+          const hasQueuedMessage = !!(capturedTabId && tabState?.queuedMessage);
+
+          if (!hasQueuedMessage) {
+            // Normal completion — clear streaming state so spinner stops
+            // and input re-enables.
+            setIsStreaming(false, capturedTabId ?? undefined);
+          }
+          // Always bump generation so the old completeHandler no-ops.
           incrementStreamGen();
 
           // Fix 5: Remove persisted pending state — session completed successfully
@@ -1366,19 +1375,21 @@ export function useChatStreamingLifecycle(
             removePendingState(resultSessionId);
           }
 
-          // Fix 8: Update tab status — background tabs get 'complete_unread', foreground gets 'idle'
-          if (capturedTabId) {
-            updateTabStatus(
-              capturedTabId,
-              isActiveTab ? 'idle' : 'complete_unread',
-            );
+          if (!hasQueuedMessage) {
+            // Fix 8: Update tab status — background tabs get 'complete_unread', foreground gets 'idle'
+            if (capturedTabId) {
+              updateTabStatus(
+                capturedTabId,
+                isActiveTab ? 'idle' : 'complete_unread',
+              );
+            }
           }
 
-          // Drain site A: auto-send queued message on stream completion.
-          // setTimeout(0) ensures React has flushed idle state and stream
-          // cleanup is complete before starting a new stream.
-          if (capturedTabId && tabState?.queuedMessage) {
-            setTimeout(() => deps.onDrainQueue?.(capturedTabId), 0);
+          if (hasQueuedMessage) {
+            // Schedule drain — isStreaming stays true, indicator persists.
+            // setTimeout(0) lets React flush the result-event state updates
+            // (messages sync, session ID) before starting the next turn.
+            setTimeout(() => deps.onDrainQueue?.(capturedTabId!), 0);
           }
         } else if (event.type === 'error') {
           // Suppress error events from a user-stopped stream — the abort
@@ -1828,6 +1839,14 @@ export function useChatStreamingLifecycle(
         if (capturedTabId) {
           updateTabStatus(capturedTabId, 'error');
         }
+
+        // Drain queued message after terminal error — the user's queued
+        // message shouldn't be silently orphaned because the previous
+        // stream hit a connection error.  Same pattern as result-event
+        // drain (Site A) and handleStop drain (Site B).
+        if (capturedTabId && tabState?.queuedMessage) {
+          setTimeout(() => deps.onDrainQueue?.(capturedTabId), 0);
+        }
       };
     },
     [setIsStreaming, incrementStreamGen, addToast, updateTabStatus],
@@ -1847,6 +1866,21 @@ export function useChatStreamingLifecycle(
     const capturedTabId = tabId ?? activeTabIdRef.current;
 
     return () => {
+      // --- Pre-guard drain: rescue orphaned queued messages ---
+      // When an SSE-level error event fires without a subsequent
+      // `reconnecting` (backend decided not to retry), the error
+      // handler bumps streamGen, making this complete handler stale.
+      // The queued message would be silently orphaned.  Check BEFORE
+      // the gen guard so stale handlers can still rescue the queue.
+      // Guard: only drain if tab is NOT already streaming (prevents
+      // double-drain when the result-event drain already started).
+      if (capturedTabId) {
+        const preGuardTab = tabMapRef.current.get(capturedTabId);
+        if (preGuardTab?.queuedMessage && !preGuardTab.isStreaming) {
+          setTimeout(() => deps.onDrainQueue?.(capturedTabId), 0);
+        }
+      }
+
       // Check per-tab generation if available
       if (capturedTabId) {
         const tabState = tabMapRef.current.get(capturedTabId);

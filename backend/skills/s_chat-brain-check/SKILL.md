@@ -1,6 +1,6 @@
 ---
 name: chat-brain-check
-description: Comprehensive chat experience audit — code review, E2E tests, SSE pipeline verification, and regression detection for SwarmAI's core chat system.
+description: Tiered chat experience validator -- quick checks (5min) after every change, full audit (30min) before releases. Covers state machine invariants, SSE pipeline, streaming indicators, queue drain, and regression detection.
 trigger:
   - chat brain check
   - chat health
@@ -18,288 +18,381 @@ siblings:
   - code-review = general code review
 ---
 
-# Chat Brain Check — Comprehensive Chat Experience Audit
+# Chat Brain Check
 
-SwarmAI's chat is its brain. This skill runs a full audit: automated tests, code review by scenario, SSE pipeline verification, and regression pattern detection. Use it before any release, after any streaming/session change, or when chat feels broken.
+SwarmAI's chat is its brain. This skill validates chat correctness at two tiers:
 
-## Architecture Quick Reference
+- **Quick Check** (default) -- automated tests + invariant greps + regression scans + tsc. ~5 min. Run after every chat-related change.
+- **Full Audit** -- quick check + scenario traces + SSE pipeline + indicator pipeline + live smoke test. ~30 min. Run before releases or after major refactors.
 
-```
-Frontend                          Backend                         SDK/CLI
---------                          -------                         -------
-ChatPage.tsx                      chat.py (SSE router)            Claude CLI subprocess
-  handleSendMessage()               sse_with_heartbeat()            --system-prompt
-  handleStop()                       message_generator()             --input-format stream-json
-  drainQueuedMessage()             session_router.py                 stdin: query JSON
-useChatStreamingLifecycle.ts        run_conversation()              stdout: SDK messages
-  createStreamHandler()              _acquire_slot()
-  createErrorHandler()               _persist_assistant_blocks()
-  createCompleteHandler()          session_unit.py
-  setIsStreaming()                   send() -> _stream_response()
-  appendTextDelta()                  _read_formatted_response()
-  updateMessages()                   _spawn() -> ClaudeClientWrapper
-chat.ts (SSE service)               interrupt() / kill()
-  streamChat()                     context_injector.py
-  reader.read() loop                 build_resume_context()
-  buffer + TextDecoder             prompt_builder.py
-  [DONE] sentinel                    build_options() / build_system_prompt()
-```
-
-## Execution Plan
-
-Run ALL phases in order. Report results with pass/fail per check.
+**Trigger:** "chat brain check" = quick check. "full chat audit" = full audit.
 
 ---
 
-### Phase 1: Automated Tests (MUST PASS)
+## Quick Check (default)
 
-Run the E2E scenario tests. These cover all 6 user scenarios with mocked SDK.
+Run phases Q1-Q4 in order. Any BLOCK failure = do not ship.
+
+### Q1: Automated Tests [BLOCK]
 
 ```bash
+# Backend E2E (14 scenarios)
 cd /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/backend && \
 source .venv/bin/activate && \
 python -m pytest tests/test_chat_scenarios_e2e.py -v --tb=short 2>&1
-```
 
-**Expected:** 14/14 pass. ANY failure is a P0 blocker.
-
-Then run all chat-related tests:
-
-```bash
+# Backend chat-related
 python -m pytest tests/ -k "chat or session or stream or sse or context_warning or context_inject" -v --tb=short 2>&1
+
+# Frontend streaming (3 test files, ~170 tests)
+cd /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/desktop && \
+npx vitest run src/__tests__/useChatStreamingLifecycle.test.ts \
+  src/__tests__/streaming-lifecycle-preservation.test.ts \
+  src/pages/__tests__/ChatPageSpinner.property.test.tsx \
+  --reporter=verbose 2>&1
 ```
 
-**Expected:** All pass except the known pre-existing `test_context_warning_bridge::test_yields_warn_event_above_70pct`.
+Any failure = BLOCK. Known skip: `test_context_warning_bridge::test_yields_warn_event_above_70pct`.
 
----
+### Q2: State Machine Invariants [BLOCK]
 
-### Phase 2: Scenario-by-Scenario Code Review
+Run all checks. Any failure = BLOCK.
 
-For each scenario, trace the EXACT code path and verify correctness. Read the actual files — don't guess.
-
-#### Scenario 1: Fresh Send (COLD start)
-
-**Path:** `handleSendMessage` -> `streamChat` -> `POST /api/chat/stream` -> `run_conversation` -> `get_or_create_unit` (COLD) -> `_acquire_slot` -> `build_options` -> `send()` -> `_ensure_spawned` -> `_spawn` -> `_stream_response` -> `_read_formatted_response` -> SSE events
-
-**Files to review:**
-- `desktop/src/pages/ChatPage.tsx` — `handleSendMessage` function
-- `backend/routers/chat.py` — `chat_stream` endpoint + `sse_with_heartbeat`
-- `backend/core/session_router.py` — `run_conversation`
-- `backend/core/session_unit.py` — `send()`, `_ensure_spawned`, `_spawn`, `_stream_response`
-- `backend/core/prompt_builder.py` — `build_options`, `build_system_prompt`
-
-**Verify:**
-- [ ] `session_id` flows correctly (frontend -> backend -> unit)
-- [ ] `session_start` event carries session_id back to frontend
-- [ ] System prompt assembled without null bytes or corruption
-- [ ] `result` event sent before generator returns
-- [ ] `data: [DONE]\n\n` sentinel sent after generator finishes
-- [ ] State transitions: COLD -> IDLE (spawn) -> STREAMING (send) -> IDLE (result)
-
-#### Scenario 2: Warm Send (subprocess alive, IDLE)
-
-**Path:** Same as Scenario 1 but skips spawn. `send()` detects IDLE -> goes straight to STREAMING.
-
-**Files to review:**
-- `backend/core/session_unit.py` — `send()` line ~510 (spawn check)
-
-**Verify:**
-- [ ] No re-spawn when state is IDLE
-- [ ] SDK client reused (same subprocess)
-- [ ] `_sdk_session_id` preserved across sends
-
-#### Scenario 3: Append While Streaming (Queue Path)
-
-**Path:** `handleSendMessage` -> detects `isStreaming=true` -> queue path -> `tabState.queuedMessage` set -> on `result` event: `onDrainQueue` -> `drainQueuedMessage` -> `streamChat`
-
-**Files to review:**
-- `desktop/src/pages/ChatPage.tsx` — `handleSendMessage` queue path (line ~1257), `drainQueuedMessage`
-- `desktop/src/hooks/useChatStreamingLifecycle.ts` — `result` event handler drain trigger (line ~1372)
-
-**Verify:**
-- [ ] Queued message displayed with `isQueued=true` badge
-- [ ] Queue drain fires after `result` event (setTimeout 0)
-- [ ] Queue drain also fires after `handleStop` (line ~1913)
-- [ ] `resolvedSessionId` in drain uses `tabState.sessionId` (not stale ref)
-- [ ] Queued message cleared BEFORE send (exactly-once)
-- [ ] Append path: second queue message concatenates with first (not replaces)
-
-#### Scenario 4: Stop -> New Message
-
-**Path:** `handleStop` -> abort SSE + `setIsStreaming(false)` + append "Stopped" + `chatService.stopSession` -> backend `interrupt()` -> STREAMING->IDLE. Then `handleSendMessage` -> normal send from IDLE.
-
-**Files to review:**
-- `desktop/src/pages/ChatPage.tsx` — `handleStop`
-- `backend/core/session_unit.py` — `interrupt()` with stale-interrupt guard
-- `backend/routers/chat.py` — `_recover_streaming_on_disconnect`
-
-**Verify:**
-- [ ] `handleStop` sets `isStreaming=false` synchronously (before async backend call)
-- [ ] `userStopped=true` flag prevents spurious error events
-- [ ] Backend `interrupt()` transitions STREAMING -> IDLE (warm) or kills -> COLD
-- [ ] Stale-interrupt guard prevents killing a NEW stream's subprocess
-- [ ] `_stop_event` cleared after interrupt (prevents stale stop in next stream)
-- [ ] Queue drain fires after stop if queued message exists
-- [ ] Next `send()` works from IDLE without issues
-
-#### Scenario 5: Resume Within TTL (12hr)
-
-**Path:** Same as Scenario 2 (Warm Send). Subprocess still alive, session IDLE.
-
-**Verify:**
-- [ ] No context injection (not cold resume)
-- [ ] `_sdk_session_id` still valid
-- [ ] Last used timestamp updated
-
-#### Scenario 6: Resume Post TTL (subprocess killed, COLD)
-
-**Path:** `handleSendMessage` -> `streamChat` -> `run_conversation` -> `get_or_create_unit` (existing or new COLD) -> cold resume detection (`state==COLD && _sdk_session_id is None && msg_count > 1`) -> `needs_context_injection=True` -> `build_resume_context` -> `_spawn` with enriched system prompt
-
-**Files to review:**
-- `backend/core/session_router.py` — cold resume detection (line ~501)
-- `backend/core/context_injector.py` — `build_resume_context`
-- `backend/core/session_unit.py` — `_spawn` null-byte sanitization
-
-**Verify:**
-- [ ] Cold resume detected when `state==COLD && _sdk_session_id is None`
-- [ ] `msg_count > 1` check prevents injection on truly new sessions
-- [ ] `session_resuming` SSE event emitted for UI indicator
-- [ ] Resume context strips tool-only messages, drops last assistant message
-- [ ] Token budget scales with model context window
-- [ ] Null bytes stripped from system prompt before spawn
-- [ ] `embedded null byte` classified as retriable for auto-retry
-
----
-
-### Phase 3: SSE Pipeline Integrity
-
-Verify the SSE data flow from backend to frontend.
-
-**Backend side (chat.py):**
 ```bash
-# Verify [DONE] sentinel is sent
-cd /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/backend
-grep -n 'data: \[DONE\]' routers/chat.py
-```
-
-**Frontend side (chat.ts):**
-```bash
-# Verify buffer flush on stream close
 cd /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/desktop/src
-grep -n 'decoder.decode()' services/chat.ts
+
+echo "=== 2.1: Drain preserves streaming (no false-to-true gap) ==="
+# Must find: if (!hasQueuedMessage) { setIsStreaming(false, ...) }
+grep -A2 'hasQueuedMessage' hooks/useChatStreamingLifecycle.ts | grep 'setIsStreaming(false'
+
+echo "=== 2.2: Generation guard in completeHandler ==="
+# Must find 2 guards: tabState.streamGen and streamGenRef.current
+grep -c 'streamGen.*!== capturedGen\|!== capturedGen' hooks/useChatStreamingLifecycle.ts
+# Expected: >= 2
+
+echo "=== 2.3: 3 drain sites present ==="
+# Site A (result): in createStreamHandler
+# Site C-error: in createErrorHandler
+# Site C-complete: in createCompleteHandler (pre-guard)
+grep -n 'onDrainQueue' hooks/useChatStreamingLifecycle.ts
+
+echo "=== 2.4: Pre-guard drain before gen check ==="
+# Must appear BEFORE the 'tabState.streamGen !== capturedGen' line
+grep -n 'preGuardTab\|streamGen !== capturedGen' hooks/useChatStreamingLifecycle.ts | head -4
+# preGuardTab line number must be LESS than streamGen check line number
+
+echo "=== 2.5: Drain failure cleanup ==="
+# cleanupStreamingState called in empty-content return AND catch block
+grep -c 'cleanupStreamingState' ../pages/ChatPage.tsx
+# Expected: >= 3 (declaration + 2 call sites)
+
+echo "=== 2.6: isStreaming derived from ref (not useState) ==="
+grep 'const isStreaming =' hooks/useChatStreamingLifecycle.ts
+# Must contain: activeTabState?.isStreaming
+# Must NOT be: useState
+
+echo "=== 2.7: No dead event handlers ==="
+grep -c 'cmd_permission_acknowledged' ../pages/ChatPage.tsx hooks/useChatStreamingLifecycle.ts
+# Expected: 0 for both files
+
+echo "=== 2.8: Permission uses standard handler ==="
+grep -A5 'streamCmdPermissionContinue' ../pages/ChatPage.tsx | grep 'streamHandler'
+# Must find: streamHandler passed directly as onMessage (no wrapper)
 ```
 
-**Frontend side (useChatStreamingLifecycle.ts):**
-```bash
-# Verify result event syncs messages
-grep -n 'setMessages(tabState.messages)' hooks/useChatStreamingLifecycle.ts
-```
-
-**Verify:**
-- [ ] Backend `sse_with_heartbeat` sends `data: [DONE]\n\n` on generator completion
-- [ ] Frontend flushes TextDecoder + buffer on `reader.read()` done=true
-- [ ] `[DONE]` sentinel triggers `onComplete()` before HTTP close
-- [ ] `result` event syncs `tabState.messages` -> React state (safety net)
-- [ ] Heartbeats sent every 15s during streaming
-- [ ] Stall detection: 45s (reader level), 60s text / 180s tool (hook level)
-
----
-
-### Phase 4: Regression Pattern Detection
-
-Search for known anti-patterns that caused past bugs.
+### Q3: Regression Patterns [BLOCK / WARN]
 
 ```bash
 cd /Users/gawan/Desktop/SwarmAI-Workspace/swarmai
 
-# 1. Null bytes in workspace files that feed into system prompt
-find ~/.swarm-ai/SwarmWS/.context/ ~/.swarm-ai/SwarmWS/Knowledge/DailyActivity/ ~/.swarm-ai/SwarmWS/Projects/ -name '*.md' -exec python3 -c "
+echo "=== 3.1: Null bytes in context files [BLOCK] ==="
+find ~/.swarm-ai/SwarmWS/.context/ ~/.swarm-ai/SwarmWS/Knowledge/DailyActivity/ \
+  ~/.swarm-ai/SwarmWS/Projects/ -name '*.md' -exec python3 -c "
 import sys
 with open(sys.argv[1], 'rb') as f:
-    if b'\x00' in f.read():
-        print(f'NULL BYTE: {sys.argv[1]}')
+    if b'\x00' in f.read(): print(f'NULL BYTE: {sys.argv[1]}')
 " {} \;
+# Expected: no output
 
-# 2. Binary files in .claude/skills/ (cause "embedded null byte" on spawn)
-find ~/.swarm-ai/SwarmWS/.claude/skills/ -name '*.pyc' -o -name '*.pyo' -o -name '*.so' -o -name '*.dylib' 2>/dev/null
+echo "=== 3.2: Binary in skills [BLOCK] ==="
+find ~/.swarm-ai/SwarmWS/.claude/skills/ \
+  -name '*.pyc' -o -name '*.pyo' -o -name '*.so' -o -name '*.dylib' 2>/dev/null
+# Expected: no output
 
-# 3. Check isStreaming derivation hasn't regressed (must read from tabMapRef)
-grep -n 'const isStreaming' desktop/src/hooks/useChatStreamingLifecycle.ts
+echo "=== 3.3: incrementStreamGen at transitions [WARN] ==="
+grep -c 'incrementStreamGen' desktop/src/hooks/useChatStreamingLifecycle.ts \
+  desktop/src/pages/ChatPage.tsx
+# Expected: lifecycle >= 5, ChatPage >= 4
+# Sites: result, error(SSE), error(connection), ask_user_question,
+#   cmd_permission_request, drain, handleSendMessage, handleAnswerQuestion,
+#   handleRetryQueueTimeout, handlePermissionDecision
 
-# 4. Check createCompleteHandler generation guard is intact
-grep -n 'streamGen.*capturedGen\|capturedGen.*streamGen' desktop/src/hooks/useChatStreamingLifecycle.ts
-
-# 5. Verify error handler suppresses user-stopped errors
-grep -n 'userStopped' desktop/src/hooks/useChatStreamingLifecycle.ts | head -5
-
-# 6. Check that result event clears streaming (not just onComplete)
-grep -n 'setIsStreaming.*false.*result\|result.*setIsStreaming' desktop/src/hooks/useChatStreamingLifecycle.ts
+echo "=== 3.4: userStopped guard present [WARN] ==="
+grep -c 'userStopped' desktop/src/hooks/useChatStreamingLifecycle.ts
+# Expected: >= 4 (check in streamHandler, check in errorHandler, set in handleStop, clear in drain/send)
 ```
 
-**Verify:**
-- [ ] No null bytes in any workspace text file
-- [ ] No binary files (`.pyc`, `.so`, `.dylib`) in `.claude/skills/`
-- [ ] `isStreaming` derived from `tabMapRef` + `pendingStreamTabs` (not useState)
-- [ ] `createCompleteHandler` has generation guard (stale handler is no-op)
-- [ ] `userStopped` flag suppresses spurious errors after stop
-- [ ] `result` event calls `setIsStreaming(false)` directly (not wait for [DONE])
-
----
-
-### Phase 5: Frontend TypeScript Check
+### Q4: TypeScript [BLOCK]
 
 ```bash
 cd /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/desktop && npx tsc --noEmit 2>&1 | tail -5
 ```
 
-**Expected:** Clean — no type errors.
+Must be clean. Pre-existing `stall` warnings in chat.ts are acceptable.
+
+### Quick Check Report
+
+```
+## Quick Check -- YYYY-MM-DD
+
+| Phase | Status | Details |
+|-------|--------|---------|
+| Q1 Tests | PASS/BLOCK | backend N/N, frontend N/N |
+| Q2 Invariants | PASS/BLOCK | 8/8 checks passed |
+| Q3 Regressions | PASS/WARN/BLOCK | null bytes, binaries, patterns |
+| Q4 TypeScript | PASS/BLOCK | clean / N errors |
+
+**Verdict: SHIP IT / BLOCK**
+```
 
 ---
 
-## Report Format
+## Full Audit (on request)
 
-After all phases, output a structured report:
+Run Quick Check first, then phases F1-F4.
+
+### F1: Scenario Code Path Trace
+
+For each scenario relevant to the change, trace the code path and verify the checklist. Skip scenarios unrelated to the change.
+
+#### Scenario 1: Fresh Send (COLD start)
+
+**Path:** `handleSendMessage` -> `streamChat` -> `POST /api/chat/stream` -> `run_conversation` -> `get_or_create_unit` (COLD) -> `send()` -> `_spawn` -> `_stream_response` -> SSE events
+
+**Checklist:**
+- [ ] `session_id` flows frontend -> backend -> unit -> `session_start` event back
+- [ ] System prompt has no null bytes
+- [ ] State: COLD -> IDLE (spawn) -> STREAMING (send) -> IDLE (result)
+- [ ] `setIsStreaming(true)` synchronous, BEFORE async work
+- [ ] `userStopped`, `hasReceivedData`, `isReconnecting`, `isResuming` all reset
+- [ ] Assistant placeholder synced to React state AND tabMapRef
+
+#### Scenario 2: Warm Send (IDLE)
+
+- [ ] No re-spawn, SDK client reused, `_sdk_session_id` preserved
+
+#### Scenario 3: Append While Streaming (Queue -> Drain)
+
+**Path:** `handleSendMessage` -> queue -> `result` event: `hasQueuedMessage=true` -> streaming preserved -> `setTimeout(0)` -> `drainQueuedMessage` -> `streamChat`
+
+**Checklist:**
+- [ ] Queued message has `isQueued=true` badge + cancel button
+- [ ] **Result event preserves `isStreaming=true` when queue exists**
+- [ ] `resolvedSessionId` from `tabState.sessionId` (not stale ref)
+- [ ] Queue cleared BEFORE send (exactly-once)
+- [ ] Append: second message concatenates with first
+- [ ] `incrementStreamGen()` in BOTH result handler AND drain
+- [ ] Drain failure -> `cleanupStreamingState()`
+- [ ] `resetUserScroll()` in drain
+- [ ] Indicator stays visible through transition (no cold-start flicker)
+
+#### Scenario 4: Stop -> Queue Drain
+
+- [ ] `handleStop`: `isStreaming=false` synchronous, "Stopped" appended
+- [ ] `userStopped=true` suppresses errors from aborted SSE
+- [ ] Drain fires via `setTimeout(0)`, indicator re-enables
+- [ ] `userStopped = false` reset at drain start
+
+#### Scenario 5: Error -> Queue Drain
+
+**Path:** Terminal error -> createErrorHandler fires -> error shown -> drain. OR SSE closes after error -> createCompleteHandler pre-guard -> drain.
+
+- [ ] createErrorHandler terminal triggers drain when `queuedMessage` exists
+- [ ] createCompleteHandler pre-guard runs BEFORE gen check
+- [ ] Pre-guard guarded by `!tabState.isStreaming` (prevents double-drain)
+- [ ] Error message stays in chat, new placeholder added after it
+
+#### Scenario 6: Stop -> New Message (no queue)
+
+- [ ] Guard passes after stop, `userStopped = false` reset on fresh send
+
+#### Scenario 7: Permission Approve
+
+**Path:** `handlePermissionDecision` -> `setIsStreaming(true)` -> `streamCmdPermissionContinue(... streamHandler ...)` -> `tool_result`, `text_delta`, `result`
+
+- [ ] `onMessage` is `streamHandler` directly (no wrapper/special-casing)
+- [ ] No dead `cmd_permission_acknowledged` handler
+- [ ] Placeholder synced to tabMapRef
+- [ ] Guard: `if (currentTabState?.isStreaming) return` prevents double-submit
+
+#### Scenario 8: Permission Deny
+
+- [ ] `setIsStreaming(false)` at end (cleanup), guarded by isStreaming check
+
+#### Scenario 9: Resume Within TTL
+
+- [ ] No context injection, subprocess reused, `_sdk_session_id` preserved
+
+#### Scenario 10: Resume Post TTL (COLD)
+
+- [ ] Cold resume: `state==COLD && _sdk_session_id is None && msg_count > 1`
+- [ ] `session_resuming` -> "Resuming session..." indicator
+- [ ] Null bytes stripped from system prompt
+
+#### Scenario 11: Backend Auto-Retry (error -> reconnecting)
+
+- [ ] `error` -> status='error', `reconnecting` -> status='streaming'
+- [ ] `streamStartTimeRef` reset on reconnecting
+- [ ] After retry: `result` fires normal drain if queue exists
+- [ ] 1-frame flash between error and reconnecting (acceptable)
+
+### F2: SSE Pipeline Integrity
+
+```bash
+cd /Users/gawan/Desktop/SwarmAI-Workspace/swarmai
+
+# [DONE] sentinel
+grep -n 'data: \[DONE\]' backend/routers/chat.py
+# Buffer flush
+grep -n 'decoder.decode()' desktop/src/services/chat.ts
+# Result sync
+grep -n 'setMessages(tabState.messages)' desktop/src/hooks/useChatStreamingLifecycle.ts
+# Heartbeat filter
+grep -n "event.type === 'heartbeat'" desktop/src/services/chat.ts
+```
+
+- [ ] `sse_with_heartbeat` sends `[DONE]` on completion
+- [ ] TextDecoder flushed on `done=true`
+- [ ] `[DONE]` triggers `onComplete()`
+- [ ] `result` syncs tabState.messages -> React
+- [ ] Heartbeats filtered before onMessage
+- [ ] Stall detection: reader + hook level
+
+### F3: Streaming Indicator Pipeline
+
+```bash
+cd /Users/gawan/Desktop/SwarmAI-Workspace/swarmai/desktop/src
+
+# Render condition
+grep 'isLastAssistantForStreaming' pages/ChatPage.tsx | head -2
+# Derivation
+grep -A3 'const lastAssistantIdx' pages/ChatPage.tsx
+# Null cases
+grep -A6 'function deriveStreamingActivity' hooks/useChatStreamingLifecycle.ts
+# Debounce reset
+grep -B1 -A3 'lastActivityChangeTimeRef.current = 0' hooks/useChatStreamingLifecycle.ts
+# Constants
+grep 'ELAPSED_DISPLAY_THRESHOLD_MS\|MIN_ACTIVITY_DISPLAY_MS' hooks/useChatStreamingLifecycle.ts | head -2
+# Tab switch sync
+grep -A8 'bumpStreamingDerivation' hooks/useChatStreamingLifecycle.ts | head -10
+# Fallback
+grep 'lastAssistantIdx < 0' pages/ChatPage.tsx
+```
+
+- [ ] `isLastAssistantForStreaming = isStreaming && assistant && idx === lastAssistantIdx`
+- [ ] `lastAssistantIdx` via `useMemo([messages])` with `.reduce()`
+- [ ] `deriveStreamingActivity` null for: !isStreaming, no assistant, empty content
+- [ ] Debounce resets `lastActivityChangeTimeRef = 0` on `!isStreaming`
+- [ ] `ELAPSED_DISPLAY_THRESHOLD_MS = 10000`, `MIN_ACTIVITY_DISPLAY_MS = 1500`
+- [ ] `bumpStreamingDerivation` derives immediately (no useEffect lag)
+- [ ] Fallback "Thinking..." when `isStreaming && lastAssistantIdx < 0`
+
+### F4: Live Smoke Test
+
+Open the running app and manually test. Skip if no running instance.
+
+| Test | Steps | Expected |
+|------|-------|----------|
+| Fresh send | New tab, send message | "Thinking..." -> "Running: {tool}" -> response complete |
+| Append | Send during streaming | Queued badge appears, drains after first response, indicator stays visible through transition |
+| Stop + drain | Send during streaming, click Stop | "Stopped" shown, queued message sends automatically |
+| Permission | Trigger a bash command needing approval | Permission UI shows, approve -> tool executes -> completes |
+| Tab switch | Start stream in tab A, switch to B and back | Indicator restores correctly, no flash |
+| Error recovery | (if reproducible) Kill backend mid-stream | Error shown, queued message drains or stays with cancel option |
+
+### Full Audit Report
 
 ```
-## Chat Brain Check Report
+## Full Audit -- YYYY-MM-DD
 
-### Automated Tests
-- E2E Scenarios: 14/14 PASS
-- Chat-related tests: N/N PASS (1 known skip)
+### Quick Check
+(paste quick check report)
 
-### Scenario Code Review
-| Scenario | Status | Issues |
-|----------|--------|--------|
-| 1. Fresh Send | PASS | — |
-| 2. Warm Send | PASS | — |
-| 3. Append While Streaming | PASS | — |
-| 4. Stop -> New Message | PASS | — |
-| 5. Resume Within TTL | PASS | — |
-| 6. Resume Post TTL | PASS | — |
+### F1: Scenarios
+| # | Scenario | Status | Notes |
+|---|----------|--------|-------|
+| 1 | Fresh Send (COLD) | | |
+| 2 | Warm Send (IDLE) | | |
+| 3 | Append While Streaming | | |
+| 4 | Stop -> Queue Drain | | |
+| 5 | Error -> Queue Drain | | |
+| 6 | Stop -> New Message | | |
+| 7 | Permission Approve | | |
+| 8 | Permission Deny | | |
+| 9 | Resume Within TTL | | |
+| 10 | Resume Post TTL | | |
+| 11 | Backend Auto-Retry | | |
 
-### SSE Pipeline
-- [DONE] sentinel: PASS
-- Buffer flush: PASS
-- Result sync: PASS
+### F2: SSE Pipeline
+(pass/fail per check)
 
-### Regression Patterns
-- Null bytes: CLEAN
-- Binary in skills: CLEAN
-- State derivation: CORRECT
+### F3: Indicator Pipeline
+(pass/fail per check)
 
-### TypeScript
-- Type check: CLEAN
+### F4: Live Smoke Test
+(pass/fail per test, or SKIPPED)
 
-### Verdict: SHIP IT / BLOCK (with reasons)
+**Verdict: SHIP IT / BLOCK**
 ```
+
+---
+
+## Reference: setIsStreaming(false) Audit Table
+
+Every call site. Update this table when adding new sites.
+
+| # | Location | Trigger | Followed by true? | Severity |
+|---|----------|---------|-------------------|----------|
+| 1 | lifecycle: `ask_user_question` | User input pause | Yes: handleAnswerQuestion | SAFE |
+| 2 | lifecycle: `cmd_permission_request` | Permission pause | Yes: handlePermissionDecision | SAFE |
+| 3 | lifecycle: `result` | Stream complete | Conditional: only if `!hasQueuedMessage` | SAFE |
+| 4 | lifecycle: `error` (userStopped) | Aborted stream | No | SAFE |
+| 5 | lifecycle: `error` (real SSE) | Backend error | Maybe: reconnecting follows | 1-frame flash OK |
+| 6 | lifecycle: compaction `kill` | Guard killed stream | No | SAFE |
+| 7 | lifecycle: errorHandler (userStopped) | Suppressed error | No | SAFE |
+| 8 | lifecycle: errorHandler (terminal) | Connection failure | Site C drain follows | SAFE |
+| 9 | lifecycle: completeHandler | SSE close | No (gen-guarded) + pre-guard drain | SAFE |
+| 10 | ChatPage: new tab init | Fresh tab | No | SAFE |
+| 11 | ChatPage: plugin command | Not a stream | No | SAFE |
+| 12 | ChatPage: empty content | Build failed | No | SAFE |
+| 13 | ChatPage: drain cleanup | Drain failed | No | SAFE |
+| 14 | ChatPage: permission deny | Deny decision | No | SAFE |
+| 15 | ChatPage: handleStop | User stop | Yes: Site B drain | "Stopped" first OK |
+
+**Rule:** Any new `setIsStreaming(false)` must be added here. If it can be followed by `true`, verify the transition is intentional (user action) or seamless (no false render frame).
+
+## Reference: Bug Classes
+
+| Bug Class | Root Cause | Detection | Fix Pattern |
+|-----------|-----------|-----------|-------------|
+| **false-to-true gap** | `false` then `true` with render gap | Q2.1 | Conditional: skip false when queue exists |
+| **stale handler** | Old onComplete/onError fires | Q2.2 | streamGen generation guard |
+| **orphaned queue** | Error kills stream, queue never drains | Q2.3 | 3 drain sites (A/B/C) |
+| **indicator cold-start** | displayedActivity resets on false | F3 debounce check | Keep isStreaming true through drain |
+| **invisible indicator** | Below viewport, stale scroll ref | F4 live test | resetUserScroll() in all drain sites |
+| **null byte crash** | Binary in context/skills | Q3.1 | Strip nulls in _spawn |
+| **stuck isStreaming** | Drain fails, true never cleared | Q2.5 | cleanupStreamingState in failure paths |
+| **dead code** | Handler for nonexistent event | Q2.7 | Remove, pass to standard handler |
+| **double-drain** | result + complete both drain | Q2.4 pre-guard | `!isStreaming` guard in pre-guard |
 
 ## When to Run
 
-- **Before any release** — mandatory gate
-- **After changes to**: session_unit.py, session_router.py, chat.py, useChatStreamingLifecycle.ts, ChatPage.tsx, chat.ts, context_injector.py, prompt_builder.py
-- **After chat bug reports** — before and after the fix
-- **Weekly** — proactive regression detection
+| Trigger | Tier |
+|---------|------|
+| Any change to chat files | Quick Check |
+| Before release | Full Audit |
+| After chat bug report (before AND after fix) | Full Audit |
+| Weekly proactive | Quick Check |
+| Major refactor (session, streaming, SSE) | Full Audit |
 
-## Known Acceptable Failures
-
-- `test_context_warning_bridge::test_yields_warn_event_above_70pct` — pre-existing mock issue with empty ResultMessage detection. Not a real bug.
+**Chat files:** session_unit.py, session_router.py, chat.py, useChatStreamingLifecycle.ts, ChatPage.tsx, chat.ts, context_injector.py, prompt_builder.py
