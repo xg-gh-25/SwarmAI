@@ -70,7 +70,35 @@ SwarmAI doesn't just use skills — it builds new ones when it hits capability g
 - **Correction capture** — mistakes are recorded as high-value entries so the same error never happens twice
 - **50+ built-in skills** — browser automation, PDF manipulation, spreadsheets, Slack, Outlook, Apple Reminders, web research, code review, and more
 
-### 4. Three-Column Command Center — Seamless Integration
+### 4. Autonomous Pipeline — From Requirement to PR
+
+Give SwarmAI a one-sentence requirement, and it drives the full development lifecycle:
+
+```
+"Add retry logic to the payment API"
+
+  [done] EVALUATE   ROI 4.2 → GO. Scope: httpx transport retry.
+  [done] THINK      3 alternatives (Minimal/Ideal/Creative). Recommending: built-in retry.
+  [done] PLAN       Design doc with 5 acceptance criteria.
+  [done] BUILD      47 lines changed, 2 files, atomic commits.
+  [done] REVIEW     Clean. No security findings.
+  [done] TEST       5/5 pass. 94% coverage.
+  [done] DELIVER    PR ready. Decision log attached.
+  [done] REFLECT    3 lessons written to IMPROVEMENT.md.
+```
+
+**8 stages, 7 artifact types, 5 pipeline profiles** (full/trivial/research/docs/bugfix). The agent classifies every decision as *mechanical* (auto-approve), *taste* (batch-review at delivery), or *judgment* (block and ask). Safety without noise.
+
+- **DDD Knowledge Layer** — 4 documents per project (PRODUCT.md, TECH.md, IMPROVEMENT.md, PROJECT.md) give the agent autonomous judgment: *Should we? Can we? Have we tried? Should we now?*
+- **ROI Gate** — scores every requirement before committing pipeline resources. Low-value tasks get deferred, not executed.
+- **Escalation Protocol** — 3 levels (INFORM / CONSULT / BLOCK). The agent acts confidently within its competence boundary and escalates cleanly outside it.
+- **Per-run artifact isolation** — each pipeline run gets its own `.artifacts/runs/<id>/` directory. Self-contained, portable, git-diffable.
+- **Budget tracking** — token consumption tracked per stage, auto-checkpoints before context exhaustion, historical calibration from past runs.
+- **Background execution** — pipelines run as scheduled jobs. Checkpoints create Radar todos visible even when you're away.
+
+This is the implementation of [AIDLC Phase 3 (AI-Management)](./Knowledge/AIDLC/2026-03-24-aidlc-phase3-high-level-design.md) — where AI makes autonomous decisions and humans step in when needed.
+
+### 5. Three-Column Command Center — Seamless Integration
 
 SwarmAI isn't three separate panels. It's **one integrated system** where the Chat Center orchestrates everything:
 
@@ -90,7 +118,7 @@ SwarmAI isn't three separate panels. It's **one integrated system** where the Ch
 - **Drag-to-chat** — drag any file from SwarmWS or any ToDo/artifact from Radar into a chat tab. The agent gets full context and starts executing immediately. No copy-paste, no re-explaining.
 - **Everything is connected** — when the agent writes a file, it shows up in the explorer. When it creates a ToDo, it appears in Radar. When you complete work, DailyActivity captures it automatically. The three panels are views of one unified workspace.
 
-### 5. Multi-Tab Parallel Sessions
+### 6. Multi-Tab Parallel Sessions
 
 Not a single chat thread — a **parallel command center**:
 
@@ -98,7 +126,7 @@ Not a single chat thread — a **parallel command center**:
 - **Tab persistence** — tabs survive app restarts with full conversation history
 - **Session isolation** — Tab 1 crashing does not affect Tab 2. Each tab has its own subprocess, state machine, and error recovery.
 
-### 6. Security — Human Always in Control
+### 7. Security — Human Always in Control
 
 Defense-in-depth: tool logger (audit trail) + command blocker (13 dangerous patterns) + human approval (permission dialog with persistent approvals) + skill access control. Plus workspace isolation, bash sandboxing, and error sanitization.
 
@@ -132,6 +160,7 @@ Claude Code is a powerful CLI coding agent. SwarmAI wraps the same Claude Agent 
 | **Self-evolution** | Builds new skills, captures corrections across sessions | No cross-session learning |
 | **Visual workspace** | File explorer, radar dashboard, drag-to-chat | Terminal only |
 | **Skills** | 50+ built-in (browser, PDF, Slack, Outlook, research...) | Tool use only |
+| **Autonomous pipeline** | 8-stage lifecycle with ROI gate, escalation, artifact chaining | Manual workflow |
 
 **TL;DR**: Claude Code is a coding assistant. SwarmAI is an agentic operating system for all knowledge work.
 
@@ -158,6 +187,7 @@ Code editors with AI autocomplete. Fundamentally different category:
 | **Memory** | Persistent across all sessions | Per-project context |
 | **Execution** | Full agent (browse, email, research, create docs) | Code suggestions + chat |
 | **Self-evolution** | Builds new capabilities | Static feature set |
+| **Autonomous pipeline** | Requirement → PR in one command | Not available |
 
 ### vs OpenClaw
 
