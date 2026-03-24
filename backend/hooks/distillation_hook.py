@@ -24,6 +24,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import subprocess
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -34,6 +35,16 @@ from scripts.locked_write import LockedWriteError
 from hooks.evolution_maintenance_hook import _append_changelog
 
 logger = logging.getLogger(__name__)
+
+# Keywords that signal an implementation claim (as opposed to a decision or design choice).
+# Claims containing these keywords are verified against git before promotion to MEMORY.md.
+_IMPLEMENTATION_KEYWORDS = re.compile(
+    r"\b(?:implement(?:ed|s|ing)?|ship(?:ped|s)?|built|creat(?:ed|ing)|"
+    r"complet(?:ed|ing)|fix(?:ed)?|deploy(?:ed)?|launch(?:ed)?|"
+    r"refactor(?:ed)?|migrat(?:ed)?|rewrit(?:ten|e)|"
+    r"delet(?:ed|ing)|remov(?:ed|ing)|replac(?:ed|ing))\b",
+    re.IGNORECASE,
+)
 
 UNDISTILLED_THRESHOLD = 0  # Run every session close (was 2 — caused 1-2 day staleness)
 FLAG_FILENAME = ".needs_distillation"
@@ -311,6 +322,14 @@ class DistillationTriggerHook:
             except Exception as exc:
                 logger.warning("Failed to distill %s: %s", da_file.name, exc)
                 continue
+
+        # Git-verify implementation claims before promotion (COE C005 fix).
+        # Claims with implementation keywords that don't match any git commit
+        # get tagged [UNVERIFIED] to prevent confident false memories.
+        source_repo = self._get_source_repo_path()
+        if source_repo:
+            all_decisions = self._tag_unverified_claims(all_decisions, source_repo)
+            all_lessons = self._tag_unverified_claims(all_lessons, source_repo)
 
         # Supersede older entries about the same topic before writing.
         # Without this, "L0+L1 implemented" (session A) and "L0-L4
@@ -614,6 +633,137 @@ class DistillationTriggerHook:
                 keep_indices.add(best)
 
         return [e for i, e in enumerate(entries) if i in keep_indices]
+
+    @staticmethod
+    def _get_source_repo_path() -> Path | None:
+        """Resolve the SwarmAI source repo path for git verification.
+
+        Checks known paths and TECH.md config. Returns None if no git
+        repo is found (verification is skipped gracefully).
+        """
+        candidates = [
+            Path("/Users/gawan/Desktop/SwarmAI-Workspace/swarmai"),
+        ]
+        # Try TECH.md for configured path
+        try:
+            ws = Path(initialization_manager.get_cached_workspace_path())
+            tech_md = ws / "Projects" / "SwarmAI" / "TECH.md"
+            if tech_md.exists():
+                content = tech_md.read_text(encoding="utf-8")
+                for line in content.splitlines():
+                    if "Clone:" in line or "local:" in line.lower():
+                        paths = re.findall(r"(/\S+/swarmai/?)", line)
+                        for p in paths:
+                            candidates.insert(0, Path(p))
+        except Exception:
+            pass
+
+        for path in candidates:
+            if path.is_dir() and (path / ".git").exists():
+                return path
+        return None
+
+    @staticmethod
+    def _verify_claim_against_git(claim: str, repo_path: Path) -> bool:
+        """Check if an implementation claim is supported by git history.
+
+        Non-implementation claims (no implementation keywords) return True
+        immediately — they don't need git verification.
+
+        For implementation claims, extracts key subject words and searches
+        git log. Returns True if ANY matching commit is found.
+
+        Args:
+            claim: The text of the decision/lesson being promoted.
+            repo_path: Path to the git repository.
+
+        Returns:
+            True if claim is verified (or not an implementation claim),
+            False if claim makes an unverifiable implementation assertion.
+        """
+        # Only verify claims that contain implementation keywords
+        if not _IMPLEMENTATION_KEYWORDS.search(claim):
+            return True
+
+        # Extract subject words for git search (remove common filler)
+        _FILLER = frozenset({
+            "a", "an", "the", "is", "was", "were", "are", "be", "been",
+            "to", "of", "in", "for", "on", "at", "by", "with", "from",
+            "and", "or", "not", "no", "but", "that", "this", "it",
+            "all", "now", "have", "has", "had", "fully", "successfully",
+            "we", "our", "i", "my", "also", "just", "still", "only",
+        })
+        # Strip date prefix and markdown
+        cleaned = re.sub(r"^\d{4}-\d{2}-\d{2}:\s*", "", claim)
+        cleaned = cleaned.replace("**", "").replace("`", "")
+        words = re.findall(r"[a-zA-Z][a-zA-Z0-9_.-]+", cleaned.lower())
+        subject_words = [w for w in words if w not in _FILLER and len(w) > 2
+                         and w not in {kw.rstrip("edsing") for kw in
+                         ["implemented", "shipped", "built", "created",
+                          "completed", "fixed", "deployed", "launched",
+                          "refactored", "migrated", "rewritten",
+                          "deleted", "removed", "replaced"]}]
+
+        if not subject_words:
+            return True  # No meaningful subject to search for
+
+        # Search git log for each significant subject word
+        # Use the top 3 most distinctive words (longer = more distinctive)
+        search_words = sorted(subject_words, key=len, reverse=True)[:3]
+
+        for word in search_words:
+            try:
+                result = subprocess.run(
+                    ["git", "log", "--all", f"--grep={word}",
+                     "--oneline", "--max-count=3", "-i"],
+                    cwd=str(repo_path),
+                    capture_output=True, text=True, timeout=5,
+                )
+                if result.returncode == 0 and result.stdout.strip():
+                    return True  # Found matching commit
+            except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+                return True  # Can't verify — give benefit of the doubt
+
+        # Also check file names — maybe the feature exists but commit messages don't mention it
+        for word in search_words[:2]:
+            try:
+                result = subprocess.run(
+                    ["git", "ls-files", f"*{word}*"],
+                    cwd=str(repo_path),
+                    capture_output=True, text=True, timeout=5,
+                )
+                if result.returncode == 0 and result.stdout.strip():
+                    return True
+            except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+                return True
+
+        return False
+
+    def _tag_unverified_claims(
+        self,
+        entries: list[str],
+        repo_path: Path,
+    ) -> list[str]:
+        """Tag implementation claims that fail git verification with [UNVERIFIED].
+
+        Non-implementation entries pass through unchanged.
+        """
+        tagged: list[str] = []
+        for entry in entries:
+            # Extract the claim text (after "- YYYY-MM-DD: " prefix)
+            claim_match = re.match(r"^(-\s*\d{4}-\d{2}-\d{2}:\s*)(.*)", entry)
+            if not claim_match:
+                tagged.append(entry)
+                continue
+
+            prefix, claim = claim_match.group(1), claim_match.group(2)
+            if self._verify_claim_against_git(claim, repo_path):
+                tagged.append(entry)
+            else:
+                tagged.append(f"{prefix}[UNVERIFIED] {claim}")
+                logger.info("Tagged unverified claim: %s", claim[:80])
+
+        return tagged
 
     def _write_competence(
         self,

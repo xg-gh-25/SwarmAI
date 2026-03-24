@@ -203,6 +203,13 @@ def _format_session_entry(summary: StructuredSummary, context: HookContext) -> s
             lines.append(f"- {c}")
         lines.append("")
 
+    # --- Git ground truth (actual commits during session) ---
+    if summary.git_commits:
+        lines.append("**Git activity:**")
+        for c in summary.git_commits[:10]:  # Cap to avoid bloat
+            lines.append(f"- `{c}`")
+        lines.append("")
+
     # --- COE context (when investigating a problem) ---
     if summary.coe_signal and summary.coe_topic:
         lines.append(f"**COE:** `{summary.coe_signal}` — {summary.coe_topic}")

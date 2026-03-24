@@ -93,6 +93,10 @@ class StructuredSummary:
     coe_topic: str = ""       # Problem topic for cross-session clustering
     # Corrections: user corrected agent behavior (auto-captured for EVOLUTION.md)
     corrections: list[str] = field(default_factory=list)
+    # Git ground truth: actual commits made during the session timeframe.
+    # Populated by DailyActivityExtractionHook from `git log --since=<session_start>`.
+    # Gives distillation a verifiable signal for implementation claims.
+    git_commits: list[str] = field(default_factory=list)
     # Legacy fields (kept for backward compat, will be empty for new sessions)
     actions_taken: list[str] = field(default_factory=list)
     reasoning: list[str] = field(default_factory=list)
