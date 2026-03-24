@@ -18,6 +18,7 @@ from .workspace_api import router as workspace_api_router
 from .projects import router as projects_router
 from .tscc import tscc_router as tscc_router
 from .artifacts import router as artifacts_router
+from .escalations import router as escalations_router
 
 __all__ = [
     "agents_router",
@@ -39,4 +40,5 @@ __all__ = [
     "projects_router",
     "tscc_router",
     "artifacts_router",
+    "escalations_router",
 ]

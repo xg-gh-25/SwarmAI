@@ -610,9 +610,24 @@ class SwarmWorkspaceManager:
             if not manifest.exists():
                 manifest.write_text(json.dumps({
                     "project": DEFAULT_PROJECT_NAME,
-                    "pipeline_state": "think",
+                    "pipeline_state": "evaluate",
                     "updated_at": datetime.now(timezone.utc).isoformat(),
                     "artifacts": [],
+                }, indent=2), encoding="utf-8")
+
+            # Ensure decision-strategy.json for ROI triage
+            strategy = project_dir / "decision-strategy.json"
+            if not strategy.exists():
+                strategy.write_text(json.dumps({
+                    "project": DEFAULT_PROJECT_NAME,
+                    "weights": {
+                        "strategic_alignment": 0.35,
+                        "current_priority": 0.25,
+                        "historical_leverage": 0.15,
+                        "inverse_feasibility": 0.25,
+                    },
+                    "thresholds": {"go": 3.5, "defer": 2.0},
+                    "calibration_history": [],
                 }, indent=2), encoding="utf-8")
 
             # Ensure .project.json metadata (for project CRUD compatibility)
@@ -674,7 +689,7 @@ class SwarmWorkspaceManager:
                 filepath = project_dir / filename
                 if not filepath.exists():
                     filepath.write_text(
-                        template.format(project_name=project_name),
+                        template.replace("{project_name}", project_name),
                         encoding="utf-8",
                     )
                     created.append(filename)
@@ -686,11 +701,30 @@ class SwarmWorkspaceManager:
             if not manifest.exists():
                 manifest.write_text(json.dumps({
                     "project": project_name,
-                    "pipeline_state": "think",
+                    "pipeline_state": "evaluate",
                     "updated_at": datetime.now(timezone.utc).isoformat(),
                     "artifacts": [],
                 }, indent=2), encoding="utf-8")
                 created.append(".artifacts/manifest.json")
+
+            # Ensure decision-strategy.json for ROI triage weights
+            strategy = project_dir / "decision-strategy.json"
+            if not strategy.exists():
+                strategy.write_text(json.dumps({
+                    "project": project_name,
+                    "weights": {
+                        "strategic_alignment": 0.35,
+                        "current_priority": 0.25,
+                        "historical_leverage": 0.15,
+                        "inverse_feasibility": 0.25,
+                    },
+                    "thresholds": {
+                        "go": 3.5,
+                        "defer": 2.0,
+                    },
+                    "calibration_history": [],
+                }, indent=2), encoding="utf-8")
+                created.append("decision-strategy.json")
 
             return created
 
@@ -701,6 +735,160 @@ class SwarmWorkspaceManager:
                 project_name, ", ".join(created),
             )
         return created
+
+    # ── TECH.md auto-population from codebase scan ─────────────────────
+
+    async def scan_and_populate_tech(
+        self,
+        project_name: str,
+        codebase_path: str,
+        workspace_path: str = None,
+    ) -> dict:
+        """Scan a codebase directory and populate TECH.md with detected info.
+
+        Detects: language, framework, test runner, dev commands, git remote.
+        Only fills in sections that are still at template placeholder values.
+
+        Args:
+            project_name: Name of existing project.
+            codebase_path: Absolute path to the codebase directory.
+            workspace_path: Workspace root. If None, uses default.
+
+        Returns:
+            dict with detected info: {language, framework, test_cmd, dev_cmd, git_remote}
+        """
+        workspace_path = self._resolve_workspace_path(workspace_path)
+        project_dir = Path(workspace_path) / "Projects" / project_name
+        tech_path = project_dir / "TECH.md"
+
+        if not project_dir.is_dir():
+            raise ValueError(f"Project '{project_name}' not found")
+
+        cb = Path(codebase_path).expanduser().resolve()
+        if not cb.is_dir():
+            raise ValueError(f"Codebase path not found: {codebase_path}")
+
+        def _scan():
+            detected = {
+                "codebase_path": str(cb),
+                "language": None,
+                "framework": None,
+                "test_cmd": None,
+                "dev_cmd": None,
+                "build_cmd": None,
+                "git_remote": None,
+            }
+
+            # Detect from config files
+            if (cb / "pyproject.toml").exists():
+                detected["language"] = "Python"
+                detected["test_cmd"] = "pytest"
+                toml_text = (cb / "pyproject.toml").read_text(encoding="utf-8", errors="replace")
+                if "fastapi" in toml_text.lower():
+                    detected["framework"] = "FastAPI"
+                elif "django" in toml_text.lower():
+                    detected["framework"] = "Django"
+                elif "flask" in toml_text.lower():
+                    detected["framework"] = "Flask"
+
+            if (cb / "package.json").exists():
+                try:
+                    pkg = json.loads((cb / "package.json").read_text(encoding="utf-8"))
+                    scripts = pkg.get("scripts", {})
+                    deps = {**pkg.get("dependencies", {}), **pkg.get("devDependencies", {})}
+
+                    if not detected["language"]:
+                        detected["language"] = "TypeScript" if "typescript" in deps else "JavaScript"
+
+                    if "next" in deps:
+                        detected["framework"] = "Next.js"
+                    elif "react" in deps:
+                        detected["framework"] = (detected["framework"] or "") + " + React" if detected["framework"] else "React"
+                    elif "vue" in deps:
+                        detected["framework"] = "Vue.js"
+
+                    if "vitest" in deps:
+                        detected["test_cmd"] = detected["test_cmd"] or "npx vitest run"
+                    elif "jest" in deps:
+                        detected["test_cmd"] = detected["test_cmd"] or "npx jest"
+
+                    if "dev" in scripts:
+                        detected["dev_cmd"] = scripts["dev"]
+                    if "build" in scripts:
+                        detected["build_cmd"] = scripts["build"]
+                except (json.JSONDecodeError, OSError):
+                    pass
+
+            if (cb / "Cargo.toml").exists():
+                detected["language"] = detected["language"] or "Rust"
+                detected["test_cmd"] = detected["test_cmd"] or "cargo test"
+                detected["build_cmd"] = "cargo build"
+
+            if (cb / "go.mod").exists():
+                detected["language"] = detected["language"] or "Go"
+                detected["test_cmd"] = detected["test_cmd"] or "go test ./..."
+                detected["build_cmd"] = "go build"
+
+            # Git remote
+            git_config = cb / ".git" / "config"
+            if git_config.exists():
+                try:
+                    for line in git_config.read_text(encoding="utf-8").splitlines():
+                        line = line.strip()
+                        if line.startswith("url = "):
+                            detected["git_remote"] = line[6:].strip()
+                            break
+                except OSError:
+                    pass
+
+            return detected
+
+        detected = await anyio.to_thread.run_sync(_scan)
+
+        # Update TECH.md if it exists and has placeholder content
+        if tech_path.exists():
+            def _update_tech():
+                content = tech_path.read_text(encoding="utf-8")
+                modified = False
+
+                # Only update sections that still have placeholder text
+                # Replace codebase placeholder (multiple possible variants)
+                codebase_placeholders = [
+                    "_Absolute path or repo URL to the project's source code._",
+                    "_Set this to your local SwarmAI source path after cloning._",
+                    "_Set this to your project's source path after cloning._",
+                    "_Set this to your local SwarmAI source path, e.g.: /path/to/swarmai/_",
+                    "_Set this to your project's source path._",
+                ]
+                if detected["codebase_path"]:
+                    path_line = detected["codebase_path"]
+                    if detected.get("git_remote"):
+                        path_line += f"\n- **Git:** {detected['git_remote']}"
+                    for placeholder in codebase_placeholders:
+                        if placeholder in content:
+                            content = content.replace(placeholder, path_line)
+                            modified = True
+                            break
+
+                if ("_e.g., Python" in content or "_e.g., FastAPI" in content) and detected.get("language"):
+                    lang = detected["language"]
+                    fw = detected.get("framework", "")
+                    test = detected.get("test_cmd", "")
+                    content = content.replace("_e.g., Python 3.12, TypeScript 5_", lang)
+                    content = content.replace("_e.g., FastAPI, Next.js_", fw or "_not detected_")
+                    content = content.replace("_e.g., SQLite, PostgreSQL_", "_not detected_")
+                    content = content.replace("_e.g., pytest, vitest_", test or "_not detected_")
+                    modified = True
+
+                if modified:
+                    tech_path.write_text(content, encoding="utf-8")
+                return modified
+
+            updated = await anyio.to_thread.run_sync(_update_tech)
+            if updated:
+                logger.info("Auto-populated TECH.md for '%s' from %s", project_name, cb)
+
+        return detected
 
     # ── PROJECTS.md auto-refresh ──────────────────────────────────────
 

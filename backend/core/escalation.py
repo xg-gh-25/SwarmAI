@@ -1,14 +1,15 @@
 """Escalation Protocol — human-in-the-loop for the autonomous pipeline.
 
 Provides structured escalation from any pipeline stage when Swarm needs
-human judgment.  v1 implements L0 INFORM and L2 BLOCK in-chat only.
+human judgment.  v2 implements all three levels with Radar todo integration.
 
 Three escalation levels:
 
 - **L0 INFORM** — "FYI, I did this."  Pipeline continues.  No action needed.
-- **L1 CONSULT** — "I chose X, override?"  Pipeline continues with timeout.
-  (v2 — not implemented yet)
+- **L1 CONSULT** — "I chose X, override within 24h."  Pipeline continues.
+  Auto-accepts recommendation on timeout.  Creates Radar todo for async review.
 - **L2 BLOCK** — "I need your input."  Pipeline pauses until human responds.
+  Creates high-priority Radar todo.
 
 Escalation data is delivered to the frontend via SSE ``escalation`` events
 and rendered by ``EscalationBlock.tsx``.
@@ -18,11 +19,13 @@ At L1+ (project exists), escalations are persisted to ``.artifacts/escalations/`
 and appear in Radar todos for async review.
 
 Public API:
-  - ``inform()``          — L0: emit FYI annotation (no action needed)
-  - ``block()``           — L2: emit blocking question (pipeline pauses)
-  - ``resolve()``         — Resolve an open L2 escalation
-  - ``get_open()``        — List open escalations for a project
-  - ``build_sse_event()`` — Build SSE event dict from an Escalation
+  - ``inform()``            — L0: emit FYI annotation (no action needed)
+  - ``consult()``           — L1: emit override-window question (pipeline continues)
+  - ``block()``             — L2: emit blocking question (pipeline pauses)
+  - ``resolve()``           — Resolve an open escalation
+  - ``resolve_expired()``   — Auto-resolve expired L1 CONSULTs
+  - ``create_radar_todo()`` — Create Radar todo from L1/L2 escalation
+  - ``build_sse_event()``   — Build SSE event dict from an Escalation
 """
 
 from __future__ import annotations
@@ -30,7 +33,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from enum import IntEnum
 from pathlib import Path
 from uuid import uuid4
@@ -53,46 +56,52 @@ class Level(IntEnum):
 # escalation_triggers SKILL.md metadata.
 TRIGGER_TYPES = frozenset({
     # EVALUATE stage
-    "AMBIGUOUS_SCOPE",
-    "CONFLICTING_PRIORITIES",
-    "LOW_CONFIDENCE_ROI",
-    "CLEAR_EVALUATION",
+    "AMBIGUOUS_SCOPE",           # L2: can't determine what "done" looks like
+    "CONFLICTING_PRIORITIES",    # L2: PRODUCT.md priorities contradict
+    "LOW_CONFIDENCE_ROI",        # L1: borderline ROI (2.5-3.5)
+    "MISSING_INFORMATION",       # L2: can't answer 2+ of 4 DDD questions
+    "CLEAR_EVALUATION",          # L0: high-confidence go/defer/reject
 
-    # THINK stage
-    "INCONCLUSIVE_RESEARCH",
-    "NO_CLEAR_WINNER",
-    "CLEAR_RECOMMENDATION",
+    # THINK stage (research + alternatives)
+    "INCONCLUSIVE_RESEARCH",     # L1: multiple contradictory sources
+    "NO_CLEAR_WINNER",           # L1: all alternatives have similar tradeoffs
+    "CLEAR_RECOMMENDATION",      # L0: clear winner with evidence
 
-    # PLAN stage
-    "UNCOMMITTED_DEPENDENCY",
-    "DEVIATES_FROM_TECH",
-    "FOLLOWS_PATTERNS",
+    # PLAN stage (design doc)
+    "UNCOMMITTED_DEPENDENCY",    # L2: design requires new dep / API change
+    "DEVIATES_FROM_TECH",        # L1: approach differs from TECH.md conventions
+    "FOLLOWS_PATTERNS",          # L0: design follows established patterns
 
     # BUILD stage
-    "EXCEEDS_SCOPE",
-    "IMPLEMENTATION_DIFFERS",
-    "BUILT_AS_DESIGNED",
+    "EXCEEDS_SCOPE",             # L2: changes exceed design_doc scope
+    "IMPLEMENTATION_DIFFERS",    # L1: practical constraint forced deviation
+    "BUILT_AS_DESIGNED",         # L0: implemented per design
 
-    # REVIEW stage
-    "CRITICAL_SECURITY_FINDING",
-    "NEEDS_HUMAN_JUDGMENT",
-    "CLEAN_REVIEW",
+    # REVIEW stage (code review + security)
+    "CRITICAL_SECURITY_FINDING", # L2: high-confidence security issue
+    "NEEDS_HUMAN_JUDGMENT",      # L1: medium findings, human decides severity
+    "CLEAN_REVIEW",              # L0: no findings or low-severity only
 
-    # TEST stage
-    "WTF_GATE_TRIGGERED",
-    "UNEXPECTED_REGRESSION",
-    "FLAKY_TESTS",
-    "ALL_PASS",
+    # TEST stage (QA)
+    "WTF_GATE_TRIGGERED",        # L2: fix attempts getting risky
+    "UNEXPECTED_REGRESSION",     # L2: failures outside changeset scope
+    "FLAKY_TESTS",               # L1: flaky — skip or investigate?
+    "ALL_PASS",                  # L0: all tests pass
 
     # DELIVER stage
-    "UNRESOLVED_ESCALATIONS",
-    "PR_NEEDS_POLISH",
-    "CLEAN_DELIVERY",
+    "UNRESOLVED_ESCALATIONS",    # L2: open L1 consultations from earlier stages
+    "PR_NEEDS_POLISH",           # L1: PR description needs human touch
+    "CLEAN_DELIVERY",            # L0: ready for merge
 
-    # Cross-cutting
-    "FIRST_TIME_DOMAIN",
-    "COST_THRESHOLD",
-    "RESOURCE_CONTENTION",
+    # REFLECT stage
+    "CONTRADICTS_LESSON",        # L1: new lesson contradicts IMPROVEMENT.md entry
+    "LESSONS_CAPTURED",          # L0: added N lessons to IMPROVEMENT.md
+
+    # Cross-cutting (any stage)
+    "FIRST_TIME_DOMAIN",         # L1: novel domain with no prior history
+    "COST_THRESHOLD",            # L2: operation exceeds token/cost budget
+    "RESOURCE_CONTENTION",       # L2: too many concurrent pipelines
+    "NON_OBVIOUS_CHOICE",        # L1: generic — used when no specific trigger fits
 })
 
 
@@ -223,6 +232,52 @@ def block(
     )
 
 
+def consult(
+    title: str,
+    situation: str,
+    options: list[Option],
+    *,
+    trigger: str = "NON_OBVIOUS_CHOICE",
+    recommendation: str | None = None,
+    pipeline_stage: str = "",
+    project: str | None = None,
+    evidence: list[str] | None = None,
+    upstream_artifacts: list[str] | None = None,
+    timeout_hours: int = 24,
+) -> Escalation:
+    """Create an L1 CONSULT escalation — pipeline continues, override window.
+
+    Swarm acts on its ``recommendation`` immediately.  The human has
+    ``timeout_hours`` to override.  If no response, the recommendation
+    is auto-accepted.
+
+    Args:
+        timeout_hours: Hours before auto-accepting the recommendation.
+            Default 24h.  Set to 0 to disable timeout (acts like BLOCK).
+    """
+    now = datetime.now(timezone.utc)
+    timeout_at = (
+        (now + timedelta(hours=timeout_hours)).isoformat()
+        if timeout_hours > 0 else None
+    )
+    return Escalation(
+        id=_make_id(),
+        level=Level.CONSULT,
+        trigger=trigger,
+        title=title,
+        situation=situation,
+        options=options,
+        recommendation=recommendation,
+        evidence=evidence or [],
+        project=project,
+        pipeline_stage=pipeline_stage,
+        upstream_artifacts=upstream_artifacts or [],
+        status="open",
+        created_at=now.isoformat(),
+        timeout_at=timeout_at,
+    )
+
+
 def resolve(esc: Escalation, resolution: str, resolved_by: str = "user") -> Escalation:
     """Resolve an open escalation with the human's decision.
 
@@ -320,3 +375,158 @@ def get_open_escalations(workspace_root: Path, project: str) -> list[Escalation]
         except Exception:
             continue
     return results
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Radar Todo Integration (L1 + L2 — creates a self-contained work packet)
+# ─────────────────────────────────────────────────────────────────────────────
+
+_DB_PATH = Path.home() / ".swarm-ai" / "data.db"
+_WORKSPACE_ID = "swarmws"
+
+
+def create_radar_todo(esc: Escalation, db_path: Path | None = None) -> str | None:
+    """Create a Radar todo from an L1/L2 escalation.
+
+    Writes directly to SQLite (same pattern as ``todo_db.py``).
+    Returns the todo ID, or None if creation failed or not applicable.
+
+    L0 INFORM escalations are skipped (no todo needed).
+    """
+    if esc.level == Level.INFORM:
+        return None
+
+    import sqlite3 as _sqlite3
+
+    db = db_path or _DB_PATH
+    if not db.exists():
+        logger.warning("escalation.radar_todo: DB not found at %s", db)
+        return None
+
+    try:
+        conn = _sqlite3.connect(str(db), timeout=5.0)
+        conn.execute("PRAGMA journal_mode=WAL")
+
+        todo_id = str(uuid4())
+        now = _now_iso()
+        level_name = Level(esc.level).name
+        priority = "high" if esc.level == Level.BLOCK else "medium"
+
+        # Build linked_context with full escalation packet
+        linked_context = json.dumps({
+            "escalation_id": esc.id,
+            "escalation_level": level_name,
+            "project": esc.project,
+            "pipeline_stage": esc.pipeline_stage,
+            "trigger": esc.trigger,
+            "options": [asdict(o) for o in esc.options],
+            "recommendation": esc.recommendation,
+            "evidence": esc.evidence,
+            "timeout_at": esc.timeout_at,
+            "next_step": f"Resolve escalation: {esc.title}",
+            "acceptance": "Choose an option or discuss further",
+        })
+
+        # Description includes the situation + options for quick scanning
+        options_text = "\n".join(
+            f"  {i+1}. {o.label}{' (recommended)' if o.is_recommendation else ''}"
+            for i, o in enumerate(esc.options)
+        )
+        description = f"{esc.situation}\n\nOptions:\n{options_text}" if options_text else esc.situation
+
+        conn.execute(
+            """INSERT INTO todos (id, workspace_id, title, description, source,
+               source_type, status, priority, due_date, linked_context, task_id,
+               created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, NULL, ?, ?)""",
+            (
+                todo_id, _WORKSPACE_ID,
+                f"[{level_name}] {esc.title}",
+                description,
+                f"escalation:{esc.id}",
+                "ai_detected",
+                priority,
+                esc.timeout_at,  # due_date = timeout for visual urgency
+                linked_context,
+                now, now,
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+        logger.info(
+            "escalation.radar_todo id=%s esc=%s level=%s priority=%s",
+            todo_id, esc.id, level_name, priority,
+        )
+        return todo_id
+
+    except Exception as exc:
+        logger.warning("escalation.radar_todo failed esc=%s: %s", esc.id, exc)
+        return None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Timeout Resolution (L1 CONSULT — auto-accept on expiry)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def resolve_expired(workspace_root: Path, project: str) -> list[Escalation]:
+    """Find and auto-resolve expired L1 CONSULT escalations.
+
+    L1 escalations with ``timeout_at`` in the past are resolved with
+    Swarm's recommendation (or "deferred" if no recommendation).
+
+    Call this at session start or periodically — it's idempotent.
+
+    Returns the list of escalations that were auto-resolved.
+    """
+    open_escs = get_open_escalations(workspace_root, project)
+    now = datetime.now(timezone.utc)
+    resolved_list = []
+
+    for esc in open_escs:
+        if esc.level != Level.CONSULT or not esc.timeout_at:
+            continue
+
+        try:
+            timeout = datetime.fromisoformat(esc.timeout_at)
+            if now <= timeout:
+                continue  # Not expired yet
+        except (ValueError, TypeError):
+            continue  # Invalid timestamp — skip
+
+        # Auto-resolve with recommendation or "deferred"
+        resolution = esc.recommendation or "deferred (timeout)"
+        resolved_esc = resolve(esc, resolution=resolution, resolved_by="timeout")
+        save_escalation(workspace_root, resolved_esc)
+
+        # Also mark the Radar todo as handled
+        _mark_todo_handled(esc.id)
+
+        resolved_list.append(resolved_esc)
+        logger.info(
+            "escalation.timeout_resolved id=%s resolution=%s project=%s",
+            esc.id, resolution, project,
+        )
+
+    return resolved_list
+
+
+def _mark_todo_handled(escalation_id: str, db_path: Path | None = None) -> None:
+    """Mark the Radar todo associated with an escalation as handled."""
+    import sqlite3 as _sqlite3
+
+    db = db_path or _DB_PATH
+    if not db.exists():
+        return
+
+    try:
+        conn = _sqlite3.connect(str(db), timeout=5.0)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute(
+            "UPDATE todos SET status = 'handled', updated_at = ? WHERE source = ?",
+            (_now_iso(), f"escalation:{escalation_id}"),
+        )
+        conn.commit()
+        conn.close()
+    except Exception as exc:
+        logger.warning("escalation.mark_todo_handled failed esc=%s: %s", escalation_id, exc)

@@ -64,6 +64,12 @@ class SkillInfo:
 
     ``content`` is ``None`` when loaded in cache/list mode and populated
     on demand for detail requests.
+
+    ``consumes_artifacts`` and ``produces_artifact`` are optional metadata
+    from the SKILL.md YAML frontmatter.  When present, the artifact
+    registry auto-discovers upstream artifacts for skills that declare
+    ``consumes_artifacts``, and auto-publishes output for skills that
+    declare ``produces_artifact``.
     """
 
     folder_name: str
@@ -73,6 +79,8 @@ class SkillInfo:
     source_tier: Literal["built-in", "user", "plugin"]
     path: Path
     content: str | None = None
+    consumes_artifacts: tuple[str, ...] = ()
+    produces_artifact: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -213,6 +221,15 @@ def parse_skill_md(
         )
         description = f"Skill: {folder_name}"
 
+    # --- Artifact metadata (optional) ---
+    consumes_raw = meta.get("consumes_artifacts", []) if meta else []
+    if isinstance(consumes_raw, str):
+        consumes_raw = [consumes_raw]
+    consumes = tuple(str(t).strip() for t in consumes_raw if t)
+
+    produces_raw = meta.get("produces_artifact") if meta else None
+    produces = str(produces_raw).strip() if produces_raw else None
+
     return SkillInfo(
         folder_name=folder_name,
         name=str(name),
@@ -221,6 +238,8 @@ def parse_skill_md(
         source_tier=source_tier,
         path=path.parent,
         content=body if load_content else None,
+        consumes_artifacts=consumes,
+        produces_artifact=produces,
     )
 
 
@@ -262,6 +281,76 @@ def format_skill_md(
     ).rstrip("\n")
 
     return f"---\n{frontmatter}\n---\n\n{content}"
+
+
+# ---------------------------------------------------------------------------
+# Artifact context injection for skills
+# ---------------------------------------------------------------------------
+
+
+def discover_artifacts_for_skill(
+    skill_info: SkillInfo,
+    project: str | None,
+    workspace_root: Path | None = None,
+) -> str:
+    """Discover upstream artifacts and format them as context for a skill.
+
+    If the skill declares ``consumes_artifacts`` and a project is active,
+    reads the artifact registry and returns a markdown block summarizing
+    each discovered artifact.  Returns empty string if no artifacts found
+    or no project context.
+
+    This is designed to be prepended to a skill's content when injecting
+    into the agent's prompt.
+
+    Args:
+        skill_info: Parsed skill metadata (must have consumes_artifacts).
+        project: Active project name, or None (L0 — returns "").
+        workspace_root: Path to SwarmWS root. Auto-detected if None.
+
+    Returns:
+        Markdown string with artifact summaries, or "".
+    """
+    if not skill_info.consumes_artifacts or not project:
+        return ""
+
+    if workspace_root is None:
+        workspace_root = Path.home() / ".swarm-ai" / "SwarmWS"
+
+    try:
+        from core.artifact_registry import ArtifactRegistry
+        reg = ArtifactRegistry(workspace_root)
+        artifacts = reg.discover(project, *skill_info.consumes_artifacts)
+    except Exception:
+        return ""
+
+    if not artifacts:
+        return ""
+
+    lines = [
+        "---",
+        f"## Upstream Artifacts (auto-discovered for {project})",
+        "",
+    ]
+    for a in artifacts:
+        lines.append(f"### {a.type} — {a.summary}")
+        lines.append(f"- **Producer:** {a.producer}")
+        lines.append(f"- **ID:** {a.id}")
+        if a.data:
+            # Include key fields from data (truncated for context budget)
+            for key in ("summary", "key_findings", "recommendation",
+                        "acceptance_criteria", "scope", "decisions",
+                        "files_changed", "findings", "passed", "failed"):
+                if key in a.data:
+                    val = a.data[key]
+                    if isinstance(val, list) and len(val) > 5:
+                        val = val[:5] + [f"... ({len(a.data[key])} total)"]
+                    lines.append(f"- **{key}:** {val}")
+        lines.append("")
+
+    lines.append("---")
+    lines.append("")
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------

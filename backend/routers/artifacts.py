@@ -1,28 +1,24 @@
-"""FastAPI router for the Artifacts API (git-derived, read-only).
+"""FastAPI router for the Artifacts API.
 
-This module exposes a single endpoint that returns recently modified files
-from the workspace git tree.  No new database tables are created — artifacts
-are derived on-the-fly from ``git log``.
+Two artifact systems coexist:
+
+1. **Git-derived artifacts** (``GET /artifacts/recent``) — recently modified
+   files from the workspace git tree.  Read-only, no new database tables.
+
+2. **Pipeline artifacts** (``GET/POST /artifacts/pipeline/*``) — typed skill
+   output chaining via the ``ArtifactRegistry``.  Filesystem-backed under
+   ``Projects/<project>/.artifacts/``.  Supports publish, discover,
+   pipeline state, and supersede operations.
 
 Public endpoints:
 
-- ``GET /artifacts/recent`` — Return recently modified files sorted by
-  modification time (newest first).
-
-Helper constants:
-
-- ``EXTENSION_TYPE_MAP``   — Maps file extensions to artifact type categories.
-
-Helper functions:
-
-- ``_get_workspace_path``  — Resolve workspace path from DB config.
-- ``_classify_extension``  — Derive artifact type from file extension.
-- ``_parse_git_log``       — Parse raw ``git log`` output into deduplicated
-  artifact records.
-
-Response models:
-
-- ``ArtifactResponse``     — Pydantic model with snake_case fields.
+- ``GET  /artifacts/recent``              — Git-derived recent files
+- ``GET  /artifacts/pipeline/projects``   — Pipeline status for all projects
+- ``GET  /artifacts/pipeline/discover``   — Discover artifacts by type
+- ``GET  /artifacts/pipeline/state``      — Get pipeline state for a project
+- ``POST /artifacts/pipeline/publish``    — Publish a new artifact
+- ``POST /artifacts/pipeline/advance``    — Advance pipeline state
+- ``POST /artifacts/pipeline/supersede``  — Mark artifact as superseded
 """
 
 import logging
@@ -291,3 +287,207 @@ async def get_recent_artifacts(
 
     artifacts = _parse_git_log(result.stdout)
     return [ArtifactResponse(**a) for a in artifacts[:limit]]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Pipeline Artifact Endpoints (ArtifactRegistry)
+# ─────────────────────────────────────────────────────────────────────────────
+
+from core.artifact_registry import ArtifactRegistry, ARTIFACT_TYPES, PIPELINE_STATES
+
+
+def _get_registry() -> ArtifactRegistry:
+    """Lazy-init the singleton ArtifactRegistry."""
+    workspace_path = swarm_workspace_manager.expand_path(
+        swarm_workspace_manager.DEFAULT_WORKSPACE_CONFIG.get(
+            "file_path", "~/.swarm-ai/SwarmWS"
+        )
+    )
+    return ArtifactRegistry(Path(workspace_path))
+
+
+class PipelineProjectStatus(BaseModel):
+    """Pipeline status for a single project."""
+    project: str
+    pipeline_state: str
+    artifact_count: int
+    active_artifact_count: int
+    latest_artifact: Optional[str]
+
+
+class PipelineArtifactResponse(BaseModel):
+    """A pipeline artifact returned from discovery."""
+    id: str
+    type: str
+    producer: str
+    created: str
+    file: str
+    summary: str
+    superseded_by: Optional[str]
+
+
+class PublishRequest(BaseModel):
+    """Request body for publishing a new artifact."""
+    project: str
+    artifact_type: str
+    data: dict
+    producer: str
+    summary: str
+    topic: str = ""
+
+
+class AdvanceRequest(BaseModel):
+    """Request body for advancing pipeline state."""
+    project: str
+    state: str
+
+
+class SupersedeRequest(BaseModel):
+    """Request body for superseding an artifact."""
+    project: str
+    old_id: str
+    new_id: str
+
+
+@router.get(
+    "/artifacts/pipeline/projects",
+    response_model=list[PipelineProjectStatus],
+)
+async def get_pipeline_projects() -> list[PipelineProjectStatus]:
+    """Return pipeline status for all projects."""
+    reg = _get_registry()
+
+    def _list():
+        return reg.list_projects()
+
+    statuses = await anyio.to_thread.run_sync(_list)
+    return [
+        PipelineProjectStatus(
+            project=s.project,
+            pipeline_state=s.pipeline_state,
+            artifact_count=s.artifact_count,
+            active_artifact_count=s.active_artifact_count,
+            latest_artifact=s.latest_artifact,
+        )
+        for s in statuses
+    ]
+
+
+@router.get(
+    "/artifacts/pipeline/discover",
+    response_model=list[PipelineArtifactResponse],
+)
+async def discover_pipeline_artifacts(
+    project: str = Query(..., description="Project name"),
+    types: str = Query(..., description="Comma-separated artifact types"),
+) -> list[PipelineArtifactResponse]:
+    """Discover active artifacts of given types for a project."""
+    reg = _get_registry()
+    type_list = [t.strip() for t in types.split(",") if t.strip()]
+
+    def _discover():
+        return reg.discover(project, *type_list)
+
+    artifacts = await anyio.to_thread.run_sync(_discover)
+    return [
+        PipelineArtifactResponse(
+            id=a.id, type=a.type, producer=a.producer,
+            created=a.created, file=a.file, summary=a.summary,
+            superseded_by=a.superseded_by,
+        )
+        for a in artifacts
+    ]
+
+
+@router.get("/artifacts/pipeline/state")
+async def get_pipeline_state(
+    project: str = Query(..., description="Project name"),
+) -> dict:
+    """Get the current pipeline state for a project."""
+    reg = _get_registry()
+
+    def _get():
+        return reg.get_pipeline_state(project)
+
+    state = await anyio.to_thread.run_sync(_get)
+    return {"project": project, "pipeline_state": state}
+
+
+@router.post("/artifacts/pipeline/publish")
+async def publish_pipeline_artifact(req: PublishRequest) -> dict:
+    """Publish a new artifact for a project."""
+    reg = _get_registry()
+
+    def _publish():
+        return reg.publish(
+            project=req.project,
+            artifact_type=req.artifact_type,
+            data=req.data,
+            producer=req.producer,
+            summary=req.summary,
+            topic=req.topic,
+        )
+
+    try:
+        artifact_id = await anyio.to_thread.run_sync(_publish)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+    return {"artifact_id": artifact_id, "project": req.project}
+
+
+@router.post("/artifacts/pipeline/advance")
+async def advance_pipeline(req: AdvanceRequest) -> dict:
+    """Advance a project's pipeline state."""
+    reg = _get_registry()
+
+    def _advance():
+        reg.advance_pipeline(req.project, req.state)
+
+    try:
+        await anyio.to_thread.run_sync(_advance)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    return {"project": req.project, "pipeline_state": req.state}
+
+
+@router.post("/artifacts/pipeline/supersede")
+async def supersede_artifact(req: SupersedeRequest) -> dict:
+    """Mark an artifact as superseded by a newer one."""
+    reg = _get_registry()
+
+    def _supersede():
+        reg.supersede(req.project, req.old_id, req.new_id)
+
+    await anyio.to_thread.run_sync(_supersede)
+    return {"old_id": req.old_id, "new_id": req.new_id, "project": req.project}
+
+
+class LearnRequest(BaseModel):
+    """Request body for recording pipeline outcome."""
+    project: str
+    evaluation_id: str
+    outcome: str  # success, partial, failure, cancelled
+    actual_effort: Optional[str] = None
+    lessons: list[str] = []
+
+
+@router.post("/artifacts/pipeline/learn")
+async def record_learn_outcome(req: LearnRequest) -> dict:
+    """Record pipeline outcome for learning feedback loop."""
+    reg = _get_registry()
+
+    def _learn():
+        reg.record_outcome(
+            project=req.project,
+            evaluation_id=req.evaluation_id,
+            outcome=req.outcome,
+            actual_effort=req.actual_effort,
+            lessons=req.lessons or None,
+        )
+
+    await anyio.to_thread.run_sync(_learn)
+    return {"project": req.project, "outcome": req.outcome, "recorded": True}

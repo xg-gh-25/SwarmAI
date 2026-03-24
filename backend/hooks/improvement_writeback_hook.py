@@ -127,13 +127,15 @@ class ImprovementWritebackHook:
                     if isinstance(b, dict) and b.get("type") == "text"
                 )
 
-            # Look for Projects/<name>/ references in file paths
+            # Look for Projects/<name>/ path patterns (not bare substring)
             for project_dir in projects_dir.iterdir():
                 if not project_dir.is_dir() or project_dir.name.startswith("."):
                     continue
-                if project_dir.name in content:
-                    project_counts[project_dir.name] = (
-                        project_counts.get(project_dir.name, 0) + 1
+                # Match actual path references: Projects/Name/ or /full/path/Projects/Name
+                name = project_dir.name
+                if f"Projects/{name}/" in content or f"Projects/{name}" in content.split():
+                    project_counts[name] = (
+                        project_counts.get(name, 0) + 1
                     )
 
         if not project_counts:
@@ -173,17 +175,18 @@ class ImprovementWritebackHook:
 
             content_lower = content.lower()
 
-            # Detect "what worked" patterns
+            # Detect "what worked" patterns — require explicit lesson-like
+            # phrasing, not routine test output like "all 80 tests pass"
             if any(
                 marker in content_lower
                 for marker in [
                     "this worked",
                     "fix verified",
-                    "tests pass",
-                    "shipped",
-                    "all pass",
-                    "all passed",
+                    "shipped successfully",
                     "clean implementation",
+                    "lesson learned",
+                    "pattern that worked",
+                    "approach worked",
                 ]
             ):
                 # Extract a one-line summary from the surrounding context
@@ -191,18 +194,20 @@ class ImprovementWritebackHook:
                 if summary:
                     worked.append(summary)
 
-            # Detect "what failed" patterns
+            # Detect "what failed" patterns — require explicit failure
+            # analysis, not routine test failures
             if any(
                 marker in content_lower
                 for marker in [
                     "root cause",
                     "coe",
-                    "regression",
-                    "broke",
+                    "regression caused",
+                    "broke because",
                     "failed because",
-                    "bug:",
+                    "bug: ",
                     "the real issue",
                     "should have",
+                    "lesson: ",
                 ]
             ):
                 summary = self._extract_summary(content, "failed")
@@ -278,10 +283,16 @@ class ImprovementWritebackHook:
     ) -> tuple[str, bool]:
         """Insert an entry after a markdown section header.
 
-        Handles edge cases: header at end of file (no trailing newline),
-        header followed by blank line, etc.  Returns (new_content, changed).
+        Deduplicates: if *entry* already exists in *content*, returns
+        unchanged.  Handles edge cases: header at end of file (no
+        trailing newline), header followed by blank line, etc.
+        Returns (new_content, changed).
         """
         if header not in content:
+            return content, False
+
+        # Dedup: skip if this exact entry is already present
+        if entry in content:
             return content, False
 
         idx = content.index(header) + len(header)

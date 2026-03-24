@@ -7,6 +7,7 @@ description: >
   For GitHub repos use github-research. For consulting-grade reports use consulting-report.
   Saves output to Knowledge/Notes/ by default.
 version: "2.0.0"
+produces_artifact: research
 ---
 
 # Deep Research
