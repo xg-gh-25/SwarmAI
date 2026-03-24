@@ -6,6 +6,8 @@ description: >
   DO NOT USE: for UI/frontend-specific review (use web-design-review) or for auto-fixing code (use simplify).
   SIBLINGS: web-design-review = UI/accessibility audit | simplify = auto-fix quality issues | code-review = structured findings report.
 version: "1.0.0"
+consumes_artifacts: [changeset, design_doc]
+produces_artifact: review
 ---
 
 # Code Review
@@ -211,6 +213,38 @@ If user says "quick review" or "just a glance", focus only on Critical/Warning i
 | No test changes in PR | Flag as WARNING: "No tests for new functionality" |
 | Unfamiliar language | Focus on logic/design patterns; skip language-specific idioms |
 | gh not authenticated | Fall back to `git diff` for local reviews |
+
+## Escalation Protocol
+
+### L0 INFORM (clean review)
+```markdown
+> [INFORM] **Review clean: 2 warnings, 0 critical** — no blockers found.
+```
+
+### L2 BLOCK (critical findings that need human judgment)
+```markdown
+> [BLOCK] **Critical finding needs human review**
+>
+> **Finding:** Hardcoded AWS credentials in config.py:42 (confidence 9/10)
+> **Exploit:** Attacker with repo access gets production AWS access.
+>
+> This is auto-fixable but changes the deployment configuration.
+> **Options:**
+> 1. Auto-fix: move to env var (recommended)
+> 2. Verify it's a test-only credential and suppress
+> 3. Discuss the credential management approach first
+```
+
+Also BLOCK when review scope exceeds expectation:
+```markdown
+> [BLOCK] **Scope concern: changeset touches 47 files across 8 modules**
+>
+> A thorough review of this scope would take significant context budget.
+> **Options:**
+> 1. Review all 47 files (comprehensive but expensive)
+> 2. Focus on the 12 files with logic changes (skip config/test)
+> 3. Split into module-by-module reviews
+```
 
 ## Quality Rules
 
