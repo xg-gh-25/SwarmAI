@@ -31,7 +31,10 @@ from core.escalation import (
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/escalations", tags=["escalations"])
 
-_WORKSPACE_ROOT = Path.home() / ".swarm-ai" / "SwarmWS"
+
+def _get_workspace_root() -> Path:
+    """Resolve SwarmWS path. Function (not constant) for testability."""
+    return Path.home() / ".swarm-ai" / "SwarmWS"
 
 
 class ResolveRequest(BaseModel):
@@ -40,21 +43,33 @@ class ResolveRequest(BaseModel):
     resolved_by: str = "user"
 
 
+def _validate_project(project: str) -> str:
+    """Validate project name to prevent path traversal.
+
+    Rejects names containing path separators, parent references,
+    or null bytes. Returns the validated name or raises HTTPException.
+    """
+    if not project or ".." in project or "/" in project or "\\" in project or "\0" in project:
+        raise HTTPException(status_code=400, detail=f"Invalid project name: {project!r}")
+    return project
+
+
 @router.get("/{project}")
 async def list_open(project: str):
     """List all open escalations for a project.
 
     Also runs timeout resolution for expired L1 CONSULTs.
     """
+    project = _validate_project(project)
     # Auto-resolve expired L1s first (idempotent)
-    auto_resolved = resolve_expired(_WORKSPACE_ROOT, project)
+    auto_resolved = resolve_expired(_get_workspace_root(), project)
     if auto_resolved:
         logger.info(
             "escalation.auto_resolved %d expired L1 consultations for project %s",
             len(auto_resolved), project,
         )
 
-    open_escs = get_open_escalations(_WORKSPACE_ROOT, project)
+    open_escs = get_open_escalations(_get_workspace_root(), project)
     return {
         "project": project,
         "open": [build_sse_event(e) for e in open_escs],
@@ -65,7 +80,8 @@ async def list_open(project: str):
 @router.get("/{project}/{escalation_id}")
 async def get_escalation(project: str, escalation_id: str):
     """Get a single escalation by ID."""
-    esc = load_escalation(_WORKSPACE_ROOT, project, escalation_id)
+    project = _validate_project(project)
+    esc = load_escalation(_get_workspace_root(), project, escalation_id)
     if esc is None:
         raise HTTPException(status_code=404, detail=f"Escalation {escalation_id} not found")
     return build_sse_event(esc)
@@ -77,7 +93,8 @@ async def resolve_escalation(project: str, escalation_id: str, body: ResolveRequ
 
     Also marks the associated Radar todo as handled.
     """
-    esc = load_escalation(_WORKSPACE_ROOT, project, escalation_id)
+    project = _validate_project(project)
+    esc = load_escalation(_get_workspace_root(), project, escalation_id)
     if esc is None:
         raise HTTPException(status_code=404, detail=f"Escalation {escalation_id} not found")
 
@@ -88,7 +105,7 @@ async def resolve_escalation(project: str, escalation_id: str, body: ResolveRequ
         )
 
     resolved_esc = resolve(esc, resolution=body.resolution, resolved_by=body.resolved_by)
-    save_escalation(_WORKSPACE_ROOT, resolved_esc)
+    save_escalation(_get_workspace_root(), resolved_esc)
 
     # Mark associated Radar todo as handled
     mark_todo_handled(escalation_id)
