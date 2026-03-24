@@ -3,7 +3,7 @@ title: "AIDLC Phase 3: AI-Management — High-Level Design"
 date: 2026-03-24
 updated: 2026-03-24
 author: XG (direction), Swarm (synthesis + implementation)
-status: shipped-pilot
+status: shipped (v4a validator + TDD + confidence + report; stress test next)
 tags: [aidlc, phase3, ai-management, ddd, sdd, tdd, autonomous, escalation, pipeline]
 consolidates:
   - 2026-03-23-aidlc-three-phase-definition.md
@@ -364,7 +364,7 @@ Pipelines can run as background jobs via the Swarm Job System:
 job_manager.py pipeline --project SwarmAI --requirement "Add retry logic" --one-shot
 ```
 
-Creates an `agent_task` job that spawns headless Claude CLI with s_pipeline prompt. Checkpoints create Radar todos visible in the sidebar even when the user isn't watching.
+Creates an `agent_task` job that spawns headless Claude CLI with s_autonomous-pipeline prompt. Checkpoints create Radar todos visible in the sidebar even when the user isn't watching.
 
 ### Cross-Project Dashboard
 
@@ -480,7 +480,7 @@ Project: SwarmAI | Profile: trivial | Budget: 71K/800K (8.9%)
 |---|---|---|---|
 | DDD Project System (4 docs, auto-provision, templates) | ~300 | 152 | Shipped |
 | Artifact Registry (filesystem, 8 types, per-run subdirs) | ~500 | 39 | Shipped |
-| s_pipeline orchestrator (8 stages, 5 profiles, decision classification) | ~550 | 36 | Shipped |
+| s_autonomous-pipeline orchestrator (8 stages, 5 profiles, decision classification) | ~550 | 36 | Shipped |
 | Pipeline CLI (13 commands: publish, discover, run-*, status, resume) | ~700 | 36 | Shipped |
 | /api/pipelines REST endpoint (dashboard data) | ~160 | 10 | Shipped |
 | s_evaluate (ROI scoring, 4 DDD questions) | ~300 | -- | Shipped |
@@ -491,34 +491,43 @@ Project: SwarmAI | Profile: trivial | Budget: 71K/800K (8.9%)
 | IMPROVEMENT.md writeback hook | -- | -- | Shipped |
 | Auto-populate TECH.md from config files | -- | -- | Shipped |
 | Background pipeline jobs (job_manager pipeline command) | ~70 | -- | Shipped |
-| **Total** | **~3,060** | **85+** | |
+| Pipeline Validator (6 structural invariant checks) | ~270 | 34 | Shipped |
+| TDD enforcement in BUILD (red-green-verify cycle) | -- | -- | Shipped (in SKILL.md) |
+| Confidence scoring at DELIVER (1-10, threshold 7) | -- | -- | Shipped (in SKILL.md) |
+| REPORT.md template (13-section markdown per run) | -- | -- | Shipped (in SKILL.md) |
+| Token estimation formula + base-cost table | -- | -- | Shipped (in SKILL.md) |
+| **Total** | **~3,600+** | **109+** | |
 
 ### Remaining Gaps
 
-| # | Gap | Priority | Effort |
-|---|---|---|---|
-| G1 | **Escalation UI** — EscalationBlock.tsx (in-chat rendering + action buttons) | P1 | 2-3 sessions |
-| G2 | **Spec-first TDD loop** — spec gen → test suite gen → agent codes against tests | P1 | 3-4 sessions |
-| G4 | **Pipeline Dashboard** — Radar sidebar panel (data API ready, needs React component) | P2 | 2-3 sessions |
-| G5 | **Push notifications** — Slack DM / macOS notification for L2 blocks | P2 | 1 session |
-| G6 | **Stage-selective context loading** — full document-scoped loading per stage | P2 | 1-2 sessions |
+| # | Gap | Priority | Status | Effort |
+|---|---|---|---|---|
+| G1 | **Escalation UI** — EscalationBlock.tsx (in-chat rendering + action buttons) | P1 | Design ready | 2-3 sessions |
+| G2 | ~~Spec-first TDD loop~~ | ~~P1~~ | **Shipped** (TDD enforced in BUILD stage, Rule #2) | 0 |
+| G4 | **Pipeline Dashboard** — Radar sidebar panel (data API ready, needs React component) | P2 | Design ready | 2-3 sessions |
+| G5 | **Push notifications** — Slack DM / macOS notification for L2 blocks | P2 | Open | 1 session |
+| G6 | **Stage-selective context loading** — full document-scoped loading per stage | P2 | Open | 1-2 sessions |
+| G7 | **Stress test** — 5 diverse requirements across all profiles for calibration | P1 | Next | 1 session |
 
 ### Rollout Plan
 
 ```
-Phase 3a — Pilot (NOW)
+Phase 3a — Pilot (NOW → NEARLY COMPLETE)
   SwarmAI itself running full pipeline. Human triggers, reviews output.
   Calibrating decision-strategy.json from real data.
-  Goal: validate pipeline produces shippable output. ← VALIDATED
+  Goal: validate pipeline produces shippable output. ← VALIDATED (run_7edb81f3)
+  Remaining: v4b stress test (5 requirements) for real calibration data.
 
 Phase 3b — Semi-Autonomous (Q2 2026)
   Orchestrator auto-advances stages. Human approves at EVALUATE + DELIVER.
   Escalation protocol handles mid-pipeline blocks.
+  Confidence scoring flags low-confidence runs for review.
   Goal: 50% of stages run without human intervention.
 
 Phase 3c — Autonomous (Q3 2026+)
   Background jobs run pipelines. Human at triage only.
   Learn loop expands competence boundary over time.
+  TDD ensures output matches specs without line-by-line review.
   Goal: 30%+ intake handled fully autonomously.
 ```
 
@@ -553,19 +562,8 @@ Phase 3c — Autonomous (Q3 2026+)
 
 ## Related Documents
 
-These detailed design docs live in the SwarmWS workspace (`~/.swarm-ai/SwarmWS/`):
-
-- **Three-Phase Evolution Model** (`Knowledge/AIDLC/2026-03-23-aidlc-three-phase-definition.md`) — Phase definitions and transitions
-- **DDD Investigation: Document-as-Bounded-Context** (`Knowledge/AIDLC/2026-03-20-aidlc-ddd-investigation.md`) — Knowledge layer pattern
-- **Skill Lifecycle Pipeline** (`Knowledge/Designs/2026-03-23-skill-lifecycle-pipeline-design.md`) — Stage definitions, artifact types, DDD enrichment
-- **Escalation Protocol** (`Knowledge/Designs/2026-03-24-escalation-protocol-design.md`) — 3-level HITL, 28 triggers, decision packets
-- **Pipeline Orchestrator** (`Knowledge/Designs/2026-03-24-pipeline-orchestrator-design.md`) — Orchestration loop, budget, checkpoint/resume, gstack patterns
-
-Key implementation files in this repo:
-
-- `backend/skills/s_pipeline/SKILL.md` — Pipeline orchestrator skill (550 lines)
-- `backend/scripts/artifact_cli.py` — 13 CLI commands for artifacts + pipeline runs
-- `backend/core/artifact_registry.py` — Filesystem-backed artifact storage
-- `backend/core/escalation.py` — 3-level escalation protocol
-- `backend/routers/pipelines.py` — `/api/pipelines` REST endpoint
-- `backend/core/pipeline_profiles.py` — Shared pipeline profile definitions
+- [Three-Phase Evolution Model](2026-03-23-aidlc-three-phase-definition.md) — Phase definitions and transitions
+- [DDD Investigation: Document-as-Bounded-Context](2026-03-20-aidlc-ddd-investigation.md) — Knowledge layer pattern
+- [Skill Lifecycle Pipeline](../Designs/2026-03-23-skill-lifecycle-pipeline-design.md) — Stage definitions, artifact types, DDD enrichment
+- [Escalation Protocol](../Designs/2026-03-24-escalation-protocol-design.md) — 3-level HITL, 28 triggers, decision packets
+- [Pipeline Orchestrator](../Designs/2026-03-24-pipeline-orchestrator-design.md) — Orchestration loop, budget, checkpoint/resume, gstack patterns
