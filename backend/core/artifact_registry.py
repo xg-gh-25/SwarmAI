@@ -154,6 +154,7 @@ class ArtifactRegistry:
         producer: str,
         summary: str,
         topic: str = "",
+        run_id: str | None = None,
     ) -> str:
         """Write a new artifact and update the manifest.
 
@@ -167,6 +168,9 @@ class ArtifactRegistry:
             producer: Name of the skill or process that produced this.
             summary: One-line human-readable summary.
             topic: Optional topic slug for the filename.
+            run_id: Optional pipeline run ID. When provided, the artifact
+                is stored in ``.artifacts/runs/<run_id>/`` instead of the
+                top-level ``.artifacts/`` directory.
 
         Raises:
             ValueError: If artifact_type is not recognized.
@@ -189,10 +193,20 @@ class ArtifactRegistry:
         artifact_id = f"art_{uuid4().hex[:8]}"
         date_str = now.strftime("%Y%m%d")
         topic_slug = f"-{_slugify(topic)}" if topic else ""
-        filename = f"{artifact_type}-{date_str}{topic_slug}.json"
+        bare_filename = f"{artifact_type}-{date_str}{topic_slug}.json"
+
+        # Determine storage directory: runs/<run_id>/ or top-level
+        if run_id:
+            write_dir = artifacts_dir / "runs" / run_id
+            write_dir.mkdir(parents=True, exist_ok=True)
+            # file path in manifest is relative to .artifacts/
+            filename = f"runs/{run_id}/{bare_filename}"
+        else:
+            write_dir = artifacts_dir
+            filename = bare_filename
 
         # Write artifact data file
-        artifact_path = artifacts_dir / filename
+        artifact_path = write_dir / bare_filename
         artifact_path.write_text(
             json.dumps(data, indent=2, default=str),
             encoding="utf-8",
@@ -206,7 +220,7 @@ class ArtifactRegistry:
             "artifacts": [],
         }
 
-        manifest["artifacts"].append({
+        entry = {
             "id": artifact_id,
             "type": artifact_type,
             "producer": producer,
@@ -214,7 +228,11 @@ class ArtifactRegistry:
             "file": filename,
             "summary": summary,
             "superseded_by": None,
-        })
+        }
+        if run_id:
+            entry["run_id"] = run_id
+
+        manifest["artifacts"].append(entry)
         manifest["updated_at"] = now.isoformat()
 
         self._write_manifest(project, manifest)

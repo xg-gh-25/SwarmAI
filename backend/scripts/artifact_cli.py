@@ -1,26 +1,37 @@
 #!/usr/bin/env python3
-"""CLI for artifact registry operations.
+"""CLI for artifact registry and pipeline run operations.
 
-Called by the agent via bash to discover upstream artifacts and publish
-new artifacts.  Follows the same pattern as ``locked_write.py`` —
+Called by the agent via bash to discover/publish artifacts and manage
+pipeline runs.  Follows the same pattern as ``locked_write.py`` —
 a standalone script with no FastAPI dependency.
 
-Usage:
-    # Discover artifacts for a skill
-    python artifact_cli.py discover --project SwarmAI --types research,alternatives
-
-    # Publish a new artifact
+Usage — Artifact Registry:
+    python artifact_cli.py discover --project SwarmAI --types research,alternatives [--full]
     python artifact_cli.py publish --project SwarmAI --type evaluation \\
-        --producer s_evaluate --summary "GO: ROI 3.2" --data '{"roi": 3.2}'
-
-    # Get pipeline state
+        --producer s_evaluate --summary "GO" --data '{"roi": 3.2}' [--run-id run_xxx]
     python artifact_cli.py state --project SwarmAI
-
-    # Advance pipeline state
     python artifact_cli.py advance --project SwarmAI --state think
-
-    # List all projects with pipeline status
+    python artifact_cli.py learn --project SwarmAI --evaluation-id art_xxx --outcome success
     python artifact_cli.py projects
+
+Usage — Pipeline Runs (stored in .artifacts/runs/<run_id>/):
+    python artifact_cli.py run-create --project SwarmAI --requirement "Add feature" [--profile full]
+    python artifact_cli.py run-update --project SwarmAI --run-id run_xxx [--stage-json '...'] [--status completed]
+    python artifact_cli.py run-get --project SwarmAI [--run-id run_xxx]
+    python artifact_cli.py run-budget --project SwarmAI --run-id run_xxx
+    python artifact_cli.py run-checkpoint --project SwarmAI --run-id run_xxx --stage build --reason "L2 BLOCK"
+    python artifact_cli.py run-history --project SwarmAI [--limit 10]
+    python artifact_cli.py run-status [--active-only]
+    python artifact_cli.py run-resume --project SwarmAI --run-id run_xxx
+
+Storage layout:
+    Projects/<project>/.artifacts/
+        manifest.json                   # global artifact index
+        <type>-<date>-<topic>.json      # standalone artifacts (no pipeline)
+        runs/
+            <run_id>/
+                run.json                # pipeline run state
+                <type>-<date>.json      # artifacts scoped to this run
 
 Public symbols:
 - ``main``  — CLI entry point with subcommand dispatch.
@@ -88,6 +99,7 @@ def cmd_publish(args, reg: ArtifactRegistry) -> None:
         print(json.dumps({"error": f"Invalid JSON data: {e}"}), file=sys.stderr)
         sys.exit(1)
 
+    run_id = getattr(args, "run_id", None)
     try:
         artifact_id = reg.publish(
             project=args.project,
@@ -96,8 +108,12 @@ def cmd_publish(args, reg: ArtifactRegistry) -> None:
             producer=args.producer,
             summary=args.summary,
             topic=args.topic or "",
+            run_id=run_id,
         )
-        print(json.dumps({"artifact_id": artifact_id, "project": args.project}))
+        result = {"artifact_id": artifact_id, "project": args.project}
+        if run_id:
+            result["run_id"] = run_id
+        print(json.dumps(result))
     except (ValueError, FileNotFoundError) as e:
         print(json.dumps({"error": str(e)}), file=sys.stderr)
         sys.exit(1)
@@ -172,8 +188,29 @@ CHECKPOINT_RESERVE = 50_000    # Reserve for checkpoint handoff
 
 
 def _pipeline_runs_dir(project: str) -> Path:
-    """Get the directory for pipeline run state files."""
-    return _get_workspace() / "Projects" / project / ".artifacts"
+    """Get the base runs directory: .artifacts/runs/."""
+    return _get_workspace() / "Projects" / project / ".artifacts" / "runs"
+
+
+def _run_dir(project: str, run_id: str) -> Path:
+    """Get directory for a specific run: .artifacts/runs/<run_id>/."""
+    return _pipeline_runs_dir(project) / run_id
+
+
+def _resolve_run_file(project: str, run_id: str) -> Path:
+    """Find the run.json file, checking new path (runs/<id>/run.json) then legacy (pipeline-run-<id>.json)."""
+    # New path: .artifacts/runs/<run_id>/run.json
+    new_path = _run_dir(project, run_id) / "run.json"
+    if new_path.exists():
+        return new_path
+
+    # Legacy path: .artifacts/pipeline-run-<run_id>.json
+    legacy_path = _get_workspace() / "Projects" / project / ".artifacts" / f"pipeline-run-{run_id}.json"
+    if legacy_path.exists():
+        return legacy_path
+
+    print(json.dumps({"error": f"Pipeline run {run_id} not found"}), file=sys.stderr)
+    sys.exit(1)
 
 
 def _gen_run_id() -> str:
@@ -182,20 +219,43 @@ def _gen_run_id() -> str:
 
 
 def _load_completed_runs(project: str, limit: int = 10) -> list[dict]:
-    """Load completed pipeline runs for historical calibration."""
-    run_dir = _pipeline_runs_dir(project)
-    if not run_dir.exists():
-        return []
+    """Load completed pipeline runs for historical calibration.
+
+    Scans both new path (runs/*/run.json) and legacy (pipeline-run-*.json).
+    """
+    artifacts_dir = _get_workspace() / "Projects" / project / ".artifacts"
     runs = []
-    for f in sorted(run_dir.glob("pipeline-run-*.json"), reverse=True):
-        try:
-            state = json.loads(f.read_text(encoding="utf-8"))
-            if state.get("status") == "completed" and state.get("stages"):
-                runs.append(state)
-                if len(runs) >= limit:
-                    break
-        except (json.JSONDecodeError, KeyError):
-            continue
+
+    # New path: .artifacts/runs/*/run.json
+    runs_dir = artifacts_dir / "runs"
+    if runs_dir.exists():
+        for rd in sorted(runs_dir.iterdir(), reverse=True):
+            run_file = rd / "run.json"
+            if run_file.exists():
+                try:
+                    state = json.loads(run_file.read_text(encoding="utf-8"))
+                    if state.get("status") == "completed" and state.get("stages"):
+                        runs.append(state)
+                        if len(runs) >= limit:
+                            return runs
+                except (json.JSONDecodeError, KeyError):
+                    continue
+
+    # Legacy path: .artifacts/pipeline-run-*.json
+    if artifacts_dir.exists():
+        seen_ids = {r["id"] for r in runs}
+        for f in sorted(artifacts_dir.glob("pipeline-run-*.json"), reverse=True):
+            try:
+                state = json.loads(f.read_text(encoding="utf-8"))
+                if state["id"] in seen_ids:
+                    continue
+                if state.get("status") == "completed" and state.get("stages"):
+                    runs.append(state)
+                    if len(runs) >= limit:
+                        return runs
+            except (json.JSONDecodeError, KeyError):
+                continue
+
     return runs
 
 
@@ -253,9 +313,9 @@ def cmd_run_create(args, reg: ArtifactRegistry) -> None:
         "completed_at": None,
     }
 
-    run_dir = _pipeline_runs_dir(args.project)
-    run_dir.mkdir(parents=True, exist_ok=True)
-    run_file = run_dir / f"pipeline-run-{run_id}.json"
+    rd = _run_dir(args.project, run_id)
+    rd.mkdir(parents=True, exist_ok=True)
+    run_file = rd / "run.json"
     run_file.write_text(json.dumps(run_state, indent=2), encoding="utf-8")
 
     print(json.dumps({"pipeline_id": run_id, "project": args.project, "file": str(run_file)}))
@@ -266,12 +326,7 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
     from datetime import datetime, timezone
     now = datetime.now(timezone.utc).isoformat()
 
-    run_dir = _pipeline_runs_dir(args.project)
-    run_file = run_dir / f"pipeline-run-{args.run_id}.json"
-    if not run_file.exists():
-        print(json.dumps({"error": f"Pipeline run {args.run_id} not found"}), file=sys.stderr)
-        sys.exit(1)
-
+    run_file = _resolve_run_file(args.project, args.run_id)
     run_state = json.loads(run_file.read_text(encoding="utf-8"))
 
     if args.status:
@@ -306,40 +361,55 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
 
 def cmd_run_get(args, reg: ArtifactRegistry) -> None:
     """Get a pipeline run's current state."""
-    run_dir = _pipeline_runs_dir(args.project)
-
     if args.run_id:
-        run_file = run_dir / f"pipeline-run-{args.run_id}.json"
-        if not run_file.exists():
-            print(json.dumps({"error": f"Pipeline run {args.run_id} not found"}), file=sys.stderr)
-            sys.exit(1)
+        run_file = _resolve_run_file(args.project, args.run_id)
         run_state = json.loads(run_file.read_text(encoding="utf-8"))
         print(json.dumps(run_state, indent=2))
         return
 
-    # List all pipeline runs for this project
-    if not run_dir.exists():
-        print(json.dumps({"runs": [], "count": 0}))
-        return
-
+    # List all pipeline runs for this project (scan both new and legacy paths)
     runs = []
-    for f in sorted(run_dir.glob("pipeline-run-*.json"), reverse=True):
-        try:
-            state = json.loads(f.read_text(encoding="utf-8"))
-            runs.append({
-                "id": state["id"],
-                "requirement": state["requirement"][:80],
-                "status": state["status"],
-                "profile": state.get("profile"),
-                "stages_completed": sum(
-                    1 for s in state.get("stages", []) if s.get("status") == "completed"
-                ),
-                "created_at": state["created_at"],
-            })
-        except (json.JSONDecodeError, KeyError):
-            continue
+    artifacts_dir = _get_workspace() / "Projects" / args.project / ".artifacts"
+
+    # New path: .artifacts/runs/*/run.json
+    runs_dir = artifacts_dir / "runs"
+    if runs_dir.exists():
+        for rd in sorted(runs_dir.iterdir(), reverse=True):
+            run_file = rd / "run.json"
+            if run_file.exists():
+                try:
+                    state = json.loads(run_file.read_text(encoding="utf-8"))
+                    runs.append(_run_summary(state))
+                except (json.JSONDecodeError, KeyError):
+                    continue
+
+    # Legacy path: .artifacts/pipeline-run-*.json
+    if artifacts_dir.exists():
+        for f in sorted(artifacts_dir.glob("pipeline-run-*.json"), reverse=True):
+            try:
+                state = json.loads(f.read_text(encoding="utf-8"))
+                # Skip if already found via new path
+                if any(r["id"] == state["id"] for r in runs):
+                    continue
+                runs.append(_run_summary(state))
+            except (json.JSONDecodeError, KeyError):
+                continue
 
     print(json.dumps({"runs": runs, "count": len(runs)}, indent=2))
+
+
+def _run_summary(state: dict) -> dict:
+    """Extract summary fields from a pipeline run state."""
+    return {
+        "id": state["id"],
+        "requirement": state["requirement"][:80],
+        "status": state["status"],
+        "profile": state.get("profile"),
+        "stages_completed": sum(
+            1 for s in state.get("stages", []) if s.get("status") == "completed"
+        ),
+        "created_at": state["created_at"],
+    }
 
 
 def cmd_run_checkpoint(args, reg: ArtifactRegistry) -> None:
@@ -347,12 +417,7 @@ def cmd_run_checkpoint(args, reg: ArtifactRegistry) -> None:
     from datetime import datetime, timezone
     now = datetime.now(timezone.utc).isoformat()
 
-    run_dir = _pipeline_runs_dir(args.project)
-    run_file = run_dir / f"pipeline-run-{args.run_id}.json"
-    if not run_file.exists():
-        print(json.dumps({"error": f"Pipeline run {args.run_id} not found"}), file=sys.stderr)
-        sys.exit(1)
-
+    run_file = _resolve_run_file(args.project, args.run_id)
     run_state = json.loads(run_file.read_text(encoding="utf-8"))
 
     # 1. Pause the run
@@ -398,6 +463,7 @@ def cmd_run_checkpoint(args, reg: ArtifactRegistry) -> None:
             producer="s_pipeline",
             summary=f"Pipeline paused at {args.stage}: {args.reason}",
             topic=args.run_id,
+            run_id=args.run_id,
         )
     except (ValueError, FileNotFoundError):
         artifact_id = None
@@ -556,12 +622,7 @@ def cmd_run_budget(args, reg: ArtifactRegistry) -> None:
     stage fits within the budget. Used by the agent to decide when
     to checkpoint.
     """
-    run_dir = _pipeline_runs_dir(args.project)
-    run_file = run_dir / f"pipeline-run-{args.run_id}.json"
-    if not run_file.exists():
-        print(json.dumps({"error": f"Pipeline run {args.run_id} not found"}), file=sys.stderr)
-        sys.exit(1)
-
+    run_file = _resolve_run_file(args.project, args.run_id)
     run_state = json.loads(run_file.read_text(encoding="utf-8"))
     budget = run_state.get("budget", _estimate_session_budget(args.project))
 
@@ -621,6 +682,28 @@ def _get_profile_stages(profile: str | None) -> list[str]:
     return profiles.get(profile or "full", profiles["full"])
 
 
+def _status_entry(state: dict, project_name: str) -> dict:
+    """Build a dashboard entry from a pipeline run state dict."""
+    completed_stages = [s for s in state.get("stages", []) if s.get("status") == "completed"]
+    total_stages = len(_get_profile_stages(state.get("profile")))
+    consumed = sum(s.get("token_cost", 0) for s in state.get("stages", []))
+    return {
+        "id": state["id"],
+        "project": project_name,
+        "requirement": state.get("requirement", "")[:80],
+        "status": state.get("status", "running"),
+        "profile": state.get("profile", "full"),
+        "progress": f"{len(completed_stages)}/{total_stages}",
+        "stages_completed": len(completed_stages),
+        "stages_total": total_stages,
+        "tokens_consumed": consumed,
+        "taste_decisions": len(state.get("taste_decisions", [])),
+        "checkpoint": state.get("checkpoint"),
+        "created_at": state.get("created_at", ""),
+        "updated_at": state.get("updated_at", ""),
+    }
+
+
 def cmd_run_status(args, reg: ArtifactRegistry) -> None:
     """Cross-project pipeline dashboard data.
 
@@ -642,33 +725,31 @@ def cmd_run_status(args, reg: ArtifactRegistry) -> None:
             continue
 
         project_name = project_dir.name
+        seen_ids: set[str] = set()
+
+        # New path: runs/*/run.json
+        runs_dir = artifacts_dir / "runs"
+        if runs_dir.exists():
+            for rd in sorted(runs_dir.iterdir(), reverse=True):
+                rf = rd / "run.json"
+                if rf.exists():
+                    try:
+                        state = json.loads(rf.read_text(encoding="utf-8"))
+                        state["_project"] = project_name
+                        seen_ids.add(state["id"])
+                        all_pipelines.append(_status_entry(state, project_name))
+                    except (json.JSONDecodeError, OSError, KeyError):
+                        continue
+
+        # Legacy path: pipeline-run-*.json
         for run_file in sorted(artifacts_dir.glob("pipeline-run-*.json"), reverse=True):
             try:
                 state = json.loads(run_file.read_text(encoding="utf-8"))
-            except (json.JSONDecodeError, OSError):
+                if state.get("id") in seen_ids:
+                    continue
+                all_pipelines.append(_status_entry(state, project_name))
+            except (json.JSONDecodeError, OSError, KeyError):
                 continue
-
-            # Skip old completed runs (only show last 3 per project)
-            completed_stages = [s for s in state.get("stages", []) if s.get("status") == "completed"]
-            total_stages = len(_get_profile_stages(state.get("profile")))
-            consumed = sum(s.get("token_cost", 0) for s in state.get("stages", []))
-
-            pipeline_info = {
-                "id": state["id"],
-                "project": project_name,
-                "requirement": state["requirement"][:80],
-                "status": state["status"],
-                "profile": state.get("profile", "full"),
-                "progress": f"{len(completed_stages)}/{total_stages}",
-                "stages_completed": len(completed_stages),
-                "stages_total": total_stages,
-                "tokens_consumed": consumed,
-                "taste_decisions": len(state.get("taste_decisions", [])),
-                "checkpoint": state.get("checkpoint"),
-                "created_at": state["created_at"],
-                "updated_at": state["updated_at"],
-            }
-            all_pipelines.append(pipeline_info)
 
     # Sort: running first, then paused, then completed. Within group, newest first.
     status_order = {"running": 0, "paused": 1, "failed": 2, "completed": 3, "cancelled": 4}
@@ -717,12 +798,7 @@ def cmd_run_resume(args, reg: ArtifactRegistry) -> None:
     from datetime import datetime, timezone
     now = datetime.now(timezone.utc).isoformat()
 
-    run_dir = _pipeline_runs_dir(args.project)
-    run_file = run_dir / f"pipeline-run-{args.run_id}.json"
-    if not run_file.exists():
-        print(json.dumps({"error": f"Pipeline run {args.run_id} not found"}), file=sys.stderr)
-        sys.exit(1)
-
+    run_file = _resolve_run_file(args.project, args.run_id)
     run_state = json.loads(run_file.read_text(encoding="utf-8"))
 
     if run_state["status"] != "paused":
@@ -783,6 +859,7 @@ def main() -> None:
     p_publish.add_argument("--summary", required=True)
     p_publish.add_argument("--data", required=True, help="JSON data string")
     p_publish.add_argument("--topic", default="")
+    p_publish.add_argument("--run-id", default=None, help="Pipeline run ID (stores in runs/<id>/ subdir)")
 
     # state
     p_state = sub.add_parser("state", help="Get pipeline state")
