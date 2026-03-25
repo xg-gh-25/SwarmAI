@@ -596,6 +596,83 @@ def _get_job_result_highlights(working_directory: str, max_items: int = 5) -> li
     return lines
 
 
+def _get_health_highlights(working_directory: str) -> list[str]:
+    """Read health_findings.json and return formatted alerts for session briefing.
+
+    Shows warnings/critical findings from ContextHealthHook and weekly
+    memory maintenance results. Graceful no-op if file doesn't exist.
+    """
+    findings_path = (
+        Path(working_directory) / "Services" / "swarm-jobs" / "health_findings.json"
+    )
+    if not findings_path.exists():
+        return []
+
+    try:
+        data = json.loads(findings_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return []
+
+    lines: list[str] = []
+
+    # Context health findings (warnings and critical only)
+    for finding in data.get("findings", []):
+        level = finding.get("level", "info")
+        msg = _sanitize_prompt_field(finding.get("message", ""), 150)
+        if level == "critical":
+            lines.append(f"  - [critical] {msg}")
+            # Auto-create Radar todo for critical findings
+            try:
+                _create_health_todo(msg, severity="critical")
+            except Exception:
+                pass  # Non-blocking
+        elif level == "warning":
+            lines.append(f"  - [warning] {msg}")
+
+    # Weekly memory health summary
+    mem_health = data.get("memory_health")
+    if mem_health:
+        actions = mem_health.get("actions", [])
+        summary = mem_health.get("summary", "")
+        if actions:
+            action_text = ", ".join(a[:50] for a in actions[:3])
+            lines.append(f"  - [maintenance] {action_text}")
+        elif summary:
+            lines.append(f"  - [maintenance] {_sanitize_prompt_field(summary, 100)}")
+
+    return lines
+
+
+def _create_health_todo(message: str, severity: str = "warning") -> None:
+    """Create a Radar todo for critical health findings.
+
+    Only creates for severity="critical". Deduplicates by checking
+    if an active todo with similar title already exists.
+    """
+    if severity != "critical":
+        return
+
+    try:
+        from core.todo_manager import ToDoManager
+        mgr = ToDoManager()
+        title = f"Health Alert: {message[:80]}"
+
+        # Check for existing active todo with same prefix
+        existing = mgr.list_todos(status="active")
+        for todo in existing:
+            if todo.get("title", "").startswith("Health Alert:") and \
+               message[:40] in todo.get("title", ""):
+                return  # Already exists, don't duplicate
+
+        mgr.create_todo(
+            title=title,
+            description=f"Auto-created by health alerting system.\n\nFinding: {message}",
+            priority="high",
+        )
+    except Exception as exc:
+        logger.warning("Failed to create health todo: %s", exc)
+
+
 # ---------------------------------------------------------------------------
 # Internal bridge functions (delegate to sub-modules with _DATE_REF_RE)
 # ---------------------------------------------------------------------------
@@ -710,6 +787,11 @@ def build_session_briefing(
         job_lines = _get_job_result_highlights(str(workspace))
         if job_lines:
             sections.append("**Recent job results (last 24h):**\n" + "\n".join(job_lines))
+
+        # L4: System health alerts from health_findings.json
+        health_lines = _get_health_highlights(str(workspace))
+        if health_lines:
+            sections.append("**System health:**\n" + "\n".join(health_lines))
 
         # L3: Surface learning insight
         learning_insight = learning_state.learning_summary()
