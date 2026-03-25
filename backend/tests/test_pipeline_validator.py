@@ -38,6 +38,7 @@ from scripts.pipeline_validator import (
     _parse_failed_patterns,
     _compute_doc_checksum,
     check_ddd_consistency,
+    check_ddd_staleness,
     validate,
 )
 from core.pipeline_profiles import get_profile_stages, PIPELINE_PROFILES
@@ -729,3 +730,196 @@ Cloud SaaS deployment with Kubernetes.
         result = validate("TestProject", "run_test1", "evaluate")
         assert result["checks_total"] == 7
         assert result["checks_passed"] == 7
+
+
+# ---------------------------------------------------------------------------
+# DDD Staleness Detection
+# ---------------------------------------------------------------------------
+
+def _create_ddd_docs(project_dir: Path, product: str = "# Test\n",
+                     tech: str = "# Test\n", improvement: str = "# Test\n",
+                     project_ctx: str = "# Test\n") -> None:
+    """Helper to create DDD docs in a project directory."""
+    project_dir.mkdir(parents=True, exist_ok=True)
+    (project_dir / "PRODUCT.md").write_text(product)
+    (project_dir / "TECH.md").write_text(tech)
+    (project_dir / "IMPROVEMENT.md").write_text(improvement)
+    (project_dir / "PROJECT.md").write_text(project_ctx)
+
+
+def _make_completed_run(workspace: Path, run_id: str, ddd_checksums: dict | None = None,
+                        status: str = "completed") -> None:
+    """Create a completed run.json with optional ddd_checksums."""
+    runs_dir = workspace / "Projects" / "TestProject" / ".artifacts" / "runs" / run_id
+    runs_dir.mkdir(parents=True, exist_ok=True)
+    run = {
+        "id": run_id,
+        "project": "TestProject",
+        "requirement": "Test",
+        "profile": "full",
+        "status": status,
+        "stages": [_stage_record("evaluate")],
+        "taste_decisions": [],
+        "budget": {"session_total": 800000, "consumed": 0, "remaining": 800000,
+                   "stage_estimates": {}, "calibration_source": "defaults"},
+        "created_at": "2026-03-24T00:00:00Z",
+        "updated_at": "2026-03-24T00:00:00Z",
+        "completed_at": "2026-03-24T01:00:00Z",
+    }
+    if ddd_checksums is not None:
+        run["ddd_checksums"] = ddd_checksums
+    (runs_dir / "run.json").write_text(json.dumps(run))
+
+
+class TestDDDStaleness:
+    def test_no_runs(self, workspace):
+        """Empty project has no stale runs."""
+        _create_ddd_docs(workspace / "Projects" / "TestProject")
+        result = check_ddd_staleness("TestProject")
+        assert result["stale_runs"] == []
+        assert result["fresh_runs"] == []
+        assert len(result["current_checksums"]) == 4
+
+    def test_fresh_run(self, workspace):
+        """Run with matching checksums is fresh."""
+        project_dir = workspace / "Projects" / "TestProject"
+        _create_ddd_docs(project_dir)
+
+        # Get current checksums and store them in a run
+        current = check_ddd_consistency("TestProject")
+        _make_completed_run(workspace, "run_fresh", ddd_checksums=current["checksums"])
+
+        result = check_ddd_staleness("TestProject")
+        assert len(result["fresh_runs"]) == 1
+        assert "run_fresh" in result["fresh_runs"]
+        assert result["stale_runs"] == []
+
+    def test_stale_run_detected(self, workspace):
+        """Run with old checksums is detected as stale after doc change."""
+        project_dir = workspace / "Projects" / "TestProject"
+        _create_ddd_docs(project_dir)
+
+        # Store old checksums
+        old_checksums = check_ddd_consistency("TestProject")["checksums"]
+        _make_completed_run(workspace, "run_old", ddd_checksums=old_checksums)
+
+        # Now change PRODUCT.md
+        (project_dir / "PRODUCT.md").write_text("# Test v2 -- updated priorities\n")
+
+        result = check_ddd_staleness("TestProject")
+        assert len(result["stale_runs"]) == 1
+        assert result["stale_runs"][0]["run_id"] == "run_old"
+        assert "PRODUCT.md" in result["stale_runs"][0]["stale_docs"]
+
+    def test_multiple_stale_docs(self, workspace):
+        """Multiple changed docs all reported."""
+        project_dir = workspace / "Projects" / "TestProject"
+        _create_ddd_docs(project_dir)
+        old_checksums = check_ddd_consistency("TestProject")["checksums"]
+        _make_completed_run(workspace, "run_multi", ddd_checksums=old_checksums)
+
+        # Change two docs
+        (project_dir / "PRODUCT.md").write_text("# Changed product\n")
+        (project_dir / "TECH.md").write_text("# Changed tech\n")
+
+        result = check_ddd_staleness("TestProject")
+        stale = result["stale_runs"][0]
+        assert "PRODUCT.md" in stale["stale_docs"]
+        assert "TECH.md" in stale["stale_docs"]
+
+    def test_untracked_run(self, workspace):
+        """Run without ddd_checksums is reported as untracked."""
+        _create_ddd_docs(workspace / "Projects" / "TestProject")
+        _make_completed_run(workspace, "run_no_checksums", ddd_checksums=None)
+
+        result = check_ddd_staleness("TestProject")
+        assert "run_no_checksums" in result["untracked_runs"]
+        assert result["stale_runs"] == []
+        assert result["fresh_runs"] == []
+
+    def test_running_runs_ignored(self, workspace):
+        """Active (non-completed) runs are not checked for staleness."""
+        _create_ddd_docs(workspace / "Projects" / "TestProject")
+        old_checksums = check_ddd_consistency("TestProject")["checksums"]
+        _make_completed_run(workspace, "run_active", ddd_checksums=old_checksums, status="running")
+
+        # Change docs
+        (workspace / "Projects" / "TestProject" / "PRODUCT.md").write_text("# Changed\n")
+
+        result = check_ddd_staleness("TestProject")
+        # Running run should NOT appear in stale_runs
+        assert result["stale_runs"] == []
+        assert result["fresh_runs"] == []
+
+    def test_new_doc_added_makes_run_stale(self, workspace):
+        """If a DDD doc is added after a run, that run is stale."""
+        project_dir = workspace / "Projects" / "TestProject"
+        project_dir.mkdir(parents=True, exist_ok=True)
+        # Start with only 2 docs
+        (project_dir / "PRODUCT.md").write_text("# Test\n")
+        (project_dir / "TECH.md").write_text("# Test\n")
+
+        old_checksums = check_ddd_consistency("TestProject")["checksums"]
+        _make_completed_run(workspace, "run_partial", ddd_checksums=old_checksums)
+
+        # Now add IMPROVEMENT.md
+        (project_dir / "IMPROVEMENT.md").write_text("# New lessons\n")
+
+        result = check_ddd_staleness("TestProject")
+        assert len(result["stale_runs"]) == 1
+        assert "IMPROVEMENT.md" in result["stale_runs"][0]["stale_docs"]
+
+
+class TestStalenessInValidate:
+    """Staleness warnings appear in validate() at evaluate stage."""
+
+    def test_staleness_warning_in_validate(self, workspace):
+        """When prior run is stale, validate() adds a staleness warning."""
+        project_dir = workspace / "Projects" / "TestProject"
+        _create_ddd_docs(project_dir,
+                         improvement="# T\n\n## What Worked\n\n- OK\n\n## What Failed\n\n- **Old pattern was bad** -- fix\n")
+
+        # Create an old completed run with old checksums
+        old_checksums = check_ddd_consistency("TestProject")["checksums"]
+        _make_completed_run(workspace, "run_old", ddd_checksums=old_checksums)
+
+        # Change PRODUCT.md
+        (project_dir / "PRODUCT.md").write_text("# Test v2 -- new priorities\n")
+
+        # Now create a new run being validated
+        artifacts_dir = workspace / "Projects" / "TestProject" / ".artifacts"
+        runs_dir = artifacts_dir / "runs" / "run_test1"
+        _make_artifact(artifacts_dir, "run_test1", "art_eval", "evaluation",
+                       {"recommendation": "GO", "scope": "standard"})
+        _make_run(runs_dir, stages=[
+            _stage_record("evaluate", artifact_id="art_eval"),
+        ])
+
+        result = validate("TestProject", "run_test1", "evaluate")
+        assert result["valid"] is True  # Staleness is WARN, not BLOCK
+        staleness_warnings = [w for w in result["warnings"] if "staleness" in w.lower()]
+        assert len(staleness_warnings) >= 1
+        assert "PRODUCT.md" in staleness_warnings[0]
+
+    def test_no_staleness_when_fresh(self, workspace):
+        """No staleness warning when prior run has matching checksums."""
+        project_dir = workspace / "Projects" / "TestProject"
+        _create_ddd_docs(project_dir,
+                         improvement="# T\n\n## What Worked\n\n- OK\n\n## What Failed\n\n- **Old pattern was bad** -- fix\n")
+
+        # Create a prior run with current checksums (no changes)
+        current_checksums = check_ddd_consistency("TestProject")["checksums"]
+        _make_completed_run(workspace, "run_current", ddd_checksums=current_checksums)
+
+        # Create new run
+        artifacts_dir = workspace / "Projects" / "TestProject" / ".artifacts"
+        runs_dir = artifacts_dir / "runs" / "run_test1"
+        _make_artifact(artifacts_dir, "run_test1", "art_eval", "evaluation",
+                       {"recommendation": "GO", "scope": "standard"})
+        _make_run(runs_dir, stages=[
+            _stage_record("evaluate", artifact_id="art_eval"),
+        ])
+
+        result = validate("TestProject", "run_test1", "evaluate")
+        staleness_warnings = [w for w in result["warnings"] if "staleness" in w.lower()]
+        assert len(staleness_warnings) == 0

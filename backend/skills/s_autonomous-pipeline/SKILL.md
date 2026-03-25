@@ -510,7 +510,7 @@ This checks 7 invariants automatically:
 | 4 | **Decision logged** | WARN | No decisions classified (except reflect/deliver) |
 | 5 | **Budget recorded** | WARN | token_cost is 0 — needed for calibration |
 | 6 | **Profile respected** | BLOCK | Stage not in selected profile |
-| 7 | **DDD consistency** | WARN | Non-goals vs TECH.md architecture conflict, failed patterns not recorded, missing DDD docs. Runs at EVALUATE stage only. |
+| 7 | **DDD consistency** | WARN | Non-goals vs TECH.md architecture conflict, failed patterns not recorded, missing DDD docs, staleness since last run. Runs at EVALUATE stage only. |
 
 **Response format:**
 ```json
@@ -518,11 +518,28 @@ This checks 7 invariants automatically:
  "checks_passed": 7, "checks_total": 7}
 ```
 
+**IMPORTANT: Write checksums to run.json after EVALUATE.**
+After the EVALUATE stage completes successfully, run `ddd-check` and store the checksums
+in the run state so future staleness detection works:
+```bash
+# Get current checksums
+CHECKSUMS=$(python backend/scripts/pipeline_validator.py ddd-check --project <PROJECT> | python -c "import sys,json; print(json.dumps(json.load(sys.stdin)['checksums']))")
+# Write to run.json (via artifact_cli or direct update)
+python backend/scripts/artifact_cli.py run-update --project <PROJECT> --run-id <RUN_ID> --field ddd_checksums --value "$CHECKSUMS"
+```
+
 **Standalone DDD check** (no pipeline needed):
 ```bash
 python backend/scripts/pipeline_validator.py ddd-check --project <PROJECT>
 ```
 Returns non-goals, failed patterns, doc checksums, and any cross-doc warnings.
+
+**Staleness check** (which completed runs are based on outdated DDD docs?):
+```bash
+python backend/scripts/pipeline_validator.py ddd-staleness --project <PROJECT>
+```
+Returns stale_runs (docs changed), fresh_runs (matching), untracked_runs (no checksums stored).
+Exit code 1 if any stale runs found — useful for CI gates.
 
 **Handle the result:**
 - `valid: true` → advance to next stage. Log any warnings for delivery report.

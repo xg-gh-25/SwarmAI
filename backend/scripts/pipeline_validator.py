@@ -22,12 +22,14 @@ The 7 invariant checks:
     5. Budget recorded — token_cost > 0 in stage record
     6. Profile respected — stage is in the selected profile
     7. DDD consistency — cross-document checks: non-goals vs approach,
-                          failed patterns vs plan (WARN only, evaluate stage)
+                          failed patterns vs plan, staleness detection
+                          (WARN only, evaluate stage)
 
 Public symbols:
 - ``main``              — CLI entry point
 - ``validate``          — Core validation logic (testable without CLI)
 - ``check_ddd_consistency`` — Standalone DDD cross-doc check (testable without pipeline)
+- ``check_ddd_staleness``  — Detect runs whose DDD docs changed since evaluation
 """
 
 import argparse
@@ -313,6 +315,85 @@ def check_ddd_consistency(project: str, context_text: str | None = None) -> dict
     }
 
 
+def check_ddd_staleness(project: str) -> dict[str, Any]:
+    """Check if any completed pipeline runs are stale (DDD docs changed since evaluation).
+
+    Scans all completed runs in Projects/<project>/.artifacts/runs/, reads their
+    stored ``ddd_checksums`` field, and compares against current DDD doc checksums.
+
+    Returns:
+        {
+            "current_checksums": {"PRODUCT.md": "abc...", ...},
+            "stale_runs": [
+                {"run_id": "run_xxx", "stale_docs": ["PRODUCT.md"],
+                 "run_checksums": {...}, "status": "completed"}
+            ],
+            "fresh_runs": ["run_yyy"],
+            "untracked_runs": ["run_zzz"]  # runs without stored checksums
+        }
+    """
+    ws = _get_workspace()
+    runs_dir = ws / "Projects" / project / ".artifacts" / "runs"
+
+    # Get current checksums
+    current = check_ddd_consistency(project)
+    current_checksums = current["checksums"]
+
+    result: dict[str, Any] = {
+        "current_checksums": current_checksums,
+        "stale_runs": [],
+        "fresh_runs": [],
+        "untracked_runs": [],
+    }
+
+    if not runs_dir.exists():
+        return result
+
+    for run_dir in sorted(runs_dir.iterdir()):
+        run_file = run_dir / "run.json"
+        if not run_file.exists():
+            continue
+
+        try:
+            run = json.loads(run_file.read_text())
+        except (json.JSONDecodeError, OSError):
+            continue
+
+        run_id = run.get("id", run_dir.name)
+        run_status = run.get("status", "unknown")
+
+        # Only check completed or delivered runs (active runs will re-evaluate anyway)
+        if run_status not in ("completed", "delivered"):
+            continue
+
+        stored_checksums = run.get("ddd_checksums")
+        if not stored_checksums:
+            result["untracked_runs"].append(run_id)
+            continue
+
+        # Compare each doc
+        stale_docs = []
+        for doc_name, current_hash in current_checksums.items():
+            stored_hash = stored_checksums.get(doc_name)
+            if stored_hash and stored_hash != current_hash:
+                stale_docs.append(doc_name)
+            elif not stored_hash and current_hash:
+                # Doc was added after the run
+                stale_docs.append(doc_name)
+
+        if stale_docs:
+            result["stale_runs"].append({
+                "run_id": run_id,
+                "stale_docs": stale_docs,
+                "run_checksums": stored_checksums,
+                "status": run_status,
+            })
+        else:
+            result["fresh_runs"].append(run_id)
+
+    return result
+
+
 def _extract_section(text: str, heading: str) -> str:
     """Extract a markdown section by heading (case-insensitive). Returns empty string if not found."""
     lines = text.splitlines()
@@ -335,7 +416,7 @@ def _extract_section(text: str, heading: str) -> str:
 # ---------------------------------------------------------------------------
 
 def validate(project: str, run_id: str, stage: str) -> dict[str, Any]:
-    """Validate a pipeline stage against 6 structural invariants.
+    """Validate a pipeline stage against 7 structural invariants.
 
     Returns a result dict with:
         valid: bool — False if any BLOCK errors
@@ -467,6 +548,17 @@ def validate(project: str, run_id: str, stage: str) -> dict[str, Any]:
 
         ddd_result = check_ddd_consistency(project, context_text)
         warnings.extend(ddd_result["warnings"])
+
+        # Staleness check: warn if DDD docs changed since last completed run
+        staleness = check_ddd_staleness(project)
+        if staleness["stale_runs"]:
+            latest_stale = staleness["stale_runs"][-1]  # most recent
+            changed_docs = ", ".join(latest_stale["stale_docs"])
+            warnings.append(
+                f"DDD staleness: {changed_docs} changed since last pipeline run "
+                f"({latest_stale['run_id']}). Prior evaluations may need review."
+            )
+
         checks_passed += 1  # WARN only — never blocks
     else:
         checks_passed += 1  # Auto-pass for non-evaluate stages
@@ -623,6 +715,10 @@ def main() -> None:
     ddd_p.add_argument("--project", required=True, help="Project name")
     ddd_p.add_argument("--context", default=None, help="Optional text to check against non-goals")
 
+    # ddd-staleness command — check if pipeline runs are stale
+    stale_p = sub.add_parser("ddd-staleness", help="Check which pipeline runs are stale (DDD docs changed)")
+    stale_p.add_argument("--project", required=True, help="Project name")
+
     args = parser.parse_args()
 
     if args.command == "check":
@@ -663,7 +759,13 @@ def main() -> None:
     elif args.command == "ddd-check":
         result = check_ddd_consistency(args.project, args.context)
         print(json.dumps(result, indent=2))
-        sys.exit(0 if len(result["warnings"]) == 0 else 0)  # Always exit 0 — warnings only
+        sys.exit(0)  # Always exit 0 — warnings only
+
+    elif args.command == "ddd-staleness":
+        result = check_ddd_staleness(args.project)
+        print(json.dumps(result, indent=2))
+        # Exit 1 if stale runs found (useful for CI/scripting)
+        sys.exit(1 if result["stale_runs"] else 0)
 
     else:
         parser.print_help()
