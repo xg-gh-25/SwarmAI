@@ -1,0 +1,266 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 620" width="960" height="620">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0f1019"/>
+      <stop offset="100%" style="stop-color:#1a1a2e"/>
+    </linearGradient>
+    <linearGradient id="gold" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#f59e0b"/>
+      <stop offset="100%" style="stop-color:#d97706"/>
+    </linearGradient>
+    <linearGradient id="blue" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#3b82f6"/>
+      <stop offset="100%" style="stop-color:#2563eb"/>
+    </linearGradient>
+    <linearGradient id="purple" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#8b5cf6"/>
+      <stop offset="100%" style="stop-color:#7c3aed"/>
+    </linearGradient>
+    <linearGradient id="green" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#10b981"/>
+      <stop offset="100%" style="stop-color:#059669"/>
+    </linearGradient>
+    <linearGradient id="red" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#ef4444"/>
+      <stop offset="100%" style="stop-color:#dc2626"/>
+    </linearGradient>
+    <linearGradient id="cyan" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#06b6d4"/>
+      <stop offset="100%" style="stop-color:#0891b2"/>
+    </linearGradient>
+    <!-- Filters may be stripped by GitHub SVG sanitizer - graceful degradation -->
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="3" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <marker id="arrowGold" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#f59e0b" opacity="0.7"/>
+    </marker>
+    <marker id="arrowWhite" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#94a3b8" opacity="0.5"/>
+    </marker>
+  </defs>
+
+  <!-- Background -->
+  <rect width="960" height="620" rx="16" fill="url(#bg)"/>
+
+  <!-- Subtle grid pattern -->
+  <g opacity="0.03" stroke="#f59e0b">
+    <line x1="0" y1="100" x2="960" y2="100" stroke-width="0.5"/>
+    <line x1="0" y1="200" x2="960" y2="200" stroke-width="0.5"/>
+    <line x1="0" y1="300" x2="960" y2="300" stroke-width="0.5"/>
+    <line x1="0" y1="400" x2="960" y2="400" stroke-width="0.5"/>
+    <line x1="0" y1="500" x2="960" y2="500" stroke-width="0.5"/>
+    <line x1="160" y1="0" x2="160" y2="620" stroke-width="0.5"/>
+    <line x1="320" y1="0" x2="320" y2="620" stroke-width="0.5"/>
+    <line x1="480" y1="0" x2="480" y2="620" stroke-width="0.5"/>
+    <line x1="640" y1="0" x2="640" y2="620" stroke-width="0.5"/>
+    <line x1="800" y1="0" x2="800" y2="620" stroke-width="0.5"/>
+  </g>
+
+  <!-- Title -->
+  <text x="480" y="46" text-anchor="middle" font-family="system-ui,-apple-system,SF Pro Display,sans-serif" font-size="24" font-weight="700" fill="#f59e0b" letter-spacing="3" filter="url(#glow)">SWARM CORE ENGINE</text>
+  <text x="480" y="70" text-anchor="middle" font-family="system-ui,-apple-system,sans-serif" font-size="13" fill="#94a3b8" letter-spacing="1">The Self-Growing Intelligence</text>
+
+  <!-- ==================== CONNECTION ARROWS (behind nodes) ==================== -->
+
+  <!-- Outer ring: clockwise flow arrows -->
+  <!-- Evolution -> Memory -->
+  <path d="M 350,155 C 380,140 420,140 450,160" stroke="#f59e0b" stroke-width="1.5" fill="none" opacity="0.3" marker-end="url(#arrowGold)" stroke-dasharray="4,3"/>
+  <!-- Memory -> Context -->
+  <path d="M 630,160 C 660,140 700,140 730,155" stroke="#f59e0b" stroke-width="1.5" fill="none" opacity="0.3" marker-end="url(#arrowGold)" stroke-dasharray="4,3"/>
+  <!-- Context -> Harness -->
+  <path d="M 810,260 C 830,290 830,340 810,370" stroke="#f59e0b" stroke-width="1.5" fill="none" opacity="0.3" marker-end="url(#arrowGold)" stroke-dasharray="4,3"/>
+  <!-- Harness -> Jobs -->
+  <path d="M 730,470 C 700,490 660,490 630,470" stroke="#f59e0b" stroke-width="1.5" fill="none" opacity="0.3" marker-end="url(#arrowGold)" stroke-dasharray="4,3"/>
+  <!-- Jobs -> Health -->
+  <path d="M 450,470 C 420,490 380,490 350,470" stroke="#f59e0b" stroke-width="1.5" fill="none" opacity="0.3" marker-end="url(#arrowGold)" stroke-dasharray="4,3"/>
+  <!-- Health -> Evolution -->
+  <path d="M 230,370 C 210,340 210,290 230,260" stroke="#f59e0b" stroke-width="1.5" fill="none" opacity="0.3" marker-end="url(#arrowGold)" stroke-dasharray="4,3"/>
+
+  <!-- Cross connections (subtle) -->
+  <!-- Memory -> Harness -->
+  <path d="M 570,240 C 620,290 670,340 720,385" stroke="#94a3b8" stroke-width="1" fill="none" opacity="0.15" marker-end="url(#arrowWhite)" stroke-dasharray="3,4"/>
+  <!-- Evolution -> Context -->
+  <path d="M 350,210 C 450,240 630,240 730,210" stroke="#94a3b8" stroke-width="1" fill="none" opacity="0.15" marker-end="url(#arrowWhite)" stroke-dasharray="3,4"/>
+  <!-- Health -> Jobs -->
+  <path d="M 330,430 C 380,440 450,440 490,430" stroke="#94a3b8" stroke-width="1" fill="none" opacity="0.15" marker-end="url(#arrowWhite)" stroke-dasharray="3,4"/>
+  <!-- Memory -> Jobs (center cross) -->
+  <path d="M 540,240 C 530,310 530,370 540,400" stroke="#94a3b8" stroke-width="1" fill="none" opacity="0.12" marker-end="url(#arrowWhite)" stroke-dasharray="3,4"/>
+
+  <!-- ==================== FLYWHEEL NODES ==================== -->
+
+  <!-- Node 1: Self-Evolution (top center) -->
+  <g transform="translate(280, 130)">
+    <rect x="0" y="0" width="160" height="100" rx="12" fill="#1e1e36" stroke="#8b5cf6" stroke-width="1.5" opacity="0.95"/>
+    <rect x="0" y="0" width="160" height="100" rx="12" fill="url(#purple)" opacity="0.08"/>
+    <circle cx="28" cy="28" r="14" fill="#8b5cf6" opacity="0.15"/>
+    <polygon points="28,16 31,25 40,25 33,30 35,39 28,34 21,39 23,30 16,25 25,25" fill="#c4b5fd" opacity="0.8"/>
+    <text x="50" y="30" font-family="system-ui,-apple-system,sans-serif" font-size="12" font-weight="700" fill="#c4b5fd" letter-spacing="0.5">Self-Evolution</text>
+    <text x="14" y="52" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="#94a3b8">Learn capabilities</text>
+    <text x="14" y="66" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="#94a3b8">Capture corrections</text>
+    <text x="14" y="80" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="#94a3b8">Never repeat mistakes</text>
+    <!-- Status dot -->
+    <circle cx="142" cy="16" r="4" fill="#10b981"/>
+  </g>
+
+  <!-- Node 2: Self-Memory (top right of center) -->
+  <g transform="translate(490, 130)">
+    <rect x="0" y="0" width="160" height="100" rx="12" fill="#1e1e36" stroke="#3b82f6" stroke-width="1.5" opacity="0.95"/>
+    <rect x="0" y="0" width="160" height="100" rx="12" fill="url(#blue)" opacity="0.08"/>
+    <circle cx="28" cy="28" r="14" fill="#3b82f6" opacity="0.15"/>
+    <circle cx="28" cy="28" r="9" fill="none" stroke="#93c5fd" stroke-width="1.5" opacity="0.8"/>
+    <path d="M 22,28 Q 28,20 34,28 Q 28,36 22,28" fill="#93c5fd" opacity="0.5"/>
+    <text x="50" y="30" font-family="system-ui,-apple-system,sans-serif" font-size="12" font-weight="700" fill="#93c5fd" letter-spacing="0.5">Self-Memory</text>
+    <text x="14" y="52" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="#94a3b8">3-layer distillation</text>
+    <text x="14" y="66" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="#94a3b8">Git-verified accuracy</text>
+    <text x="14" y="80" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="#94a3b8">LLM-powered pruning</text>
+    <circle cx="142" cy="16" r="4" fill="#10b981"/>
+  </g>
+
+  <!-- Node 3: Self-Context (right) -->
+  <g transform="translate(700, 130)">
+    <rect x="0" y="0" width="160" height="100" rx="12" fill="#1e1e36" stroke="#f59e0b" stroke-width="1.5" opacity="0.95"/>
+    <rect x="0" y="0" width="160" height="100" rx="12" fill="url(#gold)" opacity="0.08"/>
+    <circle cx="28" cy="28" r="14" fill="#f59e0b" opacity="0.15"/>
+    <circle cx="28" cy="28" r="9" fill="none" stroke="#fcd34d" stroke-width="1.5" opacity="0.6"/>
+    <circle cx="28" cy="28" r="5" fill="none" stroke="#fcd34d" stroke-width="1" opacity="0.6"/>
+    <circle cx="28" cy="28" r="2" fill="#fcd34d" opacity="0.8"/>
+    <text x="50" y="30" font-family="system-ui,-apple-system,sans-serif" font-size="12" font-weight="700" fill="#fcd34d" letter-spacing="0.5">Self-Context</text>
+    <text x="14" y="52" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="#94a3b8">11-file priority chain</text>
+    <text x="14" y="66" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="#94a3b8">Token budget mgmt</text>
+    <text x="14" y="80" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="#94a3b8">L0/L1 smart caching</text>
+    <circle cx="142" cy="16" r="4" fill="#10b981"/>
+  </g>
+
+  <!-- Node 4: Self-Health (bottom left) -->
+  <g transform="translate(170, 370)">
+    <rect x="0" y="0" width="160" height="100" rx="12" fill="#1e1e36" stroke="#ef4444" stroke-width="1.5" opacity="0.95"/>
+    <rect x="0" y="0" width="160" height="100" rx="12" fill="url(#red)" opacity="0.08"/>
+    <circle cx="28" cy="28" r="14" fill="#ef4444" opacity="0.15"/>
+    <path d="M 28,19 L 34,25 L 34,33 L 28,37 L 22,33 L 22,25 Z" fill="none" stroke="#fca5a5" stroke-width="1.5" opacity="0.8"/>
+    <line x1="28" y1="25" x2="28" y2="31" stroke="#fca5a5" stroke-width="1.5" opacity="0.8"/>
+    <text x="50" y="30" font-family="system-ui,-apple-system,sans-serif" font-size="12" font-weight="700" fill="#fca5a5" letter-spacing="0.5">Self-Health</text>
+    <text x="14" y="52" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="#94a3b8">Service monitoring</text>
+    <text x="14" y="66" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="#94a3b8">Auto-restart on crash</text>
+    <text x="14" y="80" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="#94a3b8">Resource diagnostics</text>
+    <circle cx="142" cy="16" r="4" fill="#10b981"/>
+  </g>
+
+  <!-- Node 5: Self-Jobs (bottom center) -->
+  <g transform="translate(430, 370)">
+    <rect x="0" y="0" width="160" height="100" rx="12" fill="#1e1e36" stroke="#06b6d4" stroke-width="1.5" opacity="0.95"/>
+    <rect x="0" y="0" width="160" height="100" rx="12" fill="url(#cyan)" opacity="0.08"/>
+    <circle cx="28" cy="28" r="14" fill="#06b6d4" opacity="0.15"/>
+    <circle cx="28" cy="28" r="5" fill="none" stroke="#67e8f9" stroke-width="1.5" opacity="0.8"/>
+    <circle cx="28" cy="28" r="2" fill="#67e8f9" opacity="0.8"/>
+    <g stroke="#67e8f9" stroke-width="1.5" opacity="0.6">
+      <line x1="28" y1="19" x2="28" y2="22"/><line x1="28" y1="34" x2="28" y2="37"/>
+      <line x1="19" y1="28" x2="22" y2="28"/><line x1="34" y1="28" x2="37" y2="28"/>
+    </g>
+    <text x="50" y="30" font-family="system-ui,-apple-system,sans-serif" font-size="12" font-weight="700" fill="#67e8f9" letter-spacing="0.5">Self-Jobs</text>
+    <text x="14" y="52" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="#94a3b8">Scheduled automation</text>
+    <text x="14" y="66" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="#94a3b8">Sidecar services</text>
+    <text x="14" y="80" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="#94a3b8">Signal pipeline</text>
+    <circle cx="142" cy="16" r="4" fill="#10b981"/>
+  </g>
+
+  <!-- Node 6: Self-Harness (bottom right) -->
+  <g transform="translate(660, 370)">
+    <rect x="0" y="0" width="160" height="100" rx="12" fill="#1e1e36" stroke="#10b981" stroke-width="1.5" opacity="0.95"/>
+    <rect x="0" y="0" width="160" height="100" rx="12" fill="url(#green)" opacity="0.08"/>
+    <circle cx="28" cy="28" r="14" fill="#10b981" opacity="0.15"/>
+    <circle cx="26" cy="26" r="6" fill="none" stroke="#6ee7b7" stroke-width="1.5" opacity="0.8"/>
+    <line x1="30" y1="30" x2="36" y2="36" stroke="#6ee7b7" stroke-width="2" opacity="0.8" stroke-linecap="round"/>
+    <text x="50" y="30" font-family="system-ui,-apple-system,sans-serif" font-size="12" font-weight="700" fill="#6ee7b7" letter-spacing="0.5">Self-Harness</text>
+    <text x="14" y="52" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="#94a3b8">Validate context files</text>
+    <text x="14" y="66" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="#94a3b8">Detect DDD staleness</text>
+    <text x="14" y="80" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="#94a3b8">Auto-refresh indexes</text>
+    <circle cx="142" cy="16" r="4" fill="#10b981"/>
+  </g>
+
+  <!-- ==================== CENTER HUB ==================== -->
+  <g transform="translate(420, 265)">
+    <rect x="0" y="0" width="180" height="80" rx="40" fill="#1a1a2e" stroke="#f59e0b" stroke-width="2" opacity="0.95" filter="url(#glow)"/>
+    <rect x="0" y="0" width="180" height="80" rx="40" fill="url(#gold)" opacity="0.06"/>
+    <text x="90" y="38" text-anchor="middle" font-family="system-ui,-apple-system,sans-serif" font-size="16" font-weight="800" fill="#f59e0b" letter-spacing="1">COMPOUND</text>
+    <text x="90" y="58" text-anchor="middle" font-family="system-ui,-apple-system,sans-serif" font-size="16" font-weight="800" fill="#f59e0b" letter-spacing="1">LOOP</text>
+  </g>
+
+  <!-- Hub connections (from center to each node) -->
+  <g stroke="#f59e0b" stroke-width="1" opacity="0.2">
+    <line x1="480" y1="265" x2="360" y2="230"/>
+    <line x1="520" y1="265" x2="570" y2="230"/>
+    <line x1="560" y1="290" x2="700" y2="230"/>
+    <line x1="560" y1="320" x2="660" y2="370"/>
+    <line x1="480" y1="345" x2="510" y2="370"/>
+    <line x1="440" y1="345" x2="330" y2="370"/>
+    <line x1="420" y1="290" x2="280" y2="230"/>
+  </g>
+
+  <!-- ==================== GROWTH TRAJECTORY (bottom) ==================== -->
+  <g transform="translate(80, 520)">
+    <!-- Track line -->
+    <line x1="0" y1="22" x2="800" y2="22" stroke="#334155" stroke-width="2"/>
+
+    <!-- L0 -->
+    <circle cx="40" cy="22" r="8" fill="#334155" stroke="#64748b" stroke-width="1.5"/>
+    <text x="40" y="26" text-anchor="middle" font-family="system-ui,-apple-system,sans-serif" font-size="8" font-weight="700" fill="#94a3b8">L0</text>
+    <text x="40" y="50" text-anchor="middle" font-family="system-ui,-apple-system,sans-serif" font-size="9" fill="#64748b">Reactive</text>
+
+    <!-- L1 (current - highlighted) -->
+    <circle cx="240" cy="22" r="12" fill="#f59e0b" stroke="#fbbf24" stroke-width="2" filter="url(#glow)"/>
+    <text x="240" y="27" text-anchor="middle" font-family="system-ui,-apple-system,sans-serif" font-size="9" font-weight="800" fill="#1a1a2e">L1</text>
+    <text x="240" y="50" text-anchor="middle" font-family="system-ui,-apple-system,sans-serif" font-size="9" font-weight="600" fill="#fbbf24">Self-Maintaining</text>
+    <text x="240" y="64" text-anchor="middle" font-family="system-ui,-apple-system,sans-serif" font-size="8" fill="#94a3b8">(current)</text>
+
+    <!-- L2 -->
+    <circle cx="420" cy="22" r="8" fill="#1e1e36" stroke="#8b5cf6" stroke-width="1.5"/>
+    <text x="420" y="26" text-anchor="middle" font-family="system-ui,-apple-system,sans-serif" font-size="8" font-weight="700" fill="#c4b5fd">L2</text>
+    <text x="420" y="50" text-anchor="middle" font-family="system-ui,-apple-system,sans-serif" font-size="9" fill="#8b5cf6">Self-Improving</text>
+
+    <!-- L3 -->
+    <circle cx="580" cy="22" r="8" fill="#1e1e36" stroke="#3b82f6" stroke-width="1.5"/>
+    <text x="580" y="26" text-anchor="middle" font-family="system-ui,-apple-system,sans-serif" font-size="8" font-weight="700" fill="#93c5fd">L3</text>
+    <text x="580" y="50" text-anchor="middle" font-family="system-ui,-apple-system,sans-serif" font-size="9" fill="#3b82f6">Self-Governing</text>
+
+    <!-- L4 -->
+    <circle cx="760" cy="22" r="8" fill="#1e1e36" stroke="#10b981" stroke-width="1.5"/>
+    <text x="760" y="26" text-anchor="middle" font-family="system-ui,-apple-system,sans-serif" font-size="8" font-weight="700" fill="#6ee7b7">L4</text>
+    <text x="760" y="50" text-anchor="middle" font-family="system-ui,-apple-system,sans-serif" font-size="9" fill="#10b981">Autonomous</text>
+
+    <!-- Progress fill (L0 to L1) -->
+    <line x1="0" y1="22" x2="240" y2="22" stroke="#f59e0b" stroke-width="2.5" opacity="0.6"/>
+
+    <!-- Label -->
+    <text x="400" y="82" text-anchor="middle" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="#64748b" letter-spacing="2">GROWTH TRAJECTORY</text>
+  </g>
+
+  <!-- ==================== LEGEND ==================== -->
+  <g transform="translate(32, 130)">
+    <text x="0" y="0" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="#64748b" letter-spacing="1">FLYWHEELS</text>
+    <circle cx="8" cy="18" r="4" fill="#8b5cf6" opacity="0.6"/>
+    <text x="18" y="22" font-family="system-ui,-apple-system,sans-serif" font-size="9" fill="#94a3b8">Evolution</text>
+    <circle cx="8" cy="36" r="4" fill="#3b82f6" opacity="0.6"/>
+    <text x="18" y="40" font-family="system-ui,-apple-system,sans-serif" font-size="9" fill="#94a3b8">Memory</text>
+    <circle cx="8" cy="54" r="4" fill="#f59e0b" opacity="0.6"/>
+    <text x="18" y="58" font-family="system-ui,-apple-system,sans-serif" font-size="9" fill="#94a3b8">Context</text>
+    <circle cx="8" cy="72" r="4" fill="#ef4444" opacity="0.6"/>
+    <text x="18" y="76" font-family="system-ui,-apple-system,sans-serif" font-size="9" fill="#94a3b8">Health</text>
+    <circle cx="8" cy="90" r="4" fill="#06b6d4" opacity="0.6"/>
+    <text x="18" y="94" font-family="system-ui,-apple-system,sans-serif" font-size="9" fill="#94a3b8">Jobs</text>
+    <circle cx="8" cy="108" r="4" fill="#10b981" opacity="0.6"/>
+    <text x="18" y="112" font-family="system-ui,-apple-system,sans-serif" font-size="9" fill="#94a3b8">Harness</text>
+  </g>
+
+  <!-- Status legend -->
+  <g transform="translate(32, 290)">
+    <circle cx="8" cy="0" r="3.5" fill="#10b981"/>
+    <text x="18" y="4" font-family="system-ui,-apple-system,sans-serif" font-size="9" fill="#94a3b8">Active</text>
+    <line x1="0" y1="18" x2="16" y2="18" stroke="#f59e0b" stroke-width="1.5" stroke-dasharray="4,3" opacity="0.5"/>
+    <text x="22" y="22" font-family="system-ui,-apple-system,sans-serif" font-size="9" fill="#94a3b8">Data flow</text>
+  </g>
+
+  <!-- Tagline -->
+  <text x="480" y="608" text-anchor="middle" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="#475569" letter-spacing="1">Every session makes the next one better. The system doesn't just run — it compounds.</text>
+</svg>
