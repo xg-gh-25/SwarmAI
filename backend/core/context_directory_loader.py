@@ -105,16 +105,34 @@ class ContextFileSpec:
     truncate_from: Literal["head", "tail"] = "tail"
 
 
+# Ownership model:
+#   user_customized=False → SYSTEM-OWNED: always overwritten from template, readonly (0o444).
+#     Source of truth: backend/context/<file>.md (codebase).
+#     User/agent edits to .context/ copy are LOST on next startup.
+#     Files: SWARMAI.md, IDENTITY.md, SOUL.md, AGENT.md
+#
+#   user_customized=True  → RUNTIME-OWNED: copy-only-if-missing, writable (0o644).
+#     Source of truth: .context/<file>.md (workspace).
+#     Template only used for initial provisioning. Never overwritten after.
+#     Sub-categories (enforced by convention, not code):
+#       - User-owned:  USER.md, STEERING.md, TOOLS.md — user edits freely
+#       - Agent-owned: MEMORY.md, EVOLUTION.md — agent writes via hooks/locked_write
+#       - Auto-generated: KNOWLEDGE.md, PROJECTS.md — agent rebuilds from filesystem scans
+#
 CONTEXT_FILES: list[ContextFileSpec] = [
+    # ── System-owned (codebase template → always overwrite) ──────────
     ContextFileSpec("SWARMAI.md",           0,  "SwarmAI",            False, False, "tail"),
     ContextFileSpec("IDENTITY.md",          1,  "Identity",           False, False, "tail"),
     ContextFileSpec("SOUL.md",              2,  "Soul",               False, False, "tail"),
     ContextFileSpec("AGENT.md",             3,  "Agent Directives",   True,  False, "tail"),
+    # ── User-owned (user edits, never overwritten) ───────────────────
     ContextFileSpec("USER.md",              4,  "User",               True,  True,  "tail"),
     ContextFileSpec("STEERING.md",          5,  "Steering",           True,  True,  "tail"),
     ContextFileSpec("TOOLS.md",             6,  "Tools",              True,  True,  "tail"),
+    # ── Agent-owned (agent writes via hooks, never overwritten) ──────
     ContextFileSpec("MEMORY.md",            7,  "Memory",             True,  True,  "head"),
     ContextFileSpec("EVOLUTION.md",         8,  "Evolution Registry", True,  True,  "head"),
+    # ── Auto-generated (rebuilt from filesystem, never overwritten) ──
     ContextFileSpec("KNOWLEDGE.md",         9,  "Knowledge",          True,  True,  "tail"),
     ContextFileSpec("PROJECTS.md",         10,  "Projects",           True,  True,  "tail"),
     # GROWTH_PRINCIPLES.md removed (2026-03) — content folded into SOUL.md
