@@ -849,7 +849,7 @@ python backend/scripts/artifact_cli.py run-status [--active-only]
 python backend/scripts/artifact_cli.py run-resume --project <PROJECT> --run-id <RUN_ID>
 
 # Create a background pipeline job (runs via scheduler)
-python3 ~/.swarm-ai/SwarmWS/Services/swarm-jobs/job_manager.py pipeline \
+python -m jobs.job_manager pipeline \
   --project <PROJECT> --requirement "<what to build>" \
   [--schedule "0 9 * * 1-5"] [--profile full] [--budget 2.00] [--one-shot]
 ```
@@ -863,12 +863,12 @@ pipeline execution from interactive chat sessions.
 
 ```bash
 # Recurring: run every weekday at 9am
-python3 ~/.swarm-ai/SwarmWS/Services/swarm-jobs/job_manager.py pipeline \
+python -m jobs.job_manager pipeline \
   --project SwarmAI --requirement "Run QA on recent changes" \
   --profile bugfix --schedule "0 1 * * 1-5"
 
 # One-shot: run once (for a specific feature)
-python3 ~/.swarm-ai/SwarmWS/Services/swarm-jobs/job_manager.py pipeline \
+python -m jobs.job_manager pipeline \
   --project ClientApp --requirement "Add payment retry logic" \
   --profile full --budget 3.00 --one-shot
 ```

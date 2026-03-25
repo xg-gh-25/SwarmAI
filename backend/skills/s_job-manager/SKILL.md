@@ -18,15 +18,30 @@ output_type: text
 
 # Job Manager Skill
 
-Manage scheduled background jobs in the Swarm Job System. Jobs run hourly via
-launchd (`com.swarm.signal-pipeline.plist`) — the scheduler checks which jobs are
-due and executes them independently of any chat session.
+Manage scheduled background jobs in the Swarm Job System. System jobs are
+defined in product code (`backend/jobs/system_jobs.py`). User jobs live in
+`SwarmWS/Services/swarm-jobs/user-jobs.yaml`. The scheduler runs hourly via
+a single launchd plist (`com.swarmai.scheduler`).
 
-## Tool
+## Tool — REST API (preferred)
 
 ```bash
-# All commands output JSON to stdout
-python3 ~/.swarm-ai/SwarmWS/Services/swarm-jobs/job_manager.py <command> [options]
+# List all jobs with status
+curl -s http://localhost:PORT/api/jobs/ | python3 -m json.tool
+
+# Force-run a specific job
+curl -s -X POST http://localhost:PORT/api/jobs/run \
+  -H "Content-Type: application/json" -d '{"job_id":"signal-fetch"}'
+
+# Scheduler status overview
+curl -s http://localhost:PORT/api/jobs/status | python3 -m json.tool
+```
+
+## Tool — CLI (when backend unavailable)
+
+```bash
+# From the backend directory (auto-detected by the agent):
+cd backend && .venv/bin/python -m jobs.job_manager <command> [options]
 ```
 
 Where `~/.swarm-ai/SwarmWS` = `~/.swarm-ai/SwarmWS`
@@ -35,13 +50,13 @@ Where `~/.swarm-ai/SwarmWS` = `~/.swarm-ai/SwarmWS`
 
 ### List all jobs
 ```bash
-python3 ~/.swarm-ai/SwarmWS/Services/swarm-jobs/job_manager.py list
+python -m jobs.job_manager list
 ```
 Returns array of all jobs (system + user) with status, last run, failure count.
 
 ### Create a user job
 ```bash
-python3 ~/.swarm-ai/SwarmWS/Services/swarm-jobs/job_manager.py create --json '{
+python -m jobs.job_manager create --json '{
   "name": "Morning Inbox Summary",
   "type": "agent_task",
   "schedule": "0 1 * * 1-5",
@@ -57,7 +72,7 @@ python3 ~/.swarm-ai/SwarmWS/Services/swarm-jobs/job_manager.py create --json '{
 
 ### Edit a user job
 ```bash
-python3 ~/.swarm-ai/SwarmWS/Services/swarm-jobs/job_manager.py edit uj-morning-inbox --json '{
+python -m jobs.job_manager edit uj-morning-inbox --json '{
   "schedule": "0 0 * * 1-5",
   "prompt": "Updated prompt here"
 }'
@@ -65,24 +80,24 @@ python3 ~/.swarm-ai/SwarmWS/Services/swarm-jobs/job_manager.py edit uj-morning-i
 
 ### Pause / Resume / Delete
 ```bash
-python3 ~/.swarm-ai/SwarmWS/Services/swarm-jobs/job_manager.py pause uj-morning-inbox
-python3 ~/.swarm-ai/SwarmWS/Services/swarm-jobs/job_manager.py resume uj-morning-inbox
-python3 ~/.swarm-ai/SwarmWS/Services/swarm-jobs/job_manager.py delete uj-morning-inbox
+python -m jobs.job_manager pause uj-morning-inbox
+python -m jobs.job_manager resume uj-morning-inbox
+python -m jobs.job_manager delete uj-morning-inbox
 ```
 
 ### Show full details
 ```bash
-python3 ~/.swarm-ai/SwarmWS/Services/swarm-jobs/job_manager.py show signal-fetch
+python -m jobs.job_manager show signal-fetch
 ```
 
 ### Validate a cron expression
 ```bash
-python3 ~/.swarm-ai/SwarmWS/Services/swarm-jobs/job_manager.py validate-cron "0 9 * * 1-5"
+python -m jobs.job_manager validate-cron "0 9 * * 1-5"
 ```
 
 ### Force-run a job immediately
 ```bash
-python3 ~/.swarm-ai/SwarmWS/Services/swarm-jobs/scheduler.py --run-now JOB_ID
+python -m jobs.scheduler --run-now JOB_ID
 ```
 
 ## Job Types
