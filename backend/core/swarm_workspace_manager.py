@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Simplified folder structure — only user-facing directories
-FOLDER_STRUCTURE = ["Knowledge", "Projects", "Attachments"]
+FOLDER_STRUCTURE = ["Knowledge", "Projects", "Attachments", "Services"]
 
 # Default Knowledge subdirectories (auto-created on startup)
 KNOWLEDGE_SUBDIRS = [
@@ -46,7 +46,7 @@ KNOWLEDGE_SUBDIRS = [
 ]
 
 SYSTEM_MANAGED_FOLDERS = {
-    "Knowledge", "Projects", "Attachments",
+    "Knowledge", "Projects", "Attachments", "Services",
     "Knowledge/Notes", "Knowledge/Reports", "Knowledge/Meetings",
     "Knowledge/Library", "Knowledge/Archives", "Knowledge/DailyActivity",
     "Knowledge/Handoffs", "Knowledge/Designs", "Knowledge/AIDLC",
