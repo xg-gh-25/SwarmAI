@@ -529,7 +529,7 @@ def _create_checkpoint_todo(
             "completed_stages": completed_stages,
             "reason": reason,
             "next_step": f"Resolve '{reason}', then resume pipeline for {project}",
-            "files": [f"Projects/{project}/.artifacts/pipeline-run-{run_id}.json"],
+            "files": [f"Projects/{project}/.artifacts/runs/{run_id}/run.json"],
         })
 
         with sqlite3.connect(str(db_path), timeout=5.0) as conn:
