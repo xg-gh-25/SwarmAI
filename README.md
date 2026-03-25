@@ -74,33 +74,9 @@ SwarmAI doesn't just use skills — it builds new ones when it hits capability g
 
 Most AI agents are stateless functions: input in, output out, nothing learned. Swarm has a **brain** — six interconnected flywheels that feed each other, creating compound growth with every session.
 
-```
-                     ┌─────────────────────┐
-                     │   Self-Evolution     │  Learn new capabilities,
-                     │                     │  never repeat mistakes
-                     └──────┬──────────────┘
-                            │
-  ┌─────────────────┐  ┌────┴────────────┐  ┌─────────────────┐
-  │  Self-Health    │  │  Self-Memory    │  │  Self-Context   │
-  │  Monitor,       │  │  Remember what  │  │  Right info,    │
-  │  diagnose,      │◄─┤  matters,       ├─►│  right time,    │
-  │  auto-heal      │  │  forget what    │  │  right budget   │
-  └────────┬────────┘  │  doesn't        │  └──────┬──────────┘
-           │           └────┬────────────┘         │
-           │                │                      │
-  ┌────────┴────────┐  ┌───┴─────────────┐
-  │  Self-Jobs      │  │  Self-Harness   │  Validate accuracy,
-  │  Background     │◄─┤  detect drift,  │  detect staleness,
-  │  automation     │  │  auto-fix       │  auto-repair
-  └─────────────────┘  └─────────────────┘
-```
-
-**The compound loop:**
-```
-Session happens → Memory captures it → Evolution detects patterns →
-Harness verifies accuracy → Context assembles smarter prompts →
-Next session performs better → Memory captures the improvement → (loop accelerates)
-```
+<div align="center">
+<img src="./assets/swarm-core-engine.svg" alt="Swarm Core Engine Architecture" width="800"/>
+</div>
 
 | Flywheel | What It Does | Key Components |
 |----------|-------------|----------------|
