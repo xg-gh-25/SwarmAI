@@ -34,7 +34,6 @@ from core.session_router import SessionRouter
 
 PROPERTY_SETTINGS = settings(
     max_examples=50,
-    
     suppress_health_check=[HealthCheck.function_scoped_fixture],
 )
 

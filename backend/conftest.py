@@ -2,10 +2,11 @@
 
 Provides:
 1. Hypothesis profiles (default=30 examples, ci=100) for PBT speed control
-2. Auto-marking of Hypothesis tests with @pytest.mark.pbt
-3. Resource leak detection (processes, FDs, memory) — periodic, not per-test
-4. xdist-safe: no SIGALRM, no child-kill, no event-loop tampering
-5. Per-test timeout via threading (xdist-compatible, no pytest-timeout needed)
+2. Resource leak detection (processes, FDs, memory) — periodic, not per-test
+3. xdist-safe: no SIGALRM, no child-kill, no event-loop tampering
+4. Per-test timeout (xdist-compatible, no pytest-timeout needed)
+
+Auto-marking of PBT tests and tiered test selection live in tests/conftest.py.
 
 Usage:
     make test          # fast: skip PBT+slow, 4 workers
@@ -24,6 +25,9 @@ from typing import Optional
 import psutil
 import pytest
 from hypothesis import HealthCheck, settings as hypothesis_settings
+
+# NOTE: pytest_collection_modifyitems (auto-mark pbt/slow) lives in
+# tests/conftest.py — not here. Keep one copy to avoid double-marking.
 
 
 # ---------------------------------------------------------------------------
@@ -46,21 +50,6 @@ hypothesis_settings.register_profile(
 
 _profile = os.environ.get("HYPOTHESIS_PROFILE", "default")
 hypothesis_settings.load_profile(_profile)
-
-
-# ---------------------------------------------------------------------------
-# Auto-mark Hypothesis tests with @pytest.mark.pbt
-# ---------------------------------------------------------------------------
-
-def pytest_collection_modifyitems(config, items):
-    """Walk collected tests; any using @given gets the `pbt` marker."""
-    pbt_marker = pytest.mark.pbt
-    for item in items:
-        if isinstance(item, pytest.Function):
-            func = item.obj
-            # Hypothesis wraps @given functions with a .hypothesis attribute
-            if hasattr(func, "hypothesis"):
-                item.add_marker(pbt_marker)
 
 
 # ---------------------------------------------------------------------------
@@ -189,6 +178,10 @@ def _test_timeout(request):
     """Flag tests that exceed _DEFAULT_TIMEOUT seconds.
 
     Override per-test: @pytest.mark.timeout(120)
+
+    NOTE: Measures wall-clock time including fixture setup/teardown. A fast
+    test with slow fixture cleanup could get flagged. Acceptable with the
+    generous 60s default — only revisit if fixture teardown becomes heavy.
     """
     # Allow per-test override via marker
     marker = request.node.get_closest_marker("timeout")
