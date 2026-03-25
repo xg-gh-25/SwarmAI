@@ -449,7 +449,7 @@ def validate(project: str, run_id: str, stage: str) -> dict[str, Any]:
     # Find the stage record for the stage being validated
     stage_record = None
     for s in stages_list:
-        if s.get("stage") == stage:
+        if s.get("stage", s.get("name")) == stage:
             stage_record = s
 
     if stage_record is None:
@@ -684,7 +684,7 @@ def _check_profile_respected(stage: str, profile: str) -> bool:
 def _find_stage_record(stage_name: str, stages_list: list[dict]) -> dict | None:
     """Find the most recent record for a given stage name."""
     for s in reversed(stages_list):
-        if s.get("stage") == stage_name:
+        if s.get("stage", s.get("name")) == stage_name:
             return s
     return None
 
@@ -737,7 +737,7 @@ def main() -> None:
         total_warnings = 0
 
         for stage_rec in run.get("stages", []):
-            stage_name = stage_rec.get("stage")
+            stage_name = stage_rec.get("stage", stage_rec.get("name"))
             if stage_rec.get("status") in ("completed", "running"):
                 result = validate(args.project, args.run_id, stage_name)
                 all_results.append(result)

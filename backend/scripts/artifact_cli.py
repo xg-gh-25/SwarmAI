@@ -128,13 +128,92 @@ def cmd_state(args, reg: ArtifactRegistry) -> None:
 
 
 def cmd_advance(args, reg: ArtifactRegistry) -> None:
-    """Advance pipeline state."""
+    """Advance pipeline state. Auto-validates if a run is active.
+
+    If a pipeline run exists and the current stage has a record,
+    runs the pipeline validator. Refuses to advance on BLOCK errors.
+    Warnings are printed but don't block advancement.
+    """
+    # Auto-validate before advancing (structural enforcement)
+    try:
+        _auto_validate_before_advance(args.project, args.state)
+    except SystemExit:
+        raise  # Re-raise if validation blocks
+    except Exception as e:
+        # Non-blocking: if validator itself fails, still advance
+        print(json.dumps({"validation_warning": f"Validator error: {e}"}), file=sys.stderr)
+
     try:
         reg.advance_pipeline(args.project, args.state)
         print(json.dumps({"project": args.project, "pipeline_state": args.state}))
     except ValueError as e:
         print(json.dumps({"error": str(e)}), file=sys.stderr)
         sys.exit(1)
+
+
+def _auto_validate_before_advance(project: str, next_state: str) -> None:
+    """Run pipeline validator on the current stage before advancing.
+
+    Blocks on errors, warns on warnings. Skips if no active run found.
+    """
+    import subprocess
+
+    # Find active run
+    artifacts_dir = Path.home() / ".swarm-ai" / "SwarmWS" / "Projects" / project / ".artifacts" / "runs"
+    if not artifacts_dir.exists():
+        return
+
+    # Find the most recent running run
+    run_id = None
+    for run_dir in sorted(artifacts_dir.iterdir(), reverse=True):
+        run_file = run_dir / "run.json"
+        if run_file.exists():
+            run_data = json.loads(run_file.read_text())
+            if run_data.get("status") == "running":
+                run_id = run_data["id"]
+                stages = run_data.get("stages", [])
+                break
+
+    if not run_id or not stages:
+        return
+
+    # Determine current stage (last completed)
+    current_stage = None
+    for s in reversed(stages):
+        status = s.get("status", "")
+        if status in ("done", "completed"):
+            current_stage = s.get("stage", s.get("name"))
+            break
+
+    if not current_stage:
+        return
+
+    # Run validator
+    try:
+        validator = Path(__file__).parent / "pipeline_validator.py"
+        result = subprocess.run(
+            [sys.executable, str(validator), "check",
+             "--project", project, "--run-id", run_id, "--stage", current_stage],
+            capture_output=True, text=True, timeout=10,
+            cwd=str(Path(__file__).parent.parent),
+        )
+        if result.stdout:
+            validation = json.loads(result.stdout)
+            if not validation.get("valid", True):
+                errors = validation.get("errors", [])
+                print(json.dumps({
+                    "validation_blocked": True,
+                    "stage": current_stage,
+                    "errors": errors,
+                }, indent=2), file=sys.stderr)
+                sys.exit(1)
+            warnings = validation.get("warnings", [])
+            if warnings:
+                print(json.dumps({"validation_warnings": warnings}), file=sys.stderr)
+    except subprocess.TimeoutExpired:
+        pass  # Don't block on validator timeout
+    except (json.JSONDecodeError, OSError):
+        pass  # Don't block on validator parse errors
 
 
 def cmd_learn(args, reg: ArtifactRegistry) -> None:
@@ -338,9 +417,13 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
 
     if args.stage_json:
         stage_record = json.loads(args.stage_json)
+        # Normalize: accept both "name" and "stage" as the stage identifier
+        if "name" in stage_record and "stage" not in stage_record:
+            stage_record["stage"] = stage_record.pop("name")
         # Replace existing stage record or append
         existing_idx = next(
-            (i for i, s in enumerate(run_state["stages"]) if s["stage"] == stage_record["stage"]),
+            (i for i, s in enumerate(run_state["stages"])
+             if s.get("stage", s.get("name")) == stage_record["stage"]),
             None,
         )
         if existing_idx is not None:
@@ -430,7 +513,7 @@ def cmd_run_checkpoint(args, reg: ArtifactRegistry) -> None:
     run_state["updated_at"] = now
 
     # Store checkpoint metadata in the run state
-    completed_stages = [s["stage"] for s in run_state["stages"] if s.get("status") == "completed"]
+    completed_stages = [s.get("stage", s.get("name", "unknown")) for s in run_state["stages"] if s.get("status") == "completed"]
     checkpoint_meta = {
         "reason": args.reason,
         "stage": args.stage,
@@ -448,7 +531,7 @@ def cmd_run_checkpoint(args, reg: ArtifactRegistry) -> None:
         "requirement": run_state["requirement"],
         "completed_stages": [
             {
-                "stage": s["stage"],
+                "stage": s.get("stage", s.get("name", "unknown")),
                 "artifact_id": s.get("artifact_id"),
                 "notes": s.get("notes"),
             }
@@ -654,7 +737,7 @@ def cmd_run_budget(args, reg: ArtifactRegistry) -> None:
     usable = remaining - budget["checkpoint_reserve"]
 
     # Determine next stage
-    completed_stages = {s["stage"] for s in run_state.get("stages", []) if s.get("status") == "completed"}
+    completed_stages = {s.get("stage", s.get("name", "unknown")) for s in run_state.get("stages", []) if s.get("status") == "completed"}
     profile_stages = _get_profile_stages(run_state.get("profile", "full"))
     next_stage = None
     for s in profile_stages:
@@ -846,9 +929,9 @@ def cmd_run_resume(args, reg: ArtifactRegistry) -> None:
         "pipeline_id": args.run_id,
         "status": "running",
         "resumed_from": next_stage,
-        "completed_stages": [s["stage"] for s in run_state["stages"] if s.get("status") == "completed"],
+        "completed_stages": [s.get("stage", s.get("name", "unknown")) for s in run_state["stages"] if s.get("status") == "completed"],
         "budget": budget,
-        "blocked_stages": [s["stage"] for s in blocked_stages],
+        "blocked_stages": [s.get("stage", s.get("name", "unknown")) for s in blocked_stages],
     }, indent=2))
 
 
