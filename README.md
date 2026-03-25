@@ -99,7 +99,36 @@ Most AI agents are stateless functions: input in, output out, nothing learned. S
 
 This isn't a feature list — it's a growth architecture. Every session makes the next one better. Every correction prevents a class of future mistakes. The system doesn't just run; it **compounds**.
 
-### 5. Autonomous Pipeline — From Requirement to PR
+### 5. Swarm Brain — One AI, Every Channel, Shared Memory
+
+Swarm is a personal assistant. It has **one brain**. Whether you talk to it via a chat tab, Slack, Feishu, or any future channel — it's the same Swarm, the same memory, the same context.
+
+<div align="center">
+<img src="./assets/swarm-brain.svg" alt="Swarm Brain — Unified Session Architecture" width="800"/>
+</div>
+
+Three layers of continuity ensure nothing is lost across touchpoints:
+
+| Layer | What It Does | Scope |
+|-------|-------------|-------|
+| **L1: Shared Memory** | 11 context files (MEMORY.md, USER.md, EVOLUTION.md, DailyActivity...) loaded at every prompt build | All sessions — tabs + channels |
+| **L2: Cross-Channel Session** | All channels for the same person share ONE Claude conversation (`--resume`) | Slack + Feishu + future channels |
+| **L3: Active Session Digest** | Sibling session summaries injected into prompts — Tab knows what Channel did, Channel knows what Tab is working on | Tabs ↔ Channels (bidirectional) |
+
+**How it works in practice:**
+
+- Ask Swarm something on Slack → continue the conversation on Feishu → Claude remembers everything from both
+- Work on a deployment in Chat Tab 1 → ask on Slack "how's the deployment?" → Swarm knows (L3 digest)
+- Say "remember to deploy at 10am" on any channel → every future session knows (L1 memory)
+- Add WeChat or Teams next year → zero architecture change. Write an adapter (~250 lines), map user identity, done.
+
+**Key design decisions:**
+- Chat tabs are **parallel** (multi-slot, per-topic) — for deep work
+- Channel session is **serialized** (single dedicated slot) — for quick exchanges across platforms
+- One dedicated channel slot always reserved (`min_tabs = 2`) — channels never starve chat, chat never starves channels
+- User identity mapping ties platform-specific IDs (Slack `W017T04E`, Feishu `ou_abc`) to one unified `user_key`
+
+### 6. Autonomous Pipeline — From Requirement to PR
 
 Give SwarmAI a one-sentence requirement, and it drives the full development lifecycle:
 
@@ -164,7 +193,7 @@ This is the key Phase 3 insight: when no human reviews every line, **the test su
 
 This is the implementation of [AIDLC Phase 3 (AI-Management)](./docs/AIDLC-Phase3-Design.md) — where AI makes autonomous decisions and humans step in when needed.
 
-### 6. Three-Column Command Center — Seamless Integration
+### 7. Three-Column Command Center — Seamless Integration
 
 SwarmAI isn't three separate panels. It's **one integrated system** where the Chat Center orchestrates everything:
 
@@ -184,7 +213,7 @@ SwarmAI isn't three separate panels. It's **one integrated system** where the Ch
 - **Drag-to-chat** — drag any file from SwarmWS or any ToDo/artifact from Radar into a chat tab. The agent gets full context and starts executing immediately. No copy-paste, no re-explaining.
 - **Everything is connected** — when the agent writes a file, it shows up in the explorer. When it creates a ToDo, it appears in Radar. When you complete work, DailyActivity captures it automatically. The three panels are views of one unified workspace.
 
-### 7. Multi-Tab Parallel Sessions
+### 8. Multi-Tab Parallel Sessions
 
 Not a single chat thread — a **parallel command center**:
 
@@ -192,7 +221,7 @@ Not a single chat thread — a **parallel command center**:
 - **Tab persistence** — tabs survive app restarts with full conversation history
 - **Session isolation** — Tab 1 crashing does not affect Tab 2. Each tab has its own subprocess, state machine, and error recovery.
 
-### 8. Security — Human Always in Control
+### 9. Security — Human Always in Control
 
 Defense-in-depth: tool logger (audit trail) + command blocker (13 dangerous patterns) + human approval (permission dialog with persistent approvals) + skill access control. Plus workspace isolation, bash sandboxing, and error sanitization.
 
@@ -264,11 +293,11 @@ Code editors with AI autocomplete. Fundamentally different category:
 | **Philosophy** | Deep workspace — context compounds | Wide connector — AI everywhere |
 | **Memory** | 3-layer pipeline + self-evolution | Session pruning, no distillation |
 | **Context** | 11-file priority chain, token budgets, L0/L1 cache | Standard system prompt |
-| **Channels** | Desktop + Slack + Feishu | 21+ messaging platforms |
+| **Channels** | Desktop + Slack + Feishu (unified brain — one session across all) | 21+ messaging platforms (isolated per-channel) |
 | **Skills** | 50+ curated + self-built | 5,400+ marketplace |
 | **Voice/Mobile** | -- | Wake word + iOS/Android |
 
-**Where SwarmAI leads**: context depth, memory persistence, self-evolution, multi-tab isolation.
+**Where SwarmAI leads**: context depth, memory persistence, self-evolution, unified brain across channels.
 **Where OpenClaw leads**: platform reach, skill marketplace, voice, mobile.
 
 ---
