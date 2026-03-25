@@ -639,6 +639,21 @@ def _handle_maintenance(
             JOB_RESULTS_JSONL.write_text("\n".join(lines[-500:]) + "\n")
             actions.append(f"Trimmed job results JSONL: {len(lines)} → 500")
 
+    # LLM-powered memory health (weekly — the expensive but smart part)
+    try:
+        from .handlers.memory_health import run_memory_health
+        health_result = run_memory_health()
+        if health_result.get("status") == "success":
+            health_actions = health_result.get("actions", [])
+            actions.extend(health_actions)
+            if not health_actions:
+                actions.append("Memory health: all clear")
+        elif health_result.get("status") == "error":
+            actions.append(f"Memory health error: {health_result.get('error', 'unknown')}")
+    except Exception as e:
+        logger.warning("Memory health check failed (non-blocking): %s", e)
+        actions.append(f"Memory health skipped: {e}")
+
     summary = "; ".join(actions) if actions else "No maintenance needed"
     duration = (datetime.now(timezone.utc) - start).total_seconds()
 
