@@ -65,6 +65,65 @@ PROJECT_SYSTEM_FOLDERS: set[str] = set()
 # docs but cannot delete or rename the project itself.
 DEFAULT_PROJECT_NAME = "SwarmAI"
 
+# Default job system config (provisioned on first startup).
+# Feed definitions are user-customizable; system job definitions live in code.
+_DEFAULT_JOB_CONFIG = """\
+# Swarm Signal Pipeline — Feed Configuration
+# Feeds define what signals to fetch. Edit freely.
+# System job definitions are managed by SwarmAI (not in this file).
+
+feeds:
+  - id: ai-engineering
+    name: AI Engineering Blogs
+    type: rss
+    config:
+      urls:
+        - https://simonwillison.net/atom/everything/
+        - https://lilianweng.github.io/index.xml
+        - https://www.latent.space/feed
+        - https://blog.langchain.dev/rss/
+        - https://www.anthropic.com/rss.xml
+    tags: [ai, engineering]
+    enabled: true
+
+  - id: tool-releases
+    name: AI Tool Releases
+    type: github-releases
+    config:
+      repos:
+        - anthropics/anthropic-sdk-python
+        - anthropics/claude-code
+        - pydantic/pydantic
+        - tiangolo/fastapi
+      include_prereleases: false
+    tags: [releases, tools]
+    enabled: true
+
+  - id: hn-ai
+    name: HN AI Discussions
+    type: hacker-news
+    config:
+      keywords: [Claude, LLM agent, AI coding, Anthropic]
+      min_score: 50
+      max_stories: 15
+    tags: [ai, community]
+    enabled: true
+
+defaults:
+  max_age_hours: 48
+  dedup_window_days: 7
+  relevance_threshold: 0.3
+  max_active_feeds: 15
+  max_daily_agent_tasks: 50
+  max_monthly_spend_usd: 100.0
+
+user_context:
+  interests: []
+  projects: []
+  tech_stack: []
+  recent_topics: []
+"""
+
 # DDD document templates for new projects.  Each key is a filename, each
 # value is the template content with ``{project_name}`` placeholders.
 DDD_TEMPLATES: dict[str, str] = {
@@ -1520,11 +1579,51 @@ class SwarmWorkspaceManager:
         # Auto-refresh Knowledge Index in KNOWLEDGE.md
         await self.refresh_knowledge_index(str(root))
 
+        # Provision job system default config
+        await anyio.to_thread.run_sync(lambda: self._provision_job_system(root))
+
         # Auto-prune old archived DailyActivity files (Req 7.6, 15.11)
         expanded = str(root)
         await anyio.to_thread.run_sync(lambda: self.prune_archives(expanded))
 
         return recreated
+
+    def _provision_job_system(self, root: Path) -> None:
+        """Ensure Services/swarm-jobs/ has required config files.
+
+        Creates default config.yaml (feed definitions) and empty
+        user-jobs.yaml if they don't exist. State, logs, and signal
+        directories are also ensured. System job definitions live in
+        backend/jobs/system_jobs.py (code, not YAML).
+        """
+        jobs_dir = root / "Services" / "swarm-jobs"
+        jobs_dir.mkdir(parents=True, exist_ok=True)
+        (jobs_dir / "logs").mkdir(exist_ok=True)
+
+        # Ensure signals directory
+        signals_dir = root / "Services" / "signals"
+        signals_dir.mkdir(parents=True, exist_ok=True)
+
+        # Default config.yaml (feed definitions) — only create if missing
+        config_file = jobs_dir / "config.yaml"
+        if not config_file.exists():
+            config_file.write_text(_DEFAULT_JOB_CONFIG, encoding="utf-8")
+            logger.info("Provisioned default job config: %s", config_file)
+
+        # Empty user-jobs.yaml
+        user_jobs_file = jobs_dir / "user-jobs.yaml"
+        if not user_jobs_file.exists():
+            user_jobs_file.write_text(
+                "# User-defined scheduled jobs (managed via chat or s_job-manager skill)\n"
+                "jobs: []\n",
+                encoding="utf-8",
+            )
+            logger.info("Provisioned empty user-jobs: %s", user_jobs_file)
+
+        # Empty state.json
+        state_file = jobs_dir / "state.json"
+        if not state_file.exists():
+            state_file.write_text("{}", encoding="utf-8")
 
     def prune_archives(self, workspace_path: str, max_age_days: int = 90) -> int:
         """Delete archived DailyActivity files older than *max_age_days*.
