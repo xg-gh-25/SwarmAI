@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.swarmai.scheduler</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <!-- Uses the backend venv Python to run the product-level scheduler -->
+        <string>__PYTHON_PATH__</string>
+        <string>-m</string>
+        <string>jobs.scheduler</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>__BACKEND_DIR__</string>
+
+    <!-- Run every hour at :07 (avoid :00 stampede with other crons) -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Minute</key>
+        <integer>7</integer>
+    </dict>
+
+    <!-- Also run at load (catches up after sleep/reboot) -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>__LOG_DIR__/scheduler-stdout.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>__LOG_DIR__/scheduler-stderr.log</string>
+
+    <!-- Don't retry — scheduler has its own circuit breaker -->
+    <key>KeepAlive</key>
+    <false/>
+
+    <!-- Nice priority — background work -->
+    <key>Nice</key>
+    <integer>10</integer>
+
+    <!-- Kill if takes longer than 5 minutes -->
+    <key>TimeOut</key>
+    <integer>300</integer>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin</string>
+    </dict>
+</dict>
+</plist>
