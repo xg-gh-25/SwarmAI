@@ -522,10 +522,9 @@ This checks 7 invariants automatically:
 After the EVALUATE stage completes successfully, run `ddd-check` and store the checksums
 in the run state so future staleness detection works:
 ```bash
-# Get current checksums
+# Get current checksums and write to run.json in one step
 CHECKSUMS=$(python backend/scripts/pipeline_validator.py ddd-check --project <PROJECT> | python -c "import sys,json; print(json.dumps(json.load(sys.stdin)['checksums']))")
-# Write to run.json (via artifact_cli or direct update)
-python backend/scripts/artifact_cli.py run-update --project <PROJECT> --run-id <RUN_ID> --field ddd_checksums --value "$CHECKSUMS"
+python backend/scripts/artifact_cli.py run-update --project <PROJECT> --run-id <RUN_ID> --ddd-checksums "$CHECKSUMS"
 ```
 
 **Standalone DDD check** (no pipeline needed):
