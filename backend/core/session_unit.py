@@ -942,16 +942,34 @@ class SessionUnit:
 
         # Context usage warning (ok/warn/critical)
         input_tokens = (usage.get("input_tokens") if usage else None)
+        logger.info(
+            "session_unit.context_ring_debug session_id=%s "
+            "usage_keys=%s input_tokens=%s model=%s",
+            self.session_id,
+            list(usage.keys()) if usage else "NO_USAGE",
+            input_tokens,
+            self._model_name,
+        )
         if input_tokens and input_tokens > 0:
             try:
                 from .prompt_builder import PromptBuilder
                 warning_evt = PromptBuilder.build_context_warning(
                     input_tokens, self._model_name
                 )
+                logger.info(
+                    "session_unit.context_warning_built session_id=%s "
+                    "pct=%s level=%s",
+                    self.session_id,
+                    warning_evt.get("pct") if warning_evt else "NONE",
+                    warning_evt.get("level") if warning_evt else "NONE",
+                )
                 if warning_evt:
                     events.append(warning_evt)
-            except Exception:
-                pass  # Never block on warning failure
+            except Exception as exc:
+                logger.warning(
+                    "session_unit.context_warning_failed session_id=%s: %s",
+                    self.session_id, exc,
+                )
 
             # Feed context usage to compaction guard
             try:
@@ -1400,6 +1418,14 @@ class SessionUnit:
 
                 # Yield result event with usage metrics
                 usage = getattr(message, "usage", None) or {}
+                logger.info(
+                    "session_unit.result_usage session_id=%s "
+                    "raw_usage=%s input_tokens=%s model=%s",
+                    self.session_id,
+                    usage,
+                    usage.get("input_tokens") if usage else None,
+                    self._model_name,
+                )
                 yield {
                     "type": "result",
                     "session_id": self.session_id,
