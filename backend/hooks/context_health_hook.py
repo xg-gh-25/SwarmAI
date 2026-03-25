@@ -169,6 +169,9 @@ class ContextHealthHook:
         # 5. L1 cache freshness — if source .md newer than cache, invalidate
         self._check_cache_freshness(context_dir, findings)
 
+        # Persist findings for session briefing
+        self._persist_findings(root, findings)
+
         # Report
         if findings:
             logger.warning(
@@ -276,6 +279,53 @@ class ContextHealthHook:
                 except OSError:
                     findings.append(f"STALE-CACHE: L1 cache older than {source.name}")
                 break  # Only need to invalidate once
+
+    def _persist_findings(self, root: Path, findings: list[str]) -> None:
+        """Write findings to health_findings.json for session briefing.
+
+        The proactive intelligence system reads this file at session start
+        to surface health alerts. Structured as:
+        {
+            "timestamp": "ISO8601",
+            "findings": [{"level": "warning|info|critical", "message": "..."}],
+            "memory_health": null  // populated by weekly maintenance job
+        }
+        """
+        import json
+
+        findings_dir = root / "Services" / "swarm-jobs"
+        findings_dir.mkdir(parents=True, exist_ok=True)
+        findings_file = findings_dir / "health_findings.json"
+
+        structured = []
+        for f in findings:
+            level = "critical" if f.startswith("EMPTY") else \
+                    "warning" if any(f.startswith(p) for p in ("UNCOMMITTED", "STALE", "MISSING")) else \
+                    "info"
+            structured.append({"level": level, "message": f})
+
+        data = {
+            "timestamp": datetime.now().isoformat(),
+            "findings": structured,
+            "memory_health": None,  # Populated by weekly-maintenance job
+        }
+
+        try:
+            # Merge memory_health from previous run (weekly job may have written it)
+            if findings_file.exists():
+                try:
+                    prev = json.loads(findings_file.read_text(encoding="utf-8"))
+                    if prev.get("memory_health"):
+                        data["memory_health"] = prev["memory_health"]
+                except (json.JSONDecodeError, OSError):
+                    pass
+
+            findings_file.write_text(
+                json.dumps(data, indent=2, default=str),
+                encoding="utf-8",
+            )
+        except OSError as e:
+            logger.warning("Failed to persist health findings: %s", e)
 
     # ------------------------------------------------------------------
     # Helpers

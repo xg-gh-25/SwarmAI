@@ -74,6 +74,10 @@ def run_memory_health(dry_run: bool = False) -> dict:
 
     _write_summary_to_daily(report, actions)
 
+    # ── 6. Update health_findings.json for session briefing ────────
+
+    _update_health_findings(report, actions)
+
     logger.info("Memory health complete: %d actions", len(actions))
     return {
         "status": "success",
@@ -358,3 +362,37 @@ def _write_summary_to_daily(report: dict, actions: list[str]) -> None:
             daily_path.write_text(f"---\ndate: \"{today}\"\n---\n{summary_text}", encoding="utf-8")
     except Exception as e:
         logger.warning("Failed to write maintenance summary: %s", e)
+
+
+def _update_health_findings(report: dict, actions: list[str]) -> None:
+    """Update health_findings.json with memory health results.
+
+    Merges into the existing file (written by ContextHealthHook).
+    The proactive intelligence system reads this at session start.
+    """
+    from ..paths import JOBS_DATA_DIR
+
+    findings_file = JOBS_DATA_DIR / "health_findings.json"
+    JOBS_DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+    memory_health_data = {
+        "actions": actions,
+        "summary": report.get("summary", ""),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+    try:
+        if findings_file.exists():
+            data = json.loads(findings_file.read_text(encoding="utf-8"))
+        else:
+            data = {"timestamp": datetime.now(timezone.utc).isoformat(), "findings": []}
+
+        data["memory_health"] = memory_health_data
+
+        findings_file.write_text(
+            json.dumps(data, indent=2, default=str),
+            encoding="utf-8",
+        )
+        logger.info("Updated health_findings.json with memory health results")
+    except Exception as e:
+        logger.warning("Failed to update health findings: %s", e)
