@@ -327,6 +327,21 @@ async def get_max_tabs() -> MaxTabsResponse:
         return MaxTabsResponse(max_tabs=1, memory_pressure="critical")
 
 
+@router.get("/briefing")
+async def get_session_briefing() -> dict:
+    """Return structured session briefing data for the Welcome Screen.
+
+    Calls proactive_intelligence.build_session_briefing_data() which
+    reads MEMORY.md, signal_digest.json, and job results. Never fails
+    — returns an empty structure on any error.
+    """
+    from core.proactive_intelligence import build_session_briefing_data
+    ws_path = swarm_workspace_manager.get_workspace_path()
+    if not ws_path:
+        return {"focus": [], "signals": [], "jobs": [], "learning": None, "generated_at": None}
+    return build_session_briefing_data(ws_path)
+
+
 @router.post("/reset-to-defaults", response_model=ResetToDefaultsResponse)
 async def reset_to_defaults() -> ResetToDefaultsResponse:
     """Reset application to default state and re-run initialization.
