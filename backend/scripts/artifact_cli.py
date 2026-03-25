@@ -354,6 +354,9 @@ def cmd_run_update(args, reg: ArtifactRegistry) -> None:
     if args.profile:
         run_state["profile"] = args.profile
 
+    if args.ddd_checksums:
+        run_state["ddd_checksums"] = json.loads(args.ddd_checksums)
+
     run_state["updated_at"] = now
     run_file.write_text(json.dumps(run_state, indent=2), encoding="utf-8")
 
@@ -887,6 +890,7 @@ def main() -> None:
     p_run_update.add_argument("--stage-json", default=None, help="Stage record JSON to add/update")
     p_run_update.add_argument("--taste-decision", default=None, help="Taste decision JSON to append")
     p_run_update.add_argument("--profile", default=None, help="Pipeline profile override")
+    p_run_update.add_argument("--ddd-checksums", default=None, help="DDD doc checksums JSON (from ddd-check)")
 
     # run-get
     p_run_get = sub.add_parser("run-get", help="Get pipeline run state")
