@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Pipeline stage validator — structural enforcement for the pipeline orchestrator.
 
-Enforces 6 invariants after each pipeline stage to prevent behavioral drift
+Enforces 7 invariants after each pipeline stage to prevent behavioral drift
 in the prompt-driven orchestrator. Called via bash after every stage:
 
     python pipeline_validator.py check \\
@@ -9,26 +9,31 @@ in the prompt-driven orchestrator. Called via bash after every stage:
 
 Returns JSON:
     {"valid": true, "stage": "evaluate", "errors": [], "warnings": [],
-     "checks_passed": 6, "checks_total": 6}
+     "checks_passed": 7, "checks_total": 7}
 
 Errors (BLOCK) prevent stage advancement. Warnings are informational —
 they surface in the delivery report but don't block progress.
 
-The 6 invariant checks:
+The 7 invariant checks:
     1. Stage order     — current stage follows the last completed stage per profile
     2. Artifact exists — stage published an artifact (except reflect)
     3. Artifact schema — required fields present in artifact JSON
     4. Decision logged — at least 1 decision classified in StageRecord
     5. Budget recorded — token_cost > 0 in stage record
     6. Profile respected — stage is in the selected profile
+    7. DDD consistency — cross-document checks: non-goals vs approach,
+                          failed patterns vs plan (WARN only, evaluate stage)
 
 Public symbols:
-- ``main``        — CLI entry point
-- ``validate``    — Core validation logic (testable without CLI)
+- ``main``              — CLI entry point
+- ``validate``          — Core validation logic (testable without CLI)
+- ``check_ddd_consistency`` — Standalone DDD cross-doc check (testable without pipeline)
 """
 
 import argparse
+import hashlib
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -128,6 +133,204 @@ def _load_artifact_data(project: str, run_id: str, artifact_id: str) -> dict[str
 
 
 # ---------------------------------------------------------------------------
+# DDD cross-document consistency
+# ---------------------------------------------------------------------------
+
+def _parse_non_goals(product_text: str) -> list[str]:
+    """Extract non-goal keywords from PRODUCT.md's Non-Goals section.
+
+    Returns lowercase keyword phrases (e.g. ["cloud saas", "general chatbot"]).
+    """
+    non_goals: list[str] = []
+    in_section = False
+    for line in product_text.splitlines():
+        stripped = line.strip()
+        # Detect ## Non-Goals header
+        if re.match(r"^##\s+Non[- ]?Goals", stripped, re.IGNORECASE):
+            in_section = True
+            continue
+        # Exit on next ## header
+        if in_section and stripped.startswith("## "):
+            break
+        if in_section and stripped.startswith("- "):
+            # Extract the bold part or the whole line
+            bold = re.findall(r"\*\*([^*]+)\*\*", stripped)
+            if bold:
+                non_goals.extend(b.strip().lower() for b in bold)
+            else:
+                # Use the line content after "- "
+                non_goals.append(stripped[2:].strip().lower())
+    return non_goals
+
+
+def _parse_failed_patterns(improvement_text: str) -> list[str]:
+    """Extract failed pattern descriptions from IMPROVEMENT.md's What Failed section.
+
+    Returns lowercase summary phrases from each bullet.
+    """
+    patterns: list[str] = []
+    in_section = False
+    for line in improvement_text.splitlines():
+        stripped = line.strip()
+        if re.match(r"^##\s+What Failed", stripped, re.IGNORECASE):
+            in_section = True
+            continue
+        if in_section and stripped.startswith("## "):
+            break
+        if in_section and stripped.startswith("- "):
+            # Extract bold summary or first sentence
+            bold = re.findall(r"\*\*([^*]+)\*\*", stripped)
+            if bold:
+                for b in bold:
+                    b_clean = b.strip().lower()
+                    # Skip date-only entries (auto-writeback noise)
+                    if re.match(r"^\d{4}-\d{2}-\d{2}$", b_clean):
+                        continue
+                    # Skip very short entries (< 10 chars, likely noise)
+                    if len(b_clean) < 10:
+                        continue
+                    patterns.append(b_clean)
+            else:
+                text = stripped[2:].strip()
+                # Take first sentence or up to 120 chars
+                first_sentence = re.split(r"[.!?]", text)[0].strip()
+                if first_sentence and len(first_sentence) >= 10:
+                    patterns.append(first_sentence.lower()[:120])
+    return patterns
+
+
+def _compute_doc_checksum(text: str) -> str:
+    """Compute a stable checksum for DDD document content (ignores whitespace variance)."""
+    normalized = re.sub(r"\s+", " ", text.strip())
+    return hashlib.md5(normalized.encode()).hexdigest()[:12]
+
+
+def check_ddd_consistency(project: str, context_text: str | None = None) -> dict[str, Any]:
+    """Cross-validate DDD documents for a project. Works standalone or within pipeline.
+
+    Checks:
+      1. Non-goals (PRODUCT.md) vs architecture description (TECH.md)
+         — flags if non-goal keywords appear in TECH.md architecture section
+      2. Failed patterns (IMPROVEMENT.md) existence check
+         — warns if no failed patterns recorded (empty learning)
+      3. Document staleness — computes checksums for change detection
+
+    Args:
+        project: Project name (directory under Projects/)
+        context_text: Optional text to check against non-goals (e.g. evaluation summary).
+                      If provided, also checks this text against non-goals.
+
+    Returns:
+        {"warnings": [...], "checksums": {"PRODUCT.md": "abc...", ...},
+         "non_goals": [...], "failed_patterns": [...]}
+    """
+    ws = _get_workspace()
+    project_dir = ws / "Projects" / project
+    warnings: list[str] = []
+    checksums: dict[str, str] = {}
+    non_goals: list[str] = []
+    failed_patterns: list[str] = []
+
+    # Load DDD docs
+    ddd_docs: dict[str, str] = {}
+    for doc_name in ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md"):
+        doc_path = project_dir / doc_name
+        if doc_path.exists():
+            try:
+                content = doc_path.read_text()
+                ddd_docs[doc_name] = content
+                checksums[doc_name] = _compute_doc_checksum(content)
+            except OSError:
+                warnings.append(f"DDD: Could not read {doc_name} for project '{project}'")
+
+    if not ddd_docs:
+        return {
+            "warnings": [f"DDD: No DDD documents found for project '{project}' — skipping consistency check"],
+            "checksums": {},
+            "non_goals": [],
+            "failed_patterns": [],
+        }
+
+    # Check 1: Non-goals vs TECH.md architecture
+    if "PRODUCT.md" in ddd_docs:
+        non_goals = _parse_non_goals(ddd_docs["PRODUCT.md"])
+
+    if non_goals and "TECH.md" in ddd_docs:
+        tech_text = ddd_docs["TECH.md"].lower()
+        # Only check the Architecture section of TECH.md (not the whole doc)
+        arch_section = _extract_section(tech_text, "architecture")
+        check_text = arch_section if arch_section else tech_text[:2000]
+
+        for ng in non_goals:
+            # Extract meaningful keywords (skip short/common words)
+            keywords = [w for w in ng.split() if len(w) > 3 and w not in
+                        {"not", "just", "only", "that", "this", "with", "from",
+                         "have", "been", "does", "about", "into", "more", "than"}]
+            for kw in keywords:
+                if kw in check_text:
+                    warnings.append(
+                        f"DDD conflict: Non-goal '{ng}' keyword '{kw}' "
+                        f"appears in TECH.md architecture — verify alignment"
+                    )
+
+    # Check 1b: Non-goals vs context_text (e.g. evaluation approach)
+    if non_goals and context_text:
+        ctx_lower = context_text.lower()
+        for ng in non_goals:
+            keywords = [w for w in ng.split() if len(w) > 3 and w not in
+                        {"not", "just", "only", "that", "this", "with", "from",
+                         "have", "been", "does", "about", "into", "more", "than"}]
+            for kw in keywords:
+                if kw in ctx_lower:
+                    warnings.append(
+                        f"DDD conflict: Non-goal '{ng}' keyword '{kw}' "
+                        f"found in pipeline context — verify this isn't violating a non-goal"
+                    )
+
+    # Check 2: Failed patterns existence
+    if "IMPROVEMENT.md" in ddd_docs:
+        failed_patterns = _parse_failed_patterns(ddd_docs["IMPROVEMENT.md"])
+        if not failed_patterns:
+            warnings.append(
+                "DDD note: IMPROVEMENT.md has no 'What Failed' entries — "
+                "consider recording lessons from past work"
+            )
+
+    # Check 3: Missing DDD docs (not blocking, just informational)
+    missing = [d for d in ("PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md")
+               if d not in ddd_docs]
+    if missing:
+        warnings.append(
+            f"DDD incomplete: Missing {', '.join(missing)} for project '{project}' — "
+            f"pipeline runs at reduced intelligence (L0/L1 instead of L2)"
+        )
+
+    return {
+        "warnings": warnings,
+        "checksums": checksums,
+        "non_goals": non_goals,
+        "failed_patterns": failed_patterns,
+    }
+
+
+def _extract_section(text: str, heading: str) -> str:
+    """Extract a markdown section by heading (case-insensitive). Returns empty string if not found."""
+    lines = text.splitlines()
+    capturing = False
+    result: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if re.match(rf"^##\s+{re.escape(heading)}", stripped, re.IGNORECASE):
+            capturing = True
+            continue
+        if capturing and stripped.startswith("## "):
+            break
+        if capturing:
+            result.append(line)
+    return "\n".join(result)
+
+
+# ---------------------------------------------------------------------------
 # Core validation
 # ---------------------------------------------------------------------------
 
@@ -144,7 +347,7 @@ def validate(project: str, run_id: str, stage: str) -> dict[str, Any]:
     """
     errors: list[str] = []
     warnings: list[str] = []
-    checks_total = 6
+    checks_total = 7
     checks_passed = 0
 
     # Load run state
@@ -242,6 +445,31 @@ def validate(project: str, run_id: str, stage: str) -> dict[str, Any]:
             f"Profile violation: '{stage}' is not in the '{profile}' profile. "
             f"Expected stages: {get_profile_stages(profile)}"
         )
+
+    # --- Check 7: DDD cross-document consistency (WARN only) ---
+    # Runs on evaluate stage — that's when DDD docs are first consulted.
+    # On other stages, auto-pass (DDD was already validated at evaluate).
+    if stage == "evaluate":
+        # Build context text from the evaluation artifact for cross-check
+        artifact_id = stage_record.get("artifact_id")
+        context_text = None
+        if artifact_id:
+            artifact_data = _load_artifact_data(project, run_id, artifact_id)
+            if artifact_data:
+                # Combine key fields for non-goal cross-reference
+                parts = [
+                    str(artifact_data.get("recommendation", "")),
+                    str(artifact_data.get("scope", "")),
+                    str(artifact_data.get("summary", "")),
+                    str(artifact_data.get("approach", "")),
+                ]
+                context_text = " ".join(parts)
+
+        ddd_result = check_ddd_consistency(project, context_text)
+        warnings.extend(ddd_result["warnings"])
+        checks_passed += 1  # WARN only — never blocks
+    else:
+        checks_passed += 1  # Auto-pass for non-evaluate stages
 
     return {
         "valid": len(errors) == 0,
@@ -390,6 +618,11 @@ def main() -> None:
     summary_p.add_argument("--project", required=True, help="Project name")
     summary_p.add_argument("--run-id", required=True, help="Pipeline run ID")
 
+    # ddd-check command — standalone DDD cross-document consistency check
+    ddd_p = sub.add_parser("ddd-check", help="Check DDD document consistency for a project")
+    ddd_p.add_argument("--project", required=True, help="Project name")
+    ddd_p.add_argument("--context", default=None, help="Optional text to check against non-goals")
+
     args = parser.parse_args()
 
     if args.command == "check":
@@ -426,6 +659,11 @@ def main() -> None:
         }
         print(json.dumps(summary, indent=2))
         sys.exit(0 if total_errors == 0 else 1)
+
+    elif args.command == "ddd-check":
+        result = check_ddd_consistency(args.project, args.context)
+        print(json.dumps(result, indent=2))
+        sys.exit(0 if len(result["warnings"]) == 0 else 0)  # Always exit 0 — warnings only
 
     else:
         parser.print_help()

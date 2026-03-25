@@ -1,7 +1,7 @@
-"""Tests for pipeline_validator.py — 6 structural invariant checks.
+"""Tests for pipeline_validator.py — 7 structural invariant checks.
 
 Tests the validator against synthetic pipeline runs with known
-good/bad data to verify all 6 checks fire correctly.
+good/bad data to verify all 7 checks fire correctly.
 
 Key properties tested:
     - Stage order enforcement across all 5 profiles
@@ -10,6 +10,7 @@ Key properties tested:
     - Decision logging (required for non-optional stages)
     - Budget recording (token_cost > 0)
     - Profile respect (stage must be in selected profile)
+    - DDD cross-document consistency (non-goals vs approach, failed patterns)
     - Summary command validates all stages
     - Edge cases: missing run, missing stage record, corrupt data
 """
@@ -33,6 +34,10 @@ from scripts.pipeline_validator import (
     _check_decision_logged,
     _check_profile_respected,
     _check_stage_order,
+    _parse_non_goals,
+    _parse_failed_patterns,
+    _compute_doc_checksum,
+    check_ddd_consistency,
     validate,
 )
 from core.pipeline_profiles import get_profile_stages, PIPELINE_PROFILES
@@ -357,7 +362,17 @@ class TestValidateIntegration:
         assert "No stage record" in result["errors"][0]
 
     def test_perfect_stage(self, workspace):
-        """A well-formed stage passes all 6 checks."""
+        """A well-formed stage passes all 7 checks."""
+        # Create DDD docs so check 7 doesn't warn about missing docs
+        project_dir = workspace / "Projects" / "TestProject"
+        project_dir.mkdir(parents=True, exist_ok=True)
+        (project_dir / "PRODUCT.md").write_text("# Test\n\n## Non-Goals\n\n- **Not X** -- skip.\n")
+        (project_dir / "TECH.md").write_text("# Test\n\n## Architecture\n\nDesktop app.\n")
+        (project_dir / "IMPROVEMENT.md").write_text(
+            "# Test\n\n## What Worked\n\n- OK\n\n## What Failed\n\n- **Retry logic was too aggressive** -- caused cascading failures\n"
+        )
+        (project_dir / "PROJECT.md").write_text("# Test\n")
+
         artifacts_dir = workspace / "Projects" / "TestProject" / ".artifacts"
         runs_dir = artifacts_dir / "runs" / "run_test1"
 
@@ -370,8 +385,8 @@ class TestValidateIntegration:
 
         result = validate("TestProject", "run_test1", "evaluate")
         assert result["valid"] is True
-        assert result["checks_passed"] == 6
-        assert result["checks_total"] == 6
+        assert result["checks_passed"] == 7
+        assert result["checks_total"] == 7
         assert len(result["errors"]) == 0
         assert len(result["warnings"]) == 0
 
@@ -386,10 +401,10 @@ class TestValidateIntegration:
 
         result = validate("TestProject", "run_test1", "reflect")
         assert result["valid"] is True
-        assert result["checks_passed"] == 6
+        assert result["checks_passed"] == 7
 
     def test_warnings_dont_block(self, workspace):
-        """Warnings don't make valid=false, and checks_passed stays at 6."""
+        """Warnings don't make valid=false, and checks_passed stays at 7."""
         artifacts_dir = workspace / "Projects" / "TestProject" / ".artifacts"
         runs_dir = artifacts_dir / "runs" / "run_test1"
 
@@ -401,7 +416,7 @@ class TestValidateIntegration:
 
         result = validate("TestProject", "run_test1", "evaluate")
         assert result["valid"] is True  # No BLOCK errors
-        assert result["checks_passed"] == 6  # Warnings don't reduce count
+        assert result["checks_passed"] == 7  # Warnings don't reduce count
         assert len(result["warnings"]) >= 2  # Missing decisions + zero budget
 
     def test_multiple_errors_accumulate(self, workspace):
@@ -452,3 +467,265 @@ class TestSummary:
 
         assert len(results) == 2
         assert all(r["valid"] for r in results)
+
+
+# ---------------------------------------------------------------------------
+# Check 7: DDD Cross-Document Consistency
+# ---------------------------------------------------------------------------
+
+class TestParseNonGoals:
+    def test_extracts_bold_keywords(self):
+        text = """## Non-Goals
+
+- **Not a cloud SaaS** -- Desktop-first, local-first.
+- **Not a general chatbot** -- Opinionated.
+"""
+        goals = _parse_non_goals(text)
+        assert "not a cloud saas" in goals
+        assert "not a general chatbot" in goals
+
+    def test_empty_section(self):
+        text = """## Non-Goals
+
+## Next Section
+"""
+        assert _parse_non_goals(text) == []
+
+    def test_no_section(self):
+        text = "# Product\n\nSome content without non-goals."
+        assert _parse_non_goals(text) == []
+
+    def test_non_bold_bullets(self):
+        text = """## Non-Goals
+
+- We don't do cloud hosting
+- No mobile app planned
+"""
+        goals = _parse_non_goals(text)
+        assert len(goals) == 2
+        assert "we don't do cloud hosting" in goals
+
+
+class TestParseFailedPatterns:
+    def test_extracts_bold_patterns(self):
+        text = """## What Failed
+
+- **Big-bang refactor of 5,000+ line module** -- caused 15+ bugs
+- **Memory pipeline trusting its own output** -- stale snapshots
+"""
+        patterns = _parse_failed_patterns(text)
+        assert len(patterns) == 2
+        assert "big-bang refactor of 5,000+ line module" in patterns
+
+    def test_empty_section(self):
+        text = """## What Failed
+
+## Known Issues
+"""
+        assert _parse_failed_patterns(text) == []
+
+    def test_no_section(self):
+        text = "# Improvement\n\nNo failures here."
+        assert _parse_failed_patterns(text) == []
+
+
+class TestDocChecksum:
+    def test_deterministic(self):
+        text = "Hello World"
+        assert _compute_doc_checksum(text) == _compute_doc_checksum(text)
+
+    def test_whitespace_insensitive(self):
+        assert _compute_doc_checksum("Hello  World") == _compute_doc_checksum("Hello World")
+        assert _compute_doc_checksum("Hello\n\nWorld") == _compute_doc_checksum("Hello World")
+
+    def test_different_content(self):
+        assert _compute_doc_checksum("Hello") != _compute_doc_checksum("World")
+
+
+class TestDDDConsistency:
+    def test_no_project_dir(self, workspace):
+        """Missing project returns warning, not error."""
+        result = check_ddd_consistency("NonExistentProject")
+        assert len(result["warnings"]) >= 1
+        assert "No DDD documents" in result["warnings"][0]
+
+    def test_complete_project_no_conflicts(self, workspace):
+        """Well-formed DDD docs with no conflicts produce no warnings."""
+        project_dir = workspace / "Projects" / "TestProject"
+        project_dir.mkdir(parents=True, exist_ok=True)
+        (project_dir / "PRODUCT.md").write_text("""# Test -- Product Context
+
+## Non-Goals
+
+- **Not a mobile app** -- Desktop only.
+""")
+        (project_dir / "TECH.md").write_text("""# Test -- Technical Context
+
+## Architecture
+
+Desktop app with Tauri shell and Python backend.
+""")
+        (project_dir / "IMPROVEMENT.md").write_text("""# Test -- Lessons
+
+## What Worked
+
+- Good stuff
+
+## What Failed
+
+- **Retry logic was too aggressive** -- caused cascading failures
+""")
+        (project_dir / "PROJECT.md").write_text("# Test -- Project Context\n")
+
+        result = check_ddd_consistency("TestProject")
+        assert len(result["warnings"]) == 0
+        assert len(result["checksums"]) == 4
+        assert len(result["non_goals"]) == 1
+        assert len(result["failed_patterns"]) == 1
+
+    def test_non_goal_conflict_detected(self, workspace):
+        """Non-goal keyword appearing in TECH.md architecture triggers warning."""
+        project_dir = workspace / "Projects" / "TestProject"
+        project_dir.mkdir(parents=True, exist_ok=True)
+        (project_dir / "PRODUCT.md").write_text("""# Test
+
+## Non-Goals
+
+- **Not a cloud SaaS** -- Desktop only.
+""")
+        (project_dir / "TECH.md").write_text("""# Test
+
+## Architecture
+
+Cloud-native SaaS with microservices deployed on AWS.
+""")
+
+        result = check_ddd_consistency("TestProject")
+        conflict_warnings = [w for w in result["warnings"] if "DDD conflict" in w]
+        assert len(conflict_warnings) >= 1
+        assert any("cloud" in w.lower() or "saas" in w.lower() for w in conflict_warnings)
+
+    def test_non_goal_vs_context_text(self, workspace):
+        """Non-goal keyword in pipeline context triggers warning."""
+        project_dir = workspace / "Projects" / "TestProject"
+        project_dir.mkdir(parents=True, exist_ok=True)
+        (project_dir / "PRODUCT.md").write_text("""# Test
+
+## Non-Goals
+
+- **Not a cloud SaaS** -- Desktop only.
+""")
+        (project_dir / "TECH.md").write_text("# Test\n\n## Architecture\n\nDesktop app.\n")
+
+        result = check_ddd_consistency("TestProject", context_text="Deploy to cloud infrastructure")
+        conflict_warnings = [w for w in result["warnings"] if "pipeline context" in w]
+        assert len(conflict_warnings) >= 1
+
+    def test_missing_docs_warned(self, workspace):
+        """Missing DDD docs produce informational warning."""
+        project_dir = workspace / "Projects" / "TestProject"
+        project_dir.mkdir(parents=True, exist_ok=True)
+        (project_dir / "PRODUCT.md").write_text("# Test\n\n## Non-Goals\n\n- **Nothing** -- nope\n")
+
+        result = check_ddd_consistency("TestProject")
+        incomplete = [w for w in result["warnings"] if "DDD incomplete" in w]
+        assert len(incomplete) == 1
+        assert "TECH.md" in incomplete[0]
+
+    def test_empty_improvement_warned(self, workspace):
+        """Empty What Failed section produces note."""
+        project_dir = workspace / "Projects" / "TestProject"
+        project_dir.mkdir(parents=True, exist_ok=True)
+        (project_dir / "PRODUCT.md").write_text("# Test\n")
+        (project_dir / "TECH.md").write_text("# Test\n")
+        (project_dir / "IMPROVEMENT.md").write_text("""# Test
+
+## What Worked
+
+- Good stuff
+
+## What Failed
+
+## Known Issues
+""")
+        (project_dir / "PROJECT.md").write_text("# Test\n")
+
+        result = check_ddd_consistency("TestProject")
+        assert any("no 'What Failed' entries" in w for w in result["warnings"])
+
+    def test_checksums_computed(self, workspace):
+        """All present docs get checksums."""
+        project_dir = workspace / "Projects" / "TestProject"
+        project_dir.mkdir(parents=True, exist_ok=True)
+        (project_dir / "PRODUCT.md").write_text("# A\n")
+        (project_dir / "TECH.md").write_text("# B\n")
+
+        result = check_ddd_consistency("TestProject")
+        assert "PRODUCT.md" in result["checksums"]
+        assert "TECH.md" in result["checksums"]
+        assert len(result["checksums"]["PRODUCT.md"]) == 12  # md5[:12]
+
+
+class TestDDDInValidate:
+    """Check 7 runs within validate() at evaluate stage."""
+
+    def test_ddd_check_runs_at_evaluate(self, workspace):
+        """DDD check runs at evaluate and adds warnings (not errors)."""
+        # Setup project with a conflict
+        project_dir = workspace / "Projects" / "TestProject"
+        project_dir.mkdir(parents=True, exist_ok=True)
+        (project_dir / "PRODUCT.md").write_text("""# Test
+
+## Non-Goals
+
+- **Not a cloud SaaS** -- Desktop only.
+""")
+        (project_dir / "TECH.md").write_text("""# Test
+
+## Architecture
+
+Cloud SaaS deployment with Kubernetes.
+""")
+
+        artifacts_dir = workspace / "Projects" / "TestProject" / ".artifacts"
+        runs_dir = artifacts_dir / "runs" / "run_test1"
+        _make_artifact(artifacts_dir, "run_test1", "art_eval", "evaluation",
+                       {"recommendation": "GO", "scope": "standard"})
+        _make_run(runs_dir, stages=[
+            _stage_record("evaluate", artifact_id="art_eval"),
+        ])
+
+        result = validate("TestProject", "run_test1", "evaluate")
+        # DDD warnings should be present but not block
+        assert result["valid"] is True
+        ddd_warnings = [w for w in result["warnings"] if "DDD" in w]
+        assert len(ddd_warnings) >= 1
+
+    def test_ddd_check_skipped_on_other_stages(self, workspace):
+        """DDD check auto-passes on non-evaluate stages (no extra warnings)."""
+        artifacts_dir = workspace / "Projects" / "TestProject" / ".artifacts"
+        runs_dir = artifacts_dir / "runs" / "run_test1"
+        _make_artifact(artifacts_dir, "run_test1", "art_build", "changeset",
+                       {"files_changed": ["a.py"]})
+        _make_run(runs_dir, profile="trivial", stages=[
+            _stage_record("evaluate", artifact_id="art_eval"),
+            _stage_record("build", artifact_id="art_build"),
+        ])
+
+        result = validate("TestProject", "run_test1", "build")
+        ddd_warnings = [w for w in result["warnings"] if "DDD" in w]
+        assert len(ddd_warnings) == 0
+
+    def test_checks_total_is_7(self, workspace):
+        """Verify checks_total is now 7."""
+        artifacts_dir = workspace / "Projects" / "TestProject" / ".artifacts"
+        runs_dir = artifacts_dir / "runs" / "run_test1"
+        _make_artifact(artifacts_dir, "run_test1", "art_eval", "evaluation",
+                       {"recommendation": "GO", "scope": "standard"})
+        _make_run(runs_dir, stages=[
+            _stage_record("evaluate", artifact_id="art_eval"),
+        ])
+
+        result = validate("TestProject", "run_test1", "evaluate")
+        assert result["checks_total"] == 7
+        assert result["checks_passed"] == 7
