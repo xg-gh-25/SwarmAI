@@ -50,7 +50,7 @@ class RunJobResponse(BaseModel):
 async def list_jobs():
     """List all jobs (system + user) with their current status."""
     try:
-        from backend.jobs.scheduler import load_jobs, load_state
+        from jobs.scheduler import load_jobs, load_state
         jobs = load_jobs()
         state = load_state()
 
@@ -80,11 +80,11 @@ async def list_jobs():
 async def run_job(req: RunJobRequest):
     """Force-run a specific job immediately."""
     try:
-        from backend.jobs.scheduler import (
+        from jobs.scheduler import (
             load_jobs, load_config, load_feeds, load_state,
             save_state, load_user_context, load_defaults,
         )
-        from backend.jobs.executor import execute_job
+        from jobs.executor import execute_job
 
         config = load_config()
         feeds = load_feeds(config)
@@ -127,7 +127,7 @@ async def run_job(req: RunJobRequest):
 async def scheduler_status():
     """Get scheduler overview — monthly spend, signal buffer, job summary."""
     try:
-        from backend.jobs.scheduler import load_state, load_jobs
+        from jobs.scheduler import load_state, load_jobs
         state = load_state()
         jobs = load_jobs()
 
