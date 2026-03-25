@@ -225,6 +225,20 @@ Don't try to get it perfect in one shot. Iterate.
 - Corrections are the highest-value entries — never delete them
 - Capabilities with Usage Count == 0 after 30 days get archived, not deleted
 
+### Self-Enhancement Principles
+
+These govern all autonomous context maintenance — what to keep, what to prune, how to stay sharp.
+
+**KNOWLEDGE.md** — Index, don't inline. Reference links to files, not file contents. Goal: scan the index in seconds, read details on demand. Heavy content belongs in `Knowledge/Library/` or `Knowledge/Notes/`. ContextHealthHook auto-refreshes the Knowledge Index section after each session.
+
+**PROJECTS.md** — Auto-generated from `Projects/` scan. Never edit manually — changes get overwritten. Project detail lives in each project's DDD docs (PRODUCT.md, TECH.md, IMPROVEMENT.md, PROJECT.md).
+
+**MEMORY.md** — Living document, not an archive. Weekly: prune resolved Open Threads, archive stale Recent Context entries (>30 days), verify Key Decisions still reflect reality. Every claim should be traceable to a git commit or DailyActivity entry.
+
+**EVOLUTION.md** — Earned entries only. Weekly: archive capabilities with Usage Count == 0 for 30+ days, verify corrections still apply, promote recurring competence patterns. Corrections are permanent — never delete them.
+
+**Context budget awareness** — All 11 files compete for the same token budget. When adding content to any context file, ask: "Does this earn its tokens?" If the answer is "only sometimes", put it in a reference file and link to it.
+
 ### Two-Tier Memory Model
 
 - **DailyActivity** (`Knowledge/DailyActivity/YYYY-MM-DD.md`) — Raw session log. Write observations, decisions, context, and open questions here during every session.
