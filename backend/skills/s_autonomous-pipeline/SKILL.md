@@ -500,7 +500,7 @@ python backend/scripts/pipeline_validator.py check \
   --project <PROJECT> --run-id <RUN_ID> --stage <STAGE>
 ```
 
-This checks 6 invariants automatically:
+This checks 7 invariants automatically:
 
 | # | Check | Severity | What It Catches |
 |---|-------|----------|-----------------|
@@ -510,12 +510,19 @@ This checks 6 invariants automatically:
 | 4 | **Decision logged** | WARN | No decisions classified (except reflect/deliver) |
 | 5 | **Budget recorded** | WARN | token_cost is 0 — needed for calibration |
 | 6 | **Profile respected** | BLOCK | Stage not in selected profile |
+| 7 | **DDD consistency** | WARN | Non-goals vs TECH.md architecture conflict, failed patterns not recorded, missing DDD docs. Runs at EVALUATE stage only. |
 
 **Response format:**
 ```json
 {"valid": true, "stage": "evaluate", "errors": [], "warnings": [...],
- "checks_passed": 6, "checks_total": 6}
+ "checks_passed": 7, "checks_total": 7}
 ```
+
+**Standalone DDD check** (no pipeline needed):
+```bash
+python backend/scripts/pipeline_validator.py ddd-check --project <PROJECT>
+```
+Returns non-goals, failed patterns, doc checksums, and any cross-doc warnings.
 
 **Handle the result:**
 - `valid: true` → advance to next stage. Log any warnings for delivery report.
