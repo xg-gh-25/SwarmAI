@@ -1,24 +1,32 @@
 """Test fixtures and configuration for backend tests.
 
-Memory management: 1,759 tests in a single process can spike to 9GB+ RSS
-because Python's allocator doesn't eagerly return pages to the OS. Four
-structural defenses prevent this from crashing the system during peak usage:
+Test infrastructure optimization layers:
 
-1. Auto-xdist injection — if pytest-xdist is installed and user didn't pass
-   -n explicitly, auto-inject -n auto to split across CPU cores. Each worker
-   handles ~440 tests at ~2GB peak instead of 9GB total.
-2. Periodic RSS sampling (every 25 tests) — triggers aggressive GC only when
-   RSS exceeds 1.5GB, avoiding the ~85s overhead of gc.collect on every test.
-3. Memory watchdog plugin — monitors RSS periodically, triggers aggressive GC
-   at 1.5GB, aborts the session at 2.5GB before macOS jetsam kills processes.
-4. Subprocess fallback — when xdist isn't available, the safe_test_runner.py
-   script splits tests into batches of 200 via subprocess invocations.
+1. **Parallel execution** -- Auto-injects pytest-xdist (-n 4) when installed.
+   Each worker handles ~460 tests at ~2GB peak instead of 9GB total.
+   Install: ``pip install pytest-xdist``
+
+2. **Tiered test selection** -- Three markers for selective running:
+   - ``pbt`` -- auto-applied to all Hypothesis property-based tests (46 files)
+   - ``slow`` -- manually applied to known heavy tests
+   - ``integration`` -- tests needing external resources
+   Run fast subset: ``pytest -m 'not pbt'`` (~1200 unit tests, <15s)
+   Run PBT only:   ``pytest -m pbt`` (~650 tests)
+   Run everything:  ``pytest`` (default, all ~1850 tests)
+
+3. **Profile-aware PBT** -- Hypothesis settings centralized in helpers.py
+   (PROPERTY_SETTINGS / PROPERTY_SETTINGS_MINIMAL). max_examples inherits
+   from the active profile:
+   - default (local dev): 30 examples -- ~70% faster
+   - ci (CI pipeline):   100 examples -- full coverage
+   Switch: ``HYPOTHESIS_PROFILE=ci pytest``
+
+4. **Memory safety** -- MemoryWatchdogPlugin samples RSS every 25 tests.
+   Triggers GC at 1.5GB, aborts at 2.5GB before macOS jetsam kills.
+   Thresholds tuned for 36GB machine with SwarmAI + browser overhead.
 
 DB reset uses a single executescript() call to clear all 21 tables in one
 round-trip instead of 21 individual execute() + commit() calls.
-
-Thresholds are tuned for a 36GB machine running 2 chat sessions + MCPs (~3GB)
-+ browser/IDE (~5GB). The 2.5GB abort leaves 25GB+ for the rest of the system.
 """
 import gc
 import logging
@@ -43,8 +51,13 @@ _logger = logging.getLogger("test_memory")
 # ---------------------------------------------------------------------------
 
 def pytest_configure(config):
-    """Register memory safety plugins and auto-inject xdist."""
-    # Register memory watchdog first (works with or without xdist)
+    """Register markers, memory safety plugins, and auto-inject xdist."""
+    # Register custom markers
+    config.addinivalue_line("markers", "pbt: property-based tests using Hypothesis")
+    config.addinivalue_line("markers", "slow: marks tests as slow-running")
+    config.addinivalue_line("markers", "integration: tests requiring external resources")
+
+    # Register memory watchdog (works with or without xdist)
     config.pluginmanager.register(MemoryWatchdogPlugin(), "memory_watchdog")
 
     # Auto-inject -n auto if xdist is available and user didn't specify -n
@@ -66,12 +79,67 @@ def pytest_configure(config):
             config.option.numprocesses = workercount
             config.option.dist = "loadgroup"
             _logger.info(
-                f"Memory safety: auto-injecting -n {workercount} "
+                f"Auto-injecting -n {workercount} "
                 f"(pytest-xdist detected, user didn't specify -n)"
             )
     except (ImportError, AttributeError):
-        # xdist not installed — watchdog is our defense
+        # xdist not installed — watchdog is our only memory defense.
+        # Install it: pip install pytest-xdist
         pass
+
+
+def pytest_collection_modifyitems(config, items):
+    """Auto-mark tests for tiered execution.
+
+    Markers applied:
+    - ``pbt``: any test whose module uses Hypothesis ``@given``.
+    - ``slow``: any test in a module whose filename contains "stress" or
+      "e2e", OR any PBT test with ``max_examples >= 100`` in its settings.
+
+    Usage during dev iteration::
+
+        pytest -m "not slow"       # skip stress + heavy PBT
+        pytest -m "not pbt"        # skip all property-based tests
+        pytest --lf                # re-run only last failures
+    """
+    pbt_marker = pytest.mark.pbt
+    slow_marker = pytest.mark.slow
+    # Module names that are inherently slow
+    _SLOW_PATTERNS = {"stress", "e2e"}
+
+    for item in items:
+        module = item.module
+        if module is None:
+            continue
+
+        # --- PBT detection (cached per module) ---
+        if not hasattr(module, "_has_hypothesis"):
+            module._has_hypothesis = hasattr(module, "__hypothesis_pytestplugin_setup")
+            if not module._has_hypothesis:
+                try:
+                    import inspect
+                    src = inspect.getsource(module)
+                    module._has_hypothesis = "@given(" in src
+                except (TypeError, OSError):
+                    module._has_hypothesis = False
+        if module._has_hypothesis:
+            item.add_marker(pbt_marker)
+
+        # --- Slow detection ---
+        # 1. Module filename contains "stress" or "e2e"
+        mod_name = getattr(module, "__name__", "")
+        if any(p in mod_name for p in _SLOW_PATTERNS):
+            item.add_marker(slow_marker)
+            continue
+
+        # 2. PBT test with high max_examples (>= 100)
+        if module._has_hypothesis:
+            # Check if the test function itself has @settings(max_examples>=100)
+            test_func = getattr(item, "obj", None)
+            if test_func is not None:
+                hyp_settings = getattr(test_func, "_hypothesis_internal_use_settings", None)
+                if hyp_settings is not None and hyp_settings.max_examples >= 100:
+                    item.add_marker(slow_marker)
 
 
 # ---------------------------------------------------------------------------

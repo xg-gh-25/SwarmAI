@@ -31,7 +31,7 @@ _SKIP_SKILL_TESTS = pytest.mark.skip(
 
 PROPERTY_SETTINGS = settings(
     max_examples=2,
-    deadline=None,
+    
     suppress_health_check=[HealthCheck.function_scoped_fixture],
 )
 

@@ -80,7 +80,7 @@ class TestBuiltinRefreshFaultCondition:
     @settings(
         max_examples=50,
         suppress_health_check=[HealthCheck.function_scoped_fixture],
-        deadline=None,
+        
     )
     def test_builtin_files_match_source_after_ensure_directory(
         self, file_entries

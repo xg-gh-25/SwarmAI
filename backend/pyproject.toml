@@ -59,6 +59,14 @@ testpaths = ["tests"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "session"
 python_files = ["test_*.py"]
+# Cache last-run results so --lf (last-failed) works out of the box
+cache_dir = ".pytest_cache"
+markers = [
+    "pbt: property-based tests using Hypothesis (auto-applied by conftest)",
+    "slow: marks tests as slow-running (deselect with '-m not slow')",
+    "integration: tests requiring external resources",
+    "timeout: override per-test timeout in seconds (e.g. @pytest.mark.timeout(60))",
+]
 
 [dependency-groups]
 dev = [

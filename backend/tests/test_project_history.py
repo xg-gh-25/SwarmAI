@@ -530,7 +530,7 @@ class TestHistoryImmutability:
 
 PROPERTY_SETTINGS = settings(
     max_examples=20,
-    deadline=None,
+    
     suppress_health_check=[HealthCheck.function_scoped_fixture],
 )
 

@@ -4,9 +4,14 @@ Provides common workspace and entity creation helpers used across 20+ test
 files. These are module-level async functions (not fixtures) because
 Hypothesis tests don't support pytest fixtures well.
 
+Also provides shared Hypothesis settings constants so all PBT files
+inherit max_examples from the active profile (default=30 dev, ci=100 CI)
+instead of hardcoding per-file values.
+
 Import them directly::
 
-    from tests.helpers import (
+    from helpers import PROPERTY_SETTINGS, PROPERTY_SETTINGS_MINIMAL
+    from helpers import (
         now_iso,
         ensure_default_workspace,
         create_default_workspace,
@@ -26,7 +31,41 @@ from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
+from hypothesis import settings, HealthCheck
+
 from database import db
+
+
+# ---------------------------------------------------------------------------
+# Shared Hypothesis settings — profile-aware, single source of truth
+# ---------------------------------------------------------------------------
+# max_examples is NOT set here — it inherits from the active Hypothesis
+# profile registered in conftest.py:
+#   - "default" (local dev): 30 examples per property
+#   - "ci" (CI pipeline):   100 examples per property
+#
+# This means local dev runs ~70% fewer PBT examples than CI, which is the
+# right tradeoff: fast iteration locally, thorough coverage in CI.
+
+PROPERTY_SETTINGS = settings(
+    suppress_health_check=[HealthCheck.function_scoped_fixture],
+)
+"""Standard PBT settings for tests using function-scoped fixtures (most of ours).
+
+Inherits max_examples from active profile. Use for all PBT tests unless
+you have a specific reason to override.
+"""
+
+PROPERTY_SETTINGS_MINIMAL = settings(
+    max_examples=2,
+    suppress_health_check=[HealthCheck.function_scoped_fixture],
+)
+"""Minimal PBT settings for structural-verification-only tests.
+
+Use when the property verifies a type/enum invariant where 2 examples
+are sufficient (e.g., round-trip serialization, enum exhaustiveness).
+Always runs 2 examples regardless of profile.
+"""
 
 
 # ---------------------------------------------------------------------------

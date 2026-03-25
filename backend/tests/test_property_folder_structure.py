@@ -19,7 +19,7 @@ from core.swarm_workspace_manager import SwarmWorkspaceManager
 
 PROPERTY_SETTINGS = settings(
     max_examples=50,
-    deadline=None,
+    
     suppress_health_check=[HealthCheck.function_scoped_fixture],
 )
 
