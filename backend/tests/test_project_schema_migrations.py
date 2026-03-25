@@ -31,7 +31,7 @@ from core.project_schema_migrations import (
 
 PROPERTY_SETTINGS = settings(
     max_examples=100,
-    deadline=None,
+    
     suppress_health_check=[HealthCheck.function_scoped_fixture],
 )
 

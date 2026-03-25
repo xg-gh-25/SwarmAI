@@ -350,7 +350,7 @@ async def test_returning_user_data_not_overwritten(
 # ---------------------------------------------------------------------------
 
 @given(data_db_exists=st.booleans())
-@settings(max_examples=20, deadline=None)
+@settings(max_examples=20)
 def test_property_no_seed_always_runs_full_init(data_db_exists):
     """Property: For all contexts where seed.db is NOT available,
     the full init pipeline always runs (dev-mode fallback).

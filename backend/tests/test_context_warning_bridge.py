@@ -119,13 +119,20 @@ async def _collect_events(unit):
 
 
 def _wire_client(unit, messages):
-    """Wire a list of mock messages into the unit's client."""
+    """Wire a list of mock messages into the unit's client.
+
+    Also marks the unit as having emitted content so the zombie/empty-result
+    detection guard (streaming_dur < 2s && !_content_emitted) doesn't fire
+    during instant mock streams.
+    """
     async def _mock_response():
         for msg in messages:
             yield msg
     mock_client = MagicMock()
     mock_client.receive_response = MagicMock(return_value=_mock_response())
     unit._client = mock_client
+    # Prevent false-positive zombie detection on instant mock streams
+    unit._content_emitted = True
 
 
 # ── build_context_warning via PromptBuilder directly ─────────────────
@@ -355,7 +362,7 @@ class TestPreservation_WarnCriticalEvents:
     @given(
         input_tokens=st.integers(min_value=140_000, max_value=200_000),
     )
-    @settings(max_examples=30, deadline=None)
+    @settings(max_examples=30)
     async def test_warn_critical_events_preserved_200k_model(
         self, input_tokens: int
     ):
@@ -397,7 +404,7 @@ class TestPreservation_WarnCriticalEvents:
             st.integers(max_value=-1),
         ),
     )
-    @settings(max_examples=30, deadline=None)
+    @settings(max_examples=30)
     async def test_invalid_input_produces_no_event(
         self, input_tokens
     ):
@@ -451,7 +458,7 @@ class TestBugConditionExploration_OkLevelFiltered:
     @given(
         input_tokens=st.integers(min_value=1, max_value=139_999),
     )
-    @settings(max_examples=30, deadline=None)
+    @settings(max_examples=30)
     async def test_ok_level_event_yielded_for_200k_model(self, input_tokens: int):
         """**Validates: Requirements 1.1, 2.1**
 
@@ -527,7 +534,7 @@ class TestBugConditionExploration_SystemPromptMetadataMissing:
         token_count=st.integers(min_value=100, max_value=50_000),
         file_count=st.integers(min_value=1, max_value=10),
     )
-    @settings(max_examples=20, deadline=None)
+    @settings(max_examples=20)
     async def test_system_prompt_metadata_event_emitted(
         self, token_count: int, file_count: int
     ):

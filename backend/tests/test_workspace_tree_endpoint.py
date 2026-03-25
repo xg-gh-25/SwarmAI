@@ -27,7 +27,7 @@ from routers.workspace_api import _build_tree, _should_include
 
 PROPERTY_SETTINGS = settings(
     max_examples=100,
-    deadline=None,
+    
     suppress_health_check=[HealthCheck.function_scoped_fixture],
 )
 

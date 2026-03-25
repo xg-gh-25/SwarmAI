@@ -34,7 +34,7 @@ from core.session_unit import SessionState, SessionUnit
 
 PROPERTY_SETTINGS = settings(
     max_examples=100,
-    deadline=None,
+    
     suppress_health_check=[HealthCheck.function_scoped_fixture],
 )
 
