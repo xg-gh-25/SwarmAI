@@ -39,6 +39,7 @@ Public symbols:
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -473,6 +474,9 @@ def cmd_run_checkpoint(args, reg: ArtifactRegistry) -> None:
         artifact_id = None
 
     # 3. Create Radar todo for visibility and resume
+    # Tests can set SWARM_TODO_DB to a temp path to avoid polluting production DB
+    _todo_db_override = os.environ.get("SWARM_TODO_DB")
+    _todo_db_path = Path(_todo_db_override) if _todo_db_override else None
     todo_result = _create_checkpoint_todo(
         project=args.project,
         run_id=args.run_id,
@@ -480,6 +484,7 @@ def cmd_run_checkpoint(args, reg: ArtifactRegistry) -> None:
         stage=args.stage,
         reason=args.reason,
         completed_stages=completed_stages,
+        db_path=_todo_db_path,
     )
 
     result = {
@@ -500,16 +505,22 @@ def _create_checkpoint_todo(
     stage: str,
     reason: str,
     completed_stages: list[str],
+    db_path: Path | None = None,
 ) -> dict | None:
     """Create a Radar todo for a pipeline checkpoint.
 
     Uses todo_db.py directly (same pattern as s_radar-todo skill).
+    Deduplicates: won't create a second pending todo with the same title.
     Returns the todo info or None if DB not available.
+
+    ``db_path`` defaults to ``~/.swarm-ai/data.db``; tests can override
+    to a temp DB to avoid polluting the production database.
     """
     import sqlite3
     import uuid as _uuid
 
-    db_path = Path.home() / ".swarm-ai" / "data.db"
+    if db_path is None:
+        db_path = Path.home() / ".swarm-ai" / "data.db"
     if not db_path.exists():
         return None
 
@@ -537,6 +548,13 @@ def _create_checkpoint_todo(
 
         with sqlite3.connect(str(db_path), timeout=5.0) as conn:
             conn.execute("PRAGMA journal_mode=WAL")
+            # Dedup: skip if a pending todo with same title already exists
+            existing = conn.execute(
+                "SELECT id FROM todos WHERE title = ? AND status = 'pending' LIMIT 1",
+                (title,),
+            ).fetchone()
+            if existing:
+                return existing[0]  # Return existing todo ID
             conn.execute(
                 """INSERT INTO todos (id, workspace_id, title, description, source,
                    source_type, status, priority, due_date, linked_context, task_id,
