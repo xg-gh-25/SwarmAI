@@ -721,7 +721,6 @@ import core.swarm_workspace_manager as swm_module
 # Hypothesis settings for property tests
 _PBT_SETTINGS = settings(
     max_examples=20,
-    
     suppress_health_check=[HealthCheck.function_scoped_fixture],
 )
 
