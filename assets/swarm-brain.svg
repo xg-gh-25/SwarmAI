@@ -1,0 +1,182 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 560" width="960" height="560">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f1019"/>
+      <stop offset="100%" stop-color="#1a1a2e"/>
+    </linearGradient>
+    <linearGradient id="gold" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f59e0b"/>
+      <stop offset="100%" stop-color="#d97706"/>
+    </linearGradient>
+    <linearGradient id="blue" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#3b82f6"/>
+      <stop offset="100%" stop-color="#2563eb"/>
+    </linearGradient>
+    <linearGradient id="purple" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#8b5cf6"/>
+      <stop offset="100%" stop-color="#7c3aed"/>
+    </linearGradient>
+    <linearGradient id="green" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#10b981"/>
+      <stop offset="100%" stop-color="#059669"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="960" height="560" rx="16" fill="url(#bg)"/>
+
+  <!-- Subtle grid -->
+  <g opacity="0.03" stroke="#f59e0b">
+    <line x1="0" y1="100" x2="960" y2="100" stroke-width="0.5"/>
+    <line x1="0" y1="200" x2="960" y2="200" stroke-width="0.5"/>
+    <line x1="0" y1="300" x2="960" y2="300" stroke-width="0.5"/>
+    <line x1="0" y1="400" x2="960" y2="400" stroke-width="0.5"/>
+    <line x1="240" y1="0" x2="240" y2="560" stroke-width="0.5"/>
+    <line x1="480" y1="0" x2="480" y2="560" stroke-width="0.5"/>
+    <line x1="720" y1="0" x2="720" y2="560" stroke-width="0.5"/>
+  </g>
+
+  <!-- Title -->
+  <text x="480" y="42" text-anchor="middle" fill="#f59e0b" font-family="Arial,Helvetica,sans-serif" font-size="18" font-weight="bold" letter-spacing="2">SWARM BRAIN</text>
+  <text x="480" y="60" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="11">One AI, Every Channel, Shared Memory</text>
+
+  <!-- ================================================================ -->
+  <!-- L1: SHARED MEMORY (top layer) -->
+  <!-- ================================================================ -->
+  <rect x="80" y="78" width="800" height="90" rx="12" fill="none" stroke="url(#gold)" stroke-width="1.5" stroke-dasharray="6 3" opacity="0.6"/>
+  <text x="120" y="100" fill="#f59e0b" font-family="Arial,Helvetica,sans-serif" font-size="11" font-weight="bold" opacity="0.9">L1 : SHARED MEMORY</text>
+  <text x="330" y="100" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="10" opacity="0.5">loaded into every session at prompt build</text>
+
+  <!-- Memory file boxes -->
+  <g opacity="0.9">
+    <rect x="100" y="112" width="115" height="38" rx="6" fill="#f59e0b" fill-opacity="0.1" stroke="#f59e0b" stroke-width="0.8" stroke-opacity="0.4"/>
+    <text x="157" y="136" text-anchor="middle" fill="#fbbf24" font-family="Arial,Helvetica,sans-serif" font-size="11" font-weight="bold">MEMORY.md</text>
+
+    <rect x="230" y="112" width="100" height="38" rx="6" fill="#f59e0b" fill-opacity="0.1" stroke="#f59e0b" stroke-width="0.8" stroke-opacity="0.4"/>
+    <text x="280" y="136" text-anchor="middle" fill="#fbbf24" font-family="Arial,Helvetica,sans-serif" font-size="11" font-weight="bold">USER.md</text>
+
+    <rect x="345" y="112" width="125" height="38" rx="6" fill="#f59e0b" fill-opacity="0.1" stroke="#f59e0b" stroke-width="0.8" stroke-opacity="0.4"/>
+    <text x="407" y="136" text-anchor="middle" fill="#fbbf24" font-family="Arial,Helvetica,sans-serif" font-size="11" font-weight="bold">EVOLUTION.md</text>
+
+    <rect x="485" y="112" width="120" height="38" rx="6" fill="#f59e0b" fill-opacity="0.1" stroke="#f59e0b" stroke-width="0.8" stroke-opacity="0.4"/>
+    <text x="545" y="136" text-anchor="middle" fill="#fbbf24" font-family="Arial,Helvetica,sans-serif" font-size="11" font-weight="bold">DailyActivity</text>
+
+    <rect x="620" y="112" width="110" height="38" rx="6" fill="#f59e0b" fill-opacity="0.1" stroke="#f59e0b" stroke-width="0.8" stroke-opacity="0.4"/>
+    <text x="675" y="136" text-anchor="middle" fill="#fbbf24" font-family="Arial,Helvetica,sans-serif" font-size="11" font-weight="bold">Knowledge/</text>
+
+    <rect x="745" y="112" width="115" height="38" rx="6" fill="#f59e0b" fill-opacity="0.06" stroke="#f59e0b" stroke-width="0.5" stroke-opacity="0.25" stroke-dasharray="3 2"/>
+    <text x="802" y="136" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="10" opacity="0.5">+6 more files</text>
+  </g>
+
+  <!-- ================================================================ -->
+  <!-- L3: ACTIVE SESSION DIGEST (bridge layer) -->
+  <!-- ================================================================ -->
+  <rect x="260" y="192" width="440" height="38" rx="8" fill="#8b5cf6" fill-opacity="0.08" stroke="url(#purple)" stroke-width="1" stroke-dasharray="4 2"/>
+  <text x="480" y="216" text-anchor="middle" fill="#a78bfa" font-family="Arial,Helvetica,sans-serif" font-size="11" font-weight="bold">L3 : ACTIVE SESSION DIGEST — cross-session awareness</text>
+
+  <!-- L3 arrows down to sessions -->
+  <line x1="370" y1="230" x2="220" y2="278" stroke="#a78bfa" stroke-width="1" opacity="0.35"/>
+  <polygon points="217,275 223,281 226,274" fill="#a78bfa" opacity="0.35"/>
+
+  <line x1="590" y1="230" x2="740" y2="278" stroke="#a78bfa" stroke-width="1" opacity="0.35"/>
+  <polygon points="737,274 740,281 743,275" fill="#a78bfa" opacity="0.35"/>
+
+  <!-- L1 read arrows down -->
+  <line x1="220" y1="168" x2="220" y2="192" stroke="#f59e0b" stroke-width="1" opacity="0.2"/>
+  <line x1="220" y1="230" x2="220" y2="278" stroke="#f59e0b" stroke-width="1" opacity="0.2"/>
+  <line x1="740" y1="168" x2="740" y2="192" stroke="#f59e0b" stroke-width="1" opacity="0.2"/>
+  <line x1="740" y1="230" x2="740" y2="278" stroke="#f59e0b" stroke-width="1" opacity="0.2"/>
+
+  <!-- Vertical labels -->
+  <text x="195" y="250" fill="#f59e0b" font-family="Arial,Helvetica,sans-serif" font-size="8" opacity="0.35" transform="rotate(-90,195,250)">reads / writes</text>
+  <text x="765" y="250" fill="#f59e0b" font-family="Arial,Helvetica,sans-serif" font-size="8" opacity="0.35" transform="rotate(-90,765,250)">reads / writes</text>
+
+  <!-- ================================================================ -->
+  <!-- CHAT TABS (left) -->
+  <!-- ================================================================ -->
+  <rect x="60" y="280" width="320" height="200" rx="12" fill="#3b82f6" fill-opacity="0.05" stroke="url(#blue)" stroke-width="1.2"/>
+  <text x="220" y="305" text-anchor="middle" fill="#60a5fa" font-family="Arial,Helvetica,sans-serif" font-size="14" font-weight="bold">CHAT TABS</text>
+  <text x="220" y="322" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="10">Independent sessions | Parallel | Per-topic</text>
+
+  <!-- Tab 1 -->
+  <rect x="80" y="340" width="130" height="55" rx="8" fill="#3b82f6" fill-opacity="0.1" stroke="#3b82f6" stroke-width="0.8" stroke-opacity="0.5"/>
+  <text x="145" y="362" text-anchor="middle" fill="#93c5fd" font-family="Arial,Helvetica,sans-serif" font-size="11" font-weight="bold">Tab 1</text>
+  <text x="145" y="380" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="9">"Deploy feature"</text>
+
+  <!-- Tab 2 -->
+  <rect x="230" y="340" width="130" height="55" rx="8" fill="#3b82f6" fill-opacity="0.1" stroke="#3b82f6" stroke-width="0.8" stroke-opacity="0.5"/>
+  <text x="295" y="362" text-anchor="middle" fill="#93c5fd" font-family="Arial,Helvetica,sans-serif" font-size="11" font-weight="bold">Tab 2</text>
+  <text x="295" y="380" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="9">"Review PR #42"</text>
+
+  <!-- Tab 3 (ghost) -->
+  <rect x="130" y="410" width="120" height="48" rx="8" fill="#3b82f6" fill-opacity="0.04" stroke="#3b82f6" stroke-width="0.5" stroke-opacity="0.2" stroke-dasharray="4 2"/>
+  <text x="190" y="438" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="10" opacity="0.4">Tab 3 (available)</text>
+
+  <!-- Chat slot label -->
+  <text x="220" y="487" text-anchor="middle" fill="#3b82f6" font-family="Arial,Helvetica,sans-serif" font-size="10" font-weight="bold" opacity="0.5">max_tabs - 1 slots</text>
+
+  <!-- ================================================================ -->
+  <!-- CHANNEL SESSION (right) -->
+  <!-- ================================================================ -->
+  <rect x="580" y="280" width="320" height="200" rx="12" fill="#10b981" fill-opacity="0.05" stroke="url(#green)" stroke-width="1.2"/>
+  <text x="740" y="305" text-anchor="middle" fill="#34d399" font-family="Arial,Helvetica,sans-serif" font-size="14" font-weight="bold">CHANNEL SESSION</text>
+  <text x="740" y="322" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="10">Shared session | Serialized | 1 dedicated slot</text>
+
+  <!-- ONE Session box -->
+  <rect x="650" y="342" width="180" height="50" rx="10" fill="#10b981" fill-opacity="0.12" stroke="#10b981" stroke-width="1.2"/>
+  <text x="740" y="365" text-anchor="middle" fill="#6ee7b7" font-family="Arial,Helvetica,sans-serif" font-size="13" font-weight="bold">ONE Session</text>
+  <text x="740" y="383" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Claude --resume</text>
+
+  <!-- Slack -->
+  <rect x="600" y="412" width="72" height="26" rx="6" fill="#ec4899" fill-opacity="0.1" stroke="#ec4899" stroke-width="0.7"/>
+  <text x="636" y="430" text-anchor="middle" fill="#f472b6" font-family="Arial,Helvetica,sans-serif" font-size="10" font-weight="bold">Slack</text>
+  <line x1="636" y1="412" x2="700" y2="392" stroke="#f472b6" stroke-width="1" opacity="0.4"/>
+  <polygon points="698,389 702,395 696,394" fill="#f472b6" opacity="0.4"/>
+
+  <!-- Feishu -->
+  <rect x="690" y="412" width="72" height="26" rx="6" fill="#06b6d4" fill-opacity="0.1" stroke="#06b6d4" stroke-width="0.7"/>
+  <text x="726" y="430" text-anchor="middle" fill="#22d3ee" font-family="Arial,Helvetica,sans-serif" font-size="10" font-weight="bold">Feishu</text>
+  <line x1="726" y1="412" x2="740" y2="392" stroke="#22d3ee" stroke-width="1" opacity="0.4"/>
+  <polygon points="738,389 742,395 736,394" fill="#22d3ee" opacity="0.4"/>
+
+  <!-- Future -->
+  <rect x="780" y="412" width="100" height="26" rx="6" fill="#94a3b8" fill-opacity="0.05" stroke="#94a3b8" stroke-width="0.5" stroke-dasharray="3 2"/>
+  <text x="830" y="429" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9" opacity="0.4">WeChat  Teams ...</text>
+  <line x1="830" y1="412" x2="780" y2="392" stroke="#94a3b8" stroke-width="0.8" opacity="0.2" stroke-dasharray="3 2"/>
+
+  <!-- Channel slot label -->
+  <text x="740" y="460" text-anchor="middle" fill="#10b981" font-family="Arial,Helvetica,sans-serif" font-size="10" font-weight="bold" opacity="0.5">1 dedicated slot (always reserved)</text>
+
+  <!-- ================================================================ -->
+  <!-- USER IDENTITY MAP (bottom center) -->
+  <!-- ================================================================ -->
+  <rect x="320" y="498" width="320" height="38" rx="8" fill="#f59e0b" fill-opacity="0.06" stroke="#f59e0b" stroke-width="0.8" stroke-dasharray="4 2" stroke-opacity="0.4"/>
+  <text x="480" y="515" text-anchor="middle" fill="#fbbf24" font-family="Arial,Helvetica,sans-serif" font-size="10" font-weight="bold">USER IDENTITY MAP</text>
+  <text x="480" y="530" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Slack W017T04E  =  Feishu ou_abc  =  WeChat wxid_xxx  =  user_key "xg"</text>
+
+  <!-- Identity arrows from channels to map -->
+  <line x1="636" y1="438" x2="550" y2="498" stroke="#f59e0b" stroke-width="0.8" opacity="0.2" stroke-dasharray="3 2"/>
+  <line x1="726" y1="438" x2="560" y2="498" stroke="#f59e0b" stroke-width="0.8" opacity="0.2" stroke-dasharray="3 2"/>
+
+  <!-- ================================================================ -->
+  <!-- Center divider -->
+  <!-- ================================================================ -->
+  <line x1="480" y1="275" x2="480" y2="490" stroke="#334155" stroke-width="0.8" stroke-dasharray="4 4" opacity="0.3"/>
+
+  <!-- ================================================================ -->
+  <!-- Legend -->
+  <!-- ================================================================ -->
+  <g transform="translate(80, 548)">
+    <rect x="-4" y="-5" width="8" height="8" rx="2" fill="#3b82f6" opacity="0.6"/>
+    <text x="10" y="3" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Chat (parallel, per-topic)</text>
+
+    <rect x="196" y="-5" width="8" height="8" rx="2" fill="#10b981" opacity="0.6"/>
+    <text x="210" y="3" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Channel (serialized, shared)</text>
+
+    <rect x="416" y="-5" width="8" height="8" rx="2" fill="#f59e0b" opacity="0.6"/>
+    <text x="430" y="3" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Shared memory (all sessions)</text>
+
+    <rect x="636" y="-5" width="8" height="8" rx="2" fill="#8b5cf6" opacity="0.6"/>
+    <text x="650" y="3" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Cross-session awareness</text>
+  </g>
+</svg>
