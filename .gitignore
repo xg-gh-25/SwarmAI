@@ -90,3 +90,4 @@ desktop/resources/seed.db
 
 # User-local MCP config (machine-specific, contains absolute paths)
 desktop/resources/user-mcp-servers.json
+backend/pytest-of-gawan/

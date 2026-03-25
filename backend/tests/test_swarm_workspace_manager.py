@@ -49,6 +49,7 @@ class TestSwarmWorkspaceManagerConstants:
             "Knowledge",
             "Projects",
             "Attachments",
+            "Services",
         ]
         assert SwarmWorkspaceManager.FOLDER_STRUCTURE == required_dirs
 
@@ -161,7 +162,7 @@ class TestGlobalInstance:
         assert isinstance(swarm_workspace_manager, SwarmWorkspaceManager)
 
     def test_global_instance_has_folder_structure(self):
-        assert len(swarm_workspace_manager.FOLDER_STRUCTURE) == 3
+        assert len(swarm_workspace_manager.FOLDER_STRUCTURE) == 4
 
 
 class TestCreateFolderStructure:
