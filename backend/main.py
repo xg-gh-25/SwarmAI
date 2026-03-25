@@ -97,6 +97,34 @@ logger.info(f"Log file: {log_file}")
 logging.getLogger("urllib3").setLevel(logging.WARNING)
 
 
+def _detect_backend_port() -> int:
+    """Detect the port this backend is listening on.
+
+    Resolution order:
+    1. ``--port N`` in sys.argv (production — set by desktop_main.py via Tauri)
+    2. ``PORT`` env var
+    3. ``settings.port`` (dev default: 8000)
+    """
+    # 1. Check sys.argv for --port N
+    for i, arg in enumerate(sys.argv):
+        if arg == "--port" and i + 1 < len(sys.argv):
+            try:
+                return int(sys.argv[i + 1])
+            except ValueError:
+                pass
+
+    # 2. Check PORT env var
+    port_env = os.environ.get("PORT")
+    if port_env:
+        try:
+            return int(port_env)
+        except ValueError:
+            pass
+
+    # 3. Fall back to settings
+    return settings.port
+
+
 def _get_seed_database_path() -> Path | None:
     """Get the path to the bundled seed database.
     
@@ -523,10 +551,27 @@ async def lifespan(app: FastAPI):
     )
     logger.info("Startup complete - ready to serve requests")
 
+    # ── Start managed sidecar services (Slack bot, etc.) ─────────────
+    # Deferred to background so it never blocks startup.  Services
+    # discover the backend via ~/.swarm-ai/backend.port written here.
+    from core.service_manager import service_manager as _svc_mgr
+
+    async def _deferred_services_startup() -> None:
+        try:
+            ws_path = initialization_manager.get_cached_workspace_path()
+            backend_port = _detect_backend_port()
+            await _svc_mgr.start_all(ws_path, backend_port)
+        except Exception:
+            logger.exception("Sidecar services startup failed (non-fatal)")
+
+    asyncio.create_task(_deferred_services_startup())
+
     yield
     # Shutdown
     _startup_complete = False
     logger.info("Shutting down...")
+    await _svc_mgr.stop_all()
+    logger.info("Sidecar services stopped")
     await channel_gateway.shutdown()
     logger.info("Channel gateway stopped")
     await session_registry.stop_lifecycle()

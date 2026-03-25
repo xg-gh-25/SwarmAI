@@ -362,3 +362,10 @@ async def reset_to_defaults() -> ResetToDefaultsResponse:
         success=result["success"],
         error=result.get("error")
     )
+
+
+@router.get("/services")
+async def get_managed_services():
+    """Get status of all managed sidecar services (Slack bot, etc.)."""
+    from core.service_manager import service_manager
+    return {"services": service_manager.get_status()}
