@@ -70,7 +70,60 @@ SwarmAI doesn't just use skills — it builds new ones when it hits capability g
 - **Correction capture** — mistakes are recorded as high-value entries so the same error never happens twice
 - **50+ built-in skills** — browser automation, PDF manipulation, spreadsheets, Slack, Outlook, Apple Reminders, web research, code review, and more
 
-### 4. Autonomous Pipeline — From Requirement to PR
+### 4. Swarm Core Engine — A Self-Growing Intelligence
+
+Most AI agents are stateless functions: input in, output out, nothing learned. Swarm has a **brain** — six interconnected flywheels that feed each other, creating compound growth with every session.
+
+```
+                     ┌─────────────────────┐
+                     │   Self-Evolution     │  Learn new capabilities,
+                     │                     │  never repeat mistakes
+                     └──────┬──────────────┘
+                            │
+  ┌─────────────────┐  ┌────┴────────────┐  ┌─────────────────┐
+  │  Self-Health    │  │  Self-Memory    │  │  Self-Context   │
+  │  Monitor,       │  │  Remember what  │  │  Right info,    │
+  │  diagnose,      │◄─┤  matters,       ├─►│  right time,    │
+  │  auto-heal      │  │  forget what    │  │  right budget   │
+  └────────┬────────┘  │  doesn't        │  └──────┬──────────┘
+           │           └────┬────────────┘         │
+           │                │                      │
+  ┌────────┴────────┐  ┌───┴─────────────┐
+  │  Self-Jobs      │  │  Self-Harness   │  Validate accuracy,
+  │  Background     │◄─┤  detect drift,  │  detect staleness,
+  │  automation     │  │  auto-fix       │  auto-repair
+  └─────────────────┘  └─────────────────┘
+```
+
+**The compound loop:**
+```
+Session happens → Memory captures it → Evolution detects patterns →
+Harness verifies accuracy → Context assembles smarter prompts →
+Next session performs better → Memory captures the improvement → (loop accelerates)
+```
+
+| Flywheel | What It Does | Key Components |
+|----------|-------------|----------------|
+| **Self-Evolution** | Builds new skills, captures corrections, never repeats mistakes | EVOLUTION.md, 50+ skills, gap detection, correction registry |
+| **Self-Memory** | 3-layer distillation pipeline, git-verified, weekly LLM-powered pruning | DailyActivity, distillation hooks, MEMORY.md, proactive briefing |
+| **Self-Context** | 11-file P0-P10 priority chain with token budgets and L0/L1 caching | Context loader, prompt builder, budget tiers, freshness checks |
+| **Self-Harness** | Validates all context files, detects DDD staleness, auto-refreshes indexes | ContextHealthHook (light + deep modes), auto-commit, integrity checks |
+| **Self-Health** | Monitors services, resources, sessions; auto-restarts crashed processes | Service manager, resource monitor, lifecycle manager, health API |
+| **Self-Jobs** | Background automation — scheduled tasks, sidecar services, signal pipeline | Job scheduler, service manager, signal fetch/digest, user-defined jobs |
+
+**The growth trajectory:**
+
+| Level | State | Milestone |
+|-------|-------|-----------|
+| L0 | Reactive | Responds to questions, no memory |
+| **L1** | **Self-Maintaining** (current) | Remembers, self-commits, captures corrections, monitors health |
+| L2 | Self-Improving | Weekly LLM maintenance, unified job system, feedback loops |
+| L3 | Self-Governing | Context adapts per session, proactive gap detection, DDD auto-sync |
+| L4 | Autonomous | Full AIDLC pipeline, self-directed learning, judgment framework |
+
+This isn't a feature list — it's a growth architecture. Every session makes the next one better. Every correction prevents a class of future mistakes. The system doesn't just run; it **compounds**.
+
+### 5. Autonomous Pipeline — From Requirement to PR
 
 Give SwarmAI a one-sentence requirement, and it drives the full development lifecycle:
 
@@ -135,7 +188,7 @@ This is the key Phase 3 insight: when no human reviews every line, **the test su
 
 This is the implementation of [AIDLC Phase 3 (AI-Management)](./docs/AIDLC-Phase3-Design.md) — where AI makes autonomous decisions and humans step in when needed.
 
-### 5. Three-Column Command Center — Seamless Integration
+### 6. Three-Column Command Center — Seamless Integration
 
 SwarmAI isn't three separate panels. It's **one integrated system** where the Chat Center orchestrates everything:
 
@@ -155,7 +208,7 @@ SwarmAI isn't three separate panels. It's **one integrated system** where the Ch
 - **Drag-to-chat** — drag any file from SwarmWS or any ToDo/artifact from Radar into a chat tab. The agent gets full context and starts executing immediately. No copy-paste, no re-explaining.
 - **Everything is connected** — when the agent writes a file, it shows up in the explorer. When it creates a ToDo, it appears in Radar. When you complete work, DailyActivity captures it automatically. The three panels are views of one unified workspace.
 
-### 6. Multi-Tab Parallel Sessions
+### 7. Multi-Tab Parallel Sessions
 
 Not a single chat thread — a **parallel command center**:
 
@@ -163,7 +216,7 @@ Not a single chat thread — a **parallel command center**:
 - **Tab persistence** — tabs survive app restarts with full conversation history
 - **Session isolation** — Tab 1 crashing does not affect Tab 2. Each tab has its own subprocess, state machine, and error recovery.
 
-### 7. Security — Human Always in Control
+### 8. Security — Human Always in Control
 
 Defense-in-depth: tool logger (audit trail) + command blocker (13 dangerous patterns) + human approval (permission dialog with persistent approvals) + skill access control. Plus workspace isolation, bash sandboxing, and error sanitization.
 
