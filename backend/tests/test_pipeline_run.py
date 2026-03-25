@@ -30,8 +30,12 @@ def workspace(tmp_path):
 def _run_cli(workspace: Path, *args: str) -> dict:
     """Run artifact_cli command and return parsed JSON output."""
     cli_path = Path(__file__).resolve().parent.parent / "scripts" / "artifact_cli.py"
+    # SWARM_TODO_DB isolates checkpoint todos to a temp DB — prevents
+    # test runs from polluting the production ~/.swarm-ai/data.db
+    todo_db = workspace / ".test-todos.db"
     env = {
         "SWARM_WORKSPACE": str(workspace),
+        "SWARM_TODO_DB": str(todo_db),
         "PATH": "/usr/bin:/bin",
         "PYTHONPATH": str(Path(__file__).resolve().parent.parent),
     }
