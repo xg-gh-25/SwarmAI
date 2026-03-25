@@ -467,6 +467,7 @@ async def lifespan(app: FastAPI):
     from core.compliance import ComplianceTracker
     from hooks.daily_activity_hook import DailyActivityExtractionHook
     from hooks.auto_commit_hook import WorkspaceAutoCommitHook
+    from hooks.context_health_hook import ContextHealthHook
     from hooks.distillation_hook import DistillationTriggerHook
     from hooks.evolution_maintenance_hook import EvolutionMaintenanceHook
     from hooks.improvement_writeback_hook import ImprovementWritebackHook
@@ -479,13 +480,15 @@ async def lifespan(app: FastAPI):
     # Create fire-and-forget executor — hooks never block the chat path
     hook_executor = BackgroundHookExecutor(hook_manager)
 
-    # Order matters: extraction first, then commit, then distillation check, then evolution maintenance
+    # Order matters: extraction → commit → health → distillation → evolution → improvement
     hook_manager.register(DailyActivityExtractionHook(
         summarization_pipeline=summarization_pipeline,
         compliance_tracker=compliance_tracker,
     ))
     # Pass shared git lock to auto-commit hook to prevent .git/index.lock contention
     hook_manager.register(WorkspaceAutoCommitHook(git_lock=hook_executor.git_lock))
+    # Context health: light refresh every session (if changed), deep check daily
+    hook_manager.register(ContextHealthHook())
     hook_manager.register(DistillationTriggerHook())
     hook_manager.register(EvolutionMaintenanceHook())
     # IMPROVEMENT.md write-back: closes the DDD learning loop.
@@ -496,7 +499,7 @@ async def lifespan(app: FastAPI):
 
     # Wire hooks into session_registry (new architecture)
     set_compliance_tracker(compliance_tracker)
-    logger.info("Session lifecycle hooks registered (5 hooks, background executor)")
+    logger.info("Session lifecycle hooks registered (6 hooks, background executor)")
 
     # ── Initialize new session architecture ──────────────────────────
     session_registry.initialize(app_config)
