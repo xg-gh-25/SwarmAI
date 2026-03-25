@@ -1343,3 +1343,129 @@ def build_session_briefing(
     except Exception as exc:
         logger.warning("Proactive intelligence failed (non-blocking): %s", exc)
         return None
+
+
+def build_session_briefing_data(
+    workspace_dir: str | Path,
+) -> dict[str, Any]:
+    """Build a structured briefing dict for the frontend Welcome Screen.
+
+    Returns a JSON-serializable dict with focus items, external signals,
+    job results, and learning insights. Never raises — returns empty
+    structure on any failure.
+
+    This is the structured counterpart of ``build_session_briefing()``
+    which returns a markdown string for the system prompt.
+    """
+    empty: dict[str, Any] = {
+        "focus": [],
+        "signals": [],
+        "jobs": [],
+        "learning": None,
+        "generated_at": datetime.now().isoformat(),
+    }
+    try:
+        workspace = Path(workspace_dir)
+        memory_path = workspace / ".context" / "MEMORY.md"
+        daily_dir = workspace / "Knowledge" / "DailyActivity"
+
+        if not memory_path.exists():
+            return empty
+
+        memory_text = memory_path.read_text(encoding="utf-8")
+
+        # Parse threads + hints (same logic as build_session_briefing)
+        threads = _parse_open_threads(memory_text)
+        continue_hints = _parse_continue_hints(daily_dir)
+        signals = _detect_patterns(threads, daily_dir, memory_text)
+        threads = _filter_completed_threads(threads, daily_dir)
+
+        # Score and rank
+        learning_state = _load_learning_state(workspace)
+        learning_state = _update_learning_from_activity(learning_state, daily_dir)
+        ranked = _build_suggestions(threads, continue_hints, signals)
+        for item in ranked:
+            _apply_learning(item, learning_state)
+        priority_order = {"P0": 0, "P1": 1, "P2": 2}
+        ranked.sort(key=lambda x: (-x.score, priority_order.get(x.priority, 3), x.title))
+
+        # Build focus items
+        focus = []
+        for item in ranked[:5]:
+            focus.append({
+                "title": item.title,
+                "priority": item.priority,
+                "score": item.score,
+                "source": item.source,
+                "momentum": item.from_continue_hint,
+            })
+
+        # External signals from signal_digest.json
+        ext_signals = []
+        digest_path = workspace / "Services" / "signals" / "signal_digest.json"
+        if digest_path.exists():
+            try:
+                data = json.loads(digest_path.read_text(encoding="utf-8"))
+                import time as _time
+                cutoff = _time.time() - 48 * 3600
+                for sig in data.get("items", [])[:5]:
+                    fetched = sig.get("fetched_at", "")
+                    if isinstance(fetched, str) and fetched:
+                        try:
+                            dt = datetime.fromisoformat(fetched.replace("Z", "+00:00"))
+                            if dt.timestamp() < cutoff:
+                                continue
+                        except (ValueError, TypeError):
+                            continue
+                    ext_signals.append({
+                        "title": sig.get("title", ""),
+                        "summary": sig.get("summary", ""),
+                        "source": sig.get("source", ""),
+                        "url": sig.get("url", ""),
+                        "urgency": sig.get("urgency", "medium"),
+                        "relevance": sig.get("relevance_score", 0),
+                    })
+            except (json.JSONDecodeError, OSError):
+                pass
+
+        # Job results
+        jobs = []
+        jsonl_path = workspace / "Knowledge" / "JobResults" / ".job-results.jsonl"
+        if jsonl_path.exists():
+            try:
+                import time as _time
+                cutoff_24h = _time.time() - 24 * 3600
+                for line in reversed(jsonl_path.read_text(encoding="utf-8").strip().splitlines()):
+                    if len(jobs) >= 5:
+                        break
+                    try:
+                        entry = json.loads(line)
+                        ts = entry.get("run_at", entry.get("completed_at", ""))
+                        if isinstance(ts, str) and ts:
+                            dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                            if dt.timestamp() < cutoff_24h:
+                                break  # older entries won't be newer
+                        jobs.append({
+                            "name": entry.get("job_name", entry.get("job_id", "")),
+                            "status": entry.get("status", "unknown"),
+                            "duration": entry.get("duration_seconds", 0),
+                        })
+                    except (json.JSONDecodeError, ValueError):
+                        continue
+            except OSError:
+                pass
+
+        # Learning insight
+        learning = learning_state.learning_summary()
+
+        return {
+            "focus": focus,
+            "signals": ext_signals,
+            "jobs": jobs,
+            "learning": learning,
+            "generated_at": datetime.now().isoformat(),
+        }
+
+    except Exception as exc:
+        logger.warning("Briefing data generation failed (non-blocking): %s", exc)
+        return empty

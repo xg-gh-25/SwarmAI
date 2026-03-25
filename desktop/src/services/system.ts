@@ -90,6 +90,39 @@ const toCamelCase = (data: Record<string, unknown>): SystemStatus => {
 
 // ============== Service ==============
 
+// ============== Briefing Types ==============
+
+export interface BriefingFocusItem {
+  title: string;
+  priority: string;  // P0, P1, P2
+  score: number;
+  source: string;    // "thread" or "hint"
+  momentum: boolean;
+}
+
+export interface BriefingSignal {
+  title: string;
+  summary: string;
+  source: string;
+  url: string;
+  urgency: string;   // "high", "medium", "low"
+  relevance: number;
+}
+
+export interface BriefingJob {
+  name: string;
+  status: string;  // "success", "failed", etc.
+  duration: number;
+}
+
+export interface SessionBriefing {
+  focus: BriefingFocusItem[];
+  signals: BriefingSignal[];
+  jobs: BriefingJob[];
+  learning: string | null;
+  generatedAt: string | null;
+}
+
 const STATUS_TIMEOUT_MS = 5000;
 
 export interface MaxTabsInfo {
@@ -135,5 +168,27 @@ export const systemService = {
         ? data.memory_pressure
         : 'ok') as MaxTabsInfo['memoryPressure'],
     };
+  },
+
+  /**
+   * Get session briefing data for the Welcome Screen.
+   *
+   * Returns focus suggestions, external signals, job results, and
+   * learning insights from the proactive intelligence engine.
+   */
+  async getBriefing(): Promise<SessionBriefing> {
+    try {
+      const response = await api.get<Record<string, unknown>>('/system/briefing');
+      const d = response.data;
+      return {
+        focus: (d.focus as BriefingFocusItem[]) ?? [],
+        signals: (d.signals as BriefingSignal[]) ?? [],
+        jobs: (d.jobs as BriefingJob[]) ?? [],
+        learning: (d.learning as string) ?? null,
+        generatedAt: (d.generated_at as string) ?? null,
+      };
+    } catch {
+      return { focus: [], signals: [], jobs: [], learning: null, generatedAt: null };
+    }
   },
 };
