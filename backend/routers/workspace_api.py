@@ -211,7 +211,7 @@ async def update_workspace(request: WorkspaceConfigUpdate):
 # Internal directories that exist on disk but should not appear in the
 # workspace explorer tree.  These are runtime/system data, not user content.
 # .git is excluded because its internals are not useful to browse.
-_HIDDEN_DIRS = frozenset({"chats", ".git"})
+_HIDDEN_DIRS = frozenset({"chats", ".git", "Services"})
 
 # Root-level files that are infrastructure/tooling artifacts — hidden from the
 # explorer tree but fully functional on disk (git-tracked, used by tools, etc.).
