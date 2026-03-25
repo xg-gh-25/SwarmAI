@@ -143,7 +143,7 @@ class TestDatabaseErrorHandling:
             return False
 
         # Mock agent as ready
-        async def mock_get_default_agent():
+        async def mock_build_agent_config(agent_id=None):
             return {"name": "SwarmAgent", "allowed_skills": [], "mcp_ids": []}
 
         # Mock gateway as running
@@ -152,7 +152,7 @@ class TestDatabaseErrorHandling:
         mock_gateway.startup_state = "started"
 
         with patch("routers.system.db") as mock_db, \
-             patch("routers.system.get_default_agent", mock_get_default_agent), \
+             patch("routers.system.build_agent_config", mock_build_agent_config), \
              patch("routers.system.channel_gateway", mock_gateway):
 
             mock_db.health_check = mock_health_check_failure
@@ -176,10 +176,10 @@ class TestMissingAgentHandling:
 
         **Validates: Requirements 1.7**
         """
-        async def mock_get_default_agent():
+        async def mock_build_agent_config(agent_id=None):
             return None
 
-        with patch("routers.system.get_default_agent", mock_get_default_agent):
+        with patch("routers.system.build_agent_config", mock_build_agent_config):
             response = client.get("/api/system/status")
 
             assert response.status_code == 200
@@ -191,10 +191,10 @@ class TestMissingAgentHandling:
 
         **Validates: Requirements 1.7, 2.2**
         """
-        async def mock_get_default_agent():
+        async def mock_build_agent_config(agent_id=None):
             return None
 
-        with patch("routers.system.get_default_agent", mock_get_default_agent):
+        with patch("routers.system.build_agent_config", mock_build_agent_config):
             response = client.get("/api/system/status")
 
             assert response.status_code == 200
@@ -206,10 +206,10 @@ class TestMissingAgentHandling:
 
         **Validates: Requirements 1.7, 2.2**
         """
-        async def mock_get_default_agent():
+        async def mock_build_agent_config(agent_id=None):
             return None
 
-        with patch("routers.system.get_default_agent", mock_get_default_agent):
+        with patch("routers.system.build_agent_config", mock_build_agent_config):
             response = client.get("/api/system/status")
 
             assert response.status_code == 200
@@ -222,10 +222,10 @@ class TestMissingAgentHandling:
 
         **Validates: Requirements 1.7**
         """
-        async def mock_get_default_agent():
+        async def mock_build_agent_config(agent_id=None):
             raise Exception("Agent retrieval failed")
 
-        with patch("routers.system.get_default_agent", mock_get_default_agent):
+        with patch("routers.system.build_agent_config", mock_build_agent_config):
             response = client.get("/api/system/status")
 
             assert response.status_code == 200
@@ -242,7 +242,7 @@ class TestMissingAgentHandling:
             return True
 
         # Mock agent as not found
-        async def mock_get_default_agent():
+        async def mock_build_agent_config(agent_id=None):
             return None
 
         # Mock gateway as running
@@ -251,7 +251,7 @@ class TestMissingAgentHandling:
         mock_gateway.startup_state = "started"
 
         with patch("routers.system.db") as mock_db, \
-             patch("routers.system.get_default_agent", mock_get_default_agent), \
+             patch("routers.system.build_agent_config", mock_build_agent_config), \
              patch("routers.system.channel_gateway", mock_gateway):
 
             mock_db.health_check = mock_health_check
@@ -299,14 +299,14 @@ class TestAgentResourceCounts:
 
     def test_agent_with_skills_reports_correct_count(self, client: TestClient):
         """Test that agent with skills reports correct skills_count."""
-        async def mock_get_default_agent():
+        async def mock_build_agent_config(agent_id=None):
             return {
                 "name": "SwarmAgent",
                 "allowed_skills": ["skill-1", "skill-2", "skill-3"],
                 "mcp_ids": []
             }
 
-        with patch("routers.system.get_default_agent", mock_get_default_agent):
+        with patch("routers.system.build_agent_config", mock_build_agent_config):
             response = client.get("/api/system/status")
 
             assert response.status_code == 200
@@ -315,14 +315,14 @@ class TestAgentResourceCounts:
 
     def test_agent_with_mcp_servers_reports_correct_count(self, client: TestClient):
         """Test that agent with MCP servers reports correct mcp_servers_count."""
-        async def mock_get_default_agent():
+        async def mock_build_agent_config(agent_id=None):
             return {
                 "name": "SwarmAgent",
                 "allowed_skills": [],
                 "mcp_ids": ["mcp-1", "mcp-2"]
             }
 
-        with patch("routers.system.get_default_agent", mock_get_default_agent):
+        with patch("routers.system.build_agent_config", mock_build_agent_config):
             response = client.get("/api/system/status")
 
             assert response.status_code == 200
@@ -331,14 +331,14 @@ class TestAgentResourceCounts:
 
     def test_agent_with_null_allowed_skills_reports_zero(self, client: TestClient):
         """Test that agent with null allowed_skills reports zero count."""
-        async def mock_get_default_agent():
+        async def mock_build_agent_config(agent_id=None):
             return {
                 "name": "SwarmAgent",
                 "allowed_skills": None,
                 "mcp_ids": None
             }
 
-        with patch("routers.system.get_default_agent", mock_get_default_agent):
+        with patch("routers.system.build_agent_config", mock_build_agent_config):
             response = client.get("/api/system/status")
 
             assert response.status_code == 200
@@ -360,7 +360,7 @@ class TestAllComponentsReady:
             return True
 
         # Mock agent as ready
-        async def mock_get_default_agent():
+        async def mock_build_agent_config(agent_id=None):
             return {
                 "name": "SwarmAgent",
                 "allowed_skills": ["skill-1"],
@@ -385,7 +385,7 @@ class TestAllComponentsReady:
         mock_db.workspace_config.get_config = mock_get_default_workspace
 
         with patch("routers.system.db", mock_db), \
-             patch("routers.system.get_default_agent", mock_get_default_agent), \
+             patch("routers.system.build_agent_config", mock_build_agent_config), \
              patch("routers.system.channel_gateway", mock_gateway):
 
             response = client.get("/api/system/status")
