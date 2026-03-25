@@ -377,55 +377,7 @@ def validate_config() -> None:
         print("\n✅ All configuration valid")
 
 
-def install_launchd() -> None:
-    """Generate and install the launchd plist."""
-    import shutil
-
-    plist_name = "com.swarmai.jobs.plist"
-    launch_agents = Path.home() / "Library" / "LaunchAgents"
-    launch_agents.mkdir(exist_ok=True)
-
-    # Resolve Python path from venv
-    venv_python = BASE_DIR / "venv" / "bin" / "python"
-    if not venv_python.exists():
-        python_path = shutil.which("python3") or "python3"
-    else:
-        python_path = str(venv_python)
-
-    plist_content = f"""<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>com.swarmai.jobs</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>{python_path}</string>
-        <string>{BASE_DIR / 'scheduler.py'}</string>
-    </array>
-    <key>StartCalendarInterval</key>
-    <array>
-        <dict><key>Minute</key><integer>7</integer></dict>
-    </array>
-    <key>StandardOutPath</key>
-    <string>{LOG_DIR / 'launchd-stdout.log'}</string>
-    <key>StandardErrorPath</key>
-    <string>{LOG_DIR / 'launchd-stderr.log'}</string>
-    <key>WorkingDirectory</key>
-    <string>{BASE_DIR}</string>
-    <key>EnvironmentVariables</key>
-    <dict>
-        <key>PATH</key>
-        <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
-    </dict>
-</dict>
-</plist>"""
-
-    dest = launch_agents / plist_name
-    dest.write_text(plist_content)
-    print(f"Plist written to {dest}")
-    print(f"Load with: launchctl load {dest}")
-    print(f"Unload with: launchctl unload {dest}")
+    # install_launchd removed — use install_scheduler.py instead
 
 
 def main():
@@ -451,7 +403,8 @@ def main():
     elif args.validate:
         validate_config()
     elif args.install:
-        install_launchd()
+        from .install_scheduler import install
+        install()
     else:
         run_scheduler(dry_run=args.dry_run, force_job=args.run_now)
 
