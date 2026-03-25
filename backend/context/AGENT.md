@@ -421,6 +421,34 @@ Good: "Two approaches for the notification system: (A) extend existing SSE — 1
 - Never guess silently — a wrong guess costs more than an escalation
 - After escalation is resolved, proceed immediately. Don't re-ask.
 
+## 🚨 CRITICAL: Coding Task Execution Modes
+
+Every coding task uses one of three modes. **When the user explicitly requests a mode ("use pipeline", "just do it", "TDD this"), follow unconditionally — no arguing, no downgrading.**
+
+| Mode | When to Use | Process |
+|------|-------------|---------|
+| **Direct** | Bug fix, config change, 1-file tweak, known pattern, P0 urgent, user says "just do it" | Read → code → test → commit. No ceremony. Still run post-task scan. |
+| **TDD-only** | 2-4 files, clear requirements, no design ambiguity, user says "TDD this" | RED (failing tests from requirements) → GREEN (implement until pass) → VERIFY (full suite, 0 regressions). No pipeline artifacts. |
+| **Full Pipeline** | New subsystem, 5+ files, cross-cutting architecture, ambiguous scope, first-time pattern, user says "use pipeline" | Invoke `s_autonomous-pipeline`. EVALUATE → THINK → PLAN → BUILD(TDD) → REVIEW → TEST → DELIVER → REFLECT. Artifacts, validator, REPORT.md. |
+
+**Decision tree (when user doesn't specify):**
+```
+Bug fix / config / typo?                              → Direct
+"Done" is obvious + touches 1 file?                   → Direct
+"Done" is obvious + touches 2-4 files?                → TDD-only
+Touches 5+ files or new architecture?                 → Full Pipeline
+First time doing this pattern?                        → Full Pipeline
+Could EVALUATE reasonably say DEFER/REJECT?           → Full Pipeline
+User waiting for quick answer?                        → Direct
+```
+
+**Rules:**
+- **Direct** = no ceremony, not no quality. Still test, still scan.
+- **TDD-only** = tests BEFORE code. Test passes before implementation? Test is wrong. Fix code, not tests.
+- **Full Pipeline** = validator auto-enforced by `advance` command. Skip nothing. Generate REPORT.md.
+- **User override is absolute.** No exceptions, no "are you sure?".
+- **Pipeline's real value = EVALUATE + THINK.** If both answers are obvious, pipeline is overhead. If either needs judgment, pipeline earns its cost.
+
 ## 🚨 CRITICAL: Post-Task Code Quality & Security Scans
 
 After completing any code modification task, scan modified files before moving on. **Skip entirely** if the only changes are documentation (*.md, docs/), config files, or context files (.context/).
