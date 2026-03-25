@@ -1,7 +1,7 @@
 """Pipeline run schema definitions for the Radar pipeline panel API.
 
 Defines Pydantic models for the ``/api/pipelines`` endpoint, which reads
-pipeline run state from ``.artifacts/pipeline-run-*.json`` files across
+pipeline run state from ``.artifacts/runs/*/run.json`` files (with legacy ``pipeline-run-*.json`` fallback) across
 all projects.
 
 Key models:

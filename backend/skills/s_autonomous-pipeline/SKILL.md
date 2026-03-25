@@ -17,7 +17,7 @@ description: >
   SIBLINGS: evaluate = the GO/DEFER gate alone | qa = testing alone |
   deliver = packaging alone | pipeline = the full orchestrated sequence.
 consumes_artifacts: [evaluation, research, alternatives, design_doc, changeset, review, test_report]
-produces_artifact: checkpoint
+produces_artifact: [evaluation, research, design_doc, changeset, review, test_report, delivery, checkpoint]
 ---
 
 # Pipeline Orchestrator
@@ -72,7 +72,7 @@ or start a new one?"
 
 **Pipeline run state** is tracked in a JSON file:
 ```
-Projects/<project>/.artifacts/pipeline-run-<id>.json
+Projects/<project>/.artifacts/runs/<id>/run.json
 ```
 
 Create the initial run state:
@@ -101,7 +101,7 @@ Project: <PROJECT>
 When the user says "resume pipeline" or drags a pipeline Radar todo:
 
 1. Read the checkpoint artifact: `discover --types checkpoint --full`
-2. Load `pipeline-run-<id>.json`
+2. Load `runs/<id>/run.json` via `run-get`
 3. Check pending escalations -- if any still open, report and wait
 4. Skip completed stages, resume from the checkpoint stage
 5. Announce:

@@ -1,6 +1,6 @@
 """Pipeline runs API router.
 
-Reads pipeline run state from ``.artifacts/pipeline-run-*.json`` files
+Reads pipeline run state from ``.artifacts/runs/*/run.json`` files (with legacy ``pipeline-run-*.json`` fallback)
 across all projects in SwarmWS. Serves real data to the Radar pipeline panel.
 
 Key endpoints:
