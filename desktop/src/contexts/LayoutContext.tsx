@@ -55,6 +55,10 @@ export interface LayoutContextValue {
   workspaceSettingsId: string;
   setWorkspaceSettingsId: (id: string) => void;
 
+  // Settings tab deep-link (e.g., sidebar Skills icon → settings with skills tab)
+  settingsTab: string | undefined;
+  setSettingsTab: (tab: string | undefined) => void;
+
   // Responsive state
   isNarrowViewport: boolean;
 }
@@ -132,6 +136,9 @@ export function LayoutProvider({ children }: LayoutProviderProps) {
 
   // Workspace settings modal target ID
   const [workspaceSettingsId, setWorkspaceSettingsId] = useState<string>('');
+
+  // Settings tab deep-link (sidebar → specific settings tab)
+  const [settingsTab, setSettingsTab] = useState<string | undefined>(undefined);
 
   // TopBar session context -- ChatPage writes, TopBar/BottomBar read.
   // Hosted in a SEPARATE context (SessionMetaContext) so high-frequency
@@ -236,6 +243,8 @@ export function LayoutProvider({ children }: LayoutProviderProps) {
     closeModal,
     workspaceSettingsId,
     setWorkspaceSettingsId,
+    settingsTab,
+    setSettingsTab,
     isNarrowViewport,
   }), [
     workspaceExplorerCollapsed,
@@ -250,6 +259,8 @@ export function LayoutProvider({ children }: LayoutProviderProps) {
     closeModal,
     workspaceSettingsId,
     setWorkspaceSettingsId,
+    settingsTab,
+    setSettingsTab,
     isNarrowViewport,
   ]);
 

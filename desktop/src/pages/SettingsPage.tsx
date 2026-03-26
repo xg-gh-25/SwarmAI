@@ -1,13 +1,15 @@
 /**
  * Settings page — thin wrapper over SettingsTabs.
  *
- * The old flat-section layout has been replaced with a 5-tab layout:
- * General, AI & Models, Channels, System, About.
- *
- * Dead sections removed: Claude Agent SDK, Self-Evolution (zero user value).
+ * 7-tab layout: General, AI & Models, Channels, Skills, MCP Servers, System, About.
+ * Supports initialTab prop so sidebar icons can deep-link to Skills or MCP tabs.
  */
 import SettingsTabs from '../components/settings/SettingsTabs';
 
-export default function SettingsPage() {
-  return <SettingsTabs />;
+interface SettingsPageProps {
+  initialTab?: string;
+}
+
+export default function SettingsPage({ initialTab }: SettingsPageProps) {
+  return <SettingsTabs initialTab={initialTab} />;
 }

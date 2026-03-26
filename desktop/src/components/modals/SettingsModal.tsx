@@ -1,10 +1,9 @@
 /**
  * SettingsModal Component
- * 
+ *
  * Wraps the SettingsPage content in a modal overlay for the three-column layout.
- * Opens from the Left Sidebar navigation.
- * 
- * Requirements: 2.2, 7.4
+ * Opens from the Left Sidebar navigation. Supports initialTab for deep-linking
+ * (e.g., clicking Skills icon opens Settings with Skills tab active).
  */
 
 import Modal from '../common/Modal';
@@ -13,9 +12,10 @@ import SettingsPage from '../../pages/SettingsPage';
 interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
+  initialTab?: string;
 }
 
-export default function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
+export default function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProps) {
   return (
     <Modal
       isOpen={isOpen}
@@ -24,20 +24,8 @@ export default function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
       size="fullscreen"
     >
       <div className="h-full overflow-y-auto -m-6">
-        <SettingsPageContent />
+        <SettingsPage initialTab={initialTab} />
       </div>
     </Modal>
-  );
-}
-
-/**
- * SettingsPageContent - Renders the settings page content without the breadcrumb
- * and with adjusted padding for modal context
- */
-function SettingsPageContent() {
-  return (
-    <div className="settings-modal-content">
-      <SettingsPage />
-    </div>
   );
 }
