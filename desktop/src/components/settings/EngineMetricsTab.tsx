@@ -81,12 +81,13 @@ export default function EngineMetricsTab() {
 
   if (!metrics) return null;
 
-  const level = metrics.engineLevel;
-  const memory = metrics.memory as Record<string, unknown>;
-  const learning = metrics.learning as Record<string, unknown>;
-  const sessions = metrics.sessions as Record<string, unknown>;
+  // All data passes through deepSnakeToCamel in system.ts — trust camelCase only
+  const level = metrics.engineLevel ?? { current: 'unknown', l3Progress: '0/0', l3Features: {}, levels: {} };
+  const memory = (metrics.memory ?? { status: 'error' }) as Record<string, unknown>;
+  const learning = (metrics.learning ?? {}) as Record<string, unknown>;
+  const sessions = (metrics.sessions ?? {}) as Record<string, unknown>;
   const effectiveness = (learning.effectiveness ?? {}) as Record<string, unknown>;
-  const workDist = (learning.work_type_distribution ?? learning.workTypeDistribution ?? {}) as Record<string, number>;
+  const workDist = (learning.workTypeDistribution ?? {}) as Record<string, number>;
 
   return (
     <div className="space-y-6">
@@ -111,7 +112,7 @@ export default function EngineMetricsTab() {
       <section className="bg-[var(--color-card)] rounded-lg p-5">
         <h3 className="text-sm font-semibold text-[var(--color-text)] mb-3">Growth Level</h3>
         <div className="space-y-2">
-          {Object.entries(level.levels).map(([key, status]) => {
+          {Object.entries(level.levels ?? {}).map(([key, status]) => {
             const label = key.replace(/_/g, ' ').replace(/^l(\d)/, 'L$1:');
             const isActive = status === 'in_progress';
             const isDone = status === 'complete';
@@ -130,7 +131,7 @@ export default function EngineMetricsTab() {
         </div>
 
         {/* L3 feature checklist */}
-        {level.l3Features && Object.keys(level.l3Features).length > 0 && (
+        {level.l3Features && Object.keys(level.l3Features ?? {}).length > 0 && (
           <div className="mt-4 pt-3 border-t border-[var(--color-border)]">
             <p className="text-xs text-[var(--color-text-muted)] mb-2">L3 Features</p>
             <div className="grid grid-cols-2 gap-1">
@@ -154,23 +155,23 @@ export default function EngineMetricsTab() {
         <div className="grid grid-cols-4 gap-4">
           <Stat
             label="Sessions (7d)"
-            value={sessions.last_7d_sessions as number ?? sessions.last7dSessions as number ?? '-'}
-            sub={`${sessions.last_7d_active_days ?? sessions.last7dActiveDays ?? 0} active days`}
+            value={sessions.last7dSessions as number ?? '-'}
+            sub={`${sessions.last7dActiveDays ?? 0} active days`}
           />
           <Stat
             label="Memory Freshness"
-            value={`${memory.freshness_score ?? memory.freshnessScore ?? 0}%`}
-            sub={`${memory.total_entries ?? memory.totalEntries ?? 0} entries`}
+            value={`${memory.freshnessScore ?? 0}%`}
+            sub={`${memory.totalEntries ?? 0} entries`}
           />
           <Stat
             label="Follow Rate"
-            value={`${Math.round((effectiveness.follow_rate as number ?? effectiveness.followRate as number ?? 0) * 100)}%`}
-            sub={`${effectiveness.total_suggestions ?? effectiveness.totalSuggestions ?? 0} suggestions`}
+            value={`${Math.round((effectiveness.followRate as number ?? 0) * 100)}%`}
+            sub={`${effectiveness.totalSuggestions ?? 0} suggestions`}
           />
           <Stat
             label="Observations"
-            value={learning.total_observations as number ?? learning.totalObservations as number ?? 0}
-            sub={learning.learning_summary as string ?? learning.learningSummary as string ?? ''}
+            value={learning.totalObservations as number ?? 0}
+            sub={learning.learningSummary as string ?? ''}
           />
         </div>
       </section>
@@ -181,24 +182,23 @@ export default function EngineMetricsTab() {
           <h3 className="text-sm font-semibold text-[var(--color-text)] mb-3">Memory Health</h3>
           <div className="space-y-3">
             <ProgressBar
-              value={memory.recent_entries_14d as number ?? memory.recentEntries14d as number ?? 0}
-              max={memory.dated_entries as number ?? memory.datedEntries as number ?? 1}
+              value={memory.recentEntries14d as number ?? 0}
+              max={memory.datedEntries as number ?? 1}
               label="Fresh entries (< 14 days)"
             />
-            {(memory.stale_entries_30d as number ?? memory.staleEntries30d as number ?? 0) > 0 && (
+            {(memory.staleEntries30d as number ?? 0) > 0 && (
               <div className="text-xs text-yellow-400">
-                {String(memory.stale_entries_30d ?? memory.staleEntries30d ?? 0)} entries older than 30 days — consider pruning
+                {String(memory.staleEntries30d ?? 0)} entries older than 30 days — consider pruning
               </div>
             )}
-            {((memory.sections ?? {}) as Record<string, Record<string, unknown>>)
-              && Object.entries((memory.sections ?? {}) as Record<string, Record<string, unknown>>).map(([name, sec]) => (
+            {Object.entries((memory.sections ?? {}) as Record<string, Record<string, unknown>>).map(([name, sec]) => (
               <div key={name} className="flex items-center justify-between text-xs">
                 <span className="text-[var(--color-text-muted)]">{name}</span>
                 <span className="text-[var(--color-text)]">
-                  {Number(sec.count ?? 0)} entries
-                  {Number(sec.stale_30d ?? sec.stale30d ?? 0) > 0 && (
+                  {Number(sec?.count ?? 0)} entries
+                  {Number(sec?.stale30d ?? 0) > 0 && (
                     <span className="text-yellow-400 ml-1">
-                      ({String(sec.stale_30d ?? sec.stale30d ?? 0)} stale)
+                      ({String(sec?.stale30d ?? 0)} stale)
                     </span>
                   )}
                 </span>
@@ -231,25 +231,25 @@ export default function EngineMetricsTab() {
       )}
 
       {/* DDD Health */}
-      {metrics.dddHealth.projects.length > 0 && (
+      {(metrics.dddHealth?.projects ?? []).length > 0 && (
         <section className="bg-[var(--color-card)] rounded-lg p-5">
           <h3 className="text-sm font-semibold text-[var(--color-text)] mb-3">DDD Health</h3>
           <div className="space-y-3">
             {metrics.dddHealth.projects.map((project) => (
               <div key={project.name as string} className="space-y-1">
                 <div className="flex items-center gap-2 text-sm">
-                  <StatusDot color={project.overall_stale ? 'yellow' : 'green'} />
+                  <StatusDot color={project.overallStale ? 'yellow' : 'green'} />
                   <span className="text-[var(--color-text)] font-medium">{project.name as string}</span>
                 </div>
                 <div className="ml-4 grid grid-cols-4 gap-2">
-                  {Object.entries(project.docs as Record<string, Record<string, unknown>>).map(([doc, info]) => (
+                  {Object.entries((project.docs ?? {}) as Record<string, Record<string, unknown>>).map(([doc, info]) => (
                     <div key={doc} className="text-xs">
-                      <span className={info.stale ? 'text-yellow-400' : info.exists ? 'text-[var(--color-text-muted)]' : 'text-red-400'}>
+                      <span className={info?.stale ? 'text-yellow-400' : info?.exists ? 'text-[var(--color-text-muted)]' : 'text-red-400'}>
                         {doc.replace('.md', '')}
                       </span>
-                      {Boolean(info.exists) && (
+                      {Boolean(info?.exists) && (
                         <span className="text-[var(--color-text-muted)] ml-1">
-                          {String(info.age_days ?? 0)}d
+                          {String(info?.ageDays ?? 0)}d
                         </span>
                       )}
                     </div>
@@ -260,7 +260,7 @@ export default function EngineMetricsTab() {
           </div>
 
           {/* DDD Change Suggestions */}
-          {metrics.dddSuggestions.length > 0 && (
+          {(metrics.dddSuggestions ?? []).length > 0 && (
             <div className="mt-3 pt-3 border-t border-[var(--color-border)]">
               <p className="text-xs text-[var(--color-text-muted)] mb-2">Suggested Updates</p>
               {metrics.dddSuggestions.map((s, i) => (
@@ -274,7 +274,7 @@ export default function EngineMetricsTab() {
       )}
 
       {/* Context Health Findings */}
-      {metrics.contextHealth.findings.length > 0 && (
+      {(metrics.contextHealth?.findings ?? []).length > 0 && (
         <section className="bg-[var(--color-card)] rounded-lg p-5">
           <h3 className="text-sm font-semibold text-[var(--color-text)] mb-3">Context Health</h3>
           <div className="space-y-1">
