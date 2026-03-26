@@ -412,6 +412,14 @@ def inject_channel_mcp(
         reply_to = channel_context.get("reply_to_message_id")
         if reply_to:
             env_vars["REPLY_TO_MESSAGE_ID"] = reply_to
+    elif channel_type == "slack":
+        env_vars.update({
+            "SLACK_BOT_TOKEN": channel_context.get("bot_token", ""),
+            "SLACK_CHANNEL_ID": channel_context.get("chat_id", ""),
+        })
+        reply_to = channel_context.get("reply_to_message_id")
+        if reply_to:
+            env_vars["REPLY_TO_MESSAGE_ID"] = reply_to
 
     mcp_script = Path(__file__).resolve().parent.parent / "mcp_servers" / "channel_file_sender.py"
     if mcp_script.exists():

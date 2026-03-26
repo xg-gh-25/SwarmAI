@@ -576,10 +576,15 @@ class ChannelGateway:
             "chat_id": msg.external_chat_id,
             "reply_to_message_id": msg.external_message_id,
             "is_group": is_group,
-            # Extract only the credential keys needed by channel adapters
-            "app_id": channel_config.get("app_id", ""),
-            "app_secret": channel_config.get("app_secret", ""),
         }
+        # Inject platform-specific credential keys for channel MCP tools
+        channel_type = channel.get("channel_type", "")
+        if channel_type == "feishu":
+            channel_context["app_id"] = channel_config.get("app_id", "")
+            channel_context["app_secret"] = channel_config.get("app_secret", "")
+        elif channel_type == "slack":
+            channel_context["bot_token"] = channel_config.get("bot_token", "")
+            channel_context["app_token"] = channel_config.get("app_token", "")
 
         # Prepare message text (stages attachments to workspace if present)
         final_text = await self._prepare_message_text(msg, agent_id)
@@ -787,6 +792,28 @@ class ChannelGateway:
     # Session resolution
     # ------------------------------------------------------------------
 
+    async def _resolve_user_key(
+        self, platform: str, external_sender_id: str,
+    ) -> str:
+        """Map a platform-specific sender ID to a unified user_key.
+
+        Looks up ``channel_user_identities`` in DB.  If no mapping exists,
+        falls back to using the raw ``external_sender_id`` as the user_key
+        (per-channel isolation for unmapped users).
+        """
+        try:
+            user_key = await db.channel_user_identities.resolve_user_key(
+                platform=platform, external_sender_id=external_sender_id,
+            )
+            if user_key:
+                return user_key
+        except Exception:
+            logger.debug(
+                "channel_user_identities lookup failed for %s/%s, using fallback",
+                platform, external_sender_id,
+            )
+        return external_sender_id
+
     async def _resolve_session(
         self,
         channel_id: str,
@@ -798,10 +825,18 @@ class ChannelGateway:
     ) -> tuple[str, str, bool]:
         """Resolve an external conversation to an internal session.
 
+        For threaded messages (external_thread_id is set), sessions are
+        scoped per (channel_id, external_chat_id, thread_id) — no
+        cross-channel sharing.
+
+        For top-level messages (no thread), sessions are shared across
+        channels for the same user_key, enabling cross-channel conversation
+        continuity (L2: Swarm's Brain Model).
+
         Returns:
             (session_id, channel_session_id, is_new)
         """
-        # Try to find an existing channel_session mapping
+        # 1. Try to find an existing channel_session by exact external IDs
         existing = await db.channel_sessions.find_by_external(
             channel_id=channel_id,
             external_chat_id=external_chat_id,
@@ -809,9 +844,6 @@ class ChannelGateway:
         )
 
         if existing:
-            # Only treat as resumable if at least one conversation completed
-            # successfully.  message_count == 0 means the prior attempt failed
-            # before the SDK assigned a real session ID, so we must start fresh.
             is_new = (existing.get("message_count", 0) or 0) == 0
             logger.debug(
                 f"Resolved existing session {existing['session_id']} "
@@ -819,7 +851,49 @@ class ChannelGateway:
             )
             return existing["session_id"], existing["id"], is_new
 
-        # Create a new internal session
+        # 2. For top-level (non-threaded) messages, check cross-channel sharing
+        if not external_thread_id:
+            channel_record = self._channel_cache.get(channel_id)
+            if not channel_record:
+                channel_record = await db.channels.get(channel_id)
+            platform = (channel_record or {}).get("channel_type", "unknown")
+            user_key = await self._resolve_user_key(platform, external_sender_id)
+
+            # Look for any existing non-threaded session for this user_key
+            try:
+                cross = await db.channel_sessions.find_by_user_key(
+                    user_key=user_key, exclude_threaded=True,
+                )
+                if cross:
+                    # Reuse the session_id from the other channel
+                    session_id = cross["session_id"]
+                    channel_session_id = str(uuid4())
+                    await db.channel_sessions.put({
+                        "id": channel_session_id,
+                        "channel_id": channel_id,
+                        "external_chat_id": external_chat_id,
+                        "external_sender_id": external_sender_id,
+                        "external_thread_id": None,
+                        "session_id": session_id,
+                        "agent_id": agent_id,
+                        "sender_display_name": sender_display_name,
+                        "user_key": user_key,
+                        "last_message_at": datetime.now().isoformat(),
+                        "message_count": 0,
+                    })
+                    is_new = (cross.get("message_count", 0) or 0) == 0
+                    logger.info(
+                        f"Cross-channel session sharing: reusing session {session_id} "
+                        f"for user_key={user_key} from channel {cross.get('channel_id')} "
+                        f"→ channel {channel_id}"
+                    )
+                    return session_id, channel_session_id, is_new
+            except Exception:
+                logger.debug("find_by_user_key not available, falling back to per-channel")
+        else:
+            user_key = external_sender_id
+
+        # 3. Create a new internal session
         session_id = str(uuid4())
         title = f"Channel: {sender_display_name or external_sender_id}"
         await session_manager.store_session(
@@ -839,6 +913,7 @@ class ChannelGateway:
             "session_id": session_id,
             "agent_id": agent_id,
             "sender_display_name": sender_display_name,
+            "user_key": user_key,
             "last_message_at": datetime.now().isoformat(),
             "message_count": 0,
         })

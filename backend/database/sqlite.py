@@ -577,6 +577,51 @@ class SQLiteChannelSessionsTable(SQLiteTable[T], Generic[T]):
             await conn.commit()
             return cursor.rowcount
 
+    async def find_by_user_key(
+        self, user_key: str, exclude_threaded: bool = False,
+    ) -> Optional[T]:
+        """Find a channel session by user_key (cross-channel sharing).
+
+        When *exclude_threaded* is True, only returns sessions without
+        a thread ID (top-level conversations).
+        """
+        async with self._get_connection() as conn:
+            conn.row_factory = aiosqlite.Row
+            if exclude_threaded:
+                query = (
+                    f"SELECT * FROM {self.table_name} "
+                    "WHERE user_key = ? AND external_thread_id IS NULL "
+                    "ORDER BY last_message_at DESC LIMIT 1"
+                )
+            else:
+                query = (
+                    f"SELECT * FROM {self.table_name} "
+                    "WHERE user_key = ? ORDER BY last_message_at DESC LIMIT 1"
+                )
+            async with conn.execute(query, (user_key,)) as cursor:
+                row = await cursor.fetchone()
+                return self._row_to_dict(row) if row else None
+
+
+class SQLiteChannelUserIdentitiesTable(SQLiteTable[T], Generic[T]):
+    """Maps platform-specific sender IDs to unified user keys."""
+
+    async def resolve_user_key(
+        self, platform: str, external_sender_id: str,
+    ) -> Optional[str]:
+        """Resolve an external sender ID to a user_key.
+
+        Returns the user_key string or None if no mapping exists.
+        """
+        async with self._get_connection() as conn:
+            async with conn.execute(
+                f"SELECT user_key FROM {self.table_name} "
+                "WHERE platform = ? AND external_sender_id = ?",
+                (platform, external_sender_id),
+            ) as cursor:
+                row = await cursor.fetchone()
+                return row[0] if row else None
+
 
 class SQLiteChannelMessagesTable(SQLiteTable[T], Generic[T]):
     """Specialized SQLite table for channel messages."""
@@ -1300,6 +1345,7 @@ class SQLiteDatabase(BaseDatabase):
         session_id TEXT NOT NULL,
         agent_id TEXT NOT NULL,
         sender_display_name TEXT,
+        user_key TEXT,
         last_message_at TEXT,
         message_count INTEGER DEFAULT 0,
         created_at TEXT NOT NULL,
@@ -1310,6 +1356,8 @@ class SQLiteDatabase(BaseDatabase):
     );
     CREATE INDEX IF NOT EXISTS idx_channel_sessions_lookup
         ON channel_sessions(channel_id, external_chat_id, external_thread_id);
+    CREATE INDEX IF NOT EXISTS idx_channel_sessions_user_key
+        ON channel_sessions(user_key);
 
     -- Channel messages table (audit log)
     CREATE TABLE IF NOT EXISTS channel_messages (
@@ -1327,6 +1375,18 @@ class SQLiteDatabase(BaseDatabase):
         FOREIGN KEY (channel_session_id) REFERENCES channel_sessions(id) ON DELETE CASCADE
     );
     CREATE INDEX IF NOT EXISTS idx_channel_messages_session ON channel_messages(channel_session_id);
+
+    -- Channel user identity mapping (cross-channel session sharing)
+    CREATE TABLE IF NOT EXISTS channel_user_identities (
+        user_key TEXT NOT NULL,
+        platform TEXT NOT NULL,
+        external_sender_id TEXT NOT NULL,
+        display_name TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (platform, external_sender_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_channel_uid_user ON channel_user_identities(user_key);
 
     -- Workspace Config table (singleton SwarmWS configuration)
     -- Validates: SwarmWS Foundation Requirements 19.1, 19.2, 19.5
@@ -1494,6 +1554,7 @@ class SQLiteDatabase(BaseDatabase):
         self._channels = SQLiteTable[dict]("channels", self.db_path)
         self._channel_sessions = SQLiteChannelSessionsTable[dict]("channel_sessions", self.db_path)
         self._channel_messages = SQLiteChannelMessagesTable[dict]("channel_messages", self.db_path)
+        self._channel_user_identities = SQLiteChannelUserIdentitiesTable[dict]("channel_user_identities", self.db_path)
         self._workspace_config = SQLiteWorkspaceConfigTable[dict]("workspace_config", self.db_path)
         # Daily Work Operating Loop tables
         self._todos = SQLiteToDosTable[dict]("todos", self.db_path)
@@ -2115,6 +2176,11 @@ class SQLiteDatabase(BaseDatabase):
     def channel_messages(self) -> SQLiteChannelMessagesTable:
         """Get the channel messages table."""
         return self._channel_messages
+
+    @property
+    def channel_user_identities(self) -> SQLiteChannelUserIdentitiesTable:
+        """Get the channel user identities table (cross-channel session sharing)."""
+        return self._channel_user_identities
 
     @property
     def workspace_config(self) -> SQLiteWorkspaceConfigTable:

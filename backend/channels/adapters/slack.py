@@ -1,0 +1,363 @@
+"""Slack channel adapter using Socket Mode (WebSocket, no public URL needed).
+
+Connects to Slack via the official slack-bolt SDK's Socket Mode handler,
+so no public URL or webhook endpoint is needed. Messages are received
+through the persistent WS connection and sent back via the Web API.
+
+This follows the same architectural pattern as the Feishu adapter:
+background thread with its own event loop, bridging events to the
+main FastAPI asyncio loop via ``call_soon_threadsafe``.
+"""
+from __future__ import annotations
+
+import asyncio
+import logging
+import threading
+from typing import Optional
+
+try:
+    from slack_bolt import App
+    from slack_bolt.adapter.socket_mode import SocketModeHandler
+    from slack_sdk import WebClient
+    SLACK_BOLT_AVAILABLE = True
+except ImportError:
+    SLACK_BOLT_AVAILABLE = False
+
+from channels.base import (
+    ATTACH_TYPE_FILE,
+    ATTACH_TYPE_IMAGE,
+    MAX_ATTACHMENT_SIZE,
+    ChannelAdapter,
+    InboundMessage,
+    OutboundMessage,
+)
+
+logger = logging.getLogger(__name__)
+
+
+class SlackChannelAdapter(ChannelAdapter):
+    """Adapter for Slack using Socket Mode WebSocket.
+
+    Config keys:
+        bot_token:  Slack Bot Token (xoxb-...)
+        app_token:  Slack App-Level Token (xapp-...)
+    """
+
+    def __init__(self, channel_id: str, config: dict, on_message) -> None:
+        super().__init__(channel_id, config, on_message)
+        self._bot_token: str = config.get("bot_token", "")
+        self._app_token: str = config.get("app_token", "")
+        self._bolt_app = None
+        self._handler = None
+        self._slack_client = None
+        self._ws_thread: Optional[threading.Thread] = None
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._stopped = False
+        # User name cache: user_id -> display_name
+        self._user_cache: dict[str, str] = {}
+
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
+
+    async def validate_config(self) -> tuple[bool, Optional[str]]:
+        """Verify bot_token and app_token are present and valid."""
+        if not self._bot_token or not self._bot_token.startswith("xoxb-"):
+            return False, "Missing or invalid bot_token (must start with xoxb-)"
+        if not self._app_token or not self._app_token.startswith("xapp-"):
+            return False, "Missing or invalid app_token (must start with xapp-)"
+
+        try:
+            client = WebClient(token=self._bot_token)
+            result = client.auth_test()
+            if not result.get("ok"):
+                return False, f"Bot token auth failed: {result.get('error')}"
+            return True, None
+        except Exception as exc:
+            return False, f"Slack credential check error: {exc}"
+
+    async def start(self) -> None:
+        """Start the Socket Mode WebSocket in a background thread."""
+        if self._stopped:
+            self._stopped = False
+
+        self._loop = asyncio.get_running_loop()
+        self._slack_client = WebClient(token=self._bot_token)
+
+        # Build the Bolt app (sync mode — runs in background thread)
+        self._bolt_app = App(token=self._bot_token)
+
+        # Register event handlers
+        self._bolt_app.event("message")(self._handle_message_event)
+        self._bolt_app.event("app_mention")(self._handle_app_mention)
+
+        # Start Socket Mode in background thread
+        self._handler = SocketModeHandler(self._bolt_app, self._app_token)
+
+        def _run_socket_mode():
+            try:
+                self._handler.start()  # Blocking
+            except Exception as exc:
+                if not self._stopped:
+                    logger.exception(
+                        "Slack Socket Mode crashed for channel %s",
+                        self.channel_id,
+                    )
+                    error_msg = f"Socket Mode connection failed: {exc}"
+                    main_loop = self._loop
+                    if (
+                        self._on_error is not None
+                        and main_loop is not None
+                        and not main_loop.is_closed()
+                    ):
+                        try:
+                            main_loop.call_soon_threadsafe(
+                                asyncio.ensure_future,
+                                self._on_error(self.channel_id, error_msg),
+                            )
+                        except RuntimeError:
+                            pass  # loop already closed
+
+        self._ws_thread = threading.Thread(
+            target=_run_socket_mode,
+            daemon=True,
+            name=f"slack-ws-{self.channel_id}",
+        )
+        self._ws_thread.start()
+        logger.info(
+            "Slack adapter started for channel %s (bot_token=xoxb-...%s)",
+            self.channel_id,
+            self._bot_token[-4:] if len(self._bot_token) > 4 else "****",
+        )
+
+    async def stop(self) -> None:
+        """Stop the adapter and release resources."""
+        self._stopped = True
+
+        if self._handler is not None:
+            try:
+                self._handler.close()
+            except Exception:
+                pass
+
+        ws_thread = self._ws_thread
+        if ws_thread is not None and ws_thread.is_alive():
+            ws_thread.join(timeout=3.0)
+            if ws_thread.is_alive():
+                logger.warning(
+                    "Slack WS thread for channel %s did not stop within 3s",
+                    self.channel_id,
+                )
+
+        self._bolt_app = None
+        self._handler = None
+        self._slack_client = None
+        self._ws_thread = None
+        self._loop = None
+        logger.info("Slack adapter stopped for channel %s", self.channel_id)
+
+    # ------------------------------------------------------------------
+    # Incoming messages (called from Socket Mode thread)
+    # ------------------------------------------------------------------
+
+    def _handle_message_event(self, event: dict, say=None) -> None:
+        """Handle an incoming message event from Slack Socket Mode."""
+        if self._stopped:
+            return
+
+        # Skip message subtypes (edited, deleted, etc.) except file_share
+        subtype = event.get("subtype")
+        if subtype and subtype not in ("file_share",):
+            return
+
+        # Skip messages from bots (including ourselves)
+        if event.get("bot_id"):
+            return
+
+        user_id = event.get("user", "")
+        text = event.get("text", "").strip()
+        channel_id = event.get("channel", "")
+        ts = event.get("ts", "")
+        thread_ts = event.get("thread_ts")
+        channel_type = event.get("channel_type", "im")
+
+        # Download any attached files
+        attachments = []
+        for file_info in event.get("files", []):
+            attachment = self._download_file_sync(file_info)
+            if attachment:
+                attachments.append(attachment)
+
+        if not text and not attachments:
+            return
+
+        msg = InboundMessage(
+            channel_id=self.channel_id,
+            external_chat_id=channel_id,
+            external_sender_id=user_id,
+            external_thread_id=thread_ts,
+            external_message_id=ts,
+            text=text,
+            sender_display_name=self._get_user_name(user_id),
+            attachments=attachments,
+            metadata={
+                "chat_type": self._normalize_chat_type(channel_type),
+                "message_type": "text",
+                "ts": ts,
+            },
+        )
+
+        # Bridge to main asyncio loop (same pattern as Feishu)
+        main_loop = self._loop
+        if main_loop is not None and not main_loop.is_closed() and not self._stopped:
+            main_loop.call_soon_threadsafe(
+                asyncio.ensure_future,
+                self._on_message(msg),
+            )
+
+    def _handle_app_mention(self, event: dict, say=None) -> None:
+        """Handle @bot mentions in channels.
+
+        Delegates to _handle_message_event — mentions are just messages
+        with channel_type context.
+        """
+        if self._stopped:
+            return
+        # Treat as a regular message — the channel_type will indicate
+        # it's a group context, and the gateway handles group exclusion.
+        event.setdefault("channel_type", "channel")
+        self._handle_message_event(event, say)
+
+    # ------------------------------------------------------------------
+    # Chat type normalization
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _normalize_chat_type(channel_type: str) -> str:
+        """Normalize Slack channel_type to gateway chat_type.
+
+        Slack types: im, mpim, channel, group
+        Gateway types: im, mpim, channel (triggers is_group=True)
+        """
+        if channel_type == "im":
+            return "im"
+        if channel_type == "mpim":
+            return "mpim"
+        # Both "channel" and "group" map to "channel" (group context)
+        return "channel"
+
+    # ------------------------------------------------------------------
+    # User name resolution
+    # ------------------------------------------------------------------
+
+    def _get_user_name(self, user_id: str) -> str:
+        """Resolve a Slack user ID to a display name (cached)."""
+        if user_id in self._user_cache:
+            return self._user_cache[user_id]
+
+        if not self._slack_client:
+            return user_id
+
+        try:
+            result = self._slack_client.users_info(user=user_id)
+            if result.get("ok"):
+                user = result.get("user", {})
+                name = (
+                    user.get("real_name")
+                    or user.get("profile", {}).get("display_name")
+                    or user.get("name")
+                    or user_id
+                )
+                self._user_cache[user_id] = name
+                return name
+        except Exception:
+            logger.debug("Failed to resolve user name for %s", user_id)
+
+        return user_id
+
+    # ------------------------------------------------------------------
+    # File download
+    # ------------------------------------------------------------------
+
+    def _download_file_sync(self, file_info: dict) -> Optional[dict]:
+        """Download a Slack file using bot token auth."""
+        import requests
+
+        url = file_info.get("url_private_download") or file_info.get("url_private")
+        if not url:
+            return None
+
+        size = file_info.get("size", 0)
+        if size > MAX_ATTACHMENT_SIZE:
+            logger.warning(
+                "Slack file %s exceeds size limit (%d bytes), skipping",
+                file_info.get("name"), size,
+            )
+            return None
+
+        try:
+            resp = requests.get(
+                url,
+                headers={"Authorization": f"Bearer {self._bot_token}"},
+                timeout=30,
+            )
+            resp.raise_for_status()
+
+            mimetype = file_info.get("mimetype", "application/octet-stream")
+            return {
+                "type": ATTACH_TYPE_IMAGE if mimetype.startswith("image/") else ATTACH_TYPE_FILE,
+                "file_bytes": resp.content,
+                "file_name": file_info.get("name", "attachment"),
+                "file_size": len(resp.content),
+                "mime_type": mimetype,
+            }
+        except Exception:
+            logger.exception(
+                "Failed to download Slack file %s", file_info.get("name"),
+            )
+            return None
+
+    # ------------------------------------------------------------------
+    # Outgoing messages
+    # ------------------------------------------------------------------
+
+    async def send_message(self, message: OutboundMessage) -> Optional[str]:
+        """Send a message back to Slack."""
+        if not self._slack_client:
+            return None
+
+        try:
+            kwargs = {
+                "channel": message.external_chat_id,
+                "text": message.text,
+            }
+
+            # Reply in thread if original message was threaded
+            if message.external_thread_id:
+                kwargs["thread_ts"] = message.external_thread_id
+
+            result = self._slack_client.chat_postMessage(**kwargs)
+            return result.get("ts")
+        except Exception:
+            logger.exception("Error sending Slack message")
+            return None
+
+    # ------------------------------------------------------------------
+    # Properties
+    # ------------------------------------------------------------------
+
+    @property
+    def channel_type(self) -> str:
+        return "slack"
+
+
+# ------------------------------------------------------------------
+# Self-registration
+# ------------------------------------------------------------------
+if SLACK_BOLT_AVAILABLE:
+    from channels.registry import register_adapter
+    register_adapter("slack", SlackChannelAdapter)
+else:
+    logger.debug(
+        "Slack adapter not registered: slack-bolt package is not installed"
+    )
