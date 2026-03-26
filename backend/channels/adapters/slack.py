@@ -322,14 +322,22 @@ class SlackChannelAdapter(ChannelAdapter):
     # ------------------------------------------------------------------
 
     async def send_message(self, message: OutboundMessage) -> Optional[str]:
-        """Send a message back to Slack."""
+        """Send a message back to Slack with Block Kit formatting.
+
+        Converts markdown-style text to Slack's ``mrkdwn`` format and
+        wraps it in a ``section`` block.  The plain ``text`` field is
+        always set as a notification fallback.
+        """
         if not self._slack_client:
             return None
 
         try:
+            blocks = self._text_to_blocks(message.text)
+
             kwargs = {
                 "channel": message.external_chat_id,
-                "text": message.text,
+                "text": message.text,  # Fallback for notifications / accessibility
+                "blocks": blocks,
             }
 
             # Reply in thread if original message was threaded
@@ -341,6 +349,85 @@ class SlackChannelAdapter(ChannelAdapter):
         except Exception:
             logger.exception("Error sending Slack message")
             return None
+
+    # ------------------------------------------------------------------
+    # Block Kit helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _text_to_blocks(text: str) -> list[dict]:
+        """Convert markdown text to Slack Block Kit blocks.
+
+        Slack's ``mrkdwn`` is close to markdown but not identical:
+        - Bold: **text** -> *text*
+        - Italic: *text* or _text_ -> _text_
+        - Strikethrough: ~~text~~ -> ~text~
+        - Code blocks and inline code work as-is.
+        - Links: [text](url) -> <url|text>
+
+        Each section block has a 3000-char limit, so long messages
+        are split across multiple blocks.
+        """
+        import re
+
+        if not text:
+            return [{"type": "section", "text": {"type": "mrkdwn", "text": " "}}]
+
+        mrkdwn = text
+
+        # Convert markdown links [text](url) -> <url|text>
+        mrkdwn = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', r'<\2|\1>', mrkdwn)
+
+        # Convert bold **text** -> *text* (but not inside code blocks)
+        # Process outside of code fences only
+        parts = re.split(r'(```[\s\S]*?```|`[^`]+`)', mrkdwn)
+        for i, part in enumerate(parts):
+            if not part.startswith('`'):
+                # Bold: **text** -> *text*
+                part = re.sub(r'\*\*(.+?)\*\*', r'*\1*', part)
+                # Strikethrough: ~~text~~ -> ~text~
+                part = re.sub(r'~~(.+?)~~', r'~\1~', part)
+                parts[i] = part
+        mrkdwn = ''.join(parts)
+
+        # Split into 3000-char blocks (Slack section limit)
+        _BLOCK_LIMIT = 3000
+        blocks: list[dict] = []
+
+        if len(mrkdwn) <= _BLOCK_LIMIT:
+            blocks.append({
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": mrkdwn},
+            })
+        else:
+            # Split on paragraph boundaries to avoid mid-sentence breaks
+            paragraphs = mrkdwn.split('\n\n')
+            current = ""
+            for para in paragraphs:
+                candidate = f"{current}\n\n{para}" if current else para
+                if len(candidate) > _BLOCK_LIMIT and current:
+                    blocks.append({
+                        "type": "section",
+                        "text": {"type": "mrkdwn", "text": current},
+                    })
+                    current = para
+                else:
+                    current = candidate
+            if current:
+                # Final chunk may still exceed limit — hard-split as last resort
+                while len(current) > _BLOCK_LIMIT:
+                    blocks.append({
+                        "type": "section",
+                        "text": {"type": "mrkdwn", "text": current[:_BLOCK_LIMIT]},
+                    })
+                    current = current[_BLOCK_LIMIT:]
+                if current.strip():
+                    blocks.append({
+                        "type": "section",
+                        "text": {"type": "mrkdwn", "text": current},
+                    })
+
+        return blocks or [{"type": "section", "text": {"type": "mrkdwn", "text": " "}}]
 
     # ------------------------------------------------------------------
     # Properties
