@@ -719,6 +719,18 @@ def _handle_notify(job: Job, state: SchedulerState) -> JobResult:
         )
 
 
+def _get_slack_dm_channel() -> str | None:
+    """Read the owner's DM channel from Slack bot config.json."""
+    config_path = SWARMWS / "Services" / "slack-bot" / "config.json"
+    try:
+        if config_path.exists():
+            data = json.loads(config_path.read_text(encoding="utf-8"))
+            return data.get("owner_dm_channel") or None
+    except (json.JSONDecodeError, OSError):
+        pass
+    return None
+
+
 def _send_slack_dm(message: str) -> bool:
     """Send a Slack DM to the user via the slack-mcp CLI tool.
 
@@ -745,10 +757,14 @@ def _send_slack_dm(message: str) -> bool:
         json.dump(mcp_config, mcp_config_file)
         mcp_config_file.close()
 
-        # XG's Slack DM channel
+        # Read owner DM channel from Slack bot config
+        dm_channel = _get_slack_dm_channel()
+        if not dm_channel:
+            logger.warning("Slack DM: no owner_dm_channel in config")
+            return False
         prompt = (
-            f'Send this message as a Slack DM to channel D017ZD4PUKT '
-            f'(XG\'s DM channel): "{message}"'
+            f'Send this message as a Slack DM to channel {dm_channel}: '
+            f'"{message}"'
         )
         cmd = [
             claude_path, "--print",
