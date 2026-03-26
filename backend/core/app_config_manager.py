@@ -58,14 +58,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "available_models": [
         "claude-opus-4-6",
         "claude-sonnet-4-6",
-        "claude-opus-4-5-20251101",
-        "claude-sonnet-4-5-20250929",
     ],
     "bedrock_model_map": {
         "claude-opus-4-6": "us.anthropic.claude-opus-4-6-v1",
         "claude-sonnet-4-6": "us.anthropic.claude-sonnet-4-6",
-        "claude-sonnet-4-5-20250929": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
-        "claude-opus-4-5-20251101": "us.anthropic.claude-opus-4-5-20251101-v1:0",
     },
     "anthropic_base_url": None,
     "sandbox_additional_write_paths": "",

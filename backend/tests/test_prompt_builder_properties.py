@@ -25,7 +25,7 @@ def _make_builder() -> PromptBuilder:
     """Create a PromptBuilder with a mock config."""
     mock_config = MagicMock()
     mock_config.get = MagicMock(side_effect=lambda key, default=None: {
-        "default_model": "claude-sonnet-4-5-20250929",
+        "default_model": "claude-sonnet-4-6",
         "use_bedrock": False,
         "sandbox_enabled_default": True,
         "sandbox_excluded_commands": "docker",
@@ -55,7 +55,7 @@ class TestPromptBuilderDeterminism:
 
     @given(
         model=st.sampled_from([
-            "claude-opus-4-6", "claude-sonnet-4-5-20250929", None,
+            "claude-opus-4-6", "claude-sonnet-4-6", None,
         ]),
     )
     @PROPERTY_SETTINGS
@@ -145,11 +145,11 @@ class TestContextWarningThresholds:
     def test_warning_levels_correct(self, tokens: int):
         """Warning level matches percentage thresholds."""
         builder = _make_builder()
-        result = builder.build_context_warning(tokens, "claude-sonnet-4-5-20250929")
+        result = builder.build_context_warning(tokens, "claude-sonnet-4-6")
         if result is None:
             return  # Below all thresholds
 
-        window = 200_000  # Default for sonnet 4.5
+        window = 1_000_000  # Claude 4.6 1M context
         pct = round((tokens / window) * 100)
 
         if pct >= 85:
@@ -164,12 +164,12 @@ class TestContextWarningThresholds:
     def test_none_for_zero_tokens(self):
         """Returns None for 0 tokens."""
         builder = _make_builder()
-        assert builder.build_context_warning(0, "claude-sonnet-4-5-20250929") is None
+        assert builder.build_context_warning(0, "claude-sonnet-4-6") is None
 
     def test_none_for_none_tokens(self):
         """Returns None for None tokens."""
         builder = _make_builder()
-        assert builder.build_context_warning(None, "claude-sonnet-4-5-20250929") is None
+        assert builder.build_context_warning(None, "claude-sonnet-4-6") is None
 
 
 # ---------------------------------------------------------------------------

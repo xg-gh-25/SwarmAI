@@ -60,11 +60,9 @@ def _fix_path_from_login_shell() -> None:
 
 _fix_path_from_login_shell()
 
-# Sonnet pricing (us.anthropic.claude-sonnet-4) — update when model changes
+# Sonnet 4.6 pricing (us.anthropic.claude-sonnet-4-6)
 _SONNET_INPUT_PRICE = 3.0 / 1_000_000   # $3 per 1M input tokens
 _SONNET_OUTPUT_PRICE = 15.0 / 1_000_000  # $15 per 1M output tokens
-_HAIKU_INPUT_PRICE = 0.25 / 1_000_000
-_HAIKU_OUTPUT_PRICE = 1.25 / 1_000_000
 
 
 def execute_job(
@@ -1070,10 +1068,7 @@ def _expire_stale_todos(max_age_days: int = 30) -> str:
 
 
 def _estimate_cost(input_tokens: int, output_tokens: int, model: str = "sonnet") -> float:
-    """Estimate API cost in USD from token counts."""
-    if model == "haiku":
-        return input_tokens * _HAIKU_INPUT_PRICE + output_tokens * _HAIKU_OUTPUT_PRICE
-    # Default: sonnet
+    """Estimate API cost in USD from token counts (Sonnet 4.6 pricing)."""
     return input_tokens * _SONNET_INPUT_PRICE + output_tokens * _SONNET_OUTPUT_PRICE
 
 

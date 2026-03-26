@@ -94,14 +94,11 @@ class PromptBuilder:
 
     # ── Model context window sizes (tokens) for L0/L1 selection ───
     # Claude 4.6: 1M context GA on Bedrock (no beta header needed)
-    # Claude 4.5: 1M still beta — stay at 200K unless beta explicitly enabled
     _MODEL_CONTEXT_WINDOWS: dict[str, int] = {
         "claude-opus-4-6": 1_000_000,
         "claude-sonnet-4-6": 1_000_000,
-        "claude-sonnet-4-5-20250929": 200_000,
-        "claude-opus-4-5-20251101": 200_000,
     }
-    _DEFAULT_CONTEXT_WINDOW: int = 200_000
+    _DEFAULT_CONTEXT_WINDOW: int = 1_000_000
 
     # ── Context warning thresholds (percentage of context window) ──
     _CONTEXT_WARN_PCT: int = 70
