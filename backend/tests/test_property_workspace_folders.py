@@ -19,12 +19,11 @@ import pytest
 from hypothesis import given, strategies as st, settings, HealthCheck
 
 from core.swarm_workspace_manager import SwarmWorkspaceManager
+from tests.helpers import PROPERTY_SETTINGS
 
 
-PROPERTY_SETTINGS = settings(
-    max_examples=2,
-    suppress_health_check=[HealthCheck.function_scoped_fixture],
-)
+
+
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -34,6 +33,7 @@ REQUIRED_FOLDERS = [
     "Knowledge",
     "Projects",
     "Attachments",
+    "Services",
 ]
 
 # Knowledge subdirectories created by create_folder_structure

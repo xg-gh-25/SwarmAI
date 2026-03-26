@@ -421,6 +421,26 @@ Good: "Two approaches for the notification system: (A) extend existing SSE — 1
 - Never guess silently — a wrong guess costs more than an escalation
 - After escalation is resolved, proceed immediately. Don't re-ask.
 
+## 🚨 CRITICAL: Codebase-First Rule
+
+**All product-level changes MUST land in the codebase (`swarmai/`), not just the workspace (`SwarmWS/`).** This is a blocking rule.
+
+| Change Type | Where It Goes | Common Mistake |
+|-------------|---------------|----------------|
+| Agent behavior (AGENT.md) | `backend/context/AGENT.md` (template) | Editing `.context/AGENT.md` (gets overwritten on restart) |
+| DDD templates | `backend/templates/ddd/*.md` | Only editing `Projects/SwarmAI/*.md` in workspace |
+| Backend features | `backend/` modules | Writing scripts in `Services/` without product code |
+| Skills | `backend/skills/s_*/SKILL.md` | Workspace-only skill files |
+| Context files (system-owned) | `backend/context/*.md` | Editing runtime `.context/` copies |
+
+**Before completing any task, ask:** "Would a fresh install get this change?" If no → the change is in the wrong place.
+
+**Context file ownership reminder:**
+- **System-owned** (SWARMAI, IDENTITY, SOUL, AGENT) → Source of truth is `backend/context/`. Overwritten every startup. NEVER edit `.context/` copies.
+- **User-owned** (USER, STEERING, TOOLS) → Source of truth is `.context/`. Copy-only-if-missing from template.
+- **Agent-owned** (MEMORY, EVOLUTION) → Source of truth is `.context/`. Agent writes via hooks/locked_write.
+- **Auto-generated** (KNOWLEDGE, PROJECTS) → Rebuilt from filesystem scans.
+
 ## 🚨 CRITICAL: Coding Task Execution Modes
 
 Every coding task uses one of three modes. **When the user explicitly requests a mode ("use pipeline", "just do it", "TDD this"), follow unconditionally — no arguing, no downgrading.**
