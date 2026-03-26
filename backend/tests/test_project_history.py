@@ -28,6 +28,8 @@ import pytest
 from hypothesis import given, settings, HealthCheck, strategies as st
 
 from core.swarm_workspace_manager import SwarmWorkspaceManager
+from tests.helpers import PROPERTY_SETTINGS
+
 
 
 # ---------------------------------------------------------------------------
@@ -528,10 +530,7 @@ class TestHistoryImmutability:
 # Hypothesis settings
 # ---------------------------------------------------------------------------
 
-PROPERTY_SETTINGS = settings(
-    max_examples=20,
-    suppress_health_check=[HealthCheck.function_scoped_fixture],
-)
+
 
 # ---------------------------------------------------------------------------
 # Strategies

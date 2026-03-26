@@ -126,7 +126,6 @@ class TestRegularFileGitStatus:
         status_code=_file_git_status,
     )
     @settings(
-        max_examples=30,
         suppress_health_check=[HealthCheck.function_scoped_fixture],
     )
     def test_property_file_status_assigned(
@@ -256,7 +255,6 @@ class TestChildPrefixDirectoryStatus:
         child_status=_dir_git_status,
     )
     @settings(
-        max_examples=30,
         suppress_health_check=[HealthCheck.function_scoped_fixture],
     )
     def test_property_child_prefix_gives_modified(
@@ -456,7 +454,6 @@ class TestSkillTierPrecedence:
         allow_all=st.booleans(),
     )
     @settings(
-        max_examples=20,
         suppress_health_check=[HealthCheck.function_scoped_fixture],
     )
     @pytest.mark.asyncio
@@ -694,7 +691,6 @@ class TestGitStatusCodeParsing:
         ),
     )
     @settings(
-        max_examples=30,
         suppress_health_check=[HealthCheck.function_scoped_fixture],
     )
     def test_property_status_code_mapping(

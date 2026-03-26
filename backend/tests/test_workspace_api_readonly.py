@@ -212,7 +212,7 @@ class TestReadonlyPropertyBased:
     """Property-based tests for readonly API response mapping."""
 
     @given(idx=st.integers(min_value=0, max_value=len(CONTEXT_FILES) - 1))
-    @settings(max_examples=100)
+    @settings()
     def test_readonly_matches_user_customized_inverse(self, idx: int):
         """For any ContextFileSpec, readonly == (not user_customized).
 
@@ -235,7 +235,7 @@ class TestReadonlyPropertyBased:
     @given(filename=st.text(min_size=1, max_size=50).filter(
         lambda f: f not in {s.filename for s in CONTEXT_FILES}
     ))
-    @settings(max_examples=100)
+    @settings()
     def test_unknown_files_in_context_dir_not_readonly(self, filename: str):
         """Files in .context/ not in CONTEXT_FILES are never readonly.
 
@@ -247,7 +247,7 @@ class TestReadonlyPropertyBased:
     @given(prefix=st.text(min_size=1, max_size=30).filter(
         lambda p: not p.replace("\\", "/").startswith(".context/")
     ))
-    @settings(max_examples=100)
+    @settings()
     def test_files_outside_context_dir_never_readonly(self, prefix: str):
         """Files outside .context/ are never readonly regardless of name.
 

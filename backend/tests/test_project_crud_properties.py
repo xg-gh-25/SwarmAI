@@ -27,17 +27,15 @@ from hypothesis import given, settings, HealthCheck, strategies as st
 
 from core.swarm_workspace_manager import SwarmWorkspaceManager
 from core.project_schema_migrations import CURRENT_SCHEMA_VERSION
+from tests.helpers import PROPERTY_SETTINGS
+
 
 
 # ---------------------------------------------------------------------------
 # Hypothesis settings
 # ---------------------------------------------------------------------------
 
-PROPERTY_SETTINGS = settings(
-    max_examples=100,
-    
-    suppress_health_check=[HealthCheck.function_scoped_fixture],
-)
+
 
 # ---------------------------------------------------------------------------
 # Strategies

@@ -15,12 +15,11 @@ from uuid import uuid4
 from database import db
 from core.search_manager import search_manager
 from tests.helpers import now_iso, create_workspace
+from tests.helpers import PROPERTY_SETTINGS
 
 
-PROPERTY_SETTINGS = settings(
-    max_examples=2,
-    suppress_health_check=[HealthCheck.function_scoped_fixture],
-)
+
+
 
 # ---------------------------------------------------------------------------
 # Strategies

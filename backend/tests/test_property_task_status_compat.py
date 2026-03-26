@@ -16,12 +16,11 @@ from uuid import uuid4
 from database import db
 from core.task_manager import task_manager, _LEGACY_STATUS_MAP, _VALID_STATUSES
 from tests.helpers import ensure_default_workspace
+from tests.helpers import PROPERTY_SETTINGS
 
 
-PROPERTY_SETTINGS = settings(
-    max_examples=2,
-    suppress_health_check=[HealthCheck.function_scoped_fixture],
-)
+
+
 
 # Strategies
 legacy_status_strategy = st.sampled_from(list(_LEGACY_STATUS_MAP.keys()))

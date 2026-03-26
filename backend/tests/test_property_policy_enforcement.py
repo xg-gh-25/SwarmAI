@@ -21,6 +21,8 @@ from uuid import uuid4
 
 from database import db
 from tests.helpers import ensure_default_workspace
+from tests.helpers import PROPERTY_SETTINGS
+
 
 # Skip skill-related tests — workspace_skills table was dropped by skill_migration.py
 _SKIP_SKILL_TESTS = pytest.mark.skip(
@@ -29,11 +31,7 @@ _SKIP_SKILL_TESTS = pytest.mark.skip(
 )
 
 
-PROPERTY_SETTINGS = settings(
-    max_examples=2,
-    
-    suppress_health_check=[HealthCheck.function_scoped_fixture],
-)
+
 
 # ---------------------------------------------------------------------------
 # Strategies

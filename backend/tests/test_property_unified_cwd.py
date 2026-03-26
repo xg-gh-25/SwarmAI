@@ -15,12 +15,11 @@ import pytest
 from hypothesis import given, strategies as st, settings, HealthCheck
 
 from core.initialization_manager import InitializationManager
+from tests.helpers import PROPERTY_SETTINGS
 
 
-PROPERTY_SETTINGS = settings(
-    max_examples=50,
-    suppress_health_check=[HealthCheck.function_scoped_fixture],
-)
+
+
 
 # ---------------------------------------------------------------------------
 # Strategies

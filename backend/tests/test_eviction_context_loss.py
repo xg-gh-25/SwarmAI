@@ -26,16 +26,15 @@ from hypothesis import given, settings, HealthCheck, strategies as st
 
 from core.session_unit import SessionState, SessionUnit
 from core.session_router import SessionRouter
+from tests.helpers import PROPERTY_SETTINGS
+
 
 
 # ---------------------------------------------------------------------------
 # Hypothesis settings
 # ---------------------------------------------------------------------------
 
-PROPERTY_SETTINGS = settings(
-    max_examples=50,
-    suppress_health_check=[HealthCheck.function_scoped_fixture],
-)
+
 
 # Strategy: non-empty SDK session ID strings (the SDK always returns
 # a non-empty identifier for active sessions).

@@ -24,12 +24,11 @@ from hypothesis import given, settings, HealthCheck, strategies as st
 from core.resource_monitor import ResourceMonitor, SystemMemory, SpawnBudget
 from core.session_router import SessionRouter
 from core.session_unit import SessionState, SessionUnit
+from tests.helpers import PROPERTY_SETTINGS
 
 
-PROPERTY_SETTINGS = settings(
-    max_examples=200,
-    suppress_health_check=[HealthCheck.function_scoped_fixture],
-)
+
+
 
 
 def _reference_formula(available_mb: float) -> int:

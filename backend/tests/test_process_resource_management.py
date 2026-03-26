@@ -334,7 +334,7 @@ class TestP3ComputeMaxTabsFormulaPreservation:
     """
 
     @given(used_pct=st.floats(min_value=0, max_value=99, allow_nan=False, allow_infinity=False))
-    @settings(max_examples=50)
+    @settings()
     def test_formula_matches_expected(self, used_pct):
         """compute_max_tabs output matches the 80% headroom formula."""
         from core.resource_monitor import ResourceMonitor, SystemMemory

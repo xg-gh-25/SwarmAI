@@ -26,17 +26,14 @@ import pytest
 from hypothesis import given, settings, HealthCheck, strategies as st
 
 from hooks.evolution_maintenance_hook import _append_changelog
+from tests.helpers import PROPERTY_SETTINGS
 
 
 # ---------------------------------------------------------------------------
 # Hypothesis settings
 # ---------------------------------------------------------------------------
 
-PROPERTY_SETTINGS = settings(
-    max_examples=50,
-    
-    suppress_health_check=[HealthCheck.function_scoped_fixture],
-)
+
 
 # ---------------------------------------------------------------------------
 # Strategies
@@ -154,6 +151,7 @@ class TestChangelogConcurrentWriteSafety:
 
 import time
 from dataclasses import dataclass
+
 
 
 @dataclass

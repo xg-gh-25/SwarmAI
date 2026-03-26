@@ -1,118 +1,315 @@
 """Test fixtures and configuration for backend tests.
 
-Test infrastructure optimization layers:
+Single authority for all test infrastructure:
 
-1. **Parallel execution** -- Auto-injects pytest-xdist (-n 4) when installed.
-   Each worker handles ~460 tests at ~2GB peak instead of 9GB total.
-   Install: ``pip install pytest-xdist``
+1. **Concurrency guard** — File-based lock prevents multiple pytest runs.
+   Concurrent runs from different tabs are the #1 cause of macOS crashes.
 
-2. **Tiered test selection** -- Three markers for selective running:
-   - ``pbt`` -- auto-applied to all Hypothesis property-based tests (46 files)
-   - ``slow`` -- manually applied to known heavy tests
-   - ``integration`` -- tests needing external resources
-   Run fast subset: ``pytest -m 'not pbt'`` (~1200 unit tests, <15s)
-   Run PBT only:   ``pytest -m pbt`` (~650 tests)
-   Run everything:  ``pytest`` (default, all ~1850 tests)
+2. **Parallel execution** — Auto-injects pytest-xdist (-n N) when installed.
+   Worker count is memory-adaptive: scales to 0 (serial) under pressure.
 
-3. **Profile-aware PBT** -- Hypothesis settings centralized in helpers.py
-   (PROPERTY_SETTINGS / PROPERTY_SETTINGS_MINIMAL). max_examples inherits
-   from the active profile:
-   - default (local dev): 30 examples -- ~70% faster
-   - ci (CI pipeline):   100 examples -- full coverage
-   Switch: ``HYPOTHESIS_PROFILE=ci pytest``
+3. **Tiered test selection** — Three markers for selective running:
+   - ``pbt`` — auto-applied to all Hypothesis property-based tests
+   - ``slow`` — auto-applied to stress/e2e files and high-example PBT
+   - ``integration`` — manually applied to tests needing external resources
+   Run fast subset: ``pytest -m 'not pbt'`` (~1400 unit tests, <15s)
+   Run PBT only:   ``pytest -m pbt`` (~470 tests)
+   Run everything:  ``pytest`` (all ~2000 tests)
 
-4. **Memory safety** -- MemoryWatchdogPlugin samples RSS every 25 tests.
-   Triggers GC at 1.5GB, aborts at 2.5GB before macOS jetsam kills.
-   Thresholds tuned for 36GB machine with SwarmAI + browser overhead.
+4. **Memory safety** — MemoryWatchdogPlugin checks RSS every test.
+   GC at 512MB, abort at 1GB. System-level check every 5 tests.
+   Also uses resource.getrusage() as fallback when psutil unavailable.
 
-DB reset uses a single executescript() call to clear all 21 tables in one
-round-trip instead of 21 individual execute() + commit() calls.
+5. **Per-test timeout** — SIGALRM kills hanging tests at the OS level.
+   Default 30s, override with @pytest.mark.timeout(N).
+   Safe with xdist: each worker is its own process.
+
+6. **Auto maxfail** — Injects --maxfail=10 to stop cascading failures.
+
+7. **DB isolation** — Temp SQLite DB created once per process, tables
+   cleared between tests via a single executescript() call.
 """
+import atexit
+import fcntl
 import gc
 import logging
-import signal
-import pytest
-import tempfile
 import os
-import shutil
-from pathlib import Path
-from typing import Generator, AsyncGenerator
-from unittest.mock import patch
+import resource
+import signal
+import tempfile
 
+import pytest
 from fastapi.testclient import TestClient
 from httpx import AsyncClient, ASGITransport
+from typing import Generator, AsyncGenerator
 
 import database as database_module
 from database.sqlite import SQLiteDatabase
 
-_logger = logging.getLogger("test_memory")
+_logger = logging.getLogger("test")
+
 
 # ---------------------------------------------------------------------------
-# Auto-inject xdist when available (structural memory prevention)
+# Concurrency guard — only one pytest run at a time
+# ---------------------------------------------------------------------------
+# Multiple Claude tabs launching pytest simultaneously is the #1 crash cause.
+# Combined memory (4.6GB + 4.6GB) exceeds physical RAM → macOS jetsam kills
+# everything. A file lock makes concurrent runs wait or fail fast.
+
+_LOCK_PATH = os.path.join(tempfile.gettempdir(), "swarmai_pytest.lock")
+_lock_fd = None
+
+
+def _acquire_pytest_lock():
+    """Acquire exclusive file lock. Fails fast if another pytest is running."""
+    global _lock_fd
+    try:
+        _lock_fd = open(_LOCK_PATH, "w")
+        fcntl.flock(_lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        _lock_fd.write(f"{os.getpid()}\n")
+        _lock_fd.flush()
+    except (IOError, OSError):
+        # Another pytest run holds the lock
+        try:
+            with open(_LOCK_PATH) as f:
+                other_pid = f.read().strip()
+        except Exception:
+            other_pid = "unknown"
+        pytest.exit(
+            f"\n{'='*60}\n"
+            f"BLOCKED: Another pytest run is active (PID {other_pid})\n"
+            f"{'='*60}\n"
+            f"Concurrent test runs cause macOS memory crashes.\n"
+            f"Wait for the other run to finish, or kill it:\n"
+            f"  kill -9 {other_pid}\n"
+            f"{'='*60}",
+            returncode=1,
+        )
+
+
+def _release_pytest_lock():
+    """Release file lock on exit."""
+    global _lock_fd
+    if _lock_fd is not None:
+        try:
+            fcntl.flock(_lock_fd, fcntl.LOCK_UN)
+            _lock_fd.close()
+            os.unlink(_LOCK_PATH)
+        except OSError:
+            pass
+        _lock_fd = None
+
+
+atexit.register(_release_pytest_lock)
+
+
+# ---------------------------------------------------------------------------
+# Pre-flight: kill orphaned pytest/xdist processes from prior crashed runs
+# ---------------------------------------------------------------------------
+# When macOS jetsam kills a pytest parent, xdist workers become orphans
+# (ppid=1) and keep consuming GB of RAM. Next run sees "enough memory"
+# but the zombies are still eating it. Kill them before computing budget.
+
+def _kill_orphaned_test_processes():
+    """Kill orphaned pytest processes from prior crashed runs.
+
+    Targets: processes with ppid=1 (orphaned) whose cmdline contains
+    'pytest' or 'swarmai_test'. Skips our own process.
+    """
+    try:
+        import psutil
+        my_pid = os.getpid()
+        killed = []
+        for p in psutil.process_iter(["pid", "ppid", "cmdline", "memory_info"]):
+            try:
+                info = p.info
+                if info["pid"] == my_pid:
+                    continue
+                if info["cmdline"] is None or info["memory_info"] is None:
+                    continue
+                cmd = " ".join(info["cmdline"])
+                is_orphan = info["ppid"] == 1
+                is_test_proc = "pytest" in cmd or "swarmai_test" in cmd
+                if is_orphan and is_test_proc:
+                    rss_mb = info["memory_info"].rss / 1024**2
+                    p.kill()
+                    killed.append((info["pid"], rss_mb))
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+        if killed:
+            total = sum(mb for _, mb in killed)
+            pids = ", ".join(str(pid) for pid, _ in killed)
+            _logger.warning(
+                f"Killed {len(killed)} orphaned test process(es) "
+                f"(pids: {pids}, freed ~{total:.0f}MB)"
+            )
+    except ImportError:
+        pass
+
+
+# Run immediately at import time — before worker count computation
+_kill_orphaned_test_processes()
+
+
+# ---------------------------------------------------------------------------
+# System memory pre-flight — refuse to start if system is under pressure
+# ---------------------------------------------------------------------------
+
+def _check_system_memory_preflight():
+    """Abort early if system memory is too low to safely run tests.
+
+    This catches the case where the machine is already at 80%+ memory
+    (e.g., Kiro + Chrome + Claude + Slack) before tests even start.
+    """
+    try:
+        import psutil
+        mem = psutil.virtual_memory()
+        available_gb = mem.available / 1024**3
+
+        if available_gb < 3.0:
+            pytest.exit(
+                f"\n{'='*60}\n"
+                f"SYSTEM MEMORY TOO LOW TO RUN TESTS\n"
+                f"{'='*60}\n"
+                f"Available: {available_gb:.1f}GB (need >= 3.0GB)\n"
+                f"Used: {mem.percent}%\n"
+                f"Close some apps (browsers, Kiro, etc) and retry.\n"
+                f"{'='*60}",
+                returncode=1,
+            )
+
+        if available_gb < 5.0:
+            _logger.warning(
+                f"Low memory: {available_gb:.1f}GB available. "
+                f"Tests will run serial with aggressive GC."
+            )
+    except ImportError:
+        pass
+
+
+# ---------------------------------------------------------------------------
+# Memory-adaptive worker count — prevents macOS jetsam kills
+# ---------------------------------------------------------------------------
+# Each xdist worker costs ~150-300 MB (backend import + test DB + fixtures).
+# On a 36GB machine running Kiro+Teams+Slack+Chrome+Zoom+Claude (~13GB
+# baseline), workers can push total past physical RAM, triggering macOS
+# memory pressure kills (jetsam / SIGKILL).
+#
+# Strategy: measure ACTUAL non-test memory usage (not a hardcoded constant),
+# then budget remaining memory across workers conservatively.
+
+_WORKER_MEMORY_BUDGET = int(1.0 * 1024**3)   # 1 GB per worker (headroom for spikes)
+_MIN_AVAILABLE_FOR_PARALLEL = int(6.0 * 1024**3)  # need 6GB+ free to even try parallel
+_MAX_WORKERS = 2  # hard cap — more workers on a loaded dev machine is too aggressive
+
+
+def _compute_safe_worker_count() -> int:
+    """Compute xdist worker count based on available system memory.
+
+    Returns 0 to disable xdist (run serial) when memory is tight.
+    Uses actual available memory (not hardcoded reserves) to account for
+    whatever apps are running (Kiro, Teams, Slack, Chrome, Claude, etc).
+    """
+    try:
+        import psutil
+        mem = psutil.virtual_memory()
+        available = mem.available
+
+        if available < _MIN_AVAILABLE_FOR_PARALLEL:
+            _logger.warning(
+                f"Only {available / 1024**3:.1f}GB available "
+                f"(need {_MIN_AVAILABLE_FOR_PARALLEL / 1024**3:.1f}GB for parallel). "
+                f"Running serial."
+            )
+            return 0
+
+        # Reserve 4GB headroom for OS + memory pressure buffer, budget the rest
+        headroom = int(4.0 * 1024**3)
+        budget = max(0, available - headroom)
+        max_by_memory = max(1, int(budget / _WORKER_MEMORY_BUDGET))
+        max_by_cpu = min(os.cpu_count() or 2, _MAX_WORKERS)
+        workers = min(max_by_memory, max_by_cpu)
+
+        _logger.info(
+            f"xdist: {available / 1024**3:.1f}GB available → "
+            f"{workers} workers (budget {max_by_memory}, cpu-cap {max_by_cpu})"
+        )
+        return workers
+    except ImportError:
+        # No psutil — run serial (safe default)
+        return 0
+
+
+# ---------------------------------------------------------------------------
+# pytest_configure — markers, plugins, xdist auto-inject
 # ---------------------------------------------------------------------------
 
 def pytest_configure(config):
     """Register markers, memory safety plugins, and auto-inject xdist."""
+    # Concurrency guard: only one pytest run at a time
+    _acquire_pytest_lock()
+
+    # System memory pre-flight: abort if < 3GB available
+    _check_system_memory_preflight()
+
+    # Set process group so all child processes (xdist workers) die with parent.
+    # Without this, macOS jetsam killing the parent leaves workers as orphans.
+    try:
+        os.setpgrp()
+    except OSError:
+        pass  # Already a process group leader, or xdist worker
+
     # Register custom markers
     config.addinivalue_line("markers", "pbt: property-based tests using Hypothesis")
     config.addinivalue_line("markers", "slow: marks tests as slow-running")
     config.addinivalue_line("markers", "integration: tests requiring external resources")
 
-    # Register memory watchdog (works with or without xdist)
+    # Register memory watchdog
     config.pluginmanager.register(MemoryWatchdogPlugin(), "memory_watchdog")
 
-    # Register per-test timeout (SIGALRM — works on macOS/Linux).
-    # Each xdist worker is its own process, so SIGALRM is per-worker safe.
-    # This is the ONLY reliable way to kill a hanging test — cooperative
-    # timeouts in teardown never fire if the test itself hangs.
+    # Register SIGALRM timeout (Unix only)
+    # Each xdist worker is its own process → SIGALRM is per-worker safe.
     if hasattr(signal, "SIGALRM"):
         config.pluginmanager.register(SigalrmTimeoutPlugin(), "sigalrm_timeout")
 
-    # Auto-inject -n auto if xdist is available and user didn't specify -n
+    # Auto-inject --maxfail to prevent cascading failures from eating memory.
+    # If tests start failing, continuing wastes time and RAM.
+    if not any(
+        arg.startswith("--maxfail") or arg.startswith("-x")
+        for arg in config.invocation_params.args
+    ):
+        config.option.maxfail = 10
+
+    # Auto-inject -n N if xdist is available and user didn't specify -n.
+    # Worker count is memory-adaptive: scales down when system is under pressure.
     try:
         import xdist  # noqa: F401
-        # Verify xdist actually registered its options
         if not hasattr(config.option, "numprocesses"):
             return
-        # Check if user already passed -n (don't override explicit choice)
         if not any(
             arg.startswith("-n") or arg == "--numprocesses"
             for arg in config.invocation_params.args
         ):
-            # Inject parallel execution — split tests across CPU cores
-            # Each worker gets its own process with isolated memory
-            workercount = os.cpu_count() or 4
-            # Cap at 4 workers to avoid DB contention and diminishing returns
-            workercount = min(workercount, 4)
+            workercount = _compute_safe_worker_count()
             config.option.numprocesses = workercount
             config.option.dist = "loadgroup"
-            _logger.info(
-                f"Auto-injecting -n {workercount} "
-                f"(pytest-xdist detected, user didn't specify -n)"
-            )
+            if workercount == 0:
+                _logger.warning(
+                    "xdist disabled — insufficient available memory. "
+                    "Running serially."
+                )
     except (ImportError, AttributeError):
-        # xdist not installed — watchdog is our only memory defense.
-        # Install it: pip install pytest-xdist
         pass
 
 
+# ---------------------------------------------------------------------------
+# Auto-mark tests for tiered execution
+# ---------------------------------------------------------------------------
+
 def pytest_collection_modifyitems(config, items):
-    """Auto-mark tests for tiered execution.
-
-    Markers applied:
-    - ``pbt``: any test whose module uses Hypothesis ``@given``.
-    - ``slow``: any test in a module whose filename contains "stress" or
-      "e2e", OR any PBT test with ``max_examples >= 100`` in its settings.
-
-    Usage during dev iteration::
-
-        pytest -m "not slow"       # skip stress + heavy PBT
-        pytest -m "not pbt"        # skip all property-based tests
-        pytest --lf                # re-run only last failures
-    """
+    """Auto-mark tests: ``pbt`` for Hypothesis, ``slow`` for heavy tests."""
     pbt_marker = pytest.mark.pbt
     slow_marker = pytest.mark.slow
-    # Module names that are inherently slow
     _SLOW_PATTERNS = {"stress", "e2e"}
 
     for item in items:
@@ -134,15 +331,14 @@ def pytest_collection_modifyitems(config, items):
             item.add_marker(pbt_marker)
 
         # --- Slow detection ---
-        # 1. Module filename contains "stress" or "e2e"
         mod_name = getattr(module, "__name__", "")
         if any(p in mod_name for p in _SLOW_PATTERNS):
             item.add_marker(slow_marker)
             continue
 
-        # 2. PBT test with high max_examples (>= 100)
+        # PBT test with high max_examples (>= 100) — shouldn't exist if
+        # files use helpers.PROPERTY_SETTINGS, but catch stragglers.
         if module._has_hypothesis:
-            # Check if the test function itself has @settings(max_examples>=100)
             test_func = getattr(item, "obj", None)
             if test_func is not None:
                 hyp_settings = getattr(test_func, "_hypothesis_internal_use_settings", None)
@@ -154,7 +350,6 @@ def pytest_collection_modifyitems(config, items):
 # Per-test timeout — SIGALRM kills hanging tests at the OS level
 # ---------------------------------------------------------------------------
 
-# Default timeout in seconds. Override per-test with @pytest.mark.timeout(N).
 _DEFAULT_TEST_TIMEOUT = 30
 
 
@@ -164,17 +359,13 @@ class _TestTimeoutError(Exception):
 
 
 class SigalrmTimeoutPlugin:
-    """Pytest plugin that enforces per-test timeouts via SIGALRM.
+    """Per-test timeout via SIGALRM.
 
     Why SIGALRM instead of cooperative timeouts:
-    - Cooperative timeouts (checking time.monotonic() in teardown) NEVER fire
-      if the test itself hangs — teardown only runs after the test returns.
-    - SIGALRM fires regardless of what the test is doing (blocked I/O, deadlock,
-      infinite loop).
-    - Each xdist worker is its own process with its own signal handlers,
-      so SIGALRM is safe with -n 4.
-
-    Limitation: only works on Unix (macOS/Linux). Windows has no SIGALRM.
+    - Cooperative timeouts (time.monotonic() in teardown) NEVER fire if
+      the test itself hangs — teardown only runs after the test returns.
+    - SIGALRM fires regardless (blocked I/O, deadlock, infinite loop).
+    - Each xdist worker is its own process → per-worker safe.
     """
 
     def __init__(self):
@@ -182,7 +373,6 @@ class SigalrmTimeoutPlugin:
 
     def pytest_runtest_setup(self, item):
         """Set SIGALRM before each test."""
-        # Check for @pytest.mark.timeout(N) override
         marker = item.get_closest_marker("timeout")
         timeout = marker.args[0] if marker and marker.args else _DEFAULT_TEST_TIMEOUT
 
@@ -206,9 +396,9 @@ class SigalrmTimeoutPlugin:
 # Memory watchdog — prevents runaway RSS from crashing the system
 # ---------------------------------------------------------------------------
 
-# Thresholds in bytes — tuned for 36GB machine during peak usage
-_GC_THRESHOLD = int(1.5 * 1024**3)   # 1.5 GB — trigger aggressive GC
-_ABORT_THRESHOLD = int(2.5 * 1024**3)  # 2.5 GB — abort before system crash
+_GC_THRESHOLD = int(512 * 1024**2)     # 512 MB — trigger aggressive GC
+_ABORT_THRESHOLD = int(1024 * 1024**2)  # 1 GB — abort before system crash
+_SYSTEM_AVAIL_FLOOR = int(3 * 1024**3)  # 3 GB — minimum system available
 
 try:
     import psutil
@@ -218,96 +408,140 @@ except ImportError:
 
 
 def _get_rss() -> int:
-    """Get current process RSS in bytes. Returns 0 if unavailable."""
+    """Get current process RSS in bytes.
+
+    Primary: psutil (accurate). Fallback: resource.getrusage (always available
+    on Unix, returns maxrss in bytes on macOS, KB on Linux).
+    """
     if _PSUTIL_AVAILABLE:
-        return psutil.Process().memory_info().rss
+        try:
+            return psutil.Process().memory_info().rss
+        except Exception:
+            pass
+    # Fallback: resource module (always available on Unix)
+    try:
+        ru = resource.getrusage(resource.RUSAGE_SELF)
+        maxrss = ru.ru_maxrss
+        # macOS returns bytes, Linux returns KB
+        import sys
+        if sys.platform == "darwin":
+            return maxrss
+        return maxrss * 1024
+    except Exception:
+        return 0
+
+
+def _get_system_available() -> int:
+    """Get system available memory in bytes. Returns 0 if unavailable."""
+    if _PSUTIL_AVAILABLE:
+        try:
+            return psutil.virtual_memory().available
+        except Exception:
+            pass
     return 0
 
 
 def _aggressive_gc() -> int:
     """Force full GC cycle and return bytes freed (estimated)."""
     before = _get_rss()
-    # Collect all generations, youngest to oldest
     gc.collect(0)
     gc.collect(1)
     gc.collect(2)
     after = _get_rss()
-    freed = max(0, before - after)
-    if freed > 50 * 1024**2:  # Log if freed >50MB
-        _logger.info(f"GC freed {freed / 1024**2:.0f} MB (RSS: {after / 1024**2:.0f} MB)")
-    return freed
+    return max(0, before - after)
 
 
 class MemoryWatchdogPlugin:
     """Pytest plugin that monitors RSS and prevents memory explosions.
 
-    Samples RSS every ``_CHECK_INTERVAL`` tests (not every test) to avoid
-    the ~85s cumulative overhead of calling ``gc.collect(2)`` 1700+ times.
-    Full GC only fires when RSS exceeds the 1.5GB threshold.
+    Two check points per test:
+    - pytest_runtest_setup: checks BEFORE each test (catches cumulative bloat)
+    - pytest_runtest_teardown: checks AFTER each test (catches per-test spikes)
 
-    Defense layers:
-    - Every _CHECK_INTERVAL tests: RSS check against thresholds
-    - At 1.5GB: aggressive multi-generation GC
-    - At 2.5GB: abort with clear error + xdist recommendation
+    System-level check every 5 tests catches aggregate pressure from all
+    processes (not just this one).
     """
 
-    _CHECK_INTERVAL = 25  # sample RSS every N tests (psutil ~50μs, negligible)
+    _DEEP_CHECK_INTERVAL = 5  # System check every 5 tests (was 10)
 
     def __init__(self):
         self._test_count = 0
         self._peak_rss = 0
         self._gc_trigger_count = 0
-        self._last_warning_at = 0  # test count at last warning (rate-limit logs)
+        self._last_warning_at = 0
 
-    def pytest_runtest_teardown(self, item):
-        """Run after every test teardown — periodic RSS check + GC."""
-        self._test_count += 1
-
-        # Only sample RSS periodically — avoids gc.collect overhead on every test
-        if self._test_count % self._CHECK_INTERVAL != 0:
-            return
-
+    def _check_and_abort(self, context: str):
+        """Core memory check. Called from both setup and teardown hooks."""
         rss = _get_rss()
         if rss == 0:
-            return  # psutil unavailable, can't monitor
+            return
 
         if rss > self._peak_rss:
             self._peak_rss = rss
 
+        # Hard abort: per-process RSS exceeded
         if rss > _ABORT_THRESHOLD:
-            # Last-ditch GC attempt
             _aggressive_gc()
             rss_after = _get_rss()
             if rss_after > _ABORT_THRESHOLD:
                 pytest.exit(
                     f"\n{'='*60}\n"
-                    f"MEMORY SAFETY ABORT\n"
+                    f"MEMORY SAFETY ABORT ({context})\n"
                     f"{'='*60}\n"
-                    f"RSS: {rss_after / 1024**3:.1f}GB exceeds "
-                    f"{_ABORT_THRESHOLD / 1024**3:.1f}GB limit "
+                    f"RSS: {rss_after / 1024**2:.0f}MB exceeds "
+                    f"{_ABORT_THRESHOLD / 1024**2:.0f}MB limit "
                     f"after {self._test_count} tests.\n"
-                    f"Peak RSS: {self._peak_rss / 1024**3:.1f}GB\n"
-                    f"GC triggers: {self._gc_trigger_count}\n\n"
-                    f"Fix: install pytest-xdist and run with -n auto\n"
-                    f"  pip install pytest-xdist\n"
-                    f"  pytest -n auto\n"
+                    f"Peak RSS: {self._peak_rss / 1024**2:.0f}MB\n"
+                    f"GC triggers: {self._gc_trigger_count}\n"
                     f"{'='*60}",
                     returncode=137,
                 )
-            # GC brought us back under — continue but warn
             self._gc_trigger_count += 1
 
         elif rss > _GC_THRESHOLD:
             self._gc_trigger_count += 1
             freed = _aggressive_gc()
-            # Rate-limit warnings: at most once per 100 tests
-            if self._test_count - self._last_warning_at > 100:
+            if self._test_count - self._last_warning_at > 25:
                 self._last_warning_at = self._test_count
                 _logger.warning(
-                    f"Memory pressure: RSS {rss / 1024**2:.0f}MB after "
-                    f"{self._test_count} tests. GC freed {freed / 1024**2:.0f}MB. "
-                    f"({self._gc_trigger_count} GC triggers total)"
+                    f"Memory pressure ({context}): RSS {rss / 1024**2:.0f}MB "
+                    f"after {self._test_count} tests. GC freed {freed / 1024**2:.0f}MB."
                 )
+
+    def _check_system_memory(self):
+        """System-level memory check — catches aggregate pressure from all workers."""
+        sys_avail = _get_system_available()
+        if sys_avail == 0:
+            return
+        if sys_avail < _SYSTEM_AVAIL_FLOOR:
+            _aggressive_gc()
+            sys_avail_after = _get_system_available()
+            if sys_avail_after < _SYSTEM_AVAIL_FLOOR:
+                rss = _get_rss()
+                pytest.exit(
+                    f"\n{'='*60}\n"
+                    f"SYSTEM MEMORY SAFETY ABORT\n"
+                    f"{'='*60}\n"
+                    f"System available: {sys_avail_after / 1024**3:.1f}GB "
+                    f"(< {_SYSTEM_AVAIL_FLOOR / 1024**3:.0f}GB floor)\n"
+                    f"Worker RSS: {rss / 1024**2:.0f}MB after {self._test_count} tests\n"
+                    f"Aborting to prevent macOS jetsam kill.\n"
+                    f"{'='*60}",
+                    returncode=137,
+                )
+
+    def pytest_runtest_setup(self, item):
+        """Quick RSS check BEFORE each test — catches cumulative bloat early."""
+        self._check_and_abort("pre-test")
+
+    def pytest_runtest_teardown(self, item):
+        """Post-test check: per-process RSS + periodic system-level check."""
+        self._test_count += 1
+        self._check_and_abort("post-test")
+
+        # Deep system-level check every N tests (psutil.virtual_memory is ~1ms)
+        if self._test_count % self._DEEP_CHECK_INTERVAL == 0:
+            self._check_system_memory()
 
     def pytest_terminal_summary(self, terminalreporter):
         """Report peak memory usage in the test summary."""
@@ -317,32 +551,22 @@ class MemoryWatchdogPlugin:
                 f"({self._test_count} tests, "
                 f"{self._gc_trigger_count} GC triggers)"
             )
-            is_warning = self._peak_rss > _GC_THRESHOLD
-            is_error = self._peak_rss > _ABORT_THRESHOLD
             terminalreporter.write_line(
                 msg,
-                yellow=is_warning and not is_error,
-                red=is_error,
+                yellow=self._peak_rss > _GC_THRESHOLD,
+                red=self._peak_rss > _ABORT_THRESHOLD,
             )
-            if self._gc_trigger_count > 10:
-                terminalreporter.write_line(
-                    "  Recommend: pytest -n auto (splits tests across workers)",
-                    yellow=True,
-                )
 
 
 # ---------------------------------------------------------------------------
-# Test database setup
+# Test database setup — once per process, cleared between tests
 # ---------------------------------------------------------------------------
 
 # Create a temp file for the test database (once per process).
 _test_db_fd, _test_db_path = tempfile.mkstemp(suffix=".db", prefix="swarmai_test_")
 os.close(_test_db_fd)
 
-# Safety net: atexit cleanup ensures temp DB is removed even when the test
-# process is killed by pytest-xdist, ResourceWatchdog abort, or OOM.
-# The scope="session" fixture cleanup only runs on graceful shutdown.
-import atexit
+# Safety net: atexit cleanup ensures temp DB is removed even on crash.
 atexit.register(lambda: os.unlink(_test_db_path) if os.path.exists(_test_db_path) else None)
 
 # Replace the global db singleton with one pointing at the temp file.
@@ -350,8 +574,11 @@ _test_db = SQLiteDatabase(db_path=_test_db_path)
 database_module.db = _test_db
 database_module._db_instance = _test_db
 
+# Track whether schema has been initialized (session-scoped, not per-test).
+_schema_initialized = False
 
-# Tables that are cleared between tests (order doesn't matter for DELETE).
+
+# Tables cleared between tests (order doesn't matter for DELETE).
 _TABLES_TO_CLEAR = [
     "channel_messages",
     "channel_sessions",
@@ -411,14 +638,17 @@ async def async_client() -> AsyncGenerator[AsyncClient, None]:
 async def reset_database():
     """Reset database tables before each test.
 
-    Deletes all rows from every application table so tests start with a
-    clean slate, then seeds the default agent that the app expects to
-    exist.  Runs as an async fixture so it can use aiosqlite.
+    Schema initialization is session-scoped (runs once). Per-test work
+    is just: DELETE all rows + seed default agent. No filesystem walks.
     """
-    # Ensure schema exists (idempotent)
-    await _test_db.initialize()
+    global _schema_initialized
 
-    # Clear all tables in a single batch (one round-trip instead of 21)
+    # Schema DDL: once per process, not per test.
+    if not _schema_initialized:
+        await _test_db.initialize()
+        _schema_initialized = True
+
+    # Clear all tables in a single batch (one round-trip instead of 20)
     import aiosqlite
     _delete_script = ";\n".join(f"DELETE FROM {t}" for t in _TABLES_TO_CLEAR)
     async with aiosqlite.connect(str(_test_db.db_path)) as conn:
@@ -433,34 +663,17 @@ async def reset_database():
         "description": "Default system agent",
         "model": "claude-sonnet-4-20250514",
         "permission_mode": "default",
-        "is_default": True,  # Mark as default agent
-        "is_system_agent": True,  # Mark as protected system agent
+        "is_default": True,
+        "is_system_agent": True,
         "created_at": now,
         "updated_at": now,
     })
 
     yield
 
-    # Cleanup: Remove any test skills created in ~/.swarm-ai/skills/
-    # This prevents test pollution of the user's real skills directory
-    skills_dir = Path.home() / ".swarm-ai" / "skills"
-    if skills_dir.exists():
-        for item in skills_dir.iterdir():
-            if item.is_dir():
-                try:
-                    shutil.rmtree(item)
-                except Exception:
-                    pass  # Best effort cleanup
-
-    # Cleanup: Remove any test skills created in ~/.swarm-ai/built-in-skills/
-    builtin_dir = Path.home() / ".swarm-ai" / "built-in-skills"
-    if builtin_dir.exists():
-        for item in builtin_dir.iterdir():
-            if item.is_dir():
-                try:
-                    shutil.rmtree(item)
-                except Exception:
-                    pass  # Best effort cleanup
+    # NOTE: No filesystem cleanup here. Tests that create files in
+    # ~/.swarm-ai/ should use tmp_path or mock the path. Walking
+    # production directories 2000 times per test run is wasteful.
 
 
 # ---------------------------------------------------------------------------
@@ -524,7 +737,6 @@ def sample_chat_request():
     }
 
 
-# Error testing fixtures
 @pytest.fixture
 def invalid_agent_id():
     """Invalid agent ID for error tests."""

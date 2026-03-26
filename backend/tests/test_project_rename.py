@@ -252,7 +252,7 @@ class TestPropertyRenamePreservesIdentity:
     """
 
     @pytest.mark.asyncio
-    @settings(max_examples=30, deadline=10000, suppress_health_check=[HealthCheck.function_scoped_fixture])
+    @settings(deadline=10000, suppress_health_check=[HealthCheck.function_scoped_fixture])
     @given(
         original_name=valid_project_names,
         new_name=valid_project_names,

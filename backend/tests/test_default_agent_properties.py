@@ -5,14 +5,13 @@ Uses Hypothesis to verify universal properties across all valid inputs.
 import pytest
 from hypothesis import given, strategies as st, settings, assume, HealthCheck
 from fastapi.testclient import TestClient
+from tests.helpers import PROPERTY_SETTINGS
+
 
 
 # Suppress function-scoped fixture warning since we're testing updates to
 # the same default agent across iterations (which is the intended behavior)
-PROPERTY_SETTINGS = settings(
-    max_examples=100,
-    suppress_health_check=[HealthCheck.function_scoped_fixture]
-)
+
 
 
 # Strategies for generating valid editable field values
