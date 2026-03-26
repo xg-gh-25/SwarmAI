@@ -33,7 +33,7 @@ SIGNALS_DIR = Path(os.environ.get(
 L4_DIGEST_PATH = SWARMWS / "Services" / "signals" / "signal_digest.json"
 
 # Bedrock config
-MODEL_ID = "us.anthropic.claude-3-5-haiku-20241022-v1:0"
+MODEL_ID = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 MAX_INPUT_TOKENS = 4000
 MAX_OUTPUT_TOKENS = 2000
 
