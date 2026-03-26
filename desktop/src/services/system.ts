@@ -35,6 +35,7 @@ export interface SystemStatus {
   initialized: boolean;
   initializationMode: string;  // 'first_run', 'quick_validation', or 'reset'
   initializationComplete: boolean;  // The persistent flag value
+  onboardingComplete: boolean;  // True after first-run onboarding wizard
   startupTimeMs: number | null;                    // Total backend startup duration in ms
   phaseTimings: Record<string, number> | null;     // Per-phase durations (database_ms, workspace_ms, etc.)
   timestamp: string;
@@ -82,6 +83,7 @@ const toCamelCase = (data: Record<string, unknown>): SystemStatus => {
     initialized: data.initialized as boolean,
     initializationMode: (data.initialization_mode as string) ?? 'unknown',
     initializationComplete: (data.initialization_complete as boolean) ?? false,
+    onboardingComplete: (data.onboarding_complete as boolean) ?? false,
     startupTimeMs: (data.startup_time_ms as number) ?? null,
     phaseTimings: (data.phase_timings as Record<string, number>) ?? null,
     timestamp: data.timestamp as string,
@@ -128,6 +130,26 @@ const STATUS_TIMEOUT_MS = 5000;
 export interface MaxTabsInfo {
   maxTabs: number;
   memoryPressure: 'ok' | 'warning' | 'critical';
+}
+
+// ============== Onboarding Types ==============
+
+export interface VerifyAuthResponse {
+  success: boolean;
+  model?: string;
+  bedrockModel?: string;
+  region?: string;
+  latencyMs?: number;
+  error?: string;
+  errorType?: string;
+  fixHint?: string;
+}
+
+export interface AuthHintResponse {
+  hasAdaDir: boolean;
+  hasSsoCache: boolean;
+  hasApiKey: boolean;
+  suggestedMethod: 'ada' | 'sso' | 'apikey';
 }
 
 export const systemService = {
@@ -190,5 +212,53 @@ export const systemService = {
     } catch {
       return { focus: [], signals: [], jobs: [], learning: null, generatedAt: null };
     }
+  },
+
+  /**
+   * Verify LLM authentication by making a real API call.
+   * Returns success/failure with model name, latency, and error details.
+   */
+  async verifyAuth(): Promise<VerifyAuthResponse> {
+    const response = await api.post<Record<string, unknown>>('/system/verify-auth');
+    const d = response.data;
+    return {
+      success: d.success as boolean,
+      model: d.model as string | undefined,
+      bedrockModel: d.bedrock_model as string | undefined,
+      region: d.region as string | undefined,
+      latencyMs: d.latency_ms as number | undefined,
+      error: d.error as string | undefined,
+      errorType: d.error_type as string | undefined,
+      fixHint: d.fix_hint as string | undefined,
+    };
+  },
+
+  /**
+   * Get hints about the local credential environment.
+   * Helps pick a sensible default auth method.
+   */
+  async getAuthHint(): Promise<AuthHintResponse> {
+    const response = await api.get<Record<string, unknown>>('/system/auth-hint');
+    const d = response.data;
+    return {
+      hasAdaDir: d.has_ada_dir as boolean,
+      hasSsoCache: d.has_sso_cache as boolean,
+      hasApiKey: d.has_api_key as boolean,
+      suggestedMethod: d.suggested_method as AuthHintResponse['suggestedMethod'],
+    };
+  },
+
+  /**
+   * Mark onboarding as complete.
+   */
+  async setOnboardingComplete(): Promise<void> {
+    await api.put('/system/onboarding-complete');
+  },
+
+  /**
+   * Reset onboarding (re-run setup wizard).
+   */
+  async resetOnboarding(): Promise<void> {
+    await api.delete('/system/onboarding-complete');
   },
 };

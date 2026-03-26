@@ -1258,6 +1258,7 @@ class SQLiteDatabase(BaseDatabase):
     CREATE TABLE IF NOT EXISTS app_settings (
         id TEXT PRIMARY KEY DEFAULT 'default',
         initialization_complete INTEGER DEFAULT 0,
+        onboarding_complete INTEGER DEFAULT 0,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
     );
@@ -2139,6 +2140,14 @@ class SQLiteDatabase(BaseDatabase):
             # SwarmWS doesn't exist yet - this is fine, it will be created during initialization
             # and new tasks will get the workspace_id assigned properly
             logger.debug("Workspace assignment migration skipped: SwarmWS not found (will be created during initialization)")
+
+        # Migration: Add onboarding_complete column to app_settings table (added 2026-03-26)
+        app_settings_cols = [row[1] for row in await conn.execute_fetchall("PRAGMA table_info(app_settings)")]
+        if "onboarding_complete" not in app_settings_cols:
+            logger.info("Running migration: Adding onboarding_complete column to app_settings table")
+            await conn.execute("ALTER TABLE app_settings ADD COLUMN onboarding_complete INTEGER DEFAULT 0")
+            await conn.commit()
+            logger.info("Migration complete: onboarding_complete column added to app_settings")
 
     @property
     def agents(self) -> SQLiteTable:
