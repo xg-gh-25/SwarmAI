@@ -43,7 +43,7 @@ def fetch_rss(feed: Feed, max_age_hours: int = 48) -> list[RawSignal]:
 
     for url in urls:
         try:
-            resp = safe_get(url, timeout=15, follow_redirects=True, headers={
+            resp = safe_get(url, timeout=15, headers={
                 "User-Agent": "SwarmSignalPipeline/1.0"
             })
             resp.raise_for_status()
