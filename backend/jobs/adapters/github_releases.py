@@ -18,6 +18,33 @@ logger = logging.getLogger(__name__)
 GITHUB_API = "https://api.github.com"
 
 
+def _get_releases(client, url: str, params: dict, repo: str) -> list | None:
+    """GET releases, following 301 redirects for transferred repos.
+
+    GitHub API returns 301 (not 302/307) when a repo is transferred.
+    httpx may not follow 301 automatically on some environments (e.g.
+    launchd-spawned processes with proxy env vars).  Handle explicitly.
+    """
+    resp = client.get(url, params=params)
+
+    # Follow 301 redirect for repo transfers (e.g. tiangolo/fastapi → fastapi/fastapi)
+    if resp.status_code == 301:
+        location = resp.headers.get("location")
+        if location:
+            logger.info(f"GitHub repo {repo} transferred, following redirect")
+            resp = client.get(location)
+
+    if resp.status_code == 403:
+        logger.warning(f"GitHub rate limited for {repo}")
+        return None
+    if resp.status_code == 404:
+        logger.warning(f"GitHub repo not found: {repo}")
+        return None
+
+    resp.raise_for_status()
+    return resp.json()
+
+
 def fetch_github_releases(feed: Feed, max_age_hours: int = 48) -> list[RawSignal]:
     """
     Fetch latest releases for configured GitHub repos.
@@ -42,17 +69,14 @@ def fetch_github_releases(feed: Feed, max_age_hours: int = 48) -> list[RawSignal
     with safe_client(timeout=15, headers={"Accept": "application/vnd.github.v3+json"}) as client:
         for repo in repos:
             try:
-                resp = client.get(f"{GITHUB_API}/repos/{repo}/releases", params={"per_page": 3})
-
-                if resp.status_code == 403:
-                    logger.warning(f"GitHub rate limited for {repo}")
+                releases = _get_releases(
+                    client,
+                    f"{GITHUB_API}/repos/{repo}/releases",
+                    {"per_page": 3},
+                    repo,
+                )
+                if releases is None:
                     continue
-                if resp.status_code == 404:
-                    logger.warning(f"GitHub repo not found: {repo}")
-                    continue
-
-                resp.raise_for_status()
-                releases = resp.json()
 
                 for release in releases:
                     if release.get("draft"):
