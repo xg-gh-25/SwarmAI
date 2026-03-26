@@ -16,7 +16,7 @@
 [![License](https://img.shields.io/badge/License-AGPL_v3-blue.svg?style=flat)](./LICENSE-AGPL)
 [![Commercial](https://img.shields.io/badge/License-Commercial-orange.svg?style=flat)](./LICENSE-COMMERCIAL)
 
-![SwarmAI Chat Interface](./assets/swarm-0.png)
+![SwarmAI Chat Interface](./assets/swarm-1.png)
 
 </div>
 
