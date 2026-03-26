@@ -21,12 +21,11 @@ from schemas.task import TaskStatus
 
 # --- ChatThread enums ---
 from schemas.chat_thread import ChatMode, MessageRole, SummaryType, ChatThreadCreate, ChatMessageCreate
+from tests.helpers import PROPERTY_SETTINGS
 
 
-PROPERTY_SETTINGS = settings(
-    max_examples=2,
-    suppress_health_check=[HealthCheck.function_scoped_fixture],
-)
+
+
 
 # Strategy for generating strings that are NOT valid enum values
 invalid_enum_strategy = st.text(min_size=1, max_size=50).filter(

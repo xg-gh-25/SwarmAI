@@ -14,8 +14,10 @@ import asyncio
 from hypothesis import given, strategies as st, settings
 
 from core.permission_manager import PermissionManager
+from tests.helpers import PROPERTY_SETTINGS
 
-PROPERTY_SETTINGS = settings(max_examples=100)
+
+
 
 
 class TestPermissionApproveCheckRoundTrip:

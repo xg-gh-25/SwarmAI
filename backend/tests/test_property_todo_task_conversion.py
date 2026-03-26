@@ -25,12 +25,11 @@ from schemas.todo import (
     Priority,
 )
 from tests.helpers import ensure_default_workspace
+from tests.helpers import PROPERTY_SETTINGS
 
 
-PROPERTY_SETTINGS = settings(
-    max_examples=2,
-    suppress_health_check=[HealthCheck.function_scoped_fixture],
-)
+
+
 
 # --- Strategies ---
 

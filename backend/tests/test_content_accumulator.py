@@ -14,6 +14,8 @@ import pytest
 from hypothesis import given, strategies as st, settings
 
 from core.content_accumulator import ContentBlockAccumulator
+from tests.helpers import PROPERTY_SETTINGS
+
 
 
 # --- Strategies ---
@@ -70,7 +72,7 @@ _any_block = st.one_of(
     _tool_result_missing_id,
 )
 
-PROPERTY_SETTINGS = settings(max_examples=100)
+
 
 
 class TestContentBlockDeduplication:

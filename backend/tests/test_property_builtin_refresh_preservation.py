@@ -98,7 +98,6 @@ class TestUserFilesUntouched:
 
     @given(data=_disjoint_filename_sets())
     @settings(
-        max_examples=50,
         suppress_health_check=[HealthCheck.function_scoped_fixture],
         
     )
@@ -170,7 +169,6 @@ class TestIdempotentWhenContentMatches:
         )
     )
     @settings(
-        max_examples=50,
         suppress_health_check=[HealthCheck.function_scoped_fixture],
         
     )

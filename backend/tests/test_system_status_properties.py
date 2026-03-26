@@ -9,14 +9,13 @@ import asyncio
 from unittest.mock import patch, AsyncMock, MagicMock
 from hypothesis import given, strategies as st, settings, HealthCheck
 from fastapi.testclient import TestClient
+from tests.helpers import PROPERTY_SETTINGS
+
 
 
 # Suppress function-scoped fixture warning since we're testing with mocked
 # component states across iterations
-PROPERTY_SETTINGS = settings(
-    max_examples=100,
-    suppress_health_check=[HealthCheck.function_scoped_fixture]
-)
+
 
 
 class TestInitializedFieldConsistency:

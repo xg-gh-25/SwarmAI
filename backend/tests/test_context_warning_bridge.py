@@ -362,7 +362,7 @@ class TestPreservation_WarnCriticalEvents:
     @given(
         input_tokens=st.integers(min_value=140_000, max_value=200_000),
     )
-    @settings(max_examples=30)
+    @settings()
     async def test_warn_critical_events_preserved_200k_model(
         self, input_tokens: int
     ):
@@ -404,7 +404,7 @@ class TestPreservation_WarnCriticalEvents:
             st.integers(max_value=-1),
         ),
     )
-    @settings(max_examples=30)
+    @settings()
     async def test_invalid_input_produces_no_event(
         self, input_tokens
     ):
@@ -458,7 +458,7 @@ class TestBugConditionExploration_OkLevelFiltered:
     @given(
         input_tokens=st.integers(min_value=1, max_value=139_999),
     )
-    @settings(max_examples=30)
+    @settings()
     async def test_ok_level_event_yielded_for_200k_model(self, input_tokens: int):
         """**Validates: Requirements 1.1, 2.1**
 
@@ -534,7 +534,7 @@ class TestBugConditionExploration_SystemPromptMetadataMissing:
         token_count=st.integers(min_value=100, max_value=50_000),
         file_count=st.integers(min_value=1, max_value=10),
     )
-    @settings(max_examples=20)
+    @settings()
     async def test_system_prompt_metadata_event_emitted(
         self, token_count: int, file_count: int
     ):

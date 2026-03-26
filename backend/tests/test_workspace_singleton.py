@@ -23,17 +23,15 @@ from hypothesis import given, strategies as st, settings, HealthCheck
 
 from database.sqlite import SQLiteDatabase
 from core.swarm_workspace_manager import SwarmWorkspaceManager
+from tests.helpers import PROPERTY_SETTINGS
+
 
 
 # ---------------------------------------------------------------------------
 # Hypothesis settings for property tests
 # ---------------------------------------------------------------------------
 
-PROPERTY_SETTINGS = settings(
-    max_examples=20,
-      # filesystem operations can be slow
-    suppress_health_check=[HealthCheck.function_scoped_fixture],
-)
+
 
 # ---------------------------------------------------------------------------
 # Strategies

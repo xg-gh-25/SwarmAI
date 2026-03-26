@@ -302,7 +302,7 @@ class TestPidTrackingProperties:
     """Hypothesis property-based tests for PID tracking invariants."""
 
     @given(pids=st.lists(st.integers(min_value=1, max_value=2**31), max_size=50))
-    @settings(max_examples=50, suppress_health_check=[HealthCheck.too_slow])
+    @settings(suppress_health_check=[HealthCheck.too_slow])
     def test_tracked_set_equals_unique_tracked(self, pids):
         """After tracking N pids, the set contains exactly the unique ones."""
         mgr = _make_manager()
@@ -314,7 +314,7 @@ class TestPidTrackingProperties:
         pids=st.lists(st.integers(min_value=1, max_value=2**31), min_size=1, max_size=50),
         to_remove=st.lists(st.integers(min_value=1, max_value=2**31), max_size=20),
     )
-    @settings(max_examples=50, suppress_health_check=[HealthCheck.too_slow])
+    @settings(suppress_health_check=[HealthCheck.too_slow])
     def test_untrack_removes_only_specified(self, pids, to_remove):
         """Untracking removes only the specified PIDs."""
         mgr = _make_manager()
@@ -326,7 +326,7 @@ class TestPidTrackingProperties:
         assert mgr._tracked_child_pids == expected
 
     @given(pids=st.lists(st.integers(min_value=1, max_value=2**31), min_size=1, max_size=30))
-    @settings(max_examples=30, suppress_health_check=[HealthCheck.too_slow])
+    @settings(suppress_health_check=[HealthCheck.too_slow])
     def test_kill_clears_all(self, pids):
         """_kill_tracked_pids always empties the set regardless of kill outcomes."""
         mgr = _make_manager()
@@ -339,7 +339,7 @@ class TestPidTrackingProperties:
         assert len(mgr._tracked_child_pids) == 0
 
     @given(pids=st.lists(st.integers(min_value=1, max_value=2**31), min_size=1, max_size=30))
-    @settings(max_examples=30, suppress_health_check=[HealthCheck.too_slow])
+    @settings(suppress_health_check=[HealthCheck.too_slow])
     def test_kill_attempts_every_pid(self, pids):
         """_kill_tracked_pids attempts os.kill for every unique tracked PID."""
         mgr = _make_manager()
@@ -353,7 +353,7 @@ class TestPidTrackingProperties:
         assert killed == set(pids)
 
     @given(pids=st.lists(st.integers(min_value=1, max_value=2**31), min_size=1, max_size=20))
-    @settings(max_examples=20, suppress_health_check=[HealthCheck.too_slow])
+    @settings(suppress_health_check=[HealthCheck.too_slow])
     def test_kill_survives_mixed_errors(self, pids):
         """_kill_tracked_pids doesn't crash even if every kill raises."""
         mgr = _make_manager()

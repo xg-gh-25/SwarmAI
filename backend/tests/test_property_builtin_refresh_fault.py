@@ -78,7 +78,6 @@ class TestBuiltinRefreshFaultCondition:
 
     @given(file_entries=_file_entries)
     @settings(
-        max_examples=50,
         suppress_health_check=[HealthCheck.function_scoped_fixture],
         
     )

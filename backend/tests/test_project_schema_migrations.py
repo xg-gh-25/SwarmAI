@@ -23,17 +23,14 @@ from uuid import uuid4
 import pytest
 from hypothesis import given, settings, strategies as st, HealthCheck
 
+from tests.helpers import PROPERTY_SETTINGS
 from core.project_schema_migrations import (
     CURRENT_SCHEMA_VERSION,
     compare_versions,
     migrate_if_needed,
 )
 
-PROPERTY_SETTINGS = settings(
-    max_examples=100,
-    
-    suppress_health_check=[HealthCheck.function_scoped_fixture],
-)
+
 
 
 # ---------------------------------------------------------------------------

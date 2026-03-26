@@ -29,12 +29,7 @@ from core.tool_summarizer import (
     _TOOL_SEARCH_NAMES,
     _SKILL_NAMES,
 )
-
-PROPERTY_SETTINGS = settings(
-    max_examples=50,
-    
-    suppress_health_check=[HealthCheck.function_scoped_fixture],
-)
+from tests.helpers import PROPERTY_SETTINGS
 
 
 # ---------------------------------------------------------------------------

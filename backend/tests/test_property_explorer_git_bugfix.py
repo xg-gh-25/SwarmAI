@@ -170,7 +170,7 @@ class TestBuildTreeDirectMatch:
         ),
         status_code=_git_status_code,
     )
-    @settings(max_examples=30, suppress_health_check=[HealthCheck.function_scoped_fixture])
+    @settings(suppress_health_check=[HealthCheck.function_scoped_fixture])
     def test_property_flat_path_directory_status(
         self, tmp_path: Path, dir_name: str, status_code: str,
     ):

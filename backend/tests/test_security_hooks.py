@@ -15,9 +15,11 @@ import pytest
 from hypothesis import given, strategies as st, settings
 
 from core.security_hooks import DEFAULT_DANGEROUS_PATTERNS, load_dangerous_patterns
+from tests.helpers import PROPERTY_SETTINGS
 
 
-PROPERTY_SETTINGS = settings(max_examples=100)
+
+
 
 
 class TestDangerousCommandGlobMatching:

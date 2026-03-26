@@ -17,12 +17,11 @@ from database import db
 from core.chat_thread_manager import chat_thread_manager
 from schemas.chat_thread import ChatThreadCreate, ChatMode
 from tests.helpers import ensure_default_workspace, create_custom_workspace
+from tests.helpers import PROPERTY_SETTINGS
 
 
-PROPERTY_SETTINGS = settings(
-    max_examples=2,
-    suppress_health_check=[HealthCheck.function_scoped_fixture],
-)
+
+
 
 # ---------------------------------------------------------------------------
 # Strategies
