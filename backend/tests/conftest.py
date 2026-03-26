@@ -70,11 +70,14 @@ def _acquire_pytest_lock():
         _lock_fd.flush()
     except (IOError, OSError):
         # Another pytest run holds the lock
+        other_pid = "unknown"
         try:
             with open(_LOCK_PATH) as f:
-                other_pid = f.read().strip()
+                content = f.read().strip()
+                if content:
+                    other_pid = content
         except Exception:
-            other_pid = "unknown"
+            pass
         pytest.exit(
             f"\n{'='*60}\n"
             f"BLOCKED: Another pytest run is active (PID {other_pid})\n"
