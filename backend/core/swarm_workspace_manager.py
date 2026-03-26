@@ -502,16 +502,30 @@ class SwarmWorkspaceManager:
 
         for folder_name in FOLDER_STRUCTURE:
             folder_path = root / folder_name
-            await anyio.to_thread.run_sync(
-                lambda fp=folder_path: fp.mkdir(parents=True, exist_ok=True)
-            )
+            try:
+                await anyio.to_thread.run_sync(
+                    lambda fp=folder_path: fp.mkdir(parents=True, exist_ok=True)
+                )
+            except (FileExistsError, NotADirectoryError):
+                # On case-insensitive filesystems (macOS APFS), a file with a
+                # case-variant name blocks mkdir.  Skip rather than crash.
+                logger.warning(
+                    "Cannot create folder '%s' — path blocked by existing file",
+                    folder_name,
+                )
 
         # Create default Knowledge subdirectories
         for subdir in KNOWLEDGE_SUBDIRS:
             subdir_path = root / "Knowledge" / subdir
-            await anyio.to_thread.run_sync(
-                lambda sp=subdir_path: sp.mkdir(parents=True, exist_ok=True)
-            )
+            try:
+                await anyio.to_thread.run_sync(
+                    lambda sp=subdir_path: sp.mkdir(parents=True, exist_ok=True)
+                )
+            except (FileExistsError, NotADirectoryError):
+                logger.warning(
+                    "Cannot create Knowledge/%s — path blocked by existing file",
+                    subdir,
+                )
 
         # Write .gitignore
         gitignore = root / ".gitignore"
