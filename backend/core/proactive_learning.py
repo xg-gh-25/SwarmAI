@@ -142,8 +142,15 @@ class LearningState:
 # ---------------------------------------------------------------------------
 
 def _state_path(workspace_dir: Path) -> Path:
-    """State file lives inside SwarmWS (gitignored)."""
-    return workspace_dir / "proactive_state.json"
+    """State file lives in Services/swarm-jobs/ alongside other job state."""
+    new_path = workspace_dir / "Services" / "swarm-jobs" / "proactive_state.json"
+    # Migration: move from old root-level location if it exists
+    old_path = workspace_dir / "proactive_state.json"
+    if old_path.exists() and not new_path.exists():
+        new_path.parent.mkdir(parents=True, exist_ok=True)
+        old_path.rename(new_path)
+        logger.info("Migrated proactive_state.json → Services/swarm-jobs/")
+    return new_path
 
 
 def load_learning_state(workspace_dir: Path) -> LearningState:
@@ -184,6 +191,7 @@ def save_learning_state(workspace_dir: Path, state: LearningState) -> None:
     here unless we move to precise counters that require transactional guarantees.
     """
     path = _state_path(workspace_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
     state.last_updated = datetime.now().isoformat(timespec="seconds")
     data = {
         "version": state.version,

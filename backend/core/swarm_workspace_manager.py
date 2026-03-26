@@ -281,6 +281,7 @@ node_modules/
 .DS_Store
 .claude/mcps/mcp-dev.json
 proactive_state.json
+hook_stats.json
 """
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1435,7 +1436,7 @@ class SwarmWorkspaceManager:
             try:
                 content = gitignore.read_text(encoding="utf-8")
                 missing_entries = []
-                for entry in ["proactive_state.json", "*.tmp"]:
+                for entry in ["proactive_state.json", "hook_stats.json", "*.tmp"]:
                     if entry not in content:
                         missing_entries.append(entry)
                 if missing_entries:

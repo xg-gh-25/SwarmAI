@@ -5,7 +5,7 @@
  * Handles auth method selection, credential status, and verify connection.
  */
 import { useState, useEffect } from 'react';
-import { systemService, VerifyAuthResponse } from '../../services/system';
+import { systemService, VerifyAuthResponse, AuthHintResponse } from '../../services/system';
 import { settingsService } from '../../services/settings';
 import { Dropdown } from '../common';
 
@@ -28,19 +28,28 @@ const AWS_REGION_OPTIONS = [
 export default function AuthConfigPanel({ mode, onVerifySuccess }: AuthConfigPanelProps) {
   const [method, setMethod] = useState<AuthMethod>('sso');
   const [region, setRegion] = useState('us-east-1');
+  const [adaAccount, setAdaAccount] = useState('');
+  const [adaRole, setAdaRole] = useState('');
   const [verifyState, setVerifyState] = useState<'idle' | 'verifying' | 'success' | 'error'>('idle');
   const [verifyResult, setVerifyResult] = useState<VerifyAuthResponse | null>(null);
+  const [authHint, setAuthHint] = useState<AuthHintResponse | null>(null);
 
-  // Auto-detect best auth method
+  // Auto-detect best auth method and load real credential details
   useEffect(() => {
     systemService.getAuthHint()
       .then((hint) => {
+        setAuthHint(hint);
         setMethod(hint.suggestedMethod);
+        // Pre-fill ada fields from real credentials
+        if (hint.adaDetails) {
+          if (hint.adaDetails.accountId) setAdaAccount(hint.adaDetails.accountId);
+          if (hint.adaDetails.roleName) setAdaRole(hint.adaDetails.roleName);
+        }
       })
       .catch(() => { /* default sso is fine */ });
   }, []);
 
-  // Load current region from settings
+  // Load current config from settings (region)
   useEffect(() => {
     settingsService.getAPIConfiguration()
       .then((config) => {
@@ -56,10 +65,15 @@ export default function AuthConfigPanel({ mode, onVerifySuccess }: AuthConfigPan
     try {
       // Save auth config before verifying
       const isBedrock = method !== 'apikey';
-      await settingsService.updateAPIConfiguration({
+      const configUpdate: Record<string, unknown> = {
         use_bedrock: isBedrock,
         aws_region: region,
-      });
+      };
+      if (method === 'ada') {
+        configUpdate.ada_account = adaAccount;
+        configUpdate.ada_role = adaRole;
+      }
+      await settingsService.updateAPIConfiguration(configUpdate);
 
       const result = await systemService.verifyAuth();
       setVerifyResult(result);
@@ -116,22 +130,99 @@ export default function AuthConfigPanel({ mode, onVerifySuccess }: AuthConfigPan
             placeholder="Select region..."
           />
 
-          {/* Setup hint */}
+          {/* ADA-specific fields */}
+          {method === 'ada' && (
+            <>
+              <div>
+                <label className="block text-xs text-[var(--color-text-muted)] mb-1">ADA Account ID</label>
+                <input
+                  type="text"
+                  value={adaAccount}
+                  onChange={(e) => setAdaAccount(e.target.value)}
+                  placeholder="123456789012"
+                  className="w-full px-3 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-sm text-[var(--color-text)] placeholder-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-primary)]"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-[var(--color-text-muted)] mb-1">ADA Role</label>
+                <input
+                  type="text"
+                  value={adaRole}
+                  onChange={(e) => setAdaRole(e.target.value)}
+                  placeholder="Admin"
+                  className="w-full px-3 py-2 bg-[var(--color-bg)] border border-[var(--color-border)] rounded-lg text-sm text-[var(--color-text)] placeholder-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-primary)]"
+                />
+              </div>
+            </>
+          )}
+
+          {/* Credential status / setup hint */}
           <div className="p-3 bg-[var(--color-card)] rounded-lg text-xs">
             {method === 'ada' ? (
-              <>
-                <p className="text-[var(--color-text-muted)] mb-1">Make sure VPN is connected, then run:</p>
-                <code className="block font-mono text-[var(--color-text)] bg-[var(--color-bg)] p-2 rounded">
-                  ada credentials update --account=ACCOUNT --role=ROLE --provider=isengard
-                </code>
-              </>
+              authHint?.adaDetails?.configured ? (
+                <>
+                  <div className="flex items-center gap-1.5 mb-2">
+                    <span className="w-1.5 h-1.5 bg-green-400 rounded-full" />
+                    <span className="text-green-400 font-medium">ADA credentials active</span>
+                  </div>
+                  <div className="space-y-1 text-[var(--color-text-muted)]">
+                    {authHint.adaDetails.accountId && (
+                      <div className="flex justify-between">
+                        <span>Account</span>
+                        <code className="text-[var(--color-text)]">{authHint.adaDetails.accountId}</code>
+                      </div>
+                    )}
+                    {authHint.adaDetails.roleName && (
+                      <div className="flex justify-between">
+                        <span>Role</span>
+                        <code className="text-[var(--color-text)]">{authHint.adaDetails.roleName}</code>
+                      </div>
+                    )}
+                    {authHint.adaDetails.keyPrefix && (
+                      <div className="flex justify-between">
+                        <span>Access Key</span>
+                        <code className="text-[var(--color-text)]">{authHint.adaDetails.keyPrefix}</code>
+                      </div>
+                    )}
+                  </div>
+                  <p className="text-[var(--color-text-muted)] mt-2 opacity-60">To refresh credentials:</p>
+                  <code className="block font-mono text-[var(--color-text)] bg-[var(--color-bg)] p-2 rounded select-all mt-1">
+                    ada credentials update --account={adaAccount || 'ACCOUNT'} --role={adaRole || 'ROLE'} --provider=isengard
+                  </code>
+                </>
+              ) : (
+                <>
+                  <p className="text-[var(--color-text-muted)] mb-1">Make sure VPN is connected, then run:</p>
+                  <code className="block font-mono text-[var(--color-text)] bg-[var(--color-bg)] p-2 rounded select-all">
+                    ada credentials update --account={adaAccount || 'ACCOUNT'} --role={adaRole || 'ROLE'} --provider=isengard
+                  </code>
+                </>
+              )
             ) : (
-              <>
-                <p className="text-[var(--color-text-muted)] mb-1">Authenticate with AWS SSO:</p>
-                <code className="block font-mono text-[var(--color-text)] bg-[var(--color-bg)] p-2 rounded">
-                  aws sso login --profile your-profile
-                </code>
-              </>
+              authHint?.awsProfiles && authHint.awsProfiles.length > 0 ? (
+                <>
+                  <div className="flex items-center gap-1.5 mb-2">
+                    <span className="w-1.5 h-1.5 bg-green-400 rounded-full" />
+                    <span className="text-green-400 font-medium">SSO profiles detected</span>
+                  </div>
+                  <div className="text-[var(--color-text-muted)] mb-2">
+                    Profiles: {authHint.awsProfiles.map(p => (
+                      <code key={p} className="text-[var(--color-text)] bg-[var(--color-bg)] px-1.5 py-0.5 rounded mr-1">{p}</code>
+                    ))}
+                  </div>
+                  <p className="text-[var(--color-text-muted)] opacity-60">To refresh session:</p>
+                  <code className="block font-mono text-[var(--color-text)] bg-[var(--color-bg)] p-2 rounded mt-1">
+                    aws sso login --profile {authHint.awsProfiles[0]}
+                  </code>
+                </>
+              ) : (
+                <>
+                  <p className="text-[var(--color-text-muted)] mb-1">Authenticate with AWS SSO:</p>
+                  <code className="block font-mono text-[var(--color-text)] bg-[var(--color-bg)] p-2 rounded">
+                    aws sso login --profile your-profile
+                  </code>
+                </>
+              )
             )}
           </div>
         </div>

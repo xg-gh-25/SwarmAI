@@ -431,7 +431,8 @@ async def _verify_anthropic_api(config: dict) -> dict:
 async def get_auth_hint():
     """Return hints about the local credential environment.
 
-    Helps the frontend pick a sensible default auth method card.
+    Helps the frontend pick a sensible default auth method card
+    and show real credential status when already configured.
     """
     has_ada = Path.home().joinpath(".ada").is_dir()
     has_sso_cache = bool(list(Path.home().joinpath(".aws/sso/cache").glob("*.json")))
@@ -446,12 +447,63 @@ async def get_auth_hint():
     else:
         suggested = "sso"  # safest default for external users
 
+    # Probe real credential details for display
+    ada_details = _probe_ada_details() if has_ada else None
+    aws_profiles = _probe_aws_profiles() if has_sso_cache else None
+
     return {
         "has_ada_dir": has_ada,
         "has_sso_cache": has_sso_cache,
         "has_api_key": has_api_key,
         "suggested_method": suggested,
+        "ada_details": ada_details,
+        "aws_profiles": aws_profiles,
     }
+
+
+def _probe_ada_details() -> dict | None:
+    """Read ADA credential status from ~/.ada/credentials (INI-style)."""
+    creds_path = Path.home() / ".ada" / "credentials"
+    if not creds_path.exists():
+        return None
+    try:
+        content = creds_path.read_text(encoding="utf-8")
+        details: dict = {}
+        for line in content.splitlines():
+            line = line.strip()
+            if "=" in line and not line.startswith("["):
+                k, v = line.split("=", 1)
+                k, v = k.strip(), v.strip()
+                if k == "aws_account_id":
+                    details["account_id"] = v
+                elif k == "aws_role_name":
+                    details["role_name"] = v
+                elif k == "region":
+                    details["region"] = v
+                elif k == "aws_access_key_id":
+                    details["configured"] = True
+                    details["key_prefix"] = v[:8] + "••••" if len(v) > 8 else "••••"
+        return details
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
+def _probe_aws_profiles() -> list[str] | None:
+    """List AWS CLI profile names from ~/.aws/config."""
+    config_path = Path.home() / ".aws" / "config"
+    if not config_path.exists():
+        return None
+    try:
+        profiles = []
+        for line in config_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line.startswith("[profile "):
+                profiles.append(line[9:-1])
+            elif line.startswith("[default]"):
+                profiles.append("default")
+        return profiles[:10]
+    except (OSError, UnicodeDecodeError):
+        return None
 
 
 @router.put("/onboarding-complete")

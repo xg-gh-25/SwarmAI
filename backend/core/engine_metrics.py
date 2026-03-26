@@ -296,7 +296,18 @@ def collect_hook_stats(ws_path: Path) -> dict[str, Any]:
 
     try:
         data = json.loads(stats_path.read_text(encoding="utf-8"))
-        return {"available": True, **data}
+        hooks = data.get("hooks", data)  # Support both nested and flat format
+        total_runs = sum(h.get("total_runs", 0) for h in hooks.values())
+        total_errors = sum(h.get("total_errors", 0) for h in hooks.values())
+        return {
+            "available": True,
+            "updated_at": data.get("updated_at"),
+            "hook_count": len(hooks),
+            "total_runs": total_runs,
+            "total_errors": total_errors,
+            "error_rate": round(total_errors / max(total_runs, 1) * 100, 1),
+            "hooks": hooks,
+        }
     except (json.JSONDecodeError, OSError):
         return {"available": False}
 
@@ -480,14 +491,22 @@ def _collect_ddd_health(ws_path: Path) -> dict[str, Any]:
     return {"projects": projects}
 
 
+_CHANNEL_PATTERN = re.compile(r"^\#\#\s+\d{2}:\d{2}\s+\|.*\[Channel:")
+
 def _collect_session_stats(ws_path: Path) -> dict[str, Any]:
-    """Session volume from DailyActivity files (last 7 days)."""
+    """Session volume from DailyActivity files (last 7 days).
+
+    Separates interactive sessions (user-initiated chat) from channel
+    sessions (Slack/Feishu bot pings) to avoid inflating the count.
+    """
     da_dir = ws_path / "Knowledge" / "DailyActivity"
     if not da_dir.is_dir():
         return {"available": False}
 
     cutoff = date.today() - timedelta(days=7)
     total_sessions = 0
+    interactive_sessions = 0
+    channel_sessions = 0
     days_active = 0
 
     for f in sorted(da_dir.glob("*.md")):
@@ -501,15 +520,24 @@ def _collect_session_stats(ws_path: Path) -> dict[str, Any]:
             continue
 
         days_active += 1
-        # Count ## entries (each session starts with ##)
         try:
             content = f.read_text(encoding="utf-8")
-            total_sessions += content.count("\n## ")
+            for line in content.splitlines():
+                if line.startswith("## ") and not line.startswith("## _"):
+                    total_sessions += 1
+                    if _CHANNEL_PATTERN.match(line):
+                        channel_sessions += 1
+                    else:
+                        interactive_sessions += 1
         except (OSError, UnicodeDecodeError):
             continue
 
     return {
         "last_7d_sessions": total_sessions,
+        "last_7d_interactive": interactive_sessions,
+        "last_7d_channel": channel_sessions,
         "last_7d_active_days": days_active,
-        "avg_sessions_per_day": round(total_sessions / max(days_active, 1), 1),
+        "avg_interactive_per_day": round(
+            interactive_sessions / max(days_active, 1), 1
+        ),
     }

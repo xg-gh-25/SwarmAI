@@ -202,7 +202,8 @@ uv pip install \
     "psutil>=5.9.0" \
     "pyyaml>=6.0.0" \
     "anyio>=4.0.0" \
-    "lark-oapi>=1.5.3"
+    "lark-oapi>=1.5.3" \
+    "slack-bolt>=1.27.0"
     # "mcp>=1.0.0,<2.0.0"
 
 # Verify key local modules are accessible from current directory
@@ -241,6 +242,8 @@ hiddenimports += collect_submodules('claude_agent_sdk')
 hiddenimports += collect_submodules('boto3')
 hiddenimports += collect_submodules('botocore')
 hiddenimports += ['psutil']
+hiddenimports += collect_submodules('slack_bolt')
+hiddenimports += collect_submodules('slack_sdk')
 
 # Collect data files (including bundled CLI binary from claude_agent_sdk)
 datas = []
@@ -373,6 +376,7 @@ local_modules = [
     'channels.gateway',
     'channels.registry',
     'channels.adapters.feishu',
+    'channels.adapters.slack',
     # Utils
     'utils',
     'utils.bundle_paths',

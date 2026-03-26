@@ -44,8 +44,25 @@ export interface SystemStatus {
 // ============== Case Conversion ==============
 
 /**
+ * Deep snake_case → camelCase key converter for arbitrary nested objects.
+ * Arrays are traversed, primitives pass through unchanged.
+ */
+function deepSnakeToCamel(obj: unknown): unknown {
+  if (Array.isArray(obj)) return obj.map(deepSnakeToCamel);
+  if (obj !== null && typeof obj === 'object') {
+    const result: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(obj as Record<string, unknown>)) {
+      const camelKey = k.replace(/_([a-z0-9])/g, (_, c) => c.toUpperCase());
+      result[camelKey] = deepSnakeToCamel(v);
+    }
+    return result;
+  }
+  return obj;
+}
+
+/**
  * Convert snake_case API response to camelCase for TypeScript consumption.
- * 
+ *
  * Backend response (snake_case):
  * - skills_count -> skillsCount
  * - mcp_servers_count -> mcpServersCount
@@ -152,6 +169,14 @@ export interface AuthHintResponse {
   hasSsoCache: boolean;
   hasApiKey: boolean;
   suggestedMethod: 'ada' | 'sso' | 'apikey';
+  adaDetails?: {
+    accountId?: string;
+    roleName?: string;
+    region?: string;
+    configured?: boolean;
+    keyPrefix?: string;
+  };
+  awsProfiles?: string[];
 }
 
 export const systemService = {
@@ -244,13 +269,7 @@ export const systemService = {
    */
   async getAuthHint(): Promise<AuthHintResponse> {
     const response = await api.get<Record<string, unknown>>('/system/auth-hint');
-    const d = response.data;
-    return {
-      hasAdaDir: d.has_ada_dir as boolean,
-      hasSsoCache: d.has_sso_cache as boolean,
-      hasApiKey: d.has_api_key as boolean,
-      suggestedMethod: d.suggested_method as AuthHintResponse['suggestedMethod'],
-    };
+    return deepSnakeToCamel(response.data) as AuthHintResponse;
   },
 
   /**
@@ -273,8 +292,8 @@ export const systemService = {
    */
   async getEngineMetrics(): Promise<EngineMetrics> {
     try {
-      const response = await api.get<EngineMetrics>('/system/engine-metrics');
-      return response.data;
+      const response = await api.get<Record<string, unknown>>('/system/engine-metrics');
+      return deepSnakeToCamel(response.data) as EngineMetrics;
     } catch {
       return {
         collectedAt: '',
