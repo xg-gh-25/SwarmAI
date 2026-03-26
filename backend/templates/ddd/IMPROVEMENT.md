@@ -25,6 +25,7 @@ _This document captures what worked, what failed, and what to watch for when dev
 - **Retry fighting resource exhaustion** -- Retrying a SIGKILL (OOM) with another spawn made things worse. Retry strategies must be failure-mode-aware: OOM != timeout != auth failure.
 - **Hardcoded constants at wrong scale** -- 85% memory threshold worked at 200K context, broke at 1M. Constants need a comment: "this assumes X" so you know when the assumption breaks.
 - **Sync wrappers around async cleanup** -- Async cleanup needs async callers. No shortcuts. The "convenience" sync wrapper leaked 3 file descriptors per crash.
+- **Workspace scripts drift from codebase** -- Building features in `Services/` (workspace) instead of `backend/` (codebase) means new users don't get them, and the workspace version drifts. The slack-bot grew to 1,093 lines in workspace while the codebase adapter was a different 363-line implementation. Rule: prototype in workspace, productize in codebase within the same sprint.
 
 ## Known Issues
 
