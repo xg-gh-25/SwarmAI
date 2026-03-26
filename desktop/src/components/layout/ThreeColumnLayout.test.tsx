@@ -61,16 +61,7 @@ vi.mock('@tauri-apps/plugin-fs', () => ({
 }));
 
 // Mock modal components to prevent HTTP requests from their internal pages
-vi.mock('../modals/SkillsModal', () => ({
-  default: ({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) =>
-    isOpen ? <div data-testid="skills-modal"><button onClick={onClose}>Close</button></div> : null,
-}));
-
-vi.mock('../modals/MCPSettingsModal', () => ({
-  default: ({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) =>
-    isOpen ? <div data-testid="mcp-modal"><button onClick={onClose}>Close</button></div> : null,
-}));
-
+// Note: SkillsModal and MCPSettingsModal removed — now integrated into Settings tabs
 vi.mock('../modals/SettingsModal', () => ({
   default: ({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) =>
     isOpen ? <div data-testid="settings-modal"><button onClick={onClose}>Close</button></div> : null,
