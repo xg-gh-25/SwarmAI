@@ -161,6 +161,7 @@ def parse_skill_md(
     name: str | None = None
     description: str | None = None
     version: str = "1.0.0"
+    meta: dict | None = None
     body = raw  # default: entire file is content if no frontmatter
 
     # --- Frontmatter extraction ---

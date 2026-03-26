@@ -631,6 +631,19 @@ class PromptBuilder:
             except Exception as exc:
                 logger.warning("Proactive intelligence injection failed: %s", exc)
 
+            # ── L3: Active Session Digest (sibling awareness) ──────────
+            # Inject a brief summary of what other active sessions are doing
+            # so Tabs know about Channel activity and vice versa.
+            # Lightweight: just last user message per sibling, ~50 tokens each.
+            try:
+                digest = await self._build_active_session_digest(
+                    current_session_id=agent_config.get("resume_app_session_id") or "",
+                )
+                if digest:
+                    context_text += f"\n\n{digest}"
+            except Exception as exc:
+                logger.debug("Active session digest failed (non-fatal): %s", exc)
+
             # ── Resume context injection (ephemeral, for resumed sessions) ──
             if agent_config.get("needs_context_injection") and agent_config.get("resume_app_session_id"):
                 from .context_injector import build_resume_context
@@ -764,6 +777,74 @@ class PromptBuilder:
         else:
             # Default: adaptive — model decides when thinking is useful
             return {"type": "adaptive"}
+
+    # ------------------------------------------------------------------
+    # L3: Active Session Digest
+    # ------------------------------------------------------------------
+
+    async def _build_active_session_digest(
+        self, current_session_id: str,
+    ) -> str:
+        """Build a lightweight digest of what sibling sessions are doing.
+
+        Returns a markdown section like:
+            ## Active Sessions (sibling context)
+            - [Tab, 5m ago] Deploy the new feature to staging
+            - [Channel, 2m ago] 帮我查下昨天的 meeting notes
+
+        Only includes alive sessions (STREAMING, IDLE, WAITING_INPUT).
+        Costs ~50 tokens per sibling — negligible.
+        """
+        from . import session_registry
+        from database import db
+        import time
+
+        router = getattr(session_registry, "session_router", None)
+        if not router:
+            return ""
+
+        lines: list[str] = []
+        now = time.time()
+
+        for unit in router.list_units():
+            if unit.session_id == current_session_id:
+                continue
+            if not unit.is_alive:
+                continue
+
+            # Time since last activity
+            elapsed_s = now - unit.last_used
+            if elapsed_s < 60:
+                time_ago = f"{int(elapsed_s)}s ago"
+            elif elapsed_s < 3600:
+                time_ago = f"{int(elapsed_s / 60)}m ago"
+            else:
+                time_ago = f"{int(elapsed_s / 3600)}h ago"
+
+            source = "Channel" if unit.is_channel_session else "Tab"
+
+            # Get last user message from DB (cheap — indexed query)
+            try:
+                last_msg = await db.messages.get_last_by_session(
+                    unit.session_id, role="user",
+                )
+                text = (last_msg.get("content", "") if isinstance(last_msg, dict) else "")
+                if isinstance(text, list):
+                    # content is a list of blocks — extract text
+                    text = " ".join(
+                        b.get("text", "") for b in text
+                        if isinstance(b, dict) and b.get("type") == "text"
+                    )
+                text = (text or "(no message)")[:100]
+            except Exception:
+                text = "(unavailable)"
+
+            lines.append(f"- [{source}, {time_ago}] {text}")
+
+        if not lines:
+            return ""
+
+        return "## Active Sessions (sibling context)\n" + "\n".join(lines)
 
     # ------------------------------------------------------------------
     # build_options

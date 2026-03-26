@@ -349,6 +349,29 @@ class SQLiteMessagesTable(SQLiteTable[T], Generic[T]):
             row = await cursor.fetchone()
             return row[0] if row else 0
 
+    async def get_last_by_session(
+        self, session_id: str, role: str | None = None,
+    ) -> dict | None:
+        """Return the most recent message for a session, optionally filtered by role."""
+        async with self._get_connection() as conn:
+            conn.row_factory = aiosqlite.Row
+            if role:
+                query = (
+                    f"SELECT * FROM {self.table_name} "
+                    "WHERE session_id = ? AND role = ? "
+                    "ORDER BY created_at DESC LIMIT 1"
+                )
+                params = (session_id, role)
+            else:
+                query = (
+                    f"SELECT * FROM {self.table_name} "
+                    "WHERE session_id = ? ORDER BY created_at DESC LIMIT 1"
+                )
+                params = (session_id,)
+            async with conn.execute(query, params) as cursor:
+                row = await cursor.fetchone()
+                return self._row_to_dict(row) if row else None
+
     async def cleanup_expired(self) -> int:
         """Delete expired messages based on TTL. Returns count of deleted items."""
         current_time = int(time.time())

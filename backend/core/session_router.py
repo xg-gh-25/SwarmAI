@@ -499,6 +499,11 @@ class SessionRouter:
 
         unit = self.get_or_create_unit(session_id, agent_id)
 
+        # Tag channel sessions so slot isolation works correctly.
+        # channel_context is only set by ChannelGateway, never by chat tabs.
+        if channel_context and not unit.is_channel_session:
+            unit.is_channel_session = True
+
         # ── Persist user message BEFORE slot acquisition ──
         # Critical: If slot acquisition times out (QUEUE_TIMEOUT), the
         # method returns early.  The user message MUST already be in DB

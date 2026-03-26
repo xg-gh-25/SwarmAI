@@ -94,6 +94,10 @@ class ChannelGateway:
         # Startup lifecycle state for the system status endpoint.
         # Valid values: "not_started", "starting", "started", "failed"
         self._startup_state: str = "not_started"
+        # Per-conversation lock prevents two rapid messages from the same
+        # external conversation from racing through _resolve_session +
+        # run_conversation simultaneously.  Key: (channel_id, external_chat_id).
+        self._conv_locks: dict[tuple[str, str], asyncio.Lock] = {}
 
     @property
     def startup_state(self) -> str:
@@ -516,6 +520,28 @@ class ChannelGateway:
             return
 
         # 4. Resolve / create internal session ------------------------------------
+        # Per-conversation lock: prevents two rapid messages from the same
+        # external chat from racing into _resolve_session + run_conversation.
+        conv_key = (channel_id, msg.external_chat_id)
+        if conv_key not in self._conv_locks:
+            self._conv_locks[conv_key] = asyncio.Lock()
+
+        async with self._conv_locks[conv_key]:
+            return await self._handle_conversation(
+                msg=msg,
+                channel=channel,
+                channel_id=channel_id,
+                agent_id=agent_id,
+            )
+
+    async def _handle_conversation(
+        self,
+        msg: InboundMessage,
+        channel: dict,
+        channel_id: str,
+        agent_id: str,
+    ) -> None:
+        """Inner handler — runs under per-conversation lock."""
         try:
             session_id, channel_session_id, _is_new = await self._resolve_session(
                 channel_id=channel_id,
