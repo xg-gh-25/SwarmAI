@@ -92,3 +92,4 @@ desktop/resources/seed.db
 desktop/resources/user-mcp-servers.json
 backend/pytest-of-gawan/
 pytest-of-gawan/
+*.lock

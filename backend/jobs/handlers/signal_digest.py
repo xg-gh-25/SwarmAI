@@ -32,8 +32,10 @@ SIGNALS_DIR = Path(os.environ.get(
 # L4 consumer reads this JSON file
 L4_DIGEST_PATH = SWARMWS / "Services" / "signals" / "signal_digest.json"
 
-# LLM config (used via llm_client.py, which routes through claude --print)
+# Bedrock config
+MODEL_ID = "us.anthropic.claude-3-5-haiku-20241022-v1:0"
 MAX_INPUT_TOKENS = 4000
+MAX_OUTPUT_TOKENS = 2000
 
 
 def handle_signal_digest(
@@ -126,12 +128,14 @@ def _llm_digest(
     signals: list[RawSignal], user_context: str
 ) -> tuple[str, list[dict], int]:
     """
-    Use Haiku (via claude --print) to create a prioritized, annotated digest.
+    Use Bedrock Haiku to create a prioritized, annotated digest.
 
     Returns:
         (markdown_content, scored_items, tokens_used)
     """
-    from ..llm_client import llm_call, LLMCallError
+    import boto3
+
+    client = boto3.client("bedrock-runtime", region_name="us-west-2")
 
     # Build signal summaries for the prompt
     signal_text = "\n".join(
@@ -139,7 +143,9 @@ def _llm_digest(
         for i, s in enumerate(signals[:30])  # cap to control token usage
     )
 
-    prompt = f"""Analyze these signals and produce TWO outputs.
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+    prompt = f"""You are Swarm's signal intelligence system. Analyze these signals and produce TWO outputs.
 
 ## User Context
 {user_context or "Building SwarmAI (AI desktop app), interested in AI agents, Claude SDK, LLM frameworks, context engineering."}
@@ -149,9 +155,9 @@ def _llm_digest(
 
 ## Output 1: Markdown Digest
 Create a markdown digest with these sections:
-1. **Act Now** — signals requiring immediate attention or action
-2. **Worth Knowing** — interesting developments relevant to our work
-3. **Background** — general industry movement, nice to know
+1. **🔴 Act Now** — signals requiring immediate attention or action
+2. **🟡 Worth Knowing** — interesting developments relevant to our work
+3. **🟢 Background** — general industry movement, nice to know
 
 For each signal: 1-2 sentence summary, "Why it matters" annotation, original URL.
 Start with YAML frontmatter: date, signals_count, sources (unique source names).
@@ -159,23 +165,29 @@ Skip irrelevant signals entirely.
 
 ## Output 2: JSON Scores
 After the markdown, output a line "---JSON---" then a JSON array of objects, one per RELEVANT signal (skip irrelevant ones):
+```
 [{{"idx": 0, "relevance_score": 0.85, "urgency": "high", "summary": "one-line summary"}}]
+```
 - relevance_score: 0.0 to 1.0 based on relevance to user context
 - urgency: "high" (act now), "medium" (worth knowing), "low" (background)
 - summary: concise one-line summary
 
 Output the markdown first, then ---JSON--- separator, then the JSON array. Nothing else."""
 
-    content = llm_call(
-        prompt,
-        model="haiku",
-        max_budget_usd=0.50,
-        timeout_seconds=120,
-        system_prompt="You are Swarm's signal intelligence system. Be concise and precise.",
-    )
+    body = json.dumps({
+        "anthropic_version": "bedrock-2023-05-31",
+        "max_tokens": MAX_OUTPUT_TOKENS,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.3,
+    })
 
-    # Token count not available from CLI output — estimate from content length
-    total_tokens = len(content) // 4  # rough estimate
+    response = client.invoke_model(modelId=MODEL_ID, body=body)
+    result = json.loads(response["body"].read())
+
+    content = result["content"][0]["text"]
+    input_tokens = result.get("usage", {}).get("input_tokens", 0)
+    output_tokens = result.get("usage", {}).get("output_tokens", 0)
+    total_tokens = input_tokens + output_tokens
 
     # Split markdown and JSON parts
     scored_items: list[dict] = []
@@ -375,13 +387,15 @@ def _handle_rollup(
 
 
 def _llm_rollup(combined_digests: str, user_context: str, window_days: int) -> tuple[str, int]:
-    """Use Haiku (via claude --print) to produce a weekly rollup summary."""
-    from ..llm_client import llm_call
+    """Use Bedrock Haiku to produce a weekly rollup summary."""
+    import boto3
+
+    client = boto3.client("bedrock-runtime", region_name="us-west-2")
 
     # Truncate to fit context
     truncated = combined_digests[:8000]
 
-    prompt = f"""Create a WEEKLY ROLLUP from {window_days} days of daily signal digests.
+    prompt = f"""You are Swarm's signal intelligence system. Create a WEEKLY ROLLUP from {window_days} days of daily signal digests.
 
 ## User Context
 {user_context or "Building SwarmAI (AI desktop app), interested in AI agents, Claude SDK, LLM frameworks, context engineering."}
@@ -398,16 +412,19 @@ Create a concise weekly summary with:
 
 Be concise. This is a rollup, not a repeat — synthesize patterns, don't list individual signals."""
 
-    content = llm_call(
-        prompt,
-        model="haiku",
-        max_budget_usd=0.50,
-        timeout_seconds=120,
-        system_prompt="You are Swarm's signal intelligence system. Be concise.",
-    )
+    body = json.dumps({
+        "anthropic_version": "bedrock-2023-05-31",
+        "max_tokens": MAX_OUTPUT_TOKENS,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.3,
+    })
 
-    # Token count not available from CLI — estimate
-    total_tokens = len(content) // 4
+    response = client.invoke_model(modelId=MODEL_ID, body=body)
+    result = json.loads(response["body"].read())
+
+    content = result["content"][0]["text"]
+    input_tokens = result.get("usage", {}).get("input_tokens", 0)
+    output_tokens = result.get("usage", {}).get("output_tokens", 0)
 
     header = (
         f"---\ndate: {datetime.now(timezone.utc).strftime('%Y-%m-%d')}\n"
@@ -415,4 +432,4 @@ Be concise. This is a rollup, not a repeat — synthesize patterns, don't list i
         f"# Weekly Signal Rollup\n\n"
     )
 
-    return header + content, total_tokens
+    return header + content, input_tokens + output_tokens
