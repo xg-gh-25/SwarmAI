@@ -11,6 +11,7 @@ import ChannelsTab from './ChannelsTab';
 import SkillsSettingsTab from './SkillsTab';
 import MCPServersTab from './MCPServersTab';
 import SystemTab from './SystemTab';
+import EngineMetricsTab from './EngineMetricsTab';
 import AboutTab from './AboutTab';
 
 const TABS = [
@@ -19,6 +20,7 @@ const TABS = [
   { id: 'channels', label: 'Channels', icon: 'forum' },
   { id: 'skills', label: 'Skills', icon: 'extension' },
   { id: 'mcp-servers', label: 'MCP Servers', icon: 'device_hub' },
+  { id: 'engine', label: 'Core Engine', icon: 'psychology' },
   { id: 'system', label: 'System', icon: 'dns' },
   { id: 'about', label: 'About', icon: 'info' },
 ] as const;
@@ -73,6 +75,7 @@ export default function SettingsTabs({ initialTab }: SettingsTabsProps) {
         {activeTab === 'channels' && <ChannelsTab />}
         {activeTab === 'skills' && <SkillsSettingsTab />}
         {activeTab === 'mcp-servers' && <MCPServersTab />}
+        {activeTab === 'engine' && <EngineMetricsTab />}
         {activeTab === 'system' && <SystemTab />}
         {activeTab === 'about' && <AboutTab />}
       </div>

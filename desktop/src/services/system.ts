@@ -129,6 +129,8 @@ const STATUS_TIMEOUT_MS = 5000;
 
 export interface MaxTabsInfo {
   maxTabs: number;
+  /** Max chat tabs allowed (maxTabs - 1, reserving 1 slot for channels). */
+  chatMax: number;
   memoryPressure: 'ok' | 'warning' | 'critical';
 }
 
@@ -184,8 +186,11 @@ export const systemService = {
   async getMaxTabs(): Promise<MaxTabsInfo> {
     const response = await api.get<Record<string, unknown>>('/system/max-tabs');
     const data = response.data;
+    const maxTabs = typeof data.max_tabs === 'number' ? data.max_tabs : 2;
+    const chatMax = typeof data.chat_max === 'number' ? data.chat_max : Math.max(1, maxTabs - 1);
     return {
-      maxTabs: typeof data.max_tabs === 'number' ? data.max_tabs : 2,
+      maxTabs,
+      chatMax,
       memoryPressure: (['ok', 'warning', 'critical'].includes(data.memory_pressure as string)
         ? data.memory_pressure
         : 'ok') as MaxTabsInfo['memoryPressure'],
@@ -261,4 +266,46 @@ export const systemService = {
   async resetOnboarding(): Promise<void> {
     await api.delete('/system/onboarding-complete');
   },
+
+  /**
+   * Get Core Engine growth metrics for the dashboard.
+   * Returns learning state, memory effectiveness, DDD health, session stats.
+   */
+  async getEngineMetrics(): Promise<EngineMetrics> {
+    try {
+      const response = await api.get<EngineMetrics>('/system/engine-metrics');
+      return response.data;
+    } catch {
+      return {
+        collectedAt: '',
+        engineLevel: { current: 'unknown', l3Progress: '0/0', l3Features: {}, levels: {} },
+        learning: {},
+        memory: { status: 'error' },
+        dddSuggestions: [],
+        dddHealth: { projects: [] },
+        contextHealth: { findings: [] },
+        hooks: { available: false },
+        sessions: {},
+      };
+    }
+  },
 };
+
+// ============== Engine Metrics Types ==============
+
+export interface EngineMetrics {
+  collectedAt: string;
+  engineLevel: {
+    current: string;
+    l3Progress: string;
+    l3Features: Record<string, boolean>;
+    levels: Record<string, string>;
+  };
+  learning: Record<string, unknown>;
+  memory: Record<string, unknown>;
+  dddSuggestions: Array<Record<string, string>>;
+  dddHealth: { projects: Array<Record<string, unknown>> };
+  contextHealth: { findings: Array<Record<string, string>>; lastCheck?: string };
+  hooks: Record<string, unknown>;
+  sessions: Record<string, unknown>;
+}
