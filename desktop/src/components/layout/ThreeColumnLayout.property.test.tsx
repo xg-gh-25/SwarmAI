@@ -33,16 +33,7 @@ vi.stubGlobal('XMLHttpRequest', vi.fn().mockImplementation(() => ({
 })));
 
 // Mock modal components to prevent HTTP requests from their internal pages
-vi.mock('../modals/SkillsModal', () => ({
-  default: ({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) =>
-    isOpen ? <div data-testid="skills-modal"><button onClick={onClose}>Close</button></div> : null,
-}));
-
-vi.mock('../modals/MCPSettingsModal', () => ({
-  default: ({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) =>
-    isOpen ? <div data-testid="mcp-modal"><button onClick={onClose}>Close</button></div> : null,
-}));
-
+// Note: SkillsModal and MCPSettingsModal removed — now integrated into Settings tabs
 vi.mock('../modals/SettingsModal', () => ({
   default: ({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) =>
     isOpen ? <div data-testid="settings-modal"><button onClick={onClose}>Close</button></div> : null,
@@ -611,7 +602,7 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
     const navModalTypes = ['skills', 'mcp', 'settings'] as const;
     type NavModalType = typeof navModalTypes[number];
 
-    const modalToNavTestId: Record<NavModalType, string> = {
+    const navToTestId: Record<NavModalType, string> = {
       skills: 'nav-skills',
       mcp: 'nav-mcp',
       settings: 'nav-settings',
@@ -629,7 +620,7 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
             <div data-testid="chat-content">Chat Content</div>
           );
 
-          const navButton = screen.getByTestId(modalToNavTestId[modalType]);
+          const navButton = screen.getByTestId(navToTestId[modalType]);
           expect(navButton).not.toBeNull();
           expect(navButton.getAttribute('aria-pressed')).toBe('false');
 
@@ -675,7 +666,7 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
             <div data-testid="chat-content">Chat Content</div>
           );
 
-          const navButton = screen.getByTestId(modalToNavTestId[modalType]);
+          const navButton = screen.getByTestId(navToTestId[modalType]);
           act(() => {
             navButton.click();
           });
@@ -703,7 +694,7 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
           );
 
           for (const modalType of clickSequence) {
-            const navButton = screen.getByTestId(modalToNavTestId[modalType]);
+            const navButton = screen.getByTestId(navToTestId[modalType]);
             act(() => {
               navButton.click();
             });
@@ -736,14 +727,14 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
             <div data-testid="chat-content">Chat Content</div>
           );
 
-          const firstButton = screen.getByTestId(modalToNavTestId[firstModal]);
+          const firstButton = screen.getByTestId(navToTestId[firstModal]);
           act(() => {
             firstButton.click();
           });
 
           expect(firstButton.getAttribute('aria-pressed')).toBe('true');
 
-          const secondButton = screen.getByTestId(modalToNavTestId[secondModal]);
+          const secondButton = screen.getByTestId(navToTestId[secondModal]);
           act(() => {
             secondButton.click();
           });
@@ -773,7 +764,7 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
             <div data-testid="chat-content">Chat Content</div>
           );
 
-          const navButton = screen.getByTestId(modalToNavTestId[modalType]);
+          const navButton = screen.getByTestId(navToTestId[modalType]);
           act(() => {
             navButton.click();
           });
@@ -784,7 +775,7 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
 
           // Property: All navigation icons SHALL remain accessible
           for (const otherModalType of navModalTypes) {
-            const otherButton = screen.getByTestId(modalToNavTestId[otherModalType]);
+            const otherButton = screen.getByTestId(navToTestId[otherModalType]);
             expect(otherButton).not.toBeNull();
             expect(otherButton.hasAttribute('disabled')).toBe(false);
           }
@@ -806,32 +797,36 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
    * Left_Sidebar SHALL display the active visual indicator (highlighted state).
    */
   describe('Feature: three-column-layout, Property 5: Active Navigation Indicator', () => {
-    const navModalTypes = ['skills', 'mcp', 'settings'] as const;
-    type NavModalType = typeof navModalTypes[number];
+    // Navigation items and their test IDs
+    // Skills and MCP now open Settings modal with a specific tab pre-selected.
+    // Settings button opens Settings modal with default tab (general).
+    // Active indicator depends on: (1) settings modal is open, (2) the correct tab is selected.
+    const navItems = ['skills', 'mcp', 'settings'] as const;
+    type NavItem = typeof navItems[number];
 
-    const modalToNavTestId: Record<NavModalType, string> = {
+    const navToTestId: Record<NavItem, string> = {
       skills: 'nav-skills',
       mcp: 'nav-mcp',
       settings: 'nav-settings',
     };
 
-    const navModalTypeArb = fc.constantFrom(...navModalTypes);
+    const navItemArb = fc.constantFrom(...navItems);
 
-    it('should display active visual indicator on the corresponding nav icon when modal is active', () => {
+    it('should display active visual indicator on the corresponding nav icon when clicked', () => {
       fc.assert(
-        fc.property(navModalTypeArb, (activeModalType) => {
+        fc.property(navItemArb, (activeItem) => {
           mockStorage.clear();
 
           const { unmount } = renderWithCleanup(
             <div data-testid="chat-content">Chat Content</div>
           );
 
-          const activeButton = screen.getByTestId(modalToNavTestId[activeModalType]);
+          const activeButton = screen.getByTestId(navToTestId[activeItem]);
           act(() => {
             activeButton.click();
           });
 
-          // Property: Active button SHALL have aria-pressed="true"
+          // Property: Clicked button SHALL have aria-pressed="true"
           expect(activeButton.getAttribute('aria-pressed')).toBe('true');
 
           // Property: Active button SHALL have visual indicator classes
@@ -844,26 +839,33 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
       );
     });
 
-    it('should only show active indicator on the currently active modal icon', () => {
+    it('should only show active indicator on the clicked nav icon', () => {
       fc.assert(
-        fc.property(navModalTypeArb, (activeModalType) => {
+        fc.property(navItemArb, (clickedItem) => {
           mockStorage.clear();
 
           const { unmount } = renderWithCleanup(
             <div data-testid="chat-content">Chat Content</div>
           );
 
-          const activeButton = screen.getByTestId(modalToNavTestId[activeModalType]);
+          const activeButton = screen.getByTestId(navToTestId[clickedItem]);
           act(() => {
             activeButton.click();
           });
 
-          // Property: Only the active modal's icon SHALL have the active indicator
-          for (const modalType of navModalTypes) {
-            const button = screen.getByTestId(modalToNavTestId[modalType]);
-            if (modalType === activeModalType) {
+          // Skills/MCP/Settings all open the Settings modal.
+          // Skills and MCP set a specific tab; Settings uses default (undefined).
+          // Active indicator: Skills/MCP track by settingsTab, Settings button
+          // is active when modal is open AND settingsTab is undefined (i.e.,
+          // user clicked Settings directly, not Skills/MCP).
+          for (const item of navItems) {
+            const button = screen.getByTestId(navToTestId[item]);
+            if (item === clickedItem) {
               expect(button.getAttribute('aria-pressed')).toBe('true');
             } else {
+              // Other nav items should NOT be active
+              // (Skills/MCP have different settingsTab values; Settings button
+              // isActive only when settingsTab is undefined)
               expect(button.getAttribute('aria-pressed')).toBe('false');
             }
           }
@@ -874,20 +876,20 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
       );
     });
 
-    it('should update active indicator when switching between modals', () => {
-      const modalSequenceArb = fc.array(navModalTypeArb, { minLength: 2, maxLength: 8 });
+    it('should update active indicator when switching between nav items', () => {
+      const navSequenceArb = fc.array(navItemArb, { minLength: 2, maxLength: 8 });
 
       fc.assert(
-        fc.property(modalSequenceArb, (modalSequence) => {
+        fc.property(navSequenceArb, (navSequence) => {
           mockStorage.clear();
 
           const { unmount } = renderWithCleanup(
             <div data-testid="chat-content">Chat Content</div>
           );
 
-          for (let i = 0; i < modalSequence.length; i++) {
-            const currentModal = modalSequence[i];
-            const currentButton = screen.getByTestId(modalToNavTestId[currentModal]);
+          for (let i = 0; i < navSequence.length; i++) {
+            const currentItem = navSequence[i];
+            const currentButton = screen.getByTestId(navToTestId[currentItem]);
 
             act(() => {
               currentButton.click();
@@ -897,9 +899,9 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
             expect(currentButton.getAttribute('aria-pressed')).toBe('true');
 
             // Property: All other buttons SHALL NOT have active indicator
-            for (const otherModal of navModalTypes) {
-              if (otherModal !== currentModal) {
-                const otherButton = screen.getByTestId(modalToNavTestId[otherModal]);
+            for (const otherItem of navItems) {
+              if (otherItem !== currentItem) {
+                const otherButton = screen.getByTestId(navToTestId[otherItem]);
                 expect(otherButton.getAttribute('aria-pressed')).toBe('false');
               }
             }
@@ -921,8 +923,8 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
           );
 
           // Property: Initially, no navigation icon SHALL have active indicator
-          for (const modalType of navModalTypes) {
-            const button = screen.getByTestId(modalToNavTestId[modalType]);
+          for (const item of navItems) {
+            const button = screen.getByTestId(navToTestId[item]);
             expect(button.getAttribute('aria-pressed')).toBe('false');
           }
 
@@ -936,14 +938,14 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
       const validWindowWidthArb = fc.integer({ min: 320, max: 2000 });
 
       fc.assert(
-        fc.property(navModalTypeArb, validWindowWidthArb, (activeModalType, newWidth) => {
+        fc.property(navItemArb, validWindowWidthArb, (activeItem, newWidth) => {
           mockStorage.clear();
 
           const { unmount } = renderWithCleanup(
             <div data-testid="chat-content">Chat Content</div>
           );
 
-          const activeButton = screen.getByTestId(modalToNavTestId[activeModalType]);
+          const activeButton = screen.getByTestId(navToTestId[activeItem]);
           act(() => {
             activeButton.click();
           });
@@ -956,9 +958,9 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
           expect(activeButton.getAttribute('aria-pressed')).toBe('true');
 
           // Property: Other buttons SHALL remain inactive
-          for (const modalType of navModalTypes) {
-            if (modalType !== activeModalType) {
-              const button = screen.getByTestId(modalToNavTestId[modalType]);
+          for (const item of navItems) {
+            if (item !== activeItem) {
+              const button = screen.getByTestId(navToTestId[item]);
               expect(button.getAttribute('aria-pressed')).toBe('false');
             }
           }
@@ -971,14 +973,14 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
 
     it('should correctly reflect active state in aria-pressed attribute for accessibility', () => {
       fc.assert(
-        fc.property(navModalTypeArb, (modalType) => {
+        fc.property(navItemArb, (clickedItem) => {
           mockStorage.clear();
 
           const { unmount } = renderWithCleanup(
             <div data-testid="chat-content">Chat Content</div>
           );
 
-          const button = screen.getByTestId(modalToNavTestId[modalType]);
+          const button = screen.getByTestId(navToTestId[clickedItem]);
 
           // Property: Before click, aria-pressed SHALL be "false"
           expect(button.getAttribute('aria-pressed')).toBe('false');
@@ -998,24 +1000,24 @@ describe('ThreeColumnLayout - Property-Based Tests', () => {
 
     it('should have consistent visual styling for active vs inactive states', () => {
       fc.assert(
-        fc.property(navModalTypeArb, (activeModalType) => {
+        fc.property(navItemArb, (activeItem) => {
           mockStorage.clear();
 
           const { unmount } = renderWithCleanup(
             <div data-testid="chat-content">Chat Content</div>
           );
 
-          const activeButton = screen.getByTestId(modalToNavTestId[activeModalType]);
+          const activeButton = screen.getByTestId(navToTestId[activeItem]);
           act(() => {
             activeButton.click();
           });
 
           // Property: Active button SHALL have distinct styling from inactive buttons
-          for (const modalType of navModalTypes) {
-            const button = screen.getByTestId(modalToNavTestId[modalType]);
+          for (const item of navItems) {
+            const button = screen.getByTestId(navToTestId[item]);
             const buttonClasses = button.className;
 
-            if (modalType === activeModalType) {
+            if (item === activeItem) {
               // Active button should have primary color styling
               expect(buttonClasses.includes('color-primary') ||
                      buttonClasses.includes('ring-1')).toBe(true);

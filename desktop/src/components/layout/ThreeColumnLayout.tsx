@@ -119,8 +119,8 @@ function LeftSidebar() {
         <NavIconButton
           icon="tune"
           label="Settings"
-          isActive={activeModal === 'settings'}
-          onClick={() => openModal('settings')}
+          isActive={activeModal === 'settings' && !settingsTab}
+          onClick={() => { setSettingsTab(undefined); openModal('settings'); }}
           data-testid="nav-settings"
         />
         <a
