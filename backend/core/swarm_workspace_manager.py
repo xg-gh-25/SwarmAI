@@ -216,154 +216,36 @@ _Nothing currently blocking._
 
 # Default SwarmAI project DDD content (richer than templates, serves as
 # example for users).
-SWARMAI_PROJECT_DDD: dict[str, str] = {
-    "PRODUCT.md": """\
-# SwarmAI -- Product Context
+def _load_swarmai_ddd_templates() -> dict[str, str]:
+    """Load SwarmAI default project DDD templates from backend/templates/ddd/.
 
-## Vision
+    Templates are maintained as standalone markdown files for readability,
+    diffability, and ease of editing. Falls back to minimal inline content
+    if template files are missing (e.g. PyInstaller bundle without templates).
+    """
+    templates_dir = Path(__file__).parent.parent / "templates" / "ddd"
+    ddd_files = ["PRODUCT.md", "TECH.md", "IMPROVEMENT.md", "PROJECT.md"]
+    result: dict[str, str] = {}
 
-SwarmAI is a personal AI command center that compounds value across every \
-interaction. Not a chatbot -- a colleague that remembers, learns, evolves, \
-and gets things done.
+    for filename in ddd_files:
+        template_path = templates_dir / filename
+        if template_path.exists():
+            result[filename] = template_path.read_text(encoding="utf-8")
+        else:
+            # Minimal fallback — template files should always exist in codebase
+            logger.warning(
+                "DDD template missing: %s — using minimal fallback", template_path
+            )
+            title = filename.replace(".md", "")
+            result[filename] = (
+                f"# SwarmAI -- {title}\n\n"
+                f"_Template not found. Edit this file to add project context._\n"
+            )
 
-Your AI Team, 24/7.
+    return result
 
-## What Makes SwarmAI Different
 
-Most AI assistants are stateless -- every conversation starts from scratch. \
-SwarmAI is designed around **persistent context**:
-
-- **Memory that persists** -- Decisions, lessons, and preferences survive across sessions.
-- **Skills that compound** -- 40+ built-in skills, and Swarm builds new ones when it hits capability gaps.
-- **Projects that accumulate knowledge** -- DDD documents give Swarm deep domain understanding.
-- **Proactive intelligence** -- Session briefings, signal highlights, temporal awareness.
-
-## Strategic Priorities
-
-1. **Core stability** -- Multi-session architecture, resource management, streaming reliability
-2. **Self-evolution** -- Memory pipeline, proactive intelligence, signal processing, skill ecosystem
-3. **User experience** -- Fast iteration cycles, clear error messages, intuitive UX
-4. **Autonomy progression** -- From AI-Assistant (Phase 1) to AI-Driven (Phase 2) to AI-Management (Phase 3)
-
-## Success Criteria
-
-- Sessions never crash or lose context unexpectedly
-- Swarm remembers decisions and lessons across sessions without being told
-- New skills can be created by Swarm in under 30 minutes
-- Users spend more time doing, less time re-explaining
-- Context compounds: session 50 is meaningfully more productive than session 5
-
-## Non-Goals
-
-- **Not a cloud SaaS** -- Desktop-first, local-first. Your data stays on your machine.
-- **Not a general chatbot** -- Opinionated, workspace-scoped. Built for people who ship, not people who chat.
-- **Not code-only** -- Handles research, writing, communication, planning, scheduling. A full teammate, not a coding copilot.
-- **Not a framework** -- SwarmAI is a product. It has opinions about how AI assistance should work.
-
-## Target Users
-
-All Knowledge-Workers, Developers and Leaders who want an AI teammate, not \
-an AI tool. People who work across multiple projects, value accumulated \
-context, and prefer action over conversation.
-""",
-    "TECH.md": """\
-# SwarmAI -- Technical Context
-
-## Architecture
-
-Desktop app with three layers: a Tauri 2.0 shell (Rust), a React frontend \
-(TypeScript), and a Python FastAPI backend running as a sidecar process. The \
-backend spawns Claude Agent SDK subprocesses for AI capabilities via AWS Bedrock.
-
-## Stack
-
-| Layer | Technology |
-|-------|-----------|
-| **Shell** | Tauri 2.0 (Rust) |
-| **Frontend** | React 18, Vite 6, TanStack Query, Tailwind CSS, CodeMirror 6 |
-| **Backend** | Python 3.12, FastAPI, asyncio, Pydantic v2 |
-| **AI** | Claude Agent SDK, Claude 4.6 via AWS Bedrock, 1M context window |
-| **Database** | SQLite (WAL mode) at `~/.swarm-ai/data.db` |
-| **Testing** | pytest + Hypothesis (backend), vitest (frontend) |
-| **Build** | PyInstaller (backend bundle), Tauri CLI (app package) |
-| **License** | AGPL v3 + Commercial dual-license |
-
-## Codebase Location
-
-_Set this to your local SwarmAI source path after cloning._
-
-- **GitHub:** https://github.com/xg-gh-25/SwarmAI
-
-## Dev Commands
-
-- **Full dev:** `cd desktop && npm run tauri:dev` or `./dev.sh`
-- **Backend only:** `./dev.sh backend`
-- **Frontend tests:** `cd desktop && npm test -- --run`
-- **Backend tests:** `cd backend && pytest`
-- **Build:** `cd desktop && npm run build:all`
-
-## Conventions
-
-- **Backend:** snake_case (Python/Pydantic)
-- **Frontend:** camelCase (TypeScript)
-- **API boundary:** Backend sends snake_case, frontend converts to camelCase
-- **Files:** Date-prefixed (YYYY-MM-DD-description.md)
-- **Commits:** Conventional format, co-authored with Swarm
-- **Testing:** Property-based (Hypothesis) preferred over example-based
-- **Refactoring:** Strangler fig pattern for modules >500 lines
-
-## Environment Notes
-
-- Backend port is random each launch (Tauri portpicker). Never hardcode ports.
-- Claude Agent SDK spawns a CLI subprocess per session. Each costs ~500MB RAM.
-- SQLite in WAL mode. Direct access from agent sandbox is reliable for CRUD.
-""",
-    "IMPROVEMENT.md": """\
-# SwarmAI -- Lessons & Patterns
-
-_This document captures what worked, what failed, and what to watch for. \
-Swarm updates it automatically after significant sessions. Edit directly anytime._
-
-## What Worked
-
-- **Filesystem-first for skills and context** -- No database for skills or context \
-files. Portable, git-tracked, human-readable. Never regretted.
-- **Prevention over recovery** -- Timeouts, state guards, and guaranteed transitions \
-beat elaborate error handling. Make failure structurally impossible.
-- **Property-based testing** -- Hypothesis tests catch edge cases that example-based \
-tests miss. Especially valuable for workspace and context management.
-
-## What Failed
-
-_Patterns that failed, root causes, and what to do instead. Grows through usage._
-
-## Known Issues
-
-_Recurring problems to watch for. Grows through usage._
-""",
-    "PROJECT.md": """\
-# SwarmAI -- Current Context
-
-_Tracks what's actively being worked on. Swarm reads this before every task. \
-Update as your focus shifts._
-
-## Current Focus
-
-- [ ] _Your current task or feature_
-
-## Open Items
-
-- [ ] _Item 1_
-
-## Recent Decisions
-
-- _YYYY-MM-DD: Decision and rationale_
-
-## Blocked By
-
-_Nothing currently blocking._
-""",
-}
+SWARMAI_PROJECT_DDD: dict[str, str] = _load_swarmai_ddd_templates()
 
 DEPTH_LIMITS = {
     "project_user": 3,
