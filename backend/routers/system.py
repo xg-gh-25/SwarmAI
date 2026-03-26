@@ -129,6 +129,7 @@ class SpawnBudgetResponse(BaseModel):
 class MaxTabsResponse(BaseModel):
     """Dynamic tab limit and memory pressure level."""
     max_tabs: int
+    chat_max: int  # max_tabs - 1 (1 slot reserved for channel)
     memory_pressure: str  # ok | warning | critical
 
 
@@ -539,13 +540,15 @@ async def get_max_tabs() -> MaxTabsResponse:
     try:
         resource_monitor.invalidate_cache()
         mem = resource_monitor.system_memory()
+        max_tabs = resource_monitor.compute_max_tabs()
         return MaxTabsResponse(
-            max_tabs=resource_monitor.compute_max_tabs(),
+            max_tabs=max_tabs,
+            chat_max=max(1, max_tabs - 1),
             memory_pressure=mem.pressure_level,
         )
     except Exception:
         logger.exception("Failed to compute max tabs")
-        return MaxTabsResponse(max_tabs=1, memory_pressure="critical")
+        return MaxTabsResponse(max_tabs=1, chat_max=1, memory_pressure="critical")
 
 
 @router.get("/briefing")
@@ -561,6 +564,21 @@ async def get_session_briefing() -> dict:
     if not ws_path:
         return {"focus": [], "signals": [], "jobs": [], "learning": None, "generated_at": None}
     return build_session_briefing_data(ws_path)
+
+
+@router.get("/engine-metrics")
+async def get_engine_metrics() -> dict:
+    """Return Core Engine growth metrics for the dashboard.
+
+    Aggregates: learning state, memory effectiveness, DDD health,
+    hook stats, session volume. All filesystem reads — no LLM, <500ms.
+    """
+    from core.engine_metrics import collect_engine_metrics
+
+    ws_path = swarm_workspace_manager.get_workspace_path()
+    if not ws_path:
+        return {"error": "Workspace not initialized"}
+    return collect_engine_metrics(ws_path)
 
 
 @router.post("/reset-to-defaults", response_model=ResetToDefaultsResponse)
