@@ -122,6 +122,17 @@ def execute_job(
         elif job.type == "script":
             result = _handle_script(job, state)
 
+        elif job.type == "ddd_refresh":
+            from .handlers.ddd_refresh import run_ddd_refresh
+            ddd_result = run_ddd_refresh()
+            duration = (datetime.now(timezone.utc) - start).total_seconds()
+            result = JobResult(
+                job_id=job.id, timestamp=datetime.now(timezone.utc),
+                status="success" if ddd_result.get("status") == "success" else "failed",
+                summary=ddd_result.get("summary", "DDD refresh completed"),
+                duration_seconds=duration,
+            )
+
         elif job.type == "maintenance":
             result = _handle_maintenance(job, state, known_job_ids=known_job_ids)
 
@@ -651,6 +662,20 @@ def _handle_maintenance(
     except Exception as e:
         logger.warning("Memory health check failed (non-blocking): %s", e)
         actions.append(f"Memory health skipped: {e}")
+
+    # L4: Autonomous DDD refresh (weekly — proposals for stale DDD docs)
+    try:
+        from .handlers.ddd_refresh import run_ddd_refresh
+        ddd_result = run_ddd_refresh()
+        if ddd_result.get("proposals_written", 0) > 0:
+            actions.append(
+                f"DDD refresh: {ddd_result['proposals_written']} proposal(s) written"
+            )
+        elif ddd_result.get("projects_checked", 0) > 0:
+            actions.append("DDD refresh: all docs current")
+    except Exception as e:
+        logger.warning("DDD refresh failed (non-blocking): %s", e)
+        actions.append(f"DDD refresh skipped: {e}")
 
     summary = "; ".join(actions) if actions else "No maintenance needed"
     duration = (datetime.now(timezone.utc) - start).total_seconds()

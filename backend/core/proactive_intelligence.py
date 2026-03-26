@@ -658,6 +658,28 @@ def _get_health_highlights(working_directory: str) -> list[str]:
             reason = _sanitize_prompt_field(corr.get("reason", ""), 60)
             lines.append(f"  - [stale-correction] {cid}: {reason}")
 
+    # L4: DDD refresh proposals ready for review
+    projects_dir = Path(working_directory) / "Projects"
+    if projects_dir.is_dir():
+        for project_dir in sorted(projects_dir.iterdir()):
+            if not project_dir.is_dir():
+                continue
+            artifacts = project_dir / ".artifacts"
+            if not artifacts.is_dir():
+                continue
+            for proposal in sorted(artifacts.glob("ddd-refresh-*.md"), reverse=True):
+                # Only show proposals from last 7 days
+                try:
+                    age_days = (datetime.now() - datetime.fromtimestamp(proposal.stat().st_mtime)).days
+                    if age_days <= 7:
+                        lines.append(
+                            f"  - [ddd-proposal] {project_dir.name}: "
+                            f"DDD refresh proposal ready ({proposal.name})"
+                        )
+                        break  # Only latest per project
+                except OSError:
+                    continue
+
     return lines
 
 
