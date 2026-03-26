@@ -46,6 +46,12 @@ def _get_session_git_commits(
     if not repo_path.is_dir():
         return []
 
+    # Verify this directory IS a git repo root (contains .git/).
+    # Without this check, git traverses upward and returns commits from
+    # a parent repo — producing false positives for arbitrary directories.
+    if not (repo_path / ".git").exists():
+        return []
+
     since_str = since.strftime("%Y-%m-%dT%H:%M:%S")
     try:
         result = subprocess.run(
