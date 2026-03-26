@@ -1,18 +1,22 @@
 """
 Weekly Memory Health — LLM-Powered Context Maintenance
 
-Runs weekly (Sunday 3am via weekly-maintenance job). Uses Bedrock Haiku
-to intelligently prune MEMORY.md and EVOLUTION.md instead of mechanical
-date-based heuristics.
+Runs weekly (Sunday 3am via weekly-maintenance job). Uses Bedrock to
+intelligently prune MEMORY.md, maintain EVOLUTION.md, and detect
+capability gaps — all in a single LLM pass.
 
 The LLM reads:
   - Current MEMORY.md
   - Current EVOLUTION.md
   - Last 7 days of git commits
   - Last 7 days of DailyActivity
-And produces a structured maintenance report with specific actions.
+And produces a structured maintenance report with:
+  - Stale memory entries to prune
+  - Open Threads to resolve
+  - Evolution entries to archive
+  - Capability gaps detected from error/lesson patterns (L3)
 
-Cost: ~$0.01/run (Haiku, ~5K input tokens, ~1K output).
+Cost: ~$0.01/run (~5K input tokens, ~1.5K output).
 """
 
 from __future__ import annotations
@@ -85,6 +89,8 @@ def run_memory_health(dry_run: bool = False) -> dict:
         "stale_memories_removed": report.get("stale_memories", []),
         "resolved_threads": report.get("resolved_threads", []),
         "archived_capabilities": report.get("archived_capabilities", []),
+        "capability_gaps": report.get("capability_gaps", []),
+        "stale_corrections": report.get("stale_corrections", []),
     }
 
 
@@ -175,6 +181,18 @@ Output a single JSON object with these fields:
   "ddd_staleness": [
     {{"project": "name", "doc": "TECH.md", "reason": "code diverged from docs"}}
   ],
+  "capability_gaps": [
+    {{
+      "pattern": "short description of the recurring problem",
+      "evidence": ["session date: what happened", "session date: same class of problem"],
+      "occurrences": 3,
+      "suggested_action": "build skill | add correction | add steering rule",
+      "priority": "high | medium | low"
+    }}
+  ],
+  "stale_corrections": [
+    {{"id": "C00X", "reason": "code referenced by this correction was deleted or refactored"}}
+  ],
   "summary": "1-2 sentence overall assessment"
 }}
 
@@ -184,6 +202,8 @@ Rules:
 - "archived_capabilities": EVOLUTION.md capabilities with Usage Count == 0 and status "removed" or older than 30 days.
 - "stale_decisions": Key Decisions that contradict recent git activity.
 - "ddd_staleness": Only flag if you see clear evidence of code changes that invalidate docs.
+- "capability_gaps": Look for PATTERNS across DailyActivity — the same CLASS of error, lesson, or workaround appearing 2+ times in different sessions. Evidence must cite specific sessions. Do NOT flag one-off issues. Focus on: (a) repeated errors/crashes with similar root cause, (b) tasks attempted multiple times without a skill to automate them, (c) corrections that keep getting re-triggered because the underlying pattern wasn't addressed.
+- "stale_corrections": Corrections in EVOLUTION.md that reference code/features that no longer exist (check git log for deletions/renames).
 - Empty arrays are fine. Don't invent issues.
 
 Output ONLY the JSON object, nothing else."""
@@ -274,6 +294,19 @@ def _apply_report(report: dict, memory_md: str, evolution_md: str) -> list[str]:
     stale_decisions = report.get("stale_decisions", [])
     for dec in stale_decisions[:3]:
         actions.append(f"Stale decision flagged: {dec.get('entry_prefix', '')[:60]}")
+
+    # 5. Capability gaps (log for briefing, don't auto-act)
+    gaps = report.get("capability_gaps", [])
+    for gap in gaps[:5]:
+        pattern = gap.get("pattern", "")[:80]
+        priority = gap.get("priority", "medium")
+        occurrences = gap.get("occurrences", 0)
+        actions.append(f"Capability gap [{priority}]: {pattern} ({occurrences}x)")
+
+    # 6. Stale corrections (log for briefing)
+    stale_corr = report.get("stale_corrections", [])
+    for corr in stale_corr[:3]:
+        actions.append(f"Stale correction: {corr.get('id', '')} — {corr.get('reason', '')[:60]}")
 
     return actions
 
@@ -378,6 +411,8 @@ def _update_health_findings(report: dict, actions: list[str]) -> None:
     memory_health_data = {
         "actions": actions,
         "summary": report.get("summary", ""),
+        "capability_gaps": report.get("capability_gaps", []),
+        "stale_corrections": report.get("stale_corrections", []),
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
