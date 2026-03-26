@@ -10,7 +10,12 @@ Dependency format: "after:<job-id>" — runs after dependency succeeds.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from .models import Job, JobSafety
+
+# swarmai/ root — used as cwd for script jobs that need `python -m backend.jobs.*`
+_SWARMAI_ROOT = str(Path(__file__).resolve().parents[2])
 
 # All times in UTC
 SYSTEM_JOBS: list[Job] = [
@@ -42,7 +47,7 @@ SYSTEM_JOBS: list[Job] = [
         schedule="0 7 * * *",          # Daily 7am UTC (before first fetch at 8am)
         enabled=True,
         category="system",
-        config={"command": "self-tune"},  # Handled specially by executor
+        config={"command": "python -m backend.jobs.self_tune", "cwd": _SWARMAI_ROOT},
     ),
 
     # --- Maintenance ---
