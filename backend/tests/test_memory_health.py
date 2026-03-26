@@ -309,7 +309,7 @@ class TestFullRun:
         with patch("jobs.handlers.memory_health.CONTEXT_DIR", tmp_path), \
              patch("jobs.handlers.memory_health.DAILY_DIR", daily_dir), \
              patch("jobs.handlers.memory_health.SWARMWS", tmp_path), \
-             patch("jobs.handlers.memory_health._call_haiku", return_value=mock_report):
+             patch("jobs.handlers.memory_health._call_llm", return_value=mock_report):
             result = run_memory_health()
 
         assert result["status"] == "success"
@@ -359,7 +359,7 @@ class TestFullRun:
              patch("jobs.handlers.memory_health.DAILY_DIR", daily_dir), \
              patch("jobs.handlers.memory_health.SWARMWS", tmp_path), \
              patch("jobs.paths.JOBS_DATA_DIR", jobs_dir), \
-             patch("jobs.handlers.memory_health._call_haiku", return_value=mock_report):
+             patch("jobs.handlers.memory_health._call_llm", return_value=mock_report):
             result = run_memory_health()
 
         assert result["status"] == "success"

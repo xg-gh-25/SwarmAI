@@ -1,7 +1,7 @@
 """
 Signal Digest Handler
 
-Takes buffered raw signals, groups them, calls Bedrock Haiku for
+Takes buffered raw signals, groups them, calls Bedrock Sonnet 4.6 for
 LLM summarization with relevance scoring, and writes:
   1. A human-readable markdown digest → Knowledge/Signals/
   2. A machine-readable JSON file → Services/signals/signal_digest.json
@@ -128,7 +128,7 @@ def _llm_digest(
     signals: list[RawSignal], user_context: str
 ) -> tuple[str, list[dict], int]:
     """
-    Use Bedrock Haiku to create a prioritized, annotated digest.
+    Use Bedrock Sonnet 4.6 to create a prioritized, annotated digest.
 
     Returns:
         (markdown_content, scored_items, tokens_used)
@@ -387,7 +387,7 @@ def _handle_rollup(
 
 
 def _llm_rollup(combined_digests: str, user_context: str, window_days: int) -> tuple[str, int]:
-    """Use Bedrock Haiku to produce a weekly rollup summary."""
+    """Use Bedrock Sonnet 4.6 to produce a weekly rollup summary."""
     import boto3
 
     client = boto3.client("bedrock-runtime", region_name="us-west-2")
