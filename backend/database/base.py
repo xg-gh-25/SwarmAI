@@ -108,6 +108,12 @@ class BaseDatabase(ABC):
         """Get the channel messages table."""
         pass
 
+    @property
+    @abstractmethod
+    def channel_user_identities(self) -> BaseTable:
+        """Get the channel user identities table (cross-channel session sharing)."""
+        pass
+
     @abstractmethod
     async def health_check(self) -> bool:
         """Check if the database is healthy."""

@@ -30,6 +30,7 @@ round-trip instead of 21 individual execute() + commit() calls.
 """
 import gc
 import logging
+import signal
 import pytest
 import tempfile
 import os
@@ -59,6 +60,13 @@ def pytest_configure(config):
 
     # Register memory watchdog (works with or without xdist)
     config.pluginmanager.register(MemoryWatchdogPlugin(), "memory_watchdog")
+
+    # Register per-test timeout (SIGALRM — works on macOS/Linux).
+    # Each xdist worker is its own process, so SIGALRM is per-worker safe.
+    # This is the ONLY reliable way to kill a hanging test — cooperative
+    # timeouts in teardown never fire if the test itself hangs.
+    if hasattr(signal, "SIGALRM"):
+        config.pluginmanager.register(SigalrmTimeoutPlugin(), "sigalrm_timeout")
 
     # Auto-inject -n auto if xdist is available and user didn't specify -n
     try:
@@ -140,6 +148,58 @@ def pytest_collection_modifyitems(config, items):
                 hyp_settings = getattr(test_func, "_hypothesis_internal_use_settings", None)
                 if hyp_settings is not None and hyp_settings.max_examples >= 100:
                     item.add_marker(slow_marker)
+
+
+# ---------------------------------------------------------------------------
+# Per-test timeout — SIGALRM kills hanging tests at the OS level
+# ---------------------------------------------------------------------------
+
+# Default timeout in seconds. Override per-test with @pytest.mark.timeout(N).
+_DEFAULT_TEST_TIMEOUT = 30
+
+
+class _TestTimeoutError(Exception):
+    """Raised by SIGALRM when a test exceeds its timeout."""
+    pass
+
+
+class SigalrmTimeoutPlugin:
+    """Pytest plugin that enforces per-test timeouts via SIGALRM.
+
+    Why SIGALRM instead of cooperative timeouts:
+    - Cooperative timeouts (checking time.monotonic() in teardown) NEVER fire
+      if the test itself hangs — teardown only runs after the test returns.
+    - SIGALRM fires regardless of what the test is doing (blocked I/O, deadlock,
+      infinite loop).
+    - Each xdist worker is its own process with its own signal handlers,
+      so SIGALRM is safe with -n 4.
+
+    Limitation: only works on Unix (macOS/Linux). Windows has no SIGALRM.
+    """
+
+    def __init__(self):
+        self._previous_handler = None
+
+    def pytest_runtest_setup(self, item):
+        """Set SIGALRM before each test."""
+        # Check for @pytest.mark.timeout(N) override
+        marker = item.get_closest_marker("timeout")
+        timeout = marker.args[0] if marker and marker.args else _DEFAULT_TEST_TIMEOUT
+
+        def _alarm_handler(signum, frame):
+            raise _TestTimeoutError(
+                f"Test timed out after {timeout}s: {item.nodeid}"
+            )
+
+        self._previous_handler = signal.signal(signal.SIGALRM, _alarm_handler)
+        signal.alarm(timeout)
+
+    def pytest_runtest_teardown(self, item):
+        """Cancel the alarm after the test completes."""
+        signal.alarm(0)
+        if self._previous_handler is not None:
+            signal.signal(signal.SIGALRM, self._previous_handler)
+            self._previous_handler = None
 
 
 # ---------------------------------------------------------------------------
@@ -278,6 +338,12 @@ class MemoryWatchdogPlugin:
 # Create a temp file for the test database (once per process).
 _test_db_fd, _test_db_path = tempfile.mkstemp(suffix=".db", prefix="swarmai_test_")
 os.close(_test_db_fd)
+
+# Safety net: atexit cleanup ensures temp DB is removed even when the test
+# process is killed by pytest-xdist, ResourceWatchdog abort, or OOM.
+# The scope="session" fixture cleanup only runs on graceful shutdown.
+import atexit
+atexit.register(lambda: os.unlink(_test_db_path) if os.path.exists(_test_db_path) else None)
 
 # Replace the global db singleton with one pointing at the temp file.
 _test_db = SQLiteDatabase(db_path=_test_db_path)

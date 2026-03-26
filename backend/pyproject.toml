@@ -34,6 +34,8 @@ dependencies = [
     "pyinstaller-hooks-contrib==2025.11",
     "setuptools>=80.9.0",
     "lark-oapi>=1.5.3",
+    # Slack Socket Mode adapter
+    "slack-bolt>=1.27.0",
     # MCP server (for channel file sending tool)
     # "mcp>=1.0.0,<2.0.0",
 ]

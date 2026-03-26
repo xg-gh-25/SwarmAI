@@ -196,6 +196,9 @@ class SessionUnit:
         self.state: SessionState = SessionState.COLD
         self.created_at: float = time.time()
         self.last_used: float = time.time()
+        # True when this unit serves channel conversations (Slack, Feishu, etc.)
+        # Channel units use a dedicated slot pool, separate from chat tabs.
+        self.is_channel_session: bool = False
 
         # ── Internal — not part of public interface ──────────────
         self._client: Optional[ClaudeSDKClient] = None

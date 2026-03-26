@@ -88,11 +88,11 @@ def load_adapters() -> None:
     except ImportError:
         logger.info("Feishu adapter not available (lark-oapi not installed)")
 
-    # Future: Slack adapter
-    # try:
-    #     from channels.adapters import slack  # noqa: F401
-    # except ImportError:
-    #     logger.info("Slack adapter not available (slack_bolt not installed)")
+    # Slack adapter
+    try:
+        from channels.adapters import slack  # noqa: F401
+    except ImportError:
+        logger.info("Slack adapter not available (slack-bolt not installed)")
 
     # Future: Discord adapter
     # try:

@@ -455,12 +455,19 @@ class LifecycleManager:
 
     # ── Memory pressure relief ─────────────────────────────────────
 
-    async def _check_memory_pressure(self) -> None:
-        """Proactively evict IDLE units when system memory is critical (>90%).
+    # Two-tier memory thresholds:
+    #  85-92% → evict IDLE only (gentle — session can resume cheaply)
+    #  >92%   → KILL heaviest STREAMING session (circuit breaker —
+    #            sacrificing one session beats macOS killing everything)
+    _CIRCUIT_BREAKER_PCT: float = 92.0
 
-        This prevents cascading OOM kills by freeing memory before the OS
-        resorts to jetsam/SIGKILL.  Only evicts IDLE units — protected
-        states (STREAMING, WAITING_INPUT) are never touched.
+    async def _check_memory_pressure(self) -> None:
+        """Two-tier memory pressure relief.
+
+        Tier 1 (>85%): Evict IDLE units — gentle, session resumes cheaply.
+        Tier 2 (>92%): Circuit breaker — kill heaviest STREAMING session.
+          Losing one streaming session is better than macOS jetsam killing
+          the entire app (and losing ALL sessions' in-flight data).
 
         Non-fatal — failures are logged and skipped.
         """
@@ -470,30 +477,64 @@ class LifecycleManager:
             if mem.pressure_level != "critical":
                 return
 
+            def _rss(u) -> int:
+                metrics = getattr(u, "_last_metrics", None)
+                return metrics.rss_bytes if metrics else 0
+
+            # ── Tier 1: evict IDLE units first ──────────────────────
             idle_units = [
                 u for u in self._router.list_units()
                 if u.state == SessionState.IDLE
             ]
-            if not idle_units:
+            if idle_units:
+                idle_units.sort(key=_rss, reverse=True)
+                victim = idle_units[0]
+
+                logger.warning(
+                    "lifecycle.memory_pressure_tier1: %.1f%% — evicting "
+                    "IDLE session %s (rss=%dMB)",
+                    mem.percent_used,
+                    victim.session_id,
+                    _rss(victim) // (1024 * 1024),
+                )
+
+                if not victim._hooks_enqueued and self._hook_executor:
+                    ctx = await self._build_hook_context(victim)
+                    if ctx:
+                        self.enqueue_hooks(ctx)
+                        victim._hooks_enqueued = True
+
+                await victim.kill()
+                resource_monitor.invalidate_cache()
                 return
 
-            # Evict the unit with the highest RSS first
-            def _rss(u: "SessionUnit") -> int:
-                metrics = getattr(u, "_last_metrics", None)
-                return metrics.rss_bytes if metrics else 0
+            # ── Tier 2: circuit breaker — kill heaviest STREAMING ────
+            # Only triggers when NO idle units exist AND memory > 92%.
+            # This is the last resort before macOS kills everything.
+            if mem.percent_used < self._CIRCUIT_BREAKER_PCT:
+                return
 
-            idle_units.sort(key=_rss, reverse=True)
-            victim = idle_units[0]
+            streaming_units = [
+                u for u in self._router.list_units()
+                if u.state in (SessionState.STREAMING, SessionState.WAITING_INPUT)
+            ]
+            if not streaming_units:
+                return
 
-            logger.warning(
-                "lifecycle._check_memory_pressure: memory %.1f%% — evicting "
-                "session %s (rss=%dMB)",
+            streaming_units.sort(key=_rss, reverse=True)
+            victim = streaming_units[0]
+
+            logger.critical(
+                "lifecycle.CIRCUIT_BREAKER: memory %.1f%% > %.0f%% with "
+                "0 IDLE units — KILLING streaming session %s (rss=%dMB) "
+                "to prevent OS-level kill of entire app",
                 mem.percent_used,
+                self._CIRCUIT_BREAKER_PCT,
                 victim.session_id,
                 _rss(victim) // (1024 * 1024),
             )
 
-            # Fire hooks before killing
+            # Fire hooks best-effort before killing
             if not victim._hooks_enqueued and self._hook_executor:
                 ctx = await self._build_hook_context(victim)
                 if ctx:

@@ -235,14 +235,26 @@ class SessionRouter:
 
     # ── Slot management ───────────────────────────────────────────
 
+    # ── Pool counts ──────────────────────────────────────────
+
+    @property
+    def _channel_alive_count(self) -> int:
+        """Number of alive channel session units."""
+        return sum(1 for u in self._units.values() if u.is_alive and u.is_channel_session)
+
+    @property
+    def _chat_alive_count(self) -> int:
+        """Number of alive chat (non-channel) session units."""
+        return sum(1 for u in self._units.values() if u.is_alive and not u.is_channel_session)
+
+    # ── Slot acquisition ─────────────────────────────────────
+
     async def _acquire_slot(self, requesting_unit: SessionUnit) -> str:
-        """Acquire a concurrency slot. Evict IDLE or queue with timeout.
+        """Acquire a concurrency slot. Delegates to pool-specific methods.
 
-        Uses asyncio.Lock to prevent check-then-act race where multiple
-        coroutines pass the alive_count < max_tabs check simultaneously.
-
-        Uses deadline-based timeout for the queue wait loop so repeated
-        wake-and-recheck cycles don't extend beyond QUEUE_TIMEOUT total.
+        Channel units and chat units have separate slot pools:
+        - Channel: exactly 1 dedicated slot (serialized)
+        - Chat: max_tabs - 1 slots
 
         Returns:
             "ready" — slot acquired, proceed with send
@@ -253,12 +265,77 @@ class SessionRouter:
         if requesting_unit.is_alive:
             return "ready"
 
+        if requesting_unit.is_channel_session:
+            return await self._acquire_channel_slot(requesting_unit)
+        return await self._acquire_chat_slot(requesting_unit)
+
+    async def _acquire_channel_slot(self, requesting_unit: SessionUnit) -> str:
+        """Acquire the dedicated channel slot (exactly 1).
+
+        If another channel is IDLE → evict it.
+        If another channel is STREAMING → queue with timeout.
+        Never touches chat slots.
+        """
+        from .resource_monitor import resource_monitor
+
+        async with self._slot_lock:
+            if self._channel_alive_count == 0:
+                # Channel slot is free
+                budget = resource_monitor.spawn_budget()
+                if not budget.can_spawn and self.alive_count > 0:
+                    # Try evicting an idle channel first
+                    if await self._evict_idle(exclude=requesting_unit, channel_only=True):
+                        resource_monitor.invalidate_cache()
+                return "ready"
+
+            # Another channel unit is alive — try evicting if IDLE
+            if await self._evict_idle(exclude=requesting_unit, channel_only=True):
+                return "ready"
+
+        # Channel slot occupied by a protected (STREAMING) unit — queue
+        deadline = time.monotonic() + self.QUEUE_TIMEOUT
+        logger.info(
+            "session_router: channel slot busy, queuing %s (timeout=%.0fs)",
+            requesting_unit.session_id, self.QUEUE_TIMEOUT,
+        )
+
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+
+            try:
+                self._slot_available.clear()
+                await asyncio.wait_for(
+                    self._slot_available.wait(), timeout=remaining,
+                )
+            except asyncio.TimeoutError:
+                break
+
+            async with self._slot_lock:
+                if self._channel_alive_count == 0:
+                    return "queued"
+                if await self._evict_idle(exclude=requesting_unit, channel_only=True):
+                    return "queued"
+
+        logger.warning(
+            "session_router: channel queue timeout for session %s after %.0fs",
+            requesting_unit.session_id, self.QUEUE_TIMEOUT,
+        )
+        return "timeout"
+
+    async def _acquire_chat_slot(self, requesting_unit: SessionUnit) -> str:
+        """Acquire a chat slot from the chat pool (max_tabs - 1).
+
+        Never touches the dedicated channel slot.
+        """
         from .resource_monitor import resource_monitor
 
         async with self._slot_lock:
             max_tabs = resource_monitor.compute_max_tabs()
+            chat_max = max_tabs - 1  # Reserve 1 for channel
 
-            if self.alive_count < max_tabs:
+            if self._chat_alive_count < chat_max:
                 # First tab is sacred — always allow at least one session
                 if self.alive_count > 0:
                     budget = resource_monitor.spawn_budget()
@@ -284,13 +361,14 @@ class SessionRouter:
                         )
                 return "ready"
 
+            # Chat pool full — try evicting a chat IDLE unit
             if await self._evict_idle(exclude=requesting_unit):
                 return "ready"
 
-        # All slots occupied by protected units — queue with deadline
+        # All chat slots occupied by protected units — queue with deadline
         deadline = time.monotonic() + self.QUEUE_TIMEOUT
         logger.info(
-            "session_router: all slots occupied, queuing session %s (timeout=%.0fs)",
+            "session_router: all chat slots occupied, queuing session %s (timeout=%.0fs)",
             requesting_unit.session_id, self.QUEUE_TIMEOUT,
         )
 
@@ -310,7 +388,8 @@ class SessionRouter:
             # Re-check under lock after wake
             async with self._slot_lock:
                 max_tabs = resource_monitor.compute_max_tabs()
-                if self.alive_count < max_tabs:
+                chat_max = max_tabs - 1
+                if self._chat_alive_count < chat_max:
                     budget = resource_monitor.spawn_budget()
                     if budget.can_spawn:
                         return "queued"
@@ -324,12 +403,19 @@ class SessionRouter:
         )
         return "timeout"
 
-    async def _evict_idle(self, exclude: SessionUnit) -> bool:
+    async def _evict_idle(
+        self, exclude: SessionUnit, *, channel_only: bool = False,
+    ) -> bool:
         """Evict the oldest IDLE unit to free a slot.
 
         Returns True if a unit was evicted, False if no IDLE units available.
         Only evicts units in IDLE state — STREAMING and WAITING_INPUT are
         protected (Rule 3).
+
+        When *channel_only* is True, only channel IDLE units are eligible
+        (used when acquiring a channel slot).  When False, only chat IDLE
+        units are eligible — channel units are never evicted for chat
+        (slot isolation guarantee).
 
         Fires lifecycle hooks before killing (Gap 1 fix) so that
         DailyActivity extraction, auto-commit, and distillation run
@@ -337,7 +423,9 @@ class SessionRouter:
         """
         idle_units = [
             u for u in self._units.values()
-            if u.state == SessionState.IDLE and u is not exclude
+            if u.state == SessionState.IDLE
+            and u is not exclude
+            and u.is_channel_session == channel_only
         ]
         if not idle_units:
             return False
@@ -559,32 +647,29 @@ class SessionRouter:
                 query_content, session_id,
             )
 
-        # Stream response and accumulate assistant content for DB persistence
-        assistant_blocks: list[dict] = []
-        assistant_model: str | None = None
+        # Stream response — persist each assistant message IMMEDIATELY.
+        #
+        # Why incremental (not accumulate-then-flush):
+        #   SIGKILL (macOS jetsam / OOM) is non-catchable — Python's `finally`
+        #   block does NOT execute.  If we only persist at stream end, all
+        #   in-flight assistant content (text, tool_use, tool_result) is lost
+        #   when the process is killed.  By persisting each AssistantMessage
+        #   as it arrives, we guarantee crash recovery up to the last emitted
+        #   message.  The cost is one small DB write per assistant turn — a
+        #   typical conversation has 5-15 of these, each <10KB.
+        async for event in unit.send(
+            query_content=query_content,
+            options=options,
+            app_session_id=session_id,
+            config=self._config,
+        ):
+            # Persist assistant content blocks immediately — crash-safe
+            if event.get("type") == "assistant" and event.get("content"):
+                await self._persist_assistant_blocks(
+                    session_id, event["content"], event.get("model"),
+                )
 
-        try:
-            async for event in unit.send(
-                query_content=query_content,
-                options=options,
-                app_session_id=session_id,
-                config=self._config,
-            ):
-                # Accumulate assistant content for DB save
-                if event.get("type") == "assistant" and event.get("content"):
-                    for block in event["content"]:
-                        assistant_blocks.append(block)
-                    if event.get("model"):
-                        assistant_model = event["model"]
-
-                yield event
-        finally:
-            # Save assistant message to DB — runs on normal completion,
-            # abort (GeneratorExit), and errors.  Ensures partial
-            # streaming content is persisted even if the user clicks Stop.
-            await self._persist_assistant_blocks(
-                session_id, assistant_blocks, assistant_model,
-            )
+            yield event
 
     async def interrupt_session(self, session_id: str) -> dict:
         """Delegate to SessionUnit.interrupt()."""
@@ -603,8 +688,7 @@ class SessionRouter:
     ) -> AsyncIterator[dict]:
         """Delegate to SessionUnit.continue_with_answer().
 
-        Accumulates assistant content blocks and persists them to DB
-        after the stream completes (same pattern as run_conversation).
+        Persists each assistant message immediately (crash-safe).
         """
         unit = self.get_unit(session_id)
         if unit is None:
@@ -615,29 +699,20 @@ class SessionRouter:
             )
             return
 
-        assistant_blocks: list[dict] = []
-        assistant_model: str | None = None
-
-        try:
-            async for event in unit.continue_with_answer(answer):
-                if event.get("type") == "assistant" and event.get("content"):
-                    for block in event["content"]:
-                        assistant_blocks.append(block)
-                    if event.get("model"):
-                        assistant_model = event["model"]
-                yield event
-        finally:
-            await self._persist_assistant_blocks(
-                session_id, assistant_blocks, assistant_model, label="answer",
-            )
+        async for event in unit.continue_with_answer(answer):
+            if event.get("type") == "assistant" and event.get("content"):
+                await self._persist_assistant_blocks(
+                    session_id, event["content"], event.get("model"),
+                    label="answer",
+                )
+            yield event
 
     async def continue_with_cmd_permission(
         self, session_id: str, request_id: str, allowed: bool,
     ) -> AsyncIterator[dict]:
         """Delegate to SessionUnit.continue_with_permission().
 
-        Accumulates assistant content blocks and persists them to DB
-        after the stream completes (same pattern as run_conversation).
+        Persists each assistant message immediately (crash-safe).
         """
         unit = self.get_unit(session_id)
         if unit is None:
@@ -648,21 +723,13 @@ class SessionRouter:
             )
             return
 
-        assistant_blocks: list[dict] = []
-        assistant_model: str | None = None
-
-        try:
-            async for event in unit.continue_with_permission(request_id, allowed):
-                if event.get("type") == "assistant" and event.get("content"):
-                    for block in event["content"]:
-                        assistant_blocks.append(block)
-                    if event.get("model"):
-                        assistant_model = event["model"]
-                yield event
-        finally:
-            await self._persist_assistant_blocks(
-                session_id, assistant_blocks, assistant_model, label="permission",
-            )
+        async for event in unit.continue_with_permission(request_id, allowed):
+            if event.get("type") == "assistant" and event.get("content"):
+                await self._persist_assistant_blocks(
+                    session_id, event["content"], event.get("model"),
+                    label="permission",
+                )
+            yield event
 
     async def compact_session(
         self, session_id: str, instructions: Optional[str] = None,
