@@ -50,7 +50,8 @@ def _file_tree(draw: st.DrawFn) -> dict[str, bytes]:
     Ensures no file path is a prefix of another (which would make
     mkdir fail because a file already occupies that path segment).
     Also handles case-insensitive filesystems (macOS) by comparing
-    lowercased paths.
+    lowercased paths, and excludes paths whose first segment collides
+    with FOLDER_STRUCTURE entries (e.g. ``pRojectS`` vs ``Projects``).
     """
     raw = draw(
         st.dictionaries(
@@ -60,12 +61,30 @@ def _file_tree(draw: st.DrawFn) -> dict[str, bytes]:
             max_size=10,
         )
     )
+
+    # Build case-insensitive set of all system folder first-segments.
+    # FOLDER_STRUCTURE contains entries like "Projects", "Knowledge/Notes",
+    # "Services" — we need to block files whose first segment matches ANY
+    # segment in the folder hierarchy.
+    system_segments: set[str] = set()
+    for folder in FOLDER_STRUCTURE:
+        for part in Path(folder).parts:
+            system_segments.add(part.lower())
+
     # Remove entries where one path is a parent of another
     # Use case-insensitive comparison for macOS compatibility
     paths = sorted(raw.keys())
     result: dict[str, bytes] = {}
     for p in paths:
         p_lower = p.lower()
+
+        # Skip paths whose first segment case-insensitively matches a system folder.
+        # On macOS (case-insensitive APFS), a file named "pRojectS" blocks
+        # mkdir("Projects") with FileExistsError.
+        first_segment = p_lower.split("/")[0]
+        if first_segment in system_segments:
+            continue
+
         conflict = False
         for existing in list(result.keys()):
             existing_lower = existing.lower()
