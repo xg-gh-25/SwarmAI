@@ -535,6 +535,7 @@ class PromptBuilder:
             ContextDirectoryLoader,
             CONTEXT_FILES,
             GROUP_CHANNEL_EXCLUDE,
+            CHANNEL_LIGHT_EXCLUDE,
             DEFAULT_TOKEN_BUDGET,
         )
         from .system_prompt import SystemPromptBuilder
@@ -565,12 +566,18 @@ class PromptBuilder:
             model = self.resolve_model(agent_config)
             model_context_window = self.get_model_context_window(model)
 
-            # Exclude personal files (MEMORY.md, USER.md) in group channels
-            # to prevent leaking private context to other participants.
+            # Session-type-aware context exclusion (L3):
+            # - Group channels: exclude personal files (MEMORY, USER)
+            # - Channel DMs: exclude heavy low-value files (EVOLUTION, PROJECTS)
+            # - Chat tabs: full context (no exclusion)
             exclude_files: set[str] | None = None
             if channel_context and channel_context.get("is_group"):
                 exclude_files = set(GROUP_CHANNEL_EXCLUDE)
                 logger.info("Group channel detected — excluding %s from context", exclude_files)
+            elif channel_context:
+                # Channel DM (Slack/Feishu personal) — lightweight context
+                exclude_files = set(CHANNEL_LIGHT_EXCLUDE)
+                logger.info("Channel DM detected — light context, excluding %s", exclude_files)
 
             context_text = loader.load_all(
                 model_context_window=model_context_window,
@@ -587,9 +594,14 @@ class PromptBuilder:
                 except (OSError, UnicodeDecodeError):
                     pass
 
+            # ── Session-type: channel sessions skip heavy ephemeral context ──
+            is_channel = channel_context is not None
+
             # ── DailyActivity reading — last 2 files by date (ephemeral) ──
+            # Skipped for channel sessions: Slack/Feishu DMs are quick exchanges
+            # that don't need yesterday's session logs (~4K tokens saved).
             daily_activity_dir = Path(working_directory) / "Knowledge" / "DailyActivity"
-            if daily_activity_dir.is_dir():
+            if daily_activity_dir.is_dir() and not is_channel:
                 da_files = sorted(
                     [f for f in daily_activity_dir.glob("*.md") if f.stem[:4].isdigit()],
                     key=lambda f: f.stem,
@@ -620,13 +632,16 @@ class PromptBuilder:
                     )
 
             # ── Proactive Intelligence briefing (ephemeral) ──
-            try:
-                from .proactive_intelligence import build_session_briefing
-                briefing = build_session_briefing(working_directory)
-                if briefing:
-                    context_text += f"\n\n{briefing}"
-            except Exception as exc:
-                logger.warning("Proactive intelligence injection failed: %s", exc)
+            # Skipped for channel sessions: briefing is for session planning,
+            # not quick chat exchanges (~2K tokens saved).
+            if not is_channel:
+                try:
+                    from .proactive_intelligence import build_session_briefing
+                    briefing = build_session_briefing(working_directory)
+                    if briefing:
+                        context_text += f"\n\n{briefing}"
+                except Exception as exc:
+                    logger.warning("Proactive intelligence injection failed: %s", exc)
 
             # ── L3: Active Session Digest (sibling awareness) ──────────
             # Inject a brief summary of what other active sessions are doing
