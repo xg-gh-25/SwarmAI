@@ -1184,6 +1184,7 @@ class SessionUnit:
 
         is_resume = self._sdk_session_id is not None
         is_first_message = True
+        saw_assistant_message = False  # Track if LLM actually responded
 
         # ── Permission queue watcher ──────────────────────────────
         # The dangerous_command_gate hook blocks inside PreToolUse
@@ -1313,6 +1314,7 @@ class SessionUnit:
 
             # ── AssistantMessage: full content blocks ─────────────
             if isinstance(message, AssistantMessage):
+                saw_assistant_message = True
                 content_blocks = []
                 for block in message.content:
                     if isinstance(block, TextBlock):
@@ -1455,12 +1457,14 @@ class SessionUnit:
                 # See: 2026-03-22 12:36:08 instant idle after interrupt.
                 streaming_dur = (
                     time.time() - self._streaming_start_time
-                    if self._streaming_start_time else 0.0
+                    if self._streaming_start_time else None
                 )
                 if (
-                    streaming_dur < 2.0
+                    streaming_dur is not None
+                    and streaming_dur < 2.0
                     and not self._content_emitted
                     and not is_error
+                    and saw_assistant_message  # Only degraded if LLM tried to respond
                 ):
                     logger.warning(
                         "session_unit.empty_result_detected "
