@@ -117,7 +117,7 @@ class TestC1bComputeMaxTabsAccuracy:
         max_tabs = monitor.compute_max_tabs()
 
         # active+wired = ~10.7GB used on 36GB = 29%
-        # headroom to 80% = 36*0.8 - 10.7 = ~18GB → 18000/500 = 36 → clamped to 4
+        # headroom to 85% = 36*0.85 - 10.7 = ~19.9GB → 19900/500 = 39 → clamped to 4
         assert max_tabs == 4, (
             f"compute_max_tabs() should return 4 with ~29% used, got {max_tabs}"
         )
@@ -326,8 +326,9 @@ class TestP2FallbackFailurePreservation:
 # ---------------------------------------------------------------------------
 
 class TestP3ComputeMaxTabsFormulaPreservation:
-    """P3: compute_max_tabs uses 80% rule: max(1, min(floor(headroom_to_80pct / 500), 4)).
+    """P3: compute_max_tabs uses 85% rule: max(2, min(floor(headroom_to_85pct / 500), 4)).
 
+    Min=2 guarantees 1 chat slot + 1 channel slot.
     Uses Hypothesis to verify the formula across random used_pct values.
 
     **Validates: Requirements 3.3**
@@ -336,7 +337,7 @@ class TestP3ComputeMaxTabsFormulaPreservation:
     @given(used_pct=st.floats(min_value=0, max_value=99, allow_nan=False, allow_infinity=False))
     @settings()
     def test_formula_matches_expected(self, used_pct):
-        """compute_max_tabs output matches the 80% headroom formula."""
+        """compute_max_tabs output matches the 85% headroom formula."""
         from core.resource_monitor import ResourceMonitor, SystemMemory
 
         total_bytes = 36 * 1024**3  # 36GB
@@ -345,7 +346,7 @@ class TestP3ComputeMaxTabsFormulaPreservation:
         used_bytes = int(used_mb * 1024 * 1024)
         available_bytes = total_bytes - used_bytes
         headroom_mb = total_mb * 0.85 - used_mb
-        expected = max(1, min(int(headroom_mb / 500), 4))
+        expected = max(2, min(int(headroom_mb / 500), 4))
 
         monitor = ResourceMonitor()
         monitor._cached_memory = SystemMemory(

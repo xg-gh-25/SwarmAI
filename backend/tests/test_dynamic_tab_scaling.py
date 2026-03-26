@@ -34,10 +34,17 @@ from tests.helpers import PROPERTY_SETTINGS
 def _reference_formula(available_mb: float) -> int:
     """Reference implementation of the dynamic tab limit formula.
 
-    Formula: max(1, min(floor((available_mb - 1024) / 500), 4))
+    Mirrors ``ResourceMonitor.compute_max_tabs()``:
+    headroom = total_mb * 0.85 - used_mb
+    raw = floor(headroom / 500)
+    result = max(2, min(raw, 4))
+
+    _make_system_memory sets total=16GB, so headroom = 16384*0.85 - (16384 - available_mb).
+    Simplified: headroom = available_mb - 16384*0.15 = available_mb - 2457.6
     """
-    raw = math.floor((available_mb - 1024) / 500)
-    return max(1, min(raw, 4))
+    headroom_mb = available_mb - 16384 * 0.15  # 16GB * 15% overhead
+    raw = math.floor(headroom_mb / 500)
+    return max(2, min(raw, 4))
 
 
 def _make_system_memory(available_mb: float) -> SystemMemory:
@@ -106,19 +113,21 @@ class TestComputeMaxTabsBoundaryValues:
     @pytest.mark.parametrize(
         "available_mb, expected_tabs",
         [
-            (512, 1),      # (512 - 1024) / 500 = -1.024 → floor=-2 → clamp=1
-            (1024, 1),     # (1024 - 1024) / 500 = 0.0 → floor=0 → clamp=1
-            (1524, 1),     # (1524 - 1024) / 500 = 1.0 → floor=1 → clamp=1
-            (1525, 1),     # (1525 - 1024) / 500 = 1.002 → floor=1 → clamp=1
-            (2024, 2),     # (2024 - 1024) / 500 = 2.0 → floor=2 → clamp=2
-            (2524, 3),     # (2524 - 1024) / 500 = 3.0 → floor=3 → clamp=3
-            (3024, 4),     # (3024 - 1024) / 500 = 4.0 → floor=4 → clamp=4
-            (8192, 4),     # (8192 - 1024) / 500 = 14.336 → floor=14 → clamp=4
-            (16384, 4),    # (16384 - 1024) / 500 = 30.72 → floor=30 → clamp=4
+            # headroom = available_mb - 16384 * 0.15 = available_mb - 2457.6
+            # raw = floor(headroom / 500), result = max(2, min(raw, 4))
+            (512, 2),      # headroom=-1945.6 → raw=-4 → max(2,...)=2
+            (1024, 2),     # headroom=-1433.6 → raw=-3 → 2
+            (2458, 2),     # headroom=0.4 → raw=0 → 2
+            (2958, 2),     # headroom=500.4 → raw=1 → 2
+            (3458, 2),     # headroom=1000.4 → raw=2 → 2
+            (3958, 3),     # headroom=1500.4 → raw=3 → 3
+            (4458, 4),     # headroom=2000.4 → raw=4 → 4
+            (8192, 4),     # headroom=5734.4 → raw=11 → 4
+            (16384, 4),    # headroom=13926.4 → raw=27 → 4
         ],
         ids=[
-            "512MB→1", "1024MB→1", "1524MB→1", "1525MB→1",
-            "2024MB→2", "2524MB→3", "3024MB→4", "8192MB→4", "16384MB→4",
+            "512MB→2", "1024MB→2", "2458MB→2", "2958MB→2",
+            "3458MB→2", "3958MB→3", "4458MB→4", "8192MB→4", "16384MB→4",
         ],
     )
     def test_compute_max_tabs_boundary_values(
@@ -145,15 +154,16 @@ class TestComputeMaxTabsPessimisticFallback:
     """Test pessimistic fallback when system_memory() fails.
 
     When system_memory() fails, it returns a pessimistic fallback with
-    1600MB available. This should yield compute_max_tabs() = 1.
+    total=16GB, used=14.4GB. Headroom = 16384*0.85 - 14745.6 = -819.2MB.
+    raw = floor(-819.2/500) = -2. Result = max(2, -2) = 2.
 
-    floor((1600 - 1024) / 500) = floor(1.152) = 1 → clamp(1, 4) = 1
+    Even under pessimistic fallback, min_tabs=2 guarantees 1 chat + 1 channel.
 
     **Validates: Requirement 1.6**
     """
 
     def test_compute_max_tabs_pessimistic_fallback(self):
-        """system_memory() failure returns 1600MB → compute_max_tabs() = 1."""
+        """system_memory() failure → compute_max_tabs() = 2 (min guarantee)."""
         monitor = ResourceMonitor()
 
         # Force system_memory() to raise, triggering the pessimistic fallback
@@ -164,8 +174,8 @@ class TestComputeMaxTabsPessimisticFallback:
             monitor.invalidate_cache()
             result = monitor.compute_max_tabs()
 
-        assert result == 1, (
-            f"Expected 1 from pessimistic fallback (1600MB), got {result}"
+        assert result == 2, (
+            f"Expected 2 from pessimistic fallback (min guarantee: 1 chat + 1 channel), got {result}"
         )
 
 
@@ -179,16 +189,16 @@ class TestRouterRespectsDynamicLimit:
     # Feature: dynamic-tab-scaling, Property 2: Router respects dynamic limit
 
     *For any* value N returned by ``compute_max_tabs()`` and any
-    ``alive_count`` < N, ``_acquire_slot()`` should grant the slot
-    without queueing (assuming ``spawn_budget().can_spawn`` is true).
-    Conversely, for any ``alive_count`` >= N with no IDLE sessions to
-    evict, ``_acquire_slot()`` should not grant immediate access.
+    ``alive_count`` < chat_max (= N - 1), ``_acquire_chat_slot()`` should
+    grant the slot without queueing (assuming ``spawn_budget().can_spawn``
+    is true).  Conversely, for any ``alive_count`` >= chat_max with no
+    IDLE sessions to evict, it should queue and timeout.
 
     **Validates: Requirements 2.1, 2.3**
     """
 
     @given(
-        max_tabs=st.integers(min_value=1, max_value=4),
+        max_tabs=st.integers(min_value=2, max_value=4),
         alive_count=st.integers(min_value=0, max_value=6),
     )
     @PROPERTY_SETTINGS
@@ -196,7 +206,7 @@ class TestRouterRespectsDynamicLimit:
     async def test_acquire_slot_respects_dynamic_limit(
         self, max_tabs: int, alive_count: int,
     ):
-        """_acquire_slot() grants/denies based on compute_max_tabs() vs alive_count."""
+        """_acquire_slot() grants/denies based on chat_max (max_tabs - 1) vs alive_count."""
         # Build a SessionRouter with a mocked PromptBuilder
         mock_prompt_builder = MagicMock()
         router = SessionRouter(prompt_builder=mock_prompt_builder)
@@ -235,15 +245,18 @@ class TestRouterRespectsDynamicLimit:
             mock_rm.compute_max_tabs.return_value = max_tabs
             mock_rm.spawn_budget.return_value = mock_budget
 
-            if alive_count < max_tabs:
+            # Chat slots = max_tabs - 1 (1 reserved for channel)
+            chat_max = max_tabs - 1
+
+            if alive_count < chat_max:
                 # Slot should be granted immediately
                 result = await router._acquire_slot(requesting_unit)
                 assert result == "ready", (
                     f"Expected 'ready' when alive_count={alive_count} < "
-                    f"max_tabs={max_tabs}, got '{result}'"
+                    f"chat_max={chat_max} (max_tabs={max_tabs}), got '{result}'"
                 )
             else:
-                # All slots occupied by protected (STREAMING) units,
+                # All chat slots occupied by protected (STREAMING) units,
                 # no IDLE units to evict → should queue and timeout.
                 # Use a very short timeout to avoid slow tests.
                 original_timeout = router.QUEUE_TIMEOUT
@@ -252,7 +265,7 @@ class TestRouterRespectsDynamicLimit:
                 result = await router._acquire_slot(requesting_unit)
                 assert result == "timeout", (
                     f"Expected 'timeout' when alive_count={alive_count} >= "
-                    f"max_tabs={max_tabs} with no IDLE units, got '{result}'"
+                    f"chat_max={chat_max} (max_tabs={max_tabs}) with no IDLE units, got '{result}'"
                 )
 
                 router.QUEUE_TIMEOUT = original_timeout
@@ -321,7 +334,7 @@ class TestNoEvictionOnBudgetShrinkage:
         # Simulate budget shrinkage: max_tabs drops below session_count.
         # The new max_tabs is in [1, session_count-1] when session_count > 1,
         # or stays at 1 when session_count == 1 (shrinkage to same value).
-        shrunk_max_tabs = max(1, session_count - 1)
+        shrunk_max_tabs = max(2, session_count - 1)
 
         with patch(
             "core.resource_monitor.resource_monitor"
@@ -400,6 +413,11 @@ class TestAPIMethodConsistency:
             f"available_mb={available_mb}: endpoint max_tabs={response.max_tabs}, "
             f"expected={expected_max_tabs}"
         )
+        expected_chat_max = max(1, expected_max_tabs - 1)
+        assert response.chat_max == expected_chat_max, (
+            f"available_mb={available_mb}: endpoint chat_max={response.chat_max}, "
+            f"expected={expected_chat_max}"
+        )
         assert response.memory_pressure == expected_pressure, (
             f"available_mb={available_mb}: endpoint memory_pressure="
             f"{response.memory_pressure}, expected={expected_pressure}"
@@ -435,6 +453,9 @@ class TestMaxTabsEndpointFallback:
 
         assert response.max_tabs == 1, (
             f"Expected max_tabs=1 on failure, got {response.max_tabs}"
+        )
+        assert response.chat_max == 1, (
+            f"Expected chat_max=1 on failure, got {response.chat_max}"
         )
         assert response.memory_pressure == "critical", (
             f"Expected memory_pressure='critical' on failure, "

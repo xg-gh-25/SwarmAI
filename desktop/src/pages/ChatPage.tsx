@@ -382,7 +382,7 @@ export default function ChatPage() {
   // Fix 7: Guard against exceeding dynamic max tabs limit
   const handleNewSession = useCallback(() => {
     if (!selectedAgentId) return;
-    if (tabMapRef.current.size >= maxTabsInfo.maxTabs) {
+    if (tabMapRef.current.size >= maxTabsInfo.chatMax) {
       addToast({ severity: 'info', message: 'Memory usage is high. Close an idle tab or quit other apps to free memory, then try again.', autoDismiss: true });
       return;
     }
@@ -407,7 +407,7 @@ export default function ChatPage() {
     setContextWarning(null);
     setIsStreaming(false, newTab!.id); // New tab is not streaming
     setIsExpanded(false); // New tab always starts in compact mode
-  }, [selectedAgentId, addTab, initTabState, tabMapRef, updateTabState, activeTabIdRef, setIsStreaming, setContextWarning, maxTabsInfo.maxTabs, addToast]);
+  }, [selectedAgentId, addTab, initTabState, tabMapRef, updateTabState, activeTabIdRef, setIsStreaming, setContextWarning, maxTabsInfo.chatMax, addToast]);
 
   // Handle tab selection - switches active tab and loads session messages (Req 1.6)
   // Fix 6: Save current tab state, restore target tab state from per-tab map
@@ -1934,7 +1934,7 @@ export default function ChatPage() {
         onTabClose={handleTabClose}
         onNewSession={handleNewSession}
         tabStatuses={tabStatuses}
-        isNewTabDisabled={openTabs.length >= maxTabsInfo.maxTabs}
+        isNewTabDisabled={openTabs.length >= maxTabsInfo.chatMax}
       />
 
       <div className="flex flex-1 overflow-hidden">
