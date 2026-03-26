@@ -6,6 +6,8 @@
  */
 import { useState, useEffect, useCallback } from 'react';
 import { systemService } from '../services/system';
+import { channelsService } from '../services/channels';
+import type { Channel } from '../types';
 import AuthConfigPanel from '../components/settings/AuthConfigPanel';
 import ChannelConfigForm from '../components/settings/ChannelConfigForm';
 
@@ -142,6 +144,25 @@ function Step3Channels({ onContinue, onSkip }: { onContinue: () => void; onSkip:
   const [showFeishu, setShowFeishu] = useState(false);
   const [slackDone, setSlackDone] = useState(false);
   const [feishuDone, setFeishuDone] = useState(false);
+  const [existingSlack, setExistingSlack] = useState<Channel | null>(null);
+  const [existingFeishu, setExistingFeishu] = useState<Channel | null>(null);
+
+  // Load existing channel configs so tokens are pre-filled
+  useEffect(() => {
+    channelsService.list()
+      .then((channels) => {
+        for (const ch of channels) {
+          if (ch.channelType === 'slack') {
+            setExistingSlack(ch);
+            setSlackDone(true);
+          } else if (ch.channelType === 'feishu') {
+            setExistingFeishu(ch);
+            setFeishuDone(true);
+          }
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   return (
     <div>
@@ -173,6 +194,7 @@ function Step3Channels({ onContinue, onSkip }: { onContinue: () => void; onSkip:
             <div className="mt-4 pt-4 border-t border-[var(--color-border)]">
               <ChannelConfigForm
                 channelType="slack"
+                existingConfig={existingSlack}
                 compact
                 onSave={() => { setSlackDone(true); setShowSlack(false); }}
                 onCancel={() => setShowSlack(false)}
@@ -204,6 +226,7 @@ function Step3Channels({ onContinue, onSkip }: { onContinue: () => void; onSkip:
             <div className="mt-4 pt-4 border-t border-[var(--color-border)]">
               <ChannelConfigForm
                 channelType="feishu"
+                existingConfig={existingFeishu}
                 compact
                 onSave={() => { setFeishuDone(true); setShowFeishu(false); }}
                 onCancel={() => setShowFeishu(false)}

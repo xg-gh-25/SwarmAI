@@ -392,6 +392,8 @@ class PromptBuilder:
         cls,
         input_tokens: Optional[int],
         model: Optional[str],
+        *,
+        is_resumed_first: bool = False,
     ) -> Optional[dict]:
         """Build a context_warning SSE event dict from SDK usage data.
 
@@ -405,6 +407,10 @@ class PromptBuilder:
         Args:
             input_tokens: Total input tokens from the last SDK response.
             model: Model identifier (used to look up context window size).
+            is_resumed_first: True when this is the first response after
+                resuming a previous session (e.g. app restart).  Adjusts
+                the message to explain that context is accumulated from
+                the prior conversation, avoiding user confusion.
 
         Returns:
             A dict with keys ``type``, ``level``, ``pct``, ``tokensEst``,
@@ -422,17 +428,20 @@ class PromptBuilder:
         tokens_k = input_tokens // 1000
         window_k = window // 1000
 
+        # On resume, explain the context is from a prior conversation
+        prefix = "Resumed session — " if is_resumed_first else ""
+
         if pct >= cls._CONTEXT_CRITICAL_PCT:
             msg = (
-                f"**Context alert**: Session is {pct}% full "
+                f"{prefix}context is {pct}% full "
                 f"(~{tokens_k}K/{window_k}K tokens). "
-                f"Recommend: save context and start a new session."
+                f"Start a new tab for best results."
             )
         elif pct >= cls._CONTEXT_WARN_PCT:
             msg = (
-                f"Heads up — we've used about {pct}% of this session's "
-                f"context window (~{tokens_k}K/{window_k}K tokens). "
-                f"Consider saving context soon if more heavy tasks remain."
+                f"{prefix}context is at {pct}% "
+                f"(~{tokens_k}K/{window_k}K tokens). "
+                f"Consider a new tab if more heavy tasks remain."
             )
         else:
             msg = (

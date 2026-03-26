@@ -2146,6 +2146,12 @@ class SQLiteDatabase(BaseDatabase):
         if "onboarding_complete" not in app_settings_cols:
             logger.info("Running migration: Adding onboarding_complete column to app_settings table")
             await conn.execute("ALTER TABLE app_settings ADD COLUMN onboarding_complete INTEGER DEFAULT 0")
+            # Existing users who already completed initialization should skip onboarding.
+            # ALTER TABLE ADD COLUMN gives existing rows DEFAULT 0, but these users have
+            # been using the app — don't make them re-run the wizard.
+            await conn.execute(
+                "UPDATE app_settings SET onboarding_complete = 1 WHERE initialization_complete = 1"
+            )
             await conn.commit()
             logger.info("Migration complete: onboarding_complete column added to app_settings")
 

@@ -220,6 +220,13 @@ class SessionUnit:
         # Logged on session kill/evict for post-mortem analysis.
         self._peak_tree_rss_bytes: int = 0
 
+        # ── Lifecycle response counter ─────────────────────────────────
+        # Counts ResultMessages received since this SessionUnit was created
+        # (i.e., since app launch for restored tabs).  Used to detect
+        # "first response after resume" — context warnings are adjusted
+        # to explain accumulated tokens come from a previous conversation.
+        self._lifecycle_response_count: int = 0
+
         # ── Buffer overflow recovery ────────────────────────────────
         # Set True when a tool response exceeds the CLI's 10MB JSONRPC
         # buffer.  On the next send, a recovery instruction is prepended
@@ -933,39 +940,61 @@ class SessionUnit:
         )
         yield {"_abort": True}
 
-    def _emit_post_stream_metadata(self, usage: dict) -> list[dict]:
+    def _emit_post_stream_metadata(
+        self, usage: dict, *, num_turns: int = 1,
+    ) -> list[dict]:
         """Build context-warning and TSCC metadata events after a result.
 
         Returns a list of events (0–2 items) rather than yielding, so
         the caller can iterate with a simple ``for`` loop.  Never raises
         — failures are silently swallowed since metadata must never block
         the response stream.
+
+        Args:
+            usage: Aggregated usage dict from ``ResultMessage.usage``.
+            num_turns: Number of agentic turns (API calls) in this response.
+                The SDK aggregates input tokens across ALL turns, but the
+                context window is only as full as the LAST turn's input.
+                We divide by ``num_turns`` to estimate per-call context.
         """
         events: list[dict] = []
 
         # Context usage warning (ok/warn/critical)
-        # Total input = non-cached + cache_read + cache_creation.
-        # SDK returns `input_tokens` as only non-cached portion, but the
-        # context window is consumed by ALL input tokens regardless of cache.
+        # IMPORTANT: SDK usage is AGGREGATED across all agentic turns.
+        # If the agent makes N tool calls, the SDK sums input_tokens from
+        # all N API requests.  But the context window capacity is per-call,
+        # not cumulative.  Divide by num_turns for the correct estimate.
         if usage:
             from .prompt_builder import PromptBuilder
             total = PromptBuilder.sum_usage_input_tokens(usage)
-            input_tokens = total if total > 0 else None
+            turns = max(num_turns, 1)
+            input_tokens = (total // turns) if total > 0 else None
         else:
             input_tokens = None
         logger.info(
             "session_unit.context_ring_debug session_id=%s "
-            "usage_keys=%s input_tokens=%s model=%s",
+            "usage_keys=%s raw_total=%s per_turn_est=%s "
+            "num_turns=%d model=%s",
             self.session_id,
             list(usage.keys()) if usage else "NO_USAGE",
+            PromptBuilder.sum_usage_input_tokens(usage) if usage else 0,
             input_tokens,
+            num_turns,
             self._model_name,
         )
         if input_tokens and input_tokens > 0:
             try:
                 from .prompt_builder import PromptBuilder
+                # On the first response of a resumed session, the SDK reports
+                # ALL accumulated tokens from the previous conversation.
+                # Pass this context so the warning message explains the source.
+                is_resumed_first = (
+                    self._lifecycle_response_count <= 1
+                    and self._sdk_session_id is not None
+                )
                 warning_evt = PromptBuilder.build_context_warning(
-                    input_tokens, self._model_name
+                    input_tokens, self._model_name,
+                    is_resumed_first=is_resumed_first,
                 )
                 logger.info(
                     "session_unit.context_warning_built session_id=%s "
@@ -1430,14 +1459,17 @@ class SessionUnit:
                     )
 
                 # Yield result event with usage metrics
+                self._lifecycle_response_count += 1
                 usage = getattr(message, "usage", None) or {}
                 logger.info(
                     "session_unit.result_usage session_id=%s "
-                    "raw_usage=%s input_tokens=%s model=%s",
+                    "raw_usage=%s input_tokens=%s model=%s "
+                    "lifecycle_response=%d",
                     self.session_id,
                     usage,
                     usage.get("input_tokens") if usage else None,
                     self._model_name,
+                    self._lifecycle_response_count,
                 )
                 yield {
                     "type": "result",
@@ -1454,7 +1486,10 @@ class SessionUnit:
                 }
 
                 # ── Context usage & metadata bridge ────────────────
-                for meta_event in self._emit_post_stream_metadata(usage):
+                result_num_turns = getattr(message, "num_turns", 1) or 1
+                for meta_event in self._emit_post_stream_metadata(
+                    usage, num_turns=result_num_turns,
+                ):
                     yield meta_event
 
                 # ── Post-interrupt corruption detection ────────────
@@ -1977,6 +2012,8 @@ class SessionUnit:
         self._retry_count = 0
         self._model_name = None
         self._peak_tree_rss_bytes = 0
+        # Don't reset _lifecycle_response_count — it tracks across the
+        # full unit lifetime (resume awareness persists through kill/restart).
 
     def _full_cleanup(self) -> None:
         """Full cleanup for non-retriable crashes where the session should NOT be resumable.
