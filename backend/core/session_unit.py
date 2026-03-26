@@ -944,7 +944,15 @@ class SessionUnit:
         events: list[dict] = []
 
         # Context usage warning (ok/warn/critical)
-        input_tokens = (usage.get("input_tokens") if usage else None)
+        # Total input = non-cached + cache_read + cache_creation.
+        # SDK returns `input_tokens` as only non-cached portion, but the
+        # context window is consumed by ALL input tokens regardless of cache.
+        if usage:
+            from .prompt_builder import PromptBuilder
+            total = PromptBuilder.sum_usage_input_tokens(usage)
+            input_tokens = total if total > 0 else None
+        else:
+            input_tokens = None
         logger.info(
             "session_unit.context_ring_debug session_id=%s "
             "usage_keys=%s input_tokens=%s model=%s",

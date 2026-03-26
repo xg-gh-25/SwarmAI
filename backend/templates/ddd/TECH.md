@@ -47,8 +47,7 @@ Desktop app with three layers: a Tauri 2.0 shell (Rust), a React frontend (TypeS
 
 ## Codebase Location
 
-_Set this to your local SwarmAI source code path after cloning._
-
+- **Local:** `/Users/gawan/Desktop/SwarmAI-Workspace/swarmai/`
 - **GitHub:** https://github.com/xg-gh-25/SwarmAI
 - **Clone:** `git clone https://github.com/xg-gh-25/SwarmAI.git`
 

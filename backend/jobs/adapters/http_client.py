@@ -32,7 +32,7 @@ def safe_client(timeout: int = 15, **kwargs) -> Iterator[httpx.Client]:
         if var in os.environ:
             saved[var] = os.environ.pop(var)
     try:
-        with httpx.Client(timeout=timeout, **kwargs) as client:
+        with httpx.Client(timeout=timeout, follow_redirects=True, **kwargs) as client:
             yield client
     finally:
         os.environ.update(saved)

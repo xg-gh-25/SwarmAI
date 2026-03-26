@@ -175,9 +175,17 @@ class TestBuildContextWarning:
         from core.prompt_builder import PromptBuilder
         assert PromptBuilder.build_context_warning(-100, "claude-sonnet-4-6") is None
 
-    def test_default_model_uses_200k_window(self):
+    def test_default_model_uses_1m_window(self):
+        """Default context window is 1M tokens. 140K/1M = 14% → 'ok'."""
         from core.prompt_builder import PromptBuilder
         result = PromptBuilder.build_context_warning(140_000, None)
+        assert result is not None
+        assert result["level"] == "ok"
+
+    def test_warn_level_at_70_pct(self):
+        """70% of 1M = 700K tokens → 'warn'."""
+        from core.prompt_builder import PromptBuilder
+        result = PromptBuilder.build_context_warning(700_000, None)
         assert result is not None
         assert result["level"] == "warn"
 
@@ -285,9 +293,9 @@ class TestContextWarningBridge:
 
     @pytest.mark.asyncio
     async def test_ok_event_when_model_name_none(self):
-        """Real bridge uses self._model_name=None → default 200K window, emits ok."""
+        """Real bridge uses self._model_name=None → default 1M window, emits ok."""
         unit = _make_unit(model_name=None)
-        # 100K tokens with 200K default window = 50% → ok level
+        # 100K tokens with 1M default window = 10% → ok level
         _wire_client(unit, [_make_result_message(input_tokens=100_000)])
 
         with _patch_sdk_modules():
@@ -296,15 +304,14 @@ class TestContextWarningBridge:
         warnings = [e for e in events if e.get("type") == "context_warning"]
         assert len(warnings) == 1
         assert warnings[0]["level"] == "ok"
-        assert warnings[0]["pct"] == 50
+        assert warnings[0]["pct"] == 10
         assert unit.state == SessionState.IDLE
 
     @pytest.mark.asyncio
-    async def test_200k_model_thresholds(self):
-        """Real bridge uses correct thresholds for 200K models."""
-        unit = _make_unit(model_name="claude-haiku-3-5")
-        # 200K model, 150K tokens = 75% → warn
-        _wire_client(unit, [_make_result_message(input_tokens=150_000)])
+    async def test_warn_level_at_75_pct(self):
+        """1M default window, 750K tokens = 75% → warn."""
+        unit = _make_unit(model_name="claude-opus-4-6")
+        _wire_client(unit, [_make_result_message(input_tokens=750_000)])
 
         with _patch_sdk_modules():
             events = await _collect_events(unit)
@@ -315,10 +322,10 @@ class TestContextWarningBridge:
         assert unit.state == SessionState.IDLE
 
     @pytest.mark.asyncio
-    async def test_200k_model_critical(self):
-        """200K model at 85% → critical."""
-        unit = _make_unit(model_name="claude-haiku-3-5")
-        _wire_client(unit, [_make_result_message(input_tokens=170_000)])
+    async def test_critical_level_at_85_pct(self):
+        """1M default window, 850K tokens = 85% → critical."""
+        unit = _make_unit(model_name="claude-opus-4-6")
+        _wire_client(unit, [_make_result_message(input_tokens=850_000)])
 
         with _patch_sdk_modules():
             events = await _collect_events(unit)
@@ -360,25 +367,25 @@ class TestPreservation_WarnCriticalEvents:
 
     @pytest.mark.asyncio
     @given(
-        input_tokens=st.integers(min_value=140_000, max_value=200_000),
+        input_tokens=st.integers(min_value=700_000, max_value=1_000_000),
     )
     @settings()
-    async def test_warn_critical_events_preserved_200k_model(
+    async def test_warn_critical_events_preserved_1m_model(
         self, input_tokens: int
     ):
         """**Validates: Requirements 3.1, 3.2**
 
-        For all input_tokens in [140_000, 200_000] with a 200K model,
+        For all input_tokens in [700K, 1M] with a 1M model,
         build_context_warning returns a warn or critical event.  The bridge
         MUST yield that event with identical content.
         """
         from core.prompt_builder import PromptBuilder
 
         # Pre-condition: must produce warn or critical
-        evt = PromptBuilder.build_context_warning(input_tokens, "claude-haiku-3-5")
+        evt = PromptBuilder.build_context_warning(input_tokens, "claude-opus-4-6")
         assume(evt is not None and evt.get("level") in ("warn", "critical"))
 
-        unit = _make_unit(model_name="claude-haiku-3-5")
+        unit = _make_unit(model_name="claude-opus-4-6")
         _wire_client(unit, [_make_result_message(input_tokens=input_tokens)])
 
         with _patch_sdk_modules():
@@ -492,17 +499,18 @@ class TestBugConditionExploration_OkLevelFiltered:
     async def test_ok_level_concrete_example_5000_tokens(self):
         """**Validates: Requirements 1.1, 1.2, 2.1, 2.2**
 
-        Concrete example from bugfix.md: input_tokens=5000 with 200K model
-        → pct=2, level="ok" → event generated but NOT yielded by bridge.
+        Concrete example: input_tokens=5000 with 1M model
+        → pct=1 (5000/1M * 100 = 0.5 → rounds to 1), level="ok".
+        Event generated and yielded by bridge.
         """
         from core.prompt_builder import PromptBuilder
 
-        evt = PromptBuilder.build_context_warning(5000, "claude-haiku-3-5")
+        evt = PromptBuilder.build_context_warning(5000, "claude-opus-4-6")
         assert evt is not None
         assert evt["level"] == "ok"
-        assert evt["pct"] == 2  # 5000/200000 * 100 = 2.5 → rounds to 2
+        assert evt["pct"] == 0  # 5000/1_000_000 * 100 = 0.5 → rounds to 0
 
-        unit = _make_unit(model_name="claude-haiku-3-5")
+        unit = _make_unit(model_name="claude-opus-4-6")
         _wire_client(unit, [_make_result_message(input_tokens=5000)])
 
         with _patch_sdk_modules():
