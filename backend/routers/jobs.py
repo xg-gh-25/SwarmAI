@@ -124,8 +124,23 @@ async def run_job(req: RunJobRequest):
 
 
 @router.get("/status")
-async def scheduler_status():
-    """Get scheduler overview — monthly spend, signal buffer, job summary."""
+async def unified_status():
+    """Unified job system status — aggregates all 4 categories.
+
+    Returns:
+        scheduled_jobs: Cron + user jobs with last-run and health
+        session_hooks: Background hook executor status and per-hook stats
+        services: Managed sidecar services (Slack bot, etc.)
+        overview: Summary counts and monthly spend
+    """
+    result: dict = {
+        "scheduled_jobs": {},
+        "session_hooks": {},
+        "services": [],
+        "overview": {},
+    }
+
+    # 1. Scheduled jobs (cron + user)
     try:
         from jobs.scheduler import load_state, load_jobs
         state = load_state()
@@ -134,8 +149,8 @@ async def scheduler_status():
         ok = sum(1 for j in jobs if state.jobs.get(j.id) and state.jobs[j.id].last_status == "success")
         err = sum(1 for j in jobs if state.jobs.get(j.id) and state.jobs[j.id].consecutive_failures > 0)
 
-        return {
-            "total_jobs": len(jobs),
+        result["scheduled_jobs"] = {
+            "total": len(jobs),
             "healthy": ok,
             "failing": err,
             "never_run": len(jobs) - ok - err,
@@ -144,5 +159,39 @@ async def scheduler_status():
             "dedup_cache_size": len(state.dedup_cache),
         }
     except Exception as e:
-        logger.error("Failed to get scheduler status: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error("Failed to load scheduled jobs status: %s", e)
+        result["scheduled_jobs"] = {"error": str(e)}
+
+    # 2. Session hooks
+    try:
+        from core import session_registry
+        executor = session_registry.hook_executor
+        if executor:
+            result["session_hooks"] = executor.get_status()
+        else:
+            result["session_hooks"] = {"worker_running": False, "hooks": [], "queue_size": 0}
+    except Exception as e:
+        logger.error("Failed to get hook status: %s", e)
+        result["session_hooks"] = {"error": str(e)}
+
+    # 3. Managed services
+    try:
+        from core.service_manager import service_manager
+        result["services"] = service_manager.get_status()
+    except Exception as e:
+        logger.error("Failed to get service status: %s", e)
+        result["services"] = [{"error": str(e)}]
+
+    # 4. Overview
+    sj = result["scheduled_jobs"]
+    sh = result["session_hooks"]
+    hooks_count = len(sh.get("hooks", []))
+    services_count = len(result["services"])
+    result["overview"] = {
+        "total_scheduled_jobs": sj.get("total", 0),
+        "total_session_hooks": hooks_count,
+        "total_services": services_count,
+        "total_components": sj.get("total", 0) + hooks_count + services_count,
+    }
+
+    return result

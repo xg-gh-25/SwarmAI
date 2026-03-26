@@ -30,7 +30,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Protocol, runtime_checkable
 
 logger = logging.getLogger(__name__)
@@ -202,6 +203,8 @@ class BackgroundHookExecutor:
         )
         self._worker_task: asyncio.Task | None = None
         self._started = False
+        # Per-hook status tracking: {hook_name: {last_run, last_status, total_runs, total_errors}}
+        self._hook_stats: dict[str, dict] = {}
 
     def start(self) -> None:
         """Start the background worker that processes the hook queue.
@@ -234,6 +237,37 @@ class BackgroundHookExecutor:
     def git_lock(self) -> asyncio.Lock:
         """Shared lock for serializing git operations across hooks."""
         return self._git_lock
+
+    def get_status(self) -> dict:
+        """Return status of the hook executor and per-hook last-run info."""
+        hook_statuses = []
+        for hook in self._hook_manager._hooks:
+            stats = self._hook_stats.get(hook.name, {})
+            hook_statuses.append({
+                "name": hook.name,
+                "last_run": stats.get("last_run"),
+                "last_status": stats.get("last_status", "never"),
+                "total_runs": stats.get("total_runs", 0),
+                "total_errors": stats.get("total_errors", 0),
+            })
+        return {
+            "worker_running": self._started and self._worker_task is not None
+                              and not self._worker_task.done(),
+            "queue_size": self._queue.qsize(),
+            "hooks": hook_statuses,
+        }
+
+    def _record_hook_result(self, hook_name: str, success: bool) -> None:
+        """Record a hook execution result for status reporting."""
+        stats = self._hook_stats.setdefault(hook_name, {
+            "last_run": None, "last_status": "never",
+            "total_runs": 0, "total_errors": 0,
+        })
+        stats["last_run"] = datetime.now(timezone.utc).isoformat()
+        stats["last_status"] = "success" if success else "error"
+        stats["total_runs"] += 1
+        if not success:
+            stats["total_errors"] += 1
 
     def fire(self, context: HookContext, skip_hooks: list[str] | None = None) -> None:
         """Enqueue all hooks for serialized background execution.
@@ -427,12 +461,14 @@ class BackgroundHookExecutor:
                         timeout=self._hook_manager._timeout,
                     )
                     completed += 1
+                    self._record_hook_result(hook.name, True)
                     logger.info(
                         "Background hook '%s' completed for session %s",
                         hook.name,
                         context.session_id,
                     )
                 except asyncio.TimeoutError:
+                    self._record_hook_result(hook.name, False)
                     logger.error(
                         "Background hook '%s' timed out for session %s",
                         hook.name,
@@ -446,6 +482,7 @@ class BackgroundHookExecutor:
                     )
                     raise  # Re-raise to let task cancellation propagate
                 except Exception as exc:
+                    self._record_hook_result(hook.name, False)
                     logger.error(
                         "Background hook '%s' failed for session %s: %s",
                         hook.name,
@@ -479,12 +516,14 @@ class BackgroundHookExecutor:
         """Run a single hook with timeout and error isolation."""
         try:
             await asyncio.wait_for(hook.execute(context), timeout=timeout)
+            self._record_hook_result(hook.name, True)
             logger.info(
                 "Background hook '%s' completed for session %s",
                 hook.name,
                 context.session_id,
             )
         except asyncio.TimeoutError:
+            self._record_hook_result(hook.name, False)
             logger.error(
                 "Background hook '%s' timed out for session %s",
                 hook.name,
@@ -498,6 +537,7 @@ class BackgroundHookExecutor:
             )
             raise  # Re-raise to let task cancellation propagate
         except Exception as exc:
+            self._record_hook_result(hook.name, False)
             logger.error(
                 "Background hook '%s' failed for session %s: %s",
                 hook.name,

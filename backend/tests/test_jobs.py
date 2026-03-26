@@ -427,8 +427,13 @@ class TestJobsAPI:
         response = client.get("/api/jobs/status")
         assert response.status_code == 200
         data = response.json()
-        assert "total_jobs" in data
-        assert data["total_jobs"] >= 5
+        # Unified status returns 4 categories
+        assert "scheduled_jobs" in data
+        assert "session_hooks" in data
+        assert "services" in data
+        assert "overview" in data
+        assert data["scheduled_jobs"].get("total", 0) >= 5
+        assert data["overview"]["total_components"] > 0
 
     def test_run_nonexistent_job(self, client):
         response = client.post("/api/jobs/run", json={"job_id": "nonexistent"})
