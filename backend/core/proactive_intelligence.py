@@ -640,6 +640,24 @@ def _get_health_highlights(working_directory: str) -> list[str]:
         elif summary:
             lines.append(f"  - [maintenance] {_sanitize_prompt_field(summary, 100)}")
 
+        # Capability gaps — recurring error patterns detected by weekly analysis
+        gaps = mem_health.get("capability_gaps", [])
+        for gap in gaps[:3]:
+            pattern = _sanitize_prompt_field(gap.get("pattern", ""), 80)
+            priority = gap.get("priority", "medium")
+            occurrences = gap.get("occurrences", 0)
+            action = _sanitize_prompt_field(gap.get("suggested_action", ""), 50)
+            lines.append(
+                f"  - [gap/{priority}] {pattern} ({occurrences}x) — suggest: {action}"
+            )
+
+        # Stale corrections — corrections referencing deleted code
+        stale = mem_health.get("stale_corrections", [])
+        for corr in stale[:2]:
+            cid = corr.get("id", "")
+            reason = _sanitize_prompt_field(corr.get("reason", ""), 60)
+            lines.append(f"  - [stale-correction] {cid}: {reason}")
+
     return lines
 
 
