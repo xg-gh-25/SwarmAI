@@ -100,7 +100,7 @@ async def run_skill_creator(
         "global_user_mode": False,
         "enable_tool_logging": True,
         "enable_safety_checks": True,
-        "model": model or "claude-sonnet-4-6",
+        "model": model or "claude-opus-4-6",
     }
 
     logger.info(
