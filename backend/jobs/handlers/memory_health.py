@@ -16,7 +16,7 @@ And produces a structured maintenance report with:
   - Evolution entries to archive
   - Capability gaps detected from error/lesson patterns (L3)
 
-Cost: ~$0.01/run (~5K input tokens, ~1.5K output).
+Cost: ~$0.03/run (Sonnet 4.6, ~5K input tokens, ~1.5K output).
 """
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ from ..paths import SWARMWS, CONTEXT_DIR, DAILY_DIR
 
 logger = logging.getLogger("swarm.jobs.memory_health")
 
-# Haiku for routine maintenance — fast, cheap, good enough
+# Sonnet 4.6 for maintenance — good reasoning at low cost for background jobs
 MODEL_ID = "us.anthropic.claude-sonnet-4-6"
 MAX_OUTPUT_TOKENS = 2048
 
@@ -58,16 +58,16 @@ def run_memory_health(dry_run: bool = False) -> dict:
 
     prompt = _build_prompt(memory_md, evolution_md, git_log, daily_activity)
 
-    # ── 3. Call Bedrock Haiku ───────────────────────────────────────
+    # ── 3. Call Bedrock LLM ────────────────────────────────────────
 
     if dry_run:
-        logger.info("[DRY RUN] Would call Haiku with %d chars of context", len(prompt))
+        logger.info("[DRY RUN] Would call LLM with %d chars of context", len(prompt))
         return {"status": "dry_run", "prompt_length": len(prompt)}
 
     try:
-        report = _call_haiku(prompt)
+        report = _call_llm(prompt)
     except Exception as e:
-        logger.error("Haiku call failed: %s", e)
+        logger.error("LLM call failed: %s", e)
         return {"status": "error", "error": str(e)}
 
     # ── 4. Apply changes ───────────────────────────────────────────
@@ -145,7 +145,7 @@ def _build_prompt(
     memory_md: str, evolution_md: str,
     git_log: str, daily_activity: str,
 ) -> str:
-    """Build the maintenance prompt for Haiku."""
+    """Build the maintenance prompt for the LLM."""
     return f"""You are Swarm's memory maintenance system. Review the context files and produce a maintenance report.
 
 ## Current MEMORY.md
@@ -209,8 +209,8 @@ Rules:
 Output ONLY the JSON object, nothing else."""
 
 
-def _call_haiku(prompt: str) -> dict:
-    """Call Bedrock Haiku and parse the JSON response."""
+def _call_llm(prompt: str) -> dict:
+    """Call Bedrock Sonnet 4.6 and parse the JSON response."""
     import boto3
 
     client = boto3.client("bedrock-runtime", region_name="us-west-2")
@@ -230,7 +230,7 @@ def _call_haiku(prompt: str) -> dict:
     output_tokens = result.get("usage", {}).get("output_tokens", 0)
 
     logger.info(
-        "Haiku response: %d input tokens, %d output tokens",
+        "LLM response: %d input tokens, %d output tokens",
         input_tokens, output_tokens,
     )
 
@@ -245,7 +245,7 @@ def _call_haiku(prompt: str) -> dict:
     try:
         return json.loads(text)
     except json.JSONDecodeError:
-        logger.warning("Failed to parse Haiku JSON response, returning raw")
+        logger.warning("Failed to parse LLM JSON response, returning raw")
         return {"summary": text, "parse_error": True}
 
 
