@@ -2169,7 +2169,7 @@ export default function ChatPage() {
           agents={agents}
           onSelectSession={handleSelectSession}
           onDeleteSession={(session) => setDeleteConfirmSession(session)}
-          workspaceId={selectedAgentId}
+          workspaceId="swarmws"
         />
       </div>
 
