@@ -1,7 +1,8 @@
 import { createContext, useContext, useEffect, useState, useCallback, useMemo, ReactNode } from 'react';
 
 // Modal types that can be opened from the left sidebar
-export type ModalType = 'skills' | 'mcp' | 'settings' | 'file-editor' | 'workspace-settings';
+// Skills and MCP modals removed — now integrated as Settings tabs (2026-03-26)
+export type ModalType = 'settings' | 'file-editor' | 'workspace-settings';
 
 // Workspace scope - 'all' for all workspaces or a specific workspace ID
 export type WorkspaceScope = 'all' | string;
