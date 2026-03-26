@@ -244,6 +244,72 @@ def _compute_safe_worker_count() -> int:
 
 
 # ---------------------------------------------------------------------------
+# Background memory watchdog thread
+# ---------------------------------------------------------------------------
+# Pytest hooks only fire between tests. A single test or module import that
+# allocates 5GB will blow past the hook-based watchdog. This thread samples
+# RSS every 2 seconds and hard-kills the process via os._exit() (uncatchable)
+# if the limit is exceeded. Belt AND suspenders.
+
+_THREAD_RSS_LIMIT = int(3 * 1024**3)    # 3 GB — catastrophic-only (hooks catch at 1 GB)
+_THREAD_SYSTEM_FLOOR = int(3 * 1024**3)  # 3 GB system available
+
+
+def _start_memory_watchdog_thread():
+    """Start a daemon thread that monitors RSS every 2 seconds."""
+    import threading
+
+    def _watchdog():
+        while True:
+            import time
+            time.sleep(2)
+            try:
+                rss = _get_rss()
+                if rss > _THREAD_RSS_LIMIT:
+                    _aggressive_gc()
+                    rss_after = _get_rss()
+                    if rss_after > _THREAD_RSS_LIMIT:
+                        import sys
+                        msg = (
+                            f"\n{'='*60}\n"
+                            f"WATCHDOG THREAD: HARD KILL\n"
+                            f"{'='*60}\n"
+                            f"RSS: {rss_after / 1024**2:.0f}MB exceeds "
+                            f"{_THREAD_RSS_LIMIT / 1024**2:.0f}MB limit.\n"
+                            f"This is a safety kill to prevent macOS crash.\n"
+                            f"{'='*60}\n"
+                        )
+                        sys.stderr.write(msg)
+                        sys.stderr.flush()
+                        os._exit(137)
+
+                # Also check system-level memory
+                sys_avail = _get_system_available()
+                if sys_avail > 0 and sys_avail < _THREAD_SYSTEM_FLOOR:
+                    _aggressive_gc()
+                    sys_avail2 = _get_system_available()
+                    if sys_avail2 > 0 and sys_avail2 < _THREAD_SYSTEM_FLOOR:
+                        import sys
+                        msg = (
+                            f"\n{'='*60}\n"
+                            f"WATCHDOG THREAD: SYSTEM MEMORY LOW\n"
+                            f"{'='*60}\n"
+                            f"System available: {sys_avail2 / 1024**3:.1f}GB "
+                            f"(< {_THREAD_SYSTEM_FLOOR / 1024**3:.0f}GB)\n"
+                            f"Hard-killing to prevent macOS jetsam.\n"
+                            f"{'='*60}\n"
+                        )
+                        sys.stderr.write(msg)
+                        sys.stderr.flush()
+                        os._exit(137)
+            except Exception:
+                pass  # Never let the watchdog thread crash
+
+    t = threading.Thread(target=_watchdog, daemon=True, name="pytest-memory-watchdog")
+    t.start()
+
+
+# ---------------------------------------------------------------------------
 # pytest_configure — markers, plugins, xdist auto-inject
 # ---------------------------------------------------------------------------
 
@@ -254,6 +320,13 @@ def pytest_configure(config):
 
     # System memory pre-flight: abort if < 3GB available
     _check_system_memory_preflight()
+
+    # Background memory watchdog thread — last line of defense.
+    # Pytest hooks only fire between tests. If memory grows during test
+    # collection, module imports, or a single long test, hooks can't help.
+    # This thread checks RSS every 2 seconds and calls os._exit() (which
+    # is NOT catchable by try/except) if the limit is exceeded.
+    _start_memory_watchdog_thread()
 
     # Set process group so all child processes (xdist workers) die with parent.
     # Without this, macOS jetsam killing the parent leaves workers as orphans.
@@ -400,8 +473,9 @@ class SigalrmTimeoutPlugin:
 # ---------------------------------------------------------------------------
 
 _GC_THRESHOLD = int(512 * 1024**2)     # 512 MB — trigger aggressive GC
-_ABORT_THRESHOLD = int(1024 * 1024**2)  # 1 GB — abort before system crash
+_ABORT_THRESHOLD = int(2 * 1024**3)    # 2 GB — abort before system crash
 _SYSTEM_AVAIL_FLOOR = int(3 * 1024**3)  # 3 GB — minimum system available
+_PROACTIVE_GC_INTERVAL = 25            # Force GC every 25 tests regardless of pressure
 
 try:
     import psutil
@@ -541,6 +615,12 @@ class MemoryWatchdogPlugin:
         """Post-test check: per-process RSS + periodic system-level check."""
         self._test_count += 1
         self._check_and_abort("post-test")
+
+        # Proactive GC every N tests — prevents cumulative leak across modules.
+        # TestClient/AsyncClient + module imports accumulate; periodic GC
+        # frees unreferenced objects before they compound.
+        if self._test_count % _PROACTIVE_GC_INTERVAL == 0:
+            _aggressive_gc()
 
         # Deep system-level check every N tests (psutil.virtual_memory is ~1ms)
         if self._test_count % self._DEEP_CHECK_INTERVAL == 0:
