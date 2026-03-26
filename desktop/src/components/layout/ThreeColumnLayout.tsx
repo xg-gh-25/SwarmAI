@@ -1,6 +1,6 @@
 import { ReactNode, useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { LayoutProvider, useLayout, LAYOUT_CONSTANTS, ModalType } from '../../contexts/LayoutContext';
+import { LayoutProvider, useLayout, LAYOUT_CONSTANTS } from '../../contexts/LayoutContext';
 import { ExplorerProvider, useTreeData } from '../../contexts/ExplorerContext';
 import { WorkspaceExplorer } from '../workspace-explorer';
 import { BottomBar } from './BottomBar';
@@ -10,8 +10,6 @@ import BinaryPreviewModal from '../common/BinaryPreviewModal';
 import SwarmWorkspaceWarningDialog from '../common/SwarmWorkspaceWarningDialog';
 import { classifyFileForPreview } from '../../utils/fileUtils';
 import type { FilePreviewType } from '../../utils/fileUtils';
-import SkillsModal from '../modals/SkillsModal';
-import MCPSettingsModal from '../modals/MCPSettingsModal';
 import SettingsModal from '../modals/SettingsModal';
 import WorkspaceSettingsModal from '../modals/WorkspaceSettingsModal';
 import type { FileTreeItem } from '../workspace-explorer/FileTreeNode';
@@ -70,12 +68,19 @@ function TopBar() {
 
 // Left Sidebar - narrow navigation column with icon-only navigation
 function LeftSidebar() {
-  const { activeModal, openModal, workspaceExplorerCollapsed, setWorkspaceExplorerCollapsed } = useLayout();
+  const { activeModal, openModal, settingsTab, setSettingsTab, workspaceExplorerCollapsed, setWorkspaceExplorerCollapsed } = useLayout();
 
-  // Modal-based navigation items
-  const navItems: { icon: string; label: string; modalType: ModalType }[] = [
-    { icon: 'extension', label: 'Skills', modalType: 'skills' },
-    { icon: 'device_hub', label: 'MCP Servers', modalType: 'mcp' },
+  // Skills and MCP now open Settings with the corresponding tab pre-selected
+  const handleNavClick = (target: 'skills' | 'mcp') => {
+    const tabMap = { skills: 'skills', mcp: 'mcp-servers' };
+    setSettingsTab(tabMap[target]);
+    openModal('settings');
+  };
+
+  // Legacy nav items kept for reference — now handled by handleNavClick
+  const navItems: { icon: string; label: string; target: 'skills' | 'mcp' }[] = [
+    { icon: 'extension', label: 'Skills', target: 'skills' },
+    { icon: 'device_hub', label: 'MCP Servers', target: 'mcp' },
   ];
 
   return (
@@ -99,12 +104,12 @@ function LeftSidebar() {
       <nav className="flex-1 pt-2 pb-1 space-y-1 overflow-y-auto flex flex-col items-center" data-testid="nav-icons">
         {navItems.map((item) => (
           <NavIconButton
-            key={item.modalType}
+            key={item.target}
             icon={item.icon}
             label={item.label}
-            isActive={activeModal === item.modalType}
-            onClick={() => openModal(item.modalType)}
-            data-testid={`nav-${item.modalType}`}
+            isActive={activeModal === 'settings' && settingsTab === (item.target === 'mcp' ? 'mcp-servers' : item.target)}
+            onClick={() => handleNavClick(item.target)}
+            data-testid={`nav-${item.target}`}
           />
         ))}
       </nav>
@@ -214,7 +219,7 @@ function RefreshTreeBridge({ refreshTreeRef }: { refreshTreeRef: React.MutableRe
 
 // Inner layout component that uses the context
 function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
-  const { activeModal, closeModal, workspaceSettingsId } = useLayout();
+  const { activeModal, closeModal, workspaceSettingsId, settingsTab } = useLayout();
   const { addToast } = useToast();
 
   /** Ref to hold the ExplorerContext refreshTree function (set by bridge component inside provider). */
@@ -589,9 +594,8 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
       />
 
       {/* Management Page Modals */}
-      <SkillsModal isOpen={activeModal === 'skills'} onClose={closeModal} />
-      <MCPSettingsModal isOpen={activeModal === 'mcp'} onClose={closeModal} />
-      <SettingsModal isOpen={activeModal === 'settings'} onClose={closeModal} />
+      {/* Skills and MCP now integrated into Settings tabs — standalone modals removed */}
+      <SettingsModal isOpen={activeModal === 'settings'} onClose={closeModal} initialTab={settingsTab} />
       <WorkspaceSettingsModal
         isOpen={activeModal === 'workspace-settings'}
         onClose={closeModal}
