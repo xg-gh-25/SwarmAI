@@ -663,7 +663,7 @@ def _handle_maintenance(
         logger.warning("Memory health check failed (non-blocking): %s", e)
         actions.append(f"Memory health skipped: {e}")
 
-    # L4: Autonomous DDD refresh (weekly — proposals for stale DDD docs)
+    # L4.0: Autonomous DDD refresh (weekly — proposals for stale DDD docs)
     try:
         from .handlers.ddd_refresh import run_ddd_refresh
         ddd_result = run_ddd_refresh()
@@ -676,6 +676,34 @@ def _handle_maintenance(
     except Exception as e:
         logger.warning("DDD refresh failed (non-blocking): %s", e)
         actions.append(f"DDD refresh skipped: {e}")
+
+    # L4.1: Autonomous skill proposer (weekly — skill proposals for capability gaps)
+    try:
+        from .handlers.skill_proposer import run_skill_proposer
+        # Pass gaps from the memory_health report (already run above)
+        skill_gaps = []
+        try:
+            from .handlers.memory_health import run_memory_health as _mh_ref  # noqa: just for type
+            # Gaps are in health_findings.json, updated by memory_health above
+            skill_gaps = None  # Let skill_proposer read from findings file
+        except Exception:
+            pass
+        skill_result = run_skill_proposer(gaps=skill_gaps)
+        if skill_result.get("status") == "success":
+            actions.append(
+                f"Skill proposal: {skill_result['skill_name']} "
+                f"(confidence={skill_result.get('confidence', '?')})"
+            )
+        elif skill_result.get("status") == "low_confidence":
+            actions.append(
+                f"Skill proposal discarded: confidence {skill_result.get('confidence', 0)} "
+                f"< {6} for '{skill_result.get('target_gap', '')[:50]}'"
+            )
+        elif skill_result.get("status") != "skipped":
+            actions.append(f"Skill proposer: {skill_result.get('reason', skill_result.get('status', '?'))}")
+    except Exception as e:
+        logger.warning("Skill proposer failed (non-blocking): %s", e)
+        actions.append(f"Skill proposer skipped: {e}")
 
     summary = "; ".join(actions) if actions else "No maintenance needed"
     duration = (datetime.now(timezone.utc) - start).total_seconds()
