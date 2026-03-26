@@ -658,7 +658,7 @@ def _get_health_highlights(working_directory: str) -> list[str]:
             reason = _sanitize_prompt_field(corr.get("reason", ""), 60)
             lines.append(f"  - [stale-correction] {cid}: {reason}")
 
-    # L4: DDD refresh proposals ready for review
+    # L4.0: DDD refresh proposals ready for review
     projects_dir = Path(working_directory) / "Projects"
     if projects_dir.is_dir():
         for project_dir in sorted(projects_dir.iterdir()):
@@ -679,6 +679,28 @@ def _get_health_highlights(working_directory: str) -> list[str]:
                         break  # Only latest per project
                 except OSError:
                     continue
+
+            # L4.1: Skill proposals ready for review
+            skill_proposals = artifacts / "skill-proposals"
+            if skill_proposals.is_dir():
+                for skill_dir in sorted(skill_proposals.iterdir(), reverse=True):
+                    if not skill_dir.is_dir():
+                        continue
+                    meta_path = skill_dir / "metadata.json"
+                    if not meta_path.exists():
+                        continue
+                    try:
+                        age_days = (datetime.now() - datetime.fromtimestamp(meta_path.stat().st_mtime)).days
+                        if age_days <= 7:
+                            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                            gap = meta.get("gap_pattern", "unknown gap")[:60]
+                            conf = meta.get("confidence", "?")
+                            lines.append(
+                                f"  - [skill-proposal] {skill_dir.name}: "
+                                f"addresses '{gap}' (confidence={conf})"
+                            )
+                    except (OSError, json.JSONDecodeError):
+                        continue
 
     return lines
 
