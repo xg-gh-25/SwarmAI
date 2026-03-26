@@ -65,6 +65,8 @@ export const MAX_OPEN_TABS = MAX_TABS_HARD_CEILING;
 /** Response shape from `GET /api/system/max-tabs`. */
 export interface MaxTabsInfo {
   maxTabs: number;
+  /** Max chat tabs allowed (maxTabs - 1, reserving 1 slot for channels). */
+  chatMax: number;
   memoryPressure: 'ok' | 'warning' | 'critical';
 }
 
@@ -307,10 +309,12 @@ export function useUnifiedTabState(
   // the fallback so addTab() works before the first fetch completes.
   const maxTabsRef = useRef<MaxTabsInfo>({
     maxTabs: MAX_OPEN_TABS_FALLBACK,
+    chatMax: Math.max(1, MAX_OPEN_TABS_FALLBACK - 1),
     memoryPressure: 'ok',
   });
   const [maxTabsInfo, setMaxTabsInfo] = useState<MaxTabsInfo>({
     maxTabs: MAX_OPEN_TABS_FALLBACK,
+    chatMax: Math.max(1, MAX_OPEN_TABS_FALLBACK - 1),
     memoryPressure: 'ok',
   });
 
@@ -323,8 +327,11 @@ export function useUnifiedTabState(
     try {
       const response = await api.get('/system/max-tabs');
       const data = response.data;
+      const maxTabs = typeof data.max_tabs === 'number' ? data.max_tabs : MAX_OPEN_TABS_FALLBACK;
+      const chatMax = typeof data.chat_max === 'number' ? data.chat_max : Math.max(1, maxTabs - 1);
       const info: MaxTabsInfo = {
-        maxTabs: typeof data.max_tabs === 'number' ? data.max_tabs : MAX_OPEN_TABS_FALLBACK,
+        maxTabs,
+        chatMax,
         memoryPressure: (['ok', 'warning', 'critical'].includes(data.memory_pressure)
           ? data.memory_pressure
           : 'ok') as MaxTabsInfo['memoryPressure'],
@@ -378,8 +385,8 @@ export function useUnifiedTabState(
   const addTab = useCallback(
     (agentId: string): OpenTab | undefined => {
       const map = tabMapRef.current;
-      const dynamicMax = maxTabsRef.current.maxTabs;
-      if (map.size >= dynamicMax) return undefined;
+      const chatMax = maxTabsRef.current.chatMax;
+      if (map.size >= chatMax) return undefined;
 
       const newTab = createDefaultTab(agentId);
       map.set(newTab.id, newTab);

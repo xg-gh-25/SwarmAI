@@ -2149,6 +2149,16 @@ class SQLiteDatabase(BaseDatabase):
             await conn.commit()
             logger.info("Migration complete: onboarding_complete column added to app_settings")
 
+        # Migration: Add user_key column to channel_sessions (added 2026-03-26)
+        # Required for L2 cross-channel session sharing (Swarm Brain model)
+        cs_cols = [row[1] for row in await conn.execute_fetchall("PRAGMA table_info(channel_sessions)")]
+        if "user_key" not in cs_cols:
+            logger.info("Running migration: Adding user_key column to channel_sessions table")
+            await conn.execute("ALTER TABLE channel_sessions ADD COLUMN user_key TEXT")
+            await conn.execute("CREATE INDEX IF NOT EXISTS idx_channel_sessions_user_key ON channel_sessions(user_key)")
+            await conn.commit()
+            logger.info("Migration complete: user_key column added to channel_sessions")
+
     @property
     def agents(self) -> SQLiteTable:
         """Get the agents table."""

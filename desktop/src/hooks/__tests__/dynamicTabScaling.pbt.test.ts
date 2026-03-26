@@ -92,7 +92,7 @@ describe('Dynamic Tab Scaling — Property-Based Tests', () => {
 
           // Step 1: Set high limit so we can freely add tabs during setup
           vi.mocked(api.get).mockResolvedValue({
-            data: { max_tabs: 7, memory_pressure: 'ok' },
+            data: { max_tabs: 7, chat_max: 6, memory_pressure: 'ok' },
           });
           await act(async () => {
             await result.current.fetchMaxTabs();
@@ -114,6 +114,7 @@ describe('Dynamic Tab Scaling — Property-Based Tests', () => {
             vi.mocked(api.get).mockResolvedValue({
               data: {
                 max_tabs: transition.maxTabs,
+                chat_max: Math.max(1, transition.maxTabs - 1),
                 memory_pressure: transition.memoryPressure,
               },
             });
@@ -137,8 +138,9 @@ describe('Dynamic Tab Scaling — Property-Based Tests', () => {
    * Feature: dynamic-tab-scaling, Property 5: Frontend addTab rejection at limit
    *
    * For any tab_count in [0, 6] and max_tabs in [1, 4]:
-   * - If tab_count >= max_tabs: addTab() returns undefined (rejected), tab count unchanged
-   * - If tab_count < max_tabs: addTab() returns a valid OpenTab (accepted), tab count = tab_count + 1
+   * - chat_max = max(1, max_tabs - 1) — 1 slot reserved for channels
+   * - If tab_count >= chat_max: addTab() returns undefined (rejected), tab count unchanged
+   * - If tab_count < chat_max: addTab() returns a valid OpenTab (accepted), tab count = tab_count + 1
    *
    * **Validates: Requirements 4.3, 7.2**
    */
@@ -162,7 +164,7 @@ describe('Dynamic Tab Scaling — Property-Based Tests', () => {
 
           // Step 1: Set high limit to allow unrestricted tab creation during setup
           vi.mocked(api.get).mockResolvedValue({
-            data: { max_tabs: 7, memory_pressure: 'ok' },
+            data: { max_tabs: 7, chat_max: 6, memory_pressure: 'ok' },
           });
           await act(async () => {
             await result.current.fetchMaxTabs();
@@ -179,8 +181,10 @@ describe('Dynamic Tab Scaling — Property-Based Tests', () => {
           const actualTabCount = result.current.openTabs.length;
 
           // Step 3: Set the real max_tabs limit
+          // chat_max = max(1, maxTabs - 1) — 1 slot reserved for channels
+          const chatMax = Math.max(1, maxTabs - 1);
           vi.mocked(api.get).mockResolvedValue({
-            data: { max_tabs: maxTabs, memory_pressure: 'ok' },
+            data: { max_tabs: maxTabs, chat_max: chatMax, memory_pressure: 'ok' },
           });
           await act(async () => {
             await result.current.fetchMaxTabs();
@@ -194,7 +198,7 @@ describe('Dynamic Tab Scaling — Property-Based Tests', () => {
 
           const countAfterAdd = result.current.openTabs.length;
 
-          if (actualTabCount >= maxTabs) {
+          if (actualTabCount >= chatMax) {
             // Should be rejected: addTab returns undefined, count unchanged
             expect(addResult).toBeUndefined();
             expect(countAfterAdd).toBe(actualTabCount);
@@ -252,8 +256,10 @@ describe('Dynamic Tab Scaling — Property-Based Tests', () => {
           });
 
           // Mock API to return the dynamic max tabs
+          // chat_max = max(1, maxTabs - 1) — 1 slot reserved for channels
+          const chatMax = Math.max(1, maxTabs - 1);
           vi.mocked(api.get).mockResolvedValue({
-            data: { max_tabs: maxTabs, memory_pressure: 'ok' },
+            data: { max_tabs: maxTabs, chat_max: chatMax, memory_pressure: 'ok' },
           });
 
           const { result, unmount } = renderHook(() =>
@@ -265,7 +271,7 @@ describe('Dynamic Tab Scaling — Property-Based Tests', () => {
             await result.current.restoreFromFile();
           });
 
-          // Verify all saved tabs were restored regardless of maxTabs
+          // Verify all saved tabs were restored regardless of chatMax
           expect(result.current.openTabs.length).toBe(savedTabCount);
 
           // Step 2: Fetch the dynamic max tabs limit
@@ -276,13 +282,13 @@ describe('Dynamic Tab Scaling — Property-Based Tests', () => {
           // Tab count should still be S after fetching the limit
           expect(result.current.openTabs.length).toBe(savedTabCount);
 
-          // Step 3: Try addTab — should be rejected when S >= M, accepted when S < M
+          // Step 3: Try addTab — should be rejected when S >= chatMax, accepted when S < chatMax
           let addResult: OpenTab | undefined;
           act(() => {
             addResult = result.current.addTab(DEFAULT_AGENT);
           });
 
-          if (savedTabCount >= maxTabs) {
+          if (savedTabCount >= chatMax) {
             // Rejected: too many tabs open relative to dynamic limit
             expect(addResult).toBeUndefined();
             expect(result.current.openTabs.length).toBe(savedTabCount);
