@@ -16,7 +16,7 @@ English | [中文](./README.zh-CN.md)
 [![License](https://img.shields.io/badge/License-AGPL_v3-blue.svg?style=flat)](./LICENSE-AGPL)
 [![Commercial](https://img.shields.io/badge/License-Commercial-orange.svg?style=flat)](./LICENSE-COMMERCIAL)
 
-![SwarmAI Home](./assets/swarm-0.png)
+![SwarmAI Home](./assets/swarm-1.png)
 
 </div>
 
@@ -46,7 +46,7 @@ Six layers turn a stateless LLM into a persistent, evolving agent:
 |-------|-------------|----------------|
 | **Interface** | Three-column UI + multi-channel access | SwarmWS Explorer, Chat Center (1-4 tabs), Swarm Radar, Channel Gateway (Slack/Feishu) |
 | **Intelligence** | Proactive awareness + autonomous execution | Proactive Intelligence (L0-L4), Signal Pipeline, Autonomous Pipeline (8 stages), Job System |
-| **Harness** | The core innovation — what makes raw Claude into an agentic OS | Context Engineering (11 files), Memory Pipeline (3-layer), Self-Evolution (55+ skills), Safety + Self-Harness |
+| **Harness** | The core innovation — what makes raw Claude into an agentic OS (L4 Autonomous) | Context Engineering (11 files), Memory Pipeline (3-layer), Self-Evolution (55+ skills), Safety + Self-Harness |
 | **Session** | Multi-session lifecycle with isolation and recovery | SessionRouter, SessionUnit (5-state machine), LifecycleManager, Post-Session Hooks (7 hooks) |
 | **Engine** | AI model access + tool ecosystem | Claude Agent SDK, Bedrock/Anthropic API, MCP Servers (5+), Skills Engine |
 | **Platform** | Desktop app infrastructure | Tauri 2.0 (Rust), React 19, FastAPI (Python), SQLite, local filesystem, launchd |
@@ -124,9 +124,9 @@ Most AI agents are stateless functions: input in, output out, nothing learned. S
 |-------|-------|-----------|
 | L0 | Reactive | Responds to questions, no memory |
 | L1 | Self-Maintaining | Remembers, self-commits, captures corrections, monitors health |
-| **L2** | **Self-Improving** (current) | Weekly LLM maintenance, unified job system, feedback loops closed |
-| L3 | Self-Governing (in progress) | Context adapts per session type, proactive gap detection, DDD auto-sync |
-| L4 | Autonomous | Full AIDLC pipeline, self-directed learning, judgment framework |
+| L2 | Self-Improving | Weekly LLM maintenance, unified job system, feedback loops closed |
+| L3 | Self-Governing | Context adapts per session type, proactive gap detection, DDD auto-sync |
+| **L4** | **Autonomous** (current) | Stale docs → auto-fix proposals (DDD refresh), recurring gaps → auto-skill proposals. Two compound-value loops closed. |
 
 This isn't a feature list — it's a growth architecture. Every session makes the next one better. Every correction prevents a class of future mistakes. The system doesn't just run; it **compounds**.
 
