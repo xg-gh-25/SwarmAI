@@ -1,30 +1,47 @@
 """Tests for the autonomous jobs API router.
 
-Validates YAML parsing, state merging, status derivation, and the endpoint
-returning correct data when the job scheduler directory exists vs doesn't.
+Validates status derivation, category mapping, and the endpoint
+returning correct data from the unified job system (backend/jobs/).
 """
 
-import json
-from pathlib import Path
+from datetime import datetime, timezone
 from unittest.mock import patch
 
 import pytest
-import yaml
 
-from schemas.autonomous_job import AutonomousJobCategory, AutonomousJobResponse, AutonomousJobStatus
-
-
-# ---------------------------------------------------------------------------
-# Import the router module directly to test helpers
-# ---------------------------------------------------------------------------
+from schemas.autonomous_job import AutonomousJobCategory, AutonomousJobStatus
 
 from routers.autonomous_jobs import (
     _derive_status,
-    _load_jobs_yaml,
-    _load_state,
-    _map_category,
     list_autonomous_jobs,
 )
+from jobs.models import Job, JobType, JobState, SchedulerState
+
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+
+def _make_job(id: str, name: str = "", enabled: bool = True, category: str = "system") -> Job:
+    return Job(
+        id=id,
+        name=name or id,
+        type=JobType.SIGNAL_FETCH,
+        schedule="0 8 * * *",
+        enabled=enabled,
+        category=category,
+    )
+
+
+def _make_state(jobs_dict: dict[str, dict] | None = None) -> SchedulerState:
+    """Create a SchedulerState with optional per-job state."""
+    state = SchedulerState()
+    if jobs_dict:
+        for jid, jdata in jobs_dict.items():
+            js = JobState(**jdata)
+            state.jobs[jid] = js
+    return state
 
 
 # ---------------------------------------------------------------------------
@@ -33,177 +50,118 @@ from routers.autonomous_jobs import (
 
 
 class TestDeriveStatus:
-    """Status derivation from job definition + runtime state."""
+    """Status derivation from enabled flag + failure count."""
 
     def test_disabled_job_is_paused(self):
-        assert _derive_status({"enabled": False}, None) == AutonomousJobStatus.PAUSED
+        assert _derive_status(False, 0) == AutonomousJobStatus.PAUSED
 
-    def test_enabled_no_state_is_running(self):
-        assert _derive_status({"enabled": True}, None) == AutonomousJobStatus.RUNNING
-
-    def test_enabled_missing_key_defaults_running(self):
-        assert _derive_status({}, None) == AutonomousJobStatus.RUNNING
+    def test_enabled_no_failures_is_running(self):
+        assert _derive_status(True, 0) == AutonomousJobStatus.RUNNING
 
     def test_circuit_breaker_3_failures_is_error(self):
-        state = {"consecutive_failures": 3, "last_status": "failed"}
-        assert _derive_status({"enabled": True}, state) == AutonomousJobStatus.ERROR
+        assert _derive_status(True, 3) == AutonomousJobStatus.ERROR
 
     def test_one_failure_stays_running(self):
-        """Single transient failure should NOT show error."""
-        state = {"consecutive_failures": 1, "last_status": "failed"}
-        assert _derive_status({"enabled": True}, state) == AutonomousJobStatus.RUNNING
+        assert _derive_status(True, 1) == AutonomousJobStatus.RUNNING
 
     def test_two_failures_stays_running(self):
-        state = {"consecutive_failures": 2, "last_status": "failed"}
-        assert _derive_status({"enabled": True}, state) == AutonomousJobStatus.RUNNING
+        assert _derive_status(True, 2) == AutonomousJobStatus.RUNNING
 
-    def test_healthy_after_recovery(self):
-        state = {"consecutive_failures": 0, "last_status": "success"}
-        assert _derive_status({"enabled": True}, state) == AutonomousJobStatus.RUNNING
+    def test_five_failures_is_error(self):
+        assert _derive_status(True, 5) == AutonomousJobStatus.ERROR
 
-
-# ---------------------------------------------------------------------------
-# _map_category
-# ---------------------------------------------------------------------------
-
-
-class TestMapCategory:
-    def test_system(self):
-        assert _map_category("system") == AutonomousJobCategory.SYSTEM
-
-    def test_user(self):
-        assert _map_category("user") == AutonomousJobCategory.USER_DEFINED
-
-    def test_user_defined(self):
-        assert _map_category("user_defined") == AutonomousJobCategory.USER_DEFINED
-
-    def test_unknown_defaults_system(self):
-        assert _map_category("whatever") == AutonomousJobCategory.SYSTEM
+    def test_disabled_with_failures_still_paused(self):
+        """Disabled status takes precedence over failures."""
+        assert _derive_status(False, 10) == AutonomousJobStatus.PAUSED
 
 
 # ---------------------------------------------------------------------------
-# _load_jobs_yaml
-# ---------------------------------------------------------------------------
-
-
-class TestLoadJobsYaml:
-    def test_no_files_returns_empty(self, tmp_path):
-        with patch("routers.autonomous_jobs._JOBS_FILE", tmp_path / "nope.yaml"), \
-             patch("routers.autonomous_jobs._USER_JOBS_FILE", tmp_path / "nope2.yaml"):
-            assert _load_jobs_yaml() == []
-
-    def test_loads_system_jobs(self, tmp_path):
-        jobs_file = tmp_path / "jobs.yaml"
-        jobs_file.write_text(yaml.dump({"jobs": [
-            {"id": "j1", "name": "Job 1", "type": "signal_fetch", "schedule": "0 * * * *"},
-        ]}))
-        with patch("routers.autonomous_jobs._JOBS_FILE", jobs_file), \
-             patch("routers.autonomous_jobs._USER_JOBS_FILE", tmp_path / "nope.yaml"):
-            result = _load_jobs_yaml()
-            assert len(result) == 1
-            assert result[0]["id"] == "j1"
-
-    def test_deduplicates_across_files(self, tmp_path):
-        system = tmp_path / "jobs.yaml"
-        user = tmp_path / "user-jobs.yaml"
-        system.write_text(yaml.dump({"jobs": [{"id": "dup", "name": "System"}]}))
-        user.write_text(yaml.dump({"jobs": [{"id": "dup", "name": "User"}]}))
-        with patch("routers.autonomous_jobs._JOBS_FILE", system), \
-             patch("routers.autonomous_jobs._USER_JOBS_FILE", user):
-            result = _load_jobs_yaml()
-            assert len(result) == 1
-            assert result[0]["name"] == "System"  # system wins
-
-    def test_corrupt_yaml_returns_empty(self, tmp_path):
-        bad_file = tmp_path / "jobs.yaml"
-        bad_file.write_text(": invalid: yaml: [[[")
-        with patch("routers.autonomous_jobs._JOBS_FILE", bad_file), \
-             patch("routers.autonomous_jobs._USER_JOBS_FILE", tmp_path / "nope.yaml"):
-            result = _load_jobs_yaml()
-            assert result == []
-
-    def test_skips_jobs_without_id(self, tmp_path):
-        jobs_file = tmp_path / "jobs.yaml"
-        jobs_file.write_text(yaml.dump({"jobs": [
-            {"name": "No ID"},
-            {"id": "ok", "name": "Has ID"},
-        ]}))
-        with patch("routers.autonomous_jobs._JOBS_FILE", jobs_file), \
-             patch("routers.autonomous_jobs._USER_JOBS_FILE", tmp_path / "nope.yaml"):
-            result = _load_jobs_yaml()
-            assert len(result) == 1
-            assert result[0]["id"] == "ok"
-
-
-# ---------------------------------------------------------------------------
-# _load_state
-# ---------------------------------------------------------------------------
-
-
-class TestLoadState:
-    def test_no_file_returns_empty(self, tmp_path):
-        with patch("routers.autonomous_jobs._STATE_FILE", tmp_path / "nope.json"):
-            assert _load_state() == {}
-
-    def test_loads_valid_state(self, tmp_path):
-        state_file = tmp_path / "state.json"
-        state_data = {"jobs": {"j1": {"total_runs": 5, "last_status": "success"}}}
-        state_file.write_text(json.dumps(state_data))
-        with patch("routers.autonomous_jobs._STATE_FILE", state_file):
-            result = _load_state()
-            assert result["jobs"]["j1"]["total_runs"] == 5
-
-    def test_corrupt_json_returns_empty(self, tmp_path):
-        state_file = tmp_path / "state.json"
-        state_file.write_text("not json at all {{{")
-        with patch("routers.autonomous_jobs._STATE_FILE", state_file):
-            assert _load_state() == {}
-
-
-# ---------------------------------------------------------------------------
-# Full endpoint
+# Full endpoint — list_autonomous_jobs
 # ---------------------------------------------------------------------------
 
 
 class TestListAutonomousJobs:
     @pytest.mark.asyncio
-    async def test_empty_when_no_scheduler(self, tmp_path):
-        with patch("routers.autonomous_jobs._JOBS_FILE", tmp_path / "nope.yaml"), \
-             patch("routers.autonomous_jobs._USER_JOBS_FILE", tmp_path / "nope2.yaml"):
+    async def test_empty_when_load_fails(self):
+        """Gracefully returns empty list on import/load error."""
+        with patch("jobs.scheduler.load_jobs", side_effect=ImportError("no module")):
             result = await list_autonomous_jobs()
             assert result == []
 
     @pytest.mark.asyncio
-    async def test_returns_jobs_with_state(self, tmp_path):
-        jobs_file = tmp_path / "jobs.yaml"
-        jobs_file.write_text(yaml.dump({"jobs": [
-            {"id": "sig", "name": "Signal Fetch", "type": "signal_fetch",
-             "schedule": "0 8,14,20 * * *", "enabled": True, "category": "system"},
-            {"id": "inbox", "name": "Morning Inbox", "type": "agent_task",
-             "schedule": "0 0 * * 1-5", "enabled": False, "category": "user"},
-        ]}))
-        state_file = tmp_path / "state.json"
-        state_file.write_text(json.dumps({"jobs": {
+    async def test_returns_system_jobs(self):
+        jobs = [_make_job("sig", "Signal Fetch"), _make_job("tune", "Self Tune")]
+        state = _make_state({
             "sig": {
-                "last_run": "2026-03-23T14:07:19Z",
+                "last_run": datetime(2026, 3, 23, 14, 7, tzinfo=timezone.utc),
                 "last_status": "success",
                 "total_runs": 12,
                 "consecutive_failures": 0,
             },
-        }}))
-        with patch("routers.autonomous_jobs._JOBS_FILE", jobs_file), \
-             patch("routers.autonomous_jobs._USER_JOBS_FILE", tmp_path / "nope.yaml"), \
-             patch("routers.autonomous_jobs._STATE_FILE", state_file):
+        })
+
+        with patch("jobs.scheduler.load_jobs", return_value=jobs), \
+             patch("jobs.scheduler.load_state", return_value=state):
             result = await list_autonomous_jobs()
-            assert len(result) == 2
 
-            sig = result[0]
-            assert sig.id == "sig"
-            assert sig.status == AutonomousJobStatus.RUNNING
-            assert sig.total_runs == 12
-            assert sig.last_run_at == "2026-03-23T14:07:19Z"
+        assert len(result) == 2
+        sig = result[0]
+        assert sig.id == "sig"
+        assert sig.name == "Signal Fetch"
+        assert sig.status == AutonomousJobStatus.RUNNING
+        assert sig.category == AutonomousJobCategory.SYSTEM
+        assert sig.total_runs == 12
+        assert sig.last_run_at is not None
 
-            inbox = result[1]
-            assert inbox.id == "inbox"
-            assert inbox.status == AutonomousJobStatus.PAUSED
-            assert inbox.total_runs == 0
+        tune = result[1]
+        assert tune.id == "tune"
+        assert tune.total_runs == 0
+        assert tune.last_status == "never"
+
+    @pytest.mark.asyncio
+    async def test_disabled_job_shows_paused(self):
+        jobs = [_make_job("inbox", "Morning Inbox", enabled=False, category="user")]
+        state = _make_state()
+
+        with patch("jobs.scheduler.load_jobs", return_value=jobs), \
+             patch("jobs.scheduler.load_state", return_value=state):
+            result = await list_autonomous_jobs()
+
+        assert len(result) == 1
+        assert result[0].status == AutonomousJobStatus.PAUSED
+        assert result[0].category == AutonomousJobCategory.USER_DEFINED
+
+    @pytest.mark.asyncio
+    async def test_failing_job_shows_error(self):
+        jobs = [_make_job("broken", "Broken Job")]
+        state = _make_state({
+            "broken": {
+                "last_status": "failed",
+                "total_runs": 5,
+                "consecutive_failures": 3,
+            },
+        })
+
+        with patch("jobs.scheduler.load_jobs", return_value=jobs), \
+             patch("jobs.scheduler.load_state", return_value=state):
+            result = await list_autonomous_jobs()
+
+        assert result[0].status == AutonomousJobStatus.ERROR
+        assert result[0].consecutive_failures == 3
+
+    @pytest.mark.asyncio
+    async def test_user_category_mapping(self):
+        jobs = [
+            _make_job("j1", category="user"),
+            _make_job("j2", category="user"),  # Job model only allows "system"|"user"
+            _make_job("j3", category="system"),
+        ]
+        state = _make_state()
+
+        with patch("jobs.scheduler.load_jobs", return_value=jobs), \
+             patch("jobs.scheduler.load_state", return_value=state):
+            result = await list_autonomous_jobs()
+
+        assert result[0].category == AutonomousJobCategory.USER_DEFINED
+        assert result[1].category == AutonomousJobCategory.USER_DEFINED
+        assert result[2].category == AutonomousJobCategory.SYSTEM

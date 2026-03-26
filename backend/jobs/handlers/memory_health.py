@@ -27,9 +27,8 @@ from ..paths import SWARMWS, CONTEXT_DIR, DAILY_DIR
 
 logger = logging.getLogger("swarm.jobs.memory_health")
 
-# Haiku for routine maintenance — fast, cheap, good enough
-MODEL_ID = "us.anthropic.claude-3-5-haiku-20241022-v1:0"
-MAX_OUTPUT_TOKENS = 2048
+# LLM config — calls routed through llm_client.py (claude --print)
+# No direct boto3 calls — avoids geo-restriction on Bedrock InvokeModel
 
 
 def run_memory_health(dry_run: bool = False) -> dict:
@@ -190,43 +189,28 @@ Output ONLY the JSON object, nothing else."""
 
 
 def _call_haiku(prompt: str) -> dict:
-    """Call Bedrock Haiku and parse the JSON response."""
-    import boto3
+    """Call Haiku via claude --print and parse the JSON response.
 
-    client = boto3.client("bedrock-runtime", region_name="us-west-2")
-
-    body = json.dumps({
-        "anthropic_version": "bedrock-2023-05-31",
-        "max_tokens": MAX_OUTPUT_TOKENS,
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.2,  # Low temp for maintenance decisions
-    })
-
-    response = client.invoke_model(modelId=MODEL_ID, body=body)
-    result = json.loads(response["body"].read())
-
-    content = result["content"][0]["text"]
-    input_tokens = result.get("usage", {}).get("input_tokens", 0)
-    output_tokens = result.get("usage", {}).get("output_tokens", 0)
-
-    logger.info(
-        "Haiku response: %d input tokens, %d output tokens",
-        input_tokens, output_tokens,
-    )
-
-    # Parse JSON — handle markdown code fences
-    text = content.strip()
-    if text.startswith("```"):
-        text = text.split("\n", 1)[1] if "\n" in text else text[3:]
-        if text.endswith("```"):
-            text = text[:-3]
-        text = text.strip()
+    Uses the CLI's own auth/routing path, which works from any geo
+    location (no Anthropic geo-restriction on direct Bedrock calls).
+    """
+    from ..llm_client import llm_call_json, LLMCallError
 
     try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        logger.warning("Failed to parse Haiku JSON response, returning raw")
-        return {"summary": text, "parse_error": True}
+        result = llm_call_json(
+            prompt,
+            model="haiku",
+            max_budget_usd=0.50,
+            timeout_seconds=120,
+            system_prompt="You are a maintenance assistant. Output ONLY valid JSON.",
+        )
+        if isinstance(result, dict):
+            return result
+        # If list returned, wrap it
+        return {"items": result}
+    except LLMCallError as e:
+        logger.warning("LLM call failed: %s", e)
+        return {"summary": str(e), "parse_error": True}
 
 
 # ── Apply Changes ──────────────────────────────────────────────────
