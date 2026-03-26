@@ -28,7 +28,7 @@ from ..paths import SWARMWS, CONTEXT_DIR, DAILY_DIR
 logger = logging.getLogger("swarm.jobs.memory_health")
 
 # Haiku for routine maintenance — fast, cheap, good enough
-MODEL_ID = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+MODEL_ID = "us.anthropic.claude-sonnet-4-6"
 MAX_OUTPUT_TOKENS = 2048
 
 
