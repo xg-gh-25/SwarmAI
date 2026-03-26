@@ -238,7 +238,7 @@ story.append(make_table(
         ["Post-Session Hooks", "7 (auto-commit, DailyActivity, distillation, evolution ×2, context-health, improvement)"],
         ["Pipeline Stages", "8 (EVALUATE → REFLECT)"],
         ["Session States", "5 (COLD → STREAMING → IDLE → WAITING_INPUT → DEAD)"],
-        ["Core Engine Level", "L2 (Self-Improving) complete; L3 (Self-Governing) in progress"],
+        ["Core Engine Level", "L4 (Autonomous) — two compound-value loops closed: DDD auto-refresh + auto-skill proposals"],
         ["Channels", "Desktop + Slack + Feishu (unified brain)"],
         ["Tech Stack", "4 languages: Rust (Tauri), TypeScript (React), Python (FastAPI), SQL (SQLite)"],
     ],
@@ -295,7 +295,7 @@ story.append(body(
     "skills improve memory capture — compound growth with every interaction."
 ))
 story.append(img("swarm-core-engine"))
-story.append(caption("Figure 2: Swarm Core Engine — Six interconnected flywheels and growth trajectory (L2 current, L3 in progress)"))
+story.append(caption("Figure 2: Swarm Core Engine — Six interconnected flywheels and growth trajectory (L4 Autonomous — current)"))
 story.append(make_table(
     ["Flywheel", "What It Does", "Key Components"],
     [
@@ -312,11 +312,11 @@ story.append(heading("Growth Trajectory", 3))
 story.append(make_table(
     ["Level", "State", "Capabilities", "Status"],
     [
-        ["L0", "Reactive", "Responds to questions, no memory", "Passed"],
+        ["L0", "Reactive", "Responds to questions, no memory", "Complete"],
         ["L1", "Self-Maintaining", "Remembers, self-commits, captures corrections, health monitoring", "Complete"],
-        ["L2", "Self-Improving", "Weekly LLM maintenance, unified jobs, feedback loops closed (10/12)", "Complete"],
-        ["L3", "Self-Governing", "Session-type context, proactive gap detection, DDD auto-sync", "In Progress (3/6)"],
-        ["L4", "Autonomous", "Full AIDLC pipeline, self-directed learning, judgment framework", "Planned"],
+        ["L2", "Self-Improving", "Weekly LLM maintenance, unified jobs, feedback loops closed", "Complete"],
+        ["L3", "Self-Governing", "Session-type context, proactive gap detection, DDD auto-sync", "Complete"],
+        ["L4", "Autonomous", "Stale docs → auto-fix (DDD refresh), recurring gaps → auto-skill proposals. Two compound-value loops closed.", "Current"],
     ],
     col_widths=[CONTENT_W*0.07, CONTENT_W*0.16, CONTENT_W*0.55, CONTENT_W*0.22]
 ))

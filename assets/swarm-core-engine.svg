@@ -213,25 +213,24 @@
     <text x="240" y="26" text-anchor="middle" font-family="system-ui,-apple-system,sans-serif" font-size="8" font-weight="700" fill="#94a3b8">L1</text>
     <text x="240" y="50" text-anchor="middle" font-family="system-ui,-apple-system,sans-serif" font-size="9" fill="#64748b">Self-Maintaining</text>
 
-    <!-- L2 (current - highlighted) -->
-    <circle cx="420" cy="22" r="12" fill="#f59e0b" stroke="#fbbf24" stroke-width="2" filter="url(#glow)"/>
-    <text x="420" y="27" text-anchor="middle" font-family="system-ui,-apple-system,sans-serif" font-size="9" font-weight="800" fill="#1a1a2e">L2</text>
-    <text x="420" y="50" text-anchor="middle" font-family="system-ui,-apple-system,sans-serif" font-size="9" font-weight="600" fill="#fbbf24">Self-Improving</text>
-    <text x="420" y="64" text-anchor="middle" font-family="system-ui,-apple-system,sans-serif" font-size="8" fill="#94a3b8">(current)</text>
+    <!-- L2 -->
+    <circle cx="420" cy="22" r="8" fill="#334155" stroke="#64748b" stroke-width="1.5"/>
+    <text x="420" y="26" text-anchor="middle" font-family="system-ui,-apple-system,sans-serif" font-size="8" font-weight="700" fill="#94a3b8">L2</text>
+    <text x="420" y="50" text-anchor="middle" font-family="system-ui,-apple-system,sans-serif" font-size="9" fill="#64748b">Self-Improving</text>
 
-    <!-- L3 (in progress) -->
-    <circle cx="580" cy="22" r="10" fill="#1e1e36" stroke="#3b82f6" stroke-width="2"/>
-    <text x="580" y="26" text-anchor="middle" font-family="system-ui,-apple-system,sans-serif" font-size="8" font-weight="700" fill="#93c5fd">L3</text>
-    <text x="580" y="50" text-anchor="middle" font-family="system-ui,-apple-system,sans-serif" font-size="9" fill="#3b82f6">Self-Governing</text>
-    <text x="580" y="64" text-anchor="middle" font-family="system-ui,-apple-system,sans-serif" font-size="8" fill="#475569">(in progress)</text>
+    <!-- L3 -->
+    <circle cx="580" cy="22" r="8" fill="#334155" stroke="#64748b" stroke-width="1.5"/>
+    <text x="580" y="26" text-anchor="middle" font-family="system-ui,-apple-system,sans-serif" font-size="8" font-weight="700" fill="#94a3b8">L3</text>
+    <text x="580" y="50" text-anchor="middle" font-family="system-ui,-apple-system,sans-serif" font-size="9" fill="#64748b">Self-Governing</text>
 
-    <!-- L4 -->
-    <circle cx="760" cy="22" r="8" fill="#1e1e36" stroke="#10b981" stroke-width="1.5"/>
-    <text x="760" y="26" text-anchor="middle" font-family="system-ui,-apple-system,sans-serif" font-size="8" font-weight="700" fill="#6ee7b7">L4</text>
-    <text x="760" y="50" text-anchor="middle" font-family="system-ui,-apple-system,sans-serif" font-size="9" fill="#10b981">Autonomous</text>
+    <!-- L4 (current - highlighted) -->
+    <circle cx="760" cy="22" r="12" fill="#f59e0b" stroke="#fbbf24" stroke-width="2" filter="url(#glow)"/>
+    <text x="760" y="27" text-anchor="middle" font-family="system-ui,-apple-system,sans-serif" font-size="9" font-weight="800" fill="#1a1a2e">L4</text>
+    <text x="760" y="50" text-anchor="middle" font-family="system-ui,-apple-system,sans-serif" font-size="9" font-weight="600" fill="#fbbf24">Autonomous</text>
+    <text x="760" y="64" text-anchor="middle" font-family="system-ui,-apple-system,sans-serif" font-size="8" fill="#94a3b8">(current)</text>
 
-    <!-- Progress fill (L0 to L2) -->
-    <line x1="0" y1="22" x2="420" y2="22" stroke="#f59e0b" stroke-width="2.5" opacity="0.6"/>
+    <!-- Progress fill (L0 to L4 — full) -->
+    <line x1="0" y1="22" x2="760" y2="22" stroke="#f59e0b" stroke-width="2.5" opacity="0.6"/>
 
     <!-- Label -->
     <text x="400" y="82" text-anchor="middle" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="#64748b" letter-spacing="2">GROWTH TRAJECTORY</text>
