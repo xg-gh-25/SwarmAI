@@ -1,0 +1,174 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 480" width="960" height="480">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f1019"/>
+      <stop offset="100%" stop-color="#1a1a2e"/>
+    </linearGradient>
+    <linearGradient id="gold" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f59e0b"/>
+      <stop offset="100%" stop-color="#d97706"/>
+    </linearGradient>
+    <linearGradient id="blue" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#3b82f6"/>
+      <stop offset="100%" stop-color="#2563eb"/>
+    </linearGradient>
+    <linearGradient id="green" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#10b981"/>
+      <stop offset="100%" stop-color="#059669"/>
+    </linearGradient>
+    <linearGradient id="purple" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#8b5cf6"/>
+      <stop offset="100%" stop-color="#7c3aed"/>
+    </linearGradient>
+    <marker id="arrowGold" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#f59e0b" opacity="0.7"/>
+    </marker>
+    <marker id="arrowBlue" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#3b82f6" opacity="0.7"/>
+    </marker>
+  </defs>
+
+  <rect width="960" height="480" rx="16" fill="url(#bg)"/>
+
+  <!-- Grid -->
+  <g opacity="0.03" stroke="#f59e0b">
+    <line x1="0" y1="100" x2="960" y2="100" stroke-width="0.5"/>
+    <line x1="0" y1="200" x2="960" y2="200" stroke-width="0.5"/>
+    <line x1="0" y1="300" x2="960" y2="300" stroke-width="0.5"/>
+    <line x1="0" y1="400" x2="960" y2="400" stroke-width="0.5"/>
+    <line x1="320" y1="0" x2="320" y2="480" stroke-width="0.5"/>
+    <line x1="640" y1="0" x2="640" y2="480" stroke-width="0.5"/>
+  </g>
+
+  <!-- Title -->
+  <text x="480" y="38" text-anchor="middle" fill="#f59e0b" font-family="Arial,Helvetica,sans-serif" font-size="18" font-weight="bold" letter-spacing="2">THREE-COLUMN COMMAND CENTER</text>
+  <text x="480" y="56" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="11">One Integrated System: Chat Center Orchestrates Everything</text>
+
+  <!-- ============ COLUMN 1: SwarmWS (left) ============ -->
+  <rect x="30" y="75" width="270" height="340" rx="12" fill="#1e1e36" stroke="#10b981" stroke-width="1.2" opacity="0.95"/>
+  <rect x="30" y="75" width="270" height="340" rx="12" fill="url(#green)" opacity="0.03"/>
+
+  <text x="165" y="100" text-anchor="middle" fill="#6ee7b7" font-family="Arial,Helvetica,sans-serif" font-size="14" font-weight="bold">SwarmWS Explorer</text>
+  <text x="165" y="116" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Persistent local workspace</text>
+
+  <!-- Tree structure -->
+  <g fill="#94a3b8" font-family="monospace" font-size="10">
+    <text x="50" y="142" fill="#6ee7b7">Knowledge/</text>
+    <text x="70" y="158">Notes/</text>
+    <text x="70" y="174">Reports/</text>
+    <text x="70" y="190">DailyActivity/</text>
+    <text x="70" y="206">Library/</text>
+    <text x="50" y="228" fill="#6ee7b7">Projects/</text>
+    <text x="70" y="244">SwarmAI/</text>
+    <text x="90" y="260" fill="#64748b">PRODUCT.md</text>
+    <text x="90" y="276" fill="#64748b">TECH.md</text>
+    <text x="50" y="298" fill="#6ee7b7">.context/</text>
+    <text x="70" y="314">MEMORY.md</text>
+    <text x="70" y="330">EVOLUTION.md</text>
+    <text x="70" y="346">USER.md</text>
+    <text x="70" y="362" fill="#64748b">+8 more files</text>
+  </g>
+
+  <!-- Git status indicators -->
+  <rect x="210" y="183" width="10" height="10" rx="2" fill="#f59e0b" opacity="0.4"/>
+  <rect x="210" y="307" width="10" height="10" rx="2" fill="#10b981" opacity="0.4"/>
+  <rect x="210" y="323" width="10" height="10" rx="2" fill="#10b981" opacity="0.4"/>
+
+  <text x="165" y="395" text-anchor="middle" fill="#10b981" font-family="Arial,Helvetica,sans-serif" font-size="9" opacity="0.6">git-tracked + ETag polling</text>
+
+  <!-- ============ COLUMN 2: Chat Center (center) ============ -->
+  <rect x="340" y="75" width="280" height="340" rx="12" fill="#1e1e36" stroke="#3b82f6" stroke-width="1.5" opacity="0.95"/>
+  <rect x="340" y="75" width="280" height="340" rx="12" fill="url(#blue)" opacity="0.03"/>
+
+  <text x="480" y="100" text-anchor="middle" fill="#60a5fa" font-family="Arial,Helvetica,sans-serif" font-size="14" font-weight="bold">Chat Center</text>
+  <text x="480" y="116" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Multi-session command surface</text>
+
+  <!-- Tab bar -->
+  <rect x="358" y="130" width="80" height="24" rx="5" fill="#3b82f6" fill-opacity="0.15" stroke="#3b82f6" stroke-width="0.8"/>
+  <text x="398" y="146" text-anchor="middle" fill="#93c5fd" font-family="Arial,Helvetica,sans-serif" font-size="9" font-weight="bold">Tab 1</text>
+
+  <rect x="446" y="130" width="80" height="24" rx="5" fill="#3b82f6" fill-opacity="0.06" stroke="#3b82f6" stroke-width="0.5" stroke-opacity="0.3"/>
+  <text x="486" y="146" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="9">Tab 2</text>
+
+  <rect x="534" y="130" width="30" height="24" rx="5" fill="#3b82f6" fill-opacity="0.04" stroke="#3b82f6" stroke-width="0.5" stroke-opacity="0.2"/>
+  <text x="549" y="146" text-anchor="middle" fill="#475569" font-family="Arial,Helvetica,sans-serif" font-size="10">+</text>
+
+  <!-- Chat messages -->
+  <rect x="358" y="166" width="244" height="30" rx="6" fill="#3b82f6" fill-opacity="0.06"/>
+  <text x="368" y="185" fill="#93c5fd" font-family="Arial,Helvetica,sans-serif" font-size="9">"Summarize today's notes"</text>
+
+  <rect x="358" y="202" width="244" height="30" rx="6" fill="#f59e0b" fill-opacity="0.04"/>
+  <text x="368" y="221" fill="#fbbf24" font-family="Arial,Helvetica,sans-serif" font-size="9">Here are today's key points...</text>
+
+  <rect x="358" y="240" width="244" height="30" rx="6" fill="#3b82f6" fill-opacity="0.06"/>
+  <text x="368" y="259" fill="#93c5fd" font-family="Arial,Helvetica,sans-serif" font-size="9">"Create a todo for auth refactor"</text>
+
+  <rect x="358" y="276" width="244" height="30" rx="6" fill="#f59e0b" fill-opacity="0.04"/>
+  <text x="368" y="295" fill="#fbbf24" font-family="Arial,Helvetica,sans-serif" font-size="9">Done. Added to Radar.</text>
+
+  <rect x="358" y="314" width="244" height="30" rx="6" fill="#3b82f6" fill-opacity="0.06"/>
+  <text x="368" y="333" fill="#93c5fd" font-family="Arial,Helvetica,sans-serif" font-size="9">"Remember to deploy at 10am"</text>
+
+  <rect x="358" y="350" width="244" height="30" rx="6" fill="#f59e0b" fill-opacity="0.04"/>
+  <text x="368" y="369" fill="#fbbf24" font-family="Arial,Helvetica,sans-serif" font-size="9">Saved to MEMORY.md.</text>
+
+  <text x="480" y="400" text-anchor="middle" fill="#3b82f6" font-family="Arial,Helvetica,sans-serif" font-size="9" opacity="0.6">55+ skills | SSE streaming | per-tab state</text>
+
+  <!-- ============ COLUMN 3: Swarm Radar (right) ============ -->
+  <rect x="660" y="75" width="270" height="340" rx="12" fill="#1e1e36" stroke="#8b5cf6" stroke-width="1.2" opacity="0.95"/>
+  <rect x="660" y="75" width="270" height="340" rx="12" fill="url(#purple)" opacity="0.03"/>
+
+  <text x="795" y="100" text-anchor="middle" fill="#a78bfa" font-family="Arial,Helvetica,sans-serif" font-size="14" font-weight="bold">Swarm Radar</text>
+  <text x="795" y="116" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Attention dashboard</text>
+
+  <!-- ToDos section -->
+  <text x="680" y="140" fill="#a78bfa" font-family="Arial,Helvetica,sans-serif" font-size="10" font-weight="bold">ToDos</text>
+  <rect x="680" y="148" width="230" height="24" rx="4" fill="#8b5cf6" fill-opacity="0.06"/>
+  <circle cx="694" cy="160" r="4" fill="#ef4444" opacity="0.6"/>
+  <text x="704" y="164" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Fix auth race condition</text>
+  <rect x="680" y="176" width="230" height="24" rx="4" fill="#8b5cf6" fill-opacity="0.04"/>
+  <circle cx="694" cy="188" r="4" fill="#f59e0b" opacity="0.6"/>
+  <text x="704" y="192" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Auth refactor (just added)</text>
+
+  <!-- Active Sessions -->
+  <text x="680" y="222" fill="#a78bfa" font-family="Arial,Helvetica,sans-serif" font-size="10" font-weight="bold">Active Sessions</text>
+  <rect x="680" y="230" width="230" height="24" rx="4" fill="#3b82f6" fill-opacity="0.06"/>
+  <circle cx="694" cy="242" r="4" fill="#10b981"/>
+  <text x="704" y="246" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Tab 1 - STREAMING</text>
+  <rect x="680" y="258" width="230" height="24" rx="4" fill="#3b82f6" fill-opacity="0.04"/>
+  <circle cx="694" cy="270" r="4" fill="#64748b"/>
+  <text x="704" y="274" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Tab 2 - IDLE</text>
+
+  <!-- Background Jobs -->
+  <text x="680" y="304" fill="#a78bfa" font-family="Arial,Helvetica,sans-serif" font-size="10" font-weight="bold">Background Jobs</text>
+  <rect x="680" y="312" width="230" height="24" rx="4" fill="#06b6d4" fill-opacity="0.06"/>
+  <text x="704" y="328" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Morning inbox (daily 8am)</text>
+  <rect x="680" y="340" width="230" height="24" rx="4" fill="#06b6d4" fill-opacity="0.04"/>
+  <text x="704" y="356" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Self-tune (daily)</text>
+  <rect x="680" y="368" width="230" height="24" rx="4" fill="#06b6d4" fill-opacity="0.04"/>
+  <text x="704" y="382" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Signal digest (daily)</text>
+
+  <text x="795" y="405" text-anchor="middle" fill="#8b5cf6" font-family="Arial,Helvetica,sans-serif" font-size="9" opacity="0.6">drag-to-chat for instant context</text>
+
+  <!-- ============ INTERACTION ARROWS ============ -->
+  <!-- Chat -> SwarmWS (left) -->
+  <path d="M 348,220 C 320,220 310,220 300,220" stroke="#3b82f6" stroke-width="1.5" opacity="0.4" marker-end="url(#arrowBlue)"/>
+  <text x="324" y="214" text-anchor="middle" fill="#3b82f6" font-family="Arial,Helvetica,sans-serif" font-size="7" opacity="0.6">write</text>
+
+  <!-- Chat -> Radar (right) -->
+  <path d="M 612,290 C 630,290 640,290 660,290" stroke="#3b82f6" stroke-width="1.5" opacity="0.4" marker-end="url(#arrowBlue)"/>
+  <text x="636" y="284" text-anchor="middle" fill="#3b82f6" font-family="Arial,Helvetica,sans-serif" font-size="7" opacity="0.6">create</text>
+
+  <!-- SwarmWS -> Chat (drag) -->
+  <path d="M 300,260 C 310,260 320,260 348,260" stroke="#10b981" stroke-width="1" opacity="0.3" stroke-dasharray="4 3"/>
+  <text x="324" y="272" text-anchor="middle" fill="#10b981" font-family="Arial,Helvetica,sans-serif" font-size="7" opacity="0.6">drag</text>
+
+  <!-- Radar -> Chat (drag) -->
+  <path d="M 660,250 C 640,250 630,250 612,250" stroke="#8b5cf6" stroke-width="1" opacity="0.3" stroke-dasharray="4 3"/>
+  <text x="636" y="246" text-anchor="middle" fill="#8b5cf6" font-family="Arial,Helvetica,sans-serif" font-size="7" opacity="0.6">drag</text>
+
+  <!-- ============ BOTTOM: Drag-to-chat explanation ============ -->
+  <rect x="30" y="428" width="900" height="38" rx="8" fill="#f59e0b" fill-opacity="0.04" stroke="#f59e0b" stroke-width="0.8" stroke-dasharray="4 2" stroke-opacity="0.3"/>
+  <text x="480" y="448" text-anchor="middle" fill="#f59e0b" font-family="Arial,Helvetica,sans-serif" font-size="10" font-weight="bold" opacity="0.7">DRAG-TO-CHAT</text>
+  <text x="480" y="460" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Drag any file from Explorer or any ToDo/Artifact from Radar into Chat. Agent gets full context and starts executing immediately.</text>
+</svg>

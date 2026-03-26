@@ -1,0 +1,346 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 820" width="960" height="820">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f1019"/>
+      <stop offset="100%" stop-color="#1a1a2e"/>
+    </linearGradient>
+    <linearGradient id="gold" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f59e0b"/>
+      <stop offset="100%" stop-color="#d97706"/>
+    </linearGradient>
+    <linearGradient id="blue" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#3b82f6"/>
+      <stop offset="100%" stop-color="#2563eb"/>
+    </linearGradient>
+    <linearGradient id="purple" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#8b5cf6"/>
+      <stop offset="100%" stop-color="#7c3aed"/>
+    </linearGradient>
+    <linearGradient id="green" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#10b981"/>
+      <stop offset="100%" stop-color="#059669"/>
+    </linearGradient>
+    <linearGradient id="red" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ef4444"/>
+      <stop offset="100%" stop-color="#dc2626"/>
+    </linearGradient>
+    <linearGradient id="cyan" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#06b6d4"/>
+      <stop offset="100%" stop-color="#0891b2"/>
+    </linearGradient>
+    <linearGradient id="pink" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ec4899"/>
+      <stop offset="100%" stop-color="#db2777"/>
+    </linearGradient>
+    <linearGradient id="harnessGlow" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f59e0b" stop-opacity="0.08"/>
+      <stop offset="100%" stop-color="#d97706" stop-opacity="0.03"/>
+    </linearGradient>
+    <marker id="arrowDown" markerWidth="8" markerHeight="6" refX="4" refY="6" orient="auto">
+      <polygon points="0 0, 8 0, 4 6" fill="#f59e0b" opacity="0.5"/>
+    </marker>
+    <marker id="arrowUp" markerWidth="8" markerHeight="6" refX="4" refY="0" orient="auto">
+      <polygon points="0 6, 8 6, 4 0" fill="#8b5cf6" opacity="0.5"/>
+    </marker>
+    <marker id="arrowRight" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#f59e0b" opacity="0.5"/>
+    </marker>
+  </defs>
+
+  <rect width="960" height="820" rx="16" fill="url(#bg)"/>
+
+  <!-- Subtle grid -->
+  <g opacity="0.02" stroke="#f59e0b">
+    <line x1="0" y1="100" x2="960" y2="100" stroke-width="0.5"/>
+    <line x1="0" y1="200" x2="960" y2="200" stroke-width="0.5"/>
+    <line x1="0" y1="300" x2="960" y2="300" stroke-width="0.5"/>
+    <line x1="0" y1="400" x2="960" y2="400" stroke-width="0.5"/>
+    <line x1="0" y1="500" x2="960" y2="500" stroke-width="0.5"/>
+    <line x1="0" y1="600" x2="960" y2="600" stroke-width="0.5"/>
+    <line x1="0" y1="700" x2="960" y2="700" stroke-width="0.5"/>
+    <line x1="240" y1="0" x2="240" y2="820" stroke-width="0.5"/>
+    <line x1="480" y1="0" x2="480" y2="820" stroke-width="0.5"/>
+    <line x1="720" y1="0" x2="720" y2="820" stroke-width="0.5"/>
+  </g>
+
+  <!-- ================================================================ -->
+  <!-- TITLE -->
+  <!-- ================================================================ -->
+  <text x="480" y="36" text-anchor="middle" fill="#f59e0b" font-family="Arial,Helvetica,sans-serif" font-size="20" font-weight="bold" letter-spacing="3">SWARMAI  —  AGENTIC OS ARCHITECTURE</text>
+  <text x="480" y="56" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="11" letter-spacing="1">Harness Engineering: How a Stateless LLM Becomes a Persistent, Evolving Agent</text>
+
+  <!-- Layer labels (right edge) -->
+  <g fill="#334155" font-family="Arial,Helvetica,sans-serif" font-size="9" letter-spacing="1">
+    <text x="940" y="100" text-anchor="end" transform="rotate(-90,940,100)">INTERFACE</text>
+    <text x="940" y="258" text-anchor="end" transform="rotate(-90,940,258)">INTELLIGENCE</text>
+    <text x="940" y="430" text-anchor="end" transform="rotate(-90,940,430)">HARNESS</text>
+    <text x="940" y="582" text-anchor="end" transform="rotate(-90,940,582)">SESSION</text>
+    <text x="940" y="688" text-anchor="end" transform="rotate(-90,940,688)">ENGINE</text>
+    <text x="940" y="776" text-anchor="end" transform="rotate(-90,940,776)">PLATFORM</text>
+  </g>
+
+  <!-- ================================================================ -->
+  <!-- LAYER 5: INTERFACE (top) -->
+  <!-- ================================================================ -->
+  <rect x="30" y="70" width="895" height="120" rx="12" fill="none" stroke="#3b82f6" stroke-width="1" stroke-opacity="0.3" stroke-dasharray="6 3"/>
+
+  <!-- SwarmWS Explorer -->
+  <rect x="45" y="82" width="200" height="95" rx="8" fill="#1e1e36" stroke="#10b981" stroke-width="1.2" opacity="0.95"/>
+  <rect x="45" y="82" width="200" height="95" rx="8" fill="url(#green)" opacity="0.04"/>
+  <text x="145" y="102" text-anchor="middle" fill="#6ee7b7" font-family="Arial,Helvetica,sans-serif" font-size="11" font-weight="bold">SwarmWS Explorer</text>
+  <text x="145" y="118" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Knowledge/ Projects/ .context/</text>
+  <text x="145" y="134" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Git-tracked + ETag polling</text>
+  <text x="145" y="150" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Drag-to-chat context inject</text>
+  <text x="145" y="168" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="8">workspace_api.py + ExplorerContext</text>
+
+  <!-- Chat Center -->
+  <rect x="260" y="82" width="240" height="95" rx="8" fill="#1e1e36" stroke="#3b82f6" stroke-width="1.5" opacity="0.95"/>
+  <rect x="260" y="82" width="240" height="95" rx="8" fill="url(#blue)" opacity="0.04"/>
+  <text x="380" y="102" text-anchor="middle" fill="#60a5fa" font-family="Arial,Helvetica,sans-serif" font-size="11" font-weight="bold">Chat Center (1-4 tabs)</text>
+  <text x="380" y="118" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">SSE streaming + per-tab state</text>
+  <text x="380" y="134" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">55+ skills + MCP tools</text>
+  <text x="380" y="150" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Abort / retry / tab persistence</text>
+  <text x="380" y="168" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="8">ChatPage + useChatStreamingLifecycle</text>
+
+  <!-- Swarm Radar -->
+  <rect x="515" y="82" width="190" height="95" rx="8" fill="#1e1e36" stroke="#8b5cf6" stroke-width="1.2" opacity="0.95"/>
+  <rect x="515" y="82" width="190" height="95" rx="8" fill="url(#purple)" opacity="0.04"/>
+  <text x="610" y="102" text-anchor="middle" fill="#a78bfa" font-family="Arial,Helvetica,sans-serif" font-size="11" font-weight="bold">Swarm Radar</text>
+  <text x="610" y="118" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">ToDos + Sessions + Artifacts</text>
+  <text x="610" y="134" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Background Jobs + Signals</text>
+  <text x="610" y="150" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Drag-to-chat work packets</text>
+  <text x="610" y="168" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="8">todo_manager + tscc_state_manager</text>
+
+  <!-- Channel Gateway -->
+  <rect x="720" y="82" width="190" height="95" rx="8" fill="#1e1e36" stroke="#ec4899" stroke-width="1.2" opacity="0.95"/>
+  <rect x="720" y="82" width="190" height="95" rx="8" fill="url(#pink)" opacity="0.04"/>
+  <text x="815" y="102" text-anchor="middle" fill="#f472b6" font-family="Arial,Helvetica,sans-serif" font-size="11" font-weight="bold">Channel Gateway</text>
+  <rect x="735" y="112" width="50" height="18" rx="4" fill="#ec4899" fill-opacity="0.1" stroke="#ec4899" stroke-width="0.5"/>
+  <text x="760" y="125" text-anchor="middle" fill="#f472b6" font-family="Arial,Helvetica,sans-serif" font-size="8">Slack</text>
+  <rect x="793" y="112" width="50" height="18" rx="4" fill="#06b6d4" fill-opacity="0.1" stroke="#06b6d4" stroke-width="0.5"/>
+  <text x="818" y="125" text-anchor="middle" fill="#22d3ee" font-family="Arial,Helvetica,sans-serif" font-size="8">Feishu</text>
+  <rect x="851" y="112" width="44" height="18" rx="4" fill="#334155" stroke="#475569" stroke-width="0.5" stroke-dasharray="2 2"/>
+  <text x="873" y="125" text-anchor="middle" fill="#475569" font-family="Arial,Helvetica,sans-serif" font-size="7">Future</text>
+  <text x="815" y="150" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">1 dedicated slot, shared session</text>
+  <text x="815" y="168" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="8">gateway.py + adapters/ + registry.py</text>
+
+  <!-- ================================================================ -->
+  <!-- LAYER 4: INTELLIGENCE -->
+  <!-- ================================================================ -->
+  <rect x="30" y="204" width="895" height="108" rx="12" fill="none" stroke="#8b5cf6" stroke-width="1" stroke-opacity="0.3" stroke-dasharray="6 3"/>
+
+  <!-- Proactive Intelligence -->
+  <rect x="45" y="216" width="200" height="82" rx="8" fill="#1e1e36" stroke="#8b5cf6" stroke-width="1.2" opacity="0.95"/>
+  <rect x="45" y="216" width="200" height="82" rx="8" fill="url(#purple)" opacity="0.04"/>
+  <text x="145" y="238" text-anchor="middle" fill="#c4b5fd" font-family="Arial,Helvetica,sans-serif" font-size="11" font-weight="bold">Proactive Intelligence</text>
+  <text x="145" y="256" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Session briefing + suggestions</text>
+  <text x="145" y="270" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">L0-L4: parse, time, score, learn</text>
+  <text x="145" y="288" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="8">proactive_intelligence.py (1,142 lines)</text>
+
+  <!-- Signal Pipeline -->
+  <rect x="260" y="216" width="160" height="82" rx="8" fill="#1e1e36" stroke="#06b6d4" stroke-width="1.2" opacity="0.95"/>
+  <rect x="260" y="216" width="160" height="82" rx="8" fill="url(#cyan)" opacity="0.04"/>
+  <text x="340" y="238" text-anchor="middle" fill="#67e8f9" font-family="Arial,Helvetica,sans-serif" font-size="11" font-weight="bold">Signal Pipeline</text>
+  <text x="340" y="256" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">HN + RSS + GitHub signals</text>
+  <text x="340" y="270" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Daily digest + weekly rollup</text>
+  <text x="340" y="288" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="8">signal_fetch + signal_digest</text>
+
+  <!-- Autonomous Pipeline -->
+  <rect x="435" y="216" width="220" height="82" rx="8" fill="#1e1e36" stroke="#10b981" stroke-width="1.5" opacity="0.95"/>
+  <rect x="435" y="216" width="220" height="82" rx="8" fill="url(#green)" opacity="0.04"/>
+  <text x="545" y="238" text-anchor="middle" fill="#6ee7b7" font-family="Arial,Helvetica,sans-serif" font-size="11" font-weight="bold">Autonomous Pipeline</text>
+  <text x="545" y="256" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">8 stages: EVALUATE to REFLECT</text>
+  <text x="545" y="270" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">DDD + SDD + TDD methodology</text>
+  <text x="545" y="288" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="8">s_autonomous-pipeline + artifact_registry</text>
+
+  <!-- Job System -->
+  <rect x="670" y="216" width="240" height="82" rx="8" fill="#1e1e36" stroke="#f59e0b" stroke-width="1.2" opacity="0.95"/>
+  <rect x="670" y="216" width="240" height="82" rx="8" fill="url(#gold)" opacity="0.04"/>
+  <text x="790" y="238" text-anchor="middle" fill="#fbbf24" font-family="Arial,Helvetica,sans-serif" font-size="11" font-weight="bold">Job System</text>
+  <text x="790" y="256" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">launchd scheduler + user/system jobs</text>
+  <text x="790" y="270" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Morning inbox, self-tune, signals</text>
+  <text x="790" y="288" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="8">job_manager + executor + scheduler</text>
+
+  <!-- ================================================================ -->
+  <!-- LAYER 3: HARNESS (THE CORE — expanded, highlighted) -->
+  <!-- ================================================================ -->
+  <rect x="24" y="326" width="908" height="204" rx="14" fill="url(#harnessGlow)" stroke="#f59e0b" stroke-width="2" stroke-opacity="0.6"/>
+
+  <!-- Harness label -->
+  <text x="480" y="346" text-anchor="middle" fill="#f59e0b" font-family="Arial,Helvetica,sans-serif" font-size="13" font-weight="bold" letter-spacing="3">THE HARNESS — What Makes a Raw LLM into an Agentic OS</text>
+
+  <!-- Context Engineering -->
+  <rect x="40" y="360" width="210" height="155" rx="10" fill="#1e1e36" stroke="#f59e0b" stroke-width="1.5" opacity="0.95"/>
+  <rect x="40" y="360" width="210" height="155" rx="10" fill="url(#gold)" opacity="0.04"/>
+  <text x="145" y="382" text-anchor="middle" fill="#fbbf24" font-family="Arial,Helvetica,sans-serif" font-size="11" font-weight="bold">Context Engineering</text>
+  <line x1="55" y1="390" x2="235" y2="390" stroke="#f59e0b" stroke-width="0.5" opacity="0.2"/>
+  <text x="55" y="406" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">11-file P0-P10 priority chain</text>
+  <text x="55" y="422" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Token budget (100K for 1M)</text>
+  <text x="55" y="438" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Priority-based truncation</text>
+  <text x="55" y="454" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">L0/L1 git-first caching</text>
+  <text x="55" y="470" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Session-type-aware loading</text>
+  <text x="55" y="486" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">DailyActivity + briefing inject</text>
+  <text x="145" y="507" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="8">context_directory_loader + prompt_builder</text>
+
+  <!-- Memory Pipeline -->
+  <rect x="265" y="360" width="210" height="155" rx="10" fill="#1e1e36" stroke="#3b82f6" stroke-width="1.5" opacity="0.95"/>
+  <rect x="265" y="360" width="210" height="155" rx="10" fill="url(#blue)" opacity="0.04"/>
+  <text x="370" y="382" text-anchor="middle" fill="#93c5fd" font-family="Arial,Helvetica,sans-serif" font-size="11" font-weight="bold">Memory Pipeline</text>
+  <line x1="280" y1="390" x2="460" y2="390" stroke="#3b82f6" stroke-width="0.5" opacity="0.2"/>
+  <text x="280" y="406" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">3-layer distillation</text>
+  <text x="280" y="422" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Session -> DailyActivity -> MEMORY</text>
+  <text x="280" y="438" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Git cross-reference verification</text>
+  <text x="280" y="454" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Weekly LLM maintenance</text>
+  <text x="280" y="470" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">COE registry + open threads</text>
+  <text x="280" y="486" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Auto-distillation (>=3 files)</text>
+  <text x="370" y="507" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="8">daily_activity_hook + distillation_hook</text>
+
+  <!-- Self-Evolution -->
+  <rect x="490" y="360" width="210" height="155" rx="10" fill="#1e1e36" stroke="#8b5cf6" stroke-width="1.5" opacity="0.95"/>
+  <rect x="490" y="360" width="210" height="155" rx="10" fill="url(#purple)" opacity="0.04"/>
+  <text x="595" y="382" text-anchor="middle" fill="#c4b5fd" font-family="Arial,Helvetica,sans-serif" font-size="11" font-weight="bold">Self-Evolution</text>
+  <line x1="505" y1="390" x2="685" y2="390" stroke="#8b5cf6" stroke-width="0.5" opacity="0.2"/>
+  <text x="505" y="406" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">EVOLUTION.md persistent registry</text>
+  <text x="505" y="422" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Gap detection (reactive + proactive)</text>
+  <text x="505" y="438" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Skill building + validation</text>
+  <text x="505" y="454" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Correction capture (permanent)</text>
+  <text x="505" y="470" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Competence tracking + archival</text>
+  <text x="505" y="486" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">55+ skills (self-built + curated)</text>
+  <text x="595" y="507" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="8">evolution_*_hook + skill_manager</text>
+
+  <!-- Safety + Harness -->
+  <rect x="715" y="360" width="200" height="155" rx="10" fill="#1e1e36" stroke="#ef4444" stroke-width="1.5" opacity="0.95"/>
+  <rect x="715" y="360" width="200" height="155" rx="10" fill="url(#red)" opacity="0.04"/>
+  <text x="815" y="382" text-anchor="middle" fill="#fca5a5" font-family="Arial,Helvetica,sans-serif" font-size="11" font-weight="bold">Safety + Self-Harness</text>
+  <line x1="730" y1="390" x2="900" y2="390" stroke="#ef4444" stroke-width="0.5" opacity="0.2"/>
+  <text x="730" y="406" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Tool logger (audit trail)</text>
+  <text x="730" y="422" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Command blocker (13 patterns)</text>
+  <text x="730" y="438" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Permission dialog + persistence</text>
+  <text x="730" y="454" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">ContextHealthHook (light+deep)</text>
+  <text x="730" y="470" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">DDD staleness detection</text>
+  <text x="730" y="486" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Auto-commit + index refresh</text>
+  <text x="815" y="507" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="8">security_hooks + context_health_hook</text>
+
+  <!-- ================================================================ -->
+  <!-- LAYER 2: SESSION MANAGEMENT -->
+  <!-- ================================================================ -->
+  <rect x="30" y="544" width="895" height="82" rx="12" fill="none" stroke="#06b6d4" stroke-width="1" stroke-opacity="0.3" stroke-dasharray="6 3"/>
+
+  <!-- SessionRouter -->
+  <rect x="45" y="556" width="190" height="58" rx="8" fill="#1e1e36" stroke="#06b6d4" stroke-width="1.2" opacity="0.95"/>
+  <rect x="45" y="556" width="190" height="58" rx="8" fill="url(#cyan)" opacity="0.04"/>
+  <text x="140" y="576" text-anchor="middle" fill="#67e8f9" font-family="Arial,Helvetica,sans-serif" font-size="10" font-weight="bold">SessionRouter</text>
+  <text x="140" y="592" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="8">Slot acquisition + IDLE eviction</text>
+  <text x="140" y="604" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="8">MAX_CONCURRENT=2, queue 60s</text>
+
+  <!-- SessionUnit -->
+  <rect x="250" y="556" width="190" height="58" rx="8" fill="#1e1e36" stroke="#10b981" stroke-width="1.2" opacity="0.95"/>
+  <rect x="250" y="556" width="190" height="58" rx="8" fill="url(#green)" opacity="0.04"/>
+  <text x="345" y="576" text-anchor="middle" fill="#6ee7b7" font-family="Arial,Helvetica,sans-serif" font-size="10" font-weight="bold">SessionUnit (5-state)</text>
+  <text x="345" y="592" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="8">COLD-STREAMING-IDLE-WAIT-DEAD</text>
+  <text x="345" y="604" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="8">3x retry + --resume + SSE</text>
+
+  <!-- LifecycleManager -->
+  <rect x="455" y="556" width="190" height="58" rx="8" fill="#1e1e36" stroke="#f59e0b" stroke-width="1.2" opacity="0.95"/>
+  <rect x="455" y="556" width="190" height="58" rx="8" fill="url(#gold)" opacity="0.04"/>
+  <text x="550" y="576" text-anchor="middle" fill="#fbbf24" font-family="Arial,Helvetica,sans-serif" font-size="10" font-weight="bold">LifecycleManager</text>
+  <text x="550" y="592" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="8">60s health loop + 12hr TTL</text>
+  <text x="550" y="604" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="8">Orphan reaper + dead cleanup</text>
+
+  <!-- Post-Session Hooks -->
+  <rect x="660" y="556" width="250" height="58" rx="8" fill="#1e1e36" stroke="#8b5cf6" stroke-width="1.2" opacity="0.95"/>
+  <rect x="660" y="556" width="250" height="58" rx="8" fill="url(#purple)" opacity="0.04"/>
+  <text x="785" y="576" text-anchor="middle" fill="#c4b5fd" font-family="Arial,Helvetica,sans-serif" font-size="10" font-weight="bold">Post-Session Hooks</text>
+  <text x="785" y="592" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="8">DailyActivity | auto-commit | distillation</text>
+  <text x="785" y="604" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="8">evolution | context-health | improvement</text>
+
+  <!-- ================================================================ -->
+  <!-- LAYER 1: AI ENGINE -->
+  <!-- ================================================================ -->
+  <rect x="30" y="640" width="895" height="66" rx="12" fill="none" stroke="#10b981" stroke-width="1" stroke-opacity="0.3" stroke-dasharray="6 3"/>
+
+  <!-- Claude Agent SDK -->
+  <rect x="45" y="652" width="215" height="42" rx="8" fill="#1e1e36" stroke="#10b981" stroke-width="1.2" opacity="0.95"/>
+  <rect x="45" y="652" width="215" height="42" rx="8" fill="url(#green)" opacity="0.04"/>
+  <text x="152" y="670" text-anchor="middle" fill="#6ee7b7" font-family="Arial,Helvetica,sans-serif" font-size="10" font-weight="bold">Claude Agent SDK</text>
+  <text x="152" y="686" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="8">CLI subprocess + --resume + sandbox</text>
+
+  <!-- Bedrock / Anthropic -->
+  <rect x="275" y="652" width="180" height="42" rx="8" fill="#1e1e36" stroke="#f59e0b" stroke-width="1.2" opacity="0.95"/>
+  <rect x="275" y="652" width="180" height="42" rx="8" fill="url(#gold)" opacity="0.04"/>
+  <text x="365" y="670" text-anchor="middle" fill="#fbbf24" font-family="Arial,Helvetica,sans-serif" font-size="10" font-weight="bold">Bedrock / Anthropic API</text>
+  <text x="365" y="686" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="8">Opus 4.6 (1M) + Sonnet 4.6</text>
+
+  <!-- MCP Servers -->
+  <rect x="470" y="652" width="180" height="42" rx="8" fill="#1e1e36" stroke="#8b5cf6" stroke-width="1.2" opacity="0.95"/>
+  <rect x="470" y="652" width="180" height="42" rx="8" fill="url(#purple)" opacity="0.04"/>
+  <text x="560" y="670" text-anchor="middle" fill="#c4b5fd" font-family="Arial,Helvetica,sans-serif" font-size="10" font-weight="bold">MCP Servers (5+)</text>
+  <text x="560" y="686" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="8">GitHub, Slack, Sentral, Taskei, Builder</text>
+
+  <!-- Skills Engine -->
+  <rect x="665" y="652" width="245" height="42" rx="8" fill="#1e1e36" stroke="#06b6d4" stroke-width="1.2" opacity="0.95"/>
+  <rect x="665" y="652" width="245" height="42" rx="8" fill="url(#cyan)" opacity="0.04"/>
+  <text x="787" y="670" text-anchor="middle" fill="#67e8f9" font-family="Arial,Helvetica,sans-serif" font-size="10" font-weight="bold">Skills Engine (55+ skills)</text>
+  <text x="787" y="686" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="8">skill_manager + SKILL.md discovery + lazy load</text>
+
+  <!-- ================================================================ -->
+  <!-- LAYER 0: PLATFORM -->
+  <!-- ================================================================ -->
+  <rect x="30" y="720" width="895" height="55" rx="12" fill="none" stroke="#334155" stroke-width="1" stroke-opacity="0.3" stroke-dasharray="6 3"/>
+
+  <rect x="45" y="730" width="140" height="34" rx="6" fill="#1e1e36" stroke="#334155" stroke-width="0.8"/>
+  <text x="115" y="751" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="10" font-weight="bold">Tauri 2.0 (Rust)</text>
+
+  <rect x="200" y="730" width="160" height="34" rx="6" fill="#1e1e36" stroke="#334155" stroke-width="0.8"/>
+  <text x="280" y="751" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="10" font-weight="bold">React 19 + TypeScript</text>
+
+  <rect x="375" y="730" width="130" height="34" rx="6" fill="#1e1e36" stroke="#334155" stroke-width="0.8"/>
+  <text x="440" y="751" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="10" font-weight="bold">FastAPI (Python)</text>
+
+  <rect x="520" y="730" width="120" height="34" rx="6" fill="#1e1e36" stroke="#334155" stroke-width="0.8"/>
+  <text x="580" y="751" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="10" font-weight="bold">SQLite (WAL)</text>
+
+  <rect x="655" y="730" width="130" height="34" rx="6" fill="#1e1e36" stroke="#334155" stroke-width="0.8"/>
+  <text x="720" y="751" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="10" font-weight="bold">Filesystem (local)</text>
+
+  <rect x="800" y="730" width="110" height="34" rx="6" fill="#1e1e36" stroke="#334155" stroke-width="0.8"/>
+  <text x="855" y="751" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="10" font-weight="bold">launchd (macOS)</text>
+
+  <!-- ================================================================ -->
+  <!-- VERTICAL DATA FLOW ARROWS -->
+  <!-- ================================================================ -->
+
+  <!-- Interface -> Intelligence -->
+  <path d="M 380,177 L 380,204" stroke="#f59e0b" stroke-width="1.2" opacity="0.3" marker-end="url(#arrowDown)"/>
+  <path d="M 610,177 L 610,204" stroke="#f59e0b" stroke-width="1.2" opacity="0.3" marker-end="url(#arrowDown)"/>
+
+  <!-- Intelligence -> Harness -->
+  <path d="M 145,298 L 145,360" stroke="#f59e0b" stroke-width="1.2" opacity="0.3" marker-end="url(#arrowDown)"/>
+  <path d="M 545,298 L 545,360" stroke="#f59e0b" stroke-width="1.2" opacity="0.3" marker-end="url(#arrowDown)"/>
+  <path d="M 790,298 L 790,360" stroke="#f59e0b" stroke-width="1.2" opacity="0.3" marker-end="url(#arrowDown)"/>
+
+  <!-- Harness -> Session -->
+  <path d="M 145,515 L 145,556" stroke="#f59e0b" stroke-width="1.2" opacity="0.3" marker-end="url(#arrowDown)"/>
+  <path d="M 370,515 L 370,556" stroke="#f59e0b" stroke-width="1.2" opacity="0.3" marker-end="url(#arrowDown)"/>
+  <path d="M 595,515 L 595,556" stroke="#f59e0b" stroke-width="1.2" opacity="0.3" marker-end="url(#arrowDown)"/>
+
+  <!-- Session -> Engine -->
+  <path d="M 345,614 L 345,652" stroke="#f59e0b" stroke-width="1.2" opacity="0.3" marker-end="url(#arrowDown)"/>
+  <path d="M 550,614 L 550,652" stroke="#f59e0b" stroke-width="1.2" opacity="0.3" marker-end="url(#arrowDown)"/>
+
+  <!-- Engine -> Platform -->
+  <path d="M 480,694 L 480,730" stroke="#334155" stroke-width="1" opacity="0.2" marker-end="url(#arrowDown)"/>
+
+  <!-- Feedback loops (upward) -->
+  <path d="M 820,556 C 920,490 920,400 820,340" stroke="#8b5cf6" stroke-width="1" opacity="0.15" stroke-dasharray="4 3"/>
+  <text x="928" y="450" fill="#8b5cf6" font-family="Arial,Helvetica,sans-serif" font-size="7" opacity="0.4" transform="rotate(-90,928,450)">hooks feed back</text>
+
+  <path d="M 50,515 C -10,440 -10,300 50,216" stroke="#f59e0b" stroke-width="1" opacity="0.15" stroke-dasharray="4 3"/>
+  <text x="10" y="380" fill="#f59e0b" font-family="Arial,Helvetica,sans-serif" font-size="7" opacity="0.4" transform="rotate(-90,10,380)">context feeds sessions</text>
+
+  <!-- ================================================================ -->
+  <!-- CROSS-CUTTING: COMPOUND LOOP indicator -->
+  <!-- ================================================================ -->
+  <rect x="30" y="785" width="895" height="24" rx="6" fill="#f59e0b" fill-opacity="0.04" stroke="#f59e0b" stroke-width="0.8" stroke-opacity="0.3"/>
+  <text x="480" y="801" text-anchor="middle" fill="#f59e0b" font-family="Arial,Helvetica,sans-serif" font-size="10" font-weight="bold" letter-spacing="1" opacity="0.7">COMPOUND LOOP: Session -> Hooks -> Memory -> Context -> Next Session (every interaction makes the next one better)</text>
+</svg>

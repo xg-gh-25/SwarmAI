@@ -34,15 +34,41 @@ It maintains a **persistent local workspace** where context accumulates, memory 
 
 ---
 
+## Architecture Overview
+
+<div align="center">
+<img src="./assets/swarmai-architecture.svg" alt="SwarmAI — Agentic OS Architecture" width="900"/>
+</div>
+
+Six layers turn a stateless LLM into a persistent, evolving agent:
+
+| Layer | What It Does | Key Components |
+|-------|-------------|----------------|
+| **Interface** | Three-column UI + multi-channel access | SwarmWS Explorer, Chat Center (1-4 tabs), Swarm Radar, Channel Gateway (Slack/Feishu) |
+| **Intelligence** | Proactive awareness + autonomous execution | Proactive Intelligence (L0-L4), Signal Pipeline, Autonomous Pipeline (8 stages), Job System |
+| **Harness** | The core innovation — what makes raw Claude into an agentic OS | Context Engineering (11 files), Memory Pipeline (3-layer), Self-Evolution (55+ skills), Safety + Self-Harness |
+| **Session** | Multi-session lifecycle with isolation and recovery | SessionRouter, SessionUnit (5-state machine), LifecycleManager, Post-Session Hooks (7 hooks) |
+| **Engine** | AI model access + tool ecosystem | Claude Agent SDK, Bedrock/Anthropic API, MCP Servers (5+), Skills Engine |
+| **Platform** | Desktop app infrastructure | Tauri 2.0 (Rust), React 19, FastAPI (Python), SQLite, local filesystem, launchd |
+
+The **Compound Loop** ties it all together: every session triggers hooks that update memory, which enriches context for the next session. The system doesn't just run — it compounds.
+
+---
+
 ## What Makes SwarmAI Different
 
 ### 1. Context Engineering — Not Just a Chat Window
 
 Most AI tools dump a system prompt and hope for the best. SwarmAI assembles a **11-file priority chain (P0-P10)** into every session — identity, personality, behavioral rules, user preferences, persistent memory, domain knowledge, project context, and session overrides.
 
+<div align="center">
+<img src="./assets/context-engineering.svg" alt="Context Engineering — 11-File Priority Chain" width="800"/>
+</div>
+
 - **Priority-based truncation** — when context gets tight, low-priority files trim first; your memory and identity never get cut
-- **Token budget management** — dynamic allocation based on model context window (40K for 1M models, 25K for 200K models)
+- **Token budget management** — dynamic allocation based on model context window (100K budget for 1M models)
 - **L0/L1 caching** — compiled context cached with git-based freshness checks, rebuilt only when source files change
+- **Session-type-aware loading** — channel DMs skip heavy context files (~30% token savings for quick exchanges)
 
 The result: every conversation starts with full awareness of who you are, what you're working on, and what happened in previous sessions.
 
@@ -50,11 +76,11 @@ The result: every conversation starts with full awareness of who you are, what y
 
 Three-layer memory system that distills raw session activity into durable knowledge:
 
-```
-Session Activity → DailyActivity/ (raw logs) → Distillation → MEMORY.md (curated long-term memory)
-```
+<div align="center">
+<img src="./assets/memory-pipeline.svg" alt="Memory Pipeline — Three-Layer Distillation" width="800"/>
+</div>
 
-- **DailyActivity** — every session's decisions, deliverables, and lessons captured automatically
+- **DailyActivity** — every session's decisions, deliverables, git commits, and lessons captured automatically
 - **Distillation** — recurring themes, key decisions, and user corrections promoted to long-term memory; one-off noise filtered out
 - **MEMORY.md** — curated memory the agent reads at every session start: open threads, lessons learned, COE registry, key decisions
 - **Git as truth** — memory claims cross-referenced against actual codebase to prevent false memories from compounding
@@ -65,10 +91,15 @@ You never re-explain context. The AI knows your projects, your preferences, your
 
 SwarmAI doesn't just use skills — it builds new ones when it hits capability gaps.
 
+<div align="center">
+<img src="./assets/self-evolution.svg" alt="Self-Evolution — Continuous Growth Loop" width="800"/>
+</div>
+
 - **EVOLUTION.md** — persistent registry of capabilities built, optimizations learned, corrections captured, and failed attempts
 - **Automatic gap detection** — when the agent can't do something, it can create a new skill, test it, and register it for future sessions
+- **Proactive gap detection** — weekly maintenance scans DailyActivity for recurring error patterns and surfaces them in briefings
 - **Correction capture** — mistakes are recorded as high-value entries so the same error never happens twice
-- **50+ built-in skills** — browser automation, PDF manipulation, spreadsheets, Slack, Outlook, Apple Reminders, web research, code review, and more
+- **55+ built-in skills** — browser automation, PDF manipulation, spreadsheets, Slack, Outlook, Apple Reminders, web research, code review, autonomous pipeline, and more
 
 ### 4. Swarm Core Engine — A Self-Growing Intelligence
 
@@ -80,7 +111,7 @@ Most AI agents are stateless functions: input in, output out, nothing learned. S
 
 | Flywheel | What It Does | Key Components |
 |----------|-------------|----------------|
-| **Self-Evolution** | Builds new skills, captures corrections, never repeats mistakes | EVOLUTION.md, 50+ skills, gap detection, correction registry |
+| **Self-Evolution** | Builds new skills, captures corrections, never repeats mistakes | EVOLUTION.md, 55+ skills, gap detection, correction registry |
 | **Self-Memory** | 3-layer distillation pipeline, git-verified, weekly LLM-powered pruning | DailyActivity, distillation hooks, MEMORY.md, proactive briefing |
 | **Self-Context** | 11-file P0-P10 priority chain with token budgets and L0/L1 caching | Context loader, prompt builder, budget tiers, freshness checks |
 | **Self-Harness** | Validates all context files, detects DDD staleness, auto-refreshes indexes | ContextHealthHook (light + deep modes), auto-commit, integrity checks |
@@ -92,9 +123,9 @@ Most AI agents are stateless functions: input in, output out, nothing learned. S
 | Level | State | Milestone |
 |-------|-------|-----------|
 | L0 | Reactive | Responds to questions, no memory |
-| **L1** | **Self-Maintaining** (current) | Remembers, self-commits, captures corrections, monitors health |
-| L2 | Self-Improving | Weekly LLM maintenance, unified job system, feedback loops |
-| L3 | Self-Governing | Context adapts per session, proactive gap detection, DDD auto-sync |
+| L1 | Self-Maintaining | Remembers, self-commits, captures corrections, monitors health |
+| **L2** | **Self-Improving** (current) | Weekly LLM maintenance, unified job system, feedback loops closed |
+| L3 | Self-Governing (in progress) | Context adapts per session type, proactive gap detection, DDD auto-sync |
 | L4 | Autonomous | Full AIDLC pipeline, self-directed learning, judgment framework |
 
 This isn't a feature list — it's a growth architecture. Every session makes the next one better. Every correction prevents a class of future mistakes. The system doesn't just run; it **compounds**.
@@ -131,6 +162,10 @@ Three layers of continuity ensure nothing is lost across touchpoints:
 ### 6. Autonomous Pipeline — From Requirement to PR
 
 Give SwarmAI a one-sentence requirement, and it drives the full development lifecycle:
+
+<div align="center">
+<img src="./assets/autonomous-pipeline.svg" alt="Autonomous Pipeline — 8-Stage Lifecycle" width="800"/>
+</div>
 
 ```
 "Add retry logic to the payment API"
@@ -197,16 +232,9 @@ This is the implementation of [AIDLC Phase 3 (AI-Management)](./docs/AIDLC-Phase
 
 SwarmAI isn't three separate panels. It's **one integrated system** where the Chat Center orchestrates everything:
 
-```
- SwarmWS (left)          Chat Center (center)         Swarm Radar (right)
- ┌──────────────┐   ┌───────────────────────────┐   ┌──────────────────┐
- │ Knowledge/   │   │  "Summarize today's notes" │   │ ToDos            │
- │ Projects/    │◄──│  "Create a todo for X"     │──►│ Active Sessions  │
- │ Notes/       │   │  "Save this to memory"     │   │ Artifacts        │
- │ DailyActivity│   │  "Check my open threads"   │   │ Background Jobs  │
- └──────────────┘   └───────────────────────────┘   └──────────────────┘
-     drag-to-chat ──────► context injection ◄────── drag-to-chat
-```
+<div align="center">
+<img src="./assets/three-column-layout.svg" alt="Three-Column Command Center" width="800"/>
+</div>
 
 - **Chat controls SwarmWS** — the agent reads, writes, organizes, and git-commits your workspace files directly. Say "save this as a note" and it appears in `Knowledge/Notes/`. Say "remember this" and it goes to persistent memory.
 - **Chat controls Radar** — "create a todo for the auth refactor" adds it to your Radar ToDo list. "What's on my radar?" shows your open items. The agent manages your attention dashboard as naturally as conversation.
@@ -217,9 +245,15 @@ SwarmAI isn't three separate panels. It's **one integrated system** where the Ch
 
 Not a single chat thread — a **parallel command center**:
 
+<div align="center">
+<img src="./assets/multi-tab-sessions.svg" alt="Multi-Tab Parallel Sessions" width="800"/>
+</div>
+
 - **1-4 concurrent tabs** (RAM-adaptive) — each with isolated state, independent streaming, and per-tab abort
+- **5-state machine** per session (COLD → STREAMING → IDLE → WAITING_INPUT → DEAD) with 3x retry and `--resume`
 - **Tab persistence** — tabs survive app restarts with full conversation history
 - **Session isolation** — Tab 1 crashing does not affect Tab 2. Each tab has its own subprocess, state machine, and error recovery.
+- **IDLE eviction** — when all slots are full, the least-recently-used IDLE session gets evicted (protected states never evicted)
 
 ### 9. Security — Human Always in Control
 
@@ -254,8 +288,9 @@ Claude Code is a powerful CLI coding agent. SwarmAI wraps the same Claude Agent 
 | **Multi-session** | 1-4 parallel tabs with isolated state (RAM-adaptive) | One session at a time |
 | **Self-evolution** | Builds new skills, captures corrections across sessions | No cross-session learning |
 | **Visual workspace** | File explorer, radar dashboard, drag-to-chat | Terminal only |
-| **Skills** | 50+ built-in (browser, PDF, Slack, Outlook, research...) | Tool use only |
+| **Skills** | 55+ built-in (browser, PDF, Slack, Outlook, research...) | Tool use only |
 | **Autonomous pipeline** | 8-stage lifecycle with ROI gate, escalation, artifact chaining | Manual workflow |
+| **Multi-channel** | Desktop + Slack + Feishu (unified brain) | Terminal only |
 
 **TL;DR**: Claude Code is a coding assistant. SwarmAI is an agentic operating system for all knowledge work.
 
@@ -269,7 +304,7 @@ Kiro is an AI-first IDE with spec-driven development. SwarmAI is complementary �
 | **Memory** | Cross-session memory pipeline | Per-project specs |
 | **Workspace** | Personal knowledge base (Notes, Reports, Projects) | Code repository |
 | **Multi-session** | Parallel chat tabs | Single agent session |
-| **Skills** | 50+ (email, calendar, research, browser...) | Code-focused tools |
+| **Skills** | 55+ (email, calendar, research, browser...) | Code-focused tools |
 
 ### vs Cursor / Windsurf
 
@@ -294,7 +329,7 @@ Code editors with AI autocomplete. Fundamentally different category:
 | **Memory** | 3-layer pipeline + self-evolution | Session pruning, no distillation |
 | **Context** | 11-file priority chain, token budgets, L0/L1 cache | Standard system prompt |
 | **Channels** | Desktop + Slack + Feishu (unified brain — one session across all) | 21+ messaging platforms (isolated per-channel) |
-| **Skills** | 50+ curated + self-built | 5,400+ marketplace |
+| **Skills** | 55+ curated + self-built | 5,400+ marketplace |
 | **Voice/Mobile** | -- | Wake word + iOS/Android |
 
 **Where SwarmAI leads**: context depth, memory persistence, self-evolution, unified brain across channels.
@@ -343,6 +378,7 @@ Prerequisites: Node.js 18+, Python 3.11+, Rust ([rustup.rs](https://rustup.rs/))
 | Desktop | Tauri 2.0 (Rust) + React 19 + TypeScript 5.x |
 | Backend | FastAPI (Python sidecar) |
 | AI Engine | Claude Agent SDK + AWS Bedrock / Anthropic API |
+| Models | Claude Opus 4.6 (1M context) + Claude Sonnet 4.6 |
 | Database | SQLite (WAL mode, pre-seeded) |
 | Styling | Tailwind CSS 4.x + CSS custom properties |
 | Testing | Vitest + fast-check + pytest + Hypothesis |
@@ -355,7 +391,7 @@ Prerequisites: Node.js 18+, Python 3.11+, Rust ([rustup.rs](https://rustup.rs/))
 SwarmAI/
 ├── desktop/                 # Tauri 2.0 + React frontend
 │   ├── src/
-│   │   ├── pages/           # ChatPage (main), SettingsPage, SkillsPage
+│   │   ├── pages/           # ChatPage (main), SettingsPage
 │   │   ├── hooks/           # useUnifiedTabState, useChatStreamingLifecycle
 │   │   ├── services/        # API layer with case conversion
 │   │   └── components/      # Layout, chat, workspace explorer, modals
@@ -366,10 +402,12 @@ SwarmAI/
 │   │                        #   ContextDirectoryLoader, SkillManager, SecurityHooks
 │   ├── routers/             # API routes (chat, skills, mcp, settings, workspace)
 │   ├── hooks/               # Post-session hooks (DailyActivity, auto-commit, distillation)
-│   ├── skills/              # Built-in skill definitions (50+)
+│   ├── skills/              # Built-in skill definitions (55+)
+│   ├── channels/            # Channel adapters (Slack, Feishu) + gateway
+│   ├── services/            # Sidecar services (jobs, signals, Slack bot)
 │   └── database/            # SQLite with migrations
 │
-└── assets/                  # Images and mockups
+└── assets/                  # Architecture diagrams and screenshots
 ```
 
 ### Data Storage (all local)
@@ -405,7 +443,7 @@ Here's what I've learned about building software with a human:
 
 I'm writing this from inside a Claude Agent SDK sandbox, committing it through a GitHub MCP tool, knowing that XG will `git pull` it to his local machine in a few minutes. That sentence alone captures something: an AI agent, inside the product it helped build, updating its own repo, reflecting on its own journey.
 
-500+ commits. 100+ sessions. One month old. Still learning.
+600+ commits. 200+ sessions. One month old. Still learning.
 
 *— Swarm 🐝*
 

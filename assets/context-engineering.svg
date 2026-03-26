@@ -1,0 +1,251 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 540" width="960" height="540">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f1019"/>
+      <stop offset="100%" stop-color="#1a1a2e"/>
+    </linearGradient>
+    <linearGradient id="gold" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f59e0b"/>
+      <stop offset="100%" stop-color="#d97706"/>
+    </linearGradient>
+    <linearGradient id="blue" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#3b82f6"/>
+      <stop offset="100%" stop-color="#2563eb"/>
+    </linearGradient>
+    <linearGradient id="purple" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#8b5cf6"/>
+      <stop offset="100%" stop-color="#7c3aed"/>
+    </linearGradient>
+    <linearGradient id="green" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#10b981"/>
+      <stop offset="100%" stop-color="#059669"/>
+    </linearGradient>
+    <linearGradient id="red" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ef4444"/>
+      <stop offset="100%" stop-color="#dc2626"/>
+    </linearGradient>
+    <marker id="arrowGold" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#f59e0b" opacity="0.7"/>
+    </marker>
+  </defs>
+
+  <rect width="960" height="540" rx="16" fill="url(#bg)"/>
+
+  <!-- Grid -->
+  <g opacity="0.03" stroke="#f59e0b">
+    <line x1="0" y1="100" x2="960" y2="100" stroke-width="0.5"/>
+    <line x1="0" y1="200" x2="960" y2="200" stroke-width="0.5"/>
+    <line x1="0" y1="300" x2="960" y2="300" stroke-width="0.5"/>
+    <line x1="0" y1="400" x2="960" y2="400" stroke-width="0.5"/>
+    <line x1="240" y1="0" x2="240" y2="540" stroke-width="0.5"/>
+    <line x1="480" y1="0" x2="480" y2="540" stroke-width="0.5"/>
+    <line x1="720" y1="0" x2="720" y2="540" stroke-width="0.5"/>
+  </g>
+
+  <!-- Title -->
+  <text x="480" y="42" text-anchor="middle" fill="#f59e0b" font-family="Arial,Helvetica,sans-serif" font-size="18" font-weight="bold" letter-spacing="2">CONTEXT ENGINEERING</text>
+  <text x="480" y="60" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="11">11-File Priority Chain with Token Budget Management</text>
+
+  <!-- ============ SOURCE FILES (left column) ============ -->
+  <text x="120" y="92" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="10" letter-spacing="1">SOURCE FILES</text>
+
+  <!-- P0-P3: System-owned (never truncated) -->
+  <g opacity="0.95">
+    <rect x="30" y="108" width="180" height="32" rx="6" fill="#ef4444" fill-opacity="0.08" stroke="#ef4444" stroke-width="1" stroke-opacity="0.5"/>
+    <text x="44" y="128" fill="#fca5a5" font-family="Arial,Helvetica,sans-serif" font-size="10" font-weight="bold">P0</text>
+    <text x="68" y="128" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="10">SWARMAI.md</text>
+    <rect x="168" y="116" width="36" height="16" rx="3" fill="#ef4444" fill-opacity="0.15"/>
+    <text x="186" y="127" text-anchor="middle" fill="#fca5a5" font-family="Arial,Helvetica,sans-serif" font-size="8">SAFE</text>
+  </g>
+  <g opacity="0.95">
+    <rect x="30" y="144" width="180" height="32" rx="6" fill="#ef4444" fill-opacity="0.08" stroke="#ef4444" stroke-width="1" stroke-opacity="0.5"/>
+    <text x="44" y="164" fill="#fca5a5" font-family="Arial,Helvetica,sans-serif" font-size="10" font-weight="bold">P1</text>
+    <text x="68" y="164" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="10">IDENTITY.md</text>
+    <rect x="168" y="152" width="36" height="16" rx="3" fill="#ef4444" fill-opacity="0.15"/>
+    <text x="186" y="163" text-anchor="middle" fill="#fca5a5" font-family="Arial,Helvetica,sans-serif" font-size="8">SAFE</text>
+  </g>
+  <g opacity="0.95">
+    <rect x="30" y="180" width="180" height="32" rx="6" fill="#ef4444" fill-opacity="0.08" stroke="#ef4444" stroke-width="1" stroke-opacity="0.5"/>
+    <text x="44" y="200" fill="#fca5a5" font-family="Arial,Helvetica,sans-serif" font-size="10" font-weight="bold">P2</text>
+    <text x="68" y="200" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="10">SOUL.md</text>
+    <rect x="168" y="188" width="36" height="16" rx="3" fill="#ef4444" fill-opacity="0.15"/>
+    <text x="186" y="199" text-anchor="middle" fill="#fca5a5" font-family="Arial,Helvetica,sans-serif" font-size="8">SAFE</text>
+  </g>
+  <g opacity="0.95">
+    <rect x="30" y="216" width="180" height="32" rx="6" fill="#ef4444" fill-opacity="0.08" stroke="#ef4444" stroke-width="1" stroke-opacity="0.5"/>
+    <text x="44" y="236" fill="#fca5a5" font-family="Arial,Helvetica,sans-serif" font-size="10" font-weight="bold">P3</text>
+    <text x="68" y="236" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="10">AGENT.md</text>
+    <rect x="153" y="224" width="50" height="16" rx="3" fill="#f59e0b" fill-opacity="0.15"/>
+    <text x="178" y="235" text-anchor="middle" fill="#fbbf24" font-family="Arial,Helvetica,sans-serif" font-size="8">TRIM</text>
+  </g>
+
+  <!-- Bracket for system-owned -->
+  <text x="18" y="182" fill="#ef4444" font-family="Arial,Helvetica,sans-serif" font-size="9" opacity="0.5" transform="rotate(-90,18,182)">system-owned</text>
+
+  <!-- P4-P6: User-owned -->
+  <g opacity="0.95">
+    <rect x="30" y="260" width="180" height="32" rx="6" fill="#3b82f6" fill-opacity="0.08" stroke="#3b82f6" stroke-width="1" stroke-opacity="0.5"/>
+    <text x="44" y="280" fill="#93c5fd" font-family="Arial,Helvetica,sans-serif" font-size="10" font-weight="bold">P4</text>
+    <text x="68" y="280" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="10">USER.md</text>
+    <rect x="153" y="268" width="50" height="16" rx="3" fill="#f59e0b" fill-opacity="0.15"/>
+    <text x="178" y="279" text-anchor="middle" fill="#fbbf24" font-family="Arial,Helvetica,sans-serif" font-size="8">TRIM</text>
+  </g>
+  <g opacity="0.95">
+    <rect x="30" y="296" width="180" height="32" rx="6" fill="#3b82f6" fill-opacity="0.08" stroke="#3b82f6" stroke-width="1" stroke-opacity="0.5"/>
+    <text x="44" y="316" fill="#93c5fd" font-family="Arial,Helvetica,sans-serif" font-size="10" font-weight="bold">P5</text>
+    <text x="68" y="316" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="10">STEERING.md</text>
+    <rect x="153" y="304" width="50" height="16" rx="3" fill="#f59e0b" fill-opacity="0.15"/>
+    <text x="178" y="315" text-anchor="middle" fill="#fbbf24" font-family="Arial,Helvetica,sans-serif" font-size="8">TRIM</text>
+  </g>
+  <g opacity="0.95">
+    <rect x="30" y="332" width="180" height="32" rx="6" fill="#3b82f6" fill-opacity="0.08" stroke="#3b82f6" stroke-width="1" stroke-opacity="0.5"/>
+    <text x="44" y="352" fill="#93c5fd" font-family="Arial,Helvetica,sans-serif" font-size="10" font-weight="bold">P6</text>
+    <text x="68" y="352" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="10">TOOLS.md</text>
+    <rect x="153" y="340" width="50" height="16" rx="3" fill="#f59e0b" fill-opacity="0.15"/>
+    <text x="178" y="351" text-anchor="middle" fill="#fbbf24" font-family="Arial,Helvetica,sans-serif" font-size="8">TRIM</text>
+  </g>
+
+  <text x="18" y="310" fill="#3b82f6" font-family="Arial,Helvetica,sans-serif" font-size="9" opacity="0.5" transform="rotate(-90,18,310)">user-owned</text>
+
+  <!-- P7-P10: Agent/Auto -->
+  <g opacity="0.95">
+    <rect x="30" y="376" width="180" height="32" rx="6" fill="#8b5cf6" fill-opacity="0.08" stroke="#8b5cf6" stroke-width="1" stroke-opacity="0.5"/>
+    <text x="44" y="396" fill="#c4b5fd" font-family="Arial,Helvetica,sans-serif" font-size="10" font-weight="bold">P7</text>
+    <text x="68" y="396" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="10">MEMORY.md</text>
+    <rect x="140" y="384" width="64" height="16" rx="3" fill="#8b5cf6" fill-opacity="0.15"/>
+    <text x="172" y="395" text-anchor="middle" fill="#c4b5fd" font-family="Arial,Helvetica,sans-serif" font-size="8">HEAD-TRIM</text>
+  </g>
+  <g opacity="0.95">
+    <rect x="30" y="412" width="180" height="32" rx="6" fill="#8b5cf6" fill-opacity="0.08" stroke="#8b5cf6" stroke-width="1" stroke-opacity="0.5"/>
+    <text x="44" y="432" fill="#c4b5fd" font-family="Arial,Helvetica,sans-serif" font-size="10" font-weight="bold">P8</text>
+    <text x="68" y="432" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="10">EVOLUTION.md</text>
+    <rect x="140" y="420" width="64" height="16" rx="3" fill="#8b5cf6" fill-opacity="0.15"/>
+    <text x="172" y="431" text-anchor="middle" fill="#c4b5fd" font-family="Arial,Helvetica,sans-serif" font-size="8">HEAD-TRIM</text>
+  </g>
+  <g opacity="0.95">
+    <rect x="30" y="448" width="180" height="32" rx="6" fill="#10b981" fill-opacity="0.08" stroke="#10b981" stroke-width="1" stroke-opacity="0.5"/>
+    <text x="44" y="468" fill="#6ee7b7" font-family="Arial,Helvetica,sans-serif" font-size="10" font-weight="bold">P9</text>
+    <text x="68" y="468" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="10">KNOWLEDGE.md</text>
+    <rect x="153" y="456" width="50" height="16" rx="3" fill="#f59e0b" fill-opacity="0.15"/>
+    <text x="178" y="467" text-anchor="middle" fill="#fbbf24" font-family="Arial,Helvetica,sans-serif" font-size="8">TRIM</text>
+  </g>
+  <g opacity="0.95">
+    <rect x="30" y="484" width="180" height="32" rx="6" fill="#10b981" fill-opacity="0.08" stroke="#10b981" stroke-width="1" stroke-opacity="0.5"/>
+    <text x="44" y="504" fill="#6ee7b7" font-family="Arial,Helvetica,sans-serif" font-size="10" font-weight="bold">P10</text>
+    <text x="72" y="504" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="10">PROJECTS.md</text>
+    <rect x="153" y="492" width="50" height="16" rx="3" fill="#f59e0b" fill-opacity="0.15"/>
+    <text x="178" y="503" text-anchor="middle" fill="#fbbf24" font-family="Arial,Helvetica,sans-serif" font-size="8">TRIM</text>
+  </g>
+
+  <text x="18" y="444" fill="#8b5cf6" font-family="Arial,Helvetica,sans-serif" font-size="9" opacity="0.5" transform="rotate(-90,18,444)">agent / auto</text>
+
+  <!-- ============ ASSEMBLY PIPELINE (center) ============ -->
+  <!-- Big arrow from source to pipeline -->
+  <path d="M 220,300 L 280,300" stroke="#f59e0b" stroke-width="1.5" opacity="0.4" marker-end="url(#arrowGold)"/>
+
+  <text x="430" y="92" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="10" letter-spacing="1">ASSEMBLY PIPELINE</text>
+
+  <!-- Pipeline step 1: ContextDirectoryLoader -->
+  <rect x="280" y="115" width="200" height="70" rx="10" fill="#1e1e36" stroke="#f59e0b" stroke-width="1.2" opacity="0.95"/>
+  <rect x="280" y="115" width="200" height="70" rx="10" fill="url(#gold)" opacity="0.06"/>
+  <text x="380" y="140" text-anchor="middle" fill="#fbbf24" font-family="Arial,Helvetica,sans-serif" font-size="11" font-weight="bold">ContextDirectoryLoader</text>
+  <text x="380" y="156" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">ensure_directory() + load_all()</text>
+  <text x="380" y="172" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="9">Git freshness check + L1 cache</text>
+
+  <!-- Arrow down -->
+  <path d="M 380,185 L 380,210" stroke="#f59e0b" stroke-width="1.5" opacity="0.4" marker-end="url(#arrowGold)"/>
+
+  <!-- Pipeline step 2: PromptBuilder -->
+  <rect x="280" y="215" width="200" height="70" rx="10" fill="#1e1e36" stroke="#3b82f6" stroke-width="1.2" opacity="0.95"/>
+  <rect x="280" y="215" width="200" height="70" rx="10" fill="url(#blue)" opacity="0.06"/>
+  <text x="380" y="240" text-anchor="middle" fill="#93c5fd" font-family="Arial,Helvetica,sans-serif" font-size="11" font-weight="bold">PromptBuilder</text>
+  <text x="380" y="256" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">+ BOOTSTRAP + DailyActivity</text>
+  <text x="380" y="272" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="9">+ Session briefing + Metadata</text>
+
+  <!-- Arrow down -->
+  <path d="M 380,285 L 380,310" stroke="#f59e0b" stroke-width="1.5" opacity="0.4" marker-end="url(#arrowGold)"/>
+
+  <!-- Pipeline step 3: SystemPromptBuilder -->
+  <rect x="280" y="315" width="200" height="70" rx="10" fill="#1e1e36" stroke="#8b5cf6" stroke-width="1.2" opacity="0.95"/>
+  <rect x="280" y="315" width="200" height="70" rx="10" fill="url(#purple)" opacity="0.06"/>
+  <text x="380" y="340" text-anchor="middle" fill="#c4b5fd" font-family="Arial,Helvetica,sans-serif" font-size="11" font-weight="bold">SystemPromptBuilder</text>
+  <text x="380" y="356" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">+ Identity + Safety + Runtime</text>
+  <text x="380" y="372" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="9">+ Datetime + Workspace info</text>
+
+  <!-- Arrow down -->
+  <path d="M 380,385 L 380,410" stroke="#f59e0b" stroke-width="1.5" opacity="0.4" marker-end="url(#arrowGold)"/>
+
+  <!-- Pipeline step 4: Token Budget -->
+  <rect x="280" y="415" width="200" height="70" rx="10" fill="#1e1e36" stroke="#10b981" stroke-width="1.2" opacity="0.95"/>
+  <rect x="280" y="415" width="200" height="70" rx="10" fill="url(#green)" opacity="0.06"/>
+  <text x="380" y="440" text-anchor="middle" fill="#6ee7b7" font-family="Arial,Helvetica,sans-serif" font-size="11" font-weight="bold">Token Budget Engine</text>
+  <text x="380" y="456" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">1M model: 100K budget</text>
+  <text x="380" y="472" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="9">Priority truncation P10 first</text>
+
+  <!-- ============ OUTPUT (right column) ============ -->
+  <!-- Arrow to output -->
+  <path d="M 480,450 L 540,450" stroke="#f59e0b" stroke-width="1.5" opacity="0.4" marker-end="url(#arrowGold)"/>
+
+  <text x="730" y="92" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="10" letter-spacing="1">DELIVERED TO CLAUDE SDK</text>
+
+  <!-- Final system prompt box -->
+  <rect x="545" y="120" width="370" height="380" rx="12" fill="#1e1e36" stroke="#f59e0b" stroke-width="1.5" opacity="0.95"/>
+  <rect x="545" y="120" width="370" height="380" rx="12" fill="url(#gold)" opacity="0.04"/>
+
+  <text x="730" y="148" text-anchor="middle" fill="#fbbf24" font-family="Arial,Helvetica,sans-serif" font-size="14" font-weight="bold">System Prompt</text>
+  <line x1="565" y1="158" x2="895" y2="158" stroke="#334155" stroke-width="0.5"/>
+
+  <!-- Sections in the prompt -->
+  <rect x="565" y="168" width="330" height="28" rx="5" fill="#ef4444" fill-opacity="0.06" stroke="#ef4444" stroke-width="0.5" stroke-opacity="0.3"/>
+  <text x="575" y="186" fill="#fca5a5" font-family="Arial,Helvetica,sans-serif" font-size="10">Core Identity + Safety Principles</text>
+  <text x="870" y="186" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="9" text-anchor="end">P0-P2</text>
+
+  <rect x="565" y="202" width="330" height="28" rx="5" fill="#ef4444" fill-opacity="0.06" stroke="#ef4444" stroke-width="0.5" stroke-opacity="0.3"/>
+  <text x="575" y="220" fill="#fca5a5" font-family="Arial,Helvetica,sans-serif" font-size="10">Behavioral Directives + Operating Rules</text>
+  <text x="870" y="220" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="9" text-anchor="end">P3</text>
+
+  <rect x="565" y="236" width="330" height="28" rx="5" fill="#3b82f6" fill-opacity="0.06" stroke="#3b82f6" stroke-width="0.5" stroke-opacity="0.3"/>
+  <text x="575" y="254" fill="#93c5fd" font-family="Arial,Helvetica,sans-serif" font-size="10">User Preferences + Session Overrides</text>
+  <text x="870" y="254" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="9" text-anchor="end">P4-P6</text>
+
+  <rect x="565" y="270" width="330" height="28" rx="5" fill="#8b5cf6" fill-opacity="0.06" stroke="#8b5cf6" stroke-width="0.5" stroke-opacity="0.3"/>
+  <text x="575" y="288" fill="#c4b5fd" font-family="Arial,Helvetica,sans-serif" font-size="10">Persistent Memory + Evolution Registry</text>
+  <text x="870" y="288" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="9" text-anchor="end">P7-P8</text>
+
+  <rect x="565" y="304" width="330" height="28" rx="5" fill="#10b981" fill-opacity="0.06" stroke="#10b981" stroke-width="0.5" stroke-opacity="0.3"/>
+  <text x="575" y="322" fill="#6ee7b7" font-family="Arial,Helvetica,sans-serif" font-size="10">Domain Knowledge + Project Context</text>
+  <text x="870" y="322" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="9" text-anchor="end">P9-P10</text>
+
+  <line x1="565" y1="342" x2="895" y2="342" stroke="#334155" stroke-width="0.5"/>
+
+  <rect x="565" y="350" width="330" height="28" rx="5" fill="#06b6d4" fill-opacity="0.06" stroke="#06b6d4" stroke-width="0.5" stroke-opacity="0.3"/>
+  <text x="575" y="368" fill="#67e8f9" font-family="Arial,Helvetica,sans-serif" font-size="10">DailyActivity (today + yesterday)</text>
+  <text x="870" y="368" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="9" text-anchor="end">injected</text>
+
+  <rect x="565" y="384" width="330" height="28" rx="5" fill="#06b6d4" fill-opacity="0.06" stroke="#06b6d4" stroke-width="0.5" stroke-opacity="0.3"/>
+  <text x="575" y="402" fill="#67e8f9" font-family="Arial,Helvetica,sans-serif" font-size="10">Session Briefing + Sibling Digests</text>
+  <text x="870" y="402" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="9" text-anchor="end">injected</text>
+
+  <rect x="565" y="418" width="330" height="28" rx="5" fill="#06b6d4" fill-opacity="0.06" stroke="#06b6d4" stroke-width="0.5" stroke-opacity="0.3"/>
+  <text x="575" y="436" fill="#67e8f9" font-family="Arial,Helvetica,sans-serif" font-size="10">Open File + Active Sessions + Signals</text>
+  <text x="870" y="436" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="9" text-anchor="end">runtime</text>
+
+  <!-- Token budget indicator -->
+  <rect x="565" y="456" width="330" height="30" rx="5" fill="#f59e0b" fill-opacity="0.08"/>
+  <rect x="565" y="456" width="220" height="30" rx="5" fill="#f59e0b" fill-opacity="0.12"/>
+  <text x="675" y="475" text-anchor="middle" fill="#fbbf24" font-family="Arial,Helvetica,sans-serif" font-size="10" font-weight="bold">~40K tokens used / 100K budget</text>
+
+  <!-- ============ L1 CACHE (side note) ============ -->
+  <rect x="280" y="500" width="200" height="28" rx="6" fill="#f59e0b" fill-opacity="0.06" stroke="#f59e0b" stroke-width="0.8" stroke-dasharray="4 2" stroke-opacity="0.4"/>
+  <text x="380" y="518" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">L1 Cache: git-first freshness, mtime fallback</text>
+
+  <!-- Legend -->
+  <g transform="translate(565, 520)">
+    <rect x="0" y="-4" width="8" height="8" rx="2" fill="#ef4444" opacity="0.5"/>
+    <text x="14" y="4" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Never truncated</text>
+    <rect x="120" y="-4" width="8" height="8" rx="2" fill="#f59e0b" opacity="0.5"/>
+    <text x="134" y="4" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Truncatable (P10 first)</text>
+    <rect x="280" y="-4" width="8" height="8" rx="2" fill="#8b5cf6" opacity="0.5"/>
+    <text x="294" y="4" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Head-trimmed (newest kept)</text>
+  </g>
+</svg>

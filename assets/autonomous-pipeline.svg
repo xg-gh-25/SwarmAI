@@ -1,0 +1,240 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 520" width="960" height="520">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f1019"/>
+      <stop offset="100%" stop-color="#1a1a2e"/>
+    </linearGradient>
+    <linearGradient id="gold" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f59e0b"/>
+      <stop offset="100%" stop-color="#d97706"/>
+    </linearGradient>
+    <linearGradient id="blue" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#3b82f6"/>
+      <stop offset="100%" stop-color="#2563eb"/>
+    </linearGradient>
+    <linearGradient id="purple" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#8b5cf6"/>
+      <stop offset="100%" stop-color="#7c3aed"/>
+    </linearGradient>
+    <linearGradient id="green" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#10b981"/>
+      <stop offset="100%" stop-color="#059669"/>
+    </linearGradient>
+    <linearGradient id="red" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ef4444"/>
+      <stop offset="100%" stop-color="#dc2626"/>
+    </linearGradient>
+    <linearGradient id="cyan" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#06b6d4"/>
+      <stop offset="100%" stop-color="#0891b2"/>
+    </linearGradient>
+    <linearGradient id="pink" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ec4899"/>
+      <stop offset="100%" stop-color="#db2777"/>
+    </linearGradient>
+    <marker id="arrowGold" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#f59e0b" opacity="0.7"/>
+    </marker>
+  </defs>
+
+  <rect width="960" height="520" rx="16" fill="url(#bg)"/>
+
+  <!-- Grid -->
+  <g opacity="0.03" stroke="#f59e0b">
+    <line x1="0" y1="100" x2="960" y2="100" stroke-width="0.5"/>
+    <line x1="0" y1="200" x2="960" y2="200" stroke-width="0.5"/>
+    <line x1="0" y1="300" x2="960" y2="300" stroke-width="0.5"/>
+    <line x1="0" y1="400" x2="960" y2="400" stroke-width="0.5"/>
+    <line x1="240" y1="0" x2="240" y2="520" stroke-width="0.5"/>
+    <line x1="480" y1="0" x2="480" y2="520" stroke-width="0.5"/>
+    <line x1="720" y1="0" x2="720" y2="520" stroke-width="0.5"/>
+  </g>
+
+  <!-- Title -->
+  <text x="480" y="42" text-anchor="middle" fill="#10b981" font-family="Arial,Helvetica,sans-serif" font-size="18" font-weight="bold" letter-spacing="2">AUTONOMOUS PIPELINE</text>
+  <text x="480" y="60" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="11">From One-Sentence Requirement to PR-Ready Delivery</text>
+
+  <!-- ============ 8 STAGE PIPELINE ============ -->
+  <!-- Stage 1: EVALUATE -->
+  <rect x="30" y="85" width="100" height="65" rx="8" fill="#1e1e36" stroke="#ef4444" stroke-width="1.2"/>
+  <rect x="30" y="85" width="100" height="65" rx="8" fill="url(#red)" opacity="0.06"/>
+  <text x="80" y="108" text-anchor="middle" fill="#fca5a5" font-family="Arial,Helvetica,sans-serif" font-size="10" font-weight="bold">EVALUATE</text>
+  <text x="80" y="122" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="8">ROI scoring</text>
+  <text x="80" y="134" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="8">GO / DEFER / REJECT</text>
+  <circle cx="118" cy="93" r="3" fill="#ef4444"/>
+
+  <!-- Arrow -->
+  <path d="M 130,117 L 150,117" stroke="#f59e0b" stroke-width="1" opacity="0.4" marker-end="url(#arrowGold)"/>
+
+  <!-- Stage 2: THINK -->
+  <rect x="155" y="85" width="100" height="65" rx="8" fill="#1e1e36" stroke="#8b5cf6" stroke-width="1.2"/>
+  <rect x="155" y="85" width="100" height="65" rx="8" fill="url(#purple)" opacity="0.06"/>
+  <text x="205" y="108" text-anchor="middle" fill="#c4b5fd" font-family="Arial,Helvetica,sans-serif" font-size="10" font-weight="bold">THINK</text>
+  <text x="205" y="122" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="8">3 alternatives</text>
+  <text x="205" y="134" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="8">Min / Ideal / Creative</text>
+  <circle cx="243" cy="93" r="3" fill="#8b5cf6"/>
+
+  <path d="M 255,117 L 275,117" stroke="#f59e0b" stroke-width="1" opacity="0.4" marker-end="url(#arrowGold)"/>
+
+  <!-- Stage 3: PLAN -->
+  <rect x="280" y="85" width="100" height="65" rx="8" fill="#1e1e36" stroke="#3b82f6" stroke-width="1.2"/>
+  <rect x="280" y="85" width="100" height="65" rx="8" fill="url(#blue)" opacity="0.06"/>
+  <text x="330" y="108" text-anchor="middle" fill="#93c5fd" font-family="Arial,Helvetica,sans-serif" font-size="10" font-weight="bold">PLAN</text>
+  <text x="330" y="122" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="8">Design doc + SDD</text>
+  <text x="330" y="134" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="8">Acceptance criteria</text>
+  <circle cx="368" cy="93" r="3" fill="#3b82f6"/>
+
+  <path d="M 380,117 L 400,117" stroke="#f59e0b" stroke-width="1" opacity="0.4" marker-end="url(#arrowGold)"/>
+
+  <!-- Stage 4: BUILD (TDD) -->
+  <rect x="405" y="85" width="100" height="65" rx="8" fill="#1e1e36" stroke="#10b981" stroke-width="1.5"/>
+  <rect x="405" y="85" width="100" height="65" rx="8" fill="url(#green)" opacity="0.08"/>
+  <text x="455" y="108" text-anchor="middle" fill="#6ee7b7" font-family="Arial,Helvetica,sans-serif" font-size="10" font-weight="bold">BUILD</text>
+  <text x="455" y="122" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="8">TDD: RED -> GREEN</text>
+  <text x="455" y="134" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="8">Atomic commits</text>
+  <circle cx="493" cy="93" r="3" fill="#10b981"/>
+
+  <path d="M 505,117 L 525,117" stroke="#f59e0b" stroke-width="1" opacity="0.4" marker-end="url(#arrowGold)"/>
+
+  <!-- Stage 5: REVIEW -->
+  <rect x="530" y="85" width="100" height="65" rx="8" fill="#1e1e36" stroke="#f59e0b" stroke-width="1.2"/>
+  <rect x="530" y="85" width="100" height="65" rx="8" fill="url(#gold)" opacity="0.06"/>
+  <text x="580" y="108" text-anchor="middle" fill="#fbbf24" font-family="Arial,Helvetica,sans-serif" font-size="10" font-weight="bold">REVIEW</text>
+  <text x="580" y="122" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="8">Code + security scan</text>
+  <text x="580" y="134" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="8">Quality gate</text>
+  <circle cx="618" cy="93" r="3" fill="#f59e0b"/>
+
+  <path d="M 630,117 L 650,117" stroke="#f59e0b" stroke-width="1" opacity="0.4" marker-end="url(#arrowGold)"/>
+
+  <!-- Stage 6: TEST -->
+  <rect x="655" y="85" width="100" height="65" rx="8" fill="#1e1e36" stroke="#06b6d4" stroke-width="1.2"/>
+  <rect x="655" y="85" width="100" height="65" rx="8" fill="url(#cyan)" opacity="0.06"/>
+  <text x="705" y="108" text-anchor="middle" fill="#67e8f9" font-family="Arial,Helvetica,sans-serif" font-size="10" font-weight="bold">TEST</text>
+  <text x="705" y="122" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="8">Full suite, no regress</text>
+  <text x="705" y="134" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="8">WTF gate (halt if risky)</text>
+  <circle cx="743" cy="93" r="3" fill="#06b6d4"/>
+
+  <path d="M 755,117 L 775,117" stroke="#f59e0b" stroke-width="1" opacity="0.4" marker-end="url(#arrowGold)"/>
+
+  <!-- Stage 7: DELIVER -->
+  <rect x="780" y="85" width="100" height="65" rx="8" fill="#1e1e36" stroke="#ec4899" stroke-width="1.2"/>
+  <rect x="780" y="85" width="100" height="65" rx="8" fill="url(#pink)" opacity="0.06"/>
+  <text x="830" y="108" text-anchor="middle" fill="#f472b6" font-family="Arial,Helvetica,sans-serif" font-size="10" font-weight="bold">DELIVER</text>
+  <text x="830" y="122" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="8">PR + decision log</text>
+  <text x="830" y="134" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="8">Report + artifacts</text>
+  <circle cx="868" cy="93" r="3" fill="#ec4899"/>
+
+  <!-- Stage 8: REFLECT (loops back) -->
+  <rect x="890" y="85" width="48" height="65" rx="8" fill="#1e1e36" stroke="#f59e0b" stroke-width="1" stroke-dasharray="3 2"/>
+  <text x="914" y="115" text-anchor="middle" fill="#fbbf24" font-family="Arial,Helvetica,sans-serif" font-size="8" font-weight="bold">REFLECT</text>
+  <text x="914" y="128" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="7">Lessons</text>
+
+  <!-- ============ METHODOLOGY STACK (DDD + SDD + TDD) ============ -->
+  <text x="200" y="185" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="10" letter-spacing="1">METHODOLOGY STACK</text>
+
+  <!-- DDD -->
+  <rect x="40" y="200" width="280" height="105" rx="10" fill="#1e1e36" stroke="#f59e0b" stroke-width="1.2" opacity="0.95"/>
+  <rect x="40" y="200" width="280" height="105" rx="10" fill="url(#gold)" opacity="0.04"/>
+  <text x="180" y="222" text-anchor="middle" fill="#fbbf24" font-family="Arial,Helvetica,sans-serif" font-size="12" font-weight="bold">DDD: "What should we build?"</text>
+
+  <rect x="56" y="232" width="120" height="22" rx="4" fill="#f59e0b" fill-opacity="0.08" stroke="#f59e0b" stroke-width="0.5" stroke-opacity="0.3"/>
+  <text x="116" y="247" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">PRODUCT.md</text>
+
+  <rect x="184" y="232" width="120" height="22" rx="4" fill="#f59e0b" fill-opacity="0.08" stroke="#f59e0b" stroke-width="0.5" stroke-opacity="0.3"/>
+  <text x="244" y="247" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">TECH.md</text>
+
+  <rect x="56" y="260" width="120" height="22" rx="4" fill="#f59e0b" fill-opacity="0.08" stroke="#f59e0b" stroke-width="0.5" stroke-opacity="0.3"/>
+  <text x="116" y="275" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">IMPROVEMENT.md</text>
+
+  <rect x="184" y="260" width="120" height="22" rx="4" fill="#f59e0b" fill-opacity="0.08" stroke="#f59e0b" stroke-width="0.5" stroke-opacity="0.3"/>
+  <text x="244" y="275" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">PROJECT.md</text>
+
+  <text x="180" y="297" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="8">4 docs = autonomous judgment</text>
+
+  <!-- Arrow DDD -> SDD -->
+  <path d="M 320,252 L 355,252" stroke="#f59e0b" stroke-width="1.5" opacity="0.4" marker-end="url(#arrowGold)"/>
+
+  <!-- SDD -->
+  <rect x="360" y="200" width="240" height="105" rx="10" fill="#1e1e36" stroke="#3b82f6" stroke-width="1.2" opacity="0.95"/>
+  <rect x="360" y="200" width="240" height="105" rx="10" fill="url(#blue)" opacity="0.04"/>
+  <text x="480" y="222" text-anchor="middle" fill="#93c5fd" font-family="Arial,Helvetica,sans-serif" font-size="12" font-weight="bold">SDD: "Here's the spec"</text>
+  <text x="480" y="248" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Design doc with</text>
+  <text x="480" y="264" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">acceptance criteria</text>
+  <text x="480" y="280" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">file list + effort estimates</text>
+  <text x="480" y="297" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="8">Produced by PLAN stage</text>
+
+  <!-- Arrow SDD -> TDD -->
+  <path d="M 600,252 L 635,252" stroke="#f59e0b" stroke-width="1.5" opacity="0.4" marker-end="url(#arrowGold)"/>
+
+  <!-- TDD -->
+  <rect x="640" y="200" width="280" height="105" rx="10" fill="#1e1e36" stroke="#10b981" stroke-width="1.2" opacity="0.95"/>
+  <rect x="640" y="200" width="280" height="105" rx="10" fill="url(#green)" opacity="0.04"/>
+  <text x="780" y="222" text-anchor="middle" fill="#6ee7b7" font-family="Arial,Helvetica,sans-serif" font-size="12" font-weight="bold">TDD: "Proof we built it"</text>
+
+  <rect x="656" y="236" width="56" height="22" rx="4" fill="#ef4444" fill-opacity="0.1" stroke="#ef4444" stroke-width="0.5"/>
+  <text x="684" y="251" text-anchor="middle" fill="#fca5a5" font-family="Arial,Helvetica,sans-serif" font-size="9" font-weight="bold">RED</text>
+
+  <text x="724" y="251" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="10">-></text>
+
+  <rect x="740" y="236" width="62" height="22" rx="4" fill="#10b981" fill-opacity="0.1" stroke="#10b981" stroke-width="0.5"/>
+  <text x="771" y="251" text-anchor="middle" fill="#6ee7b7" font-family="Arial,Helvetica,sans-serif" font-size="9" font-weight="bold">GREEN</text>
+
+  <text x="816" y="251" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="10">-></text>
+
+  <rect x="832" y="236" width="68" height="22" rx="4" fill="#3b82f6" fill-opacity="0.1" stroke="#3b82f6" stroke-width="0.5"/>
+  <text x="866" y="251" text-anchor="middle" fill="#93c5fd" font-family="Arial,Helvetica,sans-serif" font-size="9" font-weight="bold">VERIFY</text>
+
+  <text x="780" y="280" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Tests before code, not after</text>
+  <text x="780" y="297" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="8">Test suite IS the quality gate</text>
+
+  <!-- ============ SAFETY MECHANISMS ============ -->
+  <text x="200" y="335" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="10" letter-spacing="1">SAFETY MECHANISMS</text>
+
+  <!-- ROI Gate -->
+  <rect x="40" y="350" width="190" height="55" rx="8" fill="#1e1e36" stroke="#ef4444" stroke-width="1" opacity="0.95"/>
+  <rect x="40" y="350" width="190" height="55" rx="8" fill="url(#red)" opacity="0.04"/>
+  <text x="135" y="372" text-anchor="middle" fill="#fca5a5" font-family="Arial,Helvetica,sans-serif" font-size="10" font-weight="bold">ROI Gate</text>
+  <text x="135" y="390" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Score before committing resources</text>
+
+  <!-- Decision Classification -->
+  <rect x="250" y="350" width="190" height="55" rx="8" fill="#1e1e36" stroke="#8b5cf6" stroke-width="1" opacity="0.95"/>
+  <rect x="250" y="350" width="190" height="55" rx="8" fill="url(#purple)" opacity="0.04"/>
+  <text x="345" y="372" text-anchor="middle" fill="#c4b5fd" font-family="Arial,Helvetica,sans-serif" font-size="10" font-weight="bold">Decision Classification</text>
+  <text x="345" y="390" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">mechanical | taste | judgment</text>
+
+  <!-- Escalation Protocol -->
+  <rect x="460" y="350" width="190" height="55" rx="8" fill="#1e1e36" stroke="#f59e0b" stroke-width="1" opacity="0.95"/>
+  <rect x="460" y="350" width="190" height="55" rx="8" fill="url(#gold)" opacity="0.04"/>
+  <text x="555" y="372" text-anchor="middle" fill="#fbbf24" font-family="Arial,Helvetica,sans-serif" font-size="10" font-weight="bold">Escalation Protocol</text>
+  <text x="555" y="390" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">INFORM / CONSULT / BLOCK</text>
+
+  <!-- WTF Gate -->
+  <rect x="670" y="350" width="190" height="55" rx="8" fill="#1e1e36" stroke="#06b6d4" stroke-width="1" opacity="0.95"/>
+  <rect x="670" y="350" width="190" height="55" rx="8" fill="url(#cyan)" opacity="0.04"/>
+  <text x="765" y="372" text-anchor="middle" fill="#67e8f9" font-family="Arial,Helvetica,sans-serif" font-size="10" font-weight="bold">WTF Gate</text>
+  <text x="765" y="390" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">QA halts if fixes get risky</text>
+
+  <!-- ============ INFRASTRUCTURE ============ -->
+  <text x="480" y="435" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="10" letter-spacing="1">INFRASTRUCTURE</text>
+
+  <rect x="40" y="448" width="880" height="40" rx="8" fill="#1e1e36" stroke="#334155" stroke-width="0.8" opacity="0.95"/>
+  <g transform="translate(60, 472)">
+    <rect x="0" y="-9" width="8" height="8" rx="2" fill="#f59e0b" opacity="0.4"/>
+    <text x="14" y="0" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Per-run artifact isolation</text>
+
+    <rect x="175" y="-9" width="8" height="8" rx="2" fill="#3b82f6" opacity="0.4"/>
+    <text x="189" y="0" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Token budget tracking</text>
+
+    <rect x="340" y="-9" width="8" height="8" rx="2" fill="#10b981" opacity="0.4"/>
+    <text x="354" y="0" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Background execution</text>
+
+    <rect x="505" y="-9" width="8" height="8" rx="2" fill="#8b5cf6" opacity="0.4"/>
+    <text x="519" y="0" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Pipeline validator</text>
+
+    <rect x="645" y="-9" width="8" height="8" rx="2" fill="#06b6d4" opacity="0.4"/>
+    <text x="659" y="0" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">5 profiles (full/trivial/research/docs/bugfix)</text>
+  </g>
+
+  <!-- Tagline -->
+  <text x="480" y="510" text-anchor="middle" fill="#475569" font-family="Arial,Helvetica,sans-serif" font-size="10" letter-spacing="1">DDD drives judgment. SDD produces specs. TDD verifies delivery.</text>
+</svg>

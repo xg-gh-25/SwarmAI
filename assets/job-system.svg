@@ -1,0 +1,206 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 520" width="960" height="520">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f1019"/>
+      <stop offset="100%" stop-color="#1a1a2e"/>
+    </linearGradient>
+    <linearGradient id="gold" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f59e0b"/>
+      <stop offset="100%" stop-color="#d97706"/>
+    </linearGradient>
+    <linearGradient id="blue" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#3b82f6"/>
+      <stop offset="100%" stop-color="#2563eb"/>
+    </linearGradient>
+    <linearGradient id="purple" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#8b5cf6"/>
+      <stop offset="100%" stop-color="#7c3aed"/>
+    </linearGradient>
+    <linearGradient id="green" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#10b981"/>
+      <stop offset="100%" stop-color="#059669"/>
+    </linearGradient>
+    <linearGradient id="red" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ef4444"/>
+      <stop offset="100%" stop-color="#dc2626"/>
+    </linearGradient>
+    <linearGradient id="cyan" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#06b6d4"/>
+      <stop offset="100%" stop-color="#0891b2"/>
+    </linearGradient>
+    <linearGradient id="pink" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ec4899"/>
+      <stop offset="100%" stop-color="#db2777"/>
+    </linearGradient>
+    <marker id="arrowGold" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#f59e0b" opacity="0.7"/>
+    </marker>
+    <marker id="arrowCyan" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#06b6d4" opacity="0.7"/>
+    </marker>
+  </defs>
+
+  <rect width="960" height="520" rx="16" fill="url(#bg)"/>
+
+  <!-- Grid -->
+  <g opacity="0.03" stroke="#f59e0b">
+    <line x1="0" y1="100" x2="960" y2="100" stroke-width="0.5"/>
+    <line x1="0" y1="200" x2="960" y2="200" stroke-width="0.5"/>
+    <line x1="0" y1="300" x2="960" y2="300" stroke-width="0.5"/>
+    <line x1="0" y1="400" x2="960" y2="400" stroke-width="0.5"/>
+    <line x1="240" y1="0" x2="240" y2="520" stroke-width="0.5"/>
+    <line x1="480" y1="0" x2="480" y2="520" stroke-width="0.5"/>
+    <line x1="720" y1="0" x2="720" y2="520" stroke-width="0.5"/>
+  </g>
+
+  <!-- Title -->
+  <text x="480" y="38" text-anchor="middle" fill="#06b6d4" font-family="Arial,Helvetica,sans-serif" font-size="18" font-weight="bold" letter-spacing="2">JOB SYSTEM</text>
+  <text x="480" y="56" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="11">Background Automation: launchd Scheduler + Signal Pipeline + Sidecar Services</text>
+
+  <!-- ============ TRIGGER LAYER (top) ============ -->
+  <text x="110" y="82" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="9" letter-spacing="1">TRIGGERS</text>
+
+  <rect x="30" y="92" width="110" height="36" rx="6" fill="#1e1e36" stroke="#f59e0b" stroke-width="1"/>
+  <text x="85" y="114" text-anchor="middle" fill="#fbbf24" font-family="Arial,Helvetica,sans-serif" font-size="9" font-weight="bold">launchd (hourly)</text>
+
+  <rect x="152" y="92" width="100" height="36" rx="6" fill="#1e1e36" stroke="#3b82f6" stroke-width="1"/>
+  <text x="202" y="114" text-anchor="middle" fill="#93c5fd" font-family="Arial,Helvetica,sans-serif" font-size="9" font-weight="bold">Backend startup</text>
+
+  <rect x="264" y="92" width="100" height="36" rx="6" fill="#1e1e36" stroke="#8b5cf6" stroke-width="1"/>
+  <text x="314" y="114" text-anchor="middle" fill="#c4b5fd" font-family="Arial,Helvetica,sans-serif" font-size="9" font-weight="bold">API: /run-now</text>
+
+  <rect x="376" y="92" width="100" height="36" rx="6" fill="#1e1e36" stroke="#10b981" stroke-width="1"/>
+  <text x="426" y="114" text-anchor="middle" fill="#6ee7b7" font-family="Arial,Helvetica,sans-serif" font-size="9" font-weight="bold">Cron expression</text>
+
+  <!-- Arrows down from triggers to scheduler -->
+  <path d="M 240,128 L 240,155" stroke="#f59e0b" stroke-width="1" opacity="0.3" marker-end="url(#arrowGold)"/>
+
+  <!-- ============ SCHEDULER (center hub) ============ -->
+  <rect x="100" y="160" width="280" height="80" rx="12" fill="#1e1e36" stroke="#f59e0b" stroke-width="1.8" opacity="0.95"/>
+  <rect x="100" y="160" width="280" height="80" rx="12" fill="url(#gold)" opacity="0.06"/>
+  <text x="240" y="185" text-anchor="middle" fill="#fbbf24" font-family="Arial,Helvetica,sans-serif" font-size="13" font-weight="bold">Scheduler</text>
+  <text x="240" y="202" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Evaluate due jobs via cron_utils</text>
+  <text x="240" y="216" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Dedup + dependency chain (after:)</text>
+  <text x="240" y="230" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="8">scheduler.py + models.py + state.json</text>
+
+  <!-- Arrow from scheduler to executor -->
+  <path d="M 380,200 L 440,200" stroke="#f59e0b" stroke-width="1.5" opacity="0.4" marker-end="url(#arrowGold)"/>
+  <text x="410" y="194" text-anchor="middle" fill="#f59e0b" font-family="Arial,Helvetica,sans-serif" font-size="8" opacity="0.6">dispatch</text>
+
+  <!-- ============ EXECUTOR (routing) ============ -->
+  <rect x="445" y="155" width="200" height="90" rx="12" fill="#1e1e36" stroke="#06b6d4" stroke-width="1.5" opacity="0.95"/>
+  <rect x="445" y="155" width="200" height="90" rx="12" fill="url(#cyan)" opacity="0.06"/>
+  <text x="545" y="180" text-anchor="middle" fill="#67e8f9" font-family="Arial,Helvetica,sans-serif" font-size="12" font-weight="bold">Executor</text>
+  <text x="545" y="198" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Route by job.type:</text>
+  <text x="545" y="214" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">signal_fetch | signal_digest</text>
+  <text x="545" y="228" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">agent | script | maintenance</text>
+  <text x="545" y="240" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="8">executor.py — error isolation per job</text>
+
+  <!-- ============ JOB TYPES (fan out from executor) ============ -->
+
+  <!-- Signal Fetch -->
+  <path d="M 545,245 L 120,310" stroke="#06b6d4" stroke-width="1" opacity="0.3" marker-end="url(#arrowCyan)"/>
+  <rect x="30" y="295" width="185" height="100" rx="8" fill="#1e1e36" stroke="#3b82f6" stroke-width="1.2"/>
+  <rect x="30" y="295" width="185" height="100" rx="8" fill="url(#blue)" opacity="0.04"/>
+  <text x="122" y="316" text-anchor="middle" fill="#93c5fd" font-family="Arial,Helvetica,sans-serif" font-size="10" font-weight="bold">signal_fetch</text>
+  <text x="122" y="332" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="8">httpx adapters:</text>
+  <rect x="42" y="340" width="52" height="16" rx="3" fill="#3b82f6" fill-opacity="0.1" stroke="#3b82f6" stroke-width="0.5"/>
+  <text x="68" y="351" text-anchor="middle" fill="#93c5fd" font-family="Arial,Helvetica,sans-serif" font-size="7">HN API</text>
+  <rect x="100" y="340" width="44" height="16" rx="3" fill="#3b82f6" fill-opacity="0.1" stroke="#3b82f6" stroke-width="0.5"/>
+  <text x="122" y="351" text-anchor="middle" fill="#93c5fd" font-family="Arial,Helvetica,sans-serif" font-size="7">RSS</text>
+  <rect x="150" y="340" width="55" height="16" rx="3" fill="#3b82f6" fill-opacity="0.1" stroke="#3b82f6" stroke-width="0.5"/>
+  <text x="177" y="351" text-anchor="middle" fill="#93c5fd" font-family="Arial,Helvetica,sans-serif" font-size="7">GitHub</text>
+  <text x="122" y="376" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="8">3x daily (8am/2pm/8pm UTC)</text>
+  <text x="122" y="389" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="8">Output: raw signals JSON</text>
+
+  <!-- Signal Digest -->
+  <path d="M 545,245 L 340,310" stroke="#06b6d4" stroke-width="1" opacity="0.3" marker-end="url(#arrowCyan)"/>
+  <rect x="230" y="295" width="185" height="100" rx="8" fill="#1e1e36" stroke="#8b5cf6" stroke-width="1.2"/>
+  <rect x="230" y="295" width="185" height="100" rx="8" fill="url(#purple)" opacity="0.04"/>
+  <text x="322" y="316" text-anchor="middle" fill="#c4b5fd" font-family="Arial,Helvetica,sans-serif" font-size="10" font-weight="bold">signal_digest</text>
+  <text x="322" y="334" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="8">Sonnet 4.6 relevance scoring</text>
+  <text x="322" y="350" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="8">Categorize + prioritize signals</text>
+  <text x="322" y="366" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="8">after:signal-fetch dependency</text>
+  <text x="322" y="382" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="8">Output: signal_digest.json</text>
+  <text x="322" y="392" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="8">+ weekly rollup (Sunday 8pm)</text>
+
+  <!-- Agent Task -->
+  <path d="M 545,245 L 545,310" stroke="#06b6d4" stroke-width="1" opacity="0.3" marker-end="url(#arrowCyan)"/>
+  <rect x="440" y="295" width="185" height="100" rx="8" fill="#1e1e36" stroke="#10b981" stroke-width="1.2"/>
+  <rect x="440" y="295" width="185" height="100" rx="8" fill="url(#green)" opacity="0.04"/>
+  <text x="532" y="316" text-anchor="middle" fill="#6ee7b7" font-family="Arial,Helvetica,sans-serif" font-size="10" font-weight="bold">agent (headless)</text>
+  <text x="532" y="334" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="8">Claude CLI subprocess</text>
+  <text x="532" y="350" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="8">Full MCP tool access</text>
+  <text x="532" y="366" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="8">morning-inbox, custom tasks</text>
+  <text x="532" y="382" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="8">Output: JobResults/ + Radar todos</text>
+
+  <!-- Script / Maintenance -->
+  <path d="M 600,245 L 745,310" stroke="#06b6d4" stroke-width="1" opacity="0.3" marker-end="url(#arrowCyan)"/>
+  <rect x="650" y="295" width="185" height="100" rx="8" fill="#1e1e36" stroke="#f59e0b" stroke-width="1.2"/>
+  <rect x="650" y="295" width="185" height="100" rx="8" fill="url(#gold)" opacity="0.04"/>
+  <text x="742" y="316" text-anchor="middle" fill="#fbbf24" font-family="Arial,Helvetica,sans-serif" font-size="10" font-weight="bold">script + maintenance</text>
+  <text x="742" y="334" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="8">self-tune: calibrate feed scoring</text>
+  <text x="742" y="350" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="8">weekly-maint: prune + cleanup</text>
+  <text x="742" y="366" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="8">No AI, no tokens (deterministic)</text>
+  <text x="742" y="382" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="8">Sunday 3am UTC weekly</text>
+
+  <!-- ============ JOB DEFINITIONS (right side) ============ -->
+  <rect x="680" y="140" width="250" height="110" rx="10" fill="#1e1e36" stroke="#334155" stroke-width="1" opacity="0.95"/>
+  <text x="805" y="162" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="10" font-weight="bold">Job Definitions</text>
+  <line x1="695" y1="170" x2="915" y2="170" stroke="#334155" stroke-width="0.5"/>
+
+  <rect x="695" y="178" width="100" height="22" rx="4" fill="#ef4444" fill-opacity="0.06" stroke="#ef4444" stroke-width="0.5" stroke-opacity="0.4"/>
+  <text x="745" y="193" text-anchor="middle" fill="#fca5a5" font-family="Arial,Helvetica,sans-serif" font-size="8">system_jobs.py</text>
+  <text x="840" y="193" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="8">read-only, in code</text>
+
+  <rect x="695" y="206" width="100" height="22" rx="4" fill="#10b981" fill-opacity="0.06" stroke="#10b981" stroke-width="0.5" stroke-opacity="0.4"/>
+  <text x="745" y="221" text-anchor="middle" fill="#6ee7b7" font-family="Arial,Helvetica,sans-serif" font-size="8">user-jobs.yaml</text>
+  <text x="840" y="221" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="8">user CRUD via CLI</text>
+
+  <text x="805" y="244" text-anchor="middle" fill="#475569" font-family="Arial,Helvetica,sans-serif" font-size="8">job_manager.py: create/edit/pause/delete</text>
+
+  <!-- Arrow from definitions to scheduler -->
+  <path d="M 680,200 L 380,200" stroke="#334155" stroke-width="1" opacity="0.2" stroke-dasharray="4 3"/>
+
+  <!-- ============ SERVICE MANAGER (bottom right) ============ -->
+  <rect x="660" y="420" width="270" height="75" rx="10" fill="#1e1e36" stroke="#ec4899" stroke-width="1.2" opacity="0.95"/>
+  <rect x="660" y="420" width="270" height="75" rx="10" fill="url(#pink)" opacity="0.04"/>
+  <text x="795" y="442" text-anchor="middle" fill="#f472b6" font-family="Arial,Helvetica,sans-serif" font-size="11" font-weight="bold">Service Manager (sidecars)</text>
+  <text x="795" y="460" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Services/*/service.json discovery</text>
+  <text x="795" y="476" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Auto-restart (30s health check, max 5 crashes)</text>
+  <text x="795" y="490" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="8">Slack bot, future sidecars | SIGTERM + 5s SIGKILL</text>
+
+  <!-- ============ OUTPUT (bottom left) ============ -->
+  <rect x="30" y="420" width="260" height="75" rx="10" fill="#1e1e36" stroke="#10b981" stroke-width="1.2" opacity="0.95"/>
+  <rect x="30" y="420" width="260" height="75" rx="10" fill="url(#green)" opacity="0.04"/>
+  <text x="160" y="442" text-anchor="middle" fill="#6ee7b7" font-family="Arial,Helvetica,sans-serif" font-size="11" font-weight="bold">Outputs</text>
+  <text x="160" y="460" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Signals/ digest + weekly rollup</text>
+  <text x="160" y="476" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">JobResults/ per-run markdown</text>
+  <text x="160" y="490" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="8">→ Proactive Intelligence L4 reads signal_digest.json</text>
+
+  <!-- Arrows from job types down to outputs -->
+  <path d="M 122,395 L 122,420" stroke="#10b981" stroke-width="1" opacity="0.3"/>
+  <path d="M 322,395 L 200,420" stroke="#10b981" stroke-width="1" opacity="0.3"/>
+  <path d="M 532,395 L 240,420" stroke="#10b981" stroke-width="1" opacity="0.2" stroke-dasharray="4 3"/>
+
+  <!-- State persistence -->
+  <rect x="320" y="420" width="310" height="75" rx="10" fill="#1e1e36" stroke="#334155" stroke-width="0.8" opacity="0.95"/>
+  <text x="475" y="442" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="10" font-weight="bold">State Persistence</text>
+  <text x="475" y="460" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">state.json: last_run, next_run, run_count per job</text>
+  <text x="475" y="476" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">.job-results.jsonl: append-only execution log</text>
+  <text x="475" y="490" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="8">Survives app restarts (launchd persists independently)</text>
+
+  <!-- Legend -->
+  <g transform="translate(30, 508)">
+    <circle cx="4" cy="0" r="3" fill="#f59e0b" opacity="0.6"/>
+    <text x="12" y="4" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="8">Scheduler</text>
+    <circle cx="84" cy="0" r="3" fill="#06b6d4" opacity="0.6"/>
+    <text x="92" y="4" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="8">Executor</text>
+    <circle cx="154" cy="0" r="3" fill="#3b82f6" opacity="0.6"/>
+    <text x="162" y="4" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="8">Signals</text>
+    <circle cx="214" cy="0" r="3" fill="#10b981" opacity="0.6"/>
+    <text x="222" y="4" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="8">Agent tasks</text>
+    <circle cx="298" cy="0" r="3" fill="#ec4899" opacity="0.6"/>
+    <text x="306" y="4" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="8">Sidecar services</text>
+  </g>
+</svg>
