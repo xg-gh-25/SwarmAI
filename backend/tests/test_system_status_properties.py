@@ -83,6 +83,7 @@ class TestInitializedFieldConsistency:
         mock_db = MagicMock()
         mock_db.health_check = mock_health_check
         mock_db.workspace_config.get_config = mock_get_default_workspace
+        mock_db.app_settings.get = AsyncMock(return_value=None)
 
         with patch("routers.system.db", mock_db), \
              patch("routers.system.get_default_agent", mock_get_default_agent), \
@@ -161,6 +162,7 @@ class TestInitializedFieldConsistency:
         mock_db = MagicMock()
         mock_db.health_check = mock_health_check
         mock_db.workspace_config.get_config = mock_get_default_workspace
+        mock_db.app_settings.get = AsyncMock(return_value=None)
 
         with patch("routers.system.db", mock_db), \
              patch("routers.system.get_default_agent", mock_get_default_agent), \
@@ -299,6 +301,7 @@ class TestInitializedFieldConsistency:
         mock_db = MagicMock()
         mock_db.health_check = mock_health_check
         mock_db.workspace_config.get_config = mock_get_default_workspace
+        mock_db.app_settings.get = AsyncMock(return_value=None)
 
         with patch("routers.system.db", mock_db), \
              patch("routers.system.get_default_agent", mock_get_default_agent), \

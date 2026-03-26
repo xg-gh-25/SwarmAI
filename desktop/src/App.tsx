@@ -8,7 +8,7 @@
 import { useEffect, useState } from 'react';
 import { useZoom } from './hooks/useZoom';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
 import { ThemeProvider } from './contexts/ThemeContext';
 import { ToastProvider } from './contexts/ToastContext';
 import { HealthProvider } from './contexts/HealthContext';
@@ -18,6 +18,8 @@ import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { ToastStack } from './components/common/ToastStack';
 import ThreeColumnLayout from './components/layout/ThreeColumnLayout';
 import ChatPage from './pages/ChatPage';
+import OnboardingPage from './pages/OnboardingPage';
+import { systemService } from './services/system';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -96,23 +98,43 @@ export default function App() {
           {/* Update notification - only shown in production mode */}
           {!isDev && <UpdateNotification />}
           {/* Only render routes after backend is ready to prevent race conditions */}
-          {isBackendReady && (
-            <BrowserRouter>
-              <Routes>
-                {/* Main route with ThreeColumnLayout - ChatPage is the main content */}
-                {/* Requirements: 1.1 - Three-column layout with Left_Sidebar, Workspace_Explorer, Main_Chat_Panel */}
-                <Route path="/" element={
-                  <ThreeColumnLayout>
-                    <ChatPage />
-                  </ThreeColumnLayout>
-                } />
-              </Routes>
-            </BrowserRouter>
-          )}
+          {isBackendReady && <AppRoutes />}
           </ErrorBoundary>
           </HealthProvider>
         </ToastProvider>
       </QueryClientProvider>
     </ThemeProvider>
+  );
+}
+
+/**
+ * Route guard component.
+ *
+ * Checks onboarding status and shows OnboardingPage on first run.
+ * Must be inside QueryClientProvider for useQuery.
+ */
+function AppRoutes() {
+  const { data: status, refetch } = useQuery({
+    queryKey: ['system-status-onboarding'],
+    queryFn: systemService.getStatus,
+    staleTime: 1000 * 60 * 10, // 10 min — only check once
+    retry: 2,
+  });
+
+  // Show onboarding on first run (only if backend is initialized and onboarding not done)
+  if (status?.initialized && !status?.onboardingComplete) {
+    return <OnboardingPage onComplete={() => refetch()} />;
+  }
+
+  return (
+    <BrowserRouter>
+      <Routes>
+        <Route path="/" element={
+          <ThreeColumnLayout>
+            <ChatPage />
+          </ThreeColumnLayout>
+        } />
+      </Routes>
+    </BrowserRouter>
   );
 }

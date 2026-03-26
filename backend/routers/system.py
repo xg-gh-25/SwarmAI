@@ -1,13 +1,21 @@
 """System status API endpoints."""
+import json as _json
 import logging
+import os
+import time
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
+import boto3
+import httpx
 from fastapi import APIRouter
 from pydantic import BaseModel
 
+from config import get_bedrock_model_id
 from database import db
 from core.agent_defaults import build_agent_config, DEFAULT_AGENT_ID
+from core.app_config_manager import AppConfigManager
 from core.initialization_manager import initialization_manager
 from core.swarm_workspace_manager import swarm_workspace_manager
 from channels.gateway import channel_gateway
@@ -75,6 +83,7 @@ class SystemStatusResponse(BaseModel):
     initialized: bool
     initialization_mode: str  # 'first_run', 'quick_validation', or 'reset'
     initialization_complete: bool  # The persistent flag value
+    onboarding_complete: bool = False  # True after first-run onboarding wizard
     startup_time_ms: Optional[float] = None
     phase_timings: Optional[dict[str, float]] = None
     timestamp: str
@@ -235,6 +244,15 @@ async def get_system_status() -> SystemStatusResponse:
     # ISO 8601 timestamp
     timestamp = datetime.now(timezone.utc).isoformat()
     
+    # Read onboarding_complete flag from app_settings
+    onboarding_complete = False
+    try:
+        settings = await db.app_settings.get("default")
+        if settings:
+            onboarding_complete = bool(settings.get("onboarding_complete", 0))
+    except Exception:
+        pass
+
     # Lazy import to avoid circular dependency (main -> routers -> system -> main).
     import main as _main_module
 
@@ -246,10 +264,213 @@ async def get_system_status() -> SystemStatusResponse:
         initialized=initialized,
         initialization_mode=initialization_mode,
         initialization_complete=initialization_complete,
+        onboarding_complete=onboarding_complete,
         startup_time_ms=_main_module._startup_time_ms,
         phase_timings=_main_module._phase_timings,
         timestamp=timestamp
     )
+
+
+# ── Onboarding endpoints ──────────────────────────────────────────────
+
+
+def _get_auth_config() -> dict:
+    """Read auth-related config from AppConfigManager."""
+    try:
+        config = AppConfigManager.instance()
+        return {
+            "use_bedrock": config.get("use_bedrock", False),
+            "aws_region": config.get("aws_region", "us-east-1"),
+            "default_model": config.get("default_model", "claude-opus-4-6"),
+            "bedrock_model_map": config.get("bedrock_model_map"),
+            "anthropic_base_url": config.get("anthropic_base_url"),
+        }
+    except Exception:
+        # AppConfigManager not initialized (e.g., during tests)
+        return {
+            "use_bedrock": True,
+            "aws_region": "us-east-1",
+            "default_model": "claude-opus-4-6",
+            "bedrock_model_map": None,
+            "anthropic_base_url": None,
+        }
+
+
+def _auth_error(error: str, error_type: str, fix_hint: str) -> dict:
+    """Build a standardized auth error response."""
+    return {
+        "success": False,
+        "error": error,
+        "error_type": error_type,
+        "fix_hint": fix_hint,
+    }
+
+
+@router.post("/verify-auth")
+async def verify_auth():
+    """Verify LLM authentication by making a minimal API call.
+
+    Reads auth config from AppConfigManager, then:
+    - Bedrock: boto3 bedrock-runtime.invoke_model with max_tokens=1
+    - API key: httpx POST to messages API with max_tokens=1
+
+    Always returns 200 -- success/failure is in the response body.
+    """
+    config = _get_auth_config()
+    use_bedrock = config.get("use_bedrock", False)
+
+    if use_bedrock:
+        return _verify_bedrock(config)
+    else:
+        return await _verify_anthropic_api(config)
+
+
+def _verify_bedrock(config: dict) -> dict:
+    """Verify Bedrock auth with a minimal invoke."""
+    region = config.get("aws_region", "us-east-1")
+    model = config.get("default_model", "claude-opus-4-6")
+    bedrock_model = get_bedrock_model_id(model, config.get("bedrock_model_map"))
+
+    start = time.monotonic()
+    try:
+        client = boto3.client("bedrock-runtime", region_name=region)
+        client.invoke_model(
+            modelId=bedrock_model,
+            contentType="application/json",
+            accept="application/json",
+            body=_json.dumps({
+                "anthropic_version": "bedrock-2023-05-31",
+                "max_tokens": 1,
+                "messages": [{"role": "user", "content": "hi"}],
+            }),
+        )
+        latency = int((time.monotonic() - start) * 1000)
+        return {
+            "success": True,
+            "model": model,
+            "bedrock_model": bedrock_model,
+            "region": region,
+            "latency_ms": latency,
+        }
+    except Exception as e:
+        error_str = str(e)
+
+        if "ExpiredToken" in error_str or "expired" in error_str.lower():
+            return _auth_error(
+                error_str, "expired_credentials",
+                "Refresh credentials: ada credentials update --account=ACCOUNT --role=ROLE"
+            )
+        if "InvalidIdentityToken" in error_str or "UnrecognizedClient" in error_str:
+            return _auth_error(
+                error_str, "invalid_credentials",
+                "Credentials are invalid. Re-authenticate with ada or aws sso login."
+            )
+        if "not authorized" in error_str.lower() or "AccessDenied" in error_str:
+            return _auth_error(
+                error_str, "access_denied",
+                "Model access not enabled in this region. Check Bedrock console."
+            )
+        return _auth_error(error_str, "unknown", "Check AWS configuration and try again.")
+
+
+async def _verify_anthropic_api(config: dict) -> dict:
+    """Verify Anthropic API key with a minimal messages call."""
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        return _auth_error(
+            "ANTHROPIC_API_KEY not set", "missing_key",
+            "Set ANTHROPIC_API_KEY environment variable before launching SwarmAI."
+        )
+
+    base_url = config.get("anthropic_base_url") or "https://api.anthropic.com"
+    model = config.get("default_model", "claude-opus-4-6")
+    start = time.monotonic()
+
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(
+                f"{base_url}/v1/messages",
+                headers={
+                    "x-api-key": api_key,
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json",
+                },
+                json={
+                    "model": model,
+                    "max_tokens": 1,
+                    "messages": [{"role": "user", "content": "hi"}],
+                },
+            )
+
+        latency = int((time.monotonic() - start) * 1000)
+
+        if resp.status_code == 200:
+            return {"success": True, "model": model, "latency_ms": latency}
+
+        body = resp.json()
+        error_msg = body.get("error", {}).get("message", resp.text)
+
+        if resp.status_code == 401:
+            return _auth_error(error_msg, "invalid_key",
+                               "API key is invalid. Check the key at console.anthropic.com.")
+        if resp.status_code == 403:
+            return _auth_error(error_msg, "forbidden",
+                               "API key doesn't have access to this model.")
+
+        return _auth_error(error_msg, "api_error", "Check Anthropic API status.")
+
+    except httpx.ConnectError:
+        return _auth_error("Cannot reach API endpoint", "network",
+                           f"Check network connectivity to {base_url}")
+    except Exception as e:
+        return _auth_error(str(e), "unknown", "Check API configuration.")
+
+
+@router.get("/auth-hint")
+async def get_auth_hint():
+    """Return hints about the local credential environment.
+
+    Helps the frontend pick a sensible default auth method card.
+    """
+    has_ada = Path.home().joinpath(".ada").is_dir()
+    has_sso_cache = bool(list(Path.home().joinpath(".aws/sso/cache").glob("*.json")))
+    has_api_key = bool(os.environ.get("ANTHROPIC_API_KEY"))
+
+    if has_api_key:
+        suggested = "apikey"
+    elif has_ada:
+        suggested = "ada"
+    elif has_sso_cache:
+        suggested = "sso"
+    else:
+        suggested = "sso"  # safest default for external users
+
+    return {
+        "has_ada_dir": has_ada,
+        "has_sso_cache": has_sso_cache,
+        "has_api_key": has_api_key,
+        "suggested_method": suggested,
+    }
+
+
+@router.put("/onboarding-complete")
+async def set_onboarding_complete():
+    """Mark onboarding as complete. Called once when user finishes setup wizard."""
+    settings = await db.app_settings.get("default")
+    if settings:
+        await db.app_settings.update("default", {"onboarding_complete": 1})
+    else:
+        await db.app_settings.put({"id": "default", "onboarding_complete": 1})
+    return {"status": "ok"}
+
+
+@router.delete("/onboarding-complete")
+async def reset_onboarding():
+    """Reset onboarding flag. Used by 'Re-run Setup Wizard' in Settings."""
+    settings = await db.app_settings.get("default")
+    if settings:
+        await db.app_settings.update("default", {"onboarding_complete": 0})
+    return {"status": "ok"}
 
 
 @router.get("/resources", response_model=SystemResourcesResponse)
@@ -369,3 +590,43 @@ async def get_managed_services():
     """Get status of all managed sidecar services (Slack bot, etc.)."""
     from core.service_manager import service_manager
     return {"services": service_manager.get_status()}
+
+
+@router.post("/uninstall-cleanup")
+async def uninstall_cleanup():
+    """Remove launchd scheduler plist and clean up background processes.
+
+    Call this before deleting the app to stop the hourly scheduler.
+    Safe to call multiple times — idempotent.  Also stops managed
+    sidecar services.
+    """
+    results: dict[str, str] = {}
+
+    # 1. Unload and remove launchd plist
+    try:
+        from jobs.install_scheduler import uninstall as uninstall_scheduler
+        uninstall_scheduler()
+        results["scheduler_plist"] = "removed"
+    except Exception as e:
+        logger.error("Failed to remove scheduler plist: %s", e)
+        results["scheduler_plist"] = f"error: {e}"
+
+    # 2. Stop managed services
+    try:
+        from core.service_manager import service_manager
+        await service_manager.stop_all()
+        results["services"] = "stopped"
+    except Exception as e:
+        logger.error("Failed to stop services: %s", e)
+        results["services"] = f"error: {e}"
+
+    # 3. Remove port file
+    port_file = Path.home() / ".swarm-ai" / "backend.port"
+    try:
+        port_file.unlink(missing_ok=True)
+        results["port_file"] = "removed"
+    except Exception:
+        results["port_file"] = "already gone"
+
+    logger.info("Uninstall cleanup completed: %s", results)
+    return {"status": "cleaned", "details": results}
