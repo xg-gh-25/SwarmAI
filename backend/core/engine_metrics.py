@@ -273,14 +273,32 @@ def collect_ddd_change_suggestions(ws_path: Path) -> list[dict[str, str]]:
 
 
 def _find_swarmai_root(ws_path: Path) -> Optional[Path]:
-    """Find the SwarmAI codebase root."""
-    candidates = [
-        Path("/Users/gawan/Desktop/SwarmAI-Workspace/swarmai"),
-        ws_path.parent / "swarmai",
-    ]
-    for c in candidates:
-        if (c / "backend").is_dir():
-            return c
+    """Find the SwarmAI codebase root.
+
+    Resolution order:
+    1. SWARMAI_ROOT env var (explicit override)
+    2. Relative to this file (works in dev and PyInstaller)
+    3. Sibling of workspace parent (legacy layout)
+    """
+    import os
+
+    # Env var — explicit override for any deployment
+    env_root = os.environ.get("SWARMAI_ROOT")
+    if env_root:
+        p = Path(env_root)
+        if (p / "backend").is_dir():
+            return p
+
+    # Relative to this source file: engine_metrics.py → core/ → backend/ → swarmai/
+    source_root = Path(__file__).resolve().parents[2]
+    if (source_root / "backend").is_dir():
+        return source_root
+
+    # Sibling of workspace parent
+    sibling = ws_path.parent / "swarmai"
+    if (sibling / "backend").is_dir():
+        return sibling
+
     return None
 
 
@@ -411,10 +429,11 @@ def _compute_engine_level(ws_path: Path) -> dict[str, Any]:
     # Check if session-type detection exists (channel sessions get lighter prompts)
     try:
         from core.prompt_builder import PromptBuilder
+        # Feature detection via attribute check — works in dev and .pyc bundles
+        # PromptBuilder.build_system_prompt must accept is_channel kwarg
         import inspect
-        source = inspect.getsource(PromptBuilder)
-        # The feature is active if prompt_builder skips context for channel sessions
-        if "is_channel" in source and "daily_activity" in source.lower():
+        sig = inspect.signature(PromptBuilder.build_system_prompt)
+        if "is_channel" in sig.parameters:
             l3_features["session_type_detection"] = True
     except (ImportError, Exception):
         pass

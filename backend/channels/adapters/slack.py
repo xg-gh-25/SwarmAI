@@ -359,11 +359,13 @@ class SlackChannelAdapter(ChannelAdapter):
         """Convert markdown text to Slack Block Kit blocks.
 
         Slack's ``mrkdwn`` is close to markdown but not identical:
+        - Italic: *text* -> _text_  (processed first to avoid bold collision)
         - Bold: **text** -> *text*
-        - Italic: *text* or _text_ -> _text_
         - Strikethrough: ~~text~~ -> ~text~
         - Code blocks and inline code work as-is.
         - Links: [text](url) -> <url|text>
+
+        Limitation: ``***bold+italic***`` doesn't convert cleanly (rare in practice).
 
         Each section block has a 3000-char limit, so long messages
         are split across multiple blocks.
@@ -383,6 +385,8 @@ class SlackChannelAdapter(ChannelAdapter):
         parts = re.split(r'(```[\s\S]*?```|`[^`]+`)', mrkdwn)
         for i, part in enumerate(parts):
             if not part.startswith('`'):
+                # Italic first: *text* -> _text_ (single asterisks only, not **)
+                part = re.sub(r'(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)', r'_\1_', part)
                 # Bold: **text** -> *text*
                 part = re.sub(r'\*\*(.+?)\*\*', r'*\1*', part)
                 # Strikethrough: ~~text~~ -> ~text~

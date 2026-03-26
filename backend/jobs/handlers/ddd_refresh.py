@@ -358,12 +358,28 @@ def _write_proposal(project_dir: Path, proposal: dict) -> None:
 
 
 def _find_swarmai_root() -> Path | None:
-    """Find the SwarmAI codebase root."""
-    candidates = [
-        Path("/Users/gawan/Desktop/SwarmAI-Workspace/swarmai"),
-        SWARMWS.parent / "swarmai",
-    ]
-    for c in candidates:
-        if (c / "backend").is_dir():
-            return c
+    """Find the SwarmAI codebase root.
+
+    Resolution order:
+    1. SWARMAI_ROOT env var (explicit override)
+    2. Relative to this file (works in dev and PyInstaller)
+    3. Sibling of workspace parent (legacy layout)
+    """
+    import os
+
+    env_root = os.environ.get("SWARMAI_ROOT")
+    if env_root:
+        p = Path(env_root)
+        if (p / "backend").is_dir():
+            return p
+
+    # Relative to this source file: ddd_refresh.py → handlers/ → jobs/ → backend/ → swarmai/
+    source_root = Path(__file__).resolve().parents[3]
+    if (source_root / "backend").is_dir():
+        return source_root
+
+    sibling = SWARMWS.parent / "swarmai"
+    if (sibling / "backend").is_dir():
+        return sibling
+
     return None
