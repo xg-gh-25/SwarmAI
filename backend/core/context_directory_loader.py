@@ -75,6 +75,17 @@ for conversation and tool use."""
 GROUP_CHANNEL_EXCLUDE: frozenset[str] = frozenset({"MEMORY.md", "USER.md"})
 """Files excluded from group channel prompts to prevent personal data leakage."""
 
+CHANNEL_LIGHT_EXCLUDE: frozenset[str] = frozenset({
+    "EVOLUTION.md", "PROJECTS.md",
+})
+"""Files excluded from channel (Slack/Feishu DM) sessions.
+
+Channel messages are typically quick exchanges (56% of sessions) that
+don't need Evolution registry or project index.  MEMORY.md and USER.md
+ARE included — channel DMs are personal and benefit from persistent memory.
+Saves ~3.5K tokens per channel response. Group channels get the stricter
+GROUP_CHANNEL_EXCLUDE instead (which also drops MEMORY.md and USER.md)."""
+
 
 # ── Data Models ────────────────────────────────────────────────────────
 
