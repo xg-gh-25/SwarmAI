@@ -494,7 +494,8 @@ class TestSlackNativeStreaming:
     """Native Slack Agents & AI Apps streaming API."""
 
     def test_supports_native_streaming(self, adapter):
-        assert adapter.supports_native_streaming is True
+        # Native streaming disabled — renders as "AI inline" style, not person-like
+        assert adapter.supports_native_streaming is False
 
     @pytest.mark.asyncio
     async def test_start_stream(self, adapter):
