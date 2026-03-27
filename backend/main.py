@@ -98,6 +98,79 @@ logger.info(f"Log file: {log_file}")
 logging.getLogger("urllib3").setLevel(logging.WARNING)
 
 
+# ---------------------------------------------------------------------------
+# Backend-as-Daemon: mode detection + backend.json lifecycle
+# ---------------------------------------------------------------------------
+
+_BACKEND_JSON_DEFAULT = str(Path(get_app_data_dir()) / "backend.json")
+_backend_start_monotonic: float = 0.0  # set during lifespan startup
+
+
+def _detect_run_mode() -> str:
+    """Detect whether this backend is running as a daemon or sidecar.
+
+    Resolution: ``SWARMAI_MODE`` env var.  Daemon wrapper sets this to
+    ``"daemon"``; Tauri sidecar leaves it unset (default ``"sidecar"``).
+    """
+    return os.environ.get("SWARMAI_MODE", "sidecar")
+
+
+def write_backend_json(
+    port: int,
+    mode: str,
+    path: str = _BACKEND_JSON_DEFAULT,
+) -> None:
+    """Write ``backend.json`` so other processes can discover this backend."""
+    import json as _json
+    from datetime import datetime, timezone
+
+    data = {
+        "pid": os.getpid(),
+        "port": port,
+        "mode": mode,
+        "started_at": datetime.now(timezone.utc).isoformat(),
+    }
+    Path(path).parent.mkdir(parents=True, exist_ok=True)
+    Path(path).write_text(_json.dumps(data, indent=2))
+
+
+def remove_backend_json(path: str = _BACKEND_JSON_DEFAULT) -> None:
+    """Delete ``backend.json`` on clean shutdown."""
+    try:
+        Path(path).unlink(missing_ok=True)
+    except Exception:
+        pass  # best-effort
+
+
+def read_backend_json(path: str = _BACKEND_JSON_DEFAULT) -> dict | None:
+    """Read and validate ``backend.json``.
+
+    Returns the parsed dict if the file exists, is valid JSON, and the
+    PID recorded in it is still alive.  Returns ``None`` otherwise
+    (missing file, corrupt JSON, dead PID).
+    """
+    import json as _json
+
+    p = Path(path)
+    if not p.exists():
+        return None
+    try:
+        data = _json.loads(p.read_text())
+    except (ValueError, OSError):
+        return None
+
+    # Stale PID check: is the recorded process still alive?
+    pid = data.get("pid")
+    if pid is None:
+        return None
+    try:
+        os.kill(pid, 0)  # signal 0 = existence check
+    except (OSError, ProcessLookupError):
+        return None  # process is dead → stale file
+
+    return data
+
+
 def _detect_backend_port() -> int:
     """Detect the port this backend is listening on.
 
@@ -540,6 +613,14 @@ async def lifespan(app: FastAPI):
     if startup_killed:
         logger.warning("Killed %d leftover claude process(es) at startup", startup_killed)
 
+    # Write backend.json so Tauri (or other processes) can discover us
+    global _backend_start_monotonic
+    _backend_start_monotonic = time.monotonic()
+    backend_port = _detect_backend_port()
+    backend_mode = _detect_run_mode()
+    write_backend_json(port=backend_port, mode=backend_mode)
+    logger.info("backend.json written (port=%d, mode=%s)", backend_port, backend_mode)
+
     # Mark startup as complete - health check will now return healthy
     _startup_complete = True
     total_ms = round((time.monotonic() - t0) * 1000)
@@ -582,6 +663,8 @@ async def lifespan(app: FastAPI):
     logger.info("LifecycleManager stopped")
     await session_registry.disconnect_all()
     logger.info("All sessions disconnected")
+    remove_backend_json()
+    logger.info("backend.json removed")
 
 
 # Create FastAPI application
@@ -698,6 +781,18 @@ async def health_check():
         "version": settings.app_version,
         "sdk": "claude-agent-sdk",
         "pending_hook_tasks": pending_hooks,
+    }
+
+
+@app.get("/api/system/mode")
+async def get_system_mode():
+    """Return the backend's running mode (daemon vs sidecar)."""
+    uptime = time.monotonic() - _backend_start_monotonic if _backend_start_monotonic else 0
+    return {
+        "mode": _detect_run_mode(),
+        "pid": os.getpid(),
+        "port": _detect_backend_port(),
+        "uptime_seconds": round(uptime, 1),
     }
 
 

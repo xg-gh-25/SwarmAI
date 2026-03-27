@@ -143,9 +143,14 @@ class ChannelGateway:
                 )
                 self._schedule_retry(ch["id"])
 
+        # Set Slack bot presence to "auto" (online) on startup
+        await self._set_all_slack_presence("auto")
+
     async def shutdown(self) -> None:
         """Gracefully stop every running channel and cancel pending retries."""
         logger.info("ChannelGateway shutting down")
+        # Set Slack bot presence to "away" before stopping adapters
+        await self._set_all_slack_presence("away")
         self._shutting_down = True
 
         # Cancel all pending retry tasks first
@@ -166,6 +171,23 @@ class ChannelGateway:
         self._rate_limiter.clear()
         self._channel_cache.clear()
         logger.info("ChannelGateway shutdown complete")
+
+    # ------------------------------------------------------------------
+    # Slack presence (daemon lifecycle)
+    # ------------------------------------------------------------------
+
+    async def _set_all_slack_presence(self, presence: str) -> None:
+        """Set presence on all running Slack adapters.
+
+        Best-effort — failures are logged but don't block startup/shutdown.
+        """
+        for adapter in self._adapters.values():
+            if hasattr(adapter, "set_presence") and adapter.channel_type == "slack":
+                try:
+                    await adapter.set_presence(presence)
+                    logger.info("Slack presence set to '%s' for channel %s", presence, adapter.channel_id)
+                except Exception:
+                    logger.debug("Failed to set Slack presence for channel %s", adapter.channel_id)
 
     # ------------------------------------------------------------------
     # Channel start / stop / restart
