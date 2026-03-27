@@ -342,7 +342,11 @@ class SlackChannelAdapter(ChannelAdapter):
 
     @property
     def supports_native_streaming(self) -> bool:
-        return True
+        # Disabled: native streaming (startStream/appendStream/stopStream) renders
+        # with an "AI inline" style that looks tool-like, not person-like.
+        # Legacy path (postMessage → update) produces normal bot messages
+        # with "🐝 Thinking..." → progressive updates → Block Kit final.
+        return False
 
     async def _ensure_identity(self) -> None:
         """Resolve and cache team_id / bot_user_id (one-time, lazy)."""
