@@ -34,6 +34,11 @@ from channels.base import (
 
 logger = logging.getLogger(__name__)
 
+# Slack API limits
+_TEXT_FALLBACK_LIMIT = 39_000   # text field (notification fallback) — hard limit ~40K
+_BLOCK_SECTION_LIMIT = 3_000   # single section block text limit
+_MAX_BLOCKS_PER_MSG = 50       # max blocks array length per message
+
 
 class SlackChannelAdapter(ChannelAdapter):
     """Adapter for Slack using Socket Mode WebSocket.
@@ -372,31 +377,62 @@ class SlackChannelAdapter(ChannelAdapter):
 
         Intermediate updates use plain ``mrkdwn`` text (fast, no Block
         Kit overhead).  The final update applies full Block Kit
-        formatting with a trailing cursor removed.
+        formatting.  If the final text is too long for a single Slack
+        message, the original message is updated with the first chunk
+        and overflow is posted as new follow-up messages.
         """
         if not self._slack_client:
             return
 
         try:
             if is_final:
-                # Final update — full Block Kit formatting
+                # Final update — full Block Kit formatting, with overflow handling
                 blocks = self._text_to_blocks(text)
-                self._slack_client.chat_update(
-                    channel=external_chat_id,
-                    ts=message_id,
-                    text=text,
-                    blocks=blocks,
-                )
+                fallback = text[:_TEXT_FALLBACK_LIMIT]
+
+                if len(blocks) <= _MAX_BLOCKS_PER_MSG:
+                    # Fits in one message — update in place
+                    self._slack_client.chat_update(
+                        channel=external_chat_id,
+                        ts=message_id,
+                        text=fallback,
+                        blocks=blocks,
+                    )
+                else:
+                    # Overflow: update original with first chunk, post rest as new messages
+                    first_chunk = blocks[:_MAX_BLOCKS_PER_MSG]
+                    self._slack_client.chat_update(
+                        channel=external_chat_id,
+                        ts=message_id,
+                        text=fallback,
+                        blocks=first_chunk,
+                    )
+                    # Post overflow chunks as follow-up messages
+                    remaining = blocks[_MAX_BLOCKS_PER_MSG:]
+                    while remaining:
+                        chunk = remaining[:_MAX_BLOCKS_PER_MSG]
+                        remaining = remaining[_MAX_BLOCKS_PER_MSG:]
+                        try:
+                            self._slack_client.chat_postMessage(
+                                channel=external_chat_id,
+                                text="(continued)",
+                                blocks=chunk,
+                            )
+                        except Exception:
+                            logger.warning("Failed to post overflow chunk")
+                            break
             else:
                 # Streaming update — lightweight mrkdwn with cursor
                 display = self._md_to_mrkdwn(text) + " :writing_hand:"
-                # Truncate to Slack's 3000-char section limit
-                if len(display) > 3000:
-                    display = display[-2990:] + " :writing_hand:"
+                # Truncate to Slack's 3000-char section limit (show tail)
+                if len(display) > _BLOCK_SECTION_LIMIT:
+                    display = "..." + display[-(_BLOCK_SECTION_LIMIT - 20):] + " :writing_hand:"
+                # Truncate text fallback too — this was the msg_too_long root cause
+                fallback = text[-_TEXT_FALLBACK_LIMIT:] if len(text) > _TEXT_FALLBACK_LIMIT else text
                 self._slack_client.chat_update(
                     channel=external_chat_id,
                     ts=message_id,
-                    text=text,
+                    text=fallback,
                     blocks=[
                         {
                             "type": "section",
@@ -415,27 +451,39 @@ class SlackChannelAdapter(ChannelAdapter):
         """Send a message back to Slack with Block Kit formatting.
 
         Converts markdown-style text to Slack's ``mrkdwn`` format and
-        wraps it in a ``section`` block.  The plain ``text`` field is
-        always set as a notification fallback.
+        wraps it in section blocks.  Long messages are automatically
+        split across multiple Slack messages to stay within API limits.
         """
         if not self._slack_client:
             return None
 
         try:
             blocks = self._text_to_blocks(message.text)
+            fallback = message.text[:_TEXT_FALLBACK_LIMIT]
 
-            kwargs = {
-                "channel": message.external_chat_id,
-                "text": message.text,  # Fallback for notifications / accessibility
-                "blocks": blocks,
-            }
+            thread_ts = message.external_thread_id or None
 
-            # Reply in thread if original message was threaded
-            if message.external_thread_id:
-                kwargs["thread_ts"] = message.external_thread_id
+            # Split blocks into chunks of _MAX_BLOCKS_PER_MSG
+            first_ts: Optional[str] = None
+            block_chunks = [
+                blocks[i:i + _MAX_BLOCKS_PER_MSG]
+                for i in range(0, len(blocks), _MAX_BLOCKS_PER_MSG)
+            ] or [[{"type": "section", "text": {"type": "mrkdwn", "text": " "}}]]
 
-            result = self._slack_client.chat_postMessage(**kwargs)
-            return result.get("ts")
+            for idx, chunk in enumerate(block_chunks):
+                kwargs = {
+                    "channel": message.external_chat_id,
+                    "text": fallback if idx == 0 else "(continued)",
+                    "blocks": chunk,
+                }
+                if thread_ts:
+                    kwargs["thread_ts"] = thread_ts
+
+                result = self._slack_client.chat_postMessage(**kwargs)
+                if idx == 0:
+                    first_ts = result.get("ts")
+
+            return first_ts
         except Exception:
             logger.exception("Error sending Slack message")
             return None
