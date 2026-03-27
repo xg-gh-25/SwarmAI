@@ -10,8 +10,7 @@
         <string>__WRAPPER_PATH__</string>
     </array>
 
-    <key>WorkingDirectory</key>
-    <string>__WRAPPER_PATH__</string>
+    <!-- WorkingDirectory set by wrapper script (cd $BACKEND_DIR) -->
 
     <!-- Start on login and restart on crash -->
     <key>RunAtLoad</key>

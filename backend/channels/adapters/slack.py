@@ -318,6 +318,96 @@ class SlackChannelAdapter(ChannelAdapter):
             return None
 
     # ------------------------------------------------------------------
+    # Streaming support
+    # ------------------------------------------------------------------
+
+    @property
+    def supports_streaming(self) -> bool:
+        return True
+
+    async def send_typing_indicator(
+        self,
+        external_chat_id: str,
+        external_thread_id: Optional[str] = None,
+    ) -> Optional[str]:
+        """Post a placeholder message with a thinking indicator.
+
+        Returns the Slack ``ts`` so the gateway can update it in-place
+        as the agent streams its response.
+        """
+        if not self._slack_client:
+            return None
+
+        try:
+            kwargs = {
+                "channel": external_chat_id,
+                "text": "Thinking...",
+                "blocks": [
+                    {
+                        "type": "context",
+                        "elements": [
+                            {"type": "mrkdwn", "text": ":bee: _Thinking..._"},
+                        ],
+                    }
+                ],
+            }
+            if external_thread_id:
+                kwargs["thread_ts"] = external_thread_id
+
+            result = self._slack_client.chat_postMessage(**kwargs)
+            return result.get("ts")
+        except Exception:
+            logger.exception("Error sending Slack typing indicator")
+            return None
+
+    async def update_message(
+        self,
+        external_chat_id: str,
+        message_id: str,
+        text: str,
+        *,
+        is_final: bool = False,
+    ) -> None:
+        """Update the placeholder message with streaming or final content.
+
+        Intermediate updates use plain ``mrkdwn`` text (fast, no Block
+        Kit overhead).  The final update applies full Block Kit
+        formatting with a trailing cursor removed.
+        """
+        if not self._slack_client:
+            return
+
+        try:
+            if is_final:
+                # Final update — full Block Kit formatting
+                blocks = self._text_to_blocks(text)
+                self._slack_client.chat_update(
+                    channel=external_chat_id,
+                    ts=message_id,
+                    text=text,
+                    blocks=blocks,
+                )
+            else:
+                # Streaming update — lightweight mrkdwn with cursor
+                display = self._md_to_mrkdwn(text) + " :writing_hand:"
+                # Truncate to Slack's 3000-char section limit
+                if len(display) > 3000:
+                    display = display[-2990:] + " :writing_hand:"
+                self._slack_client.chat_update(
+                    channel=external_chat_id,
+                    ts=message_id,
+                    text=text,
+                    blocks=[
+                        {
+                            "type": "section",
+                            "text": {"type": "mrkdwn", "text": display},
+                        }
+                    ],
+                )
+        except Exception:
+            logger.exception("Error updating Slack message")
+
+    # ------------------------------------------------------------------
     # Outgoing messages
     # ------------------------------------------------------------------
 
@@ -353,6 +443,33 @@ class SlackChannelAdapter(ChannelAdapter):
     # ------------------------------------------------------------------
     # Block Kit helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _md_to_mrkdwn(text: str) -> str:
+        """Convert markdown to Slack mrkdwn (inline conversion, no blocks).
+
+        Used for streaming updates where Block Kit overhead is unnecessary.
+        """
+        import re
+
+        if not text:
+            return " "
+
+        mrkdwn = text
+
+        # Links [text](url) -> <url|text>
+        mrkdwn = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', r'<\2|\1>', mrkdwn)
+
+        # Process outside code fences only
+        parts = re.split(r'(```[\s\S]*?```|`[^`]+`)', mrkdwn)
+        for i, part in enumerate(parts):
+            if not part.startswith('`'):
+                part = re.sub(r'(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)', r'_\1_', part)
+                part = re.sub(r'\*\*(.+?)\*\*', r'*\1*', part)
+                part = re.sub(r'~~(.+?)~~', r'~\1~', part)
+                parts[i] = part
+
+        return ''.join(parts)
 
     @staticmethod
     def _text_to_blocks(text: str) -> list[dict]:

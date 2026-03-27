@@ -106,3 +106,46 @@ class ChannelAdapter(ABC):
     def channel_type(self) -> str:
         """The type identifier of this channel adapter."""
         ...
+
+    # ------------------------------------------------------------------
+    # Optional streaming support (override in subclasses)
+    # ------------------------------------------------------------------
+
+    @property
+    def supports_streaming(self) -> bool:
+        """Whether this adapter supports live message updates.
+
+        When True, the gateway will call ``send_typing_indicator`` before
+        the agent runs, then ``update_message`` with incremental text as
+        it streams, and finally ``update_message`` with the complete
+        response.  Adapters that return False get a single
+        ``send_message`` after the agent finishes.
+        """
+        return False
+
+    async def send_typing_indicator(
+        self,
+        external_chat_id: str,
+        external_thread_id: Optional[str] = None,
+    ) -> Optional[str]:
+        """Post a "thinking" placeholder and return its message ID.
+
+        The returned ID is passed to ``update_message`` for live edits.
+        Default implementation is a no-op for adapters that don't support it.
+        """
+        return None
+
+    async def update_message(
+        self,
+        external_chat_id: str,
+        message_id: str,
+        text: str,
+        *,
+        is_final: bool = False,
+    ) -> None:
+        """Replace the content of a previously-sent message.
+
+        Called repeatedly as the agent streams text.  ``is_final=True``
+        on the last call so the adapter can apply final formatting
+        (e.g. Block Kit conversion).
+        """
