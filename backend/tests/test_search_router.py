@@ -27,7 +27,7 @@ def _create_workspace(client: TestClient, name: str = "SearchTestWS") -> str:
     """Ensure the singleton workspace config exists and return its ID."""
     import asyncio
     from tests.helpers import ensure_default_workspace
-    return asyncio.get_event_loop().run_until_complete(ensure_default_workspace())
+    return asyncio.run(ensure_default_workspace())
 
 
 async def _seed_todo(workspace_id: str, title: str, **kw) -> str:

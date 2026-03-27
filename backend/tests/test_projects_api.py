@@ -43,7 +43,7 @@ def workspace_path(client: TestClient):
         projects_dir.mkdir()
 
         import database as database_module
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             database_module.db.workspace_config.put({
                 "id": "swarmws",
                 "name": "TestWorkspace",

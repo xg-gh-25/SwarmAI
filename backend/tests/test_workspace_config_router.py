@@ -36,14 +36,14 @@ from tests.helpers import now_iso
 def workspace_id(client: TestClient) -> str:
     """Return the singleton workspace ID after seeding workspace_config."""
     import asyncio
-    return asyncio.get_event_loop().run_until_complete(_ensure_default_workspace())
+    return asyncio.run(_ensure_default_workspace())
 
 
 @pytest.fixture
 def second_workspace_id(client: TestClient) -> str:
     """Return the singleton workspace ID (same as workspace_id in single-workspace model)."""
     import asyncio
-    return asyncio.get_event_loop().run_until_complete(_ensure_default_workspace())
+    return asyncio.run(_ensure_default_workspace())
 
 
 async def _ensure_default_workspace() -> str:
