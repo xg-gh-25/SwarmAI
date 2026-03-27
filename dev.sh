@@ -148,6 +148,18 @@ cmd_backend() {
     _start_backend
     _ok "Backend restarted in $(_build_time $start)"
     _log "Tail logs: tail -f $LOG_DIR/backend.log"
+
+    # Auto-restart daemon if it's running — pick up new backend code
+    if _daemon_is_running; then
+        _log "Daemon running — restarting to pick up code changes..."
+        launchctl kickstart -k "$GUI_TARGET"
+        sleep 2
+        if _daemon_health >/dev/null; then
+            _ok "Daemon restarted with new code"
+        else
+            _warn "Daemon restarted but health check failed — check: ./dev.sh daemon logs"
+        fi
+    fi
 }
 
 cmd_frontend() {
@@ -179,6 +191,18 @@ cmd_build() {
     if [ -n "$dmg" ]; then
         _ok "DMG: $dmg ($(du -h "$dmg" | cut -f1))"
         _log "Install: open \"$dmg\""
+    fi
+
+    # Auto-restart daemon if it's running — pick up new backend code
+    if _daemon_is_running; then
+        _log "Daemon running — restarting to pick up code changes..."
+        launchctl kickstart -k "$GUI_TARGET"
+        sleep 2
+        if _daemon_health >/dev/null; then
+            _ok "Daemon restarted with new code"
+        else
+            _warn "Daemon restarted but health check failed — check: ./dev.sh daemon logs"
+        fi
     fi
 }
 
