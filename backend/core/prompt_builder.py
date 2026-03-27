@@ -910,6 +910,29 @@ class PromptBuilder:
         # 1. Resolve allowed tools
         allowed_tools = self.resolve_allowed_tools(agent_config)
 
+        # 1a. Restrict tools for non-owner channel sessions.
+        # This is the STRUCTURAL enforcement — the system prompt tells the
+        # agent what it shouldn't do, but this physically removes the tools
+        # so it CAN'T do it even if confused or prompt-injected.
+        if channel_context:
+            sender = channel_context.get("sender_identity", {})
+            tier = sender.get("permission_tier", "public")
+            if tier != "owner":
+                # Non-owners get NO file/system tools.  They can only talk.
+                # The agent still has WebFetch for answering questions.
+                _BLOCKED_TOOLS = {
+                    "Read", "Write", "Edit", "Glob", "Grep",
+                    "Bash", "NotebookEdit",
+                }
+                before = len(allowed_tools)
+                allowed_tools = [t for t in allowed_tools if t not in _BLOCKED_TOOLS]
+                if before != len(allowed_tools):
+                    logger.info(
+                        "Channel permission tier '%s': removed %d tools "
+                        "(file/system access blocked)",
+                        tier, before - len(allowed_tools),
+                    )
+
         # 2. Build hooks
         hooks, effective_allowed_skills, allow_all_skills = await build_hooks(
             agent_config, enable_skills, enable_mcp,

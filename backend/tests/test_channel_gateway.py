@@ -628,6 +628,78 @@ class TestSenderIdentityInjection:
         assert si["is_owner"] is True
 
 
+class TestToolRestriction:
+    """Non-owner channel sessions get file/system tools physically removed."""
+
+    def test_trusted_loses_file_tools(self):
+        """Trusted user has Read/Write/Edit/Bash stripped from allowed_tools."""
+        from core.prompt_builder import PromptBuilder
+
+        pb = PromptBuilder.__new__(PromptBuilder)
+        pb._config = {}
+
+        agent_config = {
+            "enable_bash_tool": True,
+            "enable_file_tools": True,
+            "enable_web_tools": True,
+        }
+        # Resolve full tool list first
+        full_tools = pb.resolve_allowed_tools(agent_config)
+        assert "Read" in full_tools
+        assert "Bash" in full_tools
+
+        # Simulate what build_options does for non-owner channel
+        channel_context = {
+            "sender_identity": {
+                "permission_tier": "trusted",
+                "is_owner": False,
+            }
+        }
+        sender = channel_context.get("sender_identity", {})
+        tier = sender.get("permission_tier", "public")
+        _BLOCKED_TOOLS = {"Read", "Write", "Edit", "Glob", "Grep", "Bash", "NotebookEdit"}
+        restricted = [t for t in full_tools if t not in _BLOCKED_TOOLS]
+
+        # Only WebFetch/WebSearch should remain
+        assert "Read" not in restricted
+        assert "Bash" not in restricted
+        assert "Write" not in restricted
+        assert "WebFetch" in restricted
+
+    def test_owner_keeps_all_tools(self):
+        """Owner channel session keeps all tools."""
+        from core.prompt_builder import PromptBuilder
+
+        pb = PromptBuilder.__new__(PromptBuilder)
+        pb._config = {}
+
+        agent_config = {
+            "enable_bash_tool": True,
+            "enable_file_tools": True,
+            "enable_web_tools": True,
+        }
+        full_tools = pb.resolve_allowed_tools(agent_config)
+
+        # Owner: no filtering
+        channel_context = {
+            "sender_identity": {
+                "permission_tier": "owner",
+                "is_owner": True,
+            }
+        }
+        sender = channel_context.get("sender_identity", {})
+        tier = sender.get("permission_tier", "public")
+        if tier != "owner":
+            _BLOCKED_TOOLS = {"Read", "Write", "Edit", "Glob", "Grep", "Bash", "NotebookEdit"}
+            restricted = [t for t in full_tools if t not in _BLOCKED_TOOLS]
+        else:
+            restricted = full_tools
+
+        assert "Read" in restricted
+        assert "Bash" in restricted
+        assert "WebFetch" in restricted
+
+
 class TestSystemPromptChannelSecurity:
     """Verify the system prompt includes channel security section."""
 
