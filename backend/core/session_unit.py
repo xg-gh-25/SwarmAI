@@ -258,7 +258,7 @@ class SessionUnit:
         self._content_emitted: bool = False
 
         # ── Resource observability ─────────────────────────────────
-        self._last_error_type: Optional[str] = None  # "oom" | "timeout" | None
+        self._last_error_type: Optional[str] = None  # FailureType.value: "oom" | "rate_limit" | "api_error" | "timeout" | "unknown"
         self._last_metrics: Optional[Any] = None      # ProcessMetrics from health_check
 
         # ── Observability callback ───────────────────────────────
@@ -607,6 +607,8 @@ class SessionUnit:
             _build_error_event,
             _is_retriable_error,
             _sanitize_sdk_error,
+            classify_failure,
+            compute_backoff,
         )
 
         try:
@@ -630,15 +632,20 @@ class SessionUnit:
                 and self._retry_count < self.MAX_RETRY_ATTEMPTS
             ):
                 self._retry_count += 1
-                is_oom = _is_oom_signal(error_str)
-                backoff = 30.0 if is_oom else min(
-                    15 * (2 ** (self._retry_count - 1)), 60
+                failure_type, failure_meta = classify_failure(
+                    error_str, self._hook_session_context,
+                )
+                # Spawn retries use 15s base (heavier than stream retries)
+                # because each spawn starts a full CLI process.
+                backoff = compute_backoff(
+                    failure_type, failure_meta,
+                    self._retry_count, base_backoff=15.0,
                 )
                 logger.info(
                     "session_unit.spawn_retry session_id=%s "
-                    "attempt=%d/%d backoff=%.1fs oom=%s",
+                    "attempt=%d/%d backoff=%.1fs failure=%s",
                     self.session_id, self._retry_count,
-                    self.MAX_RETRY_ATTEMPTS, backoff, is_oom,
+                    self.MAX_RETRY_ATTEMPTS, backoff, failure_type.value,
                 )
                 yield {
                     "type": "status",
@@ -780,11 +787,11 @@ class SessionUnit:
         initial_error_str: str,
         initial_tb_str: str,
     ) -> AsyncIterator[dict]:
-        """Retry loop with exponential backoff and ``--resume``.
+        """Retry loop with failure-aware backoff and ``--resume``.
 
-        Handles OOM-aware backoff (30s flat for SIGKILL), spawn budget
-        re-check after backoff, and ``--resume`` flag for conversation
-        context restoration.
+        Handles failure-type-aware backoff (OOM → 30s flat, rate limit →
+        wait for reset, else → exponential), spawn budget re-check after
+        backoff, and ``--resume`` flag for conversation context restoration.
 
         Yields stream events on success.  Yields error event + ``_abort``
         sentinel when all retries are exhausted or resources denied.
@@ -794,9 +801,12 @@ class SessionUnit:
         here and reset to 0 in ``_read_formatted_response`` on success.
         """
         from .session_utils import (
+            FailureType,
             _build_error_event,
             _is_retriable_error,
             _sanitize_sdk_error,
+            classify_failure,
+            compute_backoff,
         )
 
         error_str = initial_error_str
@@ -810,9 +820,16 @@ class SessionUnit:
         ):
             self._retry_count += 1
 
-            # Track consecutive timeouts to abandon --resume when it's broken
-            is_timeout = "timeout" in error_str.lower() or "streaming timeout" in error_str.lower()
-            if is_timeout:
+            # ── Structured failure classification ─────────────
+            # Hook-captured context (rate limits, notifications)
+            # takes priority over string pattern matching.
+            failure_type, failure_meta = classify_failure(
+                error_str, self._hook_session_context,
+            )
+            self._last_error_type = failure_type.value
+
+            # Track consecutive timeouts to abandon --resume
+            if failure_type == FailureType.TIMEOUT:
                 _consecutive_timeouts += 1
             else:
                 _consecutive_timeouts = 0
@@ -829,27 +846,33 @@ class SessionUnit:
                 )
                 resume_session_id = None
 
-            # OOM-aware backoff: SIGKILL gets flat 30s cooldown
-            is_oom = _is_oom_signal(error_str)
-            if is_oom:
-                self._last_error_type = "oom"
-                backoff = 30.0
-            else:
-                self._last_error_type = None
-                backoff = self.RETRY_BACKOFF_SECONDS * self._retry_count
+            # Failure-type-aware backoff:
+            # OOM → 30s flat, Rate limit → wait for reset, else → exponential
+            backoff = compute_backoff(
+                failure_type, failure_meta,
+                self._retry_count, self.RETRY_BACKOFF_SECONDS,
+            )
 
             logger.info(
                 "Retry %d/%d for session %s after %.1fs backoff "
-                "(resume=%s, oom=%s)",
+                "(resume=%s, failure=%s, meta=%s)",
                 self._retry_count,
                 self.MAX_RETRY_ATTEMPTS,
                 self.session_id,
                 backoff,
                 resume_session_id,
-                is_oom,
+                failure_type.value,
+                {k: v for k, v in failure_meta.items() if k != "message"},
             )
 
             await self._crash_to_cold_async()
+
+            # Clear hook failure context after reading — prevents stale
+            # context from a previous failure leaking into the next retry.
+            if self._hook_session_context:
+                self._hook_session_context.pop("_last_notification", None)
+                self._hook_session_context.pop("_stop_info", None)
+
             await asyncio.sleep(backoff)
 
             # Re-check spawn budget after backoff
