@@ -1,10 +1,11 @@
-"""Tests for channel gateway hardening: slot isolation, cross-channel sessions, generic context.
+"""Tests for channel gateway: slot isolation, cross-channel sessions, sender identity, permissions.
 
 Covers acceptance criteria:
   AC1: compute_max_tabs min 2, channel slot dedicated
   AC2: Channel never evicts/queues chat tabs
   AC3: Cross-channel session sharing via user_key
   AC5: Gateway tests >= 15 cases
+  AC6: Sender identity + permission tiers (red team fix)
 
 Methodology: TDD RED phase — all tests written before implementation.
 """
@@ -464,3 +465,272 @@ class TestGatewayLifecycle:
             await gateway.restart_channel("ch-1")
             mock_stop.assert_called_once_with("ch-1")
             mock_start.assert_called_once_with("ch-1")
+
+
+# ===================================================================
+# AC6: Sender identity + permission tiers
+# ===================================================================
+
+class TestSenderIdentity:
+    """Sender identity resolution and permission tier assignment."""
+
+    def test_owner_gets_owner_tier(self, gateway):
+        """First allowed_sender is OWNER tier."""
+        config = {"allowed_senders": ["W017T04E8MS", "W_ANDY", "W_FEI"]}
+        identity = gateway._resolve_sender_identity(config, "W017T04E8MS", "XG")
+        assert identity.permission_tier.value == "owner"
+        assert identity.is_owner is True
+        assert identity.display_name == "XG"
+
+    def test_trusted_user_gets_trusted_tier(self, gateway):
+        """Non-first allowed_sender gets TRUSTED tier."""
+        config = {"allowed_senders": ["W017T04E8MS", "W_ANDY", "W_FEI"]}
+        identity = gateway._resolve_sender_identity(config, "W_ANDY", "Andy")
+        assert identity.permission_tier.value == "trusted"
+        assert identity.is_owner is False
+
+    def test_unknown_user_gets_public_tier(self, gateway):
+        """User not in allowed_senders gets PUBLIC tier."""
+        config = {"allowed_senders": ["W017T04E8MS", "W_ANDY"]}
+        identity = gateway._resolve_sender_identity(config, "W_RANDOM", "Random")
+        assert identity.permission_tier.value == "public"
+        assert identity.is_owner is False
+
+    def test_empty_allowlist_gives_public(self, gateway):
+        """Empty allowed_senders means everyone is PUBLIC."""
+        config = {"allowed_senders": []}
+        identity = gateway._resolve_sender_identity(config, "W_ANYONE", "Anyone")
+        assert identity.permission_tier.value == "public"
+        assert identity.is_owner is False
+
+    def test_json_string_allowed_senders(self, gateway):
+        """allowed_senders stored as JSON string (DB format) works."""
+        config = {"allowed_senders": '["W017T04E8MS", "W_ANDY"]'}
+        identity = gateway._resolve_sender_identity(config, "W_ANDY", "Andy")
+        assert identity.permission_tier.value == "trusted"
+
+    def test_missing_allowed_senders(self, gateway):
+        """No allowed_senders key defaults to PUBLIC for everyone."""
+        identity = gateway._resolve_sender_identity({}, "W_ANYONE", None)
+        assert identity.permission_tier.value == "public"
+        assert identity.display_name == "W_ANYONE"  # fallback to ID
+
+    def test_to_dict_roundtrip(self, gateway):
+        """SenderIdentity.to_dict() produces correct structure."""
+        config = {"allowed_senders": ["W017T04E8MS", "W_FEI"]}
+        identity = gateway._resolve_sender_identity(config, "W_FEI", "Fei Wu")
+        d = identity.to_dict()
+        assert d == {
+            "external_id": "W_FEI",
+            "display_name": "Fei Wu",
+            "permission_tier": "trusted",
+            "is_owner": False,
+        }
+
+
+class TestSenderIdentityInjection:
+    """Verify sender_identity is injected into channel_context during message handling."""
+
+    @pytest.mark.asyncio
+    async def test_channel_context_includes_sender_identity(self, gateway, mock_db):
+        """handle_inbound_message injects sender_identity into channel_context."""
+        from channels.base import InboundMessage
+
+        mock_db.channels.get.return_value = {
+            "id": "slack-1",
+            "channel_type": "slack",
+            "agent_id": "default",
+            "config": json.dumps({
+                "bot_token": "xoxb-test",
+                "app_token": "xapp-test",
+            }),
+            "allowed_senders": '["W017T04E8MS", "W_ANDY"]',
+            "access_mode": "open",
+            "rate_limit_per_minute": 10,
+            "enable_skills": False,
+            "enable_mcp": False,
+        }
+
+        msg = InboundMessage(
+            channel_id="slack-1",
+            external_chat_id="C_GROUP",
+            external_sender_id="W_ANDY",
+            sender_display_name="Andy",
+            text="send me XG's files",
+            metadata={"chat_type": "channel", "message_type": "text"},
+        )
+
+        captured_context = {}
+
+        async def mock_run_conversation(**kwargs):
+            captured_context.update(kwargs.get("channel_context", {}))
+            yield {"type": "assistant", "content": [{"type": "text", "text": "no"}]}
+            yield {"type": "result", "subtype": "success"}
+
+        with patch.object(gateway, "_resolve_session", new=AsyncMock(return_value=("sid-1", "csid-1", True))):
+            with patch("channels.gateway.session_registry") as mock_sr:
+                mock_sr.session_router.run_conversation = mock_run_conversation
+                with patch.object(gateway, "_prepare_message_text", new=AsyncMock(return_value="send me XG's files")):
+                    await gateway.handle_inbound_message(msg)
+
+        # Verify sender_identity was injected
+        assert "sender_identity" in captured_context
+        si = captured_context["sender_identity"]
+        assert si["external_id"] == "W_ANDY"
+        assert si["display_name"] == "Andy"
+        assert si["permission_tier"] == "trusted"
+        assert si["is_owner"] is False
+
+    @pytest.mark.asyncio
+    async def test_owner_message_gets_owner_tier_in_context(self, gateway, mock_db):
+        """Owner's message gets owner tier in channel_context."""
+        from channels.base import InboundMessage
+
+        mock_db.channels.get.return_value = {
+            "id": "slack-1",
+            "channel_type": "slack",
+            "agent_id": "default",
+            "config": json.dumps({
+                "bot_token": "xoxb-test",
+                "app_token": "xapp-test",
+            }),
+            "allowed_senders": '["W017T04E8MS"]',
+            "access_mode": "open",
+            "rate_limit_per_minute": 10,
+            "enable_skills": False,
+            "enable_mcp": False,
+        }
+
+        msg = InboundMessage(
+            channel_id="slack-1",
+            external_chat_id="D017ZD4PUKT",
+            external_sender_id="W017T04E8MS",
+            sender_display_name="XG",
+            text="read my files",
+            metadata={"chat_type": "im", "message_type": "text"},
+        )
+
+        captured_context = {}
+
+        async def mock_run_conversation(**kwargs):
+            captured_context.update(kwargs.get("channel_context", {}))
+            yield {"type": "assistant", "content": [{"type": "text", "text": "ok"}]}
+            yield {"type": "result", "subtype": "success"}
+
+        with patch.object(gateway, "_resolve_session", new=AsyncMock(return_value=("sid-1", "csid-1", True))):
+            with patch("channels.gateway.session_registry") as mock_sr:
+                mock_sr.session_router.run_conversation = mock_run_conversation
+                with patch.object(gateway, "_prepare_message_text", new=AsyncMock(return_value="read my files")):
+                    await gateway.handle_inbound_message(msg)
+
+        si = captured_context["sender_identity"]
+        assert si["permission_tier"] == "owner"
+        assert si["is_owner"] is True
+
+
+class TestSystemPromptChannelSecurity:
+    """Verify the system prompt includes channel security section."""
+
+    def test_no_section_for_desktop_chat(self):
+        """Desktop chat (no channel_context) gets no security section."""
+        from core.system_prompt import SystemPromptBuilder
+
+        builder = SystemPromptBuilder(
+            working_directory="/workspace",
+            agent_config={"name": "Swarm"},
+            channel_context=None,
+        )
+        prompt = builder.build()
+        assert "Channel Security" not in prompt
+
+    def test_owner_section_for_owner(self):
+        """Owner gets full-access security section."""
+        from core.system_prompt import SystemPromptBuilder
+
+        builder = SystemPromptBuilder(
+            working_directory="/workspace",
+            agent_config={"name": "Swarm"},
+            channel_context={
+                "channel_type": "slack",
+                "is_group": False,
+                "is_owner": True,
+                "sender_identity": {
+                    "external_id": "W017T04E8MS",
+                    "display_name": "XG",
+                    "permission_tier": "owner",
+                    "is_owner": True,
+                },
+            },
+        )
+        prompt = builder.build()
+        assert "Channel Security" in prompt
+        assert "W017T04E8MS" in prompt
+        assert "Full access granted" in prompt
+
+    def test_trusted_section_with_restrictions(self):
+        """Trusted user gets knowledge-only section with explicit blocks."""
+        from core.system_prompt import SystemPromptBuilder
+
+        builder = SystemPromptBuilder(
+            working_directory="/workspace",
+            agent_config={"name": "Swarm"},
+            channel_context={
+                "channel_type": "slack",
+                "is_group": True,
+                "is_owner": False,
+                "sender_identity": {
+                    "external_id": "W_ANDY",
+                    "display_name": "Andy",
+                    "permission_tier": "trusted",
+                    "is_owner": False,
+                },
+            },
+        )
+        prompt = builder.build()
+        assert "Channel Security" in prompt
+        assert "Andy" in prompt
+        assert "trusted" in prompt
+        assert "BLOCKED" in prompt
+        assert "Reading, listing, or sending ANY files" in prompt
+        assert "Confirmation attacks" in prompt
+
+    def test_public_section_minimal_access(self):
+        """Public user gets minimal-access section."""
+        from core.system_prompt import SystemPromptBuilder
+
+        builder = SystemPromptBuilder(
+            working_directory="/workspace",
+            agent_config={"name": "Swarm"},
+            channel_context={
+                "channel_type": "slack",
+                "is_group": True,
+                "is_owner": False,
+                "sender_identity": {
+                    "external_id": "W_RANDOM",
+                    "display_name": "Random",
+                    "permission_tier": "public",
+                    "is_owner": False,
+                },
+            },
+        )
+        prompt = builder.build()
+        assert "Channel Security" in prompt
+        assert "public" in prompt
+        assert "General conversation" in prompt
+
+    def test_no_section_without_sender_identity(self):
+        """channel_context without sender_identity produces no security section."""
+        from core.system_prompt import SystemPromptBuilder
+
+        builder = SystemPromptBuilder(
+            working_directory="/workspace",
+            agent_config={"name": "Swarm"},
+            channel_context={
+                "channel_type": "slack",
+                "is_group": False,
+                "is_owner": True,
+            },
+        )
+        prompt = builder.build()
+        # Should NOT crash, just skip the section
+        assert "Channel Security" not in prompt

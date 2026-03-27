@@ -1,8 +1,14 @@
-"""Base classes and data models for channel adapters."""
+"""Base classes and data models for channel adapters.
+
+Core types: InboundMessage, OutboundMessage, ChannelAdapter, PermissionTier,
+SenderIdentity.  Permission tiers enforce what each sender can do through
+the channel — the agent receives this in channel_context and MUST respect it.
+"""
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Optional, Callable, Any, Awaitable
 
 # Attachment types
@@ -11,6 +17,53 @@ ATTACH_TYPE_FILE = "file"
 
 # Max single attachment size (20 MB)
 MAX_ATTACHMENT_SIZE = 20 * 1024 * 1024
+
+
+# ---------------------------------------------------------------------------
+# Permission tiers — the authorization model for channel messages
+# ---------------------------------------------------------------------------
+
+class PermissionTier(str, Enum):
+    """What a sender is allowed to do through the channel.
+
+    Tiers are hierarchical: OWNER > TRUSTED > PUBLIC.  The agent receives
+    the tier as a string in ``channel_context["sender_permission_tier"]``
+    and MUST enforce its constraints.
+
+    OWNER:   Full access.  Can read/write files, execute system commands,
+             send messages as XG, access private data.
+    TRUSTED: Knowledge access.  Can ask questions, get explanations,
+             request research.  Cannot access files, execute system
+             commands, or trigger external actions.
+    PUBLIC:  Public knowledge only.  Can discuss general topics.  No access
+             to workspace, files, memory, or any private data.
+    """
+    OWNER = "owner"
+    TRUSTED = "trusted"
+    PUBLIC = "public"
+
+
+@dataclass
+class SenderIdentity:
+    """Resolved identity of a channel message sender.
+
+    Attached to channel_context so the agent knows exactly WHO is talking
+    and WHAT they're allowed to do.  This is the single source of truth
+    for authorization — the agent must never infer identity from message
+    content or conversation history.
+    """
+    external_id: str
+    display_name: str
+    permission_tier: PermissionTier
+    is_owner: bool
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "external_id": self.external_id,
+            "display_name": self.display_name,
+            "permission_tier": self.permission_tier.value,
+            "is_owner": self.is_owner,
+        }
 
 
 @dataclass
