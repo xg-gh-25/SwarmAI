@@ -1256,13 +1256,28 @@ class SessionUnit:
         perm_queue = _pm.get_session_queue(self.session_id)
 
         response_iter = self._client.receive_response().__aiter__()
+        _STREAM_EXHAUSTED = object()  # Sentinel: iterator is done
+
+        async def _next_or_sentinel():
+            """Wrap __anext__ so StopAsyncIteration doesn't leak into Task.
+
+            Python converts StopAsyncIteration inside a Task into
+            RuntimeError('async generator raised StopAsyncIteration').
+            Wrapping it here returns a sentinel instead, which the
+            caller checks after task.result().
+            """
+            try:
+                return await response_iter.__anext__()
+            except StopAsyncIteration:
+                return _STREAM_EXHAUSTED
+
         while True:
             current_timeout = INIT_TIMEOUT if is_first_message else MESSAGE_TIMEOUT
 
             # Race: SDK message vs permission request from hook
             sdk_task = asyncio.ensure_future(
                 asyncio.wait_for(
-                    response_iter.__anext__(),
+                    _next_or_sentinel(),
                     timeout=current_timeout,
                 )
             )
@@ -1318,9 +1333,9 @@ class SessionUnit:
             # ── SDK message won the race ──────────────────────────
             try:
                 message = sdk_task.result()
+                if message is _STREAM_EXHAUSTED:
+                    break
                 is_first_message = False
-            except StopAsyncIteration:
-                break
             except asyncio.TimeoutError:
                 phase = "init" if is_first_message else "streaming"
                 logger.error(

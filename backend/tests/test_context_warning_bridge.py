@@ -22,6 +22,7 @@ Key properties verified:
 
 from __future__ import annotations
 
+import asyncio
 import sys
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -111,10 +112,19 @@ def _make_unit(session_id="test-cw", model_name="claude-sonnet-4-6"):
 
 
 async def _collect_events(unit):
-    """Iterate _read_formatted_response() and collect all yielded events."""
+    """Iterate _read_formatted_response() and collect all yielded events.
+
+    Patches ``permission_manager`` so its per-session ``asyncio.Queue``
+    is created on the CURRENT event loop — not a stale loop from a
+    previous test.  Without this, concurrent test execution triggers
+    ``RuntimeError: Queue is bound to a different event loop``.
+    """
+    mock_pm = MagicMock()
+    mock_pm.get_session_queue = MagicMock(return_value=asyncio.Queue())
     events = []
-    async for event in unit._read_formatted_response():
-        events.append(event)
+    with patch("core.permission_manager.permission_manager", mock_pm):
+        async for event in unit._read_formatted_response():
+            events.append(event)
     return events
 
 
