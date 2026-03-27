@@ -7,7 +7,10 @@ a token budget, and returns a formatted string for system prompt injection.
 **Budget scaling**: Limits scale with model context window.  1M models
 (Claude 4.6) get up to 200K tokens / 500 messages — effectively the full
 conversation.  Small models (<200K) use a conservative 12K / 40 message
-budget.  See ``_compute_resume_budget()`` for the tier logic.
+budget.  Channel sessions (Slack/Feishu) use a fixed 32K / 50 message
+budget regardless of model size — enough continuity for "continue where
+we left off" without the massive prefill cost on frequent cold resumes.
+See ``_compute_resume_budget()`` for the tier logic.
 
 - ``_compute_resume_budget``        — Scale limits by model context window
 - ``build_resume_context``          — Public async entry point
@@ -235,15 +238,28 @@ def _assemble_context(messages: list[str], was_truncated: bool) -> str:
     return "\n".join(parts)
 
 
-def _compute_resume_budget(model_context_window: int) -> tuple[int, int, int]:
+def _compute_resume_budget(
+    model_context_window: int, is_channel: bool = False
+) -> tuple[int, int, int]:
     """Compute resume context limits scaled to model context window.
 
     For 1M models, we inject the full conversation — no practical truncation.
     For smaller models, use conservative limits to leave room for new work.
 
+    Channel sessions (Slack/Feishu) use a tight budget regardless of model
+    size.  Channel conversations are quick exchanges — injecting hundreds of
+    messages causes massive prefill latency on cold resume (the channel
+    subprocess is evicted frequently since there's only 1 channel slot).
+
     Returns:
         Tuple of ``(token_budget, max_messages, db_fetch_limit)``.
     """
+    if is_channel:
+        # Channel sessions: last ~50 messages / 32K tokens.
+        # Covers ~25 round-trips — enough for "continue where we left off"
+        # without the 200K prefill cost that makes cold resume sluggish.
+        return (32_000, 50, 120)
+
     if model_context_window >= 500_000:
         # 1M models: 200K budget, 500 messages, fetch 1000 from DB.
         # With 1M context, conversation history is valuable — don't discard it.
@@ -262,6 +278,7 @@ async def build_resume_context(
     max_messages: int | None = None,
     db_fetch_limit: int | None = None,
     token_budget: int | None = None,
+    is_channel: bool = False,
 ) -> str:
     """Load recent messages and format them for system prompt injection.
 
@@ -280,6 +297,9 @@ async def build_resume_context(
             Auto-computed from model_context_window if None.
         token_budget: Maximum estimated tokens for the formatted output.
             Auto-computed from model_context_window if None.
+        is_channel: Whether this is a channel session (Slack/Feishu).
+            Channel sessions use a tighter budget to avoid slow prefill
+            from accumulated conversation history.
 
     Returns:
         Formatted context string with section header, preamble, and message
@@ -287,7 +307,9 @@ async def build_resume_context(
         any error.
     """
     # Auto-compute limits from model context window, allow explicit overrides
-    auto_budget, auto_max, auto_fetch = _compute_resume_budget(model_context_window)
+    auto_budget, auto_max, auto_fetch = _compute_resume_budget(
+        model_context_window, is_channel=is_channel
+    )
     token_budget = token_budget if token_budget is not None else auto_budget
     max_messages = max_messages if max_messages is not None else auto_max
     db_fetch_limit = db_fetch_limit if db_fetch_limit is not None else auto_fetch

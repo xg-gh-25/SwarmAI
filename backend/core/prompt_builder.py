@@ -671,6 +671,7 @@ class PromptBuilder:
                 resume_ctx = await build_resume_context(
                     agent_config["resume_app_session_id"],
                     model_context_window=model_context_window,
+                    is_channel=is_channel,
                 )
                 if resume_ctx:
                     context_text += f"\n\n{resume_ctx}"

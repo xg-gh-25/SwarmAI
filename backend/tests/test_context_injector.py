@@ -50,6 +50,20 @@ class TestComputeResumeBudget:
         budget, max_msgs, fetch = _compute_resume_budget(32_000)
         assert budget == 12_000
 
+    def test_channel_gets_fixed_budget_regardless_of_model(self):
+        """Channel sessions use a fixed 32K/50 budget even on 1M models."""
+        budget, max_msgs, fetch = _compute_resume_budget(1_000_000, is_channel=True)
+        assert budget == 32_000
+        assert max_msgs == 50
+        assert fetch == 120
+
+    def test_channel_overrides_all_tiers(self):
+        """Channel budget is the same for all model sizes."""
+        for window in (32_000, 200_000, 500_000, 1_000_000):
+            budget, max_msgs, fetch = _compute_resume_budget(window, is_channel=True)
+            assert budget == 32_000
+            assert max_msgs == 50
+
 
 # ── _compact_tool_args ─────────────────────────────────────────────
 
