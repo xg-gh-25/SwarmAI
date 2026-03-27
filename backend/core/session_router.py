@@ -149,7 +149,7 @@ class SessionRouter:
     - Existing alive sessions are never killed when the dynamic limit shrinks.
     """
 
-    QUEUE_TIMEOUT: float = 60.0
+    QUEUE_TIMEOUT: float = 300.0  # 5 min — channel tasks can be complex
 
     def __init__(
         self,
@@ -501,7 +501,10 @@ class SessionRouter:
 
         # Tag channel sessions so slot isolation works correctly.
         # channel_context is only set by ChannelGateway, never by chat tabs.
-        if channel_context and not unit.is_channel_session:
+        # Owner messages bypass the channel slot — they use the chat pool
+        # so they're never queued behind other users' channel requests.
+        is_owner = channel_context.get("is_owner", False) if channel_context else False
+        if channel_context and not is_owner and not unit.is_channel_session:
             unit.is_channel_session = True
 
         # ── Persist user message BEFORE slot acquisition ──
