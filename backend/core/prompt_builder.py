@@ -980,23 +980,30 @@ class PromptBuilder:
         # 6. Inject channel-specific MCP servers
         mcp_servers = self.inject_channel_mcp(mcp_servers, channel_context, working_directory)
 
-        # 6a. Non-owner channel sessions: strip all MCP servers except
-        # channel-tools (needed for file sending back to the chat).
-        # Without this, trusted users could use slack-mcp to send messages
-        # as XG, outlook-mcp to read XG's email, github-mcp to push code, etc.
-        if _channel_sender_dir and mcp_servers:
-            safe_mcps = {
-                name: config for name, config in mcp_servers.items()
-                if name == "channel-tools"
-            }
-            stripped = len(mcp_servers) - len(safe_mcps)
-            if stripped:
+        # 6a. Non-owner channel sessions: MCP access depends on permission tier.
+        #   - TRUSTED: keep ALL enabled MCPs (skills + MCPs = full agent capability)
+        #   - PUBLIC:  strip to channel-tools only (no access to owner's integrations)
+        if _channel_sender_dir and mcp_servers and channel_context:
+            sender = channel_context.get("sender_identity", {})
+            tier = sender.get("permission_tier", "public")
+            if tier == "public":
+                safe_mcps = {
+                    name: config for name, config in mcp_servers.items()
+                    if name == "channel-tools"
+                }
+                stripped = len(mcp_servers) - len(safe_mcps)
+                if stripped:
+                    logger.info(
+                        "Public channel user: stripped %d MCP servers "
+                        "(kept only channel-tools)",
+                        stripped,
+                    )
+                mcp_servers = safe_mcps
+            else:
                 logger.info(
-                    "Non-owner channel: stripped %d MCP servers "
-                    "(kept only channel-tools)",
-                    stripped,
+                    "Trusted channel user: keeping all %d MCP servers",
+                    len(mcp_servers),
                 )
-            mcp_servers = safe_mcps
 
         # 7. Resolve model (with Bedrock conversion if needed)
         model = self.resolve_model(agent_config)
