@@ -3,12 +3,19 @@
 This module provides CRUD endpoints for ToDo entities (displayed as "Signals"
 in the UI). ToDos represent incoming work items in the Daily Work Operating Loop.
 
+Includes lifecycle management endpoints:
+- Quick-action ``/mark-handled`` and ``/mark-cancelled`` for frontend buttons
+- Session binding ``/bind-todo`` for drag-to-chat auto-completion
+
 Requirements: 6.1-6.8
 """
+import json
 import logging
+from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel
 
 from schemas.todo import (
     ToDoCreate,
@@ -18,6 +25,7 @@ from schemas.todo import (
     ToDoConvertToTaskRequest,
 )
 from core.todo_manager import todo_manager
+from database import db
 
 logger = logging.getLogger(__name__)
 
@@ -112,3 +120,116 @@ async def convert_todo_to_task(todo_id: str, data: ToDoConvertToTaskRequest):
         return task
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+# ---------------------------------------------------------------------------
+# Lifecycle quick-actions (frontend buttons)
+# ---------------------------------------------------------------------------
+
+@router.post("/{todo_id}/mark-handled")
+async def mark_todo_handled(todo_id: str):
+    """Mark a ToDo as handled (completed).
+
+    Used by frontend action buttons in the Radar sidebar.
+    """
+    todo = await todo_manager.get(todo_id)
+    if not todo:
+        raise HTTPException(status_code=404, detail=f"ToDo {todo_id} not found")
+
+    current = todo.get("status") if isinstance(todo, dict) else getattr(todo, "status", None)
+    if current in ("handled", "deleted"):
+        return {"status": current, "todo_id": todo_id, "message": f"Already {current}"}
+
+    await db.todos.update(todo_id, {
+        "status": "handled",
+        "updated_at": datetime.now().isoformat(),
+    })
+    logger.info("ToDo %s marked as handled (manual)", todo_id[:8])
+    return {"status": "handled", "todo_id": todo_id}
+
+
+@router.post("/{todo_id}/mark-cancelled")
+async def mark_todo_cancelled(todo_id: str):
+    """Mark a ToDo as cancelled (dismissed).
+
+    Used by frontend action buttons in the Radar sidebar.
+    """
+    todo = await todo_manager.get(todo_id)
+    if not todo:
+        raise HTTPException(status_code=404, detail=f"ToDo {todo_id} not found")
+
+    current = todo.get("status") if isinstance(todo, dict) else getattr(todo, "status", None)
+    if current in ("cancelled", "deleted"):
+        return {"status": current, "todo_id": todo_id, "message": f"Already {current}"}
+
+    await db.todos.update(todo_id, {
+        "status": "cancelled",
+        "updated_at": datetime.now().isoformat(),
+    })
+    logger.info("ToDo %s marked as cancelled (manual)", todo_id[:8])
+    return {"status": "cancelled", "todo_id": todo_id}
+
+
+# ---------------------------------------------------------------------------
+# Session ↔ ToDo binding (drag-to-chat)
+# ---------------------------------------------------------------------------
+
+class BindTodoRequest(BaseModel):
+    """Request body for binding a todo to a session."""
+    todo_id: str
+
+
+@router.post("/bind-session/{session_id}")
+async def bind_todo_to_session(session_id: str, request: BindTodoRequest):
+    """Bind a ToDo to a chat session.
+
+    Called when user drags a todo into a chat tab.  Stores the todo_id
+    in the session's metadata JSON so the post-session TodoLifecycleHook
+    can auto-complete it.  Also transitions the todo to ``in_discussion``.
+    """
+    # Validate todo exists
+    todo = await todo_manager.get(request.todo_id)
+    if not todo:
+        raise HTTPException(status_code=404, detail=f"ToDo {request.todo_id} not found")
+
+    # Validate session exists
+    session = await db.sessions.get(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+
+    # Update session metadata with todo_id
+    metadata = session.get("metadata") or "{}"
+    if isinstance(metadata, str):
+        try:
+            metadata = json.loads(metadata)
+        except (json.JSONDecodeError, TypeError):
+            metadata = {}
+
+    metadata["todo_id"] = request.todo_id
+    await db.sessions.update(session_id, {
+        "metadata": json.dumps(metadata),
+        "updated_at": datetime.now().isoformat(),
+    })
+
+    # Transition todo to in_discussion if pending
+    current_status = todo.get("status") if isinstance(todo, dict) else getattr(todo, "status", None)
+    if current_status == "pending":
+        await db.todos.update(request.todo_id, {
+            "status": "in_discussion",
+            "updated_at": datetime.now().isoformat(),
+        })
+        logger.info(
+            "ToDo %s bound to session %s — pending → in_discussion",
+            request.todo_id[:8], session_id[:8],
+        )
+    else:
+        logger.info(
+            "ToDo %s bound to session %s (status=%s, no transition)",
+            request.todo_id[:8], session_id[:8], current_status,
+        )
+
+    return {
+        "session_id": session_id,
+        "todo_id": request.todo_id,
+        "todo_status": "in_discussion" if current_status == "pending" else current_status,
+    }

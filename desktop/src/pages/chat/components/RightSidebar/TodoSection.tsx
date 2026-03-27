@@ -21,7 +21,7 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import type { RadarTodo } from '../../../../types';
 import { radarService } from '../../../../services/radar';
-import { DragHandle } from './shared/DragHandle';
+import { todosService } from '../../../../services/todos';
 import type { DropPayload } from './types';
 
 // ---------------------------------------------------------------------------
@@ -29,7 +29,7 @@ import type { DropPayload } from './types';
 // ---------------------------------------------------------------------------
 
 /** Default number of items shown before "See more" expansion. */
-const DISPLAY_LIMIT = 5;
+const DISPLAY_LIMIT = 10;
 
 /** Polling interval for background refresh (ms). */
 const POLL_INTERVAL_MS = 30_000;
@@ -103,6 +103,34 @@ export function TodoSection({ workspaceId, onCountChange }: TodoSectionProps) {
 
   // Track whether initial load has completed (show spinner only for first load)
   const hasLoadedRef = useRef(false);
+  // Track in-flight action to show optimistic UI
+  const [actingOn, setActingOn] = useState<string | null>(null);
+
+  // Quick-action handlers
+  const handleMarkHandled = useCallback(async (todoId: string) => {
+    setActingOn(todoId);
+    try {
+      await todosService.markHandled(todoId);
+      // Optimistically remove from list
+      setTodos((prev) => prev.filter((t) => t.id !== todoId));
+    } catch (err) {
+      console.error('[TodoSection] Failed to mark handled:', err);
+    } finally {
+      setActingOn(null);
+    }
+  }, []);
+
+  const handleMarkCancelled = useCallback(async (todoId: string) => {
+    setActingOn(todoId);
+    try {
+      await todosService.markCancelled(todoId);
+      setTodos((prev) => prev.filter((t) => t.id !== todoId));
+    } catch (err) {
+      console.error('[TodoSection] Failed to mark cancelled:', err);
+    } finally {
+      setActingOn(null);
+    }
+  }, []);
 
   // Stable fetch callback — silent=true skips the loading spinner (for polls)
   const fetchTodos = useCallback(
@@ -222,10 +250,21 @@ export function TodoSection({ workspaceId, onCountChange }: TodoSectionProps) {
           const dotColor =
             PRIORITY_COLORS[todo.priority] ?? PRIORITY_COLORS.none;
 
+          const isActing = actingOn === todo.id;
+
           return (
             <li
               key={todo.id}
-              className="group flex items-center gap-2 px-1 py-1 rounded hover:bg-[var(--color-hover)] transition-colors"
+              draggable="true"
+              onDragStart={(e) => {
+                e.dataTransfer.setData('application/json', JSON.stringify(payload));
+                e.dataTransfer.effectAllowed = 'copy';
+                e.currentTarget.style.opacity = '0.4';
+              }}
+              onDragEnd={(e) => {
+                e.currentTarget.style.opacity = '1';
+              }}
+              className={`group flex items-center gap-2 px-1 py-1 rounded hover:bg-[var(--color-hover)] cursor-grab active:cursor-grabbing transition-colors ${isActing ? 'opacity-50' : ''}`}
             >
               {/* Priority dot */}
               <span
@@ -235,12 +274,38 @@ export function TodoSection({ workspaceId, onCountChange }: TodoSectionProps) {
               />
 
               {/* Title */}
-              <span className="text-[13px] leading-5 text-[var(--color-text)] truncate flex-1">
+              <span className="text-[13px] leading-5 text-[var(--color-text)] truncate flex-1 select-none">
                 {todo.title}
               </span>
 
-              {/* Drag handle */}
-              <DragHandle payload={payload} />
+              {/* Action buttons — visible on hover */}
+              <span
+                className="shrink-0 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
+                onDragStart={(e) => e.stopPropagation()}
+                draggable={false}
+              >
+                <button
+                  className="p-0.5 rounded hover:bg-[var(--color-success,#22c55e)]/20 text-[var(--color-success,#22c55e)] transition-colors"
+                  title="Mark as done"
+                  onClick={() => handleMarkHandled(todo.id)}
+                  disabled={isActing}
+                >
+                  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="3.5 8 6.5 11 12.5 5" />
+                  </svg>
+                </button>
+                <button
+                  className="p-0.5 rounded hover:bg-[var(--color-error,#ef4444)]/20 text-[var(--color-text-muted)] hover:text-[var(--color-error,#ef4444)] transition-colors"
+                  title="Dismiss"
+                  onClick={() => handleMarkCancelled(todo.id)}
+                  disabled={isActing}
+                >
+                  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <line x1="4" y1="4" x2="12" y2="12" />
+                    <line x1="12" y1="4" x2="4" y2="12" />
+                  </svg>
+                </button>
+              </span>
             </li>
           );
         })}
