@@ -173,6 +173,30 @@ class ChannelGateway:
         logger.info("ChannelGateway shutdown complete")
 
     # ------------------------------------------------------------------
+    # Channel slot awareness (queue notifications)
+    # ------------------------------------------------------------------
+
+    def _is_channel_slot_busy(self) -> bool:
+        """Check if the channel slot is currently occupied (STREAMING).
+
+        Used to send a "busy" notice to new users before they enter the
+        conversation queue.  Best-effort — races are acceptable since
+        this is a UX hint, not a correctness guarantee.
+        """
+        try:
+            router = session_registry.session_router
+            if router is None:
+                return False
+            # Count alive channel sessions — if >= 1, slot is busy
+            count = sum(
+                1 for u in router._units.values()
+                if u.is_alive and u.is_channel_session
+            )
+            return count >= 1
+        except Exception:
+            return False
+
+    # ------------------------------------------------------------------
     # Slack presence (daemon lifecycle)
     # ------------------------------------------------------------------
 
@@ -541,7 +565,26 @@ class ChannelGateway:
                     logger.exception("Failed to send rate-limit notice")
             return
 
-        # 4. Resolve / create internal session ------------------------------------
+        # 4. Queue awareness: if another channel conversation is actively
+        # streaming, send an immediate "busy" notice so the user isn't
+        # left staring at silence.  The conversation still proceeds —
+        # it just waits for the slot inside _handle_conversation.
+        adapter = self._adapters.get(channel_id)
+        if adapter and self._is_channel_slot_busy():
+            try:
+                await adapter.send_message(OutboundMessage(
+                    channel_id=channel_id,
+                    external_chat_id=msg.external_chat_id,
+                    external_thread_id=msg.external_thread_id,
+                    reply_to_message_id=msg.external_message_id,
+                    text="Hi! I'm currently helping someone else. "
+                         "I'll get to your question as soon as I'm done "
+                         "— usually within a minute or two. :hourglass_flowing_sand:",
+                ))
+            except Exception:
+                logger.debug("Failed to send busy notice")
+
+        # 5. Resolve / create internal session ------------------------------------
         # Per-conversation lock: prevents two rapid messages from the same
         # external chat from racing into _resolve_session + run_conversation.
         conv_key = (channel_id, msg.external_chat_id)
