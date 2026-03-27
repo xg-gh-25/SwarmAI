@@ -1,0 +1,7 @@
+# Auto-activate .venv when entering backend/
+# mise hooks into shell cd — human developers get auto-activation.
+# Claude agent sandbox doesn't source mise hooks, so this is ergonomic
+# only. The conftest.py venv guard is the structural enforcement.
+
+[env]
+_.python.venv = ".venv"

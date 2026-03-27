@@ -2,6 +2,9 @@
 
 Single authority for all test infrastructure:
 
+0. **Venv guard** — Refuses to run if the wrong Python interpreter is used.
+   System python is missing test deps (xdist, hypothesis, httpx).
+
 1. **Concurrency guard** — File-based lock prevents multiple pytest runs.
    Concurrent runs from different tabs are the #1 cause of macOS crashes.
 
@@ -29,6 +32,39 @@ Single authority for all test infrastructure:
 7. **DB isolation** — Temp SQLite DB created once per process, tables
    cleared between tests via a single executescript() call.
 """
+
+# ---------------------------------------------------------------------------
+# Venv guard — must fire BEFORE importing any venv-only packages
+# ---------------------------------------------------------------------------
+# System python (mise) doesn't have pytest-xdist, hypothesis, or httpx.
+# Without this guard, tests silently run serial (no xdist) and skip PBT
+# (no hypothesis). The error is invisible because conftest.py catches
+# ImportError and falls back gracefully — which is exactly the wrong
+# behavior when the real problem is "wrong python".
+
+import sys as _sys
+import os as _os
+
+_VENV_DIR = _os.path.join(_os.path.dirname(__file__), "..", ".venv")
+if _os.path.isdir(_VENV_DIR) and not _sys.prefix.startswith(
+    _os.path.realpath(_VENV_DIR)
+):
+    print(
+        f"\n{'=' * 60}\n"
+        f"WRONG PYTHON: {_sys.executable}\n"
+        f"  prefix: {_sys.prefix}\n"
+        f"  expected venv: {_os.path.realpath(_VENV_DIR)}\n"
+        f"{'=' * 60}\n"
+        f"System python is missing test deps (xdist, hypothesis, httpx).\n"
+        f"Fix:\n"
+        f"  .venv/bin/python -m pytest          # explicit venv\n"
+        f"  source .venv/bin/activate && pytest  # activate first\n"
+        f"  make test                            # uses Makefile\n"
+        f"{'=' * 60}",
+        file=_sys.stderr,
+    )
+    _sys.exit(1)
+
 import atexit
 import fcntl
 import gc

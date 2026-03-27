@@ -23,6 +23,9 @@ from core.compaction_guard import (
     GuardPhase,
     ToolRecord,
     _COMPACTION_DROP_THRESHOLD,
+    _CONSEC_HARD,
+    _CONSEC_KILL,
+    _CONSEC_SOFT,
     _CONTEXT_ACTIVATION_PCT,
     _MIN_POST_COMPACTION_CALLS,
     _OVERLAP_THRESHOLD,
@@ -335,29 +338,44 @@ class TestCheck:
         assert guard.check() == EscalationLevel.MONITORING
 
     def test_active_below_85_returns_monitoring(self):
+        """Context-gated detectors don't fire below threshold, even with overlap."""
         guard = CompactionGuard()
+        # Build baseline with alternating calls (avoid consecutive trigger)
+        guard.record_tool_call("Bash", {"command": "pytest"})
+        guard.record_tool_call("Read", {"file_path": "/a.py"})
         guard.activate()
         guard._context_pct = 50.0
-        # Even with loop pattern present
-        for _ in range(5):
+        # Post-compaction: same baseline tools, interleaved (no consecutive)
+        for i in range(3):
             guard.record_tool_call("Bash", {"command": "pytest"})
+            guard.record_tool_call("Read", {"file_path": "/a.py"})
         assert guard.check() == EscalationLevel.MONITORING
 
     def test_active_above_85_with_loop_escalates(self):
+        """Context-gated set-overlap fires above threshold."""
         guard = CompactionGuard()
+        guard.record_tool_call("Bash", {"command": "pytest"})
+        guard.record_tool_call("Read", {"file_path": "/a.py"})
         guard.activate()
         guard._context_pct = 90.0
-        for _ in range(5):
+        # Post-compaction: same baseline tools, interleaved, ≥5 calls
+        for i in range(3):
             guard.record_tool_call("Bash", {"command": "pytest"})
+            guard.record_tool_call("Read", {"file_path": "/a.py"})
+        # 6 calls, all overlap baseline → set-overlap fires
         assert guard.check() == EscalationLevel.SOFT_WARN
 
     def test_escalation_order_soft_hard_kill(self):
+        """Set-overlap escalates one step per check() call."""
         guard = CompactionGuard()
+        guard.record_tool_call("Bash", {"command": "pytest"})
+        guard.record_tool_call("Read", {"file_path": "/a.py"})
         guard.activate()
         guard._context_pct = 90.0
-        # First detection → SOFT_WARN
-        for _ in range(5):
+        for i in range(3):
             guard.record_tool_call("Bash", {"command": "pytest"})
+            guard.record_tool_call("Read", {"file_path": "/a.py"})
+        # First detection → SOFT_WARN
         assert guard.check() == EscalationLevel.SOFT_WARN
         # Second detection → HARD_WARN
         assert guard.check() == EscalationLevel.HARD_WARN
@@ -605,3 +623,262 @@ class TestHashInput:
         h1 = CompactionGuard._hash_input({"command": "pytest"})
         h2 = CompactionGuard._hash_input({"command": "echo hi"})
         assert h1 != h2
+
+
+# ── Bash Command Normalization ────────────────────────────────────
+
+
+class TestBashCommandNormalization:
+    """Bash command normalization for loop detection.
+
+    The pytest dead-loop bug: agent runs the same pytest command with
+    different ``| tail -N`` suffixes, ``2>&1`` redirections, and ``cd``
+    prefixes. Without normalization, each looks like a unique call and
+    the guard never fires.
+    """
+
+    def test_strips_tail_suffix(self):
+        n = CompactionGuard._normalize_bash_command
+        assert n("python -m pytest tests/ -x -q | tail -20") == "python -m pytest tests/ -x -q"
+        assert n("python -m pytest tests/ -x -q | tail -30") == "python -m pytest tests/ -x -q"
+        assert n("python -m pytest tests/ | head -5") == "python -m pytest tests/"
+
+    def test_strips_2_redirect(self):
+        n = CompactionGuard._normalize_bash_command
+        assert n("python -m pytest tests/ -x -q 2>&1") == "python -m pytest tests/ -x -q"
+
+    def test_strips_tail_and_redirect_together(self):
+        n = CompactionGuard._normalize_bash_command
+        assert (
+            n("python -m pytest tests/ -x -q 2>&1 | tail -20")
+            == "python -m pytest tests/ -x -q"
+        )
+
+    def test_strips_cd_prefix(self):
+        n = CompactionGuard._normalize_bash_command
+        assert (
+            n("cd /Users/gawan/swarmai/backend && python -m pytest tests/")
+            == "python -m pytest tests/"
+        )
+
+    def test_strips_rm_cleanup_prefix(self):
+        n = CompactionGuard._normalize_bash_command
+        assert (
+            n("rm -f /tmp/lock 2>/dev/null; python -m pytest tests/")
+            == "python -m pytest tests/"
+        )
+
+    def test_strips_combined_preamble(self):
+        """The exact pattern from the dead-loop sample."""
+        n = CompactionGuard._normalize_bash_command
+        cmd1 = "cd /Users/gawan/swarmai/backend && rm -f /private/tmp/claude-503/pytest_lock 2>/dev/null; python -m pytest tests/ -x -q 2>&1 | tail -20"
+        cmd2 = "python -m pytest tests/ -x -q 2>&1 | tail -30"
+        cmd3 = "python -m pytest tests/ -x -q"
+        # All three should normalize to the same core command
+        assert n(cmd1) == n(cmd2) == n(cmd3)
+
+    def test_hash_equality_for_cosmetic_bash_variants(self):
+        """Bash tool calls with cosmetic variations produce the same hash."""
+        base = {"command": "python -m pytest tests/ -x -q"}
+        with_tail = {"command": "python -m pytest tests/ -x -q 2>&1 | tail -20"}
+        with_cd = {"command": "cd /foo && python -m pytest tests/ -x -q 2>&1 | tail -30"}
+        with_rm = {"command": "rm -f /tmp/lock; python -m pytest tests/ -x -q"}
+
+        h_base = CompactionGuard._hash_input(base)
+        h_tail = CompactionGuard._hash_input(with_tail)
+        h_cd = CompactionGuard._hash_input(with_cd)
+        h_rm = CompactionGuard._hash_input(with_rm)
+
+        assert h_base == h_tail == h_cd == h_rm
+
+    def test_description_field_ignored_in_hash(self):
+        """Bash tool 'description' varies per call but shouldn't affect hash."""
+        cmd1 = {"command": "python -m pytest tests/", "description": "Run tests"}
+        cmd2 = {"command": "python -m pytest tests/", "description": "Re-running the test suite"}
+        assert CompactionGuard._hash_input(cmd1) == CompactionGuard._hash_input(cmd2)
+
+    def test_non_bash_dicts_unchanged(self):
+        """Non-Bash tool inputs (no 'command' key) hash as before."""
+        inp = {"file_path": "/a.py", "content": "hello"}
+        # Should still produce a valid hash without normalization
+        h = CompactionGuard._hash_input(inp)
+        assert isinstance(h, str) and len(h) == 12
+
+    def test_preserves_meaningful_differences(self):
+        """Different core commands must NOT normalize to the same hash."""
+        h1 = CompactionGuard._hash_input({"command": "python -m pytest tests/"})
+        h2 = CompactionGuard._hash_input({"command": "python -m pytest tests/ -k session"})
+        assert h1 != h2
+
+    def test_single_tool_repeat_catches_normalized_bash_loop(self):
+        """Integration: 5 cosmetically different pytest runs trigger loop detection."""
+        guard = CompactionGuard()
+        guard.activate()
+        guard._context_pct = 90.0
+
+        # 5 different-looking but semantically identical pytest invocations
+        variants = [
+            {"command": "python -m pytest tests/ -x -q"},
+            {"command": "python -m pytest tests/ -x -q 2>&1 | tail -20"},
+            {"command": "cd /foo && python -m pytest tests/ -x -q 2>&1 | tail -30"},
+            {"command": "rm -f /tmp/lock; python -m pytest tests/ -x -q"},
+            {"command": "python -m pytest tests/ -x -q | tail -20"},
+        ]
+        for v in variants:
+            guard.record_tool_call("Bash", v)
+
+        # All 5 normalize to the same hash → single-tool repeat ≥5 → loop
+        assert guard._detect_loop() is True
+
+    def test_pipe_in_middle_preserved(self):
+        """Pipes that are part of the core command (not tail/head) are preserved."""
+        n = CompactionGuard._normalize_bash_command
+        # grep | wc is core logic, not cosmetic
+        result = n("grep -r TODO src/ | wc -l")
+        assert "grep -r TODO src/ | wc -l" == result
+
+    def test_empty_command(self):
+        n = CompactionGuard._normalize_bash_command
+        assert n("") == ""
+        assert n("   ") == ""
+
+    def test_chained_rm_prefixes(self):
+        """Multiple rm -f cleanup commands chained with ; or &&."""
+        n = CompactionGuard._normalize_bash_command
+        result = n("rm -f /tmp/a; rm -f /tmp/b; python -m pytest")
+        assert result == "python -m pytest"
+
+
+# ── Consecutive Identical Call Detection ──────────────────────────
+
+
+class TestConsecutiveRepeatDetection:
+    """Layer 0: Consecutive identical call detection.
+
+    Catches the pytest dead-loop at low context usage where:
+    - No compaction → guard stays PASSIVE
+    - Only 6-8 calls → diversity window (20) never fills
+    - Context at ~8% → ACTIVE context gate (40%) never fires
+
+    This detector needs only 3 consecutive identical calls. No window,
+    no context gate, no phase dependency.
+    """
+
+    def test_constants(self):
+        assert _CONSEC_SOFT == 3
+        assert _CONSEC_HARD == 5
+        assert _CONSEC_KILL == 7
+
+    def test_below_threshold_returns_monitoring(self):
+        guard = CompactionGuard()
+        guard.record_tool_call("Bash", {"command": "pytest"})
+        guard.record_tool_call("Bash", {"command": "pytest"})
+        assert guard.check() == EscalationLevel.MONITORING
+
+    def test_3_consecutive_triggers_soft_warn(self):
+        guard = CompactionGuard()
+        for _ in range(3):
+            guard.record_tool_call("Bash", {"command": "pytest"})
+        assert guard.check() == EscalationLevel.SOFT_WARN
+
+    def test_5_consecutive_triggers_hard_warn(self):
+        guard = CompactionGuard()
+        for _ in range(5):
+            guard.record_tool_call("Bash", {"command": "pytest"})
+        assert guard.check() == EscalationLevel.HARD_WARN
+
+    def test_7_consecutive_triggers_kill(self):
+        guard = CompactionGuard()
+        for _ in range(7):
+            guard.record_tool_call("Bash", {"command": "pytest"})
+        assert guard.check() == EscalationLevel.KILL
+
+    def test_broken_by_different_call(self):
+        """A different tool call resets the consecutive counter."""
+        guard = CompactionGuard()
+        guard.record_tool_call("Bash", {"command": "pytest"})
+        guard.record_tool_call("Bash", {"command": "pytest"})
+        guard.record_tool_call("Read", {"file_path": "/a.py"})  # break
+        guard.record_tool_call("Bash", {"command": "pytest"})
+        guard.record_tool_call("Bash", {"command": "pytest"})
+        assert guard.check() == EscalationLevel.MONITORING
+
+    def test_works_in_passive_phase_low_context(self):
+        """The whole point: fires at 8% context, PASSIVE phase."""
+        guard = CompactionGuard()
+        assert guard.phase == GuardPhase.PASSIVE
+        guard._context_pct = 8.0  # 8% on a 1M window
+        for _ in range(3):
+            guard.record_tool_call("Bash", {"command": "pytest"})
+        assert guard.check() == EscalationLevel.SOFT_WARN
+
+    def test_normalized_bash_variants_are_consecutive(self):
+        """Cosmetically different pytest commands count as consecutive."""
+        guard = CompactionGuard()
+        guard.record_tool_call("Bash", {"command": "python -m pytest tests/ -x -q"})
+        guard.record_tool_call("Bash", {"command": "python -m pytest tests/ -x -q 2>&1 | tail -20"})
+        guard.record_tool_call("Bash", {"command": "cd /foo && python -m pytest tests/ -x -q | tail -30"})
+        # All 3 normalize to same hash → 3 consecutive
+        assert guard.check() == EscalationLevel.SOFT_WARN
+
+    def test_escalation_is_monotonic(self):
+        """Once at HARD_WARN via consecutive, adding more calls escalates to KILL."""
+        guard = CompactionGuard()
+        for _ in range(5):
+            guard.record_tool_call("Bash", {"command": "pytest"})
+        assert guard.check() == EscalationLevel.HARD_WARN
+        guard.record_tool_call("Bash", {"command": "pytest"})
+        guard.record_tool_call("Bash", {"command": "pytest"})
+        assert guard.check() == EscalationLevel.KILL
+
+    def test_pattern_description_set(self):
+        """Pattern description includes tool name and count."""
+        guard = CompactionGuard()
+        for _ in range(3):
+            guard.record_tool_call("Bash", {"command": "pytest"})
+        guard.check()
+        assert "Bash" in guard._last_pattern_desc
+        assert "3" in guard._last_pattern_desc
+
+    def test_reset_all_clears_consecutive(self):
+        guard = CompactionGuard()
+        for _ in range(3):
+            guard.record_tool_call("Bash", {"command": "pytest"})
+        guard.reset_all()
+        assert guard._consec_count == 0
+        assert guard._last_pair is None
+
+    def test_e2e_pytest_dead_loop_scenario(self):
+        """Full integration test: the exact pattern from the bug report.
+
+        Agent at 8% context on 1M window, PASSIVE phase, runs pytest
+        6 times with cosmetic variations. Guard must escalate.
+        """
+        guard = CompactionGuard()
+        guard._context_pct = 8.0
+        guard._context_window = 1_000_000
+
+        # The exact sequence from the bug report (normalized to same hash)
+        commands = [
+            "python -m pytest tests/ -x -q 2>&1 | tail -30",
+            "python -m pytest tests/ -x -q 2>&1 | tail -20",
+            "cd /Users/gawan/swarmai/backend && python -m pytest tests/ -x -q 2>&1 | tail -20",
+            "rm -f /private/tmp/claude-503/pytest_lock 2>/dev/null; python -m pytest tests/ -x -q 2>&1 | tail -30",
+            "python -m pytest tests/ -x -q 2>&1 | tail -20",
+            "python -m pytest tests/ -x -q",
+        ]
+
+        results = []
+        for cmd in commands:
+            guard.record_tool_call("Bash", {"command": cmd})
+            results.append(guard.check())
+
+        # Call 1-2: MONITORING (< 3 consecutive)
+        assert results[0] == EscalationLevel.MONITORING
+        assert results[1] == EscalationLevel.MONITORING
+        # Call 3: SOFT_WARN (3 consecutive)
+        assert results[2] == EscalationLevel.SOFT_WARN
+        # Call 5: HARD_WARN (5 consecutive)
+        assert results[4] == EscalationLevel.HARD_WARN
+        # Still PASSIVE phase the whole time
+        assert guard.phase == GuardPhase.PASSIVE

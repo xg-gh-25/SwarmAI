@@ -15,13 +15,23 @@ Graduated escalation:
   HARD_WARN   — second detection: instruct agent to summarize and stop
   KILL        — third detection: caller interrupts the streaming session
 
-Loop detection uses three complementary strategies:
+Loop detection uses four complementary strategies:
+  0. Consecutive identical calls (all phases, no minimum): same (tool, hash) pair
+     repeated 3/5/7 consecutive times → SOFT_WARN/HARD_WARN/KILL. Catches small
+     loops (6-8 calls) at low context where other detectors are blind.
   1. Diversity stall (all phases): sliding window of last 20/40 calls,
      fires when unique (tool, input_hash) ratio drops below 30%.
      Catches real loops (same files/patterns repeating) but NOT normal
      code research (reading different files, grepping different patterns).
   2. Set-overlap (ACTIVE only): >60% of post-compaction calls match pre-compaction baseline
   3. Single-tool repetition (ACTIVE only): any (tool_name, input_hash) pair appears ≥5 times
+
+Bash command normalization:
+  Bash tool calls are normalized before hashing — ``| tail -N`` suffixes,
+  ``2>&1`` redirections, ``cd path &&`` prefixes, and ``rm -f lock;``
+  cleanup preambles are stripped. This ensures that cosmetically different
+  but semantically identical commands (e.g. the pytest dead-loop pattern)
+  are recognized as the same operation by all three detectors.
 
 Public symbols:
 
@@ -35,6 +45,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 import time
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
@@ -105,6 +116,15 @@ Example healthy: Read A, Grep B, Read C, Read D... (20 unique / 20 = 100%)
 _STALL_ESCALATION_WINDOW: int = 40
 """Larger window — if diversity still low at this count, escalate to HARD_WARN."""
 
+_CONSEC_SOFT: int = 3
+"""Consecutive identical (tool, hash) pairs to trigger SOFT_WARN."""
+
+_CONSEC_HARD: int = 5
+"""Consecutive identical (tool, hash) pairs to trigger HARD_WARN."""
+
+_CONSEC_KILL: int = 7
+"""Consecutive identical (tool, hash) pairs to trigger KILL."""
+
 
 # ── Escalation ordering (for strict one-step progression) ────────
 
@@ -155,6 +175,10 @@ class CompactionGuard:
         # Diversity-based stall detection — sliding window of recent calls
         self._recent_calls: list[tuple[str, str]] = []
 
+        # Consecutive identical call detection — fires at low call counts
+        self._last_pair: tuple[str, str] | None = None
+        self._consec_count: int = 0
+
     @property
     def phase(self) -> GuardPhase:
         """Current guard phase (PASSIVE or ACTIVE)."""
@@ -170,11 +194,67 @@ class CompactionGuard:
         """Current context usage percentage."""
         return self._context_pct
 
-    # ── Static helper (preserved from original) ──────────────────
+    # ── Static helpers ──────────────────────────────────────────
+
+    # Bash normalization patterns — compiled once, reused per call.
+    # These strip cosmetic shell variations that make semantically
+    # identical commands hash differently (the pytest dead-loop bug).
+    _RE_OUTPUT_REDIRECT = re.compile(r"\s*2>&1\s*")
+    _RE_PIPE_TAIL = re.compile(r"\s*\|\s*(?:tail|head)\s+[^\|;]*$")
+    _RE_LEADING_CLEANUP = re.compile(
+        r"^(?:rm\s+-f\s+\S+\s*(?:2>/dev/null)?\s*[;&]+\s*)+"
+    )
+    _RE_CD_PREFIX = re.compile(
+        r"^cd\s+\S+\s*(?:&&|;)\s*"
+    )
+    _RE_MULTI_SPACE = re.compile(r"\s+")
+
+    @staticmethod
+    def _normalize_bash_command(cmd: str) -> str:
+        """Normalize a Bash command string to a canonical form for hashing.
+
+        Strips cosmetic variations that agents add between retries:
+        - ``2>&1`` redirections
+        - ``| tail -N`` / ``| head -N`` suffixes
+        - Leading ``rm -f /path/to/lock;`` cleanup prefixes
+        - Leading ``cd /some/path &&`` prefixes
+        - Consecutive whitespace collapsed to single space
+
+        Examples::
+
+            'cd /foo && rm -f lock; python -m pytest tests/ -x -q 2>&1 | tail -30'
+            → 'python -m pytest tests/ -x -q'
+
+            'python -m pytest tests/ -x -q 2>&1 | tail -20'
+            → 'python -m pytest tests/ -x -q'
+
+        Both hash identically, so the guard sees them as the same operation.
+        """
+        s = cmd.strip()
+        # Order matters: strip outer wrappers first, then inner decorators.
+        # Tail/head suffix and redirections first (rightmost).
+        s = CompactionGuard._RE_PIPE_TAIL.sub("", s)
+        s = CompactionGuard._RE_OUTPUT_REDIRECT.sub(" ", s)
+        # Left-side prefixes may be nested (cd ... && rm -f ...; cmd).
+        # Loop until no more prefixes are stripped (max 5 to avoid infinite).
+        for _ in range(5):
+            prev = s
+            s = CompactionGuard._RE_CD_PREFIX.sub("", s.strip())
+            s = CompactionGuard._RE_LEADING_CLEANUP.sub("", s.strip())
+            if s == prev:
+                break
+        s = CompactionGuard._RE_MULTI_SPACE.sub(" ", s).strip()
+        return s
 
     @staticmethod
     def _hash_input(tool_input: dict | str | None) -> str:
         """Deterministic hash of tool input for deduplication.
+
+        For Bash tool calls, normalizes the command string before hashing
+        so that cosmetic variations (``| tail -N``, ``2>&1``, ``cd path &&``)
+        produce the same hash. This prevents the pytest dead-loop where the
+        agent re-runs the same command with different tail suffixes and the
+        guard sees each as a unique call.
 
         For dicts: sorts keys and hashes the JSON.
         For strings: hashes directly.
@@ -186,7 +266,19 @@ class CompactionGuard:
             raw = tool_input
         else:
             try:
-                raw = json.dumps(tool_input, sort_keys=True, default=str)
+                # Bash tool normalization: {"command": "...", ...}
+                # Normalize the command value before hashing the whole dict.
+                if isinstance(tool_input, dict) and "command" in tool_input:
+                    normalized = dict(tool_input)
+                    normalized["command"] = CompactionGuard._normalize_bash_command(
+                        str(normalized["command"])
+                    )
+                    # Drop description — it varies per call but doesn't
+                    # change the semantic operation.
+                    normalized.pop("description", None)
+                    raw = json.dumps(normalized, sort_keys=True, default=str)
+                else:
+                    raw = json.dumps(tool_input, sort_keys=True, default=str)
             except (TypeError, ValueError):
                 raw = str(tool_input)
         return hashlib.md5(raw.encode(), usedforsecurity=False).hexdigest()[:12]
@@ -244,6 +336,13 @@ class CompactionGuard:
 
             # Append full record for work summary
             self._tool_records.append(record)
+
+            # Consecutive identical call tracking
+            if pair == self._last_pair:
+                self._consec_count += 1
+            else:
+                self._last_pair = pair
+                self._consec_count = 1
 
             # Sliding window for diversity-based stall detection
             self._recent_calls.append(pair)
@@ -422,21 +521,48 @@ class CompactionGuard:
         threshold = int(_STALL_ESCALATION_WINDOW * _STALL_DIVERSITY_PCT)
         return unique < threshold
 
+    # ── _is_consecutive_repeat() ────────────────────────────────
+
+    def _is_consecutive_repeat(self) -> EscalationLevel:
+        """Detect consecutive identical tool calls — the low-context loop killer.
+
+        Unlike diversity stall (needs 20+ calls) and set-overlap (needs
+        compaction + high context), this fires on just 3 consecutive
+        identical calls. Designed for the pytest dead-loop pattern where
+        the agent re-runs the same command 6-8 times at <10% context.
+
+        Returns the escalation level this detector alone would recommend.
+        Does NOT mutate self._escalation — caller decides.
+
+        Thresholds: 3 → SOFT_WARN, 5 → HARD_WARN, 7 → KILL.
+        """
+        if self._consec_count >= _CONSEC_KILL:
+            return EscalationLevel.KILL
+        if self._consec_count >= _CONSEC_HARD:
+            return EscalationLevel.HARD_WARN
+        if self._consec_count >= _CONSEC_SOFT:
+            return EscalationLevel.SOFT_WARN
+        return EscalationLevel.MONITORING
+
     # ── check() ──────────────────────────────────────────────────
 
     def check(self) -> EscalationLevel:
         """Check all layers and return the current escalation level.
 
-        Detection strategy (both PASSIVE and ACTIVE phases):
-        1. Diversity-based stall: low unique/total ratio in sliding window.
-           This catches real dead loops (same calls repeating) but NOT normal
-           code research (reading different files, grepping different patterns).
+        Detection strategy (priority order):
+
+        0. Consecutive identical calls (all phases, no minimum window):
+           - 3 consecutive identical (tool, hash) → SOFT_WARN
+           - 5 consecutive → HARD_WARN
+           - 7 consecutive → KILL
+           Catches small loops (6-8 calls) at low context, no compaction needed.
+
+        1. Diversity-based stall (all phases):
            - 20 calls with <30% diversity (< 6 unique) → SOFT_WARN
            - 40 calls with <30% diversity (< 12 unique) → HARD_WARN
            - PASSIVE phase caps at HARD_WARN (no KILL without compaction evidence)
 
-        ACTIVE phase adds:
-        2. Context threshold + loop detection:
+        2. Context threshold + loop detection (ACTIVE only):
            - Set-overlap >60% matching baseline → escalate one step
            - Single-tool repetition ≥5 → escalate one step
            - Can reach KILL
@@ -451,6 +577,27 @@ class CompactionGuard:
             # Already at KILL: stay there
             if self._escalation == EscalationLevel.KILL:
                 return EscalationLevel.KILL
+
+            # ── Layer 0: Consecutive identical call detection (all phases) ──
+            consec_level = self._is_consecutive_repeat()
+            if consec_level != EscalationLevel.MONITORING:
+                consec_idx = _ESCALATION_ORDER.index(consec_level)
+                current_idx = _ESCALATION_ORDER.index(self._escalation)
+                if consec_idx > current_idx:
+                    tool_name = self._last_pair[0] if self._last_pair else "unknown"
+                    logger.warning(
+                        "compaction_guard.consecutive_repeat "
+                        "tool=%s count=%d → %s",
+                        tool_name,
+                        self._consec_count,
+                        consec_level.value,
+                    )
+                    self._escalation = consec_level
+                    self._last_pattern_desc = (
+                        f"Same {tool_name} command repeated "
+                        f"{self._consec_count} consecutive times"
+                    )
+                    return consec_level
 
             # ── Layer 1: Diversity-based stall detection (all phases) ──
             stalled, window_sz, unique_ct, total_calls = self._is_stalled()
@@ -668,6 +815,8 @@ class CompactionGuard:
             self._tool_records = []
             self._recent_calls = []
             self._context_window = 200_000
+            self._last_pair = None
+            self._consec_count = 0
         except Exception:
             logger.exception("compaction_guard.reset_all failed")
 
