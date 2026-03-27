@@ -351,25 +351,36 @@ def _start_memory_watchdog_thread():
 
 def pytest_configure(config):
     """Register markers, memory safety plugins, and auto-inject xdist."""
-    # Concurrency guard: only one pytest run at a time
-    _acquire_pytest_lock()
+    # Detect xdist worker — workers should skip master-only setup.
+    # xdist sets workerinput attribute on the config of each worker.
+    is_xdist_worker = hasattr(config, "workerinput")
 
-    # System memory pre-flight: abort if < 3GB available
-    _check_system_memory_preflight()
+    # Concurrency guard: only one pytest run at a time (master only).
+    # Workers inherit the lock from the master process — don't re-acquire.
+    if not is_xdist_worker:
+        _acquire_pytest_lock()
+
+    # System memory pre-flight: abort if < 3GB available (master only)
+    if not is_xdist_worker:
+        _check_system_memory_preflight()
 
     # Background memory watchdog thread — last line of defense.
     # Pytest hooks only fire between tests. If memory grows during test
     # collection, module imports, or a single long test, hooks can't help.
     # This thread checks RSS every 2 seconds and calls os._exit() (which
     # is NOT catchable by try/except) if the limit is exceeded.
+    # Each worker gets its own watchdog (safe — each is a separate process).
     _start_memory_watchdog_thread()
 
     # Set process group so all child processes (xdist workers) die with parent.
     # Without this, macOS jetsam killing the parent leaves workers as orphans.
-    try:
-        os.setpgrp()
-    except OSError:
-        pass  # Already a process group leader, or xdist worker
+    # ONLY on master — workers must NOT call setpgrp() or they detach from
+    # the master's process group, causing "Not properly terminated" crashes.
+    if not is_xdist_worker:
+        try:
+            os.setpgrp()
+        except OSError:
+            pass  # Already a process group leader
 
     # Register custom markers
     config.addinivalue_line("markers", "pbt: property-based tests using Hypothesis")
