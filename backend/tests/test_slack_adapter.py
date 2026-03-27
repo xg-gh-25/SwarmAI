@@ -518,9 +518,10 @@ class TestSlackNativeStreaming:
         mock_client.chat_startStream.return_value = {"ts": "1234.5678"}
         adapter._slack_client = mock_client
 
-        await adapter.start_stream("C001", text="Hello")
+        await adapter.start_stream("C001", external_thread_id="1111.0000", text="Hello")
         call_kwargs = mock_client.chat_startStream.call_args[1]
         assert call_kwargs["markdown_text"] == "Hello"
+        assert call_kwargs["thread_ts"] == "1111.0000"
 
     @pytest.mark.asyncio
     async def test_append_stream(self, adapter):
@@ -578,8 +579,47 @@ class TestSlackNativeStreaming:
         mock_client.chat_startStream.side_effect = Exception("stream fail")
         adapter._slack_client = mock_client
 
+        result = await adapter.start_stream("C001", external_thread_id="1111.0000")
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_start_stream_no_thread_ts_returns_none(self, adapter):
+        """start_stream returns None when no thread_ts is provided."""
+        mock_client = MagicMock()
+        adapter._slack_client = mock_client
+
         result = await adapter.start_stream("C001")
         assert result is None
+        mock_client.chat_startStream.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_start_stream_passes_recipient_user_id(self, adapter):
+        """start_stream passes recipient_user_id for DM streaming."""
+        mock_client = MagicMock()
+        mock_client.auth_test.return_value = {"team_id": "T123", "user_id": "U456"}
+        mock_client.chat_startStream.return_value = {"ts": "1234.5678"}
+        adapter._slack_client = mock_client
+
+        ts = await adapter.start_stream(
+            "C001", external_thread_id="1111.0000", recipient_user_id="URECIPIENT",
+        )
+        assert ts == "1234.5678"
+        call_kwargs = mock_client.chat_startStream.call_args[1]
+        assert call_kwargs["recipient_user_id"] == "URECIPIENT"
+        assert call_kwargs["recipient_team_id"] == "T123"
+
+    @pytest.mark.asyncio
+    async def test_stop_stream_passes_recipient_user_id(self, adapter):
+        """stop_stream passes recipient_user_id and team_id."""
+        mock_client = MagicMock()
+        mock_client.auth_test.return_value = {"team_id": "T123", "user_id": "U456"}
+        mock_client.chat_stopStream.return_value = {}
+        adapter._slack_client = mock_client
+
+        await adapter.stop_stream("C001", "1234.5678", recipient_user_id="URECIPIENT")
+        call_kwargs = mock_client.chat_stopStream.call_args[1]
+        assert call_kwargs["recipient_user_id"] == "URECIPIENT"
+        assert call_kwargs["recipient_team_id"] == "T123"
 
 
 # ===================================================================

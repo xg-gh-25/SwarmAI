@@ -223,8 +223,18 @@ class ChannelAdapter(ABC):
         external_chat_id: str,
         external_thread_id: Optional[str] = None,
         text: Optional[str] = None,
+        recipient_user_id: Optional[str] = None,
     ) -> Optional[str]:
-        """Start a native streaming session. Returns stream ts."""
+        """Start a native streaming session. Returns stream ts.
+
+        Args:
+            external_chat_id: Channel ID.
+            external_thread_id: Thread ts to stream into. For DMs, use the
+                inbound message ts so the stream appears as a reply.
+            text: Optional initial markdown text.
+            recipient_user_id: Required for DM streaming on Slack — the user
+                ID of the message recipient.
+        """
         return None
 
     async def append_stream(
