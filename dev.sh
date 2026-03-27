@@ -282,14 +282,14 @@ cmd_daemon() {
             _log "Restarting daemon..."
             launchctl kickstart -k "$GUI_TARGET"
             _log "Waiting for health..."
-            for i in $(seq 1 15); do
+            for i in $(seq 1 30); do
                 sleep 1
                 if _daemon_health >/dev/null; then
                     _ok "Daemon healthy on port ${DAEMON_PORT} (${i}s)"
                     return
                 fi
             done
-            _err "Daemon did not become healthy within 15s"
+            _err "Daemon did not become healthy within 30s"
             _warn "Check: tail -30 ~/.swarm-ai/logs/backend-stderr.log"
             ;;
         stop)
@@ -306,14 +306,14 @@ cmd_daemon() {
             _log "Starting daemon..."
             launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/${DAEMON_LABEL}.plist"
             _log "Waiting for health..."
-            for i in $(seq 1 15); do
+            for i in $(seq 1 30); do
                 sleep 1
                 if _daemon_health >/dev/null; then
                     _ok "Daemon healthy on port ${DAEMON_PORT} (${i}s)"
                     return
                 fi
             done
-            _err "Daemon did not become healthy within 15s"
+            _err "Daemon did not become healthy within 30s"
             ;;
         status)
             if _daemon_is_running; then
