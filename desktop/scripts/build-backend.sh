@@ -193,7 +193,7 @@ uv pip install \
     "python-multipart>=0.0.12" \
     "pydantic>=2.10.0" \
     "pydantic-settings>=2.6.0" \
-    "claude-agent-sdk>=0.1.48" \
+    "claude-agent-sdk>=0.1.50" \
     "aiosqlite>=0.20.0" \
     "PyJWT>=2.8.0" \
     "bcrypt>=4.0.0" \
