@@ -480,10 +480,8 @@ class SlackChannelAdapter(ChannelAdapter):
                 "text": "Thinking...",
                 "blocks": [
                     {
-                        "type": "context",
-                        "elements": [
-                            {"type": "mrkdwn", "text": ":bee: _Thinking..._"},
-                        ],
+                        "type": "section",
+                        "text": {"type": "mrkdwn", "text": ":bee: _Thinking..._"},
                     }
                 ],
             }

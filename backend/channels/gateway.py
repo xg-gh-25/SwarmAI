@@ -999,13 +999,14 @@ class ChannelGateway:
                 _stream_flushed += "".join(_stream_buf)
                 _stream_buf.clear()
                 try:
+                    # Append ✍️ indicator so user knows more is coming
                     await adapter.update_message(
                         external_chat_id=msg.external_chat_id,
                         message_id=streaming_msg_id,
-                        text=_stream_flushed,
+                        text=_stream_flushed + " ✍️",
                     )
                 except Exception:
-                    pass
+                    logger.warning("Legacy flush: chat.update failed (rate limit?)")
 
         async def _legacy_periodic() -> None:
             while not _stream_done.is_set():
