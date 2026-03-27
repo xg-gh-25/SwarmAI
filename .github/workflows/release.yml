@@ -61,6 +61,15 @@ jobs:
         working-directory: ./backend
         run: cp .env.example .env
 
+      - name: Install backend Python dependencies
+        working-directory: ./backend
+        run: |
+          pip install uv
+          uv venv .venv
+          source .venv/bin/activate
+          uv pip install -e ".[dev]"
+          echo "$VIRTUAL_ENV/bin" >> $GITHUB_PATH
+
       - name: Update version
         working-directory: ./desktop
         run: |
@@ -80,7 +89,6 @@ jobs:
         run: npm run tauri build -- --target aarch64-apple-darwin
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
       - name: Upload DMG
         uses: actions/upload-artifact@v4
@@ -109,6 +117,20 @@ jobs:
         working-directory: ./desktop
         run: npm install
 
+      - name: Create backend .env
+        working-directory: ./backend
+        run: cp .env.example .env
+
+      - name: Install backend Python dependencies
+        working-directory: ./backend
+        shell: bash
+        run: |
+          pip install uv
+          uv venv .venv
+          source .venv/Scripts/activate
+          uv pip install -e ".[dev]"
+          echo "$VIRTUAL_ENV/Scripts" >> $GITHUB_PATH
+
       - name: Update version
         working-directory: ./desktop
         shell: bash
@@ -122,7 +144,6 @@ jobs:
         run: npm run build:all
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
       - name: Upload NSIS installer
         uses: actions/upload-artifact@v4

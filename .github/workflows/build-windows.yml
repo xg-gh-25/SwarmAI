@@ -32,10 +32,24 @@ jobs:
         working-directory: ./desktop
         run: npm install
 
+      - name: Create backend .env file
+        working-directory: ./backend
+        run: cp .env.example .env
+
+      - name: Install backend Python dependencies
+        working-directory: ./backend
+        shell: bash
+        run: |
+          pip install uv
+          uv venv .venv
+          source .venv/Scripts/activate
+          uv pip install -e ".[dev]"
+          echo "$VIRTUAL_ENV/Scripts" >> $GITHUB_PATH
+
       - name: Build application
         working-directory: ./desktop
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         run: npm run build:all
         shell: bash
 
