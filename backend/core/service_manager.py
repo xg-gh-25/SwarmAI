@@ -201,8 +201,8 @@ class ServiceManager:
         Expected format::
 
             {
-                "name": "slack-bot",
-                "command": ["./venv/bin/python", "swarm_slack_bot.py"],
+                "name": "my-service",
+                "command": ["./venv/bin/python", "service.py"],
                 "enabled": true,
                 "restart_policy": "always"
             }

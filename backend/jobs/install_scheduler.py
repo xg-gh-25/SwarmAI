@@ -28,6 +28,7 @@ OLD_PLISTS = [
     "com.swarmai.gh-update-topics",
     "com.swarmai.trash-prune",
     "com.swarmai.jobs",  # Old name from workspace-level install_launchd()
+    "com.swarmai.slack-daemon",  # Replaced by com.swarmai.backend
 ]
 
 NEW_LABEL = "com.swarmai.scheduler"
