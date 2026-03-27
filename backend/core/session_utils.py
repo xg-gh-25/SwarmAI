@@ -4,6 +4,8 @@ Pure functions with no subprocess, routing, or hook logic.
 
 Public symbols:
 
+- ``FailureType``                        — Enum classifying why a session failed.
+- ``classify_failure``                   — Structured failure classification (hook context + string fallback).
 - ``_is_retriable_error``                — Classify transient SDK errors for auto-retry.
 - ``_sanitize_sdk_error``                — Map raw SDK errors to user-friendly messages.
 - ``_build_error_event``                 — Build a sanitized SSE error event dict.
@@ -12,9 +14,183 @@ Public symbols:
 from __future__ import annotations
 
 import re
+import time
+from enum import Enum
 from typing import Optional
 
 from config import settings
+
+
+# ---------------------------------------------------------------------------
+# Failure classification — structured failure types for retry intelligence
+# ---------------------------------------------------------------------------
+
+class FailureType(Enum):
+    """Why a session failed.  Drives retry backoff strategy.
+
+    Each type maps to a different recovery behaviour:
+
+    - OOM         → 30s flat backoff, check spawn budget
+    - RATE_LIMIT  → wait until resets_at (or 60s default)
+    - API_ERROR   → standard exponential backoff
+    - TIMEOUT     → exponential backoff, abandon --resume after 2x
+    - UNKNOWN     → standard exponential backoff (conservative)
+    """
+
+    OOM = "oom"
+    RATE_LIMIT = "rate_limit"
+    API_ERROR = "api_error"
+    TIMEOUT = "timeout"
+    UNKNOWN = "unknown"
+
+
+def classify_failure(
+    error_str: str,
+    hook_context: Optional[dict] = None,
+) -> tuple[FailureType, dict]:
+    """Classify a failure using hook-captured context first, string fallback second.
+
+    Returns ``(failure_type, metadata)`` where metadata contains type-specific
+    info (e.g. ``resets_at`` for rate limits, ``pressure_level`` for OOM).
+
+    Priority order:
+    1. Hook-captured ``_last_notification`` with rate limit info → RATE_LIMIT
+    2. OOM string patterns + memory pressure heuristic → OOM
+    3. Timeout string patterns → TIMEOUT
+    4. API error string patterns → API_ERROR
+    5. Fallback → UNKNOWN
+    """
+    error_lower = error_str.lower()
+    metadata: dict = {}
+
+    # ── 1. Hook context: rate limit notification ──────────────
+    if hook_context:
+        notif = hook_context.get("_last_notification")
+        if notif and _is_rate_limit_notification(notif, error_lower):
+            metadata["notification_type"] = notif.get("type", "")
+            metadata["message"] = notif.get("message", "")
+            # Extract resets_at if present in the notification message
+            resets_at = _extract_resets_at(notif.get("message", ""))
+            if resets_at:
+                metadata["resets_at"] = resets_at
+            return FailureType.RATE_LIMIT, metadata
+
+    # ── 2. OOM / SIGKILL detection (string + memory heuristic) ──
+    oom_patterns = [
+        "exit code -9", "exit code: -9", "exit code=-9",
+        "sigkill", "signal 9", "killed by signal",
+        "jetsam", "terminated process",
+    ]
+    if any(p in error_lower for p in oom_patterns):
+        metadata["pattern_matched"] = True
+        return FailureType.OOM, metadata
+
+    # Memory pressure fallback (process died + system under pressure)
+    try:
+        from .resource_monitor import resource_monitor
+        mem = resource_monitor.system_memory()
+        if mem.pressure_level == "critical":
+            metadata["pressure_level"] = mem.pressure_level
+            metadata["percent_used"] = mem.percent_used
+            return FailureType.OOM, metadata
+    except Exception:
+        pass
+
+    # ── 3. Rate limit (string patterns, no hook context) ──────
+    rate_limit_patterns = [
+        r"rate.?limit", r"too many requests", r"throttl",
+    ]
+    if any(re.search(p, error_lower) for p in rate_limit_patterns):
+        return FailureType.RATE_LIMIT, metadata
+
+    # ── 4. Timeout ────────────────────────────────────────────
+    if "timeout" in error_lower or "streaming timeout" in error_lower:
+        return FailureType.TIMEOUT, metadata
+
+    # ── 5. API / transient errors ─────────────────────────────
+    api_patterns = [
+        r"service.?unavailable", r"internal.?server.?error",
+        r"overloaded", r"capacity", r"econnreset",
+        r"connection reset", r"broken pipe", r"epipe",
+    ]
+    if any(re.search(p, error_lower) for p in api_patterns):
+        return FailureType.API_ERROR, metadata
+
+    # ── 6. Fallback ───────────────────────────────────────────
+    return FailureType.UNKNOWN, metadata
+
+
+def compute_backoff(
+    failure_type: FailureType,
+    metadata: dict,
+    retry_count: int,
+    base_backoff: float = 5.0,
+) -> float:
+    """Compute backoff seconds based on failure type.
+
+    - OOM:        flat 30s (memory needs time to free)
+    - RATE_LIMIT: wait until resets_at, or 60s default, capped at 300s
+    - TIMEOUT:    exponential (base * retry_count), capped at 60s
+    - API_ERROR:  exponential (base * retry_count), capped at 60s
+    - UNKNOWN:    exponential (base * retry_count), capped at 60s
+    """
+    if failure_type == FailureType.OOM:
+        return 30.0
+
+    if failure_type == FailureType.RATE_LIMIT:
+        resets_at = metadata.get("resets_at")
+        if resets_at:
+            wait = max(0.0, resets_at - time.time())
+            # Cap at 5 minutes — if resets_at is far future, don't block forever
+            return min(wait + 2.0, 300.0)  # +2s buffer
+        return 60.0  # Default rate limit backoff
+
+    # Exponential for everything else
+    return min(base_backoff * retry_count, 60.0)
+
+
+def _is_rate_limit_notification(notif: dict, error_lower: str) -> bool:
+    """Check if a notification represents a rate limit event."""
+    notif_type = notif.get("type", "").lower()
+    message = notif.get("message", "").lower()
+    # Notification type is "rate_limit" or message contains rate limit keywords
+    if "rate" in notif_type and "limit" in notif_type:
+        return True
+    if "rate" in message and "limit" in message:
+        return True
+    if "throttl" in message or "too many requests" in message:
+        return True
+    # Also match if the error itself contains rate-limit keywords
+    # and we have a recent notification (any type — the notification
+    # confirms the CLI was communicating rate limit context).
+    # Use word-boundary-aware patterns to avoid "rate" matching
+    # inside "generate", "separate", etc.
+    if re.search(r"rate.?limit", error_lower) or "throttl" in error_lower or "too many requests" in error_lower:
+        return True
+    return False
+
+
+def _extract_resets_at(message: str) -> Optional[float]:
+    """Extract Unix timestamp from rate limit notification message.
+
+    Looks for patterns like 'resets at <timestamp>' or 'retry after <seconds>'.
+    Returns Unix timestamp or None.
+    """
+    # Pattern: "resets at 1234567890" or "resets_at: 1234567890"
+    m = re.search(r"resets?\s*(?:at|_at)[:\s]+(\d{10,13})", message)
+    if m:
+        ts = int(m.group(1))
+        # If milliseconds, convert to seconds
+        if ts > 1e12:
+            ts = ts / 1000
+        return float(ts)
+
+    # Pattern: "retry after 60" (seconds from now)
+    m = re.search(r"retry\s*(?:after|in)[:\s]+(\d+)", message, re.IGNORECASE)
+    if m:
+        return time.time() + int(m.group(1))
+
+    return None
 
 
 # ---------------------------------------------------------------------------

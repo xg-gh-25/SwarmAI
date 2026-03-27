@@ -142,4 +142,49 @@ async def build_hooks(
         hooks.setdefault("PreCompact", [])
         hooks["PreCompact"].append(HookMatcher(hooks=[_pre_compact_hook]))
 
+    # ── Failure-aware hooks ───────────────────────────────────
+    # Capture structured failure context into session_context so
+    # the retry logic in SessionUnit can make smarter backoff
+    # decisions (rate limit → wait for reset, API error →
+    # standard backoff, OOM → 30s flat).
+    #
+    # These hooks fire WITHIN the running CLI process — they
+    # capture info BEFORE the process dies.  For OOM/SIGKILL,
+    # no hook fires and the existing string-based heuristic
+    # remains the fallback.
+    if session_context is not None:
+        async def _notification_hook(hook_input, tool_name, hook_context):
+            """Capture rate limit and error notifications."""
+            message = hook_input.get("message", "") if isinstance(hook_input, dict) else getattr(hook_input, "message", "")
+            notif_type = hook_input.get("notification_type", "") if isinstance(hook_input, dict) else getattr(hook_input, "notification_type", "")
+            logger.info(
+                "notification_hook: type=%s message=%s session=%s",
+                notif_type, message[:120],
+                session_context.get("sdk_session_id"),
+            )
+            session_context["_last_notification"] = {
+                "type": notif_type,
+                "message": message,
+            }
+            return {}
+
+        hooks.setdefault("Notification", [])
+        hooks["Notification"].append(HookMatcher(hooks=[_notification_hook]))
+
+        async def _stop_hook(hook_input, tool_name, hook_context):
+            """Capture session stop reason for retry classification."""
+            stop_active = hook_input.get("stop_hook_active", False) if isinstance(hook_input, dict) else getattr(hook_input, "stop_hook_active", False)
+            logger.info(
+                "stop_hook: stop_hook_active=%s session=%s",
+                stop_active,
+                session_context.get("sdk_session_id"),
+            )
+            session_context["_stop_info"] = {
+                "stop_hook_active": stop_active,
+            }
+            return {}
+
+        hooks.setdefault("Stop", [])
+        hooks["Stop"].append(HookMatcher(hooks=[_stop_hook]))
+
     return hooks, effective_allowed_skills, allow_all_skills
