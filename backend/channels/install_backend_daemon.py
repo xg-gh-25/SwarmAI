@@ -22,7 +22,12 @@ from pathlib import Path
 DAEMON_LABEL = "com.swarmai.backend"
 LAUNCH_AGENTS = Path.home() / "Library" / "LaunchAgents"
 TEMPLATE = Path(__file__).parent / "com.swarmai.backend.plist"
-WRAPPER = Path(__file__).parent / "swarmai_backend.sh"
+WRAPPER_SOURCE = Path(__file__).parent / "swarmai_backend.sh"
+# Installed wrapper lives in ~/.swarm-ai/ — a non-TCC-protected directory.
+# macOS TCC blocks launchd daemons from reading files under ~/Desktop,
+# ~/Documents, ~/Downloads without Full Disk Access.  Copying the wrapper
+# to ~/.swarm-ai/ avoids the "Operation not permitted" error entirely.
+WRAPPER_DEST = Path.home() / ".swarm-ai" / "swarmai_backend.sh"
 
 
 def _uid() -> int:
@@ -30,8 +35,23 @@ def _uid() -> int:
 
 
 def _resolve_wrapper() -> str:
-    """Return the absolute path to the wrapper script."""
-    return str(WRAPPER.resolve())
+    """Copy wrapper script to ~/.swarm-ai/ and return its path.
+
+    The source script lives in the repo (channels/swarmai_backend.sh).
+    We copy it to ~/.swarm-ai/ so launchd can read it without TCC
+    restrictions that apply to ~/Desktop, ~/Documents, etc.
+    """
+    WRAPPER_DEST.parent.mkdir(parents=True, exist_ok=True)
+    # Always overwrite — pick up code changes on reinstall
+    import shutil
+    shutil.copy2(str(WRAPPER_SOURCE), str(WRAPPER_DEST))
+    WRAPPER_DEST.chmod(0o755)
+    # Clear quarantine just in case
+    subprocess.run(
+        ["xattr", "-d", "com.apple.quarantine", str(WRAPPER_DEST)],
+        capture_output=True,
+    )
+    return str(WRAPPER_DEST)
 
 
 def _resolve_log_dir() -> str:
@@ -47,18 +67,27 @@ def install():
         print(f"Template not found: {TEMPLATE}", file=sys.stderr)
         sys.exit(1)
 
-    if not WRAPPER.exists():
-        print(f"Wrapper script not found: {WRAPPER}", file=sys.stderr)
+    if not WRAPPER_SOURCE.exists():
+        print(f"Wrapper script not found: {WRAPPER_SOURCE}", file=sys.stderr)
         sys.exit(1)
 
-    # Make wrapper executable (idempotent)
-    WRAPPER.chmod(0o755)
+    # Make source wrapper executable (idempotent)
+    WRAPPER_SOURCE.chmod(0o755)
+
+    # Clear macOS quarantine attribute — launchd won't run scripts
+    # that are quarantined (shows "Operation not permitted" in stderr).
+    subprocess.run(
+        ["xattr", "-d", "com.apple.quarantine", str(WRAPPER_SOURCE)],
+        capture_output=True,
+    )
 
     # Generate plist from template
     content = TEMPLATE.read_text()
     wrapper_path = _resolve_wrapper()
     content = content.replace("__WRAPPER_PATH__", wrapper_path)
     content = content.replace("__LOG_DIR__", _resolve_log_dir())
+    content = content.replace("__HOME__", str(Path.home()))
+    content = content.replace("__BACKEND_DIR__", str(WRAPPER_SOURCE.parent.parent.resolve()))
 
     # Uninstall old slack-daemon plist if it exists
     old_label = "com.swarmai.slack-daemon"
