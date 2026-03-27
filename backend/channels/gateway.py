@@ -1033,18 +1033,20 @@ class ChannelGateway:
                 event_type = event.get("type", "")
 
                 # ── Streaming: token-by-token text deltas ──────────────
-                if event_type == "text_delta" and streaming:
+                # ALWAYS capture deltas into _stream_buf (authoritative
+                # multi-turn text source).  Only gate the Slack display
+                # on `streaming` — a failed typing indicator must not
+                # cause content loss in the final reply.
+                if event_type == "text_delta":
                     delta_text = event.get("text", "")
                     if delta_text:
-                        # Switch reaction from 👀 to 🤔 on first text
-                        if not _thinking_set:
-                            _thinking_set = True
-                            _set_reaction(_EMOJI_THINKING)
-
                         _stream_buf.append(delta_text)
-                        # Native: trigger demand-driven flush
-                        if native_streaming:
-                            _native_schedule()
+                        if streaming:
+                            if not _thinking_set:
+                                _thinking_set = True
+                                _set_reaction(_EMOJI_THINKING)
+                            if native_streaming:
+                                _native_schedule()
                     continue
 
                 # ── Tool activity ──────────────────────────────────────
@@ -1143,6 +1145,9 @@ class ChannelGateway:
                     continue
 
                 if event_type == "assistant":
+                    # Extract text from this turn's content blocks.
+                    # reply_text tracks the LAST turn's text (fallback
+                    # when _stream_flushed is empty — single-turn only).
                     current_text = ""
                     content_blocks = event.get("content", [])
                     for block in content_blocks:
