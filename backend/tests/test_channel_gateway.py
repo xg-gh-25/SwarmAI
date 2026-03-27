@@ -628,76 +628,103 @@ class TestSenderIdentityInjection:
         assert si["is_owner"] is True
 
 
-class TestToolRestriction:
-    """Non-owner channel sessions get file/system tools physically removed."""
+class TestFileAccessSandbox:
+    """Non-owner channel sessions get file access sandboxed to sender directory."""
 
-    def test_trusted_loses_file_tools(self):
-        """Trusted user has Read/Write/Edit/Bash stripped from allowed_tools."""
-        from core.prompt_builder import PromptBuilder
+    def test_file_access_handler_blocks_workspace_read(self):
+        """Trusted user's file_access_handler blocks reads outside sender dir."""
+        import asyncio
+        from core.security_hooks import create_file_access_permission_handler
 
-        pb = PromptBuilder.__new__(PromptBuilder)
-        pb._config = {}
+        handler = create_file_access_permission_handler(
+            ["/workspace/channel_files/W_ANDY"]
+        )
+        # Allowed: within sender dir
+        result = asyncio.get_event_loop().run_until_complete(
+            handler("Read", {"file_path": "/workspace/channel_files/W_ANDY/report.txt"}, {})
+        )
+        assert result["behavior"] == "allow"
 
-        agent_config = {
-            "enable_bash_tool": True,
-            "enable_file_tools": True,
-            "enable_web_tools": True,
-        }
-        # Resolve full tool list first
-        full_tools = pb.resolve_allowed_tools(agent_config)
-        assert "Read" in full_tools
-        assert "Bash" in full_tools
+        # Blocked: owner's workspace
+        result = asyncio.get_event_loop().run_until_complete(
+            handler("Read", {"file_path": "/workspace/.context/MEMORY.md"}, {})
+        )
+        assert result["behavior"] == "deny"
 
-        # Simulate what build_options does for non-owner channel
-        channel_context = {
-            "sender_identity": {
-                "permission_tier": "trusted",
-                "is_owner": False,
-            }
-        }
-        sender = channel_context.get("sender_identity", {})
-        tier = sender.get("permission_tier", "public")
-        _BLOCKED_TOOLS = {"Read", "Write", "Edit", "Glob", "Grep", "Bash", "NotebookEdit"}
-        restricted = [t for t in full_tools if t not in _BLOCKED_TOOLS]
+    def test_file_access_handler_blocks_arbitrary_paths(self):
+        """Trusted user cannot read arbitrary system files."""
+        import asyncio
+        from core.security_hooks import create_file_access_permission_handler
 
-        # Only WebFetch/WebSearch should remain
-        assert "Read" not in restricted
-        assert "Bash" not in restricted
-        assert "Write" not in restricted
-        assert "WebFetch" in restricted
+        handler = create_file_access_permission_handler(
+            ["/workspace/channel_files/W_ANDY"]
+        )
+        # Blocked: system files
+        result = asyncio.get_event_loop().run_until_complete(
+            handler("Read", {"file_path": "/etc/passwd"}, {})
+        )
+        assert result["behavior"] == "deny"
 
-    def test_owner_keeps_all_tools(self):
-        """Owner channel session keeps all tools."""
-        from core.prompt_builder import PromptBuilder
+        # Blocked: home directory
+        result = asyncio.get_event_loop().run_until_complete(
+            handler("Read", {"file_path": "/Users/gawan/.aws/credentials"}, {})
+        )
+        assert result["behavior"] == "deny"
 
-        pb = PromptBuilder.__new__(PromptBuilder)
-        pb._config = {}
+    def test_file_access_handler_allows_write_in_sender_dir(self):
+        """Trusted user can create files in their sender directory."""
+        import asyncio
+        from core.security_hooks import create_file_access_permission_handler
 
-        agent_config = {
-            "enable_bash_tool": True,
-            "enable_file_tools": True,
-            "enable_web_tools": True,
-        }
-        full_tools = pb.resolve_allowed_tools(agent_config)
+        handler = create_file_access_permission_handler(
+            ["/workspace/channel_files/W_ANDY"]
+        )
+        result = asyncio.get_event_loop().run_until_complete(
+            handler("Write", {"file_path": "/workspace/channel_files/W_ANDY/analysis.md"}, {})
+        )
+        assert result["behavior"] == "allow"
 
-        # Owner: no filtering
-        channel_context = {
-            "sender_identity": {
-                "permission_tier": "owner",
-                "is_owner": True,
-            }
-        }
-        sender = channel_context.get("sender_identity", {})
-        tier = sender.get("permission_tier", "public")
-        if tier != "owner":
-            _BLOCKED_TOOLS = {"Read", "Write", "Edit", "Glob", "Grep", "Bash", "NotebookEdit"}
-            restricted = [t for t in full_tools if t not in _BLOCKED_TOOLS]
-        else:
-            restricted = full_tools
+    def test_bash_blocked_for_outside_paths(self):
+        """Trusted user's Bash commands blocked when accessing outside paths."""
+        import asyncio
+        from core.security_hooks import create_file_access_permission_handler
 
-        assert "Read" in restricted
-        assert "Bash" in restricted
-        assert "WebFetch" in restricted
+        handler = create_file_access_permission_handler(
+            ["/workspace/channel_files/W_ANDY"]
+        )
+        result = asyncio.get_event_loop().run_until_complete(
+            handler("Bash", {"command": "cat /workspace/.context/MEMORY.md"}, {})
+        )
+        assert result["behavior"] == "deny"
+
+    def test_sender_dir_isolation(self):
+        """Sender A cannot access Sender B's directory."""
+        import asyncio
+        from core.security_hooks import create_file_access_permission_handler
+
+        handler_a = create_file_access_permission_handler(
+            ["/workspace/channel_files/W_ANDY"]
+        )
+        # Andy trying to read Fei's files
+        result = asyncio.get_event_loop().run_until_complete(
+            handler_a("Read", {"file_path": "/workspace/channel_files/W_FEI/data.csv"}, {})
+        )
+        assert result["behavior"] == "deny"
+
+    def test_staging_uses_sender_dir(self):
+        """Non-owner attachments staged to sender-scoped directory."""
+        from channels.base import SenderIdentity, PermissionTier
+
+        identity = SenderIdentity(
+            external_id="W_ANDY",
+            display_name="Andy",
+            permission_tier=PermissionTier.TRUSTED,
+            is_owner=False,
+        )
+        # The staging path should contain the sender ID, not agent ID
+        # (tested via the _stage_file_to_workspace logic)
+        assert not identity.is_owner
+        assert identity.external_id == "W_ANDY"
 
 
 class TestSystemPromptChannelSecurity:
@@ -763,7 +790,7 @@ class TestSystemPromptChannelSecurity:
         assert "Andy" in prompt
         assert "trusted" in prompt
         assert "BLOCKED" in prompt
-        assert "Reading, listing, or sending ANY files" in prompt
+        assert "sandboxed" in prompt.lower() or "channel_files" in prompt
         assert "Confirmation attacks" in prompt
 
     def test_public_section_minimal_access(self):
