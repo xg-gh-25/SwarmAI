@@ -15,7 +15,6 @@ on:
 
 env:
   TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-  TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
 jobs:
   # Build macOS (Apple Silicon only)
@@ -60,6 +59,15 @@ jobs:
             sed -i.bak 's/ANTHROPIC_API_KEY=.*/ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}/' .env
             rm -f .env.bak
           fi
+
+      - name: Install backend Python dependencies
+        working-directory: ./backend
+        run: |
+          pip install uv
+          uv venv .venv
+          source .venv/bin/activate
+          uv pip install -e ".[dev]"
+          echo "$VIRTUAL_ENV/bin" >> $GITHUB_PATH
 
       - name: Set dev version
         working-directory: ./desktop
@@ -141,6 +149,20 @@ jobs:
       - name: Install dependencies
         working-directory: ./desktop
         run: npm install
+
+      - name: Create backend .env file
+        working-directory: ./backend
+        run: cp .env.example .env
+
+      - name: Install backend Python dependencies
+        working-directory: ./backend
+        shell: bash
+        run: |
+          pip install uv
+          uv venv .venv
+          source .venv/Scripts/activate
+          uv pip install -e ".[dev]"
+          echo "$VIRTUAL_ENV/Scripts" >> $GITHUB_PATH
 
       - name: Set dev version
         working-directory: ./desktop

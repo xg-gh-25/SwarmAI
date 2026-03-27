@@ -65,7 +65,7 @@
       "open": true
     },
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEUwMzQ5MjBBQzMwRDQwRTYKUldUbVFBM0RDcEkwNElHWUFES1pUT2hsZFJlaFNyTmJqTUtvRER5ZHQ1U0tpYXJNSk00YnBjK1gK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDdCOUNFREI1RDNDNThBNEQKUldSTmlzWFR0ZTJjZS8ydVk0Y3UvUlFaRG83QlBUMU44NE45OGs5YWNJY09DZU9tTi9ocUdtbGYK",
       "endpoints": [
         "https://github.com/xg-gh-25/SwarmAI/releases/latest/download/latest.json"
       ],
