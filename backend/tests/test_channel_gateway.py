@@ -1,9 +1,9 @@
-"""Tests for channel gateway: slot isolation, cross-channel sessions, sender identity, permissions.
+"""Tests for channel gateway: slot isolation, per-channel sessions, sender identity, permissions.
 
 Covers acceptance criteria:
   AC1: compute_max_tabs min 2, channel slot dedicated
   AC2: Channel never evicts/queues chat tabs
-  AC3: Cross-channel session sharing via user_key
+  AC3: Per-channel session isolation + idle TTL
   AC5: Gateway tests >= 15 cases
   AC6: Sender identity + permission tiers (red team fix)
 
@@ -39,14 +39,12 @@ def mock_db(monkeypatch):
     mock.channels.update = AsyncMock()
     mock.channel_sessions = MagicMock()
     mock.channel_sessions.find_by_external = AsyncMock(return_value=None)
-    mock.channel_sessions.find_by_user_key = AsyncMock(return_value=None)
     mock.channel_sessions.put = AsyncMock()
     mock.channel_sessions.update = AsyncMock()
+    mock.channel_sessions.delete = AsyncMock()
     mock.channel_sessions.count_by_channel = AsyncMock(return_value=0)
     mock.channel_messages = MagicMock()
     mock.channel_messages.put = AsyncMock()
-    mock.channel_user_identities = MagicMock()
-    mock.channel_user_identities.resolve_user_key = AsyncMock(return_value=None)
     monkeypatch.setattr("channels.gateway.db", mock)
     return mock
 
@@ -200,108 +198,140 @@ class TestChannelSlotSeparation:
 
 
 # ===================================================================
-# AC3: Cross-channel session sharing via user_key
+# AC3: Per-channel session isolation + idle TTL
 # ===================================================================
 
-class TestCrossChannelSessionSharing:
-    """Cross-channel session sharing: user identity mapping + shared sessions."""
+class TestPerChannelSessionIsolation:
+    """Each (channel_id, external_chat_id) gets its own session. No cross-channel sharing."""
 
     @pytest.mark.asyncio
-    async def test_resolve_user_key_from_identity_table(self, gateway, mock_db):
-        """External sender ID maps to user_key via channel_user_identities."""
-        mock_db.channel_user_identities.resolve_user_key.return_value = "xg"
-
-        user_key = await gateway._resolve_user_key(
-            platform="slack",
-            external_sender_id="W017T04E8MS",
-        )
-        assert user_key == "xg"
-        mock_db.channel_user_identities.resolve_user_key.assert_called_once()
-
-    @pytest.mark.asyncio
-    async def test_resolve_user_key_fallback_to_sender_id(self, gateway, mock_db):
-        """Unmapped sender falls back to external_sender_id as user_key."""
-        mock_db.channel_user_identities.resolve_user_key.return_value = None
-
-        user_key = await gateway._resolve_user_key(
-            platform="slack",
-            external_sender_id="W_UNKNOWN_USER",
-        )
-        # Fallback: use external_sender_id directly
-        assert user_key == "W_UNKNOWN_USER"
-
-    @pytest.mark.asyncio
-    async def test_shared_session_across_channels(self, gateway, mock_db):
-        """Same user_key on Slack and Feishu reuses the same session_id."""
-        # First call: no existing session → creates new
-        mock_db.channel_sessions.find_by_user_key.return_value = None
+    async def test_different_channels_get_different_sessions(self, gateway, mock_db):
+        """Same user in Slack DM and Slack channel gets separate sessions."""
         mock_db.channel_sessions.find_by_external.return_value = None
 
-        with patch.object(gateway, "_resolve_user_key", new=AsyncMock(return_value="xg")):
-            with patch("channels.gateway.session_manager") as mock_sm:
-                mock_sm.store_session = AsyncMock()
-                sid1, csid1, is_new1 = await gateway._resolve_session(
-                    channel_id="slack-ch-1",
-                    agent_id="default",
-                    external_chat_id="D017ZD4PUKT",
-                    external_sender_id="W017T04E8MS",
-                    external_thread_id=None,
-                    sender_display_name="XG",
-                )
-                assert is_new1 is True
-
-        # Second call from Feishu: should find existing session for user_key "xg"
-        mock_db.channel_sessions.find_by_user_key.return_value = {
-            "id": csid1,
-            "session_id": sid1,
-            "message_count": 2,
-        }
-        with patch.object(gateway, "_resolve_user_key", new=AsyncMock(return_value="xg")):
-            sid2, csid2, is_new2 = await gateway._resolve_session(
-                channel_id="feishu-ch-1",
+        with patch("channels.gateway.session_manager") as mock_sm:
+            mock_sm.store_session = AsyncMock()
+            sid1, _, _ = await gateway._resolve_session(
+                channel_id="slack-ch-1",
                 agent_id="default",
-                external_chat_id="oc_feishu_chat",
-                external_sender_id="ou_abc123",
+                external_chat_id="D017ZD4PUKT",  # DM
+                external_sender_id="W017T04E8MS",
                 external_thread_id=None,
                 sender_display_name="XG",
             )
-            # Same session_id → shared conversation
-            assert sid2 == sid1, "Cross-channel sessions should share session_id"
-            assert is_new2 is False
+
+            sid2, _, _ = await gateway._resolve_session(
+                channel_id="slack-ch-1",
+                agent_id="default",
+                external_chat_id="C0AQ2EJTRLY",  # Channel
+                external_sender_id="W017T04E8MS",
+                external_thread_id=None,
+                sender_display_name="XG",
+            )
+
+            assert sid1 != sid2, "Different chat_ids must get different sessions"
 
     @pytest.mark.asyncio
     async def test_threaded_messages_get_separate_session(self, gateway, mock_db):
-        """Slack thread messages get their own session (not shared cross-channel)."""
+        """Slack thread messages get their own session."""
         mock_db.channel_sessions.find_by_external.return_value = None
-        mock_db.channel_sessions.find_by_user_key.return_value = None
 
-        with patch.object(gateway, "_resolve_user_key", new=AsyncMock(return_value="xg")):
-            with patch("channels.gateway.session_manager") as mock_sm:
-                mock_sm.store_session = AsyncMock()
-                # Top-level message
-                sid_top, _, _ = await gateway._resolve_session(
-                    channel_id="slack-ch-1",
-                    agent_id="default",
-                    external_chat_id="D017ZD4PUKT",
-                    external_sender_id="W017T04E8MS",
-                    external_thread_id=None,
-                    sender_display_name="XG",
-                )
+        with patch("channels.gateway.session_manager") as mock_sm:
+            mock_sm.store_session = AsyncMock()
+            sid_top, _, _ = await gateway._resolve_session(
+                channel_id="slack-ch-1",
+                agent_id="default",
+                external_chat_id="D017ZD4PUKT",
+                external_sender_id="W017T04E8MS",
+                external_thread_id=None,
+                sender_display_name="XG",
+            )
 
-                # Threaded message (has thread_ts)
-                sid_thread, _, _ = await gateway._resolve_session(
-                    channel_id="slack-ch-1",
-                    agent_id="default",
-                    external_chat_id="D017ZD4PUKT",
-                    external_sender_id="W017T04E8MS",
-                    external_thread_id="1234567890.123456",
-                    sender_display_name="XG",
-                )
+            sid_thread, _, _ = await gateway._resolve_session(
+                channel_id="slack-ch-1",
+                agent_id="default",
+                external_chat_id="D017ZD4PUKT",
+                external_sender_id="W017T04E8MS",
+                external_thread_id="1234567890.123456",
+                sender_display_name="XG",
+            )
 
-                # Threaded message should get its OWN session
-                assert sid_thread != sid_top, (
-                    "Threaded messages must have separate sessions"
-                )
+            assert sid_thread != sid_top, (
+                "Threaded messages must have separate sessions"
+            )
+
+    @pytest.mark.asyncio
+    async def test_existing_session_reused_within_ttl(self, gateway, mock_db):
+        """Within TTL, existing channel_session is reused (same session_id)."""
+        from datetime import datetime
+        mock_db.channel_sessions.find_by_external.return_value = {
+            "id": "cs-1",
+            "session_id": "sid-existing",
+            "message_count": 4,
+            "last_message_at": datetime.now().isoformat(),  # Fresh
+        }
+
+        sid, csid, is_new = await gateway._resolve_session(
+            channel_id="slack-ch-1",
+            agent_id="default",
+            external_chat_id="D017ZD4PUKT",
+            external_sender_id="W017T04E8MS",
+            external_thread_id=None,
+            sender_display_name="XG",
+        )
+        assert sid == "sid-existing"
+        assert csid == "cs-1"
+        assert is_new is False
+
+    @pytest.mark.asyncio
+    async def test_stale_session_rotated_after_ttl(self, gateway, mock_db):
+        """After TTL expires, a fresh session is created."""
+        from datetime import datetime, timedelta
+
+        stale_time = (
+            datetime.now() - timedelta(seconds=gateway._CHANNEL_SESSION_IDLE_TTL_S + 60)
+        ).isoformat()
+
+        mock_db.channel_sessions.find_by_external.return_value = {
+            "id": "cs-stale",
+            "session_id": "sid-stale",
+            "message_count": 20,
+            "last_message_at": stale_time,
+        }
+
+        with patch("channels.gateway.session_manager") as mock_sm:
+            mock_sm.store_session = AsyncMock()
+            sid, csid, is_new = await gateway._resolve_session(
+                channel_id="slack-ch-1",
+                agent_id="default",
+                external_chat_id="D017ZD4PUKT",
+                external_sender_id="W017T04E8MS",
+                external_thread_id=None,
+                sender_display_name="XG",
+            )
+
+            # Must be a NEW session, not the stale one
+            assert sid != "sid-stale", "Stale session should be rotated"
+            assert is_new is True
+            # Old channel_session should be deleted
+            mock_db.channel_sessions.delete.assert_called_once_with("cs-stale")
+
+    def test_is_session_stale_within_ttl(self, gateway):
+        """Session within TTL is not stale."""
+        from datetime import datetime
+        recent = datetime.now().isoformat()
+        assert gateway._is_session_stale(recent) is False
+
+    def test_is_session_stale_beyond_ttl(self, gateway):
+        """Session beyond TTL is stale."""
+        from datetime import datetime, timedelta
+        old = (datetime.now() - timedelta(hours=3)).isoformat()
+        assert gateway._is_session_stale(old) is True
+
+    def test_is_session_stale_invalid_timestamp(self, gateway):
+        """Invalid timestamp treated as not stale (safe default)."""
+        assert gateway._is_session_stale("not-a-date") is False
+        assert gateway._is_session_stale("") is False
 
 
 # ===================================================================
