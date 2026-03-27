@@ -1087,6 +1087,61 @@ class ChannelGateway:
                     _set_reaction(_EMOJI_THINKING)
                     continue
 
+                # ── AskUserQuestion: auto-answer for channel sessions ─
+                # Channel sessions are headless — no human to answer
+                # interactive prompts.  Auto-answer questions so the agent
+                # can continue.  The session goes WAITING_INPUT when this
+                # event fires; we call continue_with_answer to resume.
+                if event_type == "ask_user_question":
+                    questions = event.get("questions", [])
+                    auto_answer = "; ".join(
+                        q.get("question", "yes") if isinstance(q, dict) else str(q)
+                        for q in questions
+                    ) if questions else "yes"
+                    # Build a reasonable auto-response
+                    answer_text = (
+                        f"[Auto-answered by channel gateway] "
+                        f"Proceeding with default: {auto_answer}"
+                    )
+                    logger.info(
+                        "Channel %s: auto-answering AskUserQuestion "
+                        "(session=%s, questions=%d)",
+                        channel_id, session_id, len(questions),
+                    )
+                    try:
+                        async for follow_event in (
+                            session_registry.session_router.continue_with_answer(
+                                session_id, answer_text,
+                            )
+                        ):
+                            fe_type = follow_event.get("type", "")
+                            if fe_type == "text_delta" and streaming:
+                                delta = follow_event.get("text", "")
+                                if delta:
+                                    _stream_buf.append(delta)
+                                    if native_streaming:
+                                        _native_schedule()
+                            elif fe_type == "assistant":
+                                for blk in follow_event.get("content", []):
+                                    if isinstance(blk, dict) and blk.get("type") == "text":
+                                        t = blk.get("text", "")
+                                        if t:
+                                            reply_text = t
+                            elif fe_type == "tool_use" and streaming:
+                                _set_reaction(_resolve_tool_emoji(
+                                    follow_event.get("name", ""),
+                                ))
+                            elif fe_type == "result":
+                                sub = follow_event.get("subtype", "")
+                                if sub and "error" in sub:
+                                    error_occurred = True
+                    except Exception:
+                        logger.exception(
+                            "Failed to auto-answer AskUserQuestion on channel %s",
+                            channel_id,
+                        )
+                    continue
+
                 if event_type == "assistant":
                     current_text = ""
                     content_blocks = event.get("content", [])
