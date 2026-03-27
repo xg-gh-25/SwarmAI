@@ -31,16 +31,20 @@ from database import db
 
 logger = logging.getLogger(__name__)
 
+# Must match swarm_workspace_manager.DEFAULT_WORKSPACE_CONFIG["id"]
+_WORKSPACE_ID = "swarmws"
+
 
 def _get_session_changed_files(
     repo_path: Path,
     since: datetime,
-    max_files: int = 50,
+    max_commits: int = 50,
 ) -> list[str]:
     """Get files changed in commits since a given time.
 
     Returns a list of relative file paths that were modified in commits
-    after ``since``.  Gracefully returns empty list on errors.
+    after ``since``.  ``max_commits`` caps the number of commits scanned
+    (not the number of files returned).  Gracefully returns empty list on errors.
     """
     if not repo_path.is_dir() or not (repo_path / ".git").exists():
         return []
@@ -53,7 +57,7 @@ def _get_session_changed_files(
                 f"--since={since_str}",
                 "--name-only",
                 "--pretty=format:",
-                f"--max-count={max_files}",
+                f"--max-count={max_commits}",
             ],
             cwd=str(repo_path),
             capture_output=True,
@@ -117,6 +121,23 @@ def _files_overlap(todo_files: list[str], changed_files: list[str]) -> bool:
     return False
 
 
+def _find_codebase_path() -> Optional[Path]:
+    """Discover the SwarmAI codebase path from known locations.
+
+    Checks common locations rather than hardcoding a user-specific path.
+    Returns None if no codebase is found (e.g., on end-user machines).
+    """
+    candidates = [
+        Path.home() / "Desktop" / "SwarmAI-Workspace" / "swarmai",
+        Path.home() / "swarmai",
+        Path.home() / "Projects" / "swarmai",
+    ]
+    for candidate in candidates:
+        if candidate.is_dir() and (candidate / ".git").exists():
+            return candidate
+    return None
+
+
 class TodoLifecycleHook:
     """Transitions Radar ToDo items based on session outcomes.
 
@@ -161,10 +182,11 @@ class TodoLifecycleHook:
         except (ValueError, TypeError):
             since = datetime.now() - timedelta(hours=2)
 
-        # Determine workspace paths for git queries
+        # Determine git repo paths for commit queries
         from config import get_app_data_dir
         workspace_path = get_app_data_dir() / "SwarmWS"
-        codebase_path = Path.home() / "Desktop" / "SwarmAI-Workspace" / "swarmai"
+        # Discover codebase path from STEERING.md or common locations
+        codebase_path = _find_codebase_path()
 
         # --- Mode 1: Explicit binding ---
         metadata = session.get("metadata") or "{}"
@@ -196,12 +218,13 @@ class TodoLifecycleHook:
         todo_id: str,
         since: datetime,
         workspace_path: Path,
-        codebase_path: Path,
+        codebase_path: Optional[Path],
     ) -> None:
         """Handle a session explicitly bound to a todo via drag-to-chat."""
         # Check if commits were made during the session
         commit_count = _get_session_commit_count(workspace_path, since)
-        commit_count += _get_session_commit_count(codebase_path, since)
+        if codebase_path:
+            commit_count += _get_session_commit_count(codebase_path, since)
 
         todo = await db.todos.get(todo_id)
         if not todo:
@@ -240,17 +263,18 @@ class TodoLifecycleHook:
         self,
         since: datetime,
         workspace_path: Path,
-        codebase_path: Path,
+        codebase_path: Optional[Path],
     ) -> None:
         """Match session file changes against pending todos' linked files."""
         changed_files = _get_session_changed_files(workspace_path, since)
-        changed_files += _get_session_changed_files(codebase_path, since)
+        if codebase_path:
+            changed_files += _get_session_changed_files(codebase_path, since)
 
         if not changed_files:
             return
 
         # Fetch pending todos with linked_context.files
-        pending_todos = await db.todos.list_by_workspace("swarmws", "pending")
+        pending_todos = await db.todos.list_by_workspace(_WORKSPACE_ID, "pending")
 
         matched = 0
         for todo in pending_todos:
