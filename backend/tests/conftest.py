@@ -270,7 +270,7 @@ def _check_system_memory_preflight():
 
 _WORKER_MEMORY_BUDGET = int(1.0 * 1024**3)   # 1 GB per worker (headroom for spikes)
 _MIN_AVAILABLE_FOR_PARALLEL = int(6.0 * 1024**3)  # need 6GB+ free to even try parallel
-_MAX_WORKERS = 2  # hard cap — more workers on a loaded dev machine is too aggressive
+_MAX_WORKERS = 4  # hard cap — memory-adaptive calc still gates below this when tight
 
 
 def _compute_safe_worker_count() -> int:
