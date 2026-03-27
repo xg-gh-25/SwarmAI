@@ -92,12 +92,28 @@ _logger = logging.getLogger("test")
 # Combined memory (4.6GB + 4.6GB) exceeds physical RAM → macOS jetsam kills
 # everything. A file lock makes concurrent runs wait or fail fast.
 
+# tempfile.gettempdir() resolves to /tmp/claude/ inside Claude sandbox.
+# All Claude tabs share this sandbox tmpdir, so cross-tab locking works.
 _LOCK_PATH = os.path.join(tempfile.gettempdir(), "swarmai_pytest.lock")
 _lock_fd = None
 
 
+def _is_pid_alive(pid_str: str) -> bool:
+    """Check if a PID is still running."""
+    try:
+        pid = int(pid_str)
+        os.kill(pid, 0)  # Signal 0 = existence check, no actual signal
+        return True
+    except (ValueError, ProcessLookupError, PermissionError):
+        return False
+
+
 def _acquire_pytest_lock():
-    """Acquire exclusive file lock. Fails fast if another pytest is running."""
+    """Acquire exclusive file lock. Fails fast if another pytest is running.
+
+    Handles stale locks: if the lock file exists but the PID is dead,
+    the flock is already released by the OS — we just acquire normally.
+    """
     global _lock_fd
     try:
         _lock_fd = open(_LOCK_PATH, "w")
@@ -105,15 +121,30 @@ def _acquire_pytest_lock():
         _lock_fd.write(f"{os.getpid()}\n")
         _lock_fd.flush()
     except (IOError, OSError):
-        # Another pytest run holds the lock
+        # Another pytest run holds the lock — check if it's actually alive
         other_pid = "unknown"
         try:
             with open(_LOCK_PATH) as f:
-                content = f.read().strip()
-                if content:
-                    other_pid = content
+                other_pid = f.read().strip()
         except Exception:
             pass
+
+        if other_pid != "unknown" and not _is_pid_alive(other_pid):
+            # Stale lock — PID is dead, OS released flock but file remains.
+            # Clean up and retry once.
+            _logger.warning(f"Stale lock from dead PID {other_pid} — reclaiming")
+            try:
+                if _lock_fd:
+                    _lock_fd.close()
+                os.unlink(_LOCK_PATH)
+                _lock_fd = open(_LOCK_PATH, "w")
+                fcntl.flock(_lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                _lock_fd.write(f"{os.getpid()}\n")
+                _lock_fd.flush()
+                return  # Successfully reclaimed
+            except (IOError, OSError):
+                pass  # Fall through to exit
+
         pytest.exit(
             f"\n{'='*60}\n"
             f"BLOCKED: Another pytest run is active (PID {other_pid})\n"
