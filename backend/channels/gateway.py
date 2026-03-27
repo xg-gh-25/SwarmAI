@@ -677,8 +677,8 @@ class ChannelGateway:
                     message_id=streaming_msg_id,
                     text=_stream_flushed,
                 )
-            except Exception:
-                logger.debug("Stream update failed (non-fatal)")
+            except Exception as exc:
+                logger.warning("Stream update failed: %s", exc)
 
         reply_text = ""
         error_occurred = False

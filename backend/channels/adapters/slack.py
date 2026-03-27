@@ -74,7 +74,9 @@ class SlackChannelAdapter(ChannelAdapter):
 
         try:
             client = WebClient(token=self._bot_token)
-            result = client.auth_test()
+            # Run sync auth_test in executor to avoid blocking the event loop
+            loop = asyncio.get_running_loop()
+            result = await loop.run_in_executor(None, client.auth_test)
             if not result.get("ok"):
                 return False, f"Bot token auth failed: {result.get('error')}"
             return True, None
@@ -407,7 +409,11 @@ class SlackChannelAdapter(ChannelAdapter):
                         text=fallback,
                         blocks=first_chunk,
                     )
-                    # Post overflow chunks as follow-up messages
+                    # Post overflow chunks as follow-up messages.
+                    # We don't have thread_ts here (update_message API doesn't
+                    # carry it), so overflow goes to the same conversation context
+                    # as the original message.  Gateway calls update_message on
+                    # the streaming placeholder which is always top-level.
                     remaining = blocks[_MAX_BLOCKS_PER_MSG:]
                     while remaining:
                         chunk = remaining[:_MAX_BLOCKS_PER_MSG]
