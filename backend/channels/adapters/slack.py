@@ -258,27 +258,59 @@ class SlackChannelAdapter(ChannelAdapter):
     # ------------------------------------------------------------------
 
     def _get_user_name(self, user_id: str) -> str:
-        """Resolve a Slack user ID to a display name (cached)."""
+        """Resolve a Slack user ID to a display name (cached).
+
+        Tries users.info first; falls back to users.profile.get if the bot
+        lacks the ``users:read`` scope (only needs ``users.profile:read``).
+        """
         if user_id in self._user_cache:
             return self._user_cache[user_id]
 
         if not self._slack_client:
             return user_id
 
+        # Attempt 1: users.info (requires users:read scope)
         try:
             result = self._slack_client.users_info(user=user_id)
             if result.get("ok"):
                 user = result.get("user", {})
+                profile = user.get("profile", {})
                 name = (
-                    user.get("real_name")
-                    or user.get("profile", {}).get("display_name")
+                    profile.get("real_name_normalized")
+                    or user.get("real_name")
+                    or profile.get("display_name_normalized")
+                    or profile.get("display_name")
                     or user.get("name")
                     or user_id
                 )
                 self._user_cache[user_id] = name
                 return name
-        except Exception:
-            logger.debug("Failed to resolve user name for %s", user_id)
+            logger.warning(
+                "users.info returned ok=false for %s: %s",
+                user_id, result.get("error"),
+            )
+        except Exception as exc:
+            logger.warning(
+                "users.info failed for %s: %s — trying users.profile.get",
+                user_id, exc,
+            )
+
+        # Attempt 2: users.profile.get (only needs users.profile:read)
+        try:
+            result = self._slack_client.users_profile_get(user=user_id)
+            if result.get("ok"):
+                profile = result.get("profile", {})
+                name = (
+                    profile.get("real_name_normalized")
+                    or profile.get("real_name")
+                    or profile.get("display_name_normalized")
+                    or profile.get("display_name")
+                    or user_id
+                )
+                self._user_cache[user_id] = name
+                return name
+        except Exception as exc:
+            logger.warning("users.profile.get also failed for %s: %s", user_id, exc)
 
         return user_id
 
