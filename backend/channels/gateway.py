@@ -797,51 +797,128 @@ class ChannelGateway:
         native_streaming = streaming and adapter.supports_native_streaming
         streaming_msg_id: Optional[str] = None
         inbound_ts = msg.external_message_id  # for reactions
+        _sender_user_id = msg.external_sender_id  # for DM native streaming
 
-        # ── Status reactions: immediate emoji feedback ──────────────
-        # Inspired by OpenClaw's status-reactions system.
-        # React to the USER's message (not our reply) so they see
-        # instant acknowledgment.
-        _EMOJI_ACK = "eyes"           # 👀 received
+        # ── Status Reaction Controller ────────────────────────────────
+        # Serialized + debounced + stall timers.  Inspired by OpenClaw.
+        _EMOJI_ACK = "eyes"                # 👀 received
         _EMOJI_THINKING = "thinking_face"  # 🤔 processing
-        _EMOJI_TOOL = "fire"          # 🔥 tool use
-        _EMOJI_DONE = "white_check_mark"  # ✅ done
-        _EMOJI_ERROR = "x"            # ❌ error
-        _current_reaction: Optional[str] = None
+        _EMOJI_TOOL = "fire"               # 🔥 tool use
+        _EMOJI_CODING = "male-technologist"  # 👨‍💻 coding
+        _EMOJI_WEB = "zap"                 # ⚡ web
+        _EMOJI_DONE = "white_check_mark"   # ✅ done
+        _EMOJI_ERROR = "x"                 # ❌ error
+        _EMOJI_STALL_SOFT = "hourglass_flowing_sand"  # ⏳ 10s no activity
+        _EMOJI_STALL_HARD = "warning"      # ⚠️ 30s no activity
 
-        async def _set_reaction(emoji: str) -> None:
-            """Set status reaction on the inbound message (swap previous)."""
+        _DEBOUNCE_S = 0.7     # intermediate state debounce
+        _STALL_SOFT_S = 10.0  # soft stall warning
+        _STALL_HARD_S = 30.0  # hard stall warning
+
+        _CODING_TOKENS = {"bash", "read", "write", "edit", "glob", "grep", "notebookedit"}
+        _WEB_TOKENS = {"webfetch", "web_search", "web_fetch", "browser", "tavily"}
+
+        _current_reaction: Optional[str] = None
+        _debounce_handle: Optional[asyncio.TimerHandle] = None
+        _stall_soft_handle: Optional[asyncio.TimerHandle] = None
+        _stall_hard_handle: Optional[asyncio.TimerHandle] = None
+        _reaction_finished = False
+
+        def _cancel_debounce() -> None:
+            nonlocal _debounce_handle
+            if _debounce_handle:
+                _debounce_handle.cancel()
+                _debounce_handle = None
+
+        def _reset_stall_timers() -> None:
+            nonlocal _stall_soft_handle, _stall_hard_handle
+            eloop = asyncio.get_event_loop()
+            if _stall_soft_handle:
+                _stall_soft_handle.cancel()
+            if _stall_hard_handle:
+                _stall_hard_handle.cancel()
+            _stall_soft_handle = eloop.call_later(
+                _STALL_SOFT_S,
+                lambda: _apply_reaction_now(_EMOJI_STALL_SOFT, skip_stall_reset=True),
+            )
+            _stall_hard_handle = eloop.call_later(
+                _STALL_HARD_S,
+                lambda: _apply_reaction_now(_EMOJI_STALL_HARD, skip_stall_reset=True),
+            )
+
+        def _clear_all_timers() -> None:
+            nonlocal _debounce_handle, _stall_soft_handle, _stall_hard_handle
+            for h in (_debounce_handle, _stall_soft_handle, _stall_hard_handle):
+                if h:
+                    h.cancel()
+            _debounce_handle = _stall_soft_handle = _stall_hard_handle = None
+
+        async def _do_set_reaction(emoji: str) -> None:
             nonlocal _current_reaction
-            if not adapter or not inbound_ts:
+            if not adapter or not inbound_ts or _current_reaction == emoji:
                 return
-            # Remove previous reaction
-            if _current_reaction and _current_reaction != emoji:
+            old = _current_reaction
+            if old:
                 try:
-                    await adapter.remove_reaction(
-                        msg.external_chat_id, inbound_ts, _current_reaction,
-                    )
+                    await adapter.remove_reaction(msg.external_chat_id, inbound_ts, old)
                 except Exception:
                     pass
-            # Add new reaction
             try:
-                await adapter.add_reaction(
-                    msg.external_chat_id, inbound_ts, emoji,
-                )
+                await adapter.add_reaction(msg.external_chat_id, inbound_ts, emoji)
                 _current_reaction = emoji
             except Exception:
                 pass
 
+        def _apply_reaction_now(emoji: str, *, skip_stall_reset: bool = False) -> None:
+            if _reaction_finished:
+                return
+            _cancel_debounce()
+            asyncio.ensure_future(_do_set_reaction(emoji))
+            if not skip_stall_reset:
+                _reset_stall_timers()
+
+        def _set_reaction(emoji: str, *, immediate: bool = False) -> None:
+            nonlocal _debounce_handle
+            if _reaction_finished:
+                return
+            if immediate:
+                _apply_reaction_now(emoji)
+                return
+            _cancel_debounce()
+            _debounce_handle = asyncio.get_event_loop().call_later(
+                _DEBOUNCE_S, lambda: _apply_reaction_now(emoji),
+            )
+            _reset_stall_timers()
+
+        async def _set_reaction_final(emoji: str) -> None:
+            nonlocal _reaction_finished
+            _reaction_finished = True
+            _clear_all_timers()
+            await _do_set_reaction(emoji)
+
+        def _resolve_tool_emoji(tool_name: str) -> str:
+            lower = tool_name.lower()
+            if any(t in lower for t in _WEB_TOKENS):
+                return _EMOJI_WEB
+            if any(t in lower for t in _CODING_TOKENS):
+                return _EMOJI_CODING
+            return _EMOJI_TOOL
+
         # Ack immediately — user sees 👀 before any processing
         if streaming:
-            await _set_reaction(_EMOJI_ACK)
+            _set_reaction(_EMOJI_ACK, immediate=True)
 
         # ── Start streaming ─────────────────────────────────────────
+        # For DMs: use inbound message ts as thread_ts so stream is a reply.
+        # For threads: use the existing thread_ts.
+        _stream_thread_ts = msg.external_thread_id or msg.external_message_id
+
         if native_streaming:
-            # Native Slack streaming: chat.startStream (no rate limit)
             try:
                 streaming_msg_id = await adapter.start_stream(
                     external_chat_id=msg.external_chat_id,
-                    external_thread_id=msg.external_thread_id,
+                    external_thread_id=_stream_thread_ts,
+                    recipient_user_id=_sender_user_id,
                 )
                 if not streaming_msg_id:
                     native_streaming = False
@@ -850,7 +927,6 @@ class ChannelGateway:
                 native_streaming = False
 
         if streaming and not native_streaming:
-            # Fallback: legacy chat.update streaming
             try:
                 streaming_msg_id = await adapter.send_typing_indicator(
                     external_chat_id=msg.external_chat_id,
@@ -860,24 +936,67 @@ class ChannelGateway:
                 logger.exception("Failed to send typing indicator")
                 streaming = False
 
-        # ── Streaming state ─────────────────────────────────────────
-        # For native streaming: tokens go directly via appendStream (no buffer).
-        # For legacy streaming: buffer + periodic flush (chat.update rate limited).
-        _STREAM_FLUSH_INTERVAL = 1.2  # legacy only
+        # ── Smart Stream Flusher ──────────────────────────────────────
+        # Native: appendStream (no rate limit) — demand-driven flush with
+        #   throttle window. First token flushes immediately, subsequent
+        #   flushes respect min interval and wait for in-flight completion.
+        # Legacy: chat.update (~50/min) — periodic 1.2s background flush.
+        _LEGACY_FLUSH_S = 1.2
+        _NATIVE_THROTTLE_S = 0.15  # min interval between appendStream calls
         _stream_buf: list[str] = []
-        _stream_flushed = ""
-        _flush_lock = asyncio.Lock()
+        _stream_flushed = ""  # legacy accumulated text
         _stream_done = asyncio.Event()
 
-        async def _do_flush() -> None:
-            """Drain buffer and push to adapter (legacy path only)."""
+        # ── Native flusher state ──
+        _native_in_flight: Optional[asyncio.Task] = None
+        _native_last_flush = 0.0
+        _native_timer: Optional[asyncio.TimerHandle] = None
+
+        async def _native_do_flush() -> None:
+            nonlocal _native_last_flush, _native_in_flight
+            if not _stream_buf or not streaming_msg_id:
+                _native_in_flight = None
+                return
+            chunk = "".join(_stream_buf)
+            _stream_buf.clear()
+            try:
+                await adapter.append_stream(msg.external_chat_id, streaming_msg_id, chunk)
+            except Exception:
+                pass
+            _native_last_flush = time.monotonic()
+            _native_in_flight = None
+            # Tokens may have arrived during API call — schedule another
+            if _stream_buf and not _stream_done.is_set():
+                _native_schedule()
+
+        def _native_schedule() -> None:
+            nonlocal _native_timer, _native_in_flight
+            if _native_in_flight or _native_timer:
+                return
+            elapsed = time.monotonic() - _native_last_flush
+            delay = max(0.0, _NATIVE_THROTTLE_S - elapsed)
+            if delay <= 0:
+                _native_in_flight = asyncio.ensure_future(_native_do_flush())
+            else:
+                _native_timer = asyncio.get_event_loop().call_later(delay, _native_fire)
+
+        def _native_fire() -> None:
+            nonlocal _native_timer, _native_in_flight
+            _native_timer = None
+            if not _stream_done.is_set() and _stream_buf:
+                _native_in_flight = asyncio.ensure_future(_native_do_flush())
+
+        # ── Legacy flusher ──
+        _flush_lock = asyncio.Lock()
+
+        async def _legacy_flush() -> None:
             nonlocal _stream_flushed
             if not streaming or not streaming_msg_id or not _stream_buf:
                 return
             async with _flush_lock:
                 if not _stream_buf:
                     return
-                _stream_flushed = _stream_flushed + "".join(_stream_buf)
+                _stream_flushed += "".join(_stream_buf)
                 _stream_buf.clear()
                 try:
                     await adapter.update_message(
@@ -885,42 +1004,17 @@ class ChannelGateway:
                         message_id=streaming_msg_id,
                         text=_stream_flushed,
                     )
-                except Exception as exc:
-                    logger.warning("Stream update failed: %s", exc)
+                except Exception:
+                    pass
 
-        async def _periodic_flusher() -> None:
-            """Background task: flush buffered tokens (legacy path only)."""
+        async def _legacy_periodic() -> None:
             while not _stream_done.is_set():
-                await asyncio.sleep(_STREAM_FLUSH_INTERVAL)
-                await _do_flush()
+                await asyncio.sleep(_LEGACY_FLUSH_S)
+                await _legacy_flush()
 
         _flush_task: Optional[asyncio.Task] = None
         if streaming and streaming_msg_id and not native_streaming:
-            _flush_task = asyncio.create_task(_periodic_flusher())
-
-        # ── Batch buffer for native streaming (reduces API calls) ───
-        # Accumulate tokens and flush every ~200ms (no rate limit, but
-        # batching avoids per-token API overhead).
-        _NATIVE_BATCH_INTERVAL = 0.2
-        _native_buf: list[str] = []
-
-        async def _native_batch_flusher() -> None:
-            """Background task: batch-flush tokens via appendStream."""
-            while not _stream_done.is_set():
-                await asyncio.sleep(_NATIVE_BATCH_INTERVAL)
-                if _native_buf and streaming_msg_id:
-                    chunk = "".join(_native_buf)
-                    _native_buf.clear()
-                    try:
-                        await adapter.append_stream(
-                            msg.external_chat_id, streaming_msg_id, chunk,
-                        )
-                    except Exception:
-                        pass
-
-        _native_flush_task: Optional[asyncio.Task] = None
-        if native_streaming and streaming_msg_id:
-            _native_flush_task = asyncio.create_task(_native_batch_flusher())
+            _flush_task = asyncio.create_task(_legacy_periodic())
 
         reply_text = ""
         error_occurred = False
@@ -944,34 +1038,39 @@ class ChannelGateway:
                         # Switch reaction from 👀 to 🤔 on first text
                         if not _thinking_set:
                             _thinking_set = True
-                            await _set_reaction(_EMOJI_THINKING)
+                            _set_reaction(_EMOJI_THINKING)
 
+                        _stream_buf.append(delta_text)
+                        # Native: trigger demand-driven flush
                         if native_streaming:
-                            _native_buf.append(delta_text)
-                        else:
-                            _stream_buf.append(delta_text)
+                            _native_schedule()
                     continue
 
                 # ── Tool activity ──────────────────────────────────────
                 if event_type == "tool_use" and streaming:
                     tool_name = event.get("name", "")
-                    # Status reaction: 🔥
-                    await _set_reaction(_EMOJI_TOOL)
+                    _set_reaction(_resolve_tool_emoji(tool_name))
 
                     if native_streaming and streaming_msg_id:
                         # Flush pending text, then append tool indicator
-                        if _native_buf:
-                            chunk = "".join(_native_buf)
-                            _native_buf.clear()
+                        if _stream_buf:
+                            chunk = "".join(_stream_buf)
+                            _stream_buf.clear()
+                            try:
+                                await adapter.append_stream(
+                                    msg.external_chat_id, streaming_msg_id, chunk,
+                                )
+                            except Exception:
+                                pass
+                        try:
                             await adapter.append_stream(
-                                msg.external_chat_id, streaming_msg_id, chunk,
+                                msg.external_chat_id, streaming_msg_id,
+                                f"\n\n_Using tool: {tool_name}..._",
                             )
-                        await adapter.append_stream(
-                            msg.external_chat_id, streaming_msg_id,
-                            f"\n\n_Using tool: {tool_name}..._",
-                        )
+                        except Exception:
+                            pass
                     elif streaming_msg_id:
-                        await _do_flush()
+                        await _legacy_flush()
                         status = _stream_flushed + f"\n\n_Using tool: {tool_name}..._" if _stream_flushed else f"_Using tool: {tool_name}..._"
                         try:
                             await adapter.update_message(
@@ -984,8 +1083,7 @@ class ChannelGateway:
                     continue
 
                 if event_type == "tool_result" and streaming:
-                    # Back to thinking
-                    await _set_reaction(_EMOJI_THINKING)
+                    _set_reaction(_EMOJI_THINKING)
                     continue
 
                 if event_type == "assistant":
@@ -1045,26 +1143,30 @@ class ChannelGateway:
         finally:
             # Stop flusher tasks
             _stream_done.set()
-            for task in (_flush_task, _native_flush_task):
-                if task is not None:
-                    task.cancel()
-                    try:
-                        await task
-                    except asyncio.CancelledError:
-                        pass
+            # Cancel native timer
+            if _native_timer:
+                _native_timer.cancel()
+            # Wait for in-flight native flush
+            if _native_in_flight and not _native_in_flight.done():
+                try:
+                    await _native_in_flight
+                except Exception:
+                    pass
+            # Cancel legacy flusher
+            if _flush_task is not None:
+                _flush_task.cancel()
+                try:
+                    await _flush_task
+                except asyncio.CancelledError:
+                    pass
 
-            # Final drain: flush any tokens buffered since last periodic flush.
-            # Without this, tokens between the last 1.2s flush and stream end
-            # are lost from _stream_flushed (and from the final message).
+            # Final drain: flush remaining buffered tokens into _stream_flushed
             if _stream_buf:
-                _stream_flushed = _stream_flushed + "".join(_stream_buf)
+                _stream_flushed += "".join(_stream_buf)
                 _stream_buf.clear()
 
-        # For multi-turn agentic responses (text → tool → text → tool → text),
-        # reply_text only captures the LAST assistant event's text — earlier
-        # turns' text is dropped.  _stream_flushed accumulates ALL text_delta
-        # tokens across ALL turns, so it's the correct source for the final
-        # message when streaming was active.
+        # For multi-turn agentic responses, _stream_flushed accumulates ALL
+        # text_delta tokens across all turns — the correct source for final msg.
         if _stream_flushed:
             reply_text = _stream_flushed
         if not reply_text:
@@ -1072,16 +1174,16 @@ class ChannelGateway:
 
         # ── Final status reaction ───────────────────────────────────
         if streaming:
-            await _set_reaction(_EMOJI_DONE if not error_occurred else _EMOJI_ERROR)
+            await _set_reaction_final(_EMOJI_DONE if not error_occurred else _EMOJI_ERROR)
 
         # 6. Send outbound reply --------------------------------------------------
         external_message_id: Optional[str] = None
 
         if native_streaming and streaming_msg_id:
-            # Flush any remaining tokens in native buffer
-            if _native_buf:
-                final_chunk = "".join(_native_buf)
-                _native_buf.clear()
+            # Flush any remaining tokens via appendStream
+            if _stream_buf:
+                final_chunk = "".join(_stream_buf)
+                _stream_buf.clear()
                 try:
                     await adapter.append_stream(
                         msg.external_chat_id, streaming_msg_id, final_chunk,
@@ -1093,11 +1195,11 @@ class ChannelGateway:
                 await adapter.stop_stream(
                     external_chat_id=msg.external_chat_id,
                     stream_ts=streaming_msg_id,
+                    recipient_user_id=_sender_user_id,
                 )
                 external_message_id = streaming_msg_id
             except Exception:
                 logger.exception("Failed to stop native stream; falling back to update")
-                # Fall through to legacy final update
                 native_streaming = False
 
         if not native_streaming and streaming and streaming_msg_id:

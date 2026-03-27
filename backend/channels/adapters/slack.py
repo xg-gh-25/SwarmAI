@@ -344,41 +344,62 @@ class SlackChannelAdapter(ChannelAdapter):
     def supports_native_streaming(self) -> bool:
         return True
 
+    async def _ensure_identity(self) -> None:
+        """Resolve and cache team_id / bot_user_id (one-time, lazy)."""
+        if hasattr(self, "_team_id"):
+            return
+        try:
+            loop = asyncio.get_running_loop()
+            info = await loop.run_in_executor(
+                None, self._slack_client.auth_test,
+            )
+            self._team_id: str = info.get("team_id", "")
+            self._bot_user_id: str = info.get("user_id", "")
+        except Exception:
+            self._team_id = ""
+            self._bot_user_id = ""
+
     async def start_stream(
         self,
         external_chat_id: str,
         external_thread_id: Optional[str] = None,
         text: Optional[str] = None,
+        recipient_user_id: Optional[str] = None,
     ) -> Optional[str]:
-        """Start a native Slack stream. Returns stream message ts."""
+        """Start a native Slack stream. Returns stream message ts.
+
+        Args:
+            external_chat_id: Channel ID.
+            external_thread_id: Thread ts (required — even for DMs, pass the
+                inbound message ts).
+            text: Optional initial markdown text.
+            recipient_user_id: User ID for DM streaming (stopStream needs it).
+        """
         if not self._slack_client:
+            return None
+        if not external_thread_id:
+            logger.warning("start_stream called without thread_ts — native streaming requires it")
             return None
         try:
             loop = asyncio.get_running_loop()
-            kwargs: dict = {"channel": external_chat_id}
-            if external_thread_id:
-                kwargs["thread_ts"] = external_thread_id
+            await self._ensure_identity()
+
+            kwargs: dict = {
+                "channel": external_chat_id,
+                "thread_ts": external_thread_id,
+            }
             if text:
                 kwargs["markdown_text"] = text
-            # Resolve team_id and bot user_id for DM streaming
-            if not hasattr(self, "_team_id"):
-                try:
-                    info = await loop.run_in_executor(
-                        None, self._slack_client.auth_test,
-                    )
-                    self._team_id = info.get("team_id", "")
-                    self._bot_user_id = info.get("user_id", "")
-                except Exception:
-                    self._team_id = ""
-                    self._bot_user_id = ""
             if self._team_id:
                 kwargs["recipient_team_id"] = self._team_id
+            if recipient_user_id:
+                kwargs["recipient_user_id"] = recipient_user_id
 
             result = await loop.run_in_executor(
                 None, lambda: self._slack_client.chat_startStream(**kwargs),
             )
             ts = result.get("ts")
-            logger.debug("Slack stream started: channel=%s ts=%s", external_chat_id, ts)
+            logger.info("Slack stream started: channel=%s thread=%s ts=%s", external_chat_id, external_thread_id, ts)
             return ts
         except Exception:
             logger.exception("Failed to start Slack native stream")
@@ -412,12 +433,15 @@ class SlackChannelAdapter(ChannelAdapter):
         stream_ts: str,
         text: Optional[str] = None,
         final_blocks: Optional[list[dict]] = None,
+        recipient_user_id: Optional[str] = None,
     ) -> None:
         """Stop a native Slack stream — message becomes a normal message."""
         if not self._slack_client:
             return
         try:
             loop = asyncio.get_running_loop()
+            await self._ensure_identity()
+
             kwargs: dict = {
                 "channel": external_chat_id,
                 "ts": stream_ts,
@@ -426,10 +450,14 @@ class SlackChannelAdapter(ChannelAdapter):
                 kwargs["markdown_text"] = text
             if final_blocks:
                 kwargs["blocks"] = final_blocks
+            if self._team_id:
+                kwargs["recipient_team_id"] = self._team_id
+            if recipient_user_id:
+                kwargs["recipient_user_id"] = recipient_user_id
             await loop.run_in_executor(
                 None, lambda: self._slack_client.chat_stopStream(**kwargs),
             )
-            logger.debug("Slack stream stopped: channel=%s ts=%s", external_chat_id, stream_ts)
+            logger.info("Slack stream stopped: channel=%s ts=%s", external_chat_id, stream_ts)
         except Exception:
             logger.exception("Failed to stop Slack stream")
 
