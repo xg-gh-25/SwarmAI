@@ -248,6 +248,28 @@ def _resolve_claude_cli() -> str | None:
     return None
 
 
+def _cli_supports_bare(claude_path: str) -> bool:
+    """Check if the resolved CLI supports --bare (>= 2.1.81).
+
+    Parses ``claude --version`` output like "2.1.85 (Claude Code)".
+    Returns False on any parse failure (safe default).
+    """
+    try:
+        result = subprocess.run(
+            [claude_path, "--version"],
+            capture_output=True, text=True, timeout=5,
+        )
+        # Output format: "2.1.85 (Claude Code)"
+        version_str = result.stdout.strip().split()[0] if result.stdout.strip() else ""
+        parts = version_str.split(".")
+        if len(parts) >= 3:
+            major, minor, patch = int(parts[0]), int(parts[1]), int(parts[2])
+            return (major, minor, patch) >= (2, 1, 81)
+    except Exception:
+        pass
+    return False
+
+
 def _load_mcp_config() -> dict:
     """Load MCP config using the same two-layer merge as SwarmAI chat sessions.
 
@@ -365,12 +387,11 @@ def _handle_agent_task(job: Job, state: SchedulerState) -> JobResult:
         )
 
     # Build CLI command (use resolved absolute path, not bare "claude")
-    # --bare skips hooks, LSP, and plugin sync — faster startup for headless jobs
-    # (requires Claude Code >= 2.1.81)
+    use_bare = _cli_supports_bare(claude_path)
     cmd = [
         claude_path,
         "--print",
-        "--bare",
+        *(["--bare"] if use_bare else []),  # skip hooks/LSP (>= 2.1.81)
         "--output-format", "json",
         "--no-session-persistence",
         "--model", "sonnet",
@@ -824,9 +845,10 @@ def _send_slack_dm(message: str) -> bool:
             f'Send this message as a Slack DM to channel {dm_channel}: '
             f'"{message}"'
         )
+        use_bare = _cli_supports_bare(claude_path)
         cmd = [
             claude_path, "--print",
-            "--bare",
+            *(["--bare"] if use_bare else []),
             "--output-format", "text",
             "--no-session-persistence",
             "--model", "sonnet",
