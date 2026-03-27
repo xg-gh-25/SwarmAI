@@ -503,6 +503,7 @@ class SlackChannelAdapter(ChannelAdapter):
         """Convert markdown to Slack mrkdwn (inline conversion, no blocks).
 
         Used for streaming updates where Block Kit overhead is unnecessary.
+        Lightweight — skips table conversion (too expensive mid-stream).
         """
         import re
 
@@ -511,8 +512,12 @@ class SlackChannelAdapter(ChannelAdapter):
 
         mrkdwn = text
 
+        # Images FIRST: ![alt](url) -> just URL
+        mrkdwn = re.sub(r'!\[([^\]]*)\]\(([^)]+)\)', r'\2', mrkdwn)
         # Links [text](url) -> <url|text>
         mrkdwn = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', r'<\2|\1>', mrkdwn)
+        # Headers # Title -> *Title*
+        mrkdwn = re.sub(r'^#{1,6}\s+(.+)$', r'*\1*', mrkdwn, flags=re.MULTILINE)
 
         # Process outside code fences only
         parts = re.split(r'(```[\s\S]*?```|`[^`]+`)', mrkdwn)
@@ -548,10 +553,57 @@ class SlackChannelAdapter(ChannelAdapter):
 
         mrkdwn = text
 
+        # ── Pre-processing (before code-fence splitting) ──────────
+
+        # Images FIRST: ![alt](url) -> just the URL (Slack auto-unfurls)
+        # Must run before link conversion or the ![...] gets partially matched.
+        mrkdwn = re.sub(r'!\[([^\]]*)\]\(([^)]+)\)', r'\2', mrkdwn)
+
         # Convert markdown links [text](url) -> <url|text>
         mrkdwn = re.sub(r'\[([^\]]+)\]\(([^)]+)\)', r'<\2|\1>', mrkdwn)
 
-        # Convert bold **text** -> *text* (but not inside code blocks)
+        # Headers: # Title -> *Title* (bold, since Slack has no header syntax)
+        mrkdwn = re.sub(r'^#{1,6}\s+(.+)$', r'*\1*', mrkdwn, flags=re.MULTILINE)
+
+        # Horizontal rules: --- or *** or ___ -> visual separator
+        mrkdwn = re.sub(r'^[\-\*_]{3,}\s*$', '─' * 30, mrkdwn, flags=re.MULTILINE)
+
+        # Tables: convert to code block for readability (Slack has no table support)
+        lines = mrkdwn.split('\n')
+        in_table = False
+        table_lines: list[str] = []
+        result_lines: list[str] = []
+        for line in lines:
+            stripped = line.strip()
+            is_table_row = bool(re.match(r'^\|.*\|$', stripped))
+            is_separator = bool(re.match(r'^\|[\s\-:|]+\|$', stripped))
+
+            if is_table_row and not in_table:
+                in_table = True
+                table_lines = [stripped]
+            elif in_table and (is_table_row or is_separator):
+                if not is_separator:  # skip the |---|---| line
+                    table_lines.append(stripped)
+            elif in_table:
+                # End of table — emit as code block
+                result_lines.append('```')
+                result_lines.extend(table_lines)
+                result_lines.append('```')
+                table_lines = []
+                in_table = False
+                result_lines.append(line)
+            else:
+                result_lines.append(line)
+
+        if in_table and table_lines:
+            result_lines.append('```')
+            result_lines.extend(table_lines)
+            result_lines.append('```')
+
+        mrkdwn = '\n'.join(result_lines)
+
+        # ── Code-fence-aware formatting ───────────────────────────
+
         # Process outside of code fences only
         parts = re.split(r'(```[\s\S]*?```|`[^`]+`)', mrkdwn)
         for i, part in enumerate(parts):
