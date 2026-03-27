@@ -712,13 +712,19 @@ class ChannelGateway:
     ) -> None:
         """Inner handler — runs under per-conversation lock."""
         try:
+            # Use sender_identity.display_name (gateway-resolved, with
+            # fallback chain) rather than msg.sender_display_name (raw
+            # from adapter, which may be the unresolved user ID).
+            resolved_name = (
+                sender_identity.display_name if sender_identity else None
+            ) or msg.sender_display_name
             session_id, channel_session_id, _is_new = await self._resolve_session(
                 channel_id=channel_id,
                 agent_id=agent_id,
                 external_chat_id=msg.external_chat_id,
                 external_sender_id=msg.external_sender_id,
                 external_thread_id=msg.external_thread_id,
-                sender_display_name=msg.sender_display_name,
+                sender_display_name=resolved_name,
             )
         except Exception:
             logger.exception(f"Failed to resolve session for channel {channel_id}")
