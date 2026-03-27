@@ -86,15 +86,13 @@ _start_backend() {
     _log "Starting backend on port $BACKEND_PORT..."
     cd "$BACKEND_DIR"
 
-    # Activate venv
+    # Activate venv and sync deps (always sync to catch new dependencies)
     if [ ! -d ".venv" ]; then
         _log "Creating venv..."
         uv venv .venv
-        source .venv/bin/activate
-        uv sync --group dev
-    else
-        source .venv/bin/activate
     fi
+    source .venv/bin/activate
+    uv sync --group dev
 
     # Start in background, log to file
     DATABASE_TYPE=sqlite python main.py --port $BACKEND_PORT \
