@@ -355,10 +355,9 @@ class SlackChannelAdapter(ChannelAdapter):
             return None
         try:
             loop = asyncio.get_running_loop()
-            kwargs: dict = {
-                "channel": external_chat_id,
-                "thread_ts": external_thread_id or "",
-            }
+            kwargs: dict = {"channel": external_chat_id}
+            if external_thread_id:
+                kwargs["thread_ts"] = external_thread_id
             if text:
                 kwargs["markdown_text"] = text
             # Resolve team_id and bot user_id for DM streaming

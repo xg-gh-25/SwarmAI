@@ -1053,6 +1053,20 @@ class ChannelGateway:
                     except asyncio.CancelledError:
                         pass
 
+            # Final drain: flush any tokens buffered since last periodic flush.
+            # Without this, tokens between the last 1.2s flush and stream end
+            # are lost from _stream_flushed (and from the final message).
+            if _stream_buf:
+                _stream_flushed = _stream_flushed + "".join(_stream_buf)
+                _stream_buf.clear()
+
+        # For multi-turn agentic responses (text → tool → text → tool → text),
+        # reply_text only captures the LAST assistant event's text — earlier
+        # turns' text is dropped.  _stream_flushed accumulates ALL text_delta
+        # tokens across ALL turns, so it's the correct source for the final
+        # message when streaming was active.
+        if _stream_flushed:
+            reply_text = _stream_flushed
         if not reply_text:
             reply_text = "(No response generated)"
 
