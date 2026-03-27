@@ -361,7 +361,10 @@ class SlackChannelAdapter(ChannelAdapter):
             if external_thread_id:
                 kwargs["thread_ts"] = external_thread_id
 
-            result = self._slack_client.chat_postMessage(**kwargs)
+            loop = asyncio.get_running_loop()
+            result = await loop.run_in_executor(
+                None, lambda: self._slack_client.chat_postMessage(**kwargs)
+            )
             return result.get("ts")
         except Exception:
             logger.exception("Error sending Slack typing indicator")
@@ -382,9 +385,17 @@ class SlackChannelAdapter(ChannelAdapter):
         formatting.  If the final text is too long for a single Slack
         message, the original message is updated with the first chunk
         and overflow is posted as new follow-up messages.
+
+        All sync Slack SDK calls are dispatched via ``run_in_executor``
+        so they never block the asyncio event loop — critical for
+        streaming, where blocking a single ``chat_update`` stalls the
+        entire token-processing pipeline.
         """
         if not self._slack_client:
             return
+
+        loop = asyncio.get_running_loop()
+        client = self._slack_client
 
         try:
             if is_final:
@@ -394,36 +405,32 @@ class SlackChannelAdapter(ChannelAdapter):
 
                 if len(blocks) <= _MAX_BLOCKS_PER_MSG:
                     # Fits in one message — update in place
-                    self._slack_client.chat_update(
+                    await loop.run_in_executor(None, lambda: client.chat_update(
                         channel=external_chat_id,
                         ts=message_id,
                         text=fallback,
                         blocks=blocks,
-                    )
+                    ))
                 else:
                     # Overflow: update original with first chunk, post rest as new messages
                     first_chunk = blocks[:_MAX_BLOCKS_PER_MSG]
-                    self._slack_client.chat_update(
+                    await loop.run_in_executor(None, lambda: client.chat_update(
                         channel=external_chat_id,
                         ts=message_id,
                         text=fallback,
                         blocks=first_chunk,
-                    )
+                    ))
                     # Post overflow chunks as follow-up messages.
-                    # We don't have thread_ts here (update_message API doesn't
-                    # carry it), so overflow goes to the same conversation context
-                    # as the original message.  Gateway calls update_message on
-                    # the streaming placeholder which is always top-level.
                     remaining = blocks[_MAX_BLOCKS_PER_MSG:]
                     while remaining:
                         chunk = remaining[:_MAX_BLOCKS_PER_MSG]
                         remaining = remaining[_MAX_BLOCKS_PER_MSG:]
                         try:
-                            self._slack_client.chat_postMessage(
+                            await loop.run_in_executor(None, lambda c=chunk: client.chat_postMessage(
                                 channel=external_chat_id,
                                 text="(continued)",
-                                blocks=chunk,
-                            )
+                                blocks=c,
+                            ))
                         except Exception:
                             logger.warning("Failed to post overflow chunk")
                             break
@@ -435,7 +442,7 @@ class SlackChannelAdapter(ChannelAdapter):
                     display = "..." + display[-(_BLOCK_SECTION_LIMIT - 20):] + " :writing_hand:"
                 # Truncate text fallback too — this was the msg_too_long root cause
                 fallback = text[-_TEXT_FALLBACK_LIMIT:] if len(text) > _TEXT_FALLBACK_LIMIT else text
-                self._slack_client.chat_update(
+                await loop.run_in_executor(None, lambda: client.chat_update(
                     channel=external_chat_id,
                     ts=message_id,
                     text=fallback,
@@ -445,7 +452,7 @@ class SlackChannelAdapter(ChannelAdapter):
                             "text": {"type": "mrkdwn", "text": display},
                         }
                     ],
-                )
+                ))
         except Exception:
             logger.exception("Error updating Slack message")
 
@@ -462,6 +469,9 @@ class SlackChannelAdapter(ChannelAdapter):
         """
         if not self._slack_client:
             return None
+
+        loop = asyncio.get_running_loop()
+        client = self._slack_client
 
         try:
             blocks = self._text_to_blocks(message.text)
@@ -485,7 +495,9 @@ class SlackChannelAdapter(ChannelAdapter):
                 if thread_ts:
                     kwargs["thread_ts"] = thread_ts
 
-                result = self._slack_client.chat_postMessage(**kwargs)
+                result = await loop.run_in_executor(
+                    None, lambda kw=kwargs: client.chat_postMessage(**kw)
+                )
                 if idx == 0:
                     first_ts = result.get("ts")
 
@@ -669,7 +681,10 @@ class SlackChannelAdapter(ChannelAdapter):
         if not self._slack_client:
             return
         try:
-            self._slack_client.users_setPresence(presence=presence)
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(
+                None, lambda: self._slack_client.users_setPresence(presence=presence)
+            )
         except Exception:
             logger.debug("Failed to set Slack presence to %s", presence)
 
