@@ -771,8 +771,12 @@ def _handle_notify(job: Job, state: SchedulerState) -> JobResult:
 
 
 def _get_slack_dm_channel() -> str | None:
-    """Read the owner's DM channel from Slack bot config.json."""
-    config_path = SWARMWS / "Services" / "slack-bot" / "config.json"
+    """Read the owner's Slack DM channel from config.json in workspace.
+
+    Previously read from Services/slack-bot/config.json (removed).
+    Now reads from the general SwarmWS config.json, falling back to None.
+    """
+    config_path = SWARMWS / "config.json"
     try:
         if config_path.exists():
             data = json.loads(config_path.read_text(encoding="utf-8"))

@@ -36,6 +36,7 @@ LEGACY_LABELS = [
     "com.swarmai.gh-update-topics",
     "com.swarmai.trash-prune",
     "com.swarmai.jobs",
+    "com.swarmai.slack-daemon",
 ]
 
 
