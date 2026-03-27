@@ -1,14 +1,14 @@
 /**
- * Read-only ToDo section for the Radar sidebar.
+ * ToDo section for the Radar sidebar with lifecycle actions.
  *
  * Displays active ToDo items (status ``pending`` or ``overdue``) fetched via
  * ``radarService.fetchActiveTodos``.  Items are sorted by priority (high first)
- * then creation date (newest first).  A display limit of 5 items is enforced
+ * then creation date (newest first).  A display limit of 10 items is enforced
  * by default with "See more" / "Show less" expansion controls.
  *
- * Each item row includes a title, colored priority dot, and a ``DragHandle``
- * with payload type ``radar-todo``.  No action buttons are rendered — the
- * list is strictly read-only.
+ * Each item row is fully draggable (payload type ``radar-todo``) and shows
+ * hover action buttons: ✅ mark handled, ❌ dismiss (cancel).  Actions use
+ * optimistic removal — the item disappears immediately, confirmed on next poll.
  *
  * Key exports:
  * - ``TodoSection``          — The section component

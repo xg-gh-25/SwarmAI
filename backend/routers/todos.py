@@ -136,9 +136,8 @@ async def mark_todo_handled(todo_id: str):
     if not todo:
         raise HTTPException(status_code=404, detail=f"ToDo {todo_id} not found")
 
-    current = todo.get("status") if isinstance(todo, dict) else getattr(todo, "status", None)
-    if current in ("handled", "deleted"):
-        return {"status": current, "todo_id": todo_id, "message": f"Already {current}"}
+    if todo.status in ("handled", "deleted"):
+        return {"status": todo.status, "todo_id": todo_id, "message": f"Already {todo.status}"}
 
     await db.todos.update(todo_id, {
         "status": "handled",
@@ -158,9 +157,8 @@ async def mark_todo_cancelled(todo_id: str):
     if not todo:
         raise HTTPException(status_code=404, detail=f"ToDo {todo_id} not found")
 
-    current = todo.get("status") if isinstance(todo, dict) else getattr(todo, "status", None)
-    if current in ("cancelled", "deleted"):
-        return {"status": current, "todo_id": todo_id, "message": f"Already {current}"}
+    if todo.status in ("cancelled", "deleted"):
+        return {"status": todo.status, "todo_id": todo_id, "message": f"Already {todo.status}"}
 
     await db.todos.update(todo_id, {
         "status": "cancelled",
@@ -212,8 +210,7 @@ async def bind_todo_to_session(session_id: str, request: BindTodoRequest):
     })
 
     # Transition todo to in_discussion if pending
-    current_status = todo.get("status") if isinstance(todo, dict) else getattr(todo, "status", None)
-    if current_status == "pending":
+    if todo.status == "pending":
         await db.todos.update(request.todo_id, {
             "status": "in_discussion",
             "updated_at": datetime.now().isoformat(),
@@ -225,11 +222,11 @@ async def bind_todo_to_session(session_id: str, request: BindTodoRequest):
     else:
         logger.info(
             "ToDo %s bound to session %s (status=%s, no transition)",
-            request.todo_id[:8], session_id[:8], current_status,
+            request.todo_id[:8], session_id[:8], todo.status,
         )
 
     return {
         "session_id": session_id,
         "todo_id": request.todo_id,
-        "todo_status": "in_discussion" if current_status == "pending" else current_status,
+        "todo_status": "in_discussion" if todo.status == "pending" else todo.status,
     }
