@@ -812,8 +812,8 @@ class ChannelGateway:
         _EMOJI_STALL_HARD = "warning"      # ⚠️ 30s no activity
 
         _DEBOUNCE_S = 0.7     # intermediate state debounce
-        _STALL_SOFT_S = 10.0  # soft stall warning
-        _STALL_HARD_S = 30.0  # hard stall warning
+        _STALL_SOFT_S = 20.0  # soft stall warning (agent tool calls often 10-30s)
+        _STALL_HARD_S = 60.0  # hard stall warning
 
         _CODING_TOKENS = {"bash", "read", "write", "edit", "glob", "grep", "notebookedit"}
         _WEB_TOKENS = {"webfetch", "web_search", "web_fetch", "browser", "tavily"}
