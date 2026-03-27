@@ -556,11 +556,29 @@ class ChannelGateway:
             return
 
         # 2. Access control -------------------------------------------------------
-        if not self._check_access(channel, msg.external_sender_id):
-            logger.warning(
-                f"Access denied for sender {msg.external_sender_id} "
-                f"on channel {channel_id}"
+        # Channels/groups: open to everyone (Swarm is a team participant).
+        # DMs: allowlist only. Non-allowlisted DMs get a polite decline.
+        chat_type = msg.metadata.get("chat_type", "im")
+        is_dm = chat_type == "im"
+
+        if is_dm and not self._check_access(channel, msg.external_sender_id):
+            logger.info(
+                f"DM access denied for {msg.external_sender_id} "
+                f"on channel {channel_id} — sending polite decline"
             )
+            adapter = self._adapters.get(channel_id)
+            if adapter:
+                try:
+                    await adapter.send_message(OutboundMessage(
+                        channel_id=channel_id,
+                        external_chat_id=msg.external_chat_id,
+                        text="Hi! I'm XG's AI assistant. "
+                             "DM access is limited to approved contacts. "
+                             "Please reach out to XG if you'd like access, "
+                             "or @mention me in a channel — I'm happy to help there!",
+                    ))
+                except Exception:
+                    pass
             return
 
         # 3. Owner detection — first allowed_sender is the channel owner.
