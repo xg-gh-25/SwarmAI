@@ -92,4 +92,19 @@ export const todosService = {
     const response = await api.post(`/todos/${id}/convert-to-task`);
     return response.data;
   },
+
+  /** Mark a ToDo as handled (completed). */
+  async markHandled(id: string): Promise<void> {
+    await api.post(`/todos/${id}/mark-handled`);
+  },
+
+  /** Mark a ToDo as cancelled (dismissed). */
+  async markCancelled(id: string): Promise<void> {
+    await api.post(`/todos/${id}/mark-cancelled`);
+  },
+
+  /** Bind a ToDo to a chat session (drag-to-chat). */
+  async bindToSession(sessionId: string, todoId: string): Promise<void> {
+    await api.post(`/todos/bind-session/${sessionId}`, { todo_id: todoId });
+  },
 };
