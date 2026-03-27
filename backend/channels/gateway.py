@@ -21,7 +21,13 @@ from pathlib import Path
 from typing import Optional
 from uuid import uuid4
 
-from channels.base import ChannelAdapter, InboundMessage, OutboundMessage
+from channels.base import (
+    ChannelAdapter,
+    InboundMessage,
+    OutboundMessage,
+    PermissionTier,
+    SenderIdentity,
+)
 from channels.registry import get_adapter_class, load_adapters
 from core import session_registry
 from core.session_manager import session_manager
@@ -191,6 +197,56 @@ class ChannelGateway:
             except (json.JSONDecodeError, TypeError):
                 return False
         return bool(allowed) and sender_id == allowed[0]
+
+    # ------------------------------------------------------------------
+    # Sender identity resolution
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _resolve_sender_identity(
+        channel_config: dict,
+        sender_id: str,
+        sender_display_name: Optional[str],
+    ) -> SenderIdentity:
+        """Resolve a sender's identity and permission tier.
+
+        The permission model has three tiers:
+
+        * **OWNER** — The first entry in ``allowed_senders``.  Full access
+          to everything: files, system commands, external actions, private data.
+        * **TRUSTED** — Other entries in ``allowed_senders``.  Can ask
+          questions and get knowledge-based help.  Cannot access files,
+          system commands, or trigger external actions.
+        * **PUBLIC** — Anyone not in ``allowed_senders`` (only reachable in
+          group channels, since DMs from non-allowed senders are rejected
+          earlier).  Public knowledge only.
+
+        This is the **single enforcement point** for sender authorization.
+        The agent receives the tier in ``channel_context`` and must respect it.
+        """
+        allowed = channel_config.get("allowed_senders", "[]")
+        if isinstance(allowed, str):
+            import json
+            try:
+                allowed = json.loads(allowed)
+            except (json.JSONDecodeError, TypeError):
+                allowed = []
+
+        is_owner = bool(allowed) and sender_id == allowed[0]
+
+        if is_owner:
+            tier = PermissionTier.OWNER
+        elif sender_id in allowed:
+            tier = PermissionTier.TRUSTED
+        else:
+            tier = PermissionTier.PUBLIC
+
+        return SenderIdentity(
+            external_id=sender_id,
+            display_name=sender_display_name or sender_id,
+            permission_tier=tier,
+            is_owner=is_owner,
+        )
 
     # ------------------------------------------------------------------
     # Channel slot awareness (queue notifications)
@@ -581,9 +637,13 @@ class ChannelGateway:
                     pass
             return
 
-        # 3. Owner detection — first allowed_sender is the channel owner.
-        # Owner: no rate limit, no queue wait, bypasses channel slot.
-        is_owner = self._is_owner(channel, msg.external_sender_id)
+        # 3. Sender identity + permission tier -----------------------------------
+        # Resolves WHO is talking and WHAT they can do.  This is the single
+        # source of truth — the agent receives this in channel_context.
+        sender_identity = self._resolve_sender_identity(
+            channel, msg.external_sender_id, msg.sender_display_name,
+        )
+        is_owner = sender_identity.is_owner
 
         # 4. Rate limiting (owner exempt) -----------------------------------------
         rate_limit = channel.get("rate_limit_per_minute", 10)
@@ -638,6 +698,7 @@ class ChannelGateway:
                 channel_id=channel_id,
                 agent_id=agent_id,
                 is_owner=is_owner,
+                sender_identity=sender_identity,
             )
 
     async def _handle_conversation(
@@ -647,6 +708,7 @@ class ChannelGateway:
         channel_id: str,
         agent_id: str,
         is_owner: bool = False,
+        sender_identity: Optional[SenderIdentity] = None,
     ) -> None:
         """Inner handler — runs under per-conversation lock."""
         try:
@@ -710,6 +772,9 @@ class ChannelGateway:
             "reply_to_message_id": msg.external_message_id,
             "is_group": is_group,
             "is_owner": is_owner,
+            # Sender identity — the agent MUST use this to determine who
+            # is talking and what they're allowed to do.
+            **({"sender_identity": sender_identity.to_dict()} if sender_identity else {}),
         }
         # Inject platform-specific credential keys for channel MCP tools
         channel_type = channel.get("channel_type", "")
