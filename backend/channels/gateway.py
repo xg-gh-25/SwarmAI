@@ -173,6 +173,26 @@ class ChannelGateway:
         logger.info("ChannelGateway shutdown complete")
 
     # ------------------------------------------------------------------
+    # Owner detection
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _is_owner(channel_config: dict, sender_id: str) -> bool:
+        """Check if sender is the channel owner (first allowed_sender).
+
+        The owner gets priority: no rate limit, no queue wait, bypasses
+        the channel slot (uses chat pool instead).
+        """
+        allowed = channel_config.get("allowed_senders", "[]")
+        if isinstance(allowed, str):
+            import json
+            try:
+                allowed = json.loads(allowed)
+            except (json.JSONDecodeError, TypeError):
+                return False
+        return bool(allowed) and sender_id == allowed[0]
+
+    # ------------------------------------------------------------------
     # Channel slot awareness (queue notifications)
     # ------------------------------------------------------------------
 
@@ -543,14 +563,17 @@ class ChannelGateway:
             )
             return
 
-        # 3. Rate limiting --------------------------------------------------------
+        # 3. Owner detection — first allowed_sender is the channel owner.
+        # Owner: no rate limit, no queue wait, bypasses channel slot.
+        is_owner = self._is_owner(channel, msg.external_sender_id)
+
+        # 4. Rate limiting (owner exempt) -----------------------------------------
         rate_limit = channel.get("rate_limit_per_minute", 10)
-        if not self._rate_limiter.is_allowed(msg.external_sender_id, rate_limit):
+        if not is_owner and not self._rate_limiter.is_allowed(msg.external_sender_id, rate_limit):
             logger.warning(
                 f"Rate limit exceeded for sender {msg.external_sender_id} "
                 f"on channel {channel_id}"
             )
-            # Best effort: send a polite rate-limit notice back to the user
             adapter = self._adapters.get(channel_id)
             if adapter:
                 try:
@@ -565,12 +588,11 @@ class ChannelGateway:
                     logger.exception("Failed to send rate-limit notice")
             return
 
-        # 4. Queue awareness: if another channel conversation is actively
+        # 5. Queue awareness: if another channel conversation is actively
         # streaming, send an immediate "busy" notice so the user isn't
-        # left staring at silence.  The conversation still proceeds —
-        # it just waits for the slot inside _handle_conversation.
+        # left staring at silence.  Owner skips this — always prioritized.
         adapter = self._adapters.get(channel_id)
-        if adapter and self._is_channel_slot_busy():
+        if adapter and not is_owner and self._is_channel_slot_busy():
             try:
                 await adapter.send_message(OutboundMessage(
                     channel_id=channel_id,
@@ -597,6 +619,7 @@ class ChannelGateway:
                 channel=channel,
                 channel_id=channel_id,
                 agent_id=agent_id,
+                is_owner=is_owner,
             )
 
     async def _handle_conversation(
@@ -605,6 +628,7 @@ class ChannelGateway:
         channel: dict,
         channel_id: str,
         agent_id: str,
+        is_owner: bool = False,
     ) -> None:
         """Inner handler — runs under per-conversation lock."""
         try:
@@ -667,6 +691,7 @@ class ChannelGateway:
             "chat_id": msg.external_chat_id,
             "reply_to_message_id": msg.external_message_id,
             "is_group": is_group,
+            "is_owner": is_owner,
         }
         # Inject platform-specific credential keys for channel MCP tools
         channel_type = channel.get("channel_type", "")
