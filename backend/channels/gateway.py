@@ -1405,27 +1405,12 @@ class ChannelGateway:
     # Session resolution
     # ------------------------------------------------------------------
 
-    async def _resolve_user_key(
-        self, platform: str, external_sender_id: str,
-    ) -> str:
-        """Map a platform-specific sender ID to a unified user_key.
-
-        Looks up ``channel_user_identities`` in DB.  If no mapping exists,
-        falls back to using the raw ``external_sender_id`` as the user_key
-        (per-channel isolation for unmapped users).
-        """
-        try:
-            user_key = await db.channel_user_identities.resolve_user_key(
-                platform=platform, external_sender_id=external_sender_id,
-            )
-            if user_key:
-                return user_key
-        except Exception:
-            logger.debug(
-                "channel_user_identities lookup failed for %s/%s, using fallback",
-                platform, external_sender_id,
-            )
-        return external_sender_id
+    # Channel session idle TTL: after this duration of inactivity, the next
+    # message starts a fresh session with cold resume context injection
+    # instead of resuming the stale CLI session.  Keeps each conversation
+    # focused and prevents multi-hour context accumulation.
+    # Does NOT affect chat tabs — only channel_sessions resolved here.
+    _CHANNEL_SESSION_IDLE_TTL_S = 2 * 60 * 60  # 2 hours
 
     async def _resolve_session(
         self,
@@ -1438,13 +1423,18 @@ class ChannelGateway:
     ) -> tuple[str, str, bool]:
         """Resolve an external conversation to an internal session.
 
-        For threaded messages (external_thread_id is set), sessions are
-        scoped per (channel_id, external_chat_id, thread_id) — no
-        cross-channel sharing.
+        Each conversation is scoped to ``(channel_id, external_chat_id,
+        thread_id)`` — no cross-channel session sharing.  Swarm Brain
+        (unified knowledge across channels) is provided by the shared
+        context files (MEMORY.md, KNOWLEDGE.md, etc.) in the system
+        prompt, not by sharing raw CLI sessions.
 
-        For top-level messages (no thread), sessions are shared across
-        channels for the same user_key, enabling cross-channel conversation
-        continuity (L2: Swarm's Brain Model).
+        **Idle TTL**: If the existing channel_session has been idle for
+        longer than ``_CHANNEL_SESSION_IDLE_TTL_S``, a new session is
+        created.  This prevents multi-hour context accumulation from
+        degrading response quality (compaction erasing details).  The
+        old session's messages remain in DB for cold resume context
+        injection if needed.
 
         Returns:
             (session_id, channel_session_id, is_new)
@@ -1457,56 +1447,41 @@ class ChannelGateway:
         )
 
         if existing:
-            is_new = (existing.get("message_count", 0) or 0) == 0
-            logger.debug(
-                f"Resolved existing session {existing['session_id']} "
-                f"for external chat {external_chat_id} (is_new={is_new})"
-            )
-            return existing["session_id"], existing["id"], is_new
-
-        # 2. For top-level (non-threaded) messages, check cross-channel sharing
-        if not external_thread_id:
-            channel_record = self._channel_cache.get(channel_id)
-            if not channel_record:
-                channel_record = await db.channels.get(channel_id)
-            platform = (channel_record or {}).get("channel_type", "unknown")
-            user_key = await self._resolve_user_key(platform, external_sender_id)
-
-            # Look for any existing non-threaded session for this user_key
-            try:
-                cross = await db.channel_sessions.find_by_user_key(
-                    user_key=user_key, exclude_threaded=True,
+            # Check idle TTL — if stale, rotate to a new session
+            last_msg = existing.get("last_message_at")
+            if last_msg and self._is_session_stale(last_msg):
+                logger.info(
+                    "Channel session %s idle > %ds — rotating to fresh session "
+                    "(old session_id=%s, external_chat=%s)",
+                    existing["id"],
+                    self._CHANNEL_SESSION_IDLE_TTL_S,
+                    existing["session_id"],
+                    external_chat_id,
                 )
-                if cross:
-                    # Reuse the session_id from the other channel
-                    session_id = cross["session_id"]
-                    channel_session_id = str(uuid4())
-                    await db.channel_sessions.put({
-                        "id": channel_session_id,
-                        "channel_id": channel_id,
-                        "external_chat_id": external_chat_id,
-                        "external_sender_id": external_sender_id,
-                        "external_thread_id": None,
-                        "session_id": session_id,
-                        "agent_id": agent_id,
-                        "sender_display_name": sender_display_name,
-                        "user_key": user_key,
-                        "last_message_at": datetime.now().isoformat(),
-                        "message_count": 0,
-                    })
-                    is_new = (cross.get("message_count", 0) or 0) == 0
-                    logger.info(
-                        f"Cross-channel session sharing: reusing session {session_id} "
-                        f"for user_key={user_key} from channel {cross.get('channel_id')} "
-                        f"→ channel {channel_id}"
+                # Fall through to step 2 (create new session) instead of
+                # reusing the stale one.  Delete the old channel_session
+                # mapping so the UNIQUE constraint allows a new one.
+                try:
+                    await db.channel_sessions.delete(existing["id"])
+                except Exception:
+                    logger.warning(
+                        "Failed to delete stale channel_session %s",
+                        existing["id"],
                     )
-                    return session_id, channel_session_id, is_new
-            except Exception:
-                logger.debug("find_by_user_key not available, falling back to per-channel")
-        else:
-            user_key = external_sender_id
+            else:
+                is_new = (existing.get("message_count", 0) or 0) == 0
+                logger.debug(
+                    "Resolved existing session %s for external chat %s "
+                    "(is_new=%s)",
+                    existing["session_id"],
+                    external_chat_id,
+                    is_new,
+                )
+                return existing["session_id"], existing["id"], is_new
 
-        # 3. Create a new internal session
+        # 2. Create a new internal session (per-channel, no cross-channel sharing)
+        user_key = external_sender_id
+
         session_id = str(uuid4())
         title = f"Channel: {sender_display_name or external_sender_id}"
         await session_manager.store_session(
@@ -1515,7 +1490,6 @@ class ChannelGateway:
             title=title,
         )
 
-        # Create the channel_session mapping
         channel_session_id = str(uuid4())
         await db.channel_sessions.put({
             "id": channel_session_id,
@@ -1532,10 +1506,23 @@ class ChannelGateway:
         })
 
         logger.info(
-            f"Created new session {session_id} (channel_session {channel_session_id}) "
-            f"for external chat {external_chat_id} on channel {channel_id}"
+            "Created new session %s (channel_session %s) "
+            "for external chat %s on channel %s",
+            session_id,
+            channel_session_id,
+            external_chat_id,
+            channel_id,
         )
         return session_id, channel_session_id, True
+
+    def _is_session_stale(self, last_message_at: str) -> bool:
+        """Check if a channel session has been idle beyond the TTL."""
+        try:
+            last_dt = datetime.fromisoformat(last_message_at)
+            idle_seconds = (datetime.now() - last_dt).total_seconds()
+            return idle_seconds > self._CHANNEL_SESSION_IDLE_TTL_S
+        except (ValueError, TypeError):
+            return False
 
     # ------------------------------------------------------------------
     # Access control
