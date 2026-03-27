@@ -520,6 +520,7 @@ For each modified source file, assign every finding a **confidence score (1-10)*
 
 ## Environment & Platform Rules
 
+- **Single source of truth for dependencies** — `pyproject.toml` is the ONLY place to declare dependencies. Build scripts (`build-backend.sh`, `dev.sh`) MUST read from pyproject.toml — never maintain a parallel hardcoded list. When adding a dep: add to `pyproject.toml`, run `uv lock`, done. If you see a hardcoded dep list anywhere, fix it to read from pyproject.toml.
 - **macOS PATH** — GUI apps don’t load shell PATH. Resolve via `zsh -lic` and sanitize output.
 - **PyInstaller trap** — `sys.executable` ≠ Python. Use direct imports or `get_python_executable()`.
 - **Sandbox writes** — Configure write access in `_build_sandbox_config`, not ad-hoc overrides.

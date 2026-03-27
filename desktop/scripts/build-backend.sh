@@ -184,27 +184,11 @@ fi
 # This ensures local modules (routers, core, etc.) remain as top-level modules in current dir
 echo "Installing dependencies with uv..."
 
-uv pip install pyinstaller pyinstaller-hooks-contrib
-
-# Install project dependencies from pyproject.toml (dependencies only, not as editable package)
-uv pip install \
-    "fastapi>=0.115.0" \
-    "uvicorn[standard]>=0.34.0" \
-    "python-multipart>=0.0.12" \
-    "pydantic>=2.10.0" \
-    "pydantic-settings>=2.6.0" \
-    "claude-agent-sdk>=0.1.50" \
-    "aiosqlite>=0.20.0" \
-    "PyJWT>=2.8.0" \
-    "bcrypt>=4.0.0" \
-    "slowapi>=0.1.9" \
-    "boto3>=1.35.0" \
-    "psutil>=5.9.0" \
-    "pyyaml>=6.0.0" \
-    "anyio>=4.0.0" \
-    "lark-oapi>=1.5.3" \
-    "slack-bolt>=1.27.0"
-    # "mcp>=1.0.0,<2.0.0"
+# Install ALL dependencies from pyproject.toml (main + dev).
+# Previously this was a hardcoded list that drifted from pyproject.toml,
+# causing deps like pytest-xdist and psutil to be declared but never installed.
+# Single source of truth: pyproject.toml [dependencies] + [project.optional-dependencies.dev]
+uv pip install -e ".[dev]"
 
 # Verify key local modules are accessible from current directory
 echo "Verifying local modules are importable..."
