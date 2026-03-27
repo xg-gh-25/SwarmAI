@@ -429,24 +429,46 @@ def pytest_configure(config):
     # --maxfail is now in pyproject.toml addopts (default=3).
     # No runtime injection needed — pytest handles it natively.
 
-    # Auto-inject -n N if xdist is available and user didn't specify -n.
-    # Worker count is memory-adaptive: scales down when system is under pressure.
+    # Enforce memory-adaptive worker cap — even when -n is passed explicitly.
+    # The SwarmAI agent often generates `pytest -n auto` which uses ALL CPU
+    # cores and crashes macOS via jetsam. We override any -n value that
+    # exceeds the safe budget. This makes the wrong thing impossible.
     try:
         import xdist  # noqa: F401
         if not hasattr(config.option, "numprocesses"):
             return
-        if not any(
+
+        safe_count = _compute_safe_worker_count()
+        user_specified_n = any(
             arg.startswith("-n") or arg == "--numprocesses"
             for arg in config.invocation_params.args
-        ):
-            workercount = _compute_safe_worker_count()
-            config.option.numprocesses = workercount
-            config.option.dist = "loadgroup"
-            if workercount == 0:
+        )
+
+        if user_specified_n:
+            # User (or agent) passed -n explicitly.
+            # "auto" resolves to os.cpu_count() by xdist — could be 8-16.
+            # Any value > safe_count gets clamped.
+            requested = config.option.numprocesses
+            # xdist stores "auto" as the string "auto" or the cpu count int
+            if requested == "auto" or (
+                isinstance(requested, int) and requested > safe_count
+            ):
                 _logger.warning(
-                    "xdist disabled — insufficient available memory. "
-                    "Running serially."
+                    f"Overriding -n {requested} → {safe_count} "
+                    f"(memory-adaptive cap, _MAX_WORKERS={_MAX_WORKERS})"
                 )
+                config.option.numprocesses = safe_count
+        else:
+            # No -n flag — inject our safe count.
+            config.option.numprocesses = safe_count
+
+        if config.option.numprocesses and config.option.numprocesses > 0:
+            config.option.dist = "loadgroup"
+        else:
+            _logger.warning(
+                "xdist disabled — insufficient available memory. "
+                "Running serially."
+            )
     except (ImportError, AttributeError):
         pass
 
