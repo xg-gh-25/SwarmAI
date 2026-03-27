@@ -791,11 +791,66 @@ class ChannelGateway:
             msg, agent_id, sender_identity,
         )
 
-        # 5a. Streaming setup — post a "thinking" indicator if supported --------
+        # 5a. Streaming setup ------------------------------------------------
         adapter = self._adapters.get(channel_id)
         streaming = adapter is not None and adapter.supports_streaming
+        native_streaming = streaming and adapter.supports_native_streaming
         streaming_msg_id: Optional[str] = None
+        inbound_ts = msg.external_message_id  # for reactions
+
+        # ── Status reactions: immediate emoji feedback ──────────────
+        # Inspired by OpenClaw's status-reactions system.
+        # React to the USER's message (not our reply) so they see
+        # instant acknowledgment.
+        _EMOJI_ACK = "eyes"           # 👀 received
+        _EMOJI_THINKING = "thinking_face"  # 🤔 processing
+        _EMOJI_TOOL = "fire"          # 🔥 tool use
+        _EMOJI_DONE = "white_check_mark"  # ✅ done
+        _EMOJI_ERROR = "x"            # ❌ error
+        _current_reaction: Optional[str] = None
+
+        async def _set_reaction(emoji: str) -> None:
+            """Set status reaction on the inbound message (swap previous)."""
+            nonlocal _current_reaction
+            if not adapter or not inbound_ts:
+                return
+            # Remove previous reaction
+            if _current_reaction and _current_reaction != emoji:
+                try:
+                    await adapter.remove_reaction(
+                        msg.external_chat_id, inbound_ts, _current_reaction,
+                    )
+                except Exception:
+                    pass
+            # Add new reaction
+            try:
+                await adapter.add_reaction(
+                    msg.external_chat_id, inbound_ts, emoji,
+                )
+                _current_reaction = emoji
+            except Exception:
+                pass
+
+        # Ack immediately — user sees 👀 before any processing
         if streaming:
+            await _set_reaction(_EMOJI_ACK)
+
+        # ── Start streaming ─────────────────────────────────────────
+        if native_streaming:
+            # Native Slack streaming: chat.startStream (no rate limit)
+            try:
+                streaming_msg_id = await adapter.start_stream(
+                    external_chat_id=msg.external_chat_id,
+                    external_thread_id=msg.external_thread_id,
+                )
+                if not streaming_msg_id:
+                    native_streaming = False
+            except Exception:
+                logger.exception("Failed to start native stream; falling back")
+                native_streaming = False
+
+        if streaming and not native_streaming:
+            # Fallback: legacy chat.update streaming
             try:
                 streaming_msg_id = await adapter.send_typing_indicator(
                     external_chat_id=msg.external_chat_id,
@@ -803,22 +858,19 @@ class ChannelGateway:
                 )
             except Exception:
                 logger.exception("Failed to send typing indicator")
-                streaming = False  # fall back to non-streaming
+                streaming = False
 
-        # Streaming state: accumulate text_delta tokens into a buffer.
-        # A background task flushes to the adapter every _STREAM_FLUSH_INTERVAL
-        # seconds.  Token handlers only append — they never await Slack API
-        # calls, so the event loop stays unblocked and tokens flow through
-        # at full speed.  Slack rate limit: ~50 chat_update/min → 1.2s safe.
-        _STREAM_FLUSH_INTERVAL = 1.2
+        # ── Streaming state ─────────────────────────────────────────
+        # For native streaming: tokens go directly via appendStream (no buffer).
+        # For legacy streaming: buffer + periodic flush (chat.update rate limited).
+        _STREAM_FLUSH_INTERVAL = 1.2  # legacy only
         _stream_buf: list[str] = []
-        _stream_flushed = ""  # text already sent to the adapter
+        _stream_flushed = ""
         _flush_lock = asyncio.Lock()
         _stream_done = asyncio.Event()
-        _tool_active = False  # True while the agent is executing a tool
 
         async def _do_flush() -> None:
-            """Drain buffer and push to adapter (must be called under _flush_lock or alone)."""
+            """Drain buffer and push to adapter (legacy path only)."""
             nonlocal _stream_flushed
             if not streaming or not streaming_msg_id or not _stream_buf:
                 return
@@ -837,26 +889,43 @@ class ChannelGateway:
                     logger.warning("Stream update failed: %s", exc)
 
         async def _periodic_flusher() -> None:
-            """Background task: flush buffered tokens to Slack periodically."""
+            """Background task: flush buffered tokens (legacy path only)."""
             while not _stream_done.is_set():
                 await asyncio.sleep(_STREAM_FLUSH_INTERVAL)
                 await _do_flush()
 
-        # Start the periodic flusher if streaming
         _flush_task: Optional[asyncio.Task] = None
-        if streaming and streaming_msg_id:
+        if streaming and streaming_msg_id and not native_streaming:
             _flush_task = asyncio.create_task(_periodic_flusher())
+
+        # ── Batch buffer for native streaming (reduces API calls) ───
+        # Accumulate tokens and flush every ~200ms (no rate limit, but
+        # batching avoids per-token API overhead).
+        _NATIVE_BATCH_INTERVAL = 0.2
+        _native_buf: list[str] = []
+
+        async def _native_batch_flusher() -> None:
+            """Background task: batch-flush tokens via appendStream."""
+            while not _stream_done.is_set():
+                await asyncio.sleep(_NATIVE_BATCH_INTERVAL)
+                if _native_buf and streaming_msg_id:
+                    chunk = "".join(_native_buf)
+                    _native_buf.clear()
+                    try:
+                        await adapter.append_stream(
+                            msg.external_chat_id, streaming_msg_id, chunk,
+                        )
+                    except Exception:
+                        pass
+
+        _native_flush_task: Optional[asyncio.Task] = None
+        if native_streaming and streaming_msg_id:
+            _native_flush_task = asyncio.create_task(_native_batch_flusher())
 
         reply_text = ""
         error_occurred = False
+        _thinking_set = False
         try:
-            # For new sessions (is_new=True, i.e. message_count==0), pass
-            # session_id=None so the SDK creates a fresh session.  The SDK
-            # will return its own session_id in the session_start event,
-            # which we store for future resumption.
-            # For existing sessions that completed at least one successful
-            # exchange, the stored session_id IS the SDK session_id and
-            # can be used to resume.
             resume_sid = None if _is_new else session_id
             async for event in session_registry.session_router.run_conversation(
                 agent_id=agent_id,
@@ -869,40 +938,57 @@ class ChannelGateway:
                 event_type = event.get("type", "")
 
                 # ── Streaming: token-by-token text deltas ──────────────
-                # Just append to buffer — the background _periodic_flusher
-                # drains it every _STREAM_FLUSH_INTERVAL seconds.  No await
-                # here, so the event loop processes tokens at full speed.
                 if event_type == "text_delta" and streaming:
                     delta_text = event.get("text", "")
                     if delta_text:
-                        _stream_buf.append(delta_text)
+                        # Switch reaction from 👀 to 🤔 on first text
+                        if not _thinking_set:
+                            _thinking_set = True
+                            await _set_reaction(_EMOJI_THINKING)
+
+                        if native_streaming:
+                            _native_buf.append(delta_text)
+                        else:
+                            _stream_buf.append(delta_text)
                     continue
 
-                # ── Tool activity: update indicator while working ──────
-                if event_type == "tool_use" and streaming and streaming_msg_id:
-                    _tool_active = True
+                # ── Tool activity ──────────────────────────────────────
+                if event_type == "tool_use" and streaming:
                     tool_name = event.get("name", "")
-                    # Force-flush buffered text, then show tool indicator
-                    await _do_flush()
-                    status = _stream_flushed + f"\n\n_Using tool: {tool_name}..._" if _stream_flushed else f"_Using tool: {tool_name}..._"
-                    try:
-                        await adapter.update_message(
-                            external_chat_id=msg.external_chat_id,
-                            message_id=streaming_msg_id,
-                            text=status,
+                    # Status reaction: 🔥
+                    await _set_reaction(_EMOJI_TOOL)
+
+                    if native_streaming and streaming_msg_id:
+                        # Flush pending text, then append tool indicator
+                        if _native_buf:
+                            chunk = "".join(_native_buf)
+                            _native_buf.clear()
+                            await adapter.append_stream(
+                                msg.external_chat_id, streaming_msg_id, chunk,
+                            )
+                        await adapter.append_stream(
+                            msg.external_chat_id, streaming_msg_id,
+                            f"\n\n_Using tool: {tool_name}..._",
                         )
-                    except Exception:
-                        pass
+                    elif streaming_msg_id:
+                        await _do_flush()
+                        status = _stream_flushed + f"\n\n_Using tool: {tool_name}..._" if _stream_flushed else f"_Using tool: {tool_name}..._"
+                        try:
+                            await adapter.update_message(
+                                external_chat_id=msg.external_chat_id,
+                                message_id=streaming_msg_id,
+                                text=status,
+                            )
+                        except Exception:
+                            pass
                     continue
 
                 if event_type == "tool_result" and streaming:
-                    _tool_active = False
-                    # Reset stream buffer — new assistant turn starts fresh
-                    # but keep _stream_flushed for context
+                    # Back to thinking
+                    await _set_reaction(_EMOJI_THINKING)
                     continue
 
                 if event_type == "assistant":
-                    # Keep only the last assistant message as the reply.
                     current_text = ""
                     content_blocks = event.get("content", [])
                     for block in content_blocks:
@@ -914,7 +1000,6 @@ class ChannelGateway:
                         reply_text = current_text
 
                 elif event_type == "session_start":
-                    # If the SDK provides a new session ID, update our mapping
                     new_sid = event.get("sessionId")
                     if new_sid and new_sid != session_id:
                         session_id = new_sid
@@ -953,31 +1038,55 @@ class ChannelGateway:
                         reply_text = "Sorry, I hit an error processing that. Please try again."
                     error_occurred = True
 
-                # Silently consume thinking_start, thinking_delta, text_start,
-                # content_block_stop, ask_user_question, etc.
-
         except Exception:
             logger.exception(f"Exception running agent conversation on channel {channel_id}")
             reply_text = "Sorry, something unexpected happened. Please try again."
             error_occurred = True
         finally:
-            # Stop the periodic flusher — no more intermediate updates needed
+            # Stop flusher tasks
             _stream_done.set()
-            if _flush_task is not None:
-                _flush_task.cancel()
-                try:
-                    await _flush_task
-                except asyncio.CancelledError:
-                    pass
+            for task in (_flush_task, _native_flush_task):
+                if task is not None:
+                    task.cancel()
+                    try:
+                        await task
+                    except asyncio.CancelledError:
+                        pass
 
         if not reply_text:
             reply_text = "(No response generated)"
 
+        # ── Final status reaction ───────────────────────────────────
+        if streaming:
+            await _set_reaction(_EMOJI_DONE if not error_occurred else _EMOJI_ERROR)
+
         # 6. Send outbound reply --------------------------------------------------
-        # If we were streaming, do a final update on the existing message.
-        # Otherwise, send a new message the traditional way.
         external_message_id: Optional[str] = None
-        if streaming and streaming_msg_id:
+
+        if native_streaming and streaming_msg_id:
+            # Flush any remaining tokens in native buffer
+            if _native_buf:
+                final_chunk = "".join(_native_buf)
+                _native_buf.clear()
+                try:
+                    await adapter.append_stream(
+                        msg.external_chat_id, streaming_msg_id, final_chunk,
+                    )
+                except Exception:
+                    pass
+            # Stop the stream — message becomes a normal Slack message
+            try:
+                await adapter.stop_stream(
+                    external_chat_id=msg.external_chat_id,
+                    stream_ts=streaming_msg_id,
+                )
+                external_message_id = streaming_msg_id
+            except Exception:
+                logger.exception("Failed to stop native stream; falling back to update")
+                # Fall through to legacy final update
+                native_streaming = False
+
+        if not native_streaming and streaming and streaming_msg_id:
             try:
                 await adapter.update_message(
                     external_chat_id=msg.external_chat_id,
@@ -988,7 +1097,6 @@ class ChannelGateway:
                 external_message_id = streaming_msg_id
             except Exception:
                 logger.exception("Failed to send final streaming update; falling back")
-                # Fall back to posting a new message
                 streaming = False
 
         if not streaming or not streaming_msg_id:

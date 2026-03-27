@@ -202,3 +202,64 @@ class ChannelAdapter(ABC):
         on the last call so the adapter can apply final formatting
         (e.g. Block Kit conversion).
         """
+
+    # ------------------------------------------------------------------
+    # Optional native streaming support (Slack Agents & AI Apps API)
+    # ------------------------------------------------------------------
+
+    @property
+    def supports_native_streaming(self) -> bool:
+        """Whether this adapter supports Slack-style native streaming.
+
+        Native streaming uses ``start_stream/append_stream/stop_stream``
+        instead of ``send_typing_indicator + update_message``.  It's
+        significantly faster because ``chat.appendStream`` has no rate
+        limit (unlike ``chat.update`` which is ~50/min).
+        """
+        return False
+
+    async def start_stream(
+        self,
+        external_chat_id: str,
+        external_thread_id: Optional[str] = None,
+        text: Optional[str] = None,
+    ) -> Optional[str]:
+        """Start a native streaming session. Returns stream ts."""
+        return None
+
+    async def append_stream(
+        self,
+        external_chat_id: str,
+        stream_ts: str,
+        text: str,
+    ) -> None:
+        """Append text to an active native stream."""
+
+    async def stop_stream(
+        self,
+        external_chat_id: str,
+        stream_ts: str,
+        text: Optional[str] = None,
+        final_blocks: Optional[list[dict]] = None,
+    ) -> None:
+        """Finalize a native stream into a regular message."""
+
+    # ------------------------------------------------------------------
+    # Optional status reactions
+    # ------------------------------------------------------------------
+
+    async def add_reaction(
+        self,
+        external_chat_id: str,
+        message_ts: str,
+        emoji: str,
+    ) -> None:
+        """Add an emoji reaction to a message."""
+
+    async def remove_reaction(
+        self,
+        external_chat_id: str,
+        message_ts: str,
+        emoji: str,
+    ) -> None:
+        """Remove an emoji reaction from a message."""

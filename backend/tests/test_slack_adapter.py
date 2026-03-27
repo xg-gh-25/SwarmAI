@@ -485,6 +485,149 @@ class TestSlackLifecycle:
 # Registry integration
 # ===================================================================
 
+# ===================================================================
+# Native streaming (chat.startStream / appendStream / stopStream)
+# ===================================================================
+
+
+class TestSlackNativeStreaming:
+    """Native Slack Agents & AI Apps streaming API."""
+
+    def test_supports_native_streaming(self, adapter):
+        assert adapter.supports_native_streaming is True
+
+    @pytest.mark.asyncio
+    async def test_start_stream(self, adapter):
+        """start_stream calls chat_startStream and returns ts."""
+        mock_client = MagicMock()
+        mock_client.auth_test.return_value = {"team_id": "T123", "user_id": "U456"}
+        mock_client.chat_startStream.return_value = {"ts": "1234.5678"}
+        adapter._slack_client = mock_client
+
+        ts = await adapter.start_stream("C001", external_thread_id="1111.0000")
+        assert ts == "1234.5678"
+        mock_client.chat_startStream.assert_called_once()
+        call_kwargs = mock_client.chat_startStream.call_args
+        assert call_kwargs[1]["channel"] == "C001"
+        assert call_kwargs[1]["thread_ts"] == "1111.0000"
+
+    @pytest.mark.asyncio
+    async def test_start_stream_with_initial_text(self, adapter):
+        mock_client = MagicMock()
+        mock_client.auth_test.return_value = {"team_id": "T123", "user_id": "U456"}
+        mock_client.chat_startStream.return_value = {"ts": "1234.5678"}
+        adapter._slack_client = mock_client
+
+        await adapter.start_stream("C001", text="Hello")
+        call_kwargs = mock_client.chat_startStream.call_args[1]
+        assert call_kwargs["markdown_text"] == "Hello"
+
+    @pytest.mark.asyncio
+    async def test_append_stream(self, adapter):
+        """append_stream calls chat_appendStream."""
+        mock_client = MagicMock()
+        mock_client.chat_appendStream.return_value = {}
+        adapter._slack_client = mock_client
+
+        await adapter.append_stream("C001", "1234.5678", "some text")
+        mock_client.chat_appendStream.assert_called_once_with(
+            channel="C001", ts="1234.5678", markdown_text="some text",
+        )
+
+    @pytest.mark.asyncio
+    async def test_append_stream_ignores_empty(self, adapter):
+        """append_stream is a no-op for empty text."""
+        mock_client = MagicMock()
+        adapter._slack_client = mock_client
+
+        await adapter.append_stream("C001", "1234.5678", "")
+        mock_client.chat_appendStream.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_stop_stream(self, adapter):
+        """stop_stream calls chat_stopStream."""
+        mock_client = MagicMock()
+        mock_client.chat_stopStream.return_value = {}
+        adapter._slack_client = mock_client
+
+        await adapter.stop_stream("C001", "1234.5678")
+        mock_client.chat_stopStream.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_stop_stream_with_final_text(self, adapter):
+        mock_client = MagicMock()
+        mock_client.chat_stopStream.return_value = {}
+        adapter._slack_client = mock_client
+
+        await adapter.stop_stream("C001", "1234.5678", text="Final.")
+        call_kwargs = mock_client.chat_stopStream.call_args[1]
+        assert call_kwargs["markdown_text"] == "Final."
+
+    @pytest.mark.asyncio
+    async def test_start_stream_no_client_returns_none(self, adapter):
+        """start_stream returns None if client is not set."""
+        adapter._slack_client = None
+        result = await adapter.start_stream("C001")
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_start_stream_exception_returns_none(self, adapter):
+        """start_stream returns None when chat_startStream fails."""
+        mock_client = MagicMock()
+        mock_client.auth_test.return_value = {"team_id": "T123", "user_id": "U456"}
+        mock_client.chat_startStream.side_effect = Exception("stream fail")
+        adapter._slack_client = mock_client
+
+        result = await adapter.start_stream("C001")
+        assert result is None
+
+
+# ===================================================================
+# Status reactions
+# ===================================================================
+
+
+class TestSlackReactions:
+    """Emoji status reactions on inbound messages."""
+
+    @pytest.mark.asyncio
+    async def test_add_reaction(self, adapter):
+        mock_client = MagicMock()
+        mock_client.reactions_add.return_value = {"ok": True}
+        adapter._slack_client = mock_client
+
+        await adapter.add_reaction("C001", "1234.5678", "eyes")
+        mock_client.reactions_add.assert_called_once_with(
+            channel="C001", timestamp="1234.5678", name="eyes",
+        )
+
+    @pytest.mark.asyncio
+    async def test_remove_reaction(self, adapter):
+        mock_client = MagicMock()
+        mock_client.reactions_remove.return_value = {"ok": True}
+        adapter._slack_client = mock_client
+
+        await adapter.remove_reaction("C001", "1234.5678", "eyes")
+        mock_client.reactions_remove.assert_called_once_with(
+            channel="C001", timestamp="1234.5678", name="eyes",
+        )
+
+    @pytest.mark.asyncio
+    async def test_add_reaction_no_client(self, adapter):
+        """Reaction is a no-op without a client."""
+        adapter._slack_client = None
+        await adapter.add_reaction("C001", "1234.5678", "eyes")  # no error
+
+    @pytest.mark.asyncio
+    async def test_add_reaction_exception_swallowed(self, adapter):
+        """Reaction failures don't propagate."""
+        mock_client = MagicMock()
+        mock_client.reactions_add.side_effect = Exception("rate limited")
+        adapter._slack_client = mock_client
+
+        await adapter.add_reaction("C001", "1234.5678", "eyes")  # no error
+
+
 class TestSlackRegistration:
     """Slack adapter registers itself in the registry when slack-bolt is available."""
 

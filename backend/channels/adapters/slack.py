@@ -325,26 +325,124 @@ class SlackChannelAdapter(ChannelAdapter):
             return None
 
     # ------------------------------------------------------------------
-    # Streaming support
+    # Streaming support — Native Slack Agents & AI Apps streaming API
     # ------------------------------------------------------------------
+    #
+    # Uses chat.startStream / chat.appendStream / chat.stopStream — the
+    # purpose-built streaming API with NO rate limit (unlike chat.update
+    # which is capped at ~50/min).  This is what makes streaming feel
+    # instant instead of 1.2s-batched.
+    #
+    # Fallback: update_message (chat.update) remains for non-streaming
+    # adapters or when native streaming fails.
 
     @property
     def supports_streaming(self) -> bool:
         return True
 
+    @property
+    def supports_native_streaming(self) -> bool:
+        return True
+
+    async def start_stream(
+        self,
+        external_chat_id: str,
+        external_thread_id: Optional[str] = None,
+        text: Optional[str] = None,
+    ) -> Optional[str]:
+        """Start a native Slack stream. Returns stream message ts."""
+        if not self._slack_client:
+            return None
+        try:
+            loop = asyncio.get_running_loop()
+            kwargs: dict = {
+                "channel": external_chat_id,
+                "thread_ts": external_thread_id or "",
+            }
+            if text:
+                kwargs["markdown_text"] = text
+            # Resolve team_id and bot user_id for DM streaming
+            if not hasattr(self, "_team_id"):
+                try:
+                    info = await loop.run_in_executor(
+                        None, self._slack_client.auth_test,
+                    )
+                    self._team_id = info.get("team_id", "")
+                    self._bot_user_id = info.get("user_id", "")
+                except Exception:
+                    self._team_id = ""
+                    self._bot_user_id = ""
+            if self._team_id:
+                kwargs["recipient_team_id"] = self._team_id
+
+            result = await loop.run_in_executor(
+                None, lambda: self._slack_client.chat_startStream(**kwargs),
+            )
+            ts = result.get("ts")
+            logger.debug("Slack stream started: channel=%s ts=%s", external_chat_id, ts)
+            return ts
+        except Exception:
+            logger.exception("Failed to start Slack native stream")
+            return None
+
+    async def append_stream(
+        self,
+        external_chat_id: str,
+        stream_ts: str,
+        text: str,
+    ) -> None:
+        """Append markdown text to an active Slack stream (no rate limit)."""
+        if not self._slack_client or not text:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(
+                None,
+                lambda: self._slack_client.chat_appendStream(
+                    channel=external_chat_id,
+                    ts=stream_ts,
+                    markdown_text=text,
+                ),
+            )
+        except Exception:
+            logger.debug("Failed to append to Slack stream ts=%s", stream_ts)
+
+    async def stop_stream(
+        self,
+        external_chat_id: str,
+        stream_ts: str,
+        text: Optional[str] = None,
+        final_blocks: Optional[list[dict]] = None,
+    ) -> None:
+        """Stop a native Slack stream — message becomes a normal message."""
+        if not self._slack_client:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+            kwargs: dict = {
+                "channel": external_chat_id,
+                "ts": stream_ts,
+            }
+            if text:
+                kwargs["markdown_text"] = text
+            if final_blocks:
+                kwargs["blocks"] = final_blocks
+            await loop.run_in_executor(
+                None, lambda: self._slack_client.chat_stopStream(**kwargs),
+            )
+            logger.debug("Slack stream stopped: channel=%s ts=%s", external_chat_id, stream_ts)
+        except Exception:
+            logger.exception("Failed to stop Slack stream")
+
+    # Legacy fallback — kept for non-native-streaming code paths
     async def send_typing_indicator(
         self,
         external_chat_id: str,
         external_thread_id: Optional[str] = None,
     ) -> Optional[str]:
-        """Post a placeholder message with a thinking indicator.
-
-        Returns the Slack ``ts`` so the gateway can update it in-place
-        as the agent streams its response.
-        """
+        """Post a placeholder message (fallback when native streaming unavailable)."""
         if not self._slack_client:
             return None
-
         try:
             kwargs = {
                 "channel": external_chat_id,
@@ -360,7 +458,6 @@ class SlackChannelAdapter(ChannelAdapter):
             }
             if external_thread_id:
                 kwargs["thread_ts"] = external_thread_id
-
             loop = asyncio.get_running_loop()
             result = await loop.run_in_executor(
                 None, lambda: self._slack_client.chat_postMessage(**kwargs)
@@ -378,18 +475,9 @@ class SlackChannelAdapter(ChannelAdapter):
         *,
         is_final: bool = False,
     ) -> None:
-        """Update the placeholder message with streaming or final content.
+        """Update message via chat.update (fallback path).
 
-        Intermediate updates use plain ``mrkdwn`` text (fast, no Block
-        Kit overhead).  The final update applies full Block Kit
-        formatting.  If the final text is too long for a single Slack
-        message, the original message is updated with the first chunk
-        and overflow is posted as new follow-up messages.
-
-        All sync Slack SDK calls are dispatched via ``run_in_executor``
-        so they never block the asyncio event loop — critical for
-        streaming, where blocking a single ``chat_update`` stalls the
-        entire token-processing pipeline.
+        All sync Slack SDK calls dispatched via ``run_in_executor``.
         """
         if not self._slack_client:
             return
@@ -399,12 +487,10 @@ class SlackChannelAdapter(ChannelAdapter):
 
         try:
             if is_final:
-                # Final update — full Block Kit formatting, with overflow handling
                 blocks = self._text_to_blocks(text)
                 fallback = text[:_TEXT_FALLBACK_LIMIT]
 
                 if len(blocks) <= _MAX_BLOCKS_PER_MSG:
-                    # Fits in one message — update in place
                     await loop.run_in_executor(None, lambda: client.chat_update(
                         channel=external_chat_id,
                         ts=message_id,
@@ -412,7 +498,6 @@ class SlackChannelAdapter(ChannelAdapter):
                         blocks=blocks,
                     ))
                 else:
-                    # Overflow: update original with first chunk, post rest as new messages
                     first_chunk = blocks[:_MAX_BLOCKS_PER_MSG]
                     await loop.run_in_executor(None, lambda: client.chat_update(
                         channel=external_chat_id,
@@ -420,7 +505,6 @@ class SlackChannelAdapter(ChannelAdapter):
                         text=fallback,
                         blocks=first_chunk,
                     ))
-                    # Post overflow chunks as follow-up messages.
                     remaining = blocks[_MAX_BLOCKS_PER_MSG:]
                     while remaining:
                         chunk = remaining[:_MAX_BLOCKS_PER_MSG]
@@ -435,12 +519,9 @@ class SlackChannelAdapter(ChannelAdapter):
                             logger.warning("Failed to post overflow chunk")
                             break
             else:
-                # Streaming update — lightweight mrkdwn with cursor
                 display = self._md_to_mrkdwn(text) + " :writing_hand:"
-                # Truncate to Slack's 3000-char section limit (show tail)
                 if len(display) > _BLOCK_SECTION_LIMIT:
                     display = "..." + display[-(_BLOCK_SECTION_LIMIT - 20):] + " :writing_hand:"
-                # Truncate text fallback too — this was the msg_too_long root cause
                 fallback = text[-_TEXT_FALLBACK_LIMIT:] if len(text) > _TEXT_FALLBACK_LIMIT else text
                 await loop.run_in_executor(None, lambda: client.chat_update(
                     channel=external_chat_id,
@@ -455,6 +536,51 @@ class SlackChannelAdapter(ChannelAdapter):
                 ))
         except Exception:
             logger.exception("Error updating Slack message")
+
+    # ------------------------------------------------------------------
+    # Status reactions (emoji feedback on inbound messages)
+    # ------------------------------------------------------------------
+
+    async def add_reaction(
+        self,
+        external_chat_id: str,
+        message_ts: str,
+        emoji: str,
+    ) -> None:
+        """Add an emoji reaction to a message."""
+        if not self._slack_client:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(
+                None,
+                lambda: self._slack_client.reactions_add(
+                    channel=external_chat_id, timestamp=message_ts, name=emoji,
+                ),
+            )
+        except Exception:
+            # Silently ignore — reaction failures shouldn't block anything
+            logger.debug("Failed to add reaction %s to %s", emoji, message_ts)
+
+    async def remove_reaction(
+        self,
+        external_chat_id: str,
+        message_ts: str,
+        emoji: str,
+    ) -> None:
+        """Remove an emoji reaction from a message."""
+        if not self._slack_client:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(
+                None,
+                lambda: self._slack_client.reactions_remove(
+                    channel=external_chat_id, timestamp=message_ts, name=emoji,
+                ),
+            )
+        except Exception:
+            logger.debug("Failed to remove reaction %s from %s", emoji, message_ts)
 
     # ------------------------------------------------------------------
     # Outgoing messages
