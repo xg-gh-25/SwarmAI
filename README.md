@@ -339,18 +339,22 @@ Code editors with AI autocomplete. Fundamentally different category:
 
 ## Quick Start
 
+> **Full setup guide**: [docs/USER_GUIDE.md](./docs/USER_GUIDE.md) — prerequisites, installation, configuration, features, troubleshooting, and FAQ.
+
 ### Install
 
-**macOS**: Download `.dmg` from [Releases](https://github.com/xg-gh-25/SwarmAI/releases) → drag to Applications. If blocked: `xattr -cr /Applications/SwarmAI.app`
+**Prerequisites**: [Node.js 18+](https://nodejs.org/), [Claude Code CLI](https://github.com/anthropics/claude-code) (`npm install -g @anthropic-ai/claude-code`), and an AI provider (AWS Bedrock or Anthropic API key).
 
-**Windows**: Download `.msi` from [Releases](https://github.com/xg-gh-25/SwarmAI/releases) → run installer. Requires [Git Bash](https://git-scm.com/downloads/win).
+**macOS (Apple Silicon)**: Download `.dmg` from [Releases](https://github.com/xg-gh-25/SwarmAI/releases) → drag to Applications → `xattr -cr /Applications/SwarmAI.app`
+
+**Windows**: Download `-setup.exe` from [Releases](https://github.com/xg-gh-25/SwarmAI/releases) → run installer. If SmartScreen warns, click "More info" → "Run anyway".
 
 ### Configure
 
 1. Launch SwarmAI
 2. Open Settings (gear icon, bottom of left sidebar)
 3. Choose your AI provider:
-   - **AWS Bedrock** (recommended): Enable toggle, select region, ensure `aws configure` is done
+   - **AWS Bedrock** (recommended): Enable toggle, select region, ensure `aws sso login` or `aws configure` is done
    - **Anthropic API**: Enter API key
 4. Send a test message — if you get a response, you're ready
 
@@ -360,8 +364,7 @@ Code editors with AI autocomplete. Fundamentally different category:
 git clone https://github.com/xg-gh-25/SwarmAI.git
 cd SwarmAI/desktop
 npm install
-cp backend.env.example ../backend/.env
-# Edit ../backend/.env — set ANTHROPIC_API_KEY or configure Bedrock
+cp .env.example ../backend/.env
 
 npm run tauri:dev     # Development mode
 npm run build:all     # Production build
