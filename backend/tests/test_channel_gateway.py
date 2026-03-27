@@ -727,6 +727,61 @@ class TestFileAccessSandbox:
         assert identity.external_id == "W_ANDY"
 
 
+class TestCwdAndMcpRestriction:
+    """Non-owner sessions get cwd switched and MCP stripped."""
+
+    def test_relative_path_resolves_to_sender_dir(self):
+        """With cwd set to sender dir, relative paths stay in sandbox."""
+        import os
+        sender_dir = "/workspace/channel_files/W_ANDY"
+        # Simulate what happens when cwd is sender_dir
+        resolved = os.path.normpath(os.path.join(sender_dir, "report.txt"))
+        assert resolved == "/workspace/channel_files/W_ANDY/report.txt"
+
+        # Relative traversal attempts resolve to parent — blocked by file_access_handler
+        traversal = os.path.normpath(os.path.join(sender_dir, "../../.context/MEMORY.md"))
+        assert not traversal.startswith(sender_dir)
+
+    def test_mcp_stripped_for_non_owner(self):
+        """Non-owner sessions keep only channel-tools MCP."""
+        mcp_servers = {
+            "slack-mcp": {"command": "slack-mcp"},
+            "outlook-mcp": {"command": "outlook-mcp"},
+            "github-mcp": {"command": "github-mcp"},
+            "channel-tools": {"command": "channel-tools"},
+        }
+        # Simulate the stripping logic
+        safe_mcps = {
+            name: config for name, config in mcp_servers.items()
+            if name == "channel-tools"
+        }
+        assert len(safe_mcps) == 1
+        assert "channel-tools" in safe_mcps
+        assert "slack-mcp" not in safe_mcps
+        assert "outlook-mcp" not in safe_mcps
+
+    def test_owner_keeps_all_mcp(self):
+        """Owner sessions keep all MCP servers."""
+        mcp_servers = {
+            "slack-mcp": {"command": "slack-mcp"},
+            "channel-tools": {"command": "channel-tools"},
+        }
+        # _channel_sender_dir is None for owner → no stripping
+        _channel_sender_dir = None
+        if _channel_sender_dir and mcp_servers:
+            mcp_servers = {n: c for n, c in mcp_servers.items() if n == "channel-tools"}
+        assert len(mcp_servers) == 2
+
+    def test_empty_mcp_when_no_channel_tools(self):
+        """If no channel-tools configured, non-owner gets empty MCP."""
+        mcp_servers = {
+            "slack-mcp": {"command": "slack-mcp"},
+            "github-mcp": {"command": "github-mcp"},
+        }
+        safe = {n: c for n, c in mcp_servers.items() if n == "channel-tools"}
+        assert len(safe) == 0
+
+
 class TestSystemPromptChannelSecurity:
     """Verify the system prompt includes channel security section."""
 

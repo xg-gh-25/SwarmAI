@@ -24,8 +24,8 @@ cd backend && uv sync && source .venv/bin/activate && python main.py
 # Frontend tests
 cd desktop && npm test -- --run
 
-# Backend tests
-cd backend && pytest
+# Backend tests (MUST use venv — system python is missing test deps)
+cd backend && .venv/bin/python -m pytest
 
 # Full production build
 cd desktop && npm run build:all
