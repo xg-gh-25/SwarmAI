@@ -615,6 +615,49 @@ class ChannelGateway:
         # Prepare message text (stages attachments to workspace if present)
         final_text = await self._prepare_message_text(msg, agent_id)
 
+        # 5a. Streaming setup — post a "thinking" indicator if supported --------
+        adapter = self._adapters.get(channel_id)
+        streaming = adapter is not None and adapter.supports_streaming
+        streaming_msg_id: Optional[str] = None
+        if streaming:
+            try:
+                streaming_msg_id = await adapter.send_typing_indicator(
+                    external_chat_id=msg.external_chat_id,
+                    external_thread_id=msg.external_thread_id,
+                )
+            except Exception:
+                logger.exception("Failed to send typing indicator")
+                streaming = False  # fall back to non-streaming
+
+        # Streaming state: accumulate text_delta tokens into a buffer.
+        # Flush to the adapter at most every _STREAM_THROTTLE_SEC seconds
+        # to avoid hitting Slack rate limits (~50 chat_update / min).
+        _STREAM_THROTTLE_SEC = 0.8
+        _stream_buf: list[str] = []
+        _stream_flushed = ""  # text already sent to the adapter
+        _last_flush = 0.0
+        _tool_active = False  # True while the agent is executing a tool
+
+        async def _flush_stream(force: bool = False) -> None:
+            """Push accumulated text to the adapter via update_message."""
+            nonlocal _stream_flushed, _last_flush, _stream_buf
+            if not streaming or not streaming_msg_id or not _stream_buf:
+                return
+            now = time.time()
+            if not force and (now - _last_flush) < _STREAM_THROTTLE_SEC:
+                return
+            _stream_flushed = _stream_flushed + "".join(_stream_buf)
+            _stream_buf.clear()
+            _last_flush = now
+            try:
+                await adapter.update_message(
+                    external_chat_id=msg.external_chat_id,
+                    message_id=streaming_msg_id,
+                    text=_stream_flushed,
+                )
+            except Exception:
+                logger.debug("Stream update failed (non-fatal)")
+
         reply_text = ""
         error_occurred = False
         try:
@@ -636,12 +679,39 @@ class ChannelGateway:
             ):
                 event_type = event.get("type", "")
 
+                # ── Streaming: token-by-token text deltas ──────────────
+                if event_type == "text_delta" and streaming:
+                    delta_text = event.get("text", "")
+                    if delta_text:
+                        _stream_buf.append(delta_text)
+                        await _flush_stream()
+                    continue
+
+                # ── Tool activity: update indicator while working ──────
+                if event_type == "tool_use" and streaming and streaming_msg_id:
+                    _tool_active = True
+                    tool_name = event.get("name", "")
+                    # Flush any buffered text, then show tool indicator
+                    await _flush_stream(force=True)
+                    status = _stream_flushed + f"\n\n_Using tool: {tool_name}..._" if _stream_flushed else f"_Using tool: {tool_name}..._"
+                    try:
+                        await adapter.update_message(
+                            external_chat_id=msg.external_chat_id,
+                            message_id=streaming_msg_id,
+                            text=status,
+                        )
+                    except Exception:
+                        pass
+                    continue
+
+                if event_type == "tool_result" and streaming:
+                    _tool_active = False
+                    # Reset stream buffer — new assistant turn starts fresh
+                    # but keep _stream_flushed for context
+                    continue
+
                 if event_type == "assistant":
                     # Keep only the last assistant message as the reply.
-                    # In multi-step conversations (assistant speaks → tool
-                    # call → assistant speaks again), intermediate messages
-                    # are not meaningful to send back; only the final
-                    # response matters.
                     current_text = ""
                     content_blocks = event.get("content", [])
                     for block in content_blocks:
@@ -657,8 +727,6 @@ class ChannelGateway:
                     new_sid = event.get("sessionId")
                     if new_sid and new_sid != session_id:
                         session_id = new_sid
-                        # Update the channel_session record to point to the
-                        # SDK-assigned session ID
                         try:
                             await db.channel_sessions.update(
                                 channel_session_id,
@@ -668,7 +736,6 @@ class ChannelGateway:
                             logger.exception("Failed to update channel_session with new session_id")
 
                 elif event_type == "result":
-                    # Conversation finished — may include an error subtype
                     subtype = event.get("subtype", "")
                     cost = event.get("totalCostUsd")
                     duration = event.get("durationMs")
@@ -683,7 +750,7 @@ class ChannelGateway:
                             f"Agent result error on channel {channel_id}: {error_detail}"
                         )
                         if not reply_text:
-                            reply_text = f"Sorry, the agent encountered an error: {error_detail}"
+                            reply_text = f"Sorry, something went wrong: {error_detail}"
                         error_occurred = True
 
                 elif event_type == "error":
@@ -692,35 +759,51 @@ class ChannelGateway:
                         f"Agent error on channel {channel_id}: {error_msg}"
                     )
                     if not reply_text:
-                        reply_text = "Sorry, I encountered an error processing your request."
+                        reply_text = "Sorry, I hit an error processing that. Please try again."
                     error_occurred = True
 
-                # Silently consume tool_use, tool_result, ask_user_question, etc.
+                # Silently consume thinking_start, thinking_delta, text_start,
+                # content_block_stop, ask_user_question, etc.
 
         except Exception:
             logger.exception(f"Exception running agent conversation on channel {channel_id}")
-            reply_text = "Sorry, an unexpected error occurred. Please try again later."
+            reply_text = "Sorry, something unexpected happened. Please try again."
             error_occurred = True
 
         if not reply_text:
             reply_text = "(No response generated)"
 
         # 6. Send outbound reply --------------------------------------------------
-        outbound = OutboundMessage(
-            channel_id=channel_id,
-            external_chat_id=msg.external_chat_id,
-            external_thread_id=msg.external_thread_id,
-            reply_to_message_id=msg.external_message_id,
-            text=reply_text,
-        )
-
+        # If we were streaming, do a final update on the existing message.
+        # Otherwise, send a new message the traditional way.
         external_message_id: Optional[str] = None
-        adapter = self._adapters.get(channel_id)
-        if adapter:
+        if streaming and streaming_msg_id:
             try:
-                external_message_id = await adapter.send_message(outbound)
+                await adapter.update_message(
+                    external_chat_id=msg.external_chat_id,
+                    message_id=streaming_msg_id,
+                    text=reply_text,
+                    is_final=True,
+                )
+                external_message_id = streaming_msg_id
             except Exception:
-                logger.exception(f"Failed to send outbound message on channel {channel_id}")
+                logger.exception("Failed to send final streaming update; falling back")
+                # Fall back to posting a new message
+                streaming = False
+
+        if not streaming or not streaming_msg_id:
+            outbound = OutboundMessage(
+                channel_id=channel_id,
+                external_chat_id=msg.external_chat_id,
+                external_thread_id=msg.external_thread_id,
+                reply_to_message_id=msg.external_message_id,
+                text=reply_text,
+            )
+            if adapter:
+                try:
+                    external_message_id = await adapter.send_message(outbound)
+                except Exception:
+                    logger.exception(f"Failed to send outbound message on channel {channel_id}")
 
         # 7. Log outbound message -------------------------------------------------
         try:
