@@ -1,13 +1,23 @@
 #!/bin/bash
 # SwarmAI Development Helper
 # Usage:
-#   ./dev.sh          — Start everything (backend + frontend)
-#   ./dev.sh backend  — Restart backend only (after Python changes)
-#   ./dev.sh frontend — Start frontend only (backend already running)
-#   ./dev.sh build    — Full production build (PyInstaller + Tauri + DMG)
-#   ./dev.sh quick    — Quick build: skip PyInstaller, rebuild Tauri only (frontend/Rust changes)
-#   ./dev.sh kill     — Kill all dev processes
-#   ./dev.sh status   — Show what's running
+#   ./dev.sh              — Start everything (backend + frontend)
+#   ./dev.sh backend      — Restart backend only (after Python changes)
+#   ./dev.sh frontend     — Start frontend only (backend already running)
+#   ./dev.sh build        — Full production build (PyInstaller + Tauri + DMG)
+#   ./dev.sh quick        — Quick build: skip PyInstaller, rebuild Tauri only
+#   ./dev.sh kill         — Kill all dev processes
+#   ./dev.sh status       — Show what's running
+#
+# Daemon & Channel management:
+#   ./dev.sh daemon restart  — Restart the backend daemon (launchd)
+#   ./dev.sh daemon stop     — Stop the daemon
+#   ./dev.sh daemon start    — Start the daemon
+#   ./dev.sh daemon status   — Show daemon status
+#   ./dev.sh daemon logs     — Tail daemon logs (Ctrl-C to stop)
+#   ./dev.sh channel restart [id] — Restart channel(s) via API
+#   ./dev.sh channel stop [id]    — Stop channel(s)
+#   ./dev.sh channel list         — List all channels + status
 
 set -e
 
@@ -17,6 +27,12 @@ DESKTOP_DIR="$PROJECT_ROOT/desktop"
 BACKEND_PORT=8000
 BACKEND_PID_FILE="/tmp/swarmai-backend.pid"
 LOG_DIR="$HOME/.swarm-ai/logs"
+
+# Daemon constants
+DAEMON_LABEL="com.swarmai.backend"
+DAEMON_PORT=18321
+DAEMON_API="http://127.0.0.1:${DAEMON_PORT}"
+GUI_TARGET="gui/$(id -u)/${DAEMON_LABEL}"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -249,6 +265,152 @@ cmd_status() {
     echo ""
 }
 
+# ── Daemon management ───────────────────────────────────────
+
+_daemon_is_running() {
+    launchctl print "$GUI_TARGET" &>/dev/null
+}
+
+_daemon_health() {
+    curl -sf "${DAEMON_API}/health" 2>/dev/null
+}
+
+cmd_daemon() {
+    local sub="${1:-status}"
+    case "$sub" in
+        restart)
+            _log "Restarting daemon..."
+            launchctl kickstart -k "$GUI_TARGET"
+            _log "Waiting for health..."
+            for i in $(seq 1 15); do
+                sleep 1
+                if _daemon_health >/dev/null; then
+                    _ok "Daemon healthy on port ${DAEMON_PORT} (${i}s)"
+                    return
+                fi
+            done
+            _err "Daemon did not become healthy within 15s"
+            _warn "Check: tail -30 ~/.swarm-ai/logs/backend-stderr.log"
+            ;;
+        stop)
+            _log "Stopping daemon..."
+            launchctl bootout "$GUI_TARGET" 2>/dev/null || true
+            _ok "Daemon stopped"
+            ;;
+        start)
+            if _daemon_is_running; then
+                _warn "Daemon already running"
+                _daemon_health && _ok "Healthy on port ${DAEMON_PORT}"
+                return
+            fi
+            _log "Starting daemon..."
+            launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/${DAEMON_LABEL}.plist"
+            _log "Waiting for health..."
+            for i in $(seq 1 15); do
+                sleep 1
+                if _daemon_health >/dev/null; then
+                    _ok "Daemon healthy on port ${DAEMON_PORT} (${i}s)"
+                    return
+                fi
+            done
+            _err "Daemon did not become healthy within 15s"
+            ;;
+        status)
+            if _daemon_is_running; then
+                _ok "Daemon: running"
+            else
+                _err "Daemon: not running"
+                return 1
+            fi
+            local health
+            if health=$(_daemon_health); then
+                echo "$health" | python3 -m json.tool 2>/dev/null || echo "$health"
+            else
+                _warn "API not responding on port ${DAEMON_PORT}"
+            fi
+            ;;
+        logs)
+            _log "Tailing daemon logs (Ctrl-C to stop)..."
+            tail -f "$LOG_DIR/backend-stderr.log"
+            ;;
+        *)
+            echo "Usage: ./dev.sh daemon [restart|stop|start|status|logs]"
+            ;;
+    esac
+}
+
+# ── Channel management ──────────────────────────────────────
+
+_api() {
+    # Helper: call daemon API, pretty-print JSON response
+    local method="$1" path="$2"
+    local resp
+    resp=$(curl -sfL -X "$method" "${DAEMON_API}${path}" 2>&1) || {
+        _err "API call failed: $method $path"
+        _warn "Is daemon running? Try: ./dev.sh daemon status"
+        return 1
+    }
+    echo "$resp" | python3 -m json.tool 2>/dev/null || echo "$resp"
+}
+
+cmd_channel() {
+    local sub="${1:-list}"
+    local channel_id="${2:-}"
+
+    case "$sub" in
+        list)
+            _log "Channels:"
+            _api GET /api/channels
+            ;;
+        restart)
+            if [ -z "$channel_id" ]; then
+                # Restart ALL channels
+                _log "Restarting all channels..."
+                local ids
+                ids=$(curl -sfL "${DAEMON_API}/api/channels/" | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+channels = data if isinstance(data, list) else data.get('channels', [])
+for ch in channels:
+    print(ch['id'])
+" 2>/dev/null)
+                if [ -z "$ids" ]; then
+                    _warn "No channels found"
+                    return
+                fi
+                for id in $ids; do
+                    _log "  Restarting $id..."
+                    _api POST "/api/channels/${id}/restart"
+                done
+                _ok "All channels restarted"
+            else
+                _log "Restarting channel $channel_id..."
+                _api POST "/api/channels/${channel_id}/restart"
+            fi
+            ;;
+        stop)
+            if [ -z "$channel_id" ]; then
+                _warn "Usage: ./dev.sh channel stop <channel_id>"
+                _warn "Use './dev.sh channel list' to see channel IDs"
+                return 1
+            fi
+            _log "Stopping channel $channel_id..."
+            _api POST "/api/channels/${channel_id}/stop"
+            ;;
+        status)
+            if [ -z "$channel_id" ]; then
+                cmd_channel list
+                return
+            fi
+            _log "Channel $channel_id:"
+            _api GET "/api/channels/${channel_id}/status"
+            ;;
+        *)
+            echo "Usage: ./dev.sh channel [list|restart|stop|status] [channel_id]"
+            ;;
+    esac
+}
+
 # ── Main ────────────────────────────────────────────────────
 
 case "${1:-start}" in
@@ -259,16 +421,31 @@ case "${1:-start}" in
     quick)    cmd_quick ;;
     kill)     cmd_kill ;;
     status)   cmd_status ;;
+    daemon)   shift; cmd_daemon "$@" ;;
+    channel)  shift; cmd_channel "$@" ;;
     *)
         echo "Usage: ./dev.sh [command]"
         echo ""
         echo "Commands:"
-        echo "  start     Start backend + frontend (default)"
-        echo "  backend   Restart backend only (after Python changes)"
-        echo "  frontend  Start frontend only"
-        echo "  build     Full production build (PyInstaller + Tauri → DMG)"
-        echo "  quick     Quick build: skip PyInstaller (frontend/Rust only)"
-        echo "  kill      Stop all dev processes"
-        echo "  status    Show what's running"
+        echo "  start            Start backend + frontend (default)"
+        echo "  backend          Restart backend only (after Python changes)"
+        echo "  frontend         Start frontend only"
+        echo "  build            Full production build (PyInstaller + Tauri → DMG)"
+        echo "  quick            Quick build: skip PyInstaller (frontend/Rust only)"
+        echo "  kill             Stop all dev processes"
+        echo "  status           Show what's running"
+        echo ""
+        echo "Daemon:"
+        echo "  daemon restart   Restart the backend daemon (launchd)"
+        echo "  daemon stop      Stop the daemon"
+        echo "  daemon start     Start the daemon"
+        echo "  daemon status    Show daemon health (default)"
+        echo "  daemon logs      Tail daemon logs"
+        echo ""
+        echo "Channels:"
+        echo "  channel list     List all channels + status"
+        echo "  channel restart  Restart all channels (or: channel restart <id>)"
+        echo "  channel stop <id>  Stop a specific channel"
+        echo "  channel status [id]  Show channel status"
         ;;
 esac
