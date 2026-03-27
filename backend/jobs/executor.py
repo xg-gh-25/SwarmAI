@@ -365,9 +365,12 @@ def _handle_agent_task(job: Job, state: SchedulerState) -> JobResult:
         )
 
     # Build CLI command (use resolved absolute path, not bare "claude")
+    # --bare skips hooks, LSP, and plugin sync — faster startup for headless jobs
+    # (requires Claude Code >= 2.1.81)
     cmd = [
         claude_path,
         "--print",
+        "--bare",
         "--output-format", "json",
         "--no-session-persistence",
         "--model", "sonnet",
@@ -823,6 +826,7 @@ def _send_slack_dm(message: str) -> bool:
         )
         cmd = [
             claude_path, "--print",
+            "--bare",
             "--output-format", "text",
             "--no-session-persistence",
             "--model", "sonnet",
