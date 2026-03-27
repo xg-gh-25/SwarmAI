@@ -742,23 +742,47 @@ class TestCwdAndMcpRestriction:
         traversal = os.path.normpath(os.path.join(sender_dir, "../../.context/MEMORY.md"))
         assert not traversal.startswith(sender_dir)
 
-    def test_mcp_stripped_for_non_owner(self):
-        """Non-owner sessions keep only channel-tools MCP."""
+    def test_mcp_stripped_for_public_user(self):
+        """Public users keep only channel-tools MCP."""
         mcp_servers = {
             "slack-mcp": {"command": "slack-mcp"},
             "outlook-mcp": {"command": "outlook-mcp"},
             "github-mcp": {"command": "github-mcp"},
             "channel-tools": {"command": "channel-tools"},
         }
-        # Simulate the stripping logic
-        safe_mcps = {
-            name: config for name, config in mcp_servers.items()
-            if name == "channel-tools"
-        }
+        tier = "public"
+        if tier == "public":
+            safe_mcps = {
+                name: config for name, config in mcp_servers.items()
+                if name == "channel-tools"
+            }
+        else:
+            safe_mcps = mcp_servers
         assert len(safe_mcps) == 1
         assert "channel-tools" in safe_mcps
         assert "slack-mcp" not in safe_mcps
         assert "outlook-mcp" not in safe_mcps
+
+    def test_mcp_kept_for_trusted_user(self):
+        """Trusted users keep ALL enabled MCP servers."""
+        mcp_servers = {
+            "slack-mcp": {"command": "slack-mcp"},
+            "outlook-mcp": {"command": "outlook-mcp"},
+            "github-mcp": {"command": "github-mcp"},
+            "channel-tools": {"command": "channel-tools"},
+        }
+        tier = "trusted"
+        if tier == "public":
+            safe_mcps = {
+                name: config for name, config in mcp_servers.items()
+                if name == "channel-tools"
+            }
+        else:
+            safe_mcps = mcp_servers
+        assert len(safe_mcps) == 4
+        assert "slack-mcp" in safe_mcps
+        assert "outlook-mcp" in safe_mcps
+        assert "github-mcp" in safe_mcps
 
     def test_owner_keeps_all_mcp(self):
         """Owner sessions keep all MCP servers."""
@@ -772,13 +796,17 @@ class TestCwdAndMcpRestriction:
             mcp_servers = {n: c for n, c in mcp_servers.items() if n == "channel-tools"}
         assert len(mcp_servers) == 2
 
-    def test_empty_mcp_when_no_channel_tools(self):
-        """If no channel-tools configured, non-owner gets empty MCP."""
+    def test_empty_mcp_for_public_without_channel_tools(self):
+        """If no channel-tools configured, public user gets empty MCP."""
         mcp_servers = {
             "slack-mcp": {"command": "slack-mcp"},
             "github-mcp": {"command": "github-mcp"},
         }
-        safe = {n: c for n, c in mcp_servers.items() if n == "channel-tools"}
+        tier = "public"
+        if tier == "public":
+            safe = {n: c for n, c in mcp_servers.items() if n == "channel-tools"}
+        else:
+            safe = mcp_servers
         assert len(safe) == 0
 
 
@@ -821,8 +849,8 @@ class TestSystemPromptChannelSecurity:
         assert "W017T04E8MS" in prompt
         assert "Full access granted" in prompt
 
-    def test_trusted_section_with_restrictions(self):
-        """Trusted user gets knowledge-only section with explicit blocks."""
+    def test_trusted_section_full_capabilities(self):
+        """Trusted user gets full capabilities with file sandboxing."""
         from core.system_prompt import SystemPromptBuilder
 
         builder = SystemPromptBuilder(
@@ -844,6 +872,9 @@ class TestSystemPromptChannelSecurity:
         assert "Channel Security" in prompt
         assert "Andy" in prompt
         assert "trusted" in prompt
+        assert "FULL CAPABILITIES" in prompt
+        assert "skills" in prompt.lower()
+        assert "MCP" in prompt
         assert "BLOCKED" in prompt
         assert "sandboxed" in prompt.lower() or "channel_files" in prompt
         assert "Confirmation attacks" in prompt
