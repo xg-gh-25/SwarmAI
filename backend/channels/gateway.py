@@ -785,8 +785,11 @@ class ChannelGateway:
             channel_context["bot_token"] = channel_config.get("bot_token", "")
             channel_context["app_token"] = channel_config.get("app_token", "")
 
-        # Prepare message text (stages attachments to workspace if present)
-        final_text = await self._prepare_message_text(msg, agent_id)
+        # Prepare message text (stages attachments to workspace if present).
+        # Non-owner attachments go to sender-scoped directory.
+        final_text = await self._prepare_message_text(
+            msg, agent_id, sender_identity,
+        )
 
         # 5a. Streaming setup — post a "thinking" indicator if supported --------
         adapter = self._adapters.get(channel_id)
@@ -803,33 +806,46 @@ class ChannelGateway:
                 streaming = False  # fall back to non-streaming
 
         # Streaming state: accumulate text_delta tokens into a buffer.
-        # Flush to the adapter at most every _STREAM_THROTTLE_SEC seconds
-        # to avoid hitting Slack rate limits (~50 chat_update / min).
-        _STREAM_THROTTLE_SEC = 0.8
+        # A background task flushes to the adapter every _STREAM_FLUSH_INTERVAL
+        # seconds.  Token handlers only append — they never await Slack API
+        # calls, so the event loop stays unblocked and tokens flow through
+        # at full speed.  Slack rate limit: ~50 chat_update/min → 1.2s safe.
+        _STREAM_FLUSH_INTERVAL = 1.2
         _stream_buf: list[str] = []
         _stream_flushed = ""  # text already sent to the adapter
-        _last_flush = 0.0
+        _flush_lock = asyncio.Lock()
+        _stream_done = asyncio.Event()
         _tool_active = False  # True while the agent is executing a tool
 
-        async def _flush_stream(force: bool = False) -> None:
-            """Push accumulated text to the adapter via update_message."""
-            nonlocal _stream_flushed, _last_flush, _stream_buf
+        async def _do_flush() -> None:
+            """Drain buffer and push to adapter (must be called under _flush_lock or alone)."""
+            nonlocal _stream_flushed
             if not streaming or not streaming_msg_id or not _stream_buf:
                 return
-            now = time.time()
-            if not force and (now - _last_flush) < _STREAM_THROTTLE_SEC:
-                return
-            _stream_flushed = _stream_flushed + "".join(_stream_buf)
-            _stream_buf.clear()
-            _last_flush = now
-            try:
-                await adapter.update_message(
-                    external_chat_id=msg.external_chat_id,
-                    message_id=streaming_msg_id,
-                    text=_stream_flushed,
-                )
-            except Exception as exc:
-                logger.warning("Stream update failed: %s", exc)
+            async with _flush_lock:
+                if not _stream_buf:
+                    return
+                _stream_flushed = _stream_flushed + "".join(_stream_buf)
+                _stream_buf.clear()
+                try:
+                    await adapter.update_message(
+                        external_chat_id=msg.external_chat_id,
+                        message_id=streaming_msg_id,
+                        text=_stream_flushed,
+                    )
+                except Exception as exc:
+                    logger.warning("Stream update failed: %s", exc)
+
+        async def _periodic_flusher() -> None:
+            """Background task: flush buffered tokens to Slack periodically."""
+            while not _stream_done.is_set():
+                await asyncio.sleep(_STREAM_FLUSH_INTERVAL)
+                await _do_flush()
+
+        # Start the periodic flusher if streaming
+        _flush_task: Optional[asyncio.Task] = None
+        if streaming and streaming_msg_id:
+            _flush_task = asyncio.create_task(_periodic_flusher())
 
         reply_text = ""
         error_occurred = False
@@ -853,19 +869,21 @@ class ChannelGateway:
                 event_type = event.get("type", "")
 
                 # ── Streaming: token-by-token text deltas ──────────────
+                # Just append to buffer — the background _periodic_flusher
+                # drains it every _STREAM_FLUSH_INTERVAL seconds.  No await
+                # here, so the event loop processes tokens at full speed.
                 if event_type == "text_delta" and streaming:
                     delta_text = event.get("text", "")
                     if delta_text:
                         _stream_buf.append(delta_text)
-                        await _flush_stream()
                     continue
 
                 # ── Tool activity: update indicator while working ──────
                 if event_type == "tool_use" and streaming and streaming_msg_id:
                     _tool_active = True
                     tool_name = event.get("name", "")
-                    # Flush any buffered text, then show tool indicator
-                    await _flush_stream(force=True)
+                    # Force-flush buffered text, then show tool indicator
+                    await _do_flush()
                     status = _stream_flushed + f"\n\n_Using tool: {tool_name}..._" if _stream_flushed else f"_Using tool: {tool_name}..._"
                     try:
                         await adapter.update_message(
@@ -942,6 +960,15 @@ class ChannelGateway:
             logger.exception(f"Exception running agent conversation on channel {channel_id}")
             reply_text = "Sorry, something unexpected happened. Please try again."
             error_occurred = True
+        finally:
+            # Stop the periodic flusher — no more intermediate updates needed
+            _stream_done.set()
+            if _flush_task is not None:
+                _flush_task.cancel()
+                try:
+                    await _flush_task
+                except asyncio.CancelledError:
+                    pass
 
         if not reply_text:
             reply_text = "(No response generated)"
@@ -1011,11 +1038,20 @@ class ChannelGateway:
     # Attachment staging
     # ------------------------------------------------------------------
 
-    async def _prepare_message_text(self, msg: InboundMessage, agent_id: str) -> str:
+    async def _prepare_message_text(
+        self,
+        msg: InboundMessage,
+        agent_id: str,
+        sender_identity: Optional[SenderIdentity] = None,
+    ) -> str:
         """Build the final message text, staging any attachments to the agent workspace.
 
         If no attachments are present, returns ``msg.text`` unchanged.
         Otherwise stages each file and appends path info to the text.
+
+        Non-owner attachments are staged to a sender-scoped directory
+        (``channel_files/<sender_id>/``) that matches the file access
+        sandbox enforced by ``prompt_builder.py``.
         """
         if not msg.attachments:
             return msg.text
@@ -1026,7 +1062,9 @@ class ChannelGateway:
             file_bytes = attachment.get("file_bytes", b"")
             if not file_bytes:
                 continue
-            path = await self._stage_file_to_workspace(agent_id, file_name, file_bytes)
+            path = await self._stage_file_to_workspace(
+                agent_id, file_name, file_bytes, sender_identity,
+            )
             if path:
                 staged_lines.append(f"[File '{file_name}' saved to: {path}]")
 
@@ -1041,14 +1079,27 @@ class ChannelGateway:
         return "\n\n".join(parts)
 
     async def _stage_file_to_workspace(
-        self, agent_id: str, file_name: str, file_bytes: bytes
+        self,
+        agent_id: str,
+        file_name: str,
+        file_bytes: bytes,
+        sender_identity: Optional[SenderIdentity] = None,
     ) -> Optional[str]:
         """Write a file into the agent's workspace ``channel_files/`` directory.
+
+        For non-owner senders, files go to ``channel_files/<sender_id>/``
+        which matches the sandboxed file access directory.  Owner files
+        go to ``channel_files/<agent_id>/`` (legacy behavior).
 
         Returns the absolute file path on success, or None on failure.
         """
         try:
-            base_dir = Path(initialization_manager.get_cached_workspace_path()) / "channel_files" / agent_id
+            ws_root = Path(initialization_manager.get_cached_workspace_path())
+            if sender_identity and not sender_identity.is_owner:
+                # Sender-scoped directory — matches file_access_handler sandbox
+                base_dir = ws_root / "channel_files" / sender_identity.external_id
+            else:
+                base_dir = ws_root / "channel_files" / agent_id
             base_dir.mkdir(parents=True, exist_ok=True)
 
             safe_name = _sanitize_filename(file_name)

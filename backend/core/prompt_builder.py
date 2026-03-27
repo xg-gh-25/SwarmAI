@@ -910,28 +910,27 @@ class PromptBuilder:
         # 1. Resolve allowed tools
         allowed_tools = self.resolve_allowed_tools(agent_config)
 
-        # 1a. Restrict tools for non-owner channel sessions.
-        # This is the STRUCTURAL enforcement — the system prompt tells the
-        # agent what it shouldn't do, but this physically removes the tools
-        # so it CAN'T do it even if confused or prompt-injected.
+        # 1a. For non-owner channel sessions, determine the sender-scoped
+        # sandbox directory.  File tools stay available so the agent can
+        # work with files created during this session, but access is
+        # restricted to ONLY that directory via file_access_handler (step 3).
+        _channel_sender_dir: str | None = None
         if channel_context:
             sender = channel_context.get("sender_identity", {})
             tier = sender.get("permission_tier", "public")
             if tier != "owner":
-                # Non-owners get NO file/system tools.  They can only talk.
-                # The agent still has WebFetch for answering questions.
-                _BLOCKED_TOOLS = {
-                    "Read", "Write", "Edit", "Glob", "Grep",
-                    "Bash", "NotebookEdit",
-                }
-                before = len(allowed_tools)
-                allowed_tools = [t for t in allowed_tools if t not in _BLOCKED_TOOLS]
-                if before != len(allowed_tools):
-                    logger.info(
-                        "Channel permission tier '%s': removed %d tools "
-                        "(file/system access blocked)",
-                        tier, before - len(allowed_tools),
-                    )
+                sender_id = sender.get("external_id", "anonymous")
+                _channel_sender_dir = str(
+                    Path(initialization_manager.get_cached_workspace_path())
+                    / "channel_files"
+                    / sender_id
+                )
+                # Ensure the directory exists so the agent can use it
+                Path(_channel_sender_dir).mkdir(parents=True, exist_ok=True)
+                logger.info(
+                    "Channel permission tier '%s': file access scoped to %s",
+                    tier, _channel_sender_dir,
+                )
 
         # 2. Build hooks
         hooks, effective_allowed_skills, allow_all_skills = await build_hooks(
@@ -948,7 +947,22 @@ class PromptBuilder:
         setting_sources = ["project"]
         global_user_mode = agent_config.get("global_user_mode", True)
 
-        if global_user_mode:
+        if _channel_sender_dir:
+            # Non-owner channel session: restrict file access to the
+            # sender-scoped directory ONLY.  The agent can read/write files
+            # created during this session but CANNOT access the owner's
+            # workspace, personal files, or any other path.
+            # This is the STRUCTURAL enforcement — even if the agent tries
+            # to read /Users/gawan/.swarm-ai/SwarmWS/MEMORY.md, the hook
+            # returns "deny" before the tool executes.
+            file_access_handler = create_file_access_permission_handler(
+                [_channel_sender_dir]
+            )
+            logger.info(
+                "Non-owner channel: file_access_handler scoped to [%s]",
+                _channel_sender_dir,
+            )
+        elif global_user_mode:
             file_access_handler = None
         else:
             allowed_directories = [working_directory]
