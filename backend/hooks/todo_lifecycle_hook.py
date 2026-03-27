@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Optional
 
 from core.session_hooks import HookContext
+from core.todo_manager import todo_manager
 from database import db
 
 logger = logging.getLogger(__name__)
@@ -122,11 +123,25 @@ def _files_overlap(todo_files: list[str], changed_files: list[str]) -> bool:
 
 
 def _find_codebase_path() -> Optional[Path]:
-    """Discover the SwarmAI codebase path from known locations.
+    """Discover the SwarmAI codebase path.
 
-    Checks common locations rather than hardcoding a user-specific path.
-    Returns None if no codebase is found (e.g., on end-user machines).
+    Priority:
+    1. ``SWARMAI_CODEBASE_DIR`` env var (explicit override)
+    2. Common filesystem locations (dev machines)
+
+    Returns None if no codebase is found (e.g., on end-user machines
+    running the packaged app — expected, not an error).
     """
+    import os
+
+    # 1. Explicit env var — always wins
+    env_path = os.environ.get("SWARMAI_CODEBASE_DIR")
+    if env_path:
+        p = Path(env_path)
+        if p.is_dir() and (p / ".git").exists():
+            return p
+
+    # 2. Common dev machine layouts
     candidates = [
         Path.home() / "Desktop" / "SwarmAI-Workspace" / "swarmai",
         Path.home() / "swarmai",
@@ -226,38 +241,16 @@ class TodoLifecycleHook:
         if codebase_path:
             commit_count += _get_session_commit_count(codebase_path, since)
 
-        todo = await db.todos.get(todo_id)
-        if not todo:
-            logger.debug("Bound todo %s not found — skipping", todo_id)
-            return
-
-        current_status = todo.get("status", "pending")
-        if current_status in ("handled", "cancelled", "deleted"):
-            return  # Already resolved
-
         if commit_count > 0:
             # Work was done — mark as handled
-            await db.todos.update(todo_id, {
-                "status": "handled",
-                "updated_at": datetime.now().isoformat(),
-            })
-            logger.info(
-                "TodoLifecycleHook: marked todo %s as handled "
-                "(%d commits during session)",
-                todo_id[:8], commit_count,
+            await todo_manager.transition_status(
+                todo_id, "handled", source="hook_explicit",
             )
         else:
             # Session interacted but no commits — mark as in_discussion
-            if current_status == "pending":
-                await db.todos.update(todo_id, {
-                    "status": "in_discussion",
-                    "updated_at": datetime.now().isoformat(),
-                })
-                logger.info(
-                    "TodoLifecycleHook: marked todo %s as in_discussion "
-                    "(bound but no commits)",
-                    todo_id[:8],
-                )
+            await todo_manager.transition_status(
+                todo_id, "in_discussion", source="hook_explicit",
+            )
 
     async def _handle_implicit_matching(
         self,
@@ -292,17 +285,11 @@ class TodoLifecycleHook:
                 continue
 
             if _files_overlap(todo_files, changed_files):
-                todo_id = todo["id"]
-                await db.todos.update(todo_id, {
-                    "status": "in_discussion",
-                    "updated_at": datetime.now().isoformat(),
-                })
-                matched += 1
-                logger.info(
-                    "TodoLifecycleHook: implicit match — todo %s → in_discussion "
-                    "(files overlap with session changes)",
-                    todo_id[:8],
+                transitioned = await todo_manager.transition_status(
+                    todo["id"], "in_discussion", source="hook_implicit",
                 )
+                if transitioned:
+                    matched += 1
 
         if matched:
             logger.info(

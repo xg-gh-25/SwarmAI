@@ -25,7 +25,7 @@ from schemas.todo import (
     ToDoConvertToTaskRequest,
 )
 from core.todo_manager import todo_manager
-from database import db
+from database import db  # Still needed for session metadata update in bind-session
 
 logger = logging.getLogger(__name__)
 
@@ -132,18 +132,11 @@ async def mark_todo_handled(todo_id: str):
 
     Used by frontend action buttons in the Radar sidebar.
     """
-    todo = await todo_manager.get(todo_id)
-    if not todo:
+    transitioned = await todo_manager.transition_status(
+        todo_id, "handled", source="manual",
+    )
+    if transitioned is None:
         raise HTTPException(status_code=404, detail=f"ToDo {todo_id} not found")
-
-    if todo.status in ("handled", "deleted"):
-        return {"status": todo.status, "todo_id": todo_id, "message": f"Already {todo.status}"}
-
-    await db.todos.update(todo_id, {
-        "status": "handled",
-        "updated_at": datetime.now().isoformat(),
-    })
-    logger.info("ToDo %s marked as handled (manual)", todo_id[:8])
     return {"status": "handled", "todo_id": todo_id}
 
 
@@ -153,18 +146,11 @@ async def mark_todo_cancelled(todo_id: str):
 
     Used by frontend action buttons in the Radar sidebar.
     """
-    todo = await todo_manager.get(todo_id)
-    if not todo:
+    transitioned = await todo_manager.transition_status(
+        todo_id, "cancelled", source="manual",
+    )
+    if transitioned is None:
         raise HTTPException(status_code=404, detail=f"ToDo {todo_id} not found")
-
-    if todo.status in ("cancelled", "deleted"):
-        return {"status": todo.status, "todo_id": todo_id, "message": f"Already {todo.status}"}
-
-    await db.todos.update(todo_id, {
-        "status": "cancelled",
-        "updated_at": datetime.now().isoformat(),
-    })
-    logger.info("ToDo %s marked as cancelled (manual)", todo_id[:8])
     return {"status": "cancelled", "todo_id": todo_id}
 
 
@@ -210,23 +196,17 @@ async def bind_todo_to_session(session_id: str, request: BindTodoRequest):
     })
 
     # Transition todo to in_discussion if pending
-    if todo.status == "pending":
-        await db.todos.update(request.todo_id, {
-            "status": "in_discussion",
-            "updated_at": datetime.now().isoformat(),
-        })
-        logger.info(
-            "ToDo %s bound to session %s — pending → in_discussion",
-            request.todo_id[:8], session_id[:8],
-        )
-    else:
-        logger.info(
-            "ToDo %s bound to session %s (status=%s, no transition)",
-            request.todo_id[:8], session_id[:8], todo.status,
-        )
+    transitioned = await todo_manager.transition_status(
+        request.todo_id, "in_discussion", source="drag_to_chat",
+    )
+    new_status = "in_discussion" if transitioned else todo.status
+    logger.info(
+        "ToDo %s bound to session %s (status=%s)",
+        request.todo_id[:8], session_id[:8], new_status,
+    )
 
     return {
         "session_id": session_id,
         "todo_id": request.todo_id,
-        "todo_status": "in_discussion" if todo.status == "pending" else todo.status,
+        "todo_status": new_status,
     }
