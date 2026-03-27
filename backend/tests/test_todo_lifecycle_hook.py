@@ -84,25 +84,19 @@ async def test_explicit_binding_with_commits():
         "metadata": json.dumps({"todo_id": "todo-abc"}),
         "created_at": (datetime.now() - timedelta(hours=1)).isoformat(),
     }
-    mock_todo = {
-        "id": "todo-abc",
-        "status": "pending",
-        "linked_context": "{}",
-    }
 
     with patch("hooks.todo_lifecycle_hook.db") as mock_db, \
+         patch("hooks.todo_lifecycle_hook.todo_manager") as mock_tm, \
          patch("hooks.todo_lifecycle_hook._get_session_commit_count", return_value=3):
         mock_db.sessions.get = AsyncMock(return_value=mock_session)
-        mock_db.todos.get = AsyncMock(return_value=mock_todo)
-        mock_db.todos.update = AsyncMock()
+        mock_tm.transition_status = AsyncMock(return_value=True)
 
         await hook.execute(ctx)
 
-        # Should mark as handled
-        mock_db.todos.update.assert_called_once()
-        call_args = mock_db.todos.update.call_args
-        assert call_args[0][0] == "todo-abc"
-        assert call_args[0][1]["status"] == "handled"
+        # Should mark as handled via todo_manager
+        mock_tm.transition_status.assert_called_once_with(
+            "todo-abc", "handled", source="hook_explicit",
+        )
 
 
 @pytest.mark.asyncio
@@ -116,29 +110,23 @@ async def test_explicit_binding_no_commits():
         "metadata": json.dumps({"todo_id": "todo-xyz"}),
         "created_at": (datetime.now() - timedelta(hours=1)).isoformat(),
     }
-    mock_todo = {
-        "id": "todo-xyz",
-        "status": "pending",
-        "linked_context": "{}",
-    }
 
     with patch("hooks.todo_lifecycle_hook.db") as mock_db, \
+         patch("hooks.todo_lifecycle_hook.todo_manager") as mock_tm, \
          patch("hooks.todo_lifecycle_hook._get_session_commit_count", return_value=0):
         mock_db.sessions.get = AsyncMock(return_value=mock_session)
-        mock_db.todos.get = AsyncMock(return_value=mock_todo)
-        mock_db.todos.update = AsyncMock()
+        mock_tm.transition_status = AsyncMock(return_value=True)
 
         await hook.execute(ctx)
 
-        mock_db.todos.update.assert_called_once()
-        call_args = mock_db.todos.update.call_args
-        assert call_args[0][0] == "todo-xyz"
-        assert call_args[0][1]["status"] == "in_discussion"
+        mock_tm.transition_status.assert_called_once_with(
+            "todo-xyz", "in_discussion", source="hook_explicit",
+        )
 
 
 @pytest.mark.asyncio
 async def test_already_handled_todo_skipped():
-    """Already-handled todos should not be re-transitioned."""
+    """Already-handled todos should not be re-transitioned (manager returns False)."""
     hook = TodoLifecycleHook()
     ctx = _make_context()
 
@@ -147,22 +135,18 @@ async def test_already_handled_todo_skipped():
         "metadata": json.dumps({"todo_id": "todo-done"}),
         "created_at": (datetime.now() - timedelta(hours=1)).isoformat(),
     }
-    mock_todo = {
-        "id": "todo-done",
-        "status": "handled",
-        "linked_context": "{}",
-    }
 
     with patch("hooks.todo_lifecycle_hook.db") as mock_db, \
+         patch("hooks.todo_lifecycle_hook.todo_manager") as mock_tm, \
          patch("hooks.todo_lifecycle_hook._get_session_commit_count", return_value=5):
         mock_db.sessions.get = AsyncMock(return_value=mock_session)
-        mock_db.todos.get = AsyncMock(return_value=mock_todo)
-        mock_db.todos.update = AsyncMock()
+        # transition_status returns False for already-terminal todos
+        mock_tm.transition_status = AsyncMock(return_value=False)
 
         await hook.execute(ctx)
 
-        # Should NOT update — already resolved
-        mock_db.todos.update.assert_not_called()
+        # Still called — but the manager handles the terminal-state guard
+        mock_tm.transition_status.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -190,19 +174,19 @@ async def test_implicit_file_matching():
     ]
 
     with patch("hooks.todo_lifecycle_hook.db") as mock_db, \
+         patch("hooks.todo_lifecycle_hook.todo_manager") as mock_tm, \
          patch("hooks.todo_lifecycle_hook._get_session_changed_files",
                return_value=["backend/core/session_unit.py", "backend/main.py"]):
         mock_db.sessions.get = AsyncMock(return_value=mock_session)
         mock_db.todos.list_by_workspace = AsyncMock(return_value=mock_pending_todos)
-        mock_db.todos.update = AsyncMock()
+        mock_tm.transition_status = AsyncMock(return_value=True)
 
         await hook.execute(ctx)
 
-        # Should update only the matching todo
-        assert mock_db.todos.update.call_count == 1
-        call_args = mock_db.todos.update.call_args
-        assert call_args[0][0] == "todo-file-match"
-        assert call_args[0][1]["status"] == "in_discussion"
+        # Should transition only the matching todo
+        mock_tm.transition_status.assert_called_once_with(
+            "todo-file-match", "in_discussion", source="hook_implicit",
+        )
 
 
 @pytest.mark.asyncio

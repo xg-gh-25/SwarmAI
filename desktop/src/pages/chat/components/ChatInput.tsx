@@ -7,6 +7,7 @@ import { TSCCPopoverButton } from './TSCCPopoverButton';
 import { ContextUsageRing } from './ContextUsageRing';
 import { SLASH_COMMANDS } from '../constants';
 import type { DropPayload } from './RightSidebar/types';
+import { todosService } from '../../../services/todos';
 
 interface ChatInputProps {
   inputValue: string;
@@ -299,11 +300,9 @@ export function ChatInput({
         // Bind todo to session for lifecycle auto-completion
         const tabId = activeTabIdRef?.current;
         if (tabId && payload.id) {
-          import('../../../services/todos').then(({ todosService }) => {
-            todosService.bindToSession(tabId, payload.id).catch((err: unknown) =>
-              console.warn('[ChatInput] Failed to bind todo to session:', err)
-            );
-          });
+          todosService.bindToSession(tabId, payload.id).catch((err: unknown) =>
+            console.warn('[ChatInput] Failed to bind todo to session:', err)
+          );
         }
       } else {
         text = `[Artifact] ${payload.title} (${payload.path})`;

@@ -189,6 +189,45 @@ class ToDoManager:
 
         return checked_results
 
+    async def transition_status(
+        self,
+        todo_id: str,
+        new_status: str,
+        *,
+        source: str = "manual",
+    ) -> bool:
+        """Transition a ToDo to a new lifecycle status.
+
+        Lightweight path for status-only updates (mark handled, cancelled,
+        in_discussion).  Validates the todo exists and isn't already in a
+        terminal state.  Skips Pydantic schema overhead.
+
+        Args:
+            todo_id: The ToDo ID.
+            new_status: Target status value (must be a valid ToDoStatus).
+            source: Who triggered ("manual", "hook", "implicit_match").
+
+        Returns:
+            True if transitioned, False if todo not found or already terminal.
+        """
+        existing = await db.todos.get(todo_id)
+        if not existing:
+            return False
+
+        current = existing.get("status", "")
+        if current in (ToDoStatus.DELETED.value, new_status):
+            return False
+
+        await db.todos.update(todo_id, {
+            "status": new_status,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        })
+
+        # Increment todo_version for context cache invalidation (Req 34.2)
+
+        logger.info("ToDo %s: %s -> %s (source=%s)", todo_id[:8], current, new_status, source)
+        return True
+
     async def update(self, todo_id: str, data: ToDoUpdate) -> Optional[ToDoResponse]:
         """Update an existing ToDo.
 
