@@ -300,7 +300,7 @@ class TestStaleSymlinkCleanup:
 
             # Act
             projection = ProjectionLayer(mock_sm)
-            asyncio.get_event_loop().run_until_complete(
+            asyncio.run(
                 projection.project_skills(workspace, allow_all=True)
             )
 

@@ -263,7 +263,7 @@ class TestSwarmAgentProtections:
             await db.agents.put(agent_data)
             return agent_data["id"]
 
-        return asyncio.get_event_loop().run_until_complete(create_system_agent())
+        return asyncio.run(create_system_agent())
 
     @pytest.fixture
     def user_skill_id(self, client: TestClient) -> str:
@@ -314,7 +314,7 @@ class TestSwarmAgentProtections:
             await db.mcp_servers.put(mcp_data)
             return mcp_data["id"]
 
-        return asyncio.get_event_loop().run_until_complete(create_user_mcp())
+        return asyncio.run(create_user_mcp())
 
     @pytest.fixture
     def swarm_agent_with_system_resources(self, client: TestClient) -> dict:
@@ -368,7 +368,7 @@ class TestSwarmAgentProtections:
                 "system_mcp_id": mcp_data["id"],
             }
 
-        return asyncio.get_event_loop().run_until_complete(setup())
+        return asyncio.run(setup())
 
     # -------------------------------------------------------------------------
     # Name Update Protection Tests
@@ -461,7 +461,7 @@ class TestSwarmAgentProtections:
             cache = await skill_manager.get_cache()
             return [folder for folder, info in cache.items() if info.source_tier == "built-in"]
 
-        all_builtin_skill_folders = asyncio.get_event_loop().run_until_complete(get_all_builtin_skills())
+        all_builtin_skill_folders = asyncio.run(get_all_builtin_skills())
 
         # First add a user skill while keeping ALL built-in skills
         response = client.put(
@@ -521,7 +521,7 @@ class TestSwarmAgentProtections:
         async def get_all_system_mcps():
             return await db.mcp_servers.list_by_system()
 
-        all_system_mcps = asyncio.get_event_loop().run_until_complete(get_all_system_mcps())
+        all_system_mcps = asyncio.run(get_all_system_mcps())
         all_system_mcp_ids = [m["id"] for m in all_system_mcps]
 
         # First add a user MCP while keeping ALL system MCPs
@@ -563,7 +563,7 @@ class TestSwarmAgentProtections:
             cache = await skill_manager.get_cache()
             return [folder for folder, info in cache.items() if info.source_tier == "built-in"]
 
-        all_builtin_skill_folders = asyncio.get_event_loop().run_until_complete(get_all_builtin_skills())
+        all_builtin_skill_folders = asyncio.run(get_all_builtin_skills())
 
         # Add user skill while keeping ALL built-in skills
         response = client.put(
@@ -596,7 +596,7 @@ class TestSwarmAgentProtections:
             cache = await skill_manager.get_cache()
             return [folder for folder, info in cache.items() if info.source_tier == "built-in"]
 
-        all_builtin_skill_folders = asyncio.get_event_loop().run_until_complete(get_all_builtin_skills())
+        all_builtin_skill_folders = asyncio.run(get_all_builtin_skills())
 
         # First add user skill while keeping ALL built-in skills
         response = client.put(
@@ -639,7 +639,7 @@ class TestSwarmAgentProtections:
         async def get_all_system_mcps():
             return await db.mcp_servers.list_by_system()
 
-        all_system_mcps = asyncio.get_event_loop().run_until_complete(get_all_system_mcps())
+        all_system_mcps = asyncio.run(get_all_system_mcps())
         all_system_mcp_ids = [m["id"] for m in all_system_mcps]
 
         # Add user MCP while keeping ALL system MCPs
@@ -670,7 +670,7 @@ class TestSwarmAgentProtections:
         async def get_all_system_mcps():
             return await db.mcp_servers.list_by_system()
 
-        all_system_mcps = asyncio.get_event_loop().run_until_complete(get_all_system_mcps())
+        all_system_mcps = asyncio.run(get_all_system_mcps())
         all_system_mcp_ids = [m["id"] for m in all_system_mcps]
 
         # First add user MCP while keeping ALL system MCPs

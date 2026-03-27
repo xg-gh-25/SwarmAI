@@ -65,7 +65,7 @@ class TestSwarmAgentNameUpdateProtection:
             await db.agents.put(agent_data)
             return agent_data["id"]
 
-        return asyncio.get_event_loop().run_until_complete(create_system_agent())
+        return asyncio.run(create_system_agent())
 
     @given(name=valid_name_strategy)
     @PROPERTY_SETTINGS
@@ -210,7 +210,7 @@ class TestSwarmAgentInitializationIdempotence:
 
             return all_mcps
 
-        all_mcps = asyncio.get_event_loop().run_until_complete(
+        all_mcps = asyncio.run(
             run_multiple_initializations()
         )
 
@@ -255,7 +255,7 @@ class TestSwarmAgentInitializationIdempotence:
 
             return swarm_agent, system_mcps
 
-        swarm_agent, system_mcps = asyncio.get_event_loop().run_until_complete(
+        swarm_agent, system_mcps = asyncio.run(
             run_and_check_bindings()
         )
 
@@ -300,7 +300,7 @@ class TestSwarmAgentInitializationIdempotence:
                 })
             return results
 
-        results = asyncio.get_event_loop().run_until_complete(run_and_check_stability())
+        results = asyncio.run(run_and_check_stability())
 
         # Verify all results have consistent core properties
         # Note: SQLite stores booleans as integers (0/1), so we use bool() for comparison
@@ -337,7 +337,7 @@ class TestSwarmAgentInitializationIdempotence:
             all_agents = await db.agents.list()
             return all_agents
 
-        all_agents = asyncio.get_event_loop().run_until_complete(run_and_count_agents())
+        all_agents = asyncio.run(run_and_count_agents())
 
         # Count agents named "SwarmAgent"
         swarm_agents = [a for a in all_agents if a.get("name") == SWARM_AGENT_NAME]

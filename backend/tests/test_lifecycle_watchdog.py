@@ -334,7 +334,7 @@ class TestPidTrackingProperties:
             mgr.track_pid(pid)
 
         with patch("os.kill"):
-            asyncio.get_event_loop().run_until_complete(mgr._kill_tracked_pids())
+            asyncio.run(mgr._kill_tracked_pids())
 
         assert len(mgr._tracked_child_pids) == 0
 
@@ -347,7 +347,7 @@ class TestPidTrackingProperties:
             mgr.track_pid(pid)
 
         with patch("os.kill") as mock_kill:
-            asyncio.get_event_loop().run_until_complete(mgr._kill_tracked_pids())
+            asyncio.run(mgr._kill_tracked_pids())
 
         killed = {c.args[0] for c in mock_kill.call_args_list}
         assert killed == set(pids)
@@ -369,6 +369,6 @@ class TestPidTrackingProperties:
             raise errors[call_count % 2]
 
         with patch("os.kill", side_effect=alternating_error):
-            asyncio.get_event_loop().run_until_complete(mgr._kill_tracked_pids())
+            asyncio.run(mgr._kill_tracked_pids())
 
         assert len(mgr._tracked_child_pids) == 0

@@ -154,7 +154,7 @@ class TestDefaultAgentUpdatePreservation:
             async def get_system_mcp_ids():
                 system_mcps = await db.mcp_servers.list_by_system()
                 return [m["id"] for m in system_mcps]
-            system_mcp_ids = asyncio.get_event_loop().run_until_complete(get_system_mcp_ids())
+            system_mcp_ids = asyncio.run(get_system_mcp_ids())
             # Merge system MCPs with generated ones (dedup)
             effective_mcp_ids = list(set(system_mcp_ids + mcp_ids))
         else:
@@ -215,7 +215,7 @@ class TestDefaultAgentUpdatePreservation:
             async def get_system_mcp_ids():
                 system_mcps = await db.mcp_servers.list_by_system()
                 return [m["id"] for m in system_mcps]
-            system_mcp_ids = asyncio.get_event_loop().run_until_complete(get_system_mcp_ids())
+            system_mcp_ids = asyncio.run(get_system_mcp_ids())
             effective_mcp_ids = list(set(system_mcp_ids + mcp_ids))
         else:
             effective_mcp_ids = mcp_ids

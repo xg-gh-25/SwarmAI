@@ -670,13 +670,13 @@ class TestFileAccessSandbox:
             ["/workspace/channel_files/W_ANDY"]
         )
         # Allowed: within sender dir
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             handler("Read", {"file_path": "/workspace/channel_files/W_ANDY/report.txt"}, {})
         )
         assert result["behavior"] == "allow"
 
         # Blocked: owner's workspace
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             handler("Read", {"file_path": "/workspace/.context/MEMORY.md"}, {})
         )
         assert result["behavior"] == "deny"
@@ -690,13 +690,13 @@ class TestFileAccessSandbox:
             ["/workspace/channel_files/W_ANDY"]
         )
         # Blocked: system files
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             handler("Read", {"file_path": "/etc/passwd"}, {})
         )
         assert result["behavior"] == "deny"
 
         # Blocked: home directory
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             handler("Read", {"file_path": "/Users/gawan/.aws/credentials"}, {})
         )
         assert result["behavior"] == "deny"
@@ -709,7 +709,7 @@ class TestFileAccessSandbox:
         handler = create_file_access_permission_handler(
             ["/workspace/channel_files/W_ANDY"]
         )
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             handler("Write", {"file_path": "/workspace/channel_files/W_ANDY/analysis.md"}, {})
         )
         assert result["behavior"] == "allow"
@@ -722,7 +722,7 @@ class TestFileAccessSandbox:
         handler = create_file_access_permission_handler(
             ["/workspace/channel_files/W_ANDY"]
         )
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             handler("Bash", {"command": "cat /workspace/.context/MEMORY.md"}, {})
         )
         assert result["behavior"] == "deny"
@@ -736,7 +736,7 @@ class TestFileAccessSandbox:
             ["/workspace/channel_files/W_ANDY"]
         )
         # Andy trying to read Fei's files
-        result = asyncio.get_event_loop().run_until_complete(
+        result = asyncio.run(
             handler_a("Read", {"file_path": "/workspace/channel_files/W_FEI/data.csv"}, {})
         )
         assert result["behavior"] == "deny"
