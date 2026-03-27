@@ -35,9 +35,9 @@ export default function SystemTab() {
         const resp = await fetch(`http://localhost:${port}/health`, {
           signal: AbortSignal.timeout(2000),
         });
-        setBackendStatus({ running: resp.ok, port });
+        setBackendStatus({ running: resp.ok, port, is_daemon_mode: false });
       } catch {
-        setBackendStatus({ running: false, port });
+        setBackendStatus({ running: false, port, is_daemon_mode: false });
       }
     };
     loadStatus();

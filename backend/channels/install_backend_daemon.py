@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""Install the SwarmAI Slack daemon launchd plist.
+"""Install the SwarmAI backend daemon launchd plist.
 
-Installs a launchd user agent that keeps the SwarmAI backend (and thus
-the Slack channel adapter) running even when the Tauri desktop app is
-closed or macOS is locked/sleeping.
+Installs a launchd user agent that keeps the SwarmAI backend running
+even when the Tauri desktop app is closed or macOS is locked/sleeping.
+This keeps channels (Slack, etc.) and background jobs alive 24/7.
 
 Usage:
-    python -m channels.install_slack_daemon           # Install
-    python -m channels.install_slack_daemon --uninstall  # Remove
-    python -m channels.install_slack_daemon --status     # Check status
+    python -m channels.install_backend_daemon           # Install
+    python -m channels.install_backend_daemon --uninstall  # Remove
+    python -m channels.install_backend_daemon --status     # Check status
 """
 
 from __future__ import annotations
@@ -19,10 +19,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-DAEMON_LABEL = "com.swarmai.slack-daemon"
+DAEMON_LABEL = "com.swarmai.backend"
 LAUNCH_AGENTS = Path.home() / "Library" / "LaunchAgents"
-TEMPLATE = Path(__file__).parent / "com.swarmai.slack-daemon.plist"
-WRAPPER = Path(__file__).parent / "slack_daemon.sh"
+TEMPLATE = Path(__file__).parent / "com.swarmai.backend.plist"
+WRAPPER = Path(__file__).parent / "swarmai_backend.sh"
 
 
 def _uid() -> int:
@@ -42,7 +42,7 @@ def _resolve_log_dir() -> str:
 
 
 def install():
-    """Install the Slack daemon plist."""
+    """Install the backend daemon plist."""
     if not TEMPLATE.exists():
         print(f"Template not found: {TEMPLATE}", file=sys.stderr)
         sys.exit(1)
@@ -60,6 +60,17 @@ def install():
     content = content.replace("__WRAPPER_PATH__", wrapper_path)
     content = content.replace("__LOG_DIR__", _resolve_log_dir())
 
+    # Uninstall old slack-daemon plist if it exists
+    old_label = "com.swarmai.slack-daemon"
+    old_plist = LAUNCH_AGENTS / f"{old_label}.plist"
+    if old_plist.exists():
+        subprocess.run(
+            ["launchctl", "bootout", f"gui/{_uid()}/{old_label}"],
+            capture_output=True,
+        )
+        old_plist.unlink()
+        print(f"  Removed old plist: {old_label}")
+
     # Write plist
     LAUNCH_AGENTS.mkdir(parents=True, exist_ok=True)
     dest = LAUNCH_AGENTS / f"{DAEMON_LABEL}.plist"
@@ -72,13 +83,13 @@ def install():
         capture_output=True,
     )
     print(f"  Loaded: {DAEMON_LABEL}")
-    print(f"\nSlack daemon installed. It will start on login and restart on crash.")
-    print(f"  Logs: {_resolve_log_dir()}/slack-daemon-{{stdout,stderr}}.log")
-    print(f"  Check: launchctl list | grep slack-daemon")
+    print(f"\nBackend daemon installed. It will start on login and restart on crash.")
+    print(f"  Logs: {_resolve_log_dir()}/backend-{{stdout,stderr}}.log")
+    print(f"  Check: launchctl list | grep swarmai.backend")
 
 
 def uninstall():
-    """Remove the Slack daemon plist."""
+    """Remove the backend daemon plist."""
     subprocess.run(
         ["launchctl", "bootout", f"gui/{_uid()}/{DAEMON_LABEL}"],
         capture_output=True,
@@ -92,25 +103,25 @@ def uninstall():
 
 
 def status():
-    """Show Slack daemon status."""
+    """Show backend daemon status."""
     result = subprocess.run(
         ["launchctl", "list"],
         capture_output=True, text=True,
     )
     found = False
     for line in result.stdout.splitlines():
-        if "slack-daemon" in line:
+        if "swarmai.backend" in line:
             print(line)
             found = True
     if not found:
-        print("Slack daemon is not running.")
+        print("Backend daemon is not running.")
 
     dest = LAUNCH_AGENTS / f"{DAEMON_LABEL}.plist"
     print(f"\nPlist exists: {dest.exists()} ({dest})")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="SwarmAI Slack Daemon Installer")
+    parser = argparse.ArgumentParser(description="SwarmAI Backend Daemon Installer")
     parser.add_argument("--uninstall", action="store_true", help="Remove the daemon")
     parser.add_argument("--status", action="store_true", help="Check daemon status")
     args = parser.parse_args()

@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.swarmai.slack-daemon</string>
+    <string>com.swarmai.backend</string>
 
     <key>ProgramArguments</key>
     <array>
@@ -28,15 +28,17 @@
     <integer>10</integer>
 
     <key>StandardOutPath</key>
-    <string>__LOG_DIR__/slack-daemon-stdout.log</string>
+    <string>__LOG_DIR__/backend-stdout.log</string>
 
     <key>StandardErrorPath</key>
-    <string>__LOG_DIR__/slack-daemon-stderr.log</string>
+    <string>__LOG_DIR__/backend-stderr.log</string>
 
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
         <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin</string>
+        <key>SWARMAI_MODE</key>
+        <string>daemon</string>
     </dict>
 </dict>
 </plist>

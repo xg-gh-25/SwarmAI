@@ -599,6 +599,23 @@ class SlackChannelAdapter(ChannelAdapter):
         return blocks or [{"type": "section", "text": {"type": "mrkdwn", "text": " "}}]
 
     # ------------------------------------------------------------------
+    # Presence management (AC5: daemon lifecycle)
+    # ------------------------------------------------------------------
+
+    async def set_presence(self, presence: str) -> None:
+        """Set the Slack bot's presence status.
+
+        Args:
+            presence: ``"auto"`` (online when active) or ``"away"``.
+        """
+        if not self._slack_client:
+            return
+        try:
+            self._slack_client.users_setPresence(presence=presence)
+        except Exception:
+            logger.debug("Failed to set Slack presence to %s", presence)
+
+    # ------------------------------------------------------------------
     # Properties
     # ------------------------------------------------------------------
 

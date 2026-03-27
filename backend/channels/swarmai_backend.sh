@@ -1,11 +1,12 @@
 #!/bin/bash
-# SwarmAI Slack Daemon — wrapper script for launchd
+# SwarmAI Backend Daemon — wrapper script for launchd
 #
 # Starts the FastAPI backend on a fixed port (18321) with caffeinate
-# to keep the Slack bot responsive when macOS is locked or sleeping.
+# to keep channels (Slack, etc.) and background jobs alive when
+# macOS is locked or sleeping.
 #
-# Usage: launchd runs this via com.swarmai.slack-daemon.plist
-#        Manual: ./slack_daemon.sh
+# Usage: launchd runs this via com.swarmai.backend.plist
+#        Manual: ./swarmai_backend.sh
 #
 # Port conflict: if 18321 is already bound, exits 0 (launchd won't retry).
 
@@ -25,7 +26,7 @@ LOG_DIR="${HOME}/.swarm-ai/logs"
 # ---------------------------------------------------------------------------
 
 if lsof -i :"${DAEMON_PORT}" -sTCP:LISTEN >/dev/null 2>&1; then
-    echo "[slack-daemon] Port ${DAEMON_PORT} already in use — another instance or Tauri backend is running. Exiting."
+    echo "[swarmai-backend] Port ${DAEMON_PORT} already in use — another instance running. Exiting."
     exit 0  # Exit 0 so launchd doesn't spam restarts
 fi
 
@@ -38,6 +39,9 @@ mkdir -p "${LOG_DIR}"
 # Fixed port for daemon mode (overrides config.py default)
 export SWARMAI_PORT="${DAEMON_PORT}"
 
+# Mark as daemon mode — Tauri reads this via /api/system/mode
+export SWARMAI_MODE="daemon"
+
 # Ensure AWS credentials are accessible (SSO tokens are file-based)
 export HOME="${HOME}"
 
@@ -49,7 +53,7 @@ unset HTTP_PROXY HTTPS_PROXY http_proxy https_proxy ALL_PROXY all_proxy NO_PROXY
 # ---------------------------------------------------------------------------
 
 if [ ! -x "${VENV_PYTHON}" ]; then
-    echo "[slack-daemon] ERROR: venv Python not found at ${VENV_PYTHON}" >&2
+    echo "[swarmai-backend] ERROR: venv Python not found at ${VENV_PYTHON}" >&2
     exit 1
 fi
 
@@ -57,9 +61,9 @@ fi
 # Launch with sleep prevention
 # ---------------------------------------------------------------------------
 
-echo "[slack-daemon] Starting on port ${DAEMON_PORT} at $(date '+%Y-%m-%d %H:%M:%S')"
-echo "[slack-daemon] Backend dir: ${BACKEND_DIR}"
-echo "[slack-daemon] Python: ${VENV_PYTHON}"
+echo "[swarmai-backend] Starting on port ${DAEMON_PORT} at $(date '+%Y-%m-%d %H:%M:%S')"
+echo "[swarmai-backend] Backend dir: ${BACKEND_DIR}"
+echo "[swarmai-backend] Python: ${VENV_PYTHON}"
 
 # caffeinate -is: prevent idle sleep (-i) and system sleep (-s)
 # The backend process becomes a child of caffeinate — when it exits,

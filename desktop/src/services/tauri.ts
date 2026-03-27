@@ -4,6 +4,7 @@ import { listen, UnlistenFn } from '@tauri-apps/api/event';
 export interface BackendStatus {
   running: boolean;
   port: number;
+  is_daemon_mode: boolean;
 }
 
 // Store the backend port globally

@@ -1,4 +1,4 @@
-"""Tests for Slack daemon installer and wrapper script.
+"""Tests for SwarmAI backend daemon installer and wrapper script.
 
 Tests the install/uninstall lifecycle, plist generation, port conflict
 detection, and wrapper script correctness. All tests run without root
@@ -32,12 +32,12 @@ import pytest
 
 BACKEND_DIR = Path(__file__).parent.parent
 CHANNELS_DIR = BACKEND_DIR / "channels"
-PLIST_TEMPLATE = CHANNELS_DIR / "com.swarmai.slack-daemon.plist"
-WRAPPER_SCRIPT = CHANNELS_DIR / "slack_daemon.sh"
-INSTALLER_MODULE = "channels.install_slack_daemon"
+PLIST_TEMPLATE = CHANNELS_DIR / "com.swarmai.backend.plist"
+WRAPPER_SCRIPT = CHANNELS_DIR / "swarmai_backend.sh"
+INSTALLER_MODULE = "channels.install_backend_daemon"
 
 DAEMON_PORT = 18321
-DAEMON_LABEL = "com.swarmai.slack-daemon"
+DAEMON_LABEL = "com.swarmai.backend"
 
 
 # ---------------------------------------------------------------------------
@@ -56,15 +56,15 @@ class TestPlistTemplate:
         """The plist must be valid XML parseable by plistlib."""
         content = PLIST_TEMPLATE.read_text()
         # Replace placeholders so plistlib can parse
-        content = content.replace("__WRAPPER_PATH__", "/tmp/slack_daemon.sh")
+        content = content.replace("__WRAPPER_PATH__", "/tmp/swarmai_backend.sh")
         content = content.replace("__LOG_DIR__", "/tmp/logs")
         plist = plistlib.loads(content.encode())
         assert isinstance(plist, dict)
 
     def test_plist_has_label(self):
-        """Plist Label must be com.swarmai.slack-daemon."""
+        """Plist Label must be com.swarmai.backend."""
         content = PLIST_TEMPLATE.read_text()
-        content = content.replace("__WRAPPER_PATH__", "/tmp/slack_daemon.sh")
+        content = content.replace("__WRAPPER_PATH__", "/tmp/swarmai_backend.sh")
         content = content.replace("__LOG_DIR__", "/tmp/logs")
         plist = plistlib.loads(content.encode())
         assert plist["Label"] == DAEMON_LABEL
@@ -72,7 +72,7 @@ class TestPlistTemplate:
     def test_plist_keep_alive(self):
         """AC5: KeepAlive must be true for auto-restart on crash."""
         content = PLIST_TEMPLATE.read_text()
-        content = content.replace("__WRAPPER_PATH__", "/tmp/slack_daemon.sh")
+        content = content.replace("__WRAPPER_PATH__", "/tmp/swarmai_backend.sh")
         content = content.replace("__LOG_DIR__", "/tmp/logs")
         plist = plistlib.loads(content.encode())
         assert plist["KeepAlive"] is True
@@ -80,7 +80,7 @@ class TestPlistTemplate:
     def test_plist_run_at_load(self):
         """AC1: RunAtLoad must be true so daemon starts on login."""
         content = PLIST_TEMPLATE.read_text()
-        content = content.replace("__WRAPPER_PATH__", "/tmp/slack_daemon.sh")
+        content = content.replace("__WRAPPER_PATH__", "/tmp/swarmai_backend.sh")
         content = content.replace("__LOG_DIR__", "/tmp/logs")
         plist = plistlib.loads(content.encode())
         assert plist["RunAtLoad"] is True
@@ -88,7 +88,7 @@ class TestPlistTemplate:
     def test_plist_has_log_paths(self):
         """Plist must define stdout and stderr log paths."""
         content = PLIST_TEMPLATE.read_text()
-        content = content.replace("__WRAPPER_PATH__", "/tmp/slack_daemon.sh")
+        content = content.replace("__WRAPPER_PATH__", "/tmp/swarmai_backend.sh")
         content = content.replace("__LOG_DIR__", "/tmp/logs")
         plist = plistlib.loads(content.encode())
         assert "StandardOutPath" in plist

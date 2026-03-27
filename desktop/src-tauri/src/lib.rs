@@ -247,6 +247,10 @@ fn get_fallback_path() -> String {
     paths.join(path_separator)
 }
 
+/// Fixed port for daemon mode. When a launchd-managed backend is already
+/// listening on this port, Tauri connects to it instead of spawning a sidecar.
+const DAEMON_PORT: u16 = 18321;
+
 // Backend state management
 struct BackendState {
     child: Option<CommandChild>,
@@ -256,6 +260,9 @@ struct BackendState {
     /// Set to `true` when shutdown is intentional (stop_backend, window close, app exit).
     /// Prevents the terminated-event handler from auto-restarting.
     intentional_shutdown: bool,
+    /// Set to `true` when connected to an external daemon (not our sidecar).
+    /// When true, Tauri must NOT kill the backend on exit.
+    is_daemon_mode: bool,
 }
 
 impl Default for BackendState {
@@ -266,6 +273,7 @@ impl Default for BackendState {
             running: false,
             pid: None,
             intentional_shutdown: false,
+            is_daemon_mode: false,
         }
     }
 }
@@ -430,6 +438,7 @@ type SharedBackendState = Arc<Mutex<BackendState>>;
 pub struct BackendStatus {
     running: bool,
     port: u16,
+    is_daemon_mode: bool,
 }
 
 /// Handle sidecar stdout/stderr/terminated events in a loop.
@@ -583,12 +592,20 @@ fn graceful_shutdown_and_kill(state: SharedBackendState, context: &str) {
         let port = backend.port;
         let pid = backend.pid;
         let child = backend.child.take();
+        let is_daemon = backend.is_daemon_mode;
 
         // Mark as intentional + not running under lock — prevents double-fire and auto-restart
         backend.intentional_shutdown = true;
         backend.running = false;
         backend.pid = None;
         drop(backend); // Release lock before blocking I/O
+
+        // Daemon mode: do NOT kill the backend — it's an external process that
+        // should keep running after Tauri exits (channels, jobs stay alive).
+        if is_daemon {
+            println!("[{}] Backend is in daemon mode — leaving it running on port {}", context, port);
+            return;
+        }
 
         // Graceful shutdown only if backend was actually running
         if was_running {
@@ -627,6 +644,39 @@ async fn start_backend(
         }
     }
 
+    // Probe for an existing daemon on the well-known port.
+    // If a daemon is already running, connect to it instead of spawning a sidecar.
+    {
+        let probe_url = format!("http://127.0.0.1:{}/health", DAEMON_PORT);
+        let probe_client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(2))
+            .build()
+            .ok();
+
+        let mut daemon_alive = false;
+        if let Some(client) = probe_client {
+            if let Ok(resp) = client.get(&probe_url).send().await {
+                if let Ok(body) = resp.text().await {
+                    if body.contains("\"healthy\"") {
+                        daemon_alive = true;
+                    }
+                }
+            }
+        }
+
+        if daemon_alive {
+            println!("[Tauri] Found existing daemon on port {} — connecting", DAEMON_PORT);
+            let mut backend = state.lock().await;
+            backend.port = DAEMON_PORT;
+            backend.running = true;
+            backend.is_daemon_mode = true;
+            backend.child = None;
+            backend.pid = None;
+            return Ok(DAEMON_PORT);
+        }
+    }
+
+    // No daemon found — spawn sidecar as usual.
     // Find an available port
     let port = portpicker::pick_unused_port()
         .ok_or_else(|| "No available port for backend".to_string())?;
@@ -819,6 +869,7 @@ async fn get_backend_status(state: tauri::State<'_, SharedBackendState>) -> Resu
     Ok(BackendStatus {
         running: backend.running,
         port: backend.port,
+        is_daemon_mode: backend.is_daemon_mode,
     })
 }
 
