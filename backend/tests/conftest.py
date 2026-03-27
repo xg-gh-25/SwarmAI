@@ -27,7 +27,7 @@ Single authority for all test infrastructure:
    Default 30s, override with @pytest.mark.timeout(N).
    Safe with xdist: each worker is its own process.
 
-6. **Auto maxfail** — Injects --maxfail=10 to stop cascading failures.
+6. **Defaults in pyproject.toml** — addopts: --maxfail=3 --tb=short -q.
 
 7. **DB isolation** — Temp SQLite DB created once per process, tables
    cleared between tests via a single executescript() call.
@@ -426,13 +426,8 @@ def pytest_configure(config):
     if hasattr(signal, "SIGALRM"):
         config.pluginmanager.register(SigalrmTimeoutPlugin(), "sigalrm_timeout")
 
-    # Auto-inject --maxfail to prevent cascading failures from eating memory.
-    # If tests start failing, continuing wastes time and RAM.
-    if not any(
-        arg.startswith("--maxfail") or arg.startswith("-x")
-        for arg in config.invocation_params.args
-    ):
-        config.option.maxfail = 10
+    # --maxfail is now in pyproject.toml addopts (default=3).
+    # No runtime injection needed — pytest handles it natively.
 
     # Auto-inject -n N if xdist is available and user didn't specify -n.
     # Worker count is memory-adaptive: scales down when system is under pressure.

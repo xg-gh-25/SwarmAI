@@ -63,6 +63,10 @@ asyncio_default_fixture_loop_scope = "session"
 python_files = ["test_*.py"]
 # Cache last-run results so --lf (last-failed) works out of the box
 cache_dir = ".pytest_cache"
+# Sane defaults — avoid -x + tail truncation, keep enough error context.
+# -n is NOT here — conftest auto-injects memory-adaptive worker count.
+# Override per-run: pytest --override-ini="addopts=" tests/specific_test.py
+addopts = "--maxfail=3 --tb=short -q"
 markers = [
     "pbt: property-based tests using Hypothesis (auto-applied by conftest)",
     "slow: marks tests as slow-running (deselect with '-m not slow')",
