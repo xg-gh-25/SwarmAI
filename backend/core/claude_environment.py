@@ -201,6 +201,15 @@ def _configure_claude_environment(config: AppConfigManager) -> None:
     # create conflicting writes and duplicate context injection.
     os.environ["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
 
+    # 4. SDK initialize timeout — controls how long the SDK waits for the
+    # CLI subprocess to complete its `initialize` control handshake (MCP
+    # server startup, plugin sync, etc.).  Default is 60s which is too
+    # tight for cross-region Bedrock (Beijing → us-east-1) + 5 MCP servers.
+    # The SDK reads this env var in milliseconds, floors at 60s:
+    #   initialize_timeout = max(CLAUDE_CODE_STREAM_CLOSE_TIMEOUT / 1000, 60)
+    # Set to 180s to match our session_unit.INIT_TIMEOUT.
+    os.environ.setdefault("CLAUDE_CODE_STREAM_CLOSE_TIMEOUT", "180000")
+
     # 5. Pre-flight auth validation
     # AWS credentials are NOT checked here — the SDK resolves them via the
     # standard credential chain at query time. Auth errors from expired
