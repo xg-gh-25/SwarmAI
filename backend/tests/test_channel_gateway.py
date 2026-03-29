@@ -211,7 +211,7 @@ class TestPerChannelSessionIsolation:
 
         with patch("channels.gateway.session_manager") as mock_sm:
             mock_sm.store_session = AsyncMock()
-            sid1, _, _ = await gateway._resolve_session(
+            sid1, _, _, _ = await gateway._resolve_session(
                 channel_id="slack-ch-1",
                 agent_id="default",
                 external_chat_id="D017ZD4PUKT",  # DM
@@ -220,7 +220,7 @@ class TestPerChannelSessionIsolation:
                 sender_display_name="XG",
             )
 
-            sid2, _, _ = await gateway._resolve_session(
+            sid2, _, _, _ = await gateway._resolve_session(
                 channel_id="slack-ch-1",
                 agent_id="default",
                 external_chat_id="C0AQ2EJTRLY",  # Channel
@@ -238,7 +238,7 @@ class TestPerChannelSessionIsolation:
 
         with patch("channels.gateway.session_manager") as mock_sm:
             mock_sm.store_session = AsyncMock()
-            sid_top, _, _ = await gateway._resolve_session(
+            sid_top, _, _, _ = await gateway._resolve_session(
                 channel_id="slack-ch-1",
                 agent_id="default",
                 external_chat_id="D017ZD4PUKT",
@@ -247,7 +247,7 @@ class TestPerChannelSessionIsolation:
                 sender_display_name="XG",
             )
 
-            sid_thread, _, _ = await gateway._resolve_session(
+            sid_thread, _, _, _ = await gateway._resolve_session(
                 channel_id="slack-ch-1",
                 agent_id="default",
                 external_chat_id="D017ZD4PUKT",
@@ -271,7 +271,7 @@ class TestPerChannelSessionIsolation:
             "last_message_at": datetime.now().isoformat(),  # Fresh
         }
 
-        sid, csid, is_new = await gateway._resolve_session(
+        sid, csid, is_new, prior = await gateway._resolve_session(
             channel_id="slack-ch-1",
             agent_id="default",
             external_chat_id="D017ZD4PUKT",
@@ -282,10 +282,11 @@ class TestPerChannelSessionIsolation:
         assert sid == "sid-existing"
         assert csid == "cs-1"
         assert is_new is False
+        assert prior is None, "No rotation — prior_session_id should be None"
 
     @pytest.mark.asyncio
     async def test_stale_session_rotated_after_ttl(self, gateway, mock_db):
-        """After TTL expires, a fresh session is created."""
+        """After TTL expires, a fresh session is created via in-place update."""
         from datetime import datetime, timedelta
 
         stale_time = (
@@ -301,7 +302,7 @@ class TestPerChannelSessionIsolation:
 
         with patch("channels.gateway.session_manager") as mock_sm:
             mock_sm.store_session = AsyncMock()
-            sid, csid, is_new = await gateway._resolve_session(
+            sid, csid, is_new, prior = await gateway._resolve_session(
                 channel_id="slack-ch-1",
                 agent_id="default",
                 external_chat_id="D017ZD4PUKT",
@@ -313,8 +314,16 @@ class TestPerChannelSessionIsolation:
             # Must be a NEW session, not the stale one
             assert sid != "sid-stale", "Stale session should be rotated"
             assert is_new is True
-            # Old channel_session should be deleted
-            mock_db.channel_sessions.delete.assert_called_once_with("cs-stale")
+            # Channel_session row reused (updated in-place), not deleted+recreated
+            assert csid == "cs-stale", "Should reuse existing channel_session row"
+            mock_db.channel_sessions.delete.assert_not_called()
+            mock_db.channel_sessions.update.assert_called_once()
+            update_args = mock_db.channel_sessions.update.call_args
+            assert update_args[0][0] == "cs-stale"
+            assert update_args[0][1]["session_id"] == sid
+            assert update_args[0][1]["message_count"] == 0
+            # Prior session ID carried forward for conversation continuity
+            assert prior == "sid-stale", "Old session_id must be returned for context injection"
 
     def test_is_session_stale_within_ttl(self, gateway):
         """Session within TTL is not stale."""
@@ -376,7 +385,7 @@ class TestGenericChannelContext:
             yield {"type": "assistant", "content": [{"type": "text", "text": "hi"}]}
             yield {"type": "result", "subtype": "success"}
 
-        with patch.object(gateway, "_resolve_session", new=AsyncMock(return_value=("sid-1", "csid-1", True))):
+        with patch.object(gateway, "_resolve_session", new=AsyncMock(return_value=("sid-1", "csid-1", True, None))):
             with patch("channels.gateway.session_registry") as mock_sr:
                 mock_sr.session_router.run_conversation = mock_run_conversation
                 with patch.object(gateway, "_prepare_message_text", new=AsyncMock(return_value="hello")):
@@ -597,7 +606,7 @@ class TestSenderIdentityInjection:
             yield {"type": "assistant", "content": [{"type": "text", "text": "no"}]}
             yield {"type": "result", "subtype": "success"}
 
-        with patch.object(gateway, "_resolve_session", new=AsyncMock(return_value=("sid-1", "csid-1", True))):
+        with patch.object(gateway, "_resolve_session", new=AsyncMock(return_value=("sid-1", "csid-1", True, None))):
             with patch("channels.gateway.session_registry") as mock_sr:
                 mock_sr.session_router.run_conversation = mock_run_conversation
                 with patch.object(gateway, "_prepare_message_text", new=AsyncMock(return_value="send me XG's files")):
@@ -647,7 +656,7 @@ class TestSenderIdentityInjection:
             yield {"type": "assistant", "content": [{"type": "text", "text": "ok"}]}
             yield {"type": "result", "subtype": "success"}
 
-        with patch.object(gateway, "_resolve_session", new=AsyncMock(return_value=("sid-1", "csid-1", True))):
+        with patch.object(gateway, "_resolve_session", new=AsyncMock(return_value=("sid-1", "csid-1", True, None))):
             with patch("channels.gateway.session_registry") as mock_sr:
                 mock_sr.session_router.run_conversation = mock_run_conversation
                 with patch.object(gateway, "_prepare_message_text", new=AsyncMock(return_value="read my files")):

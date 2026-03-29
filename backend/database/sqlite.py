@@ -600,6 +600,27 @@ class SQLiteChannelSessionsTable(SQLiteTable[T], Generic[T]):
             await conn.commit()
             return cursor.rowcount
 
+    async def find_stale(self, ttl_seconds: int) -> list[T]:
+        """Find all channel sessions idle longer than *ttl_seconds*.
+
+        Used by LifecycleManager to clean up stale channel sessions in
+        the background — prevents unbounded accumulation when a user
+        never messages a conversation again.
+        """
+        async with self._get_connection() as conn:
+            conn.row_factory = aiosqlite.Row
+            # datetime('now', 'localtime') matches the datetime.now().isoformat()
+            # writes in gateway._resolve_session (both use local time).
+            query = (
+                f"SELECT * FROM {self.table_name} "
+                "WHERE last_message_at IS NOT NULL "
+                "AND datetime(last_message_at) < datetime('now', 'localtime', ?)"
+            )
+            modifier = f"-{ttl_seconds} seconds"
+            async with conn.execute(query, (modifier,)) as cursor:
+                rows = await cursor.fetchall()
+                return [self._row_to_dict(row) for row in rows]
+
     async def find_by_user_key(
         self, user_key: str, exclude_threaded: bool = False,
     ) -> Optional[T]:

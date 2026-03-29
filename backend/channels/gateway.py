@@ -718,13 +718,15 @@ class ChannelGateway:
             resolved_name = (
                 sender_identity.display_name if sender_identity else None
             ) or msg.sender_display_name
-            session_id, channel_session_id, _is_new = await self._resolve_session(
-                channel_id=channel_id,
-                agent_id=agent_id,
-                external_chat_id=msg.external_chat_id,
-                external_sender_id=msg.external_sender_id,
-                external_thread_id=msg.external_thread_id,
-                sender_display_name=resolved_name,
+            session_id, channel_session_id, _is_new, prior_session_id = (
+                await self._resolve_session(
+                    channel_id=channel_id,
+                    agent_id=agent_id,
+                    external_chat_id=msg.external_chat_id,
+                    external_sender_id=msg.external_sender_id,
+                    external_thread_id=msg.external_thread_id,
+                    sender_display_name=resolved_name,
+                )
             )
         except Exception:
             logger.exception(f"Failed to resolve session for channel {channel_id}")
@@ -781,6 +783,10 @@ class ChannelGateway:
             # Sender identity — the agent MUST use this to determine who
             # is talking and what they're allowed to do.
             **({"sender_identity": sender_identity.to_dict()} if sender_identity else {}),
+            # Prior session for conversation continuity after TTL rotation.
+            # The old session's messages are injected into the new session's
+            # system prompt so the agent knows what was discussed before.
+            **({"prior_session_id": prior_session_id} if prior_session_id else {}),
         }
         # Inject platform-specific credential keys for channel MCP tools
         channel_type = channel.get("channel_type", "")
@@ -1431,7 +1437,7 @@ class ChannelGateway:
         external_sender_id: str,
         external_thread_id: Optional[str],
         sender_display_name: Optional[str],
-    ) -> tuple[str, str, bool]:
+    ) -> tuple[str, str, bool, Optional[str]]:
         """Resolve an external conversation to an internal session.
 
         Each conversation is scoped to ``(channel_id, external_chat_id,
@@ -1445,10 +1451,13 @@ class ChannelGateway:
         created.  This prevents multi-hour context accumulation from
         degrading response quality (compaction erasing details).  The
         old session's messages remain in DB for cold resume context
-        injection if needed.
+        injection — ``prior_session_id`` carries them forward.
 
         Returns:
-            (session_id, channel_session_id, is_new)
+            (session_id, channel_session_id, is_new, prior_session_id)
+            ``prior_session_id`` is non-None only on TTL rotation —
+            the caller should inject the old session's conversation
+            history into the new session's context.
         """
         # 1. Try to find an existing channel_session by exact external IDs
         existing = await db.channel_sessions.find_by_external(
@@ -1469,16 +1478,33 @@ class ChannelGateway:
                     existing["session_id"],
                     external_chat_id,
                 )
-                # Fall through to step 2 (create new session) instead of
-                # reusing the stale one.  Delete the old channel_session
-                # mapping so the UNIQUE constraint allows a new one.
-                try:
-                    await db.channel_sessions.delete(existing["id"])
-                except Exception:
-                    logger.warning(
-                        "Failed to delete stale channel_session %s",
-                        existing["id"],
-                    )
+                # Create a new internal session, then UPDATE the existing
+                # channel_session row in-place.  This is atomic — no gap
+                # between delete and create that could hit UNIQUE constraint
+                # violations if the delete fails.
+                new_session_id = str(uuid4())
+                title = f"Channel: {sender_display_name or external_sender_id}"
+                await session_manager.store_session(
+                    session_id=new_session_id,
+                    agent_id=agent_id,
+                    title=title,
+                )
+                await db.channel_sessions.update(existing["id"], {
+                    "session_id": new_session_id,
+                    "last_message_at": datetime.now().isoformat(),
+                    "message_count": 0,
+                })
+                old_session_id = existing["session_id"]
+                logger.info(
+                    "Rotated channel_session %s → new session %s "
+                    "(prior=%s) for external chat %s on channel %s",
+                    existing["id"],
+                    new_session_id,
+                    old_session_id,
+                    external_chat_id,
+                    channel_id,
+                )
+                return new_session_id, existing["id"], True, old_session_id
             else:
                 is_new = (existing.get("message_count", 0) or 0) == 0
                 logger.debug(
@@ -1488,7 +1514,7 @@ class ChannelGateway:
                     external_chat_id,
                     is_new,
                 )
-                return existing["session_id"], existing["id"], is_new
+                return existing["session_id"], existing["id"], is_new, None
 
         # 2. Create a new internal session (per-channel, no cross-channel sharing)
         user_key = external_sender_id
@@ -1524,7 +1550,7 @@ class ChannelGateway:
             external_chat_id,
             channel_id,
         )
-        return session_id, channel_session_id, True
+        return session_id, channel_session_id, True, None
 
     def _is_session_stale(self, last_message_at: str) -> bool:
         """Check if a channel session has been idle beyond the TTL."""
