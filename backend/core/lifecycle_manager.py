@@ -227,6 +227,7 @@ class LifecycleManager:
                     if cycle % 10 == 0:
                         await self._reap_orphans()
                         await self._purge_stale_cold()
+                        await self._cleanup_stale_channel_sessions()
                 except Exception as exc:
                     logger.error("Maintenance loop error: %s", exc, exc_info=True)
         except asyncio.CancelledError:
@@ -452,6 +453,46 @@ class LifecycleManager:
                 "lifecycle_manager.purge_stale_cold removed %d stale unit(s)",
                 len(stale_ids),
             )
+
+    async def _cleanup_stale_channel_sessions(self) -> None:
+        """Delete channel_session rows idle beyond the gateway TTL.
+
+        Without this, stale rows accumulate indefinitely — they only get
+        cleaned on the next message from the same user to the same
+        conversation.  This sweep runs every ~10 min and removes rows
+        that have been idle for >2× the gateway TTL (4 hours), giving
+        generous headroom before cleanup.
+        """
+        try:
+            from database import db
+
+            # 2× gateway TTL = 4 hours.  Conservative: avoids racing with
+            # a user who comes back just after the 2h mark.
+            CLEANUP_TTL_S = 4 * 60 * 60
+
+            stale = await db.channel_sessions.find_stale(CLEANUP_TTL_S)
+            if not stale:
+                return
+
+            deleted = 0
+            for row in stale:
+                try:
+                    await db.channel_sessions.delete(row["id"])
+                    deleted += 1
+                except Exception:
+                    logger.debug(
+                        "Failed to delete stale channel_session %s", row["id"]
+                    )
+
+            if deleted:
+                logger.info(
+                    "lifecycle_manager.channel_session_cleanup "
+                    "deleted %d stale row(s) (>%ds idle)",
+                    deleted,
+                    CLEANUP_TTL_S,
+                )
+        except Exception as exc:
+            logger.debug("Channel session cleanup skipped: %s", exc)
 
     # ── Memory pressure relief ─────────────────────────────────────
 

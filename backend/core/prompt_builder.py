@@ -577,16 +577,18 @@ class PromptBuilder:
 
             # Session-type-aware context exclusion (L3):
             # - Group channels: exclude personal files (MEMORY, USER)
-            # - Channel DMs: exclude heavy low-value files (EVOLUTION, PROJECTS)
+            # - Owner DM: full context (same as chat tab — full Brain)
+            # - Non-owner channel DMs: exclude heavy low-value files (EVOLUTION, PROJECTS)
             # - Chat tabs: full context (no exclusion)
             exclude_files: set[str] | None = None
             if channel_context and channel_context.get("is_group"):
                 exclude_files = set(GROUP_CHANNEL_EXCLUDE)
                 logger.info("Group channel detected — excluding %s from context", exclude_files)
-            elif channel_context:
-                # Channel DM (Slack/Feishu personal) — lightweight context
+            elif channel_context and not channel_context.get("is_owner"):
+                # Non-owner channel DM — lightweight context
                 exclude_files = set(CHANNEL_LIGHT_EXCLUDE)
-                logger.info("Channel DM detected — light context, excluding %s", exclude_files)
+                logger.info("Non-owner channel DM — light context, excluding %s", exclude_files)
+            # Owner DM and chat tabs: full context (no exclusion)
 
             context_text = loader.load_all(
                 model_context_window=model_context_window,

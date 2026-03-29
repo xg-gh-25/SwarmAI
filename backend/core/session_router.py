@@ -599,15 +599,30 @@ class SessionRouter:
             and unit._sdk_session_id is None
             and session_id is not None
         )
+        # Channel TTL rotation: the gateway created a fresh session_id but
+        # the prior session's messages should carry forward for continuity.
+        # prior_session_id is set by gateway._resolve_session on TTL rotation.
+        prior_session_id = (
+            channel_context.get("prior_session_id") if channel_context else None
+        )
         if is_cold_resume:
+            # Check current session first (normal cold resume: app restart)
+            resume_from = session_id
             msg_count = await db.messages.count_by_session(session_id)
+            if msg_count <= 1 and prior_session_id:
+                # TTL rotation: new session has no history, but the old one does.
+                # Inject prior session's conversation for continuity.
+                prior_count = await db.messages.count_by_session(prior_session_id)
+                if prior_count > 0:
+                    resume_from = prior_session_id
+                    msg_count = prior_count + 1  # ensure > 1 check passes
             # msg_count > 1 because the current user message was already
             # persisted above (before slot acquisition).  A truly new session
             # has exactly 1 message (the one we just saved).  Cold resume
             # requires at least 2 (prior conversation + current message).
             if msg_count > 1:
                 agent_config["needs_context_injection"] = True
-                agent_config["resume_app_session_id"] = session_id
+                agent_config["resume_app_session_id"] = resume_from
                 yield {"type": "session_resuming", "sessionId": session_id}
 
         # resume_session_id is the SDK's own session ID for Mechanism A (live
