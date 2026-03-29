@@ -253,22 +253,29 @@ class ChannelGateway:
     # ------------------------------------------------------------------
 
     def _is_channel_slot_busy(self) -> bool:
-        """Check if the channel slot is currently occupied (STREAMING).
+        """Check if another channel session is actively STREAMING.
 
         Used to send a "busy" notice to new users before they enter the
         conversation queue.  Best-effort — races are acceptable since
         this is a UX hint, not a correctness guarantee.
+
+        IMPORTANT: Only STREAMING counts as busy.  IDLE sessions are
+        just prior conversations sitting in memory — they are NOT
+        occupying the slot.  Checking ``is_alive`` (which includes IDLE)
+        would cause false "busy" notices every time a prior session
+        exists, even when no one is actively being helped.
         """
         try:
+            from core.session_unit import SessionState
+
             router = session_registry.session_router
             if router is None:
                 return False
-            # Count alive channel sessions — if >= 1, slot is busy
-            count = sum(
-                1 for u in router._units.values()
-                if u.is_alive and u.is_channel_session
+            # Only STREAMING means another user is actively being helped
+            return any(
+                u.state == SessionState.STREAMING and u.is_channel_session
+                for u in router._units.values()
             )
-            return count >= 1
         except Exception:
             return False
 
