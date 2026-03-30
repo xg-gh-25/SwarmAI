@@ -139,6 +139,16 @@ _build_time() {
 
 cmd_start() {
     _log "Starting SwarmAI dev environment..."
+
+    # Daemon conflict: bootout daemon before dev mode to avoid two backends
+    # (two ChannelGateways = duplicate Slack connections, DB write conflicts)
+    if _daemon_is_running; then
+        _warn "Backend daemon running — stopping for dev mode..."
+        launchctl bootout "$GUI_TARGET" 2>/dev/null || true
+        sleep 1
+        _ok "Daemon stopped (will re-bootstrap on ./dev.sh kill or next app launch)"
+    fi
+
     _start_backend
     _start_frontend
 }
@@ -243,6 +253,19 @@ cmd_kill() {
         echo "$vite_pids" | xargs kill -9 2>/dev/null || true
     fi
     _ok "All dev processes stopped"
+
+    # Re-bootstrap daemon if plist exists (restore 24/7 Slack after dev session)
+    local plist="$HOME/Library/LaunchAgents/${DAEMON_LABEL}.plist"
+    if [ -f "$plist" ] && ! _daemon_is_running; then
+        _log "Re-starting backend daemon (Slack/channels back online)..."
+        launchctl bootstrap "gui/$(id -u)" "$plist" 2>/dev/null || true
+        sleep 2
+        if _daemon_health >/dev/null 2>&1; then
+            _ok "Daemon re-started"
+        else
+            _warn "Daemon bootstrap attempted — check: ./dev.sh daemon status"
+        fi
+    fi
 }
 
 cmd_status() {

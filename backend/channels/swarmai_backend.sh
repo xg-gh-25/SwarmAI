@@ -31,10 +31,20 @@ LOG_DIR="${HOME}/.swarm-ai/logs"
 # Port conflict check
 # ---------------------------------------------------------------------------
 
+FAIL_STAMP="${HOME}/.swarm-ai/.daemon-port-fail"
 if lsof -i :"${DAEMON_PORT}" -sTCP:LISTEN >/dev/null 2>&1; then
-    echo "[swarmai-backend] Port ${DAEMON_PORT} already in use — another instance running. Exiting."
-    exit 0  # Exit 0 so launchd doesn't spam restarts
+    FAIL_COUNT=$(cat "$FAIL_STAMP" 2>/dev/null || echo 0)
+    FAIL_COUNT=$((FAIL_COUNT + 1))
+    echo "$FAIL_COUNT" > "$FAIL_STAMP"
+    if [ "$FAIL_COUNT" -ge 3 ]; then
+        echo "[swarmai-backend] Port ${DAEMON_PORT} occupied ${FAIL_COUNT}x — giving up (exit 0)"
+        rm -f "$FAIL_STAMP"
+        exit 0  # Stop retrying — something else genuinely owns this port
+    fi
+    echo "[swarmai-backend] Port ${DAEMON_PORT} in use (attempt ${FAIL_COUNT}/3) — retrying via launchd"
+    exit 1  # Non-zero → launchd KeepAlive triggers retry after ThrottleInterval
 fi
+rm -f "$FAIL_STAMP"  # Port is free — reset failure counter
 
 # ---------------------------------------------------------------------------
 # Environment — inherit user's login shell PATH
