@@ -172,15 +172,22 @@ def _parse_open_threads(memory_text: str) -> list[dict]:
 # DailyActivity "Next" / continue_from parser (L0)
 # ---------------------------------------------------------------------------
 
-def _parse_continue_hints(daily_dir: Path, max_files: int = 2) -> list[str]:
-    """Extract **Next:** lines from recent DailyActivity files.
+def _parse_continue_hints(daily_dir: Path, max_files: int = 1) -> list[str]:
+    """Extract **Next:** lines from the most recent session blocks.
 
-    Returns deduplicated list of continue-from hints, newest first.
-    Skips "Ongoing:" prefixed items that are stale (>2 days old).
+    Only reads the last ``MAX_BLOCKS`` session blocks (``## HH:MM | ...``
+    headings) from today's DailyActivity — older blocks are stale context
+    from parallel tabs and shouldn't drive today's focus.
+
+    Uses fuzzy word-overlap dedup to catch near-duplicate hints from
+    parallel sessions (e.g. "Add users:read scopes to Slack app config"
+    vs "Add users:read scopes in Slack App dashboard").
     """
-    hints: list[str] = []
+    MAX_HINTS = 5   # scoring engine takes top 5 anyway
+    MAX_BLOCKS = 5  # only look at the 5 most recent session blocks
+
     if not daily_dir.is_dir():
-        return hints
+        return []
 
     da_files = sorted(
         [f for f in daily_dir.glob("*.md") if f.stem[:4].isdigit()],
@@ -188,32 +195,62 @@ def _parse_continue_hints(daily_dir: Path, max_files: int = 2) -> list[str]:
         reverse=True,
     )[:max_files]
 
-    seen: set[str] = set()
+    # Collect hints from the last MAX_BLOCKS session blocks only
+    candidates: list[str] = []
     for da_file in da_files:
         try:
-            content = da_file.read_text(encoding="utf-8")
+            lines = da_file.read_text(encoding="utf-8").splitlines()
         except (OSError, UnicodeDecodeError):
             continue
 
-        for line in content.splitlines():
-            line_stripped = line.strip()
-            if not line_stripped.startswith("**Next:**"):
-                continue
+        # Find session block boundaries (## HH:MM | session_id | ...)
+        block_starts: list[int] = [
+            i for i, line in enumerate(lines)
+            if line.startswith("## ") and "|" in line[:30]
+        ]
 
-            hint = line_stripped.removeprefix("**Next:**").strip()
-            if not hint:
-                continue
+        # Take only lines from the last MAX_BLOCKS blocks
+        if block_starts:
+            start_line = block_starts[-MAX_BLOCKS] if len(block_starts) > MAX_BLOCKS else 0
+            recent_lines = lines[start_line:]
+        else:
+            recent_lines = lines
 
-            # Skip "Ongoing:" hints — these are typically stale user messages
-            # captured verbatim, not actionable continue-from items
-            if hint.startswith("Ongoing:"):
+        file_hints: list[str] = []
+        for line in recent_lines:
+            stripped = line.strip()
+            if not stripped.startswith("**Next:**"):
                 continue
+            hint = stripped.removeprefix("**Next:**").strip()
+            if not hint or hint.startswith("Ongoing:"):
+                continue
+            file_hints.append(hint)
 
-            # Normalize and deduplicate
-            hint_key = hint[:80].lower()
-            if hint_key not in seen:
-                seen.add(hint_key)
-                hints.append(hint)
+        # Reverse so newest entries (bottom of file) come first
+        candidates.extend(reversed(file_hints))
+
+    # Fuzzy dedup: two hints are "same" if >60% word overlap
+    hints: list[str] = []
+    seen_word_sets: list[set[str]] = []
+    for hint in candidates:
+        if len(hints) >= MAX_HINTS:
+            break
+
+        words = set(hint[:100].lower().split())
+        if len(words) < 2:
+            continue  # skip single-word or empty hints
+
+        is_dup = False
+        for existing_words in seen_word_sets:
+            overlap = len(words & existing_words)
+            smaller = min(len(words), len(existing_words))
+            if smaller > 0 and overlap / smaller > 0.6:
+                is_dup = True
+                break
+
+        if not is_dup:
+            seen_word_sets.append(words)
+            hints.append(hint)
 
     return hints
 
