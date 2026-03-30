@@ -7,8 +7,10 @@
  * - Live session briefing: focus suggestions, external signals, job results
  * - Falls back to taglines when no briefing data is available
  *
- * The briefing data comes from GET /api/system/briefing which reads
- * MEMORY.md open threads, signal_digest.json, and job results.
+ * Interactive behaviors:
+ * - Focus items are clickable — sends the title as a chat message
+ * - Signal items open external URLs in browser
+ * - Job items show summary; clicking opens the result file in editor
  *
  * @exports WelcomeScreen
  */
@@ -34,20 +36,30 @@ const PRIORITY_BADGES: Record<string, { label: string; cls: string }> = {
   P2: { label: 'P2', cls: 'bg-blue-500/20 text-blue-400 border-blue-500/30' },
 };
 
-function FocusItem({ item }: { item: BriefingFocusItem }) {
+function openWorkspaceFile(relativePath: string) {
+  document.dispatchEvent(
+    new CustomEvent('swarm:open-file', { detail: { path: relativePath } }),
+  );
+}
+
+function FocusItem({ item, onClick }: { item: BriefingFocusItem; onClick?: (title: string) => void }) {
   const badge = PRIORITY_BADGES[item.priority] ?? PRIORITY_BADGES.P2;
   return (
-    <div className="flex items-center gap-2 py-1">
-      <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded border ${badge.cls}`}>
+    <button
+      type="button"
+      onClick={() => onClick?.(item.title)}
+      className="flex items-center gap-2 py-1 w-full text-left rounded px-1 -mx-1 transition-colors hover:bg-[var(--color-bg-hover)] cursor-pointer"
+    >
+      <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded border shrink-0 ${badge.cls}`}>
         {badge.label}
       </span>
       <span className="text-sm text-[var(--color-text)] truncate">{item.title}</span>
       {item.momentum && (
-        <span className="text-[10px] text-green-400 whitespace-nowrap" title="Has momentum from last session">
+        <span className="text-[10px] text-green-400 whitespace-nowrap shrink-0" title="Has momentum from last session">
           &#x26A1;
         </span>
       )}
-    </div>
+    </button>
   );
 }
 
@@ -77,16 +89,33 @@ function SignalItem({ signal }: { signal: BriefingSignal }) {
 
 function JobItem({ job }: { job: BriefingJob }) {
   const isSuccess = job.status === 'success';
+  const hasFile = !!job.resultFile;
+  const hasSummary = !!job.summary;
+
+  const handleClick = () => {
+    if (hasFile) openWorkspaceFile(job.resultFile!);
+  };
+
   return (
-    <div className="flex items-center gap-2 py-0.5 text-sm">
-      <span className={isSuccess ? 'text-green-400' : 'text-red-400'}>
-        {isSuccess ? '\u2713' : '\u2717'}
-      </span>
-      <span className="text-[var(--color-text-secondary)] truncate">{job.name}</span>
-      {job.duration > 0 && (
-        <span className="text-[11px] text-[var(--color-text-secondary)]">
-          {job.duration < 60 ? `${Math.round(job.duration)}s` : `${Math.round(job.duration / 60)}m`}
+    <div
+      role={hasFile ? 'button' : undefined}
+      tabIndex={hasFile ? 0 : undefined}
+      onClick={hasFile ? handleClick : undefined}
+      onKeyDown={hasFile ? (e) => { if (e.key === 'Enter') handleClick(); } : undefined}
+      className={`py-1.5 rounded px-1 -mx-1 transition-colors ${hasFile ? 'hover:bg-[var(--color-bg-hover)] cursor-pointer' : ''}`}
+    >
+      <div className="flex items-center gap-2 text-sm">
+        <span className={isSuccess ? 'text-green-400 shrink-0' : 'text-red-400 shrink-0'}>
+          {isSuccess ? '\u2713' : '\u2717'}
         </span>
+        <span className={`truncate ${hasFile ? 'text-[var(--color-text)] hover:underline' : 'text-[var(--color-text-secondary)]'}`}>
+          {job.name}
+        </span>
+      </div>
+      {hasSummary && (
+        <p className="text-[11px] text-[var(--color-text-secondary)] mt-0.5 ml-5 line-clamp-2 leading-relaxed">
+          {job.summary}
+        </p>
       )}
     </div>
   );
@@ -103,7 +132,11 @@ function BriefingSection({ title, children }: { title: string; children: React.R
   );
 }
 
-export const WelcomeScreen: React.FC = () => {
+export interface WelcomeScreenProps {
+  onFocusClick?: (title: string) => void;
+}
+
+export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onFocusClick }) => {
   const [briefing, setBriefing] = useState<SessionBriefing | null>(null);
   const [loaded, setLoaded] = useState(false);
 
@@ -162,7 +195,7 @@ export const WelcomeScreen: React.FC = () => {
           {hasFocus && (
             <BriefingSection title="Suggested Focus">
               {briefing!.focus.map((item, i) => (
-                <FocusItem key={i} item={item} />
+                <FocusItem key={i} item={item} onClick={onFocusClick} />
               ))}
             </BriefingSection>
           )}

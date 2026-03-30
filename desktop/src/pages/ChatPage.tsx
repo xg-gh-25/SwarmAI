@@ -1488,6 +1488,14 @@ export default function ChatPage() {
     }
   }, [selectedAgentId, enableSkills, enableMCP, handlePluginCommand, buildContentArray, clearAttachments, resetUserScroll, incrementStreamGen, setIsStreaming, setMessages, setInputValue, updateTabStatus, updateTabTitle, setTabIsNew, initTabState, wrappedCreateStreamHandler, createErrorHandler, createCompleteHandler, activeTabIdRef, tabMapRef, pendingStreamTabs, queryClient, t]);
 
+  // Handle WelcomeScreen focus item click — injects title as input and sends immediately
+  const handleFocusClick = useCallback((title: string) => {
+    if (!title.trim()) return;
+    // Direct ref mutation bypasses React batching — handleSendMessage reads inputValueRef.current synchronously
+    inputValueRef.current = title;
+    handleSendMessage();
+  }, [handleSendMessage]);
+
   /**
    * Drain the queued message for a tab — builds content and starts a new stream.
    *
@@ -1999,7 +2007,7 @@ export default function ChatPage() {
                   </div>
                 )}
                 {messages.length === 0 ? (
-                  <WelcomeScreen />
+                  <WelcomeScreen onFocusClick={handleFocusClick} />
                 ) : (
                   messages.map((msg, idx) => {
                     // Evolution events get their own renderer
