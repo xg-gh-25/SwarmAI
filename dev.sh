@@ -145,7 +145,11 @@ cmd_start() {
     if _daemon_is_running; then
         _warn "Backend daemon running — stopping for dev mode..."
         launchctl bootout "$GUI_TARGET" 2>/dev/null || true
-        sleep 1
+        # Wait for daemon to fully release port (graceful shutdown + uvicorn drain)
+        for _i in $(seq 1 10); do
+            lsof -i :${DAEMON_PORT} -sTCP:LISTEN >/dev/null 2>&1 || break
+            sleep 0.5
+        done
         _ok "Daemon stopped (will re-bootstrap on ./dev.sh kill or next app launch)"
     fi
 
