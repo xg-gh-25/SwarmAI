@@ -1624,6 +1624,14 @@ class SwarmWorkspaceManager:
         return deleted
 
 
+    def get_workspace_path(self) -> str:
+        """Return the expanded absolute default workspace root path.
+
+        Convenience wrapper around :meth:`_resolve_workspace_path` for
+        callers that always want the default workspace (no DB lookup needed).
+        """
+        return self._resolve_workspace_path(None)
+
     def _resolve_workspace_path(self, workspace_path: Optional[str]) -> str:
         """Resolve workspace_path to an expanded absolute path.
 
