@@ -106,12 +106,17 @@ def install():
     dest.write_text(content)
     print(f"  Installed plist: {dest}")
 
-    # Load the plist
-    subprocess.run(
+    # Load the plist (idempotent — handles already-bootstrapped)
+    result = subprocess.run(
         ["launchctl", "bootstrap", f"gui/{_uid()}", str(dest)],
-        capture_output=True,
+        capture_output=True, text=True,
     )
-    print(f"  Loaded: {DAEMON_LABEL}")
+    if result.returncode == 37:
+        print(f"  Already loaded: {DAEMON_LABEL} (re-installed plist)")
+    elif result.returncode != 0:
+        print(f"  Bootstrap warning (code {result.returncode}): {result.stderr.strip()}", file=sys.stderr)
+    else:
+        print(f"  Loaded: {DAEMON_LABEL}")
     print(f"\nBackend daemon installed. It will start on login and restart on crash.")
     print(f"  Logs: {_resolve_log_dir()}/backend-{{stdout,stderr}}.log")
     print(f"  Check: launchctl list | grep swarmai.backend")

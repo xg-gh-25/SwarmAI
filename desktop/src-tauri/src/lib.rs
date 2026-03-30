@@ -250,6 +250,7 @@ fn get_fallback_path() -> String {
 /// Fixed port for daemon mode. When a launchd-managed backend is already
 /// listening on this port, Tauri connects to it instead of spawning a sidecar.
 const DAEMON_PORT: u16 = 18321;
+const DAEMON_PLIST_RELPATH: &str = "Library/LaunchAgents/com.swarmai.backend.plist";
 
 // Backend state management
 struct BackendState {
@@ -630,6 +631,80 @@ fn graceful_shutdown_and_kill(state: SharedBackendState, context: &str) {
 }
 
 
+/// Probe daemon health endpoint with retries.
+/// Returns Some(port) if daemon is healthy, None otherwise.
+async fn probe_daemon_health(max_attempts: u32, interval_secs: u64) -> Option<u16> {
+    let probe_url = format!("http://127.0.0.1:{}/health", DAEMON_PORT);
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(2))
+        .build()
+    {
+        Ok(c) => c,
+        Err(_) => return None,
+    };
+
+    for attempt in 1..=max_attempts {
+        if let Ok(resp) = client.get(&probe_url).send().await {
+            if let Ok(body) = resp.text().await {
+                if body.contains("\"healthy\"") {
+                    return Some(DAEMON_PORT);
+                }
+            }
+        }
+        if attempt < max_attempts {
+            tokio::time::sleep(tokio::time::Duration::from_secs(interval_secs)).await;
+        }
+    }
+    None
+}
+
+/// Ensure the daemon plist is installed and bootstrapped into launchd.
+/// Idempotent: safe to call when already bootstrapped (exit 37 is OK).
+async fn ensure_daemon_bootstrapped() -> Result<(), String> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let plist_path = format!("{}/{}", home, DAEMON_PLIST_RELPATH);
+
+    // If plist doesn't exist, we can't bootstrap. The install_backend_daemon.py
+    // script handles plist generation, but it requires the Python backend venv.
+    // For now, if plist is missing, we fall back to sidecar.
+    if !std::path::Path::new(&plist_path).exists() {
+        return Err(format!("Daemon plist not found: {}", plist_path));
+    }
+
+    // Get UID via id -u (portable, no libc dependency)
+    let uid_output = std::process::Command::new("id")
+        .arg("-u")
+        .output()
+        .map_err(|e| format!("Failed to get UID: {}", e))?;
+    let uid = String::from_utf8_lossy(&uid_output.stdout).trim().to_string();
+    let gui_target = format!("gui/{}", uid);
+
+    let output = std::process::Command::new("launchctl")
+        .args(["bootstrap", &gui_target, &plist_path])
+        .output()
+        .map_err(|e| format!("Failed to run launchctl: {}", e))?;
+
+    // launchctl exit codes:
+    //   0  = bootstrapped successfully
+    //   37 = already bootstrapped (idempotent, not an error)
+    //   5  = I/O error (plist corrupt or missing)
+    match output.status.code() {
+        Some(0) => {
+            println!("[Tauri] Daemon bootstrapped successfully");
+            Ok(())
+        }
+        Some(37) => {
+            println!("[Tauri] Daemon already bootstrapped (launchd will manage restarts)");
+            Ok(())
+        }
+        Some(code) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            Err(format!("launchctl bootstrap failed (code {}): {}", code, stderr))
+        }
+        None => Err("launchctl killed by signal".to_string()),
+    }
+}
+
 // Start the Python backend sidecar
 #[tauri::command]
 async fn start_backend(
@@ -644,27 +719,13 @@ async fn start_backend(
         }
     }
 
-    // Probe for an existing daemon on the well-known port.
-    // If a daemon is already running, connect to it instead of spawning a sidecar.
+    // ── Daemon-first architecture ──────────────────────────────────────
+    // Phase 1: Probe for existing daemon (handles 99% case: already running)
+    // Phase 2: If not running, auto-bootstrap via launchd
+    // Phase 3: Fallback to sidecar only if daemon cannot start
     {
-        let probe_url = format!("http://127.0.0.1:{}/health", DAEMON_PORT);
-        let probe_client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(2))
-            .build()
-            .ok();
-
-        let mut daemon_alive = false;
-        if let Some(client) = probe_client {
-            if let Ok(resp) = client.get(&probe_url).send().await {
-                if let Ok(body) = resp.text().await {
-                    if body.contains("\"healthy\"") {
-                        daemon_alive = true;
-                    }
-                }
-            }
-        }
-
-        if daemon_alive {
+        // Phase 1: probe with retry (daemon might be mid-restart via ThrottleInterval)
+        if let Some(_port) = probe_daemon_health(5, 2).await {
             println!("[Tauri] Found existing daemon on port {} — connecting", DAEMON_PORT);
             let mut backend = state.lock().await;
             backend.port = DAEMON_PORT;
@@ -674,9 +735,28 @@ async fn start_backend(
             backend.pid = None;
             return Ok(DAEMON_PORT);
         }
+
+        // Phase 2: daemon not running — attempt auto-bootstrap
+        println!("[Tauri] No daemon found — attempting auto-bootstrap");
+        if let Ok(()) = ensure_daemon_bootstrapped().await {
+            // Wait for daemon to come up (cold start can take a few seconds)
+            if let Some(_port) = probe_daemon_health(10, 2).await {
+                println!("[Tauri] Daemon bootstrapped and healthy on port {}", DAEMON_PORT);
+                let mut backend = state.lock().await;
+                backend.port = DAEMON_PORT;
+                backend.running = true;
+                backend.is_daemon_mode = true;
+                backend.child = None;
+                backend.pid = None;
+                return Ok(DAEMON_PORT);
+            }
+            println!("[Tauri] Daemon bootstrapped but not responding — falling back to sidecar");
+        } else {
+            println!("[Tauri] Daemon bootstrap failed — falling back to sidecar");
+        }
     }
 
-    // No daemon found — spawn sidecar as usual.
+    // Phase 3: No daemon — spawn sidecar as fallback.
     // Find an available port
     let port = portpicker::pick_unused_port()
         .ok_or_else(|| "No available port for backend".to_string())?;
