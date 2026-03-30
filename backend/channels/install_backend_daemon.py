@@ -111,8 +111,14 @@ def install():
         ["launchctl", "bootstrap", f"gui/{_uid()}", str(dest)],
         capture_output=True, text=True,
     )
-    if result.returncode == 37:
-        print(f"  Already loaded: {DAEMON_LABEL} (re-installed plist)")
+    if result.returncode in (5, 37):
+        # 5 = I/O error (service already loaded, common on macOS Ventura+)
+        # 37 = Operation already in progress (already bootstrapped)
+        print(f"  Already loaded: {DAEMON_LABEL} (re-installed plist, kickstarting...)")
+        subprocess.run(
+            ["launchctl", "kickstart", "-k", f"gui/{_uid()}/{DAEMON_LABEL}"],
+            capture_output=True,
+        )
     elif result.returncode != 0:
         print(f"  Bootstrap warning (code {result.returncode}): {result.stderr.strip()}", file=sys.stderr)
     else:

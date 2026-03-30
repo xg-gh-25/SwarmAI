@@ -686,15 +686,16 @@ async fn ensure_daemon_bootstrapped() -> Result<(), String> {
 
     // launchctl exit codes:
     //   0  = bootstrapped successfully
+    //   5  = I/O error (service already loaded, common on macOS Ventura+)
     //   37 = already bootstrapped (idempotent, not an error)
-    //   5  = I/O error (plist corrupt or missing)
     match output.status.code() {
         Some(0) => {
             println!("[Tauri] Daemon bootstrapped successfully");
             Ok(())
         }
-        Some(37) => {
-            println!("[Tauri] Daemon already bootstrapped (launchd will manage restarts)");
+        Some(5) | Some(37) => {
+            println!("[Tauri] Daemon already loaded (code {}) — launchd will manage",
+                     output.status.code().unwrap_or(-1));
             Ok(())
         }
         Some(code) => {
