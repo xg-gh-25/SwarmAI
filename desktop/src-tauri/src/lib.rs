@@ -711,13 +711,19 @@ async fn ensure_daemon_bootstrapped() -> Result<(), String> {
 /// When Tauri connects to an external daemon (not a sidecar it owns),
 /// there's no process monitor. This task polls the daemon health endpoint
 /// every `interval_secs` and emits frontend events on state changes:
-///   - `backend-terminated` when daemon becomes unreachable
-///   - `backend-restarted` when daemon recovers (launchd KeepAlive)
+///   - `backend-terminated-restarting` when daemon becomes unreachable (launchd will restart)
+///   - `backend-restarted` when daemon recovers
+///   - `backend-terminated` only after MAX_RECOVERY_ATTEMPTS failed (permanent death)
+///
+/// During recovery, polls every 3s instead of the normal interval to minimize downtime.
 fn spawn_daemon_health_watchdog(
     app_handle: tauri::AppHandle,
     state: SharedBackendState,
     interval_secs: u64,
 ) {
+    const MAX_RECOVERY_ATTEMPTS: u32 = 20; // 20 × 3s = 60s max wait for launchd restart
+    const RECOVERY_POLL_SECS: u64 = 3;
+
     tauri::async_runtime::spawn(async move {
         let client = match reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(3))
@@ -728,9 +734,12 @@ fn spawn_daemon_health_watchdog(
         };
         let health_url = format!("http://127.0.0.1:{}/health", DAEMON_PORT);
         let mut was_healthy = true;
+        let mut recovery_attempts: u32 = 0;
 
         loop {
-            tokio::time::sleep(tokio::time::Duration::from_secs(interval_secs)).await;
+            // Normal interval when healthy, fast poll during recovery
+            let sleep_secs = if was_healthy { interval_secs } else { RECOVERY_POLL_SECS };
+            tokio::time::sleep(tokio::time::Duration::from_secs(sleep_secs)).await;
 
             // Check if we're still in daemon mode (user might have stopped backend)
             {
@@ -753,14 +762,30 @@ fn spawn_daemon_health_watchdog(
             };
 
             if was_healthy && !healthy {
-                // Daemon went down
-                println!("[Tauri] Daemon watchdog: daemon unreachable — emitting backend-terminated");
-                let _ = app_handle.emit("backend-terminated", Option::<i32>::None);
-                // Don't set running=false yet — daemon might come back via KeepAlive
+                // Daemon just went down — signal "restarting" (launchd will handle it)
+                recovery_attempts = 1;
+                println!("[Tauri] Daemon watchdog: daemon unreachable — restarting via launchd (attempt {}/{})",
+                    recovery_attempts, MAX_RECOVERY_ATTEMPTS);
+                let _ = app_handle.emit("backend-terminated-restarting", Option::<i32>::None);
+            } else if !was_healthy && !healthy {
+                // Still down — increment recovery counter
+                recovery_attempts += 1;
+                println!("[Tauri] Daemon watchdog: still waiting for daemon recovery (attempt {}/{})",
+                    recovery_attempts, MAX_RECOVERY_ATTEMPTS);
+
+                if recovery_attempts >= MAX_RECOVERY_ATTEMPTS {
+                    // Give up — daemon is permanently dead
+                    println!("[Tauri] Daemon watchdog: daemon failed to recover after {} attempts — permanent failure",
+                        MAX_RECOVERY_ATTEMPTS);
+                    let _ = app_handle.emit("backend-terminated", Option::<i32>::None);
+                    // Keep watching in case it eventually comes back
+                }
             } else if !was_healthy && healthy {
                 // Daemon recovered (launchd KeepAlive restarted it)
-                println!("[Tauri] Daemon watchdog: daemon recovered — emitting backend-restarted");
+                println!("[Tauri] Daemon watchdog: daemon recovered after {} attempts — emitting backend-restarted",
+                    recovery_attempts);
                 let _ = app_handle.emit("backend-restarted", DAEMON_PORT);
+                recovery_attempts = 0;
             }
 
             was_healthy = healthy;
