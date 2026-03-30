@@ -990,10 +990,35 @@ def build_session_briefing_data(
                             dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
                             if dt.timestamp() < cutoff_24h:
                                 break  # older entries won't be newer
+                        # Build short summary from JSONL summary field
+                        raw_summary = str(entry.get("summary", "")).strip()
+                        # Skip log-style output (timestamps, [INFO], etc.)
+                        if raw_summary and not raw_summary[:1].isdigit() and "[INFO]" not in raw_summary[:30]:
+                            short_summary = raw_summary[:120].rstrip()
+                            if len(raw_summary) > 120:
+                                short_summary += "…"
+                        else:
+                            short_summary = ""
+
+                        # Construct path to the result markdown file
+                        job_id = entry.get("job_id", "")
+                        result_file = ""
+                        if job_id and ts:
+                            try:
+                                date_str = dt.strftime("%Y-%m-%d")
+                                slug = str(job_id).replace(" ", "-").lower()
+                                candidate = workspace / "Knowledge" / "JobResults" / f"{date_str}-{slug}.md"
+                                if candidate.exists():
+                                    result_file = f"Knowledge/JobResults/{date_str}-{slug}.md"
+                            except (ValueError, AttributeError):
+                                pass
+
                         jobs.append({
                             "name": entry.get("job_name", entry.get("job_id", "")),
                             "status": entry.get("status", "unknown"),
                             "duration": entry.get("duration_seconds", 0),
+                            "summary": short_summary,
+                            "result_file": result_file,
                         })
                     except (json.JSONDecodeError, ValueError):
                         continue

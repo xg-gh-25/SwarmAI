@@ -132,6 +132,8 @@ export interface BriefingJob {
   name: string;
   status: string;  // "success", "failed", etc.
   duration: number;
+  summary?: string;      // Truncated summary from job output
+  resultFile?: string;   // Workspace-relative path to result markdown
 }
 
 export interface SessionBriefing {
@@ -235,7 +237,13 @@ export const systemService = {
       return {
         focus: (d.focus as BriefingFocusItem[]) ?? [],
         signals: (d.signals as BriefingSignal[]) ?? [],
-        jobs: (d.jobs as BriefingJob[]) ?? [],
+        jobs: ((d.jobs as Record<string, unknown>[]) ?? []).map((j) => ({
+          name: j.name as string,
+          status: j.status as string,
+          duration: j.duration as number,
+          summary: (j.summary as string) || undefined,
+          resultFile: (j.result_file as string) || undefined,
+        })),
         learning: (d.learning as string) ?? null,
         generatedAt: (d.generated_at as string) ?? null,
       };
