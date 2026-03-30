@@ -178,6 +178,47 @@ def execute_job(
 # ── Agent Task Handler ───────────────────────────────────────────────
 
 
+def _check_claude_auth(claude_path: str) -> str | None:
+    """Verify Claude CLI is authenticated before running an agent task.
+
+    Returns None if auth is good, error string if auth is broken.
+    Fast check (~2s) that prevents wasting a 300s timeout on dead credentials.
+    """
+    try:
+        env = os.environ.copy()
+        # Strip proxy vars — same as _build_cli_env (Claude sandbox proxy poisons child processes)
+        for key in list(env.keys()):
+            if "proxy" in key.lower():
+                del env[key]
+        env["CLAUDE_CODE_USE_BEDROCK"] = "true"
+        env.setdefault("AWS_REGION", "us-west-2")
+
+        result = subprocess.run(
+            [claude_path, "auth", "status"],
+            capture_output=True, text=True, timeout=15, env=env,
+        )
+        if result.returncode != 0:
+            return f"claude auth status exit {result.returncode}: {result.stderr[:200]}"
+
+        auth_data = json.loads(result.stdout)
+        if not auth_data.get("loggedIn"):
+            return "CLI not logged in — run 'claude auth login' or refresh SSO IdC tokens"
+
+        logger.info("Auth pre-check passed: %s via %s",
+                     auth_data.get("apiProvider", "?"),
+                     auth_data.get("authMethod", "?"))
+        return None
+
+    except subprocess.TimeoutExpired:
+        return "claude auth status timed out (15s) — CLI may be broken"
+    except json.JSONDecodeError:
+        # Non-JSON output but exit 0 — probably fine
+        logger.debug("Auth check returned non-JSON, assuming OK")
+        return None
+    except Exception as e:
+        return f"Auth pre-check error: {e}"
+
+
 def _get_aws_credentials() -> dict[str, str]:
     """Try to get temporary AWS credentials via boto3 (credential_process → ada).
 
@@ -371,6 +412,19 @@ def _handle_agent_task(job: Job, state: SchedulerState) -> JobResult:
             summary="Claude CLI not found. Install: npm i -g @anthropic-ai/claude-code",
             duration_seconds=0,
             error="cli_not_found",
+        )
+
+    # Pre-flight: verify CLI auth before committing to a long timeout.
+    # `claude auth status` returns JSON with loggedIn: true/false.
+    # If auth is dead, fail fast instead of wasting 300s on a doomed timeout.
+    auth_err = _check_claude_auth(claude_path)
+    if auth_err:
+        return JobResult(
+            job_id=job.id, timestamp=start,
+            status="failed",
+            summary=f"Auth pre-check failed: {auth_err}",
+            duration_seconds=(datetime.now(timezone.utc) - start).total_seconds(),
+            error="auth_preflight_failed",
         )
 
     # Credential resolution: try boto3 first (same chain as signal_digest),
