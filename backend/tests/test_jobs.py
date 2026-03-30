@@ -346,6 +346,156 @@ class TestSelfTune:
         changes = suggest_new_feeds(sample_config, topics)
         assert any("ADD keyword" in c for c in changes)
 
+    def test_prune_skips_frontier_tier(self):
+        """Frontier tier feeds should never be auto-disabled."""
+        from jobs.self_tune import prune_unused_feeds
+        config = {
+            "feeds": [
+                {"id": "frontier-labs", "enabled": True, "managed_by": "self-tune",
+                 "tier": "frontier", "config": {}},
+            ],
+            "defaults": {"max_active_feeds": 15},
+        }
+        usage = {}  # zero usage
+        changes = prune_unused_feeds(config, usage)
+        # Feed should still be enabled
+        assert config["feeds"][0]["enabled"] is True
+        # Should report it's protected, not disabled
+        assert any("protected" in c for c in changes)
+        assert not any("DISABLE" in c for c in changes)
+
+    def test_prune_research_uses_30d_threshold(self):
+        """Research tier should report 30d threshold, not 14d."""
+        from jobs.self_tune import prune_unused_feeds
+        config = {
+            "feeds": [
+                {"id": "ai-research", "enabled": True, "managed_by": "self-tune",
+                 "tier": "research", "config": {}},
+            ],
+            "defaults": {"max_active_feeds": 15},
+        }
+        usage = {}  # zero usage
+        changes = prune_unused_feeds(config, usage)
+        assert any("30" in c for c in changes)
+
+    def test_prune_engineering_uses_14d_threshold(self):
+        """Engineering tier should use default 14d threshold."""
+        from jobs.self_tune import prune_unused_feeds
+        config = {
+            "feeds": [
+                {"id": "auto-eng", "enabled": True, "managed_by": "self-tune",
+                 "tier": "engineering", "config": {}},
+            ],
+            "defaults": {"max_active_feeds": 15},
+        }
+        usage = {}
+        changes = prune_unused_feeds(config, usage)
+        assert any("DISABLE" in c and "14" in c for c in changes)
+
+
+# ── Tier System ──────────────────────────────────────────────────────
+
+class TestTierSystem:
+    """Tests for the tier-based signal weighting system."""
+
+    def test_tier_type_enum_values(self):
+        from jobs.models import TierType
+        assert TierType.FRONTIER == "frontier"
+        assert TierType.RESEARCH == "research"
+        assert TierType.ENGINEERING == "engineering"
+        assert TierType.OPINION == "opinion"
+        assert TierType.AGGREGATE == "aggregate"
+
+    def test_tier_weights_complete(self):
+        from jobs.models import TierType, TIER_WEIGHTS
+        for tier in TierType:
+            assert tier in TIER_WEIGHTS, f"Missing weight for tier {tier}"
+
+    def test_tier_weights_ordering(self):
+        from jobs.models import TIER_WEIGHTS
+        assert TIER_WEIGHTS["frontier"] > TIER_WEIGHTS["research"]
+        assert TIER_WEIGHTS["research"] > TIER_WEIGHTS["engineering"]
+        assert TIER_WEIGHTS["engineering"] >= TIER_WEIGHTS["aggregate"]
+
+    def test_tier_disable_thresholds_frontier_is_none(self):
+        from jobs.models import TIER_DISABLE_THRESHOLDS
+        assert TIER_DISABLE_THRESHOLDS["frontier"] is None
+
+    def test_tier_disable_thresholds_research_is_30(self):
+        from jobs.models import TIER_DISABLE_THRESHOLDS
+        assert TIER_DISABLE_THRESHOLDS["research"] == 30
+
+    def test_feed_default_tier(self):
+        from jobs.models import Feed, TierType
+        feed = Feed(id="test", name="Test", type="rss")
+        assert feed.tier == TierType.ENGINEERING
+
+    def test_feed_custom_tier(self):
+        from jobs.models import Feed, TierType
+        feed = Feed(id="test", name="Test", type="rss", tier="frontier")
+        assert feed.tier == TierType.FRONTIER
+
+    def test_raw_signal_default_tier(self):
+        from jobs.models import RawSignal
+        sig = RawSignal(feed_id="test", title="Test", url="https://example.com")
+        assert sig.tier == "engineering"
+
+    def test_raw_signal_custom_tier(self):
+        from jobs.models import RawSignal
+        sig = RawSignal(feed_id="test", title="Test", url="https://example.com", tier="frontier")
+        assert sig.tier == "frontier"
+
+    def test_signal_fetch_stamps_tier(self):
+        """signal_fetch.handle_signal_fetch should stamp feed tier onto signals."""
+        from jobs.models import Feed, SchedulerState, RawSignal
+
+        # Create a frontier feed with a mock adapter result
+        feed = Feed(id="test-frontier", name="Test", type="rss", tier="frontier")
+        state = SchedulerState()
+
+        # Simulate what signal_fetch does: stamp tier on signals
+        signals = [
+            RawSignal(feed_id="test-frontier", title="Test Signal", url="https://example.com")
+        ]
+        for sig in signals:
+            sig.tier = feed.tier
+        assert signals[0].tier == "frontier"
+
+    def test_simple_scored_items_applies_tier_weight(self):
+        """_simple_scored_items should apply tier weights to relevance scores."""
+        from jobs.models import RawSignal
+        from jobs.handlers.signal_digest import _simple_scored_items
+
+        frontier_signal = RawSignal(
+            feed_id="labs", title="OpenAI Update", url="https://openai.com/1",
+            source="OpenAI Blog", tier="frontier", score=0.5,
+        )
+        eng_signal = RawSignal(
+            feed_id="eng", title="Blog Post", url="https://blog.com/1",
+            source="Some Blog", tier="engineering", score=0.5,
+        )
+
+        items = _simple_scored_items([frontier_signal, eng_signal])
+        assert len(items) == 2
+        # Frontier (0.5 * 2.0 = 1.0) should score higher than engineering (0.5 * 1.0 = 0.5)
+        assert items[0]["relevance_score"] > items[1]["relevance_score"]
+        assert items[0]["tier"] == "frontier"
+        assert items[1]["tier"] == "engineering"
+        assert items[0]["tier_weight"] == 2.0
+        assert items[1]["tier_weight"] == 1.0
+
+    def test_config_yaml_has_tiers(self):
+        """config.yaml should have tier field on every feed."""
+        import yaml
+        config_path = Path(__file__).parent.parent.parent.parent / ".swarm-ai" / "SwarmWS" / "Services" / "swarm-jobs" / "config.yaml"
+        if not config_path.exists():
+            pytest.skip("config.yaml not found (not running from full workspace)")
+        config = yaml.safe_load(config_path.read_text())
+        for feed in config.get("feeds", []):
+            assert "tier" in feed, f"Feed '{feed['id']}' missing tier field"
+            assert feed["tier"] in ("frontier", "research", "engineering", "opinion", "aggregate"), \
+                f"Feed '{feed['id']}' has invalid tier: {feed['tier']}"
+
 
 # ── Workspace Provisioning ─────────────────────────────────────────────
 

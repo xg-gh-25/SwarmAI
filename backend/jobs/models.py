@@ -34,6 +34,34 @@ class FeedType(str, Enum):
     HACKER_NEWS = "hacker-news"
 
 
+class TierType(str, Enum):
+    """Signal source authority tier — controls weighting and auto-disable behavior."""
+    FRONTIER = "frontier"       # Official labs (OpenAI, Anthropic, Google, etc.)
+    RESEARCH = "research"       # Academic/research (arXiv, research blogs)
+    ENGINEERING = "engineering"  # Engineering blogs, frameworks (default)
+    OPINION = "opinion"         # Thought leaders, commentary
+    AGGREGATE = "aggregate"     # Newsletters, aggregators (second-hand signal)
+
+
+# Tier weight multipliers for relevance scoring
+TIER_WEIGHTS: dict[str, float] = {
+    TierType.FRONTIER: 2.0,
+    TierType.RESEARCH: 1.5,
+    TierType.ENGINEERING: 1.0,
+    TierType.OPINION: 1.0,
+    TierType.AGGREGATE: 0.8,
+}
+
+# Tier-specific auto-disable thresholds (days of zero usage before auto-disable)
+TIER_DISABLE_THRESHOLDS: dict[str, int | None] = {
+    TierType.FRONTIER: None,   # Never auto-disable
+    TierType.RESEARCH: 30,     # 30 days
+    TierType.ENGINEERING: 14,  # 14 days (default behavior)
+    TierType.OPINION: 14,
+    TierType.AGGREGATE: 14,
+}
+
+
 # ── Signal Models ─────────────────────────────────────────────────────
 
 class RawSignal(BaseModel):
@@ -46,6 +74,7 @@ class RawSignal(BaseModel):
     source: str = ""         # e.g. "Simon Willison's Weblog"
     tags: list[str] = []
     score: float = 0.0       # relevance score (0-1), set by digester
+    tier: str = "engineering"  # inherited from feed's tier during fetch
 
 
 class Feed(BaseModel):
@@ -57,6 +86,7 @@ class Feed(BaseModel):
     tags: list[str] = []
     enabled: bool = True
     managed_by: Literal["manual", "self-tune"] = "manual"
+    tier: TierType = TierType.ENGINEERING
 
 
 # ── Job Models ────────────────────────────────────────────────────────

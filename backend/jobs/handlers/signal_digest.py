@@ -16,7 +16,7 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
-from ..models import JobResult, RawSignal, SchedulerState
+from ..models import JobResult, RawSignal, SchedulerState, TIER_WEIGHTS
 
 logger = logging.getLogger(__name__)
 
@@ -137,9 +137,18 @@ def _llm_digest(
 
     client = boto3.client("bedrock-runtime", region_name="us-west-2")
 
-    # Build signal summaries for the prompt
+    # Tier descriptions for prompt context
+    tier_labels = {
+        "frontier": "🔵 FRONTIER LAB (highest authority — official AI lab blog)",
+        "research": "🟣 RESEARCH (academic/research — trend indicator)",
+        "engineering": "⚙️ ENGINEERING (practitioner blog/framework)",
+        "opinion": "💭 OPINION (thought leader commentary)",
+        "aggregate": "📰 AGGREGATE (newsletter/aggregator — second-hand signal)",
+    }
+
+    # Build signal summaries for the prompt (now with tier)
     signal_text = "\n".join(
-        f"- [idx={i}] [{s.source}] {s.title} — {s.summary or 'No summary'} ({s.url})"
+        f"- [idx={i}] [{tier_labels.get(s.tier, '⚙️ ENGINEERING')}] [{s.source}] {s.title} — {s.summary or 'No summary'} ({s.url})"
         for i, s in enumerate(signals[:30])  # cap to control token usage
     )
 
@@ -150,6 +159,16 @@ def _llm_digest(
 ## User Context
 {user_context or "Building SwarmAI (AI desktop app), interested in AI agents, Claude SDK, LLM frameworks, context engineering."}
 
+## Signal Tier System
+Each signal is tagged with a source authority tier. Weight your scoring accordingly:
+- 🔵 FRONTIER LAB: Official AI lab announcements. Highest authority — these define the landscape.
+- 🟣 RESEARCH: Academic papers and research blogs. Trend indicators for 3-12 month horizon.
+- ⚙️ ENGINEERING: Practitioner blogs and frameworks. Direct actionability.
+- 💭 OPINION: Thought leader commentary. Directional, not definitive.
+- 📰 AGGREGATE: Newsletters and aggregators. Useful for coverage but second-hand.
+
+Frontier and Research signals should be scored higher for relevance when equally interesting.
+
 ## Raw Signals
 {signal_text}
 
@@ -159,7 +178,7 @@ Create a markdown digest with these sections:
 2. **🟡 Worth Knowing** — interesting developments relevant to our work
 3. **🟢 Background** — general industry movement, nice to know
 
-For each signal: 1-2 sentence summary, "Why it matters" annotation, original URL.
+For each signal: 1-2 sentence summary, "Why it matters" annotation, source tier tag, original URL.
 Start with YAML frontmatter: date, signals_count, sources (unique source names).
 Skip irrelevant signals entirely.
 
@@ -168,7 +187,7 @@ After the markdown, output a line "---JSON---" then a JSON array of objects, one
 ```
 [{{"idx": 0, "relevance_score": 0.85, "urgency": "high", "summary": "one-line summary"}}]
 ```
-- relevance_score: 0.0 to 1.0 based on relevance to user context
+- relevance_score: 0.0 to 1.0 based on relevance to user context (before tier weighting — we apply tier multipliers post-hoc)
 - urgency: "high" (act now), "medium" (worth knowing), "low" (background)
 - summary: concise one-line summary
 
@@ -203,17 +222,23 @@ Output the markdown first, then ---JSON--- separator, then the JSON array. Nothi
             if json_text.endswith("```"):
                 json_text = json_text.rsplit("```", 1)[0]
             raw_scores = json.loads(json_text.strip())
-            # Map idx back to signal data
+            # Map idx back to signal data, apply tier weighting
             for score_obj in raw_scores:
                 idx = score_obj.get("idx", -1)
                 if 0 <= idx < len(signals):
                     s = signals[idx]
+                    raw_score = float(score_obj.get("relevance_score", 0.5))
+                    tier_weight = TIER_WEIGHTS.get(s.tier, 1.0)
+                    weighted_score = min(raw_score * tier_weight, 1.0)
                     scored_items.append({
                         "title": s.title,
                         "summary": score_obj.get("summary", s.summary or ""),
                         "source": s.source,
                         "url": s.url,
-                        "relevance_score": float(score_obj.get("relevance_score", 0.5)),
+                        "relevance_score": round(weighted_score, 3),
+                        "raw_relevance_score": round(raw_score, 3),
+                        "tier": s.tier,
+                        "tier_weight": tier_weight,
                         "urgency": score_obj.get("urgency", "low"),
                         "fetched_at": datetime.now(timezone.utc).isoformat(),
                     })
@@ -228,20 +253,26 @@ Output the markdown first, then ---JSON--- separator, then the JSON array. Nothi
 
 
 def _simple_scored_items(signals: list[RawSignal]) -> list[dict]:
-    """Fallback: build scored items without LLM — flat 0.5 relevance."""
+    """Fallback: build scored items without LLM — flat 0.5 relevance, tier-weighted."""
     now = datetime.now(timezone.utc).isoformat()
-    return [
-        {
+    items = []
+    for s in signals:
+        raw_score = max(s.score, 0.5)
+        tier_weight = TIER_WEIGHTS.get(s.tier, 1.0)
+        weighted_score = min(raw_score * tier_weight, 1.0)
+        items.append({
             "title": s.title,
             "summary": (s.summary or "")[:200],
             "source": s.source,
             "url": s.url,
-            "relevance_score": round(max(s.score, 0.5), 2),
-            "urgency": "medium" if s.score >= 0.7 else "low",
+            "relevance_score": round(weighted_score, 3),
+            "raw_relevance_score": round(raw_score, 3),
+            "tier": s.tier,
+            "tier_weight": tier_weight,
+            "urgency": "medium" if weighted_score >= 0.7 else "low",
             "fetched_at": now,
-        }
-        for s in signals
-    ]
+        })
+    return items
 
 
 def _write_l4_json(signals: list[RawSignal], scored_items: list[dict]) -> None:
