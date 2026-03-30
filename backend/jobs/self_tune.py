@@ -285,12 +285,19 @@ def prune_unused_feeds(
 ) -> list[str]:
     """Disable feeds with zero references in the tracking window.
 
+    Tier-aware behavior:
+    - frontier: NEVER auto-disabled (too important to miss)
+    - research: 30-day threshold instead of default 14
+    - engineering/opinion/aggregate: default min_days (14)
+
     Only auto-disables feeds managed_by: "self-tune" or feeds that have
-    been active for at least min_days. Never touches manually managed feeds
-    unless they've had 0 usage for the full window.
+    been active for at least the tier-specific threshold. Never touches
+    manually managed feeds unless they've had 0 usage for the full window.
 
     Returns list of changes made.
     """
+    from .models import TIER_DISABLE_THRESHOLDS
+
     changes = []
     feeds = config.get("feeds", [])
 
@@ -299,18 +306,36 @@ def prune_unused_feeds(
             continue
 
         feed_id = feed.get("id", "")
+        feed_tier = feed.get("tier", "engineering")
         ref_count = usage.get(feed_id, 0)
+
+        # Get tier-specific disable threshold
+        tier_threshold = TIER_DISABLE_THRESHOLDS.get(feed_tier, min_days)
+
+        # Frontier tier: never auto-disable
+        if tier_threshold is None:
+            if ref_count == 0:
+                changes.append(
+                    f"NOTE: feed '{feed_id}' (tier={feed_tier}) has 0 references "
+                    f"but is protected from auto-disable"
+                )
+            continue
 
         if ref_count == 0:
             # Only auto-disable if managed by self-tune
-            # For manual feeds, just report (don't touch)
             managed = feed.get("managed_by", "manual")
             if managed == "self-tune":
-                changes.append(f"DISABLE feed '{feed_id}': 0 references in {min_days}d (auto-managed)")
+                changes.append(
+                    f"DISABLE feed '{feed_id}' (tier={feed_tier}): "
+                    f"0 references in {tier_threshold}d (auto-managed)"
+                )
                 if not dry_run:
                     feed["enabled"] = False
             else:
-                changes.append(f"NOTE: feed '{feed_id}' has 0 references in {min_days}d (manual — not auto-disabled)")
+                changes.append(
+                    f"NOTE: feed '{feed_id}' (tier={feed_tier}) has 0 references "
+                    f"in {tier_threshold}d (manual — not auto-disabled)"
+                )
 
     return changes
 

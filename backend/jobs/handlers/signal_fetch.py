@@ -60,9 +60,12 @@ def handle_signal_fetch(
 
         try:
             signals = adapter(feed, max_age_hours=max_age_hours)
+            # Stamp tier from feed config onto each signal
+            for sig in signals:
+                sig.tier = feed.tier
             all_raw.extend(signals)
             feeds_processed += 1
-            logger.info(f"Feed '{feed.id}': {len(signals)} signals")
+            logger.info(f"Feed '{feed.id}' (tier={feed.tier}): {len(signals)} signals")
         except Exception as e:
             error_msg = f"Feed '{feed.id}' failed: {e}"
             logger.error(error_msg)
