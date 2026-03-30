@@ -705,6 +705,68 @@ async fn ensure_daemon_bootstrapped() -> Result<(), String> {
     }
 }
 
+/// Background health watchdog for daemon mode.
+///
+/// When Tauri connects to an external daemon (not a sidecar it owns),
+/// there's no process monitor. This task polls the daemon health endpoint
+/// every `interval_secs` and emits frontend events on state changes:
+///   - `backend-terminated` when daemon becomes unreachable
+///   - `backend-restarted` when daemon recovers (launchd KeepAlive)
+fn spawn_daemon_health_watchdog(
+    app_handle: tauri::AppHandle,
+    state: SharedBackendState,
+    interval_secs: u64,
+) {
+    tauri::async_runtime::spawn(async move {
+        let client = match reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(3))
+            .build()
+        {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+        let health_url = format!("http://127.0.0.1:{}/health", DAEMON_PORT);
+        let mut was_healthy = true;
+
+        loop {
+            tokio::time::sleep(tokio::time::Duration::from_secs(interval_secs)).await;
+
+            // Check if we're still in daemon mode (user might have stopped backend)
+            {
+                let backend = state.lock().await;
+                if !backend.is_daemon_mode || !backend.running {
+                    println!("[Tauri] Daemon watchdog: no longer in daemon mode — exiting");
+                    return;
+                }
+            }
+
+            let healthy = match client.get(&health_url).send().await {
+                Ok(resp) => {
+                    if let Ok(body) = resp.text().await {
+                        body.contains("\"healthy\"")
+                    } else {
+                        false
+                    }
+                }
+                Err(_) => false,
+            };
+
+            if was_healthy && !healthy {
+                // Daemon went down
+                println!("[Tauri] Daemon watchdog: daemon unreachable — emitting backend-terminated");
+                let _ = app_handle.emit("backend-terminated", Option::<i32>::None);
+                // Don't set running=false yet — daemon might come back via KeepAlive
+            } else if !was_healthy && healthy {
+                // Daemon recovered (launchd KeepAlive restarted it)
+                println!("[Tauri] Daemon watchdog: daemon recovered — emitting backend-restarted");
+                let _ = app_handle.emit("backend-restarted", DAEMON_PORT);
+            }
+
+            was_healthy = healthy;
+        }
+    });
+}
+
 // Start the Python backend sidecar
 #[tauri::command]
 async fn start_backend(
@@ -724,16 +786,30 @@ async fn start_backend(
     // Phase 2: If not running, auto-bootstrap via launchd
     // Phase 3: Fallback to sidecar only if daemon cannot start
     {
+        // Helper: connect to daemon and start health watchdog
+        let connect_daemon = |state: &tauri::State<'_, SharedBackendState>, app: &tauri::AppHandle| {
+            let state_inner = state.inner().clone();
+            let app_clone = app.clone();
+            async move {
+                {
+                    let mut backend = state_inner.lock().await;
+                    backend.port = DAEMON_PORT;
+                    backend.running = true;
+                    backend.is_daemon_mode = true;
+                    backend.child = None;
+                    backend.pid = None;
+                }
+                // Start background health watchdog (30s interval)
+                spawn_daemon_health_watchdog(app_clone, state_inner, 30);
+                DAEMON_PORT
+            }
+        };
+
         // Phase 1: probe with retry (daemon might be mid-restart via ThrottleInterval)
         if let Some(_port) = probe_daemon_health(5, 2).await {
             println!("[Tauri] Found existing daemon on port {} — connecting", DAEMON_PORT);
-            let mut backend = state.lock().await;
-            backend.port = DAEMON_PORT;
-            backend.running = true;
-            backend.is_daemon_mode = true;
-            backend.child = None;
-            backend.pid = None;
-            return Ok(DAEMON_PORT);
+            let port = connect_daemon(&state, &app).await;
+            return Ok(port);
         }
 
         // Phase 2: daemon not running — attempt auto-bootstrap
@@ -742,13 +818,8 @@ async fn start_backend(
             // Wait for daemon to come up (cold start can take a few seconds)
             if let Some(_port) = probe_daemon_health(10, 2).await {
                 println!("[Tauri] Daemon bootstrapped and healthy on port {}", DAEMON_PORT);
-                let mut backend = state.lock().await;
-                backend.port = DAEMON_PORT;
-                backend.running = true;
-                backend.is_daemon_mode = true;
-                backend.child = None;
-                backend.pid = None;
-                return Ok(DAEMON_PORT);
+                let port = connect_daemon(&state, &app).await;
+                return Ok(port);
             }
             println!("[Tauri] Daemon bootstrapped but not responding — falling back to sidecar");
         } else {
