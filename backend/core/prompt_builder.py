@@ -600,7 +600,8 @@ class PromptBuilder:
             # replaced with index + topic-matched sections instead of
             # flat injection.  Guarantees 100% recall coverage via index.
             memory_progressive = bool(
-                self.config_manager.get("memory_progressive_disclosure")
+                self._config.get("memory_progressive_disclosure")
+                if self._config else False
             )
 
             # Build keyword hint for memory section selection.

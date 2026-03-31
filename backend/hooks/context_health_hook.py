@@ -64,6 +64,15 @@ class ContextHealthHook:
 
     def _light_refresh(self, root: Path, ws_path: str) -> None:
         """Refresh KNOWLEDGE.md index and MEMORY.md index if workspace changed."""
+        # Memory index regen runs unconditionally — it's <10ms and must
+        # catch uncommitted MEMORY.md writes (Edit tool, locked_write)
+        # that happen within the same git rev.
+        try:
+            self._refresh_memory_index(root)
+        except Exception as exc:
+            logger.warning("context_health: MEMORY.md index refresh failed: %s", exc)
+
+        # KNOWLEDGE.md refresh is git-gated (filesystem scan is heavier)
         current_rev = self._git_rev(ws_path)
         if current_rev and current_rev == self._last_refresh_rev:
             return  # Nothing changed since last refresh
@@ -72,11 +81,6 @@ class ContextHealthHook:
             self._refresh_knowledge_sync(root)
         except Exception as exc:
             logger.warning("context_health: KNOWLEDGE.md refresh failed: %s", exc)
-
-        try:
-            self._refresh_memory_index(root)
-        except Exception as exc:
-            logger.warning("context_health: MEMORY.md index refresh failed: %s", exc)
 
         self._last_refresh_rev = current_rev
         logger.info("context_health: indexes refreshed (rev=%s)",
