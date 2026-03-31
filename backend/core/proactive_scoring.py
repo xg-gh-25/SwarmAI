@@ -214,8 +214,15 @@ def build_suggestions(
         if any(hint_lower[:30] in t or t[:30] in hint_lower for t in seen_titles):
             continue
 
+        # Truncate at word boundary to avoid mid-word cuts in UI
+        if len(hint) > 100:
+            truncated = hint[:100].rsplit(" ", 1)[0]
+            title = truncated + "…" if truncated else hint[:100]
+        else:
+            title = hint
+
         item = ScoredItem(
-            title=hint[:100],
+            title=title,
             priority="P1",  # continue hints are implicitly important
             from_continue_hint=True,
             source="hint",
