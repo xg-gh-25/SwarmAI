@@ -293,6 +293,37 @@ The BUILD stage follows TDD methodology: tests before code, code until tests pas
 12. If existing tests break → fix production code, NOT the existing tests
 13. Track all files changed and test results
 
+**Step 4: SMOKE — exercise new code paths (catch runtime crashes)**
+
+14. For each modified file that has new branches (if/else, try/except,
+    config-gated paths), write a minimal inline smoke test that forces
+    execution through the new path. The goal is to catch AttributeError,
+    NameError, and other runtime crashes that unit tests miss because
+    they mock the surrounding context.
+
+    ```python
+    # Example: new config-gated code in prompt_builder.py
+    from core.prompt_builder import PromptBuilder
+    pb = PromptBuilder(config={"memory_progressive_disclosure": True})
+    # Call the method that contains the new branch — don't assert output,
+    # just verify it doesn't crash with AttributeError/TypeError.
+    ```
+
+    Rules:
+    - If the new code is behind a config flag → test with flag=True
+    - If behind a conditional (channel_context, resume, etc.) → construct
+      the triggering condition
+    - If new code is in a try/except → temporarily remove the except to
+      verify the try body doesn't crash (the except silently swallows
+      bugs like `self.config_manager` → `self._config`)
+    - Smoke tests are **inline verification only** — don't commit them.
+      They're a build-time gate, not regression tests.
+    - If a smoke test crashes → fix the bug before proceeding to REVIEW.
+
+    This step exists because of a real incident: `self.config_manager`
+    (wrong attribute name) passed 8 pipeline stages undetected because
+    it was inside try/except and no test exercised the actual runtime path.
+
 **The TDD constraint:** Fix code, not tests. Tests are derived from the accepted
 design. Changing a test = changing the spec = go back to PLAN.
 
@@ -301,7 +332,7 @@ Publish artifact:
 python backend/scripts/artifact_cli.py publish --project <PROJECT> \
   --type changeset --producer s_autonomous-pipeline \
   --summary "<N> files changed, <M> commits, TDD: <red>/<green>/<verify>" \
-  --data '{"branch":"...","commits":[...],"files_changed":[...],"diff_summary":"...","tdd":{"acceptance_criteria_count":N,"tests_generated":M,"red_failures":K,"green_pass":true,"regressions":0}}'
+  --data '{"branch":"...","commits":[...],"files_changed":[...],"diff_summary":"...","tdd":{"acceptance_criteria_count":N,"tests_generated":M,"red_failures":K,"green_pass":true,"regressions":0,"smoke_tests":S,"smoke_crashes_caught":C}}'
 python backend/scripts/artifact_cli.py advance --project <PROJECT> --state review
 ```
 
@@ -437,6 +468,8 @@ python backend/scripts/artifact_cli.py advance --project <PROJECT> --state deliv
    | Tests generated | M |
    | Tests per criterion | X.X |
    | Bugs caught (RED phase) | K |
+   | Smoke tests (new paths) | S |
+   | Runtime crashes caught by smoke | C |
    | Regressions | 0 |
    | Total test suite | N tests, all passing |
 
