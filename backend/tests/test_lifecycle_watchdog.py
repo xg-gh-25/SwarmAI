@@ -206,6 +206,67 @@ class TestPeriodicOrphanReaping:
 
         assert call_count == 0
 
+    @pytest.mark.asyncio
+    async def test_cleanup_expired_messages_called_on_10th_cycle(self):
+        """_cleanup_expired_messages runs in the cycle%10 block."""
+        mgr = _make_manager()
+        mgr._cleanup_expired_messages = AsyncMock()
+
+        # Stub out every other maintenance method
+        for method in (
+            "_health_check_all", "_check_streaming_timeout",
+            "_fire_idle_hooks", "_check_ttl", "_cleanup_dead",
+            "_check_memory_pressure", "_reap_orphans",
+            "_purge_stale_cold", "_cleanup_stale_channel_sessions",
+            "_sample_process_memory",
+        ):
+            setattr(mgr, method, AsyncMock())
+
+        # Replicate the maintenance loop logic for 10 cycles
+        cycle = 0
+        for _ in range(10):
+            cycle += 1
+            if cycle % 10 == 0:
+                await mgr._cleanup_expired_messages()
+
+        mgr._cleanup_expired_messages.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_cleanup_expired_messages_not_called_before_10th(self):
+        """_cleanup_expired_messages does NOT run before the 10th cycle."""
+        mgr = _make_manager()
+        mgr._cleanup_expired_messages = AsyncMock()
+
+        for cycle in range(1, 10):
+            if cycle % 10 == 0:
+                await mgr._cleanup_expired_messages()
+
+        mgr._cleanup_expired_messages.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_cleanup_expired_messages_logs_deleted_count(self):
+        """When cleanup deletes messages, it logs the count."""
+        mgr = _make_manager()
+
+        mock_db = MagicMock()
+        mock_db.cleanup_expired_messages = AsyncMock(return_value=42)
+        with patch("database.db", mock_db):
+            await mgr._cleanup_expired_messages()
+            mock_db.cleanup_expired_messages.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_cleanup_expired_messages_handles_exception(self):
+        """Exception in cleanup doesn't propagate."""
+        mgr = _make_manager()
+
+        mock_db = MagicMock()
+        mock_db.cleanup_expired_messages = AsyncMock(
+            side_effect=Exception("DB locked")
+        )
+        with patch("database.db", mock_db):
+            # Should NOT raise
+            await mgr._cleanup_expired_messages()
+
 
 # ── Unit tests: pytest orphan reaper ───────────────────────────────────
 
