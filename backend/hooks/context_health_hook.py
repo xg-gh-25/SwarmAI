@@ -63,7 +63,7 @@ class ContextHealthHook:
     # ------------------------------------------------------------------
 
     def _light_refresh(self, root: Path, ws_path: str) -> None:
-        """Refresh KNOWLEDGE.md index if git HEAD changed since last refresh."""
+        """Refresh KNOWLEDGE.md index and MEMORY.md index if workspace changed."""
         current_rev = self._git_rev(ws_path)
         if current_rev and current_rev == self._last_refresh_rev:
             return  # Nothing changed since last refresh
@@ -72,6 +72,11 @@ class ContextHealthHook:
             self._refresh_knowledge_sync(root)
         except Exception as exc:
             logger.warning("context_health: KNOWLEDGE.md refresh failed: %s", exc)
+
+        try:
+            self._refresh_memory_index(root)
+        except Exception as exc:
+            logger.warning("context_health: MEMORY.md index refresh failed: %s", exc)
 
         self._last_refresh_rev = current_rev
         logger.info("context_health: indexes refreshed (rev=%s)",
@@ -135,6 +140,43 @@ class ContextHealthHook:
             context_file.write_text(new_content, encoding="utf-8")
         except Exception as exc:
             logger.warning("context_health: KNOWLEDGE.md refresh failed: %s", exc)
+
+    def _refresh_memory_index(self, root: Path) -> None:
+        """Regenerate the compact index block in MEMORY.md.
+
+        Called after every session to keep the index in sync with MEMORY.md
+        content, regardless of how it was written (Edit tool, locked_write,
+        direct I/O, weekly job).  This is the single reliable regeneration
+        point — all write paths converge here.
+        """
+        memory_file = root / ".context" / "MEMORY.md"
+        if not memory_file.exists():
+            return
+
+        try:
+            from core.memory_index import (
+                inject_index_into_memory,
+                extract_index_from_memory,
+                MEMORY_INDEX_START,
+            )
+        except ImportError:
+            return  # Module not yet available (first startup)
+
+        content = memory_file.read_text(encoding="utf-8")
+
+        # Check if index exists and is reasonably fresh (avoid redundant writes)
+        existing_index = extract_index_from_memory(content)
+        if existing_index and MEMORY_INDEX_START in content:
+            # Index exists — skip regen if MEMORY.md hasn't changed since
+            # last regen (index block is at the top, body is below).
+            # Simple heuristic: if file mtime is within 60s of index write,
+            # it was probably just regenerated.  Full regen otherwise.
+            pass  # Always regenerate — it's <10ms, not worth caching
+
+        updated = inject_index_into_memory(content)
+        if updated != content:
+            memory_file.write_text(updated, encoding="utf-8")
+            logger.info("context_health: MEMORY.md index regenerated")
 
     # ------------------------------------------------------------------
     # Deep check — once per day, <10s
