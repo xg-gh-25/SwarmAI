@@ -538,6 +538,9 @@ class ContextDirectoryLoader:
         model_context_window: int = 200_000,
         token_budget: int | None = None,
         exclude_filenames: set[str] | None = None,
+        memory_progressive: bool = False,
+        user_message: str = "",
+        session_signals: dict | None = None,
     ) -> str:
         """Read all source files, enforce token budget, and assemble.
 
@@ -602,6 +605,23 @@ class ContextDirectoryLoader:
             content = self._clean_content(content, spec.section_name)
             if not content:
                 continue
+
+            # Progressive Memory Disclosure: for MEMORY.md, replace flat
+            # content with index + selected sections when enabled.
+            if spec.filename == "MEMORY.md" and memory_progressive:
+                try:
+                    from .memory_index import select_memory_sections
+                    content = select_memory_sections(
+                        memory_content=content,
+                        user_message=user_message,
+                        session_signals=session_signals,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Progressive memory disclosure failed, "
+                        "falling back to flat injection: %s", exc
+                    )
+                    # Fall through with original content
 
             section_tuples.append(
                 (spec.priority, spec.section_name, content, spec.truncatable, spec.truncate_from)
@@ -909,6 +929,9 @@ class ContextDirectoryLoader:
         self,
         model_context_window: int = 200_000,
         exclude_filenames: set[str] | None = None,
+        memory_progressive: bool = False,
+        user_message: str = "",
+        session_signals: dict | None = None,
     ) -> str:
         """Load and assemble context based on model context window.
 
@@ -948,9 +971,9 @@ class ContextDirectoryLoader:
                 # Small model: use L0 compact cache
                 return self._load_l0(model_context_window)
 
-            # When files are excluded (group channels), skip L1 cache —
-            # exclusions are session-specific and the cache is shared.
-            if not exclude_filenames:
+            # When files are excluded (group channels) or progressive memory
+            # is active, skip L1 cache — both are session-specific.
+            if not exclude_filenames and not memory_progressive:
                 cached = self._load_l1_if_fresh(expected_budget=dynamic_budget)
                 if cached:
                     return cached
@@ -960,6 +983,9 @@ class ContextDirectoryLoader:
                 model_context_window=model_context_window,
                 token_budget=dynamic_budget,
                 exclude_filenames=exclude_filenames,
+                memory_progressive=memory_progressive,
+                user_message=user_message,
+                session_signals=session_signals,
             )
 
             # Only write L1 cache when no exclusions (cache is the full set)

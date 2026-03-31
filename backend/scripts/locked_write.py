@@ -478,6 +478,13 @@ def main():
         help="New value for --set-field mode",
     )
 
+    parser.add_argument(
+        "--regenerate-index",
+        action="store_true",
+        default=False,
+        help="Regenerate the memory index block after writing (MEMORY.md only)",
+    )
+
     # Mutually exclusive: --append, --prepend, --replace, --increment-field, --set-field
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--append", dest="text_append", help="Text to append to section end")
@@ -550,6 +557,31 @@ def main():
     except (LockedWriteError, ValueError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         sys.exit(1)
+
+    # ── Optional: regenerate memory index after write ──
+    if args.regenerate_index and args.file.name == "MEMORY.md":
+        try:
+            _regenerate_memory_index(args.file)
+        except Exception as exc:
+            print(
+                f"WARNING: Index regeneration failed (non-fatal): {exc}",
+                file=sys.stderr,
+            )
+
+
+def _regenerate_memory_index(file_path: Path) -> None:
+    """Regenerate the memory index block in a MEMORY.md file.
+
+    Reads the file, generates a fresh index, and writes it back
+    with the index block at the top.
+    """
+    # Import here to avoid circular dependency with core module
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from core.memory_index import inject_index_into_memory
+
+    content = file_path.read_text(encoding="utf-8")
+    updated = inject_index_into_memory(content)
+    file_path.write_text(updated, encoding="utf-8")
 
 
 if __name__ == "__main__":

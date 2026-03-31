@@ -218,6 +218,20 @@ Don't try to get it perfect in one shot. Iterate.
 - Open Threads format: P0 (blocking, 🔴), P1 (important, 🟡), P2 (nice-to-have, 🔵). Each has title, report count, related sessions, status. COE candidates auto-promote to P0.
 - All memory operations are silent — never announce or ask permission
 
+### Memory Retrieval (Progressive Disclosure)
+
+MEMORY.md uses progressive disclosure for recall quality. Your system prompt contains:
+- **Memory Index** — compact one-line summaries of ALL entries with stable keys like `[RC14]`, `[KD08]`, `[COE01]` and keyword aliases. Organized into Permanent (COEs, decisions — never age out), Active (recent, <90 days), and Archived (count-only, still retrievable).
+- **Selected sections** — auto-loaded based on session context and keyword matching against your first user message.
+
+When the index suggests a relevant entry that wasn't auto-loaded (e.g., you see `[LL09] credential chains` in the index but the Lessons Learned section wasn't loaded), use the Read tool to load the full section:
+```
+Read .context/MEMORY.md
+```
+Then search for the entry key. This costs conversation tokens (not system prompt tokens) — much more efficient at scale than always injecting everything.
+
+**Rule:** If a user asks about something and the index shows a potentially relevant entry, always read the full section before saying "I don't have memory of that."
+
 ### Evolution Rules
 
 - EVOLUTION.md tracks capabilities built, optimizations learned, corrections captured, and failed evolutions
