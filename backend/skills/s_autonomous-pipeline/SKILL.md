@@ -315,13 +315,37 @@ python backend/scripts/artifact_cli.py advance --project <PROJECT> --state revie
    - < 5: suppress
    - Apply 10 false-positive exclusions
 3. Check IMPROVEMENT.md for known issue patterns
+4. **Integration Trace** — verify every new public symbol is actually wired:
+
+   For every new function, parameter, config key, or `.get("key")` call in the
+   changeset, grep the codebase for production callers (exclude test files):
+
+   | New symbol type | Verification | Example |
+   |-----------------|-------------|---------|
+   | New public function | >= 1 non-test caller exists | `generate_memory_index()` called by `inject_index_into_memory()` ✅ |
+   | New parameter on existing function | >= 1 call site passes it | `memory_progressive=True` passed by `prompt_builder.py` ✅ |
+   | New config key in DEFAULT_CONFIG | Trace: `DEFAULT_CONFIG` → `config_manager.get()` → consumer | `memory_progressive_disclosure` read by prompt_builder ✅ |
+   | `agent_config.get("key")` or `config.get("key")` | Verify key has a setter | `_first_user_message` — no setter ❌ |
+   | New CLI flag / argument | >= 1 caller passes it | `--regenerate-index` — 0 callers ❌ |
+
+   **Action on findings:**
+   - 0 production callers → **WARN** (not BLOCK). Agent must either:
+     - Wire it now (add the caller), or
+     - Document as intentional: "deferred — caller planned for Phase X"
+   - Undocumented dead symbols are not acceptable — every WARN needs a resolution.
+
+   **Why WARN not BLOCK:** Some interfaces are designed ahead of their callers
+   (e.g., Phase 4 archival functions). Blocking would force premature wiring.
+   But the agent must make an explicit decision, not silently ship dead code.
+
+   Include integration trace results in the review artifact under `"integration_trace"`.
 
 Publish artifact:
 ```bash
 python backend/scripts/artifact_cli.py publish --project <PROJECT> \
   --type review --producer s_autonomous-pipeline \
-  --summary "Review: <N findings>, <M auto-fixed>" \
-  --data '{"findings":[...],"approved":true/false,"security_findings":[...]}'
+  --summary "Review: <N findings>, <M auto-fixed>, <K integration warnings>" \
+  --data '{"findings":[...],"approved":true/false,"security_findings":[],"integration_trace":{"checked":N,"connected":M,"warnings":[...]}}'
 python backend/scripts/artifact_cli.py advance --project <PROJECT> --state test
 ```
 
@@ -426,6 +450,7 @@ python backend/scripts/artifact_cli.py advance --project <PROJECT> --state deliv
    |---|---|
    | REVIEW (code quality) | N findings, M auto-fixed |
    | REVIEW (security) | clean / N findings |
+   | REVIEW (integration) | N symbols checked, M connected, K warnings |
    | TEST (TDD) | pass |
    | VALIDATOR | 6/6 checks |
    | Confidence | X/10 |
