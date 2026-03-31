@@ -1082,3 +1082,27 @@ def build_session_briefing_data(
     except Exception as exc:
         logger.warning("Briefing data generation failed (non-blocking): %s", exc)
         return empty
+
+
+def get_focus_keywords(workspace_dir: str | Path) -> str:
+    """Extract keyword string from session briefing focus items.
+
+    Used by Progressive Memory Disclosure to select relevant MEMORY.md
+    sections at prompt-assembly time.  The user's actual first message
+    isn't available yet (system prompt is built before the user types),
+    so we use the briefing's predicted focus as a keyword proxy.
+
+    Returns a space-separated string of focus item titles and sources,
+    suitable for keyword matching.  Never raises — returns empty string
+    on any failure.
+    """
+    try:
+        data = build_session_briefing_data(workspace_dir)
+        keywords: list[str] = []
+        for item in data.get("focus", []):
+            title = item.get("title", "")
+            if title:
+                keywords.append(title)
+        return " ".join(keywords)
+    except Exception:
+        return ""

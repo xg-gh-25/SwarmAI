@@ -598,11 +598,24 @@ class PromptBuilder:
                 self.config_manager.get("memory_progressive_disclosure")
             )
 
+            # Build keyword hint for memory section selection.
+            # The user's first message isn't available yet at prompt-assembly
+            # time (system prompt is built before the user sends anything).
+            # Use the session briefing's focus items as a keyword proxy —
+            # they predict what the user is likely to work on.
+            memory_keyword_hint = ""
+            if memory_progressive and not (channel_context):
+                try:
+                    from .proactive_intelligence import get_focus_keywords
+                    memory_keyword_hint = get_focus_keywords(working_directory)
+                except Exception:
+                    pass  # Proactive module unavailable — rule-based only
+
             context_text = loader.load_all(
                 model_context_window=model_context_window,
                 exclude_filenames=exclude_files,
                 memory_progressive=memory_progressive,
-                user_message=agent_config.get("_first_user_message", ""),
+                user_message=memory_keyword_hint,
                 session_signals={
                     "is_channel": channel_context is not None,
                     "is_resume": bool(agent_config.get("resume_app_session_id")),
