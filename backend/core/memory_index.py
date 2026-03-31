@@ -100,8 +100,15 @@ def _parse_entries(section_content: str) -> list[dict]:
     entries = []
     # Match entries: - YYYY-MM-DD: **title** — rest
     # Also match: - 🔵 **title** — rest (Open Threads format)
-    for line in section_content.split("\n"):
-        line = line.strip()
+    # Only process top-level bullets (column 0-1). Skip indented sub-bullets
+    # like "  - Sub-point" which would pollute the index with fragments.
+    for raw_line in section_content.split("\n"):
+        if not raw_line or (raw_line[0] == " " and not raw_line.startswith(" -")):
+            continue
+        # Indented bullets (2+ spaces before -) are sub-items, skip
+        if raw_line.startswith("  "):
+            continue
+        line = raw_line.strip()
         if not line.startswith("- "):
             continue
 
@@ -358,8 +365,12 @@ def keyword_relevance(
     if not title_hits and not alias_hits:
         return 0.0
 
-    # Alias hits weighted 1.5x
-    score = (len(title_hits) + len(alias_hits) * 1.5) / len(all_matchable)
+    # Alias hits weighted 1.5x.  Denominator uses the larger of msg_tokens
+    # and all_matchable to avoid penalizing keyword-rich entries: an entry
+    # with 20 aliases and 1 match should score ~0.075 against msg, not
+    # ~0.075 against entry (which dilutes below threshold for rich entries).
+    denominator = max(len(msg_tokens), len(all_matchable))
+    score = (len(title_hits) + len(alias_hits) * 1.5) / denominator
     return score
 
 
