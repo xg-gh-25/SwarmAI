@@ -588,4 +588,7 @@ def extract_body_without_index(content: str) -> str:
     result = before_index + after_index
     # Clean up extra blank lines
     result = re.sub(r"\n{3,}", "\n\n", result)
-    return result.strip() + "\n" if result.strip() else content
+    # If stripping the index left nothing meaningful, return as-is
+    # (avoids returning original content with index still in it)
+    stripped = result.strip()
+    return stripped + "\n" if stripped else ""
