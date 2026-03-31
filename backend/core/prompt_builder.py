@@ -284,18 +284,23 @@ class PromptBuilder:
     # build_sandbox_config
     # ------------------------------------------------------------------
 
-    def build_sandbox_config(self, agent_config: dict) -> Optional[dict]:
+    def build_sandbox_config(self, agent_config: dict) -> dict:
         """Build the sandbox configuration dict from agent and app settings.
 
         Reads sandbox settings from ``config.json`` via ``AppConfigManager``
         (single source of truth), falling back to ``DEFAULT_CONFIG`` values.
-        Returns ``None`` when sandboxing is disabled or unsupported (Windows).
+
+        **Always returns a dict, never None.**  When sandbox is disabled, returns
+        ``{"enabled": False}`` so the CLI receives an explicit disable signal.
+        Returning ``None`` would omit the ``--settings`` flag entirely, and newer
+        CLI versions auto-enable sandbox under ``bypassPermissions`` mode as a
+        safety fallback — defeating the user's intent to disable it.
 
         Args:
             agent_config: Agent configuration dictionary.
 
         Returns:
-            Sandbox settings dict or ``None`` if sandboxing is disabled.
+            Sandbox settings dict (always present; ``enabled`` may be False).
         """
         cfg = self._config
         sandbox_default = cfg.get("sandbox_enabled_default", True) if cfg else True
@@ -307,7 +312,7 @@ class PromptBuilder:
             sandbox_enabled = False
 
         if not sandbox_enabled:
-            return None
+            return {"enabled": False}
 
         excluded_commands: list[str] = []
         raw_excluded = cfg.get("sandbox_excluded_commands", "docker") if cfg else "docker"
