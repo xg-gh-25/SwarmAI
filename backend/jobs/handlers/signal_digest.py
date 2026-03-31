@@ -140,6 +140,7 @@ def _llm_digest(
     # Tier descriptions for prompt context
     tier_labels = {
         "frontier": "🔵 FRONTIER LAB (highest authority — official AI lab blog)",
+        "leaders": "👤 LEADERS (AI thought leaders & founders — high-signal opinion)",
         "research": "🟣 RESEARCH (academic/research — trend indicator)",
         "engineering": "⚙️ ENGINEERING (practitioner blog/framework)",
         "opinion": "💭 OPINION (thought leader commentary)",
@@ -162,12 +163,13 @@ def _llm_digest(
 ## Signal Tier System
 Each signal is tagged with a source authority tier. Weight your scoring accordingly:
 - 🔵 FRONTIER LAB: Official AI lab announcements. Highest authority — these define the landscape.
+- 👤 LEADERS: AI thought leaders & founders (Sam Altman, Karpathy, etc.). High-signal opinion — score like frontier.
 - 🟣 RESEARCH: Academic papers and research blogs. Trend indicators for 3-12 month horizon.
 - ⚙️ ENGINEERING: Practitioner blogs and frameworks. Direct actionability.
 - 💭 OPINION: Thought leader commentary. Directional, not definitive.
 - 📰 AGGREGATE: Newsletters and aggregators. Useful for coverage but second-hand.
 
-Frontier and Research signals should be scored higher for relevance when equally interesting.
+Frontier, Leaders, and Research signals should be scored higher for relevance when equally interesting.
 
 ## Raw Signals
 {signal_text}

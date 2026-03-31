@@ -50,12 +50,45 @@ SYSTEM_JOBS: list[Job] = [
         config={"command": "python -m backend.jobs.self_tune", "cwd": _SWARMAI_ROOT},
     ),
 
-    # --- Maintenance ---
+    # --- Maintenance (lightweight: prune caches, trim state, reset counters) ---
     Job(
         id="weekly-maintenance",
         name="Weekly Maintenance",
         type="maintenance",
         schedule="0 3 * * 0",          # Sunday 3am UTC
+        enabled=True,
+        category="system",
+        config={},
+    ),
+
+    # --- Memory Health (LLM-powered: stale entry pruning, gap detection) ---
+    Job(
+        id="memory-health",
+        name="Memory Health Check",
+        type="memory_health",
+        schedule="15 3 * * 0",         # Sunday 3:15am UTC (after maintenance)
+        enabled=True,
+        category="system",
+        config={},
+    ),
+
+    # --- DDD Auto-Refresh (detect stale project docs, generate proposals) ---
+    Job(
+        id="ddd-refresh",
+        name="DDD Auto-Refresh",
+        type="ddd_refresh",
+        schedule="30 3 * * 0",         # Sunday 3:30am UTC (after memory health)
+        enabled=True,
+        category="system",
+        config={},
+    ),
+
+    # --- Skill Proposer (reads health_findings.json, proposes skills for gaps) ---
+    Job(
+        id="skill-proposer",
+        name="Skill Proposer",
+        type="skill_proposer",
+        schedule="after:memory-health", # Depends on health_findings.json from memory-health
         enabled=True,
         category="system",
         config={},
