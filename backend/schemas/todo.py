@@ -13,13 +13,19 @@ Key public symbols:
 - ``ToDoUpdate``       — Request model for partial updates (includes linked_context)
 - ``ToDoResponse``     — Response model with all stored fields (includes linked_context)
 - ``ToDoConvertToTaskRequest`` — Request model for ToDo → Task conversion
+- ``CONTEXT_REQUIREMENTS`` — Required context fields per source_type
+- ``validate_linked_context`` — Enforce minimum context bar (warn, never block)
+- ``TODO_LIFECYCLE``   — Configurable lifecycle TTL/purge settings
 
 Requirements: 4.1, 4.2, 4.3, 4.4, 5.1, 5.2, 5.3, 5.5
 """
+import logging
 from datetime import datetime
 from enum import Enum
 from typing import Optional
 from pydantic import BaseModel, Field
+
+logger = logging.getLogger(__name__)
 
 
 class ToDoStatus(str, Enum):
@@ -151,3 +157,67 @@ class ToDoConvertToTaskRequest(BaseModel):
     title: Optional[str] = Field(None, description="Override title for the task (defaults to ToDo title)")
     description: Optional[str] = Field(None, description="Override description for the task")
     priority: Optional[Priority] = Field(None, description="Override priority for the task")
+
+
+# ── Context Requirements per Source Type ─────────────────────────────
+
+# Required context fields per source_type.
+# Universal fields (next_step, created_by) are always required on top.
+CONTEXT_REQUIREMENTS: dict[str, list[str]] = {
+    "email": [
+        "email_subject", "email_from", "email_date",
+        "email_snippet", "suggested_action",
+    ],
+    "slack": [
+        "channel_name", "sender", "message_snippet", "thread_url",
+    ],
+    "chat": [
+        "session_id", "user_intent",
+    ],
+    "ai_detected": [
+        "detection_reason", "files",
+    ],
+    "meeting": [
+        "meeting_title", "meeting_date", "attendees", "action_item",
+    ],
+    # manual and integration only need universal fields
+}
+
+# Universal fields required for ALL source types
+_UNIVERSAL_REQUIRED = ["next_step"]
+
+
+def validate_linked_context(source_type: str, ctx: dict) -> dict:
+    """Enforce minimum context fields per source_type.
+
+    Validates that the linked_context dict contains required fields for the
+    given source_type. Logs warnings on missing fields but NEVER blocks
+    creation — tags ``_missing_fields`` in the returned dict.
+
+    Args:
+        source_type: The todo's source_type (email, slack, chat, etc.)
+        ctx: The linked_context dict to validate.
+
+    Returns:
+        The same dict, potentially with ``_missing_fields`` key added.
+    """
+    required = list(_UNIVERSAL_REQUIRED)
+    required.extend(CONTEXT_REQUIREMENTS.get(source_type, []))
+
+    missing = [f for f in required if not ctx.get(f)]
+    if missing:
+        logger.warning(
+            "ToDo [%s] missing context fields: %s", source_type, missing,
+        )
+        ctx["_missing_fields"] = missing
+    return ctx
+
+
+# ── Lifecycle Configuration ──────────────────────────────────────────
+
+TODO_LIFECYCLE = {
+    "soft_expire_days": 30,       # pending → cancelled
+    "overdue_cancel_days": 14,    # overdue → cancelled
+    "purge_retention_days": 14,   # terminal → hard delete
+    "archive_before_purge": True, # dump to JSONL before delete
+}
