@@ -31,6 +31,7 @@ No subprocess lifecycle, routing, or hook logic lives here.
 import logging
 import os
 import platform
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional, TYPE_CHECKING
 
@@ -590,9 +591,26 @@ class PromptBuilder:
                 logger.info("Non-owner channel DM — light context, excluding %s", exclude_files)
             # Owner DM and chat tabs: full context (no exclusion)
 
+            # Progressive Memory Disclosure: when enabled, MEMORY.md is
+            # replaced with index + topic-matched sections instead of
+            # flat injection.  Guarantees 100% recall coverage via index.
+            memory_progressive = bool(
+                self.config_manager.get("memory_progressive_disclosure")
+            )
+
             context_text = loader.load_all(
                 model_context_window=model_context_window,
                 exclude_filenames=exclude_files,
+                memory_progressive=memory_progressive,
+                user_message=agent_config.get("_first_user_message", ""),
+                session_signals={
+                    "is_channel": channel_context is not None,
+                    "is_resume": bool(agent_config.get("resume_app_session_id")),
+                    "is_first_session_today": not (
+                        Path(working_directory) / "Knowledge" / "DailyActivity"
+                        / f"{datetime.now().strftime('%Y-%m-%d')}.md"
+                    ).exists() if not (channel_context) else False,
+                } if memory_progressive else None,
             )
 
             # ── BOOTSTRAP.md detection (ephemeral, not in L1 cache) ──
