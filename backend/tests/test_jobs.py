@@ -177,7 +177,7 @@ class TestDedup:
 class TestSystemJobs:
     def test_system_jobs_count(self):
         from jobs.system_jobs import SYSTEM_JOBS
-        assert len(SYSTEM_JOBS) == 5
+        assert len(SYSTEM_JOBS) == 8
 
     def test_system_job_ids_unique(self):
         from jobs.system_jobs import SYSTEM_JOBS
@@ -196,6 +196,27 @@ class TestSystemJobs:
         from jobs.system_jobs import SYSTEM_JOBS
         digest = next(j for j in SYSTEM_JOBS if j.id == "signal-digest")
         assert digest.schedule == "after:signal-fetch"
+
+    def test_skill_proposer_depends_on_memory_health(self):
+        from jobs.system_jobs import SYSTEM_JOBS
+        proposer = next(j for j in SYSTEM_JOBS if j.id == "skill-proposer")
+        assert proposer.schedule == "after:memory-health"
+
+    def test_standalone_jobs_have_weekly_schedule(self):
+        """memory-health, ddd-refresh run on their own weekly schedule."""
+        from jobs.system_jobs import SYSTEM_JOBS
+        mh = next(j for j in SYSTEM_JOBS if j.id == "memory-health")
+        ddd = next(j for j in SYSTEM_JOBS if j.id == "ddd-refresh")
+        # Both run on Sundays (day 0)
+        assert "* * 0" in mh.schedule
+        assert "* * 0" in ddd.schedule
+
+    def test_new_job_types_in_enum(self):
+        """All new job types are registered in JobType enum."""
+        from jobs.models import JobType
+        assert JobType("memory_health") == JobType.MEMORY_HEALTH
+        assert JobType("ddd_refresh") == JobType.DDD_REFRESH
+        assert JobType("skill_proposer") == JobType.SKILL_PROPOSER
 
     def test_get_all_returns_copy(self):
         from jobs.system_jobs import get_all_system_jobs, SYSTEM_JOBS

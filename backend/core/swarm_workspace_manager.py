@@ -71,30 +71,57 @@ _DEFAULT_JOB_CONFIG = """\
 # Swarm Signal Pipeline — Feed Configuration
 # Feeds define what signals to fetch. Edit freely.
 # System job definitions are managed by SwarmAI (not in this file).
+# Self-tune auto-adjusts user_context and HN keywords based on your usage.
 
 feeds:
   - id: ai-engineering
     name: AI Engineering Blogs
     type: rss
+    tier: engineering
     config:
       urls:
         - https://simonwillison.net/atom/everything/
         - https://lilianweng.github.io/index.xml
         - https://www.latent.space/feed
-        - https://blog.langchain.dev/rss/
-        - https://www.anthropic.com/rss.xml
+        - https://blog.langchain.com/rss/
+        - https://huggingface.co/blog/feed.xml
     tags: [ai, engineering]
+    enabled: true
+
+  - id: frontier-labs
+    name: Frontier Lab Official Blogs
+    type: rss
+    tier: frontier
+    config:
+      urls:
+        - https://openai.com/blog/rss.xml
+        - https://blog.google/technology/ai/rss/
+        - https://deepmind.google/blog/rss.xml
+        - https://blogs.microsoft.com/ai/feed/
+    tags: [frontier, ai, official]
+    enabled: true
+
+  - id: ai-newsletters
+    name: AI Newsletters & Aggregators
+    type: rss
+    tier: aggregate
+    config:
+      urls:
+        - https://importai.substack.com/feed
+        - https://techcrunch.com/category/artificial-intelligence/feed/
+    tags: [newsletter, aggregate, ai]
     enabled: true
 
   - id: tool-releases
     name: AI Tool Releases
     type: github-releases
+    tier: engineering
     config:
       repos:
         - anthropics/anthropic-sdk-python
         - anthropics/claude-code
         - pydantic/pydantic
-        - tiangolo/fastapi
+        - fastapi/fastapi
       include_prereleases: false
     tags: [releases, tools]
     enabled: true
@@ -102,6 +129,7 @@ feeds:
   - id: hn-ai
     name: HN AI Discussions
     type: hacker-news
+    tier: aggregate
     config:
       keywords: [Claude, LLM agent, AI coding, Anthropic]
       min_score: 50
@@ -113,7 +141,7 @@ defaults:
   max_age_hours: 48
   dedup_window_days: 7
   relevance_threshold: 0.3
-  max_active_feeds: 15
+  max_active_feeds: 20
   max_daily_agent_tasks: 50
   max_monthly_spend_usd: 100.0
 

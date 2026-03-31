@@ -25,6 +25,9 @@ class JobType(str, Enum):
     SCRIPT = "script"
     NOTIFY = "notify"
     MAINTENANCE = "maintenance"
+    DDD_REFRESH = "ddd_refresh"
+    MEMORY_HEALTH = "memory_health"
+    SKILL_PROPOSER = "skill_proposer"
 
 
 class FeedType(str, Enum):
@@ -37,6 +40,7 @@ class FeedType(str, Enum):
 class TierType(str, Enum):
     """Signal source authority tier — controls weighting and auto-disable behavior."""
     FRONTIER = "frontier"       # Official labs (OpenAI, Anthropic, Google, etc.)
+    LEADERS = "leaders"         # AI leaders & thinkers (Sam Altman, Karpathy, etc.)
     RESEARCH = "research"       # Academic/research (arXiv, research blogs)
     ENGINEERING = "engineering"  # Engineering blogs, frameworks (default)
     OPINION = "opinion"         # Thought leaders, commentary
@@ -46,6 +50,7 @@ class TierType(str, Enum):
 # Tier weight multipliers for relevance scoring
 TIER_WEIGHTS: dict[str, float] = {
     TierType.FRONTIER: 2.0,
+    TierType.LEADERS: 1.5,
     TierType.RESEARCH: 1.5,
     TierType.ENGINEERING: 1.0,
     TierType.OPINION: 1.0,
@@ -55,6 +60,7 @@ TIER_WEIGHTS: dict[str, float] = {
 # Tier-specific auto-disable thresholds (days of zero usage before auto-disable)
 TIER_DISABLE_THRESHOLDS: dict[str, int | None] = {
     TierType.FRONTIER: None,   # Never auto-disable
+    TierType.LEADERS: None,    # Never auto-disable
     TierType.RESEARCH: 30,     # 30 days
     TierType.ENGINEERING: 14,  # 14 days (default behavior)
     TierType.OPINION: 14,
