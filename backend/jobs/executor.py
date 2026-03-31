@@ -5,11 +5,14 @@ Routes jobs to their handlers with error isolation.
 Each job runs in a try/except — one failure never affects another.
 
 Handlers:
-  signal_fetch  — httpx adapters (RSS, GitHub, HN)
-  signal_digest — Bedrock Haiku relevance scoring
-  agent_task    — Headless Claude CLI subprocess with MCP tools
-  script        — Deterministic subprocess (no AI, no tokens)
-  maintenance   — Prune caches, reset counters
+  signal_fetch    — httpx adapters (RSS, GitHub, HN)
+  signal_digest   — Bedrock Haiku relevance scoring
+  agent_task      — Headless Claude CLI subprocess with MCP tools
+  script          — Deterministic subprocess (no AI, no tokens)
+  maintenance     — Prune caches, reset counters (lightweight, no LLM)
+  ddd_refresh     — Autonomous DDD doc staleness detection + proposals
+  memory_health   — LLM-powered memory analysis + stale entry pruning
+  skill_proposer  — Autonomous skill proposals for recurring capability gaps
 """
 
 from __future__ import annotations
@@ -130,6 +133,44 @@ def execute_job(
                 job_id=job.id, timestamp=datetime.now(timezone.utc),
                 status="success" if ddd_result.get("status") == "success" else "failed",
                 summary=ddd_result.get("summary", "DDD refresh completed"),
+                duration_seconds=duration,
+            )
+
+        elif job.type == "memory_health":
+            from .handlers.memory_health import run_memory_health
+            health_result = run_memory_health()
+            duration = (datetime.now(timezone.utc) - start).total_seconds()
+            h_status = health_result.get("status", "unknown")
+            h_actions = health_result.get("actions", [])
+            summary = "; ".join(h_actions) if h_actions else health_result.get("error", "Memory health: all clear")
+            result = JobResult(
+                job_id=job.id, timestamp=datetime.now(timezone.utc),
+                status="success" if h_status == "success" else "failed",
+                summary=summary,
+                duration_seconds=duration,
+            )
+
+        elif job.type == "skill_proposer":
+            from .handlers.skill_proposer import run_skill_proposer
+            skill_result = run_skill_proposer()
+            duration = (datetime.now(timezone.utc) - start).total_seconds()
+            s_status = skill_result.get("status", "unknown")
+            if s_status == "success":
+                summary = (
+                    f"Proposed skill '{skill_result.get('skill_name', '?')}' "
+                    f"(confidence={skill_result.get('confidence', '?')})"
+                )
+            elif s_status == "low_confidence":
+                summary = (
+                    f"Discarded: confidence {skill_result.get('confidence', 0)} "
+                    f"< 6 for '{skill_result.get('target_gap', '')[:50]}'"
+                )
+            else:
+                summary = skill_result.get("reason", s_status)
+            result = JobResult(
+                job_id=job.id, timestamp=datetime.now(timezone.utc),
+                status="success" if s_status in ("success", "skipped", "low_confidence") else "failed",
+                summary=summary,
                 duration_seconds=duration,
             )
 
@@ -719,6 +760,22 @@ def _handle_maintenance(
     if todo_result:
         actions.append(todo_result)
 
+    # Auto-cancel overdue todos stuck for >14 days
+    from schemas.todo import TODO_LIFECYCLE
+    overdue_result = _escalate_overdue_todos(
+        cancel_days=TODO_LIFECYCLE["overdue_cancel_days"],
+    )
+    if overdue_result["cancelled_count"] > 0:
+        actions.append(f"Auto-cancelled {overdue_result['cancelled_count']} stale overdue todos")
+
+    # Purge terminal todos (handled/cancelled/deleted) older than 14 days
+    purge_result = _purge_terminal_todos(
+        retention_days=TODO_LIFECYCLE["purge_retention_days"],
+        archive_before_purge=TODO_LIFECYCLE["archive_before_purge"],
+    )
+    if purge_result["purged_count"] > 0:
+        actions.append(f"Purged {purge_result['purged_count']} old terminal todos")
+
     # Trim JSONL file (cap at 500 entries)
     if JOB_RESULTS_JSONL.exists():
         lines = JOB_RESULTS_JSONL.read_text().strip().split("\n")
@@ -726,62 +783,10 @@ def _handle_maintenance(
             JOB_RESULTS_JSONL.write_text("\n".join(lines[-500:]) + "\n")
             actions.append(f"Trimmed job results JSONL: {len(lines)} → 500")
 
-    # LLM-powered memory health (weekly — the expensive but smart part)
-    try:
-        from .handlers.memory_health import run_memory_health
-        health_result = run_memory_health()
-        if health_result.get("status") == "success":
-            health_actions = health_result.get("actions", [])
-            actions.extend(health_actions)
-            if not health_actions:
-                actions.append("Memory health: all clear")
-        elif health_result.get("status") == "error":
-            actions.append(f"Memory health error: {health_result.get('error', 'unknown')}")
-    except Exception as e:
-        logger.warning("Memory health check failed (non-blocking): %s", e)
-        actions.append(f"Memory health skipped: {e}")
-
-    # L4.0: Autonomous DDD refresh (weekly — proposals for stale DDD docs)
-    try:
-        from .handlers.ddd_refresh import run_ddd_refresh
-        ddd_result = run_ddd_refresh()
-        if ddd_result.get("proposals_written", 0) > 0:
-            actions.append(
-                f"DDD refresh: {ddd_result['proposals_written']} proposal(s) written"
-            )
-        elif ddd_result.get("projects_checked", 0) > 0:
-            actions.append("DDD refresh: all docs current")
-    except Exception as e:
-        logger.warning("DDD refresh failed (non-blocking): %s", e)
-        actions.append(f"DDD refresh skipped: {e}")
-
-    # L4.1: Autonomous skill proposer (weekly — skill proposals for capability gaps)
-    try:
-        from .handlers.skill_proposer import run_skill_proposer
-        # Pass gaps from the memory_health report (already run above)
-        skill_gaps = []
-        try:
-            from .handlers.memory_health import run_memory_health as _mh_ref  # noqa: just for type
-            # Gaps are in health_findings.json, updated by memory_health above
-            skill_gaps = None  # Let skill_proposer read from findings file
-        except Exception:
-            pass
-        skill_result = run_skill_proposer(gaps=skill_gaps)
-        if skill_result.get("status") == "success":
-            actions.append(
-                f"Skill proposal: {skill_result['skill_name']} "
-                f"(confidence={skill_result.get('confidence', '?')})"
-            )
-        elif skill_result.get("status") == "low_confidence":
-            actions.append(
-                f"Skill proposal discarded: confidence {skill_result.get('confidence', 0)} "
-                f"< {6} for '{skill_result.get('target_gap', '')[:50]}'"
-            )
-        elif skill_result.get("status") != "skipped":
-            actions.append(f"Skill proposer: {skill_result.get('reason', skill_result.get('status', '?'))}")
-    except Exception as e:
-        logger.warning("Skill proposer failed (non-blocking): %s", e)
-        actions.append(f"Skill proposer skipped: {e}")
+    # NOTE: memory_health, ddd_refresh, and skill_proposer are now
+    # standalone system jobs with their own schedules. They were extracted
+    # from maintenance to allow independent monitoring, scheduling, and
+    # failure isolation. See system_jobs.py for their definitions.
 
     summary = "; ".join(actions) if actions else "No maintenance needed"
     duration = (datetime.now(timezone.utc) - start).total_seconds()
@@ -1071,35 +1076,80 @@ def _parse_cli_output(stdout: str) -> dict:
 # DB_PATH imported from .paths
 
 
-def _create_todos_from_result(job: Job, result_text: str) -> None:
-    """Parse agent_task output for actionable items and create Radar todos.
+def _parse_structured_todos(
+    result_text: str,
+    *,
+    source_type: str = "email",
+    job_id: str = "",
+    job_name: str = "",
+    max_todos: int = 5,
+) -> list[dict]:
+    """Parse structured ``<!-- RADAR_TODOS [...] -->`` JSON from agent output.
 
-    Looks for lines matching patterns like:
-      - "urgent: ..." or "URGENT: ..."
-      - "action needed: ..."
-      - "reply needed: ..."
-      - "- [urgent] Subject — Sender"
+    Returns a list of dicts ready for DB insertion, each with:
+      title, priority, linked_context (JSON string), description.
 
-    Deduplicates by title — won't create a pending todo with a title
-    that already exists in pending state.
-
-    Config keys (in job.config):
-      create_todos: true          — enables this feature
-      todo_source_type: "email"   — source_type for created todos (default: job type)
-      todo_priority: "high"       — default priority (default: "medium")
-      todo_max: 5                 — max todos per run (default: 5)
+    If no structured block is found, returns empty list (caller falls back
+    to legacy regex parser).
     """
-    import sqlite3
-    import uuid
+    import re
 
-    if not DB_PATH.exists():
-        return
+    pattern = r"<!--\s*RADAR_TODOS\s*\n(.*?)\n\s*-->"
+    match = re.search(pattern, result_text, re.DOTALL)
+    if not match:
+        return []
 
-    source_type = job.config.get("todo_source_type", "email")
-    default_priority = job.config.get("todo_priority", "medium")
-    max_todos = job.config.get("todo_max", 5)
+    try:
+        todos_raw = json.loads(match.group(1))
+    except (json.JSONDecodeError, TypeError):
+        logger.warning("Failed to parse RADAR_TODOS JSON block")
+        return []
 
-    # Extract actionable items from result text
+    if not isinstance(todos_raw, list):
+        return []
+
+    from schemas.todo import validate_linked_context
+
+    items: list[dict] = []
+    for raw in todos_raw[:max_todos]:
+        if not isinstance(raw, dict) or not raw.get("title"):
+            continue
+
+        # Build linked_context from the item's context + job metadata
+        ctx = raw.get("context", {})
+        if not isinstance(ctx, dict):
+            ctx = {}
+        ctx["job_id"] = job_id
+        ctx["job_name"] = job_name
+        ctx["created_by"] = f"job:{job_id}"
+
+        # Validate context against source-specific requirements
+        ctx = validate_linked_context(source_type, ctx)
+
+        items.append({
+            "title": str(raw["title"])[:500],
+            "priority": raw.get("priority", "medium"),
+            "linked_context": json.dumps(ctx),
+            "description": raw.get("description", f"From scheduled job: {job_name}"),
+        })
+
+    return items
+
+
+def _parse_legacy_todos(
+    result_text: str,
+    *,
+    source_type: str = "email",
+    job_id: str = "",
+    job_name: str = "",
+    default_priority: str = "medium",
+    max_todos: int = 5,
+) -> list[dict]:
+    """Legacy regex parser for backward compatibility.
+
+    Looks for lines matching: urgent:, action needed:, reply needed:, follow up:.
+    Returns list of dicts with title, priority, linked_context.
+    """
     items: list[dict] = []
     for line in result_text.splitlines():
         stripped = line.strip().lstrip("- ").lstrip("* ")
@@ -1121,15 +1171,63 @@ def _create_todos_from_result(job: Job, result_text: str) -> None:
             priority = "medium"
             title = stripped.split(":", 1)[-1].strip()
         elif lower.startswith("informational:") or lower.startswith("[informational]"):
-            continue  # skip informational items
+            continue
         elif lower.startswith("[skip]") or lower.startswith("skip:"):
             continue
 
         if title and len(title) > 5:
-            items.append({"title": title[:120], "priority": priority})
+            ctx = {
+                "job_id": job_id,
+                "job_name": job_name,
+                "created_by": f"job:{job_id}",
+                "next_step": title,  # Best guess from legacy format
+            }
+            items.append({
+                "title": title[:120],
+                "priority": priority,
+                "linked_context": json.dumps(ctx),
+                "description": f"From scheduled job: {job_name}",
+            })
 
         if len(items) >= max_todos:
             break
+
+    return items
+
+
+def _create_todos_from_result(job: Job, result_text: str) -> None:
+    """Parse agent output for actionable items and create Radar todos.
+
+    Tries structured ``<!-- RADAR_TODOS -->`` JSON first, falls back to
+    legacy regex parsing for backward compatibility.
+
+    Config keys (in job.config):
+      create_todos: true          — enables this feature
+      todo_source_type: "email"   — source_type for created todos
+      todo_priority: "high"       — default priority (default: "medium")
+      todo_max: 5                 — max todos per run (default: 5)
+    """
+    import sqlite3
+    import uuid
+
+    if not DB_PATH.exists():
+        return
+
+    source_type = job.config.get("todo_source_type", "email")
+    default_priority = job.config.get("todo_priority", "medium")
+    max_todos = job.config.get("todo_max", 5)
+
+    # Try structured extraction first, fall back to regex
+    items = _parse_structured_todos(
+        result_text, source_type=source_type,
+        job_id=job.id, job_name=job.name, max_todos=max_todos,
+    )
+    if not items:
+        items = _parse_legacy_todos(
+            result_text, source_type=source_type,
+            job_id=job.id, job_name=job.name,
+            default_priority=default_priority, max_todos=max_todos,
+        )
 
     if not items:
         return
@@ -1155,11 +1253,11 @@ def _create_todos_from_result(job: Job, result_text: str) -> None:
                        VALUES (?, 'swarmws', ?, ?, ?, ?, 'pending', ?, NULL, ?, NULL, ?, ?)""",
                     (
                         todo_id, item["title"],
-                        f"From scheduled job: {job.name}",
+                        item.get("description", f"From scheduled job: {job.name}"),
                         f"job:{job.id}",
                         source_type,
                         item["priority"],
-                        json.dumps({"job_id": job.id, "job_name": job.name}),
+                        item["linked_context"],
                         now, now,
                     ),
                 )
@@ -1168,7 +1266,7 @@ def _create_todos_from_result(job: Job, result_text: str) -> None:
         logger.warning("Failed to create todos from job result: %s", exc)
 
 
-# ── Todo Expiration (called from maintenance) ────────────────────────
+# ── Todo Lifecycle: Expiration, Escalation, Purge ────────────────────
 
 
 def _expire_stale_todos(max_age_days: int = 30) -> str:
@@ -1202,6 +1300,135 @@ def _expire_stale_todos(max_age_days: int = 30) -> str:
     except Exception as exc:
         logger.warning("Todo expiration failed: %s", exc)
     return ""
+
+
+def _escalate_overdue_todos(
+    cancel_days: int = 14,
+    db_path: Path | None = None,
+) -> dict:
+    """Auto-cancel overdue todos that have been overdue for too long.
+
+    Overdue todos with updated_at older than cancel_days are cancelled.
+    Active statuses (pending, in_discussion) are NEVER touched.
+
+    Args:
+        cancel_days: Days after which overdue todos auto-cancel.
+        db_path: Override DB path for testing.
+
+    Returns:
+        Dict with cancelled_count.
+    """
+    import sqlite3
+    from datetime import timedelta
+
+    _db = db_path or DB_PATH
+    if not _db.exists():
+        return {"cancelled_count": 0}
+
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+00:00")
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=cancel_days)).strftime(
+        "%Y-%m-%dT%H:%M:%S+00:00"
+    )
+
+    try:
+        with sqlite3.connect(str(_db), timeout=5.0) as conn:
+            conn.execute("PRAGMA journal_mode=WAL")
+            cursor = conn.execute(
+                """UPDATE todos SET status = 'cancelled', updated_at = ?
+                   WHERE status = 'overdue' AND updated_at < ?""",
+                (now, cutoff),
+            )
+            count = cursor.rowcount
+            if count > 0:
+                logger.info("Auto-cancelled %d overdue todos (>%dd)", count, cancel_days)
+            return {"cancelled_count": count}
+    except Exception as exc:
+        logger.warning("Overdue escalation failed: %s", exc)
+        return {"cancelled_count": 0}
+
+
+def _purge_terminal_todos(
+    retention_days: int = 14,
+    archive_before_purge: bool = True,
+    db_path: Path | None = None,
+    archive_dir: Path | None = None,
+) -> dict:
+    """Hard-delete terminal-state todos older than retention_days.
+
+    Terminal states: handled, cancelled, deleted.
+    Active states (pending, overdue, in_discussion) are NEVER purged.
+
+    Optionally archives purged todos to a JSONL file before deletion.
+
+    Args:
+        retention_days: Days to keep terminal todos before purging.
+        archive_before_purge: If True, append to todo-archive.jsonl before delete.
+        db_path: Override DB path for testing.
+        archive_dir: Override archive directory for testing.
+
+    Returns:
+        Dict with purged_count and archive_path (if archived).
+    """
+    import sqlite3
+    from datetime import timedelta
+
+    _db = db_path or DB_PATH
+    if not _db.exists():
+        return {"purged_count": 0}
+
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=retention_days)).strftime(
+        "%Y-%m-%dT%H:%M:%S+00:00"
+    )
+
+    terminal_states = ("handled", "cancelled", "deleted")
+    placeholders = ",".join("?" for _ in terminal_states)
+
+    try:
+        with sqlite3.connect(str(_db), timeout=5.0) as conn:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.row_factory = sqlite3.Row
+
+            # Fetch rows to archive before deleting
+            rows = conn.execute(
+                f"""SELECT * FROM todos
+                    WHERE status IN ({placeholders}) AND updated_at < ?""",
+                (*terminal_states, cutoff),
+            ).fetchall()
+
+            if not rows:
+                return {"purged_count": 0}
+
+            # Archive to JSONL if enabled
+            archive_path = None
+            if archive_before_purge:
+                _archive_dir = archive_dir or (Path.home() / ".swarm-ai" / "SwarmWS" / "Knowledge" / "Archives")
+                _archive_dir.mkdir(parents=True, exist_ok=True)
+                archive_path = _archive_dir / "todo-archive.jsonl"
+                with open(archive_path, "a", encoding="utf-8") as f:
+                    for row in rows:
+                        entry = dict(row)
+                        entry["_purged_at"] = datetime.now(timezone.utc).isoformat()
+                        f.write(json.dumps(entry) + "\n")
+
+            # Hard delete
+            row_ids = [dict(row)["id"] for row in rows]
+            id_placeholders = ",".join("?" for _ in row_ids)
+            conn.execute(
+                f"DELETE FROM todos WHERE id IN ({id_placeholders})",
+                row_ids,
+            )
+
+            count = len(rows)
+            logger.info(
+                "Purged %d terminal todos (>%dd)%s",
+                count, retention_days,
+                f", archived to {archive_path}" if archive_path else "",
+            )
+            return {"purged_count": count, "archive_path": str(archive_path) if archive_path else None}
+
+    except Exception as exc:
+        logger.warning("Todo purge failed: %s", exc)
+        return {"purged_count": 0}
 
 
 def _estimate_cost(input_tokens: int, output_tokens: int, model: str = "sonnet") -> float:

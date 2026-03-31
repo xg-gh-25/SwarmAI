@@ -25,6 +25,7 @@ from schemas.todo import (
     ToDoStatus,
     ToDoConvertToTaskRequest,
     Priority,
+    validate_linked_context,
 )
 
 logger = logging.getLogger(__name__)
@@ -102,6 +103,18 @@ class ToDoManager:
         now = datetime.now(timezone.utc).isoformat()
         todo_id = str(uuid4())
 
+        # Validate linked_context against source-specific requirements
+        linked_context_str = data.linked_context
+        if linked_context_str:
+            try:
+                import json
+                ctx = json.loads(linked_context_str)
+                if isinstance(ctx, dict):
+                    ctx = validate_linked_context(data.source_type.value, ctx)
+                    linked_context_str = json.dumps(ctx)
+            except (json.JSONDecodeError, TypeError):
+                pass  # Invalid JSON — store as-is, don't block
+
         todo_dict = {
             "id": todo_id,
             "workspace_id": workspace_id,
@@ -112,6 +125,7 @@ class ToDoManager:
             "status": ToDoStatus.PENDING.value,
             "priority": data.priority.value,
             "due_date": data.due_date.isoformat() if data.due_date else None,
+            "linked_context": linked_context_str,
             "task_id": None,
             "created_at": now,
             "updated_at": now,

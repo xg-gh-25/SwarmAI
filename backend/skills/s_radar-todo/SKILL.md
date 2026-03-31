@@ -177,29 +177,85 @@ python3 {SKILL_DIR}/scripts/todo_db.py delete <todo_id> --hard    # hard delete 
 
 ## CRITICAL: Context Requirements by Source
 
+Every todo's `linked_context` is validated against source-specific required fields.
+Validation warns on missing fields (logged, tagged `_missing_fields`) but **never blocks creation**.
+
+### Universal fields (ALL source types)
+
+| Field | Required | Purpose |
+|-------|----------|---------|
+| `next_step` | **YES** | Concrete first action. Not vague — an actual step the agent executes. |
+| `created_by` | Recommended | Who created: `job:morning-inbox`, `agent:session_abc`, `user:manual` |
+
+### Email todos (source_type=`email`)
+
+Created by scheduled jobs (morning-inbox). Job agents output structured
+`<!-- RADAR_TODOS [...] -->` JSON blocks with email context.
+
+| Field | Required | Example |
+|-------|----------|---------|
+| `email_subject` | **YES** | `"Promote Self-Assessment Reminder"` |
+| `email_from` | **YES** | `"hr-no-reply@amazon.com"` |
+| `email_date` | **YES** | `"2026-03-30T08:15:00Z"` |
+| `email_snippet` | **YES** | First 200 chars of email body |
+| `suggested_action` | **YES** | `reply` / `forward` / `delegate` / `read` |
+| `email_message_id` | Optional | For re-fetching via Outlook MCP |
+| `email_thread_id` | Optional | For thread context |
+
+### Slack todos (source_type=`slack`)
+
+| Field | Required | Example |
+|-------|----------|---------|
+| `channel_name` | **YES** | `"#general"` |
+| `sender` | **YES** | `"alice"` |
+| `message_snippet` | **YES** | First 500 chars of message |
+| `thread_url` | **YES** | Slack permalink |
+| `channel_id` | Optional | For API lookups |
+| `thread_ts` | Optional | For thread replies |
+
 ### User chat todos (source_type=`chat`)
 
 When user says "add a todo for X" during conversation:
-1. **Title**: Clear, actionable (verb + object)
-2. **Description**: WHY — capture the user's intent and any discussion context
-3. **Files**: Any files mentioned or being worked on in current session
-4. **Next step**: What the user would do first if they started now
-5. **Acceptance**: What "done" looks like from the user's perspective
-6. **Session**: Current session ID for back-reference
-7. **Source**: `chat`
 
-### Proactive todos (source_type=`ai_detected`)
+| Field | Required | Purpose |
+|-------|----------|---------|
+| `session_id` | **YES** | Current session ID for back-reference |
+| `user_intent` | **YES** | WHY — capture the user's intent and discussion context |
+| `next_step` | **YES** | What the user would do first if they started now |
+| `files` | Optional | Any files mentioned or being worked on |
+| `design_docs` | Optional | Related design documents |
+| `commits` | Optional | Related git commits |
+| `acceptance` | Optional | What "done" looks like |
+
+### AI-detected todos (source_type=`ai_detected`)
 
 Agent creates these from detected patterns:
-1. **Title**: Specific and descriptive (not "follow up on X")
-2. **Description**: WHY this was flagged — what triggered detection
-3. **Files**: All files involved (trace the actual code path, don't guess)
-4. **Design docs**: If there's a design doc for this work, include it
-5. **Commits**: Recent related commits (find via `git log --oneline -5 -- <file>`)
-6. **Memory refs**: Any MEMORY.md COEs, lessons, or decisions that apply
-7. **Next step**: CONCRETE first action — "Read file X line Y" not "investigate"
-8. **Acceptance**: Measurable — "tests pass", "no regression", specific behavior
-9. **Blockers**: What's blocking, if anything
+
+| Field | Required | Purpose |
+|-------|----------|---------|
+| `detection_reason` | **YES** | WHY this was flagged — what triggered detection |
+| `next_step` | **YES** | CONCRETE first action — "Read file X line Y" not "investigate" |
+| `files` | **YES** | All files involved (trace actual code path, don't guess) |
+| `acceptance` | Optional | Measurable definition of done |
+| `design_docs` | Optional | Related design documents |
+| `memory_refs` | Optional | MEMORY.md COEs, lessons, or decisions that apply |
+| `blockers` | Optional | What's blocking, if anything |
+| `commits` | Optional | Recent related commits |
+
+### Meeting todos (source_type=`meeting`)
+
+| Field | Required | Example |
+|-------|----------|---------|
+| `meeting_title` | **YES** | `"Sprint Review"` |
+| `meeting_date` | **YES** | `"2026-03-31"` |
+| `attendees` | **YES** | `"XG, Bo Wang, Fan Gu"` |
+| `action_item` | **YES** | The specific action assigned |
+| `meeting_id` | Optional | Calendar event ID |
+| `notes_url` | Optional | Link to meeting notes |
+
+### Manual todos (source_type=`manual`)
+
+Only `next_step` is required. Everything else is optional.
 
 ## Proactive ToDo Detection
 
@@ -257,6 +313,31 @@ Should have (when applicable):
 - `--acceptance` — measurable definition of done
 - `--blockers` — what's blocking, if anything
 
+## Lifecycle & DB Hygiene
+
+Todos follow a 3-layer cleanup lifecycle (runs during daily maintenance):
+
+| Layer | What | When | Action |
+|-------|------|------|--------|
+| **Soft expire** | pending todos | >30 days old | status → cancelled |
+| **Overdue escalation** | overdue todos | >14 days with no change | status → cancelled |
+| **Archive purge** | handled/cancelled/deleted | >14 days since last update | archive to JSONL → hard DELETE |
+
+**Archive location**: `Knowledge/Archives/todo-archive.jsonl` — each purged todo
+is appended as a JSON line with `_purged_at` timestamp before deletion.
+
+**Config** (in `schemas/todo.py → TODO_LIFECYCLE`):
+```python
+TODO_LIFECYCLE = {
+    "soft_expire_days": 30,
+    "overdue_cancel_days": 14,
+    "purge_retention_days": 14,
+    "archive_before_purge": True,
+}
+```
+
+Active todos (pending, overdue, in_discussion) are **NEVER purged** regardless of age.
+
 ## Integration Notes
 
 - **DB location**: `~/.swarm-ai/data.db` (SQLite, WAL mode)
@@ -268,3 +349,5 @@ Should have (when applicable):
   writes from agent. Single-writer serialization is automatic.
 - **Drag-to-chat**: When user drags a todo into chat, frontend sends the todo ID.
   Agent calls `get <id>` to load the full work packet, then executes.
+- **Job producer protocol**: Job agents output `<!-- RADAR_TODOS [...] -->` JSON
+  blocks with source-specific context. Falls back to legacy regex for old agents.
