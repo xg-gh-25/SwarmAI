@@ -985,13 +985,15 @@ def build_session_briefing_data(
             })
 
         # External signals from signal_digest.json
+        # Filter ALL items by freshness first, THEN take top 5.
+        # Items aren't sorted by recency — slicing before filter misses recent entries.
         ext_signals = []
         digest_path = workspace / "Services" / "signals" / "signal_digest.json"
         if digest_path.exists():
             try:
                 data = json.loads(digest_path.read_text(encoding="utf-8"))
                 cutoff = time.time() - 48 * 3600
-                for sig in data.get("items", [])[:5]:
+                for sig in data.get("items", []):
                     fetched = sig.get("fetched_at", "")
                     if isinstance(fetched, str) and fetched:
                         try:
@@ -1000,6 +1002,8 @@ def build_session_briefing_data(
                                 continue
                         except (ValueError, TypeError):
                             continue
+                    else:
+                        continue  # no timestamp = skip (can't verify freshness)
                     ext_signals.append({
                         "title": sig.get("title", ""),
                         "summary": sig.get("summary", ""),
@@ -1008,6 +1012,8 @@ def build_session_briefing_data(
                         "urgency": sig.get("urgency", "medium"),
                         "relevance": sig.get("relevance_score", 0),
                     })
+                    if len(ext_signals) >= 5:
+                        break
             except (json.JSONDecodeError, OSError):
                 pass
 
