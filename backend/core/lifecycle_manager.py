@@ -228,6 +228,7 @@ class LifecycleManager:
                         await self._reap_orphans()
                         await self._purge_stale_cold()
                         await self._cleanup_stale_channel_sessions()
+                        await self._cleanup_expired_messages()
                 except Exception as exc:
                     logger.error("Maintenance loop error: %s", exc, exc_info=True)
         except asyncio.CancelledError:
@@ -493,6 +494,24 @@ class LifecycleManager:
                 )
         except Exception as exc:
             logger.debug("Channel session cleanup skipped: %s", exc)
+
+    async def _cleanup_expired_messages(self) -> None:
+        """Delete messages past their 7-day TTL.
+
+        Runs every ~10 minutes (cycle % 10 block).  Non-fatal — failures
+        are logged and skipped so they never block the maintenance loop.
+        """
+        try:
+            from database import db
+
+            deleted = await db.cleanup_expired_messages()
+            if deleted > 0:
+                logger.info(
+                    "lifecycle_manager.ttl_cleanup deleted=%d expired messages",
+                    deleted,
+                )
+        except Exception as exc:
+            logger.warning("lifecycle_manager.ttl_cleanup failed: %s", exc)
 
     # ── Memory pressure relief ─────────────────────────────────────
 
