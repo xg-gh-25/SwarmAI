@@ -155,7 +155,8 @@ async def create_agent(request: AgentCreateRequest):
         "allowed_directories": request.allowed_directories,
         "global_user_mode": global_user_mode,
         "enable_human_approval": request.enable_human_approval,
-        "sandbox_enabled": request.sandbox_enabled,
+        # NOTE: sandbox_enabled intentionally omitted — sandbox is app-level
+        # (config.json sandbox_enabled_default), not per-agent.
         "status": "active",
     }
     agent = await db.agents.put(agent_data)
@@ -250,7 +251,7 @@ async def update_agent(agent_id: str, request: AgentUpdateRequest):
 
         _file_driven = {
             "permission_mode", "max_turns", "enable_bash_tool",
-            "enable_file_tools", "enable_web_tools", "sandbox_enabled",
+            "enable_file_tools", "enable_web_tools",
             "global_user_mode", "enable_human_approval",
         }
         stripped = {k for k in _file_driven if k in updates}

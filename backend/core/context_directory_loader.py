@@ -988,8 +988,9 @@ class ContextDirectoryLoader:
                 session_signals=session_signals,
             )
 
-            # Only write L1 cache when no exclusions (cache is the full set)
-            if assembled and not exclude_filenames:
+            # Only write L1 cache when no exclusions and no progressive memory
+            # (both produce session-specific content that would poison shared cache)
+            if assembled and not exclude_filenames and not memory_progressive:
                 self._write_l1_cache(assembled, budget=dynamic_budget)
 
             return assembled

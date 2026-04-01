@@ -137,9 +137,13 @@ def load_user_context() -> str:
 def is_job_due(job: Job, state: SchedulerState) -> bool:
     """Check if a job should run now based on its cron schedule.
 
-    For dependency-based scheduling (after:X), runs if the dependency
-    succeeded more recently than this job's last run. No time window —
-    resilient to machine sleep/offline gaps.
+    For dependency-based scheduling (after:X), runs once per dependency
+    execution — regardless of whether the dependency succeeded or failed.
+    The dependent job is responsible for handling missing/partial data.
+    The time-based gate (my_last_run >= dep_last_run) prevents re-running.
+
+    Skipped dependencies (circuit breaker, disabled) don't update last_run,
+    so the dependent job correctly stays dormant until the dep actually executes.
     """
     if not job.enabled:
         return False
@@ -152,8 +156,10 @@ def is_job_due(job: Job, state: SchedulerState) -> bool:
             return False
         my_state = state.jobs.get(job.id)
         if my_state and my_state.last_run and my_state.last_run >= dep_state.last_run:
-            return False  # Already ran after last dependency run
-        return dep_state.last_status == "success"  # Only chain on success
+            return False  # Already ran after last dependency execution
+        # Run after any execution (success, failed, partial).
+        # "skipped" jobs don't update last_run, so they won't trigger this.
+        return dep_state.last_status != "skipped"
 
     # Cron-based scheduling
     job_state = state.jobs.get(job.id)

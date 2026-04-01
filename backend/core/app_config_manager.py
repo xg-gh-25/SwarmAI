@@ -65,7 +65,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "anthropic_base_url": None,
     "sandbox_additional_write_paths": "",
-    "sandbox_enabled_default": True,
+    "sandbox_enabled_default": False,
     "sandbox_auto_allow_bash": True,
     "sandbox_excluded_commands": "docker",
     "sandbox_allow_unsandboxed": False,

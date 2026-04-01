@@ -340,3 +340,17 @@ class TestIndexInMemoryFile:
         body = extract_body_without_index(memory_with_index)
         assert "<!-- MEMORY_INDEX_START -->" not in body
         assert "## Recent Context" in body
+
+    def test_extract_body_without_index_when_index_is_only_content(self):
+        """Edge case: MEMORY.md contains only the index block and nothing else."""
+        from core.memory_index import (
+            extract_body_without_index,
+            MEMORY_INDEX_START,
+            MEMORY_INDEX_END,
+        )
+
+        index_only = f"{MEMORY_INDEX_START}\n## Memory Index\nsome entries\n{MEMORY_INDEX_END}\n"
+        body = extract_body_without_index(index_only)
+        # Should return empty string, not the original content
+        assert body.strip() == ""
+        assert MEMORY_INDEX_START not in body

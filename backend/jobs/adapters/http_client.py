@@ -1,9 +1,9 @@
 """
 Shared HTTP Client Factory
 
-Creates httpx clients that work behind corporate proxies.
-Strips SOCKS proxy env vars (ALL_PROXY) since httpx requires socksio for SOCKS,
-but the HTTP proxy (HTTP_PROXY/HTTPS_PROXY) works natively.
+Creates httpx clients that ignore all env proxy vars (trust_env=False).
+This avoids both SOCKS proxies (which httpx can't handle without socksio)
+and Claude Code's sandbox proxy (which only works inside the sandbox).
 
 Includes retry-with-backoff for transient DNS and connection errors, which are
 common in launchd environments (sleep/wake, VPN disconnect).
@@ -12,7 +12,6 @@ common in launchd environments (sleep/wake, VPN disconnect).
 from __future__ import annotations
 
 import logging
-import os
 import socket
 import time
 from contextlib import contextmanager
@@ -21,14 +20,6 @@ from typing import Iterator
 import httpx
 
 logger = logging.getLogger(__name__)
-
-# SOCKS env vars that httpx can't handle without socksio
-_SOCKS_VARS = ("ALL_PROXY", "all_proxy", "FTP_PROXY", "ftp_proxy",
-               "GRPC_PROXY", "grpc_proxy", "RSYNC_PROXY")
-
-# Also strip Claude Code's local proxy — it only works inside the sandbox
-_PROXY_VARS = ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy",
-               "NO_PROXY", "no_proxy")
 
 # Transient errors that justify a retry (DNS, connection reset, timeout)
 _RETRYABLE = (
@@ -45,37 +36,26 @@ _MAX_RETRIES = 2
 _RETRY_DELAY_SECS = 2.0
 
 
-def _strip_proxy_vars() -> dict[str, str]:
-    """Strip SOCKS and local proxy vars, return saved originals."""
-    saved = {}
-    for var in (*_SOCKS_VARS, *_PROXY_VARS):
-        if var in os.environ:
-            saved[var] = os.environ.pop(var)
-    return saved
-
-
-def _restore_proxy_vars(saved: dict[str, str]) -> None:
-    """Restore previously stripped proxy vars."""
-    os.environ.update(saved)
-
-
 @contextmanager
 def safe_client(timeout: int = 15, **kwargs) -> Iterator[httpx.Client]:
-    """Context manager that yields an httpx.Client with proxy vars stripped.
+    """Context manager that yields an httpx.Client ignoring env proxy vars.
 
     The yielded client is a RetryClient wrapper that automatically retries
     transient errors (DNS, connection reset) with exponential backoff.
+
+    Thread-safe: uses ``trust_env=False`` so httpx never reads proxy env vars.
 
     Usage:
         with safe_client(timeout=15) as client:
             resp = client.get("https://example.com")
     """
-    saved = _strip_proxy_vars()
-    try:
-        with httpx.Client(timeout=timeout, follow_redirects=True, **kwargs) as client:
-            yield _RetryClient(client)
-    finally:
-        _restore_proxy_vars(saved)
+    with httpx.Client(
+        timeout=timeout,
+        follow_redirects=True,
+        trust_env=False,      # ignore ALL env proxy vars — thread-safe
+        **kwargs,
+    ) as client:
+        yield _RetryClient(client)
 
 
 class _RetryClient:
@@ -124,7 +104,7 @@ class _RetryClient:
 
 
 def safe_get(url: str, timeout: int = 15, **kwargs) -> httpx.Response:
-    """One-shot GET with proxy stripping and retry for transient errors.
+    """One-shot GET with proxy bypass and retry for transient errors.
 
     Convenience wrapper — creates a safe_client, makes one GET.
     For multiple requests, use safe_client() context manager directly.

@@ -10,6 +10,5 @@
   "enable_web_tools": true,
   "global_user_mode": true,
   "enable_human_approval": true,
-  "sandbox_enabled": true,
   "allow_all_skills": true
 }

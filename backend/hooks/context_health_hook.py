@@ -166,21 +166,29 @@ class ContextHealthHook:
         except ImportError:
             return  # Module not yet available (first startup)
 
-        content = memory_file.read_text(encoding="utf-8")
+        # Use flock to avoid racing with locked_write.py (skills, distillation)
+        import fcntl
+        lock_path = memory_file.with_suffix(".md.lock")
+        lock_fd = None
+        try:
+            lock_fd = open(lock_path, "w")  # noqa: SIM115
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except (BlockingIOError, OSError):
+            # Another writer holds the lock — skip this cycle, next hook run will catch it
+            if lock_fd:
+                lock_fd.close()
+            logger.debug("context_health: MEMORY.md locked by another writer, skipping index regen")
+            return
 
-        # Check if index exists and is reasonably fresh (avoid redundant writes)
-        existing_index = extract_index_from_memory(content)
-        if existing_index and MEMORY_INDEX_START in content:
-            # Index exists — skip regen if MEMORY.md hasn't changed since
-            # last regen (index block is at the top, body is below).
-            # Simple heuristic: if file mtime is within 60s of index write,
-            # it was probably just regenerated.  Full regen otherwise.
-            pass  # Always regenerate — it's <10ms, not worth caching
-
-        updated = inject_index_into_memory(content)
-        if updated != content:
-            memory_file.write_text(updated, encoding="utf-8")
-            logger.info("context_health: MEMORY.md index regenerated")
+        try:
+            content = memory_file.read_text(encoding="utf-8")
+            updated = inject_index_into_memory(content)
+            if updated != content:
+                memory_file.write_text(updated, encoding="utf-8")
+                logger.info("context_health: MEMORY.md index regenerated")
+        finally:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            lock_fd.close()
 
     # ------------------------------------------------------------------
     # Deep check — once per day, <10s

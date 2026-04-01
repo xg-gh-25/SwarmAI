@@ -197,10 +197,13 @@ class TestSystemJobs:
         digest = next(j for j in SYSTEM_JOBS if j.id == "signal-digest")
         assert digest.schedule == "after:signal-fetch"
 
-    def test_skill_proposer_depends_on_memory_health(self):
+    def test_skill_proposer_runs_independently(self):
+        """skill-proposer has its own cron — decoupled from memory-health
+        so a memory-health failure doesn't block skill proposals."""
         from jobs.system_jobs import SYSTEM_JOBS
         proposer = next(j for j in SYSTEM_JOBS if j.id == "skill-proposer")
-        assert proposer.schedule == "after:memory-health"
+        assert not proposer.schedule.startswith("after:")
+        assert "* * 0" in proposer.schedule  # Still Sunday
 
     def test_standalone_jobs_have_weekly_schedule(self):
         """memory-health, ddd-refresh run on their own weekly schedule."""
@@ -278,12 +281,25 @@ class TestScheduler:
         job = Job(id="signal-digest", name="Digest", type="signal_digest", schedule="after:signal-fetch")
         assert is_job_due(job, state) is True
 
-    def test_is_job_due_dependency_failed(self):
+    def test_is_job_due_dependency_failed_still_runs(self):
+        """Dependent job runs after dep completes — even on failure.
+        The dependent job handles missing data, not the scheduler."""
         from jobs.models import Job, JobState, SchedulerState
         from jobs.scheduler import is_job_due
         dep_time = datetime(2026, 3, 24, 10, 0, tzinfo=timezone.utc)
         state = SchedulerState(
             jobs={"signal-fetch": JobState(last_run=dep_time, last_status="failed")}
+        )
+        job = Job(id="signal-digest", name="Digest", type="signal_digest", schedule="after:signal-fetch")
+        assert is_job_due(job, state) is True
+
+    def test_is_job_due_dependency_skipped_does_not_run(self):
+        """Skipped deps (circuit breaker) don't trigger dependents."""
+        from jobs.models import Job, JobState, SchedulerState
+        from jobs.scheduler import is_job_due
+        dep_time = datetime(2026, 3, 24, 10, 0, tzinfo=timezone.utc)
+        state = SchedulerState(
+            jobs={"signal-fetch": JobState(last_run=dep_time, last_status="skipped")}
         )
         job = Job(id="signal-digest", name="Digest", type="signal_digest", schedule="after:signal-fetch")
         assert is_job_due(job, state) is False
