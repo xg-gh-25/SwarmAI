@@ -715,6 +715,11 @@ async fn ensure_daemon_bootstrapped() -> Result<(), String> {
 ///   - `backend-restarted` when daemon recovers
 ///   - `backend-terminated` only after MAX_RECOVERY_ATTEMPTS failed (permanent death)
 ///
+/// **boot_id detection:** The daemon returns a `boot_id` in `/health` that
+/// changes on every process restart. If the poll interval misses a brief
+/// outage (daemon restarts in <10s), boot_id change still triggers
+/// `backend-restarted` so the frontend can refresh connections.
+///
 /// During recovery, polls every 3s instead of the normal interval to minimize downtime.
 fn spawn_daemon_health_watchdog(
     app_handle: tauri::AppHandle,
@@ -735,6 +740,7 @@ fn spawn_daemon_health_watchdog(
         let health_url = format!("http://127.0.0.1:{}/health", DAEMON_PORT);
         let mut was_healthy = true;
         let mut recovery_attempts: u32 = 0;
+        let mut known_boot_id: Option<String> = None;
 
         loop {
             // Normal interval when healthy, fast poll during recovery
@@ -750,16 +756,43 @@ fn spawn_daemon_health_watchdog(
                 }
             }
 
-            let healthy = match client.get(&health_url).send().await {
+            let (healthy, current_boot_id) = match client.get(&health_url).send().await {
                 Ok(resp) => {
                     if let Ok(body) = resp.text().await {
-                        body.contains("\"healthy\"")
+                        let is_healthy = body.contains("\"healthy\"");
+                        // Extract boot_id from JSON response
+                        let bid = serde_json::from_str::<serde_json::Value>(&body)
+                            .ok()
+                            .and_then(|v| v.get("boot_id")?.as_str().map(String::from));
+                        (is_healthy, bid)
                     } else {
-                        false
+                        (false, None)
                     }
                 }
-                Err(_) => false,
+                Err(_) => (false, None),
             };
+
+            // boot_id change detection: daemon restarted silently (too fast for poll gap)
+            if was_healthy && healthy {
+                if let Some(ref bid) = current_boot_id {
+                    match &known_boot_id {
+                        Some(old_bid) if old_bid != bid => {
+                            println!(
+                                "[Tauri] Daemon watchdog: boot_id changed ({} → {}) — daemon restarted silently",
+                                old_bid, bid
+                            );
+                            known_boot_id = Some(bid.clone());
+                            let _ = app_handle.emit("backend-restarted", DAEMON_PORT);
+                            continue; // Skip normal health transition logic
+                        }
+                        None => {
+                            // First time seeing boot_id — record it
+                            known_boot_id = Some(bid.clone());
+                        }
+                        _ => {} // Same boot_id — no restart
+                    }
+                }
+            }
 
             if was_healthy && !healthy {
                 // Daemon just went down — signal "restarting" (launchd will handle it)
@@ -784,6 +817,7 @@ fn spawn_daemon_health_watchdog(
                 // Daemon recovered (launchd KeepAlive restarted it)
                 println!("[Tauri] Daemon watchdog: daemon recovered after {} attempts — emitting backend-restarted",
                     recovery_attempts);
+                known_boot_id = current_boot_id; // Update to new boot_id
                 let _ = app_handle.emit("backend-restarted", DAEMON_PORT);
                 recovery_attempts = 0;
             }
@@ -825,8 +859,8 @@ async fn start_backend(
                     backend.child = None;
                     backend.pid = None;
                 }
-                // Start background health watchdog (30s interval)
-                spawn_daemon_health_watchdog(app_clone, state_inner, 30);
+                // Start background health watchdog (10s interval for faster detection)
+                spawn_daemon_health_watchdog(app_clone, state_inner, 10);
                 DAEMON_PORT
             }
         };
@@ -853,7 +887,24 @@ async fn start_backend(
         }
     }
 
-    // Phase 3: No daemon — spawn sidecar as fallback.
+    // Phase 3: Sidecar fallback — only when daemon plist does NOT exist.
+    // When the plist exists, the daemon is the intended backend. Spawning a
+    // sidecar alongside it causes two backends competing for SQLite,
+    // backend.json, and workspace git.  Return an error instead so the user
+    // can diagnose the daemon issue (./dev.sh daemon logs).
+    {
+        let home = std::env::var("HOME").unwrap_or_default();
+        let plist_path = format!("{}/{}", home, DAEMON_PLIST_RELPATH);
+        if std::path::Path::new(&plist_path).exists() {
+            return Err(format!(
+                "Daemon is installed but not responding on port {}. \
+                 Check daemon logs: ~/.swarm-ai/logs/backend-stderr.log \
+                 or restart with: ./dev.sh daemon restart",
+                DAEMON_PORT,
+            ));
+        }
+    }
+
     // Find an available port
     let port = portpicker::pick_unused_port()
         .ok_or_else(|| "No available port for backend".to_string())?;

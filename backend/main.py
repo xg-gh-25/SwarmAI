@@ -105,6 +105,24 @@ logging.getLogger("urllib3").setLevel(logging.WARNING)
 _BACKEND_JSON_DEFAULT = str(Path(get_app_data_dir()) / "backend.json")
 _backend_start_monotonic: float = 0.0  # set during lifespan startup
 
+# Unique boot identifier — changes on every process restart.
+# Tauri daemon watchdog compares this to detect silent restarts
+# (daemon restart too fast for poll interval to catch the gap).
+_boot_id: str = __import__("uuid").uuid4().hex[:12]
+
+
+def _is_port_listening(host: str, port: int) -> bool:
+    """Check if a TCP port is accepting connections."""
+    import socket as _socket
+
+    try:
+        with _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM) as s:
+            s.settimeout(1)
+            s.connect((host, port))
+            return True
+    except (ConnectionRefusedError, OSError, TimeoutError):
+        return False
+
 
 def _detect_run_mode() -> str:
     """Detect whether this backend is running as a daemon or sidecar.
@@ -120,18 +138,59 @@ def write_backend_json(
     mode: str,
     path: str = _BACKEND_JSON_DEFAULT,
 ) -> None:
-    """Write ``backend.json`` so other processes can discover this backend."""
+    """Write ``backend.json`` so other processes can discover this backend.
+
+    **Conflict check:** If an existing ``backend.json`` records a PID that is
+    alive AND the recorded port is accepting connections, we skip the write to
+    prevent a competing backend from stealing the discovery file.  This avoids
+    the daemon/sidecar race where a sidecar overwrites the daemon's entry.
+    """
     import json as _json
     from datetime import datetime, timezone
+
+    p = Path(path)
+
+    # Conflict check: don't overwrite if an active backend already owns this file
+    if p.exists():
+        try:
+            existing = _json.loads(p.read_text())
+            existing_pid = existing.get("pid")
+            existing_port = existing.get("port")
+            if (
+                existing_pid is not None
+                and existing_pid != os.getpid()
+                and existing_port is not None
+            ):
+                # Check PID alive
+                try:
+                    os.kill(existing_pid, 0)
+                except PermissionError:
+                    pid_alive = True  # alive but owned by another user
+                except (OSError, ProcessLookupError):
+                    pid_alive = False  # dead PID — safe to overwrite
+                else:
+                    pid_alive = True
+                if pid_alive:
+                    # PID alive — check if port is also listening
+                    if _is_port_listening("127.0.0.1", existing_port):
+                        logger.warning(
+                            "backend.json conflict: PID %d alive and port %d listening "
+                            "— skipping write (our PID=%d, port=%d)",
+                            existing_pid, existing_port, os.getpid(), port,
+                        )
+                        return
+        except (ValueError, OSError):
+            pass  # corrupt file — safe to overwrite
 
     data = {
         "pid": os.getpid(),
         "port": port,
         "mode": mode,
+        "boot_id": _boot_id,
         "started_at": datetime.now(timezone.utc).isoformat(),
     }
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
-    Path(path).write_text(_json.dumps(data, indent=2))
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(_json.dumps(data, indent=2))
 
 
 def remove_backend_json(path: str = _BACKEND_JSON_DEFAULT) -> None:
@@ -785,6 +844,7 @@ async def health_check():
         "version": settings.app_version,
         "sdk": "claude-agent-sdk",
         "pending_hook_tasks": pending_hooks,
+        "boot_id": _boot_id,
     }
 
 

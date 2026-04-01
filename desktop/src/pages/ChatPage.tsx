@@ -212,6 +212,25 @@ export default function ChatPage() {
     };
   }, [addWorkspaceFiles]);
 
+  // Backend recovery: when health transitions disconnected → connected,
+  // useHealthMonitor dispatches 'swarm:backend-recovered'. We clear
+  // any error state on the active tab and show a recovery indicator.
+  // The user can then resend or the next message will work normally.
+  useEffect(() => {
+    const handleBackendRecovered = () => {
+      const activeId = activeTabIdRef.current;
+      if (!activeId) return;
+      const tabState = tabMapRef.current.get(activeId);
+      if (!tabState) return;
+      // Clear error/reconnecting state so the tab is usable again
+      tabState.reconnectionAttempt = 0;
+      tabState.isReconnecting = false;
+      console.log(`[ChatPage] Backend recovered — active tab ${activeId} ready`);
+    };
+    window.addEventListener('swarm:backend-recovered', handleBackendRecovered);
+    return () => window.removeEventListener('swarm:backend-recovered', handleBackendRecovered);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps -- refs are stable
+
   // Ref-bridge for the queue drain callback: drainQueuedMessage depends on
   // createStreamHandler et al. from the lifecycle hook, so it can't be passed
   // directly at hook-construction time. Instead we pass a stable wrapper that
