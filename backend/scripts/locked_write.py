@@ -436,6 +436,32 @@ def locked_read_modify_write(
         else:
             content = ""
 
+        # Validate content for MEMORY.md (injection prevention)
+        if file_path.name == "MEMORY.md":
+            try:
+                from core.memory_validation import validate_memory_content
+            except ImportError:
+                # Running standalone (CLI) — try relative import path
+                import importlib.util
+                _spec = importlib.util.spec_from_file_location(
+                    "memory_validation",
+                    Path(__file__).parent.parent / "core" / "memory_validation.py",
+                )
+                if _spec and _spec.loader:
+                    _mod = importlib.util.module_from_spec(_spec)
+                    _spec.loader.exec_module(_mod)
+                    validate_memory_content = _mod.validate_memory_content
+                else:
+                    validate_memory_content = None  # type: ignore[assignment]
+
+            if validate_memory_content is not None:
+                safe, pattern = validate_memory_content(text)
+                if not safe:
+                    raise LockedWriteError(
+                        f"Memory injection blocked — pattern '{pattern}' "
+                        f"detected in content: {text[:80]!r}"
+                    )
+
         # Modify the content
         new_content = _modify_content(content, section, text, mode)
 
