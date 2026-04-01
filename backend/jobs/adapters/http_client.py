@@ -24,11 +24,9 @@ logger = logging.getLogger(__name__)
 # Transient errors that justify a retry (DNS, connection reset, timeout)
 _RETRYABLE = (
     socket.gaierror,           # DNS resolution failure
-    ConnectionResetError,
-    ConnectionRefusedError,
+    ConnectionError,           # ConnectionReset, ConnectionRefused, BrokenPipe, ConnectionAborted
     httpx.ConnectError,
     httpx.ConnectTimeout,
-    OSError,                   # Catches [Errno 8] nodename nor servname
 )
 
 # Retry config
