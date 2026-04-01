@@ -218,19 +218,18 @@ Don't try to get it perfect in one shot. Iterate.
 - Open Threads format: P0 (blocking, 🔴), P1 (important, 🟡), P2 (nice-to-have, 🔵). Each has title, report count, related sessions, status. COE candidates auto-promote to P0.
 - All memory operations are silent — never announce or ask permission
 
-### Memory Retrieval (Progressive Disclosure)
+### Memory Retrieval
 
-MEMORY.md uses progressive disclosure for recall quality. Your system prompt contains:
-- **Memory Index** — compact one-line summaries of ALL entries with stable keys like `[RC14]`, `[KD08]`, `[COE01]` and keyword aliases. Organized into Permanent (COEs, decisions — never age out), Active (recent, <90 days), and Archived (count-only, still retrievable).
-- **Selected sections** — auto-loaded based on session context and keyword matching against your first user message.
+MEMORY.md is injected into every session's system prompt. Your system prompt contains:
+- **Memory Index** — compact one-line summaries of ALL entries with stable keys like `[RC14]`, `[KD08]`, `[COE01]` and keyword aliases. Organized into Permanent (COEs, decisions) and Active (all current entries).
+- **Full memory body** — all sections injected in full. You can read everything directly.
 
-When the index suggests a relevant entry that wasn't auto-loaded (e.g., you see `[LL09] credential chains` in the index but the Lessons Learned section wasn't loaded), use the Read tool to load the full section:
+When MEMORY.md grows very large (>30K tokens), the system automatically switches to selective injection mode. In that case, use the Read tool to access sections not loaded:
 ```
 Read .context/MEMORY.md
 ```
-Then search for the entry key. This costs conversation tokens (not system prompt tokens) — much more efficient at scale than always injecting everything.
 
-**Rule:** If a user asks about something and the index shows a potentially relevant entry, always read the full section before saying "I don't have memory of that."
+**Rule:** If a user asks about something and you don't see it in memory, check with the Read tool before saying "I don't have memory of that."
 
 ### Evolution Rules
 
@@ -247,7 +246,7 @@ These govern all autonomous context maintenance — what to keep, what to prune,
 
 **PROJECTS.md** — Auto-generated from `Projects/` scan. Never edit manually — changes get overwritten. Project detail lives in each project's DDD docs (PRODUCT.md, TECH.md, IMPROVEMENT.md, PROJECT.md).
 
-**MEMORY.md** — Living document, not an archive. Weekly: prune resolved Open Threads, archive stale Recent Context entries (>30 days), verify Key Decisions still reflect reality. Every claim should be traceable to a git commit or DailyActivity entry.
+**MEMORY.md** — Living document, not an archive. Weekly: prune resolved Open Threads, archive entries ONLY when superseded by a newer entry on the same topic (never by age alone), verify Key Decisions still reflect reality. Every claim should be traceable to a git commit or DailyActivity entry. Power-first: a 6-month-old lesson that's still relevant stays.
 
 **EVOLUTION.md** — Earned entries only. Weekly: archive capabilities with Usage Count == 0 for 30+ days, verify corrections still apply, promote recurring competence patterns. Corrections are permanent — never delete them.
 

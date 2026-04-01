@@ -518,6 +518,7 @@ class PromptBuilder:
         working_directory: str,
         channel_context: Optional[dict] = None,
         editor_context: Optional[dict] = None,
+        context_percent_used: float = 0.0,
     ) -> Any:
         """Build the system prompt with centralized context directory.
 
@@ -594,21 +595,11 @@ class PromptBuilder:
                 logger.info("Non-owner channel DM — light context, excluding %s", exclude_files)
             # Owner DM and chat tabs: full context (no exclusion)
 
-            # Progressive Memory Disclosure: when enabled, MEMORY.md is
-            # replaced with index + topic-matched sections instead of
-            # flat injection.  Guarantees 100% recall coverage via index.
-            memory_progressive = bool(
-                self._config.get("memory_progressive_disclosure")
-                if self._config else False
-            )
-
-            # Build keyword hint for memory section selection.
-            # The user's first message isn't available yet at prompt-assembly
-            # time (system prompt is built before the user sends anything).
-            # Use the session briefing's focus items as a keyword proxy —
-            # they predict what the user is likely to work on.
+            # Memory injection is always active — auto-selects full injection
+            # (< 30K tokens) or selective mode (≥ 30K).  No config flag needed.
+            # Build keyword hint for selective mode's section matching.
             memory_keyword_hint = ""
-            if memory_progressive and not (channel_context):
+            if not channel_context:
                 try:
                     from .proactive_intelligence import get_focus_keywords
                     memory_keyword_hint = get_focus_keywords(working_directory)
@@ -618,7 +609,7 @@ class PromptBuilder:
             context_text = loader.load_all(
                 model_context_window=model_context_window,
                 exclude_filenames=exclude_files,
-                memory_progressive=memory_progressive,
+                memory_smart=True,
                 user_message=memory_keyword_hint,
                 session_signals={
                     "is_channel": channel_context is not None,
@@ -627,7 +618,10 @@ class PromptBuilder:
                         Path(working_directory) / "Knowledge" / "DailyActivity"
                         / f"{datetime.now().strftime('%Y-%m-%d')}.md"
                     ).exists() if not (channel_context) else False,
-                } if memory_progressive else None,
+                },
+                # Adaptive memory budget: 0.0 at session init (full budget),
+                # non-zero when prompt is rebuilt mid-session (e.g. --resume).
+                context_percent_used=context_percent_used,
             )
 
             # ── BOOTSTRAP.md detection (ephemeral, not in L1 cache) ──

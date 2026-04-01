@@ -1,7 +1,7 @@
 """
 Weekly Memory Health — LLM-Powered Context Maintenance
 
-Runs weekly (Sunday 3am via weekly-maintenance job). Uses Bedrock to
+Runs weekly (Monday 11am ICT via weekly-maintenance job). Uses Bedrock to
 intelligently prune MEMORY.md, maintain EVOLUTION.md, and detect
 capability gaps — all in a single LLM pass.
 
@@ -197,7 +197,7 @@ Output a single JSON object with these fields:
 }}
 
 Rules:
-- "stale_memories": Recent Context entries >30 days old OR superseded by newer entries. Check dates.
+- "stale_memories": Recent Context entries superseded by a newer entry covering the same topic, OR contradicted by recent git activity. Do NOT archive based on age alone — a 6-month-old lesson that's still relevant stays.
 - "resolved_threads": Open Threads where git log or DailyActivity shows the issue was fixed.
 - "archived_capabilities": EVOLUTION.md capabilities with Usage Count == 0 and status "removed" or older than 30 days.
 - "stale_decisions": Key Decisions that contradict recent git activity.

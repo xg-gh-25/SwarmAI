@@ -51,11 +51,13 @@ SYSTEM_JOBS: list[Job] = [
     ),
 
     # --- Maintenance (lightweight: prune caches, trim state, reset counters) ---
+    # Monday 11:00 ICT (03:00 UTC) — start of work week, user is at desk.
+    # If laptop was closed, cron_utils catch-up (48h window) retriggers on next boot.
     Job(
         id="weekly-maintenance",
         name="Weekly Maintenance",
         type="maintenance",
-        schedule="0 3 * * 0",          # Sunday 3am UTC
+        schedule="0 3 * * 1",          # Monday 03:00 UTC = 11:00 ICT
         enabled=True,
         category="system",
         config={},
@@ -66,7 +68,7 @@ SYSTEM_JOBS: list[Job] = [
         id="memory-health",
         name="Memory Health Check",
         type="memory_health",
-        schedule="15 3 * * 0",         # Sunday 3:15am UTC (after maintenance)
+        schedule="15 3 * * 1",         # Monday 03:15 UTC = 11:15 ICT
         enabled=True,
         category="system",
         config={},
@@ -77,7 +79,7 @@ SYSTEM_JOBS: list[Job] = [
         id="ddd-refresh",
         name="DDD Auto-Refresh",
         type="ddd_refresh",
-        schedule="30 3 * * 0",         # Sunday 3:30am UTC (after memory health)
+        schedule="30 3 * * 1",         # Monday 03:30 UTC = 11:30 ICT
         enabled=True,
         category="system",
         config={},
@@ -87,12 +89,12 @@ SYSTEM_JOBS: list[Job] = [
     # Decoupled from memory-health: health_findings.json is populated by
     # ContextHealthHook (every session) AND memory-health (weekly LLM).
     # Skill proposer works fine with stale/partial data — no reason to block
-    # on memory-health success.  Runs 15 min after memory-health's slot.
+    # on memory-health success.
     Job(
         id="skill-proposer",
         name="Skill Proposer",
         type="skill_proposer",
-        schedule="45 3 * * 0",          # Sunday 3:45am UTC (after memory-health slot)
+        schedule="45 3 * * 1",          # Monday 03:45 UTC = 11:45 ICT
         enabled=True,
         category="system",
         config={},

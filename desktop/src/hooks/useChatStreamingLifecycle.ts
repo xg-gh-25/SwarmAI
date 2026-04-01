@@ -1339,17 +1339,38 @@ export function useChatStreamingLifecycle(
           }
 
           // Result is the definitive signal that the conversation turn is
-          // complete. Sync tabState.messages → React state UNCONDITIONALLY:
-          // text_delta/assistant events are gated by isActiveTab, so if that
-          // flag was transiently false (React batching, ref update lag), the
-          // incremental content never reached setMessages(). This final sync
-          // is the ONLY safety net — it must NOT be gated by isActiveTab.
-          // Bug: gating this caused "response truncated, flush on next send".
-          if (tabState) {
+          // complete. Sync tabState.messages → React state as a safety net.
+          //
+          // CRITICAL: Use functional updater (not direct value) to avoid
+          // breaking React 18's batched update chain. When all SSE events
+          // arrive in a single reader.read() chunk (common for fast <200ms
+          // responses), text_delta functional updaters and this result sync
+          // execute in the same synchronous batch. A direct value like
+          // setMessages(tabState.messages) can cause React to skip the
+          // render if it considers the reference unchanged — leaving the
+          // UI stuck showing partial content until the next interaction
+          // forces a re-render. Using a functional updater that returns a
+          // NEW array guarantees React sees a state change.
+          if (isActiveTab && tabState) {
             if (sid) setSessionId(sid);
-            setMessages(tabState.messages);
-          } else if (sid) {
-            setSessionId(sid);
+            // Spread creates a new reference — React always re-renders.
+            const authoritativeMessages = [...tabState.messages];
+            setMessages(() => authoritativeMessages);
+          } else if (isActiveTab) {
+            if (sid) setSessionId(sid);
+          }
+          // Deferred re-sync: if isActiveTab was transiently false due to
+          // React batching or ref update lag, this microtask fires after the
+          // batch flushes and re-checks the live ref. Only syncs if this tab
+          // is ACTUALLY active — safe for multi-tab isolation.
+          if (tabState && !isActiveTab) {
+            queueMicrotask(() => {
+              if (capturedTabId === activeTabIdRef.current) {
+                const deferred = [...tabState.messages];
+                setMessages(() => deferred);
+                if (sid) setSessionId(sid);
+              }
+            });
           }
           queryClient.invalidateQueries({ queryKey: ['radar', 'wipTasks'] });
           queryClient.invalidateQueries({ queryKey: ['radar', 'completedTasks'] });

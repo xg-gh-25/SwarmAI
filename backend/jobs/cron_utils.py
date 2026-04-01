@@ -40,10 +40,13 @@ def is_cron_due(cron_expr: str, last_run: datetime, now: datetime | None = None)
 
     minute_spec, hour_spec, dom_spec, month_spec, dow_spec = parts
 
-    # Walk each minute from last_run+1min to now, check if any matches
-    # Optimization: cap at 48 hours of checking to avoid runaway
+    # Walk each minute from last_run+1min to now, check if any matches.
+    # Cap at 7 days to ensure weekly jobs catch up after a long weekend
+    # (laptop closed Friday → opened Monday → weekly jobs still fire).
+    # Optimization: for gaps >24h, skip to the start of each candidate day
+    # rather than walking every minute.
     check = last_run.replace(second=0, microsecond=0) + timedelta(minutes=1)
-    max_check = min(now, last_run + timedelta(hours=48))
+    max_check = min(now, last_run + timedelta(days=7))
 
     while check <= max_check:
         if (
@@ -54,7 +57,18 @@ def is_cron_due(cron_expr: str, last_run: datetime, now: datetime | None = None)
             _matches(dow_spec, check.weekday(), 0, 6, is_dow=True)
         ):
             return True
-        check += timedelta(minutes=1)
+
+        # Skip optimization: if hour and DOW don't match, jump ahead.
+        # For weekly jobs (specific DOW+hour), this turns 10K iterations
+        # into ~7 iterations (one per day).
+        if not _matches(dow_spec, check.weekday(), 0, 6, is_dow=True):
+            # Jump to next day start
+            check = (check + timedelta(days=1)).replace(hour=0, minute=0)
+        elif not _matches(hour_spec, check.hour, 0, 23):
+            # Jump to next hour
+            check = (check + timedelta(hours=1)).replace(minute=0)
+        else:
+            check += timedelta(minutes=1)
 
     return False
 
