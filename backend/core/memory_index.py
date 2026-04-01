@@ -339,13 +339,17 @@ def keyword_relevance(
     Matches against both the entry summary text AND keyword aliases.
     Alias hits are weighted 1.5x to reward curated recall paths.
 
+    Uses the user's message token count as denominator so short queries
+    like "COE" or "sandbox" score high when they hit an exact match,
+    regardless of how many aliases the entry has.
+
     Args:
         user_message: The user's first message in the session.
         entry_summary: One-line summary from the index entry.
         aliases: Keyword aliases for this entry.
 
     Returns:
-        Float relevance score (0.0 = no match).
+        Float relevance score (0.0 = no match, capped at 1.0).
     """
     msg_tokens = set(_tokenize_lower(user_message))
     if not msg_tokens:
@@ -353,9 +357,8 @@ def keyword_relevance(
 
     entry_tokens = set(_tokenize_lower(entry_summary))
     alias_tokens = set(_tokenize_lower(" ".join(aliases)))
-    all_matchable = entry_tokens | alias_tokens
 
-    if not all_matchable:
+    if not entry_tokens and not alias_tokens:
         return 0.0
 
     title_hits = msg_tokens & entry_tokens
@@ -365,13 +368,14 @@ def keyword_relevance(
     if not title_hits and not alias_hits:
         return 0.0
 
-    # Alias hits weighted 1.5x.  Denominator uses the larger of msg_tokens
-    # and all_matchable to avoid penalizing keyword-rich entries: an entry
-    # with 20 aliases and 1 match should score ~0.075 against msg, not
-    # ~0.075 against entry (which dilutes below threshold for rich entries).
-    denominator = max(len(msg_tokens), len(all_matchable))
-    score = (len(title_hits) + len(alias_hits) * 1.5) / denominator
-    return score
+    # Denominator = user's message tokens.  This measures "what fraction of
+    # the user's query was satisfied by this entry" — a recall metric.
+    # Short queries ("COE", "sandbox") score high on exact match instead of
+    # being diluted by alias-rich entries (old bug: max(msg, entry) as
+    # denominator made 2-token queries score ~0.15 against 20-alias entries).
+    # Cap at 1.0 since alias_hits * 1.5 can exceed denominator.
+    score = (len(title_hits) + len(alias_hits) * 1.5) / len(msg_tokens)
+    return min(score, 1.0)
 
 
 # ── Section Selection ─────────────────────────────────────────────────
@@ -410,11 +414,33 @@ def _parse_index_entries(index_block: str) -> list[dict]:
     return entries
 
 
+def _adaptive_max_tokens(context_percent_used: float) -> int:
+    """Return token budget for memory injection based on context window usage.
+
+    Tiers:
+    - <25% used: expanded (15,000) — fresh session, load lots of context
+    - 25-50%:    standard (10,000) — default behavior
+    - 50-75%:    reduced  (5,000)  — conversation is getting long
+    - 75-90%:    minimal  (2,000)  — preserve working memory
+    - >=90%:     zero     (0)      — skip all injection
+    """
+    if context_percent_used >= 90:
+        return 0
+    if context_percent_used >= 75:
+        return 2_000
+    if context_percent_used >= 50:
+        return 5_000
+    if context_percent_used >= 25:
+        return DEFAULT_MAX_TOKENS  # 10,000
+    return 15_000  # expanded
+
+
 def select_memory_sections(
     memory_content: str,
     user_message: str = "",
     session_signals: Optional[dict] = None,
     max_tokens: int = DEFAULT_MAX_TOKENS,
+    context_percent_used: float = 0.0,
 ) -> str:
     """Select MEMORY.md sections for L1 injection.
 
@@ -434,7 +460,25 @@ def select_memory_sections(
     from .context_directory_loader import ContextDirectoryLoader
 
     signals = session_signals or {}
+
+    # ── Adaptive budget: override max_tokens based on context usage ──
+    if context_percent_used > 0:
+        max_tokens = _adaptive_max_tokens(context_percent_used)
+
     sections = parse_memory_sections(memory_content)
+
+    # ── Critical usage: return L0 index only, skip everything else ──
+    if max_tokens == 0:
+        index_block = extract_index_from_memory(memory_content)
+        if not index_block:
+            index_block = generate_memory_index(memory_content)
+        unloaded = set(sections.keys()) - {"Memory"}
+        footer = (
+            f"\n[Context {context_percent_used:.0f}% used — memory injection "
+            f"skipped to preserve working memory. {len(unloaded)} sections "
+            f"available via Read tool]"
+        )
+        return index_block + footer
 
     # ── L0: Always include index ──
     index_block = extract_index_from_memory(memory_content)
@@ -522,9 +566,7 @@ def select_memory_sections(
         if used_tokens + sec_tokens <= max_tokens:
             parts.append(sec_text)
             used_tokens += sec_tokens
-        else:
-            # Budget exceeded — skip remaining sections
-            break
+        # else: skip this section but keep trying smaller ones
 
     # ── Footer: hint about remaining content ──
     loaded_section_names = {
