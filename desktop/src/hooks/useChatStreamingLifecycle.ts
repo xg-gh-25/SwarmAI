@@ -1339,21 +1339,20 @@ export function useChatStreamingLifecycle(
           }
 
           // Result is the definitive signal that the conversation turn is
-          // complete. Sync tabState.messages → React state as a safety net:
-          // if any prior text_delta/assistant events skipped setMessages()
-          // (e.g. transient isActiveTab mismatch during React batching),
-          // the final content would be stuck in the mutable ref.
-          // This authoritative sync ensures displayed content matches truth.
-          if (isActiveTab && tabState) {
+          // complete. Sync tabState.messages → React state UNCONDITIONALLY:
+          // text_delta/assistant events are gated by isActiveTab, so if that
+          // flag was transiently false (React batching, ref update lag), the
+          // incremental content never reached setMessages(). This final sync
+          // is the ONLY safety net — it must NOT be gated by isActiveTab.
+          // Bug: gating this caused "response truncated, flush on next send".
+          if (tabState) {
             if (sid) setSessionId(sid);
             setMessages(tabState.messages);
-            queryClient.invalidateQueries({ queryKey: ['radar', 'wipTasks'] });
-            queryClient.invalidateQueries({ queryKey: ['radar', 'completedTasks'] });
-          } else if (isActiveTab) {
-            if (sid) setSessionId(sid);
-            queryClient.invalidateQueries({ queryKey: ['radar', 'wipTasks'] });
-            queryClient.invalidateQueries({ queryKey: ['radar', 'completedTasks'] });
+          } else if (sid) {
+            setSessionId(sid);
           }
+          queryClient.invalidateQueries({ queryKey: ['radar', 'wipTasks'] });
+          queryClient.invalidateQueries({ queryKey: ['radar', 'completedTasks'] });
 
           // Drain site A: if a queued message is waiting, keep streaming
           // state TRUE to avoid a false→true flicker that kills the
