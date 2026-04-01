@@ -21,9 +21,13 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-# Transient errors that justify a retry (DNS, connection reset, timeout)
+# Transient errors that justify a retry (DNS, connection reset, timeout).
+# Note: OSError was intentionally removed — it's overly broad (catches file
+# permission errors, etc). socket.gaierror (a subclass of OSError) covers DNS
+# failures including [Errno 8] "nodename nor servname". ConnectionError covers
+# all connection-level failures (Reset, Refused, BrokenPipe, Aborted).
 _RETRYABLE = (
-    socket.gaierror,           # DNS resolution failure
+    socket.gaierror,           # DNS resolution failure (subclass of OSError)
     ConnectionError,           # ConnectionReset, ConnectionRefused, BrokenPipe, ConnectionAborted
     httpx.ConnectError,
     httpx.ConnectTimeout,
