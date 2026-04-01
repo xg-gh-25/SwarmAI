@@ -211,19 +211,30 @@ class ContextHealthHook:
 
             db_path = Path.home() / ".swarm-ai" / "data.db"
             conn = sqlite3.connect(str(db_path))
-            conn.enable_load_extension(True)
-            sqlite_vec.load(conn)
-            conn.enable_load_extension(False)
+            try:
+                conn.enable_load_extension(True)
+                sqlite_vec.load(conn)
+                conn.enable_load_extension(False)
 
-            store = MemoryEmbeddingStore(conn)
-            store.ensure_tables()
+                store = MemoryEmbeddingStore(conn)
+                store.ensure_tables()
 
-            client = EmbeddingClient()
-            stats = store.sync_from_memory(
-                memory_content,
-                embed_fn=lambda text: client.embed_text(text) or [],
-            )
-            conn.close()
+                client = EmbeddingClient()
+
+                def _safe_embed(text: str) -> list[float] | None:
+                    """Embed text, returning None (not []) on failure.
+
+                    Returning None causes sync_from_memory to skip the
+                    vector upsert — no garbage zero-vectors in the index.
+                    """
+                    return client.embed_text(text)
+
+                stats = store.sync_from_memory(
+                    memory_content,
+                    embed_fn=_safe_embed,
+                )
+            finally:
+                conn.close()
 
             if stats["embedded"] > 0:
                 logger.info(

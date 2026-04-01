@@ -244,7 +244,7 @@ class MemoryEmbeddingStore:
         from .memory_index import SECTION_KEY_PREFIX
 
         sections = parse_memory_sections(memory_content)
-        stats = {"total_entries": 0, "embedded": 0, "skipped": 0, "removed": 0}
+        stats = {"total_entries": 0, "embedded": 0, "skipped": 0, "removed": 0, "embed_failed": 0}
 
         # Get existing hashes
         existing_hashes: dict[str, str] = {}
@@ -277,10 +277,14 @@ class MemoryEmbeddingStore:
                     stats["skipped"] += 1
                     continue
 
-                # Embed and upsert
+                # Embed and upsert (embedding=None is safe — metadata
+                # still stored for keyword search, vector skipped)
                 embedding = embed_fn(full_text)
                 self.upsert_entry(key, sec_name, title, full_text, keywords, embedding)
-                stats["embedded"] += 1
+                if embedding is not None:
+                    stats["embedded"] += 1
+                else:
+                    stats["embed_failed"] += 1
 
         # Remove entries no longer in MEMORY.md
         for old_key in set(existing_hashes.keys()) - seen_keys:
