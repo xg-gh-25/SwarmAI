@@ -433,41 +433,29 @@ def pytest_configure(config):
     # The SwarmAI agent often generates `pytest -n auto` which uses ALL CPU
     # cores and crashes macOS via jetsam. We override any -n value that
     # exceeds the safe budget. This makes the wrong thing impossible.
+    # xdist memory safety gate.
+    # pyproject.toml addopts has `-n 4` which activates xdist with 4 workers.
+    # If system memory is low, downgrade to serial to avoid jetsam OOM kills.
+    # Setting numprocesses in pytest_configure IS too late to inject parallel
+    # mode (xdist activates before this hook), but it CAN disable it — setting
+    # numprocesses=0 + dist="no" reliably turns off already-activated xdist.
     try:
         import xdist  # noqa: F401
         if not hasattr(config.option, "numprocesses"):
             return
 
         safe_count = _compute_safe_worker_count()
-        user_specified_n = any(
-            arg.startswith("-n") or arg == "--numprocesses"
-            for arg in config.invocation_params.args
-        )
-
-        if user_specified_n:
-            # User (or agent) passed -n explicitly.
-            # "auto" resolves to os.cpu_count() by xdist — could be 8-16.
-            # Any value > safe_count gets clamped.
-            requested = config.option.numprocesses
-            # xdist stores "auto" as the string "auto" or the cpu count int
-            if requested == "auto" or (
-                isinstance(requested, int) and requested > safe_count
-            ):
-                _logger.warning(
-                    f"Overriding -n {requested} → {safe_count} "
-                    f"(memory-adaptive cap, _MAX_WORKERS={_MAX_WORKERS})"
-                )
-                config.option.numprocesses = safe_count
-        else:
-            # No -n flag — inject our safe count.
-            config.option.numprocesses = safe_count
-
-        if config.option.numprocesses and config.option.numprocesses > 0:
-            config.option.dist = "loadgroup"
-        else:
+        if safe_count == 0:
+            config.option.numprocesses = 0
+            config.option.dist = "no"
             _logger.warning(
                 "xdist disabled — insufficient available memory. "
                 "Running serially."
+            )
+        else:
+            _logger.info(
+                f"xdist: {config.option.numprocesses} workers "
+                f"(memory-safe count: {safe_count})"
             )
     except (ImportError, AttributeError):
         pass

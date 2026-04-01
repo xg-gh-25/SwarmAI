@@ -5,7 +5,7 @@ System jobs defined in code (not YAML). These are provisioned automatically
 and cannot be deleted by users. User jobs live in user-jobs.yaml.
 
 Schedule format: standard 5-field cron (minute hour dom month dow).
-Dependency format: "after:<job-id>" — runs after dependency succeeds.
+Dependency format: "after:<job-id>" — runs after dependency completes (success or failure).
 """
 
 from __future__ import annotations
@@ -84,11 +84,15 @@ SYSTEM_JOBS: list[Job] = [
     ),
 
     # --- Skill Proposer (reads health_findings.json, proposes skills for gaps) ---
+    # Decoupled from memory-health: health_findings.json is populated by
+    # ContextHealthHook (every session) AND memory-health (weekly LLM).
+    # Skill proposer works fine with stale/partial data — no reason to block
+    # on memory-health success.  Runs 15 min after memory-health's slot.
     Job(
         id="skill-proposer",
         name="Skill Proposer",
         type="skill_proposer",
-        schedule="after:memory-health", # Depends on health_findings.json from memory-health
+        schedule="45 3 * * 0",          # Sunday 3:45am UTC (after memory-health slot)
         enabled=True,
         category="system",
         config={},

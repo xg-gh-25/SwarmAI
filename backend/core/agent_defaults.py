@@ -168,7 +168,8 @@ async def build_agent_config(agent_id: str) -> dict | None:
         "enable_web_tools": base.get("enable_web_tools", True),
         "global_user_mode": base.get("global_user_mode", True),
         "enable_human_approval": base.get("enable_human_approval", True),
-        "sandbox_enabled": base.get("sandbox_enabled", True),
+        # NOTE: sandbox_enabled removed — sandbox is app-level (config.json),
+        # not per-agent.  See prompt_builder.build_sandbox_config().
         "allow_all_skills": base.get("allow_all_skills", True),
 
         # Runtime from config.json
@@ -270,10 +271,10 @@ async def ensure_default_agent(skip_registration: bool = False) -> dict:
         _model = cfg.get("default_model")
         _bedrock = cfg.get("use_bedrock", False)
         _perm = config.get("permission_mode")
-        _sandbox = config.get("sandbox_enabled")
+        _sandbox_default = cfg.get("sandbox_enabled_default", False)
         logger.info(
-            "Agent config chain: model=%s, bedrock=%s, permission=%s, sandbox=%s",
-            _model, _bedrock, _perm, _sandbox,
+            "Agent config chain: model=%s, bedrock=%s, permission=%s, sandbox=%s (app-level)",
+            _model, _bedrock, _perm, _sandbox_default,
         )
 
     return config

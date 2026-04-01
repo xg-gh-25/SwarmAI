@@ -284,11 +284,8 @@ class PromptBuilder:
     # build_sandbox_config
     # ------------------------------------------------------------------
 
-    def build_sandbox_config(self, agent_config: dict) -> dict:
-        """Build the sandbox configuration dict from agent and app settings.
-
-        Reads sandbox settings from ``config.json`` via ``AppConfigManager``
-        (single source of truth), falling back to ``DEFAULT_CONFIG`` values.
+    def build_sandbox_config(self) -> dict:
+        """Build sandbox configuration from ``config.json`` (sole source of truth).
 
         **Always returns a dict, never None.**  When sandbox is disabled, returns
         ``{"enabled": False}`` so the CLI receives an explicit disable signal.
@@ -296,15 +293,16 @@ class PromptBuilder:
         CLI versions auto-enable sandbox under ``bypassPermissions`` mode as a
         safety fallback — defeating the user's intent to disable it.
 
-        Args:
-            agent_config: Agent configuration dictionary.
+        Sandbox is an **app-level** setting, not per-agent.  All sandbox config
+        lives in ``config.json`` via ``AppConfigManager``.  Per-agent
+        ``sandbox_enabled`` DB column is a legacy no-op (kept for migration
+        safety, never read).
 
         Returns:
             Sandbox settings dict (always present; ``enabled`` may be False).
         """
         cfg = self._config
-        sandbox_default = cfg.get("sandbox_enabled_default", True) if cfg else True
-        sandbox_enabled = agent_config.get("sandbox_enabled", sandbox_default)
+        sandbox_enabled = cfg.get("sandbox_enabled_default", False) if cfg else False
 
         # Sandbox only works on macOS/Linux, not Windows
         if sandbox_enabled and platform.system() == "Windows":
@@ -1015,7 +1013,7 @@ class PromptBuilder:
         mcp_servers, mcp_disallowed_tools = self.build_mcp_config(working_directory, enable_mcp)
 
         # 5. Build sandbox configuration
-        sandbox_settings = self.build_sandbox_config(agent_config)
+        sandbox_settings = self.build_sandbox_config()
 
         # 6. Inject channel-specific MCP servers
         mcp_servers = self.inject_channel_mcp(mcp_servers, channel_context, working_directory)

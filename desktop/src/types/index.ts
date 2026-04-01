@@ -16,34 +16,8 @@
  * workspaces, plugins, channels, tasks, projects, and various API types.
  */
 
-// Sandbox Configuration Types (Built-in SDK bash sandboxing)
-export interface SandboxNetworkConfig {
-  allowLocalBinding: boolean;
-  allowUnixSockets: string[];
-  allowAllUnixSockets: boolean;
-}
-
-export interface SandboxConfig {
-  enabled: boolean;
-  autoAllowBashIfSandboxed: boolean;
-  excludedCommands: string[];
-  allowUnsandboxedCommands: boolean;
-  network: SandboxNetworkConfig;
-}
-
-export interface SandboxNetworkConfigRequest {
-  allowLocalBinding?: boolean;
-  allowUnixSockets?: string[];
-  allowAllUnixSockets?: boolean;
-}
-
-export interface SandboxConfigRequest {
-  enabled?: boolean;
-  autoAllowBashIfSandboxed?: boolean;
-  excludedCommands?: string[];
-  allowUnsandboxedCommands?: boolean;
-  network?: SandboxNetworkConfigRequest;
-}
+// Sandbox types REMOVED — sandbox is app-level (config.json), not per-agent.
+// All sandbox config lives in AppConfigManager.DEFAULT_CONFIG.
 
 // Agent Types
 export interface Agent {
@@ -66,8 +40,7 @@ export interface Agent {
   enableSafetyChecks: boolean;
   globalUserMode: boolean;
   enableHumanApproval: boolean;
-  sandboxEnabled: boolean;
-  sandbox?: SandboxConfig;
+  // sandboxEnabled removed — sandbox is app-level (config.json), not per-agent
   isDefault: boolean;
   isSystemAgent: boolean;
   status: 'active' | 'inactive';
@@ -91,8 +64,7 @@ export interface AgentCreateRequest {
   enableWebTools?: boolean;
   globalUserMode?: boolean;
   enableHumanApproval?: boolean;
-  sandboxEnabled?: boolean;
-  sandbox?: SandboxConfigRequest;
+  // sandboxEnabled removed — sandbox is app-level (config.json), not per-agent
 }
 
 export interface AgentUpdateRequest extends Partial<AgentCreateRequest> {}
