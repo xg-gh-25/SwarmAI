@@ -129,7 +129,6 @@ export default function AgentFormModal({
         setAllowedTools(getDefaultEnabledTools());
         setGlobalUserMode(true); // Default to global mode
         setEnableHumanApproval(true);
-        setSandboxEnabled(true);
       }
     }
   }, [isOpen, agent]);
