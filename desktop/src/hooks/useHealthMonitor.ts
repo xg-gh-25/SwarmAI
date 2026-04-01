@@ -98,7 +98,7 @@ export function useHealthMonitor(options?: UseHealthMonitorOptions): UseHealthMo
       failureCountRef.current = 0;
       currentStatusRef.current = backendStatus;
 
-      // Transition: disconnected → connected — fire recovery toast.
+      // Transition: disconnected → connected — fire recovery toast + chat event.
       if (previousStatus === 'disconnected' && backendStatus === 'connected') {
         removeToastRef.current(HEALTH_DISCONNECTED_TOAST_ID);
         addToastRef.current({
@@ -106,6 +106,9 @@ export function useHealthMonitor(options?: UseHealthMonitorOptions): UseHealthMo
           message: 'Backend reconnected',
           autoDismiss: true,
         });
+        // Notify chat layer so active tabs can recover SSE streams.
+        // ChatPage listens for this to show recovery UI or auto-retry.
+        window.dispatchEvent(new CustomEvent('swarm:backend-recovered'));
       }
 
       setHealthState({
