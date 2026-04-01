@@ -449,10 +449,12 @@ class TestE2EDirectChannel:
         assert "# My Custom Tools Setup" in prompt
 
     def test_model_none_not_in_prompt(self, workspace):
-        """model=None does not appear in the runtime metadata line."""
+        """model=None literal does not appear; fallback resolves to a real model."""
         prompt, _ = _simulate_build(workspace, agent_model=None)
         assert "model=None" not in prompt
-        assert "model=" not in prompt
+        assert "model=default" not in prompt
+        # Fallback via resolve_default_model() should produce a real model name
+        assert "model=" in prompt
 
     def test_model_real_appears_in_prompt(self, workspace):
         """A real model name appears in the runtime metadata line."""
