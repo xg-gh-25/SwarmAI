@@ -213,6 +213,10 @@ def pytest_configure(config):
     if hasattr(signal, "SIGALRM"):
         config.pluginmanager.register(SigalrmTimeoutPlugin(), "sigalrm_timeout")
 
+    # Workers don't manage xdist — master already decided worker count
+    if is_xdist_worker:
+        return
+
     # --- xdist enforcement ---
     # pyproject.toml addopts has -n 4. This block ONLY overrides when needed:
     # memory pressure → downgrade, agent bypass (-n 0, --override-ini) → force back.
