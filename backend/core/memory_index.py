@@ -28,6 +28,7 @@ Public symbols:
 - ``MEMORY_INDEX_END``             — End marker constant
 """
 
+import json
 import re
 import logging
 from datetime import datetime, date
@@ -100,13 +101,10 @@ def _parse_entries(section_content: str) -> list[dict]:
     entries = []
     # Match entries: - YYYY-MM-DD: **title** — rest
     # Also match: - 🔵 **title** — rest (Open Threads format)
-    # Only process top-level bullets (column 0-1). Skip indented sub-bullets
-    # like "  - Sub-point" which would pollute the index with fragments.
+    # Only process top-level bullets (column 0). Any leading space means
+    # indented sub-bullet — skip to avoid polluting the index.
     for raw_line in section_content.split("\n"):
-        if not raw_line or (raw_line[0] == " " and not raw_line.startswith(" -")):
-            continue
-        # Indented bullets (2+ spaces before -) are sub-items, skip
-        if raw_line.startswith("  "):
+        if not raw_line or raw_line[0] == " ":
             continue
         line = raw_line.strip()
         if not line.startswith("- "):
@@ -417,22 +415,144 @@ def _parse_index_entries(index_block: str) -> list[dict]:
 def _adaptive_max_tokens(context_percent_used: float) -> int:
     """Return token budget for memory injection based on context window usage.
 
+    Power-first principle: inject max memory at all times.  We have 1M context.
+    Only apply budget pressure when genuinely near capacity.
+
     Tiers:
-    - <25% used: expanded (15,000) — fresh session, load lots of context
-    - 25-50%:    standard (10,000) — default behavior
-    - 50-75%:    reduced  (5,000)  — conversation is getting long
-    - 75-90%:    minimal  (2,000)  — preserve working memory
-    - >=90%:     zero     (0)      — skip all injection
+    - <50% used:  unlimited (999,999) — inject everything relevant
+    - 50-75%:     generous  (50,000)  — still plenty of room in 1M window
+    - 75-95%:     significant (20,000) — memory recall matters even late
+    - >=95%:      minimum   (5,000)   — emergency, still inject index + top
     """
-    if context_percent_used >= 90:
-        return 0
-    if context_percent_used >= 75:
-        return 2_000
-    if context_percent_used >= 50:
+    if context_percent_used >= 95:
         return 5_000
-    if context_percent_used >= 25:
-        return DEFAULT_MAX_TOKENS  # 10,000
-    return 15_000  # expanded
+    if context_percent_used >= 75:
+        return 20_000
+    if context_percent_used >= 50:
+        return 50_000
+    return 999_999  # effectively unlimited
+
+
+# ── Key→Section mapping ──────────────────────────────────────────────
+
+_KEY_TO_SECTION = {
+    "RC": "Recent Context",
+    "KD": "Key Decisions",
+    "LL": "Lessons Learned",
+    "COE": "COE Registry",
+}
+
+
+def _key_to_section(key: str) -> Optional[str]:
+    """Map an index entry key like 'RC01' or 'COE03' to a section name."""
+    for prefix, sec_name in _KEY_TO_SECTION.items():
+        if key.startswith(prefix):
+            return sec_name
+    return None
+
+
+def _keyword_section_scores(
+    user_message: str,
+    index_block: str,
+) -> dict[str, float]:
+    """Score sections by keyword matching (existing behavior, extracted)."""
+    index_entries = _parse_index_entries(index_block)
+    matched: dict[str, float] = {}
+
+    for entry in index_entries:
+        score = keyword_relevance(
+            user_message, entry["summary"], entry["aliases"]
+        )
+        if score >= KEYWORD_THRESHOLD:
+            sec_name = _key_to_section(entry["key"])
+            if sec_name and (sec_name not in matched or score > matched[sec_name]):
+                matched[sec_name] = score
+
+    return matched
+
+
+def _hybrid_section_scores(user_message: str) -> dict[str, float]:
+    """Score sections using hybrid vector+keyword search.
+
+    Queries the memory_vec SQLite table for vector similarity, combines
+    with keyword scores, and returns section-level max scores.
+
+    Falls back to empty dict on any failure (caller will use keyword-only).
+    """
+    import sqlite3 as _sqlite3
+    from pathlib import Path
+
+    db_path = Path.home() / ".swarm-ai" / "data.db"
+    if not db_path.exists():
+        return {}
+
+    try:
+        import sqlite_vec
+        from .memory_embeddings import MemoryEmbeddingStore, hybrid_memory_search
+        from .embedding_client import EmbeddingClient
+
+        conn = _sqlite3.connect(str(db_path))
+        conn.enable_load_extension(True)
+        sqlite_vec.load(conn)
+        conn.enable_load_extension(False)
+
+        store = MemoryEmbeddingStore(conn)
+
+        # Check if tables exist and have data
+        try:
+            count = conn.execute("SELECT COUNT(*) FROM memory_vec").fetchone()[0]
+        except _sqlite3.OperationalError:
+            conn.close()
+            return {}
+
+        if count == 0:
+            conn.close()
+            return {}
+
+        # Get vector scores
+        client = EmbeddingClient()
+        query_embedding = client.embed_text(user_message)
+
+        vector_scores: dict[str, float] = {}
+        if query_embedding is not None:
+            raw = store.vector_search_raw(query_embedding, top_k=20)
+            vector_scores = {key: max(0.0, 1.0 - dist) for key, dist in raw}
+
+        # Get keyword scores + entry→section mapping from stored entries
+        keyword_scores: dict[str, float] = {}
+        entry_sections: dict[str, str] = {}
+        rows = conn.execute(
+            "SELECT key, section, title, keywords FROM memory_entries"
+        ).fetchall()
+        for row in rows:
+            key, section, title, kw_json = row
+            entry_sections[key] = section
+            aliases = json.loads(kw_json) if kw_json else []
+            score = keyword_relevance(user_message, title, aliases)
+            if score > 0:
+                keyword_scores[key] = score
+
+        conn.close()
+
+        # Hybrid merge
+        ranked = hybrid_memory_search(
+            keyword_scores=keyword_scores,
+            vector_scores=vector_scores,
+        )
+
+        # Aggregate to section level (max score per section)
+        section_scores: dict[str, float] = {}
+        for entry in ranked:
+            sec_name = entry_sections.get(entry.key) or _key_to_section(entry.key)
+            if sec_name:
+                if sec_name not in section_scores or entry.hybrid > section_scores[sec_name]:
+                    section_scores[sec_name] = entry.hybrid
+
+        return section_scores
+
+    except Exception as exc:
+        logger.warning("Hybrid section scoring failed: %s", exc)
+        return {}
 
 
 def select_memory_sections(
@@ -441,18 +561,21 @@ def select_memory_sections(
     session_signals: Optional[dict] = None,
     max_tokens: int = DEFAULT_MAX_TOKENS,
     context_percent_used: float = 0.0,
+    memory_embeddings: bool = False,
 ) -> str:
     """Select MEMORY.md sections for L1 injection.
 
     Combines rule-based triggers (session signals) with keyword matching
-    to select relevant sections.  Always includes the index block and
-    Open Threads.
+    (and optionally hybrid vector+keyword scoring) to select relevant sections.
+    Always includes the index block and Open Threads.
 
     Args:
         memory_content: Full MEMORY.md content.
         user_message: User's first message (for keyword matching).
         session_signals: Dict with keys like is_channel, is_resume, etc.
         max_tokens: Maximum tokens for the combined L0+L1 output.
+        context_percent_used: Current context window usage (0-100).
+        memory_embeddings: If True, use hybrid vector+keyword scoring.
 
     Returns:
         Assembled content string: index + selected sections.
@@ -519,33 +642,19 @@ def select_memory_sections(
     if signals.get("is_first_session_today"):
         sections_to_load.add("Recent Context")
 
-    # ── Keyword matching against index entries ──
+    # ── Section scoring: hybrid (vector+keyword) or keyword-only ──
     if user_message:
-        index_entries = _parse_index_entries(index_block)
-        matched_sections: dict[str, float] = {}
+        if memory_embeddings:
+            # Try hybrid scoring; fall back to keyword-only on any failure
+            try:
+                matched_sections = _hybrid_section_scores(user_message)
+            except Exception as exc:
+                logger.warning("Hybrid scoring failed, falling back to keyword: %s", exc)
+                matched_sections = _keyword_section_scores(user_message, index_block)
+        else:
+            matched_sections = _keyword_section_scores(user_message, index_block)
 
-        for entry in index_entries:
-            score = keyword_relevance(
-                user_message, entry["summary"], entry["aliases"]
-            )
-            if score >= KEYWORD_THRESHOLD:
-                # Determine which section this entry belongs to
-                key = entry["key"]
-                if key.startswith("RC"):
-                    sec_name = "Recent Context"
-                elif key.startswith("KD"):
-                    sec_name = "Key Decisions"
-                elif key.startswith("LL"):
-                    sec_name = "Lessons Learned"
-                elif key.startswith("COE"):
-                    sec_name = "COE Registry"
-                else:
-                    continue
-
-                if sec_name not in matched_sections or score > matched_sections[sec_name]:
-                    matched_sections[sec_name] = score
-
-        # Add keyword-matched sections (sorted by score, best first)
+        # Add matched sections (sorted by score, best first)
         for sec_name, _ in sorted(
             matched_sections.items(), key=lambda x: x[1], reverse=True
         ):

@@ -158,11 +158,7 @@ class ContextHealthHook:
             return
 
         try:
-            from core.memory_index import (
-                inject_index_into_memory,
-                extract_index_from_memory,
-                MEMORY_INDEX_START,
-            )
+            from core.memory_index import inject_index_into_memory
         except ImportError:
             return  # Module not yet available (first startup)
 

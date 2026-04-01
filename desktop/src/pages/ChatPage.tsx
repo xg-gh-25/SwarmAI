@@ -212,26 +212,7 @@ export default function ChatPage() {
     };
   }, [addWorkspaceFiles]);
 
-  // Backend recovery: when health transitions disconnected → connected,
-  // useHealthMonitor dispatches 'swarm:backend-recovered'. We clear
-  // any error state on the active tab and show a recovery indicator.
-  // The user can then resend or the next message will work normally.
-  useEffect(() => {
-    const handleBackendRecovered = () => {
-      const activeId = activeTabIdRef.current;
-      if (!activeId) return;
-      const tabState = tabMapRef.current.get(activeId);
-      if (!tabState) return;
-      // Clear error/reconnecting state so the tab is usable again
-      tabState.reconnectionAttempt = 0;
-      tabState.isReconnecting = false;
-      console.log(`[ChatPage] Backend recovered — active tab ${activeId} ready`);
-    };
-    window.addEventListener('swarm:backend-recovered', handleBackendRecovered);
-    return () => window.removeEventListener('swarm:backend-recovered', handleBackendRecovered);
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps -- refs are stable
-
-  // Ref-bridge for the queue drain callback: drainQueuedMessage depends on
+// Ref-bridge for the queue drain callback: drainQueuedMessage depends on
   // createStreamHandler et al. from the lifecycle hook, so it can't be passed
   // directly at hook-construction time. Instead we pass a stable wrapper that
   // reads from this ref, then update the ref once drainQueuedMessage is defined.
@@ -370,6 +351,27 @@ export default function ChatPage() {
       }
     }
   }, [setMessages, setSessionId, setPendingQuestion, setIsLoadingHistory]);
+
+  // Backend recovery: when health transitions disconnected → connected,
+  // useHealthMonitor dispatches 'swarm:backend-recovered'. We clear
+  // any error state on the active tab and re-sync messages (the last
+  // assistant response may be truncated if the backend restarted mid-stream).
+  useEffect(() => {
+    const handleBackendRecovered = () => {
+      const activeId = activeTabIdRef.current;
+      if (!activeId) return;
+      const tabState = tabMapRef.current.get(activeId);
+      if (!tabState) return;
+      tabState.reconnectionAttempt = 0;
+      tabState.isReconnecting = false;
+      if (tabState.sessionId) {
+        loadSessionMessages(tabState.sessionId);
+      }
+      console.log(`[ChatPage] Backend recovered — active tab ${activeId}, re-syncing messages`);
+    };
+    window.addEventListener('swarm:backend-recovered', handleBackendRecovered);
+    return () => window.removeEventListener('swarm:backend-recovered', handleBackendRecovered);
+  }, [loadSessionMessages]);
 
   // Load older messages for infinite scroll (paginated)
   const loadOlderMessages = useCallback(async () => {
