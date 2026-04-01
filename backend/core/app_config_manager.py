@@ -70,7 +70,6 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "sandbox_excluded_commands": "docker",
     "sandbox_allow_unsandboxed": False,
     "sandbox_allowed_hosts": "*",
-    "memory_progressive_disclosure": False,
     "evolution": {
         "enabled": True,
         "max_retries": 3,

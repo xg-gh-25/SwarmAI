@@ -76,33 +76,32 @@ class TestAdaptiveMemoryBudget:
         # With expanded budget, keyword-matched sections should be included
         assert "Recent Context" in result
 
-    def test_high_usage_reduced_budget(self):
-        """When context 75-90% used, budget is 2000 tokens (minimal)."""
+    def test_high_usage_still_generous(self):
+        """When context 75-95% used, budget is 20K — power-first principle."""
         from core.memory_index import select_memory_sections, _adaptive_max_tokens
-        # Verify the budget tier is correct
-        assert _adaptive_max_tokens(80.0) == 2_000
+        # Verify the budget tier is correct (power-first: 20K not 2K)
+        assert _adaptive_max_tokens(80.0) == 20_000
         result = select_memory_sections(
             SAMPLE_MEMORY,
             user_message="progressive disclosure memory",
             context_percent_used=80.0,
         )
         assert "Memory Index" in result
-        # With only 2000 tokens, the index + Open Threads should fit
-        # but larger sections may be dropped depending on size
+        # With 20K budget, everything should fit
         assert "Open Threads" in result
 
-    def test_critical_usage_skip_all_injection(self):
-        """When context >= 90% used, return only the L0 index — no sections at all."""
-        from core.memory_index import select_memory_sections
+    def test_critical_usage_still_injects(self):
+        """When context >= 95% used, minimum 5K budget — still inject index + Open Threads."""
+        from core.memory_index import select_memory_sections, _adaptive_max_tokens
+        assert _adaptive_max_tokens(98.0) == 5_000
         result = select_memory_sections(
             SAMPLE_MEMORY,
             user_message="progressive disclosure memory",
-            context_percent_used=95.0,
+            context_percent_used=98.0,
         )
         assert "Memory Index" in result
-        # At 90%+, even Open Threads should be skipped to preserve working memory
-        assert "## Open Threads" not in result
-        assert "## Recent Context" not in result
+        # 5K budget — index + Open Threads should still fit
+        assert "Open Threads" in result
 
     def test_medium_usage_standard_budget(self):
         """When context 25-50%, use the default budget (same as before)."""

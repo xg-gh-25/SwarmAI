@@ -182,9 +182,57 @@ class ContextHealthHook:
             if updated != content:
                 memory_file.write_text(updated, encoding="utf-8")
                 logger.info("context_health: MEMORY.md index regenerated")
+
+            # Sync memory embeddings for hybrid retrieval (delta — only changed entries)
+            self._sync_memory_embeddings(content)
         finally:
             fcntl.flock(lock_fd, fcntl.LOCK_UN)
             lock_fd.close()
+
+    def _sync_memory_embeddings(self, memory_content: str) -> None:
+        """Delta-sync MEMORY.md entries into sqlite-vec for hybrid retrieval.
+
+        Only re-embeds entries whose content changed (via content_hash).
+        Failures are silent — hybrid retrieval degrades to keyword-only.
+        """
+        try:
+            # Auto-trigger: only sync embeddings when MEMORY.md exceeds
+            # the full-injection threshold (vector search needed for selective mode)
+            from core.memory_index import FULL_INJECTION_THRESHOLD
+            from core.context_directory_loader import ContextDirectoryLoader
+            tokens = ContextDirectoryLoader.estimate_tokens(memory_content)
+            if tokens < FULL_INJECTION_THRESHOLD:
+                return  # Full injection mode — vector not needed
+
+            import sqlite3
+            import sqlite_vec
+            from core.memory_embeddings import MemoryEmbeddingStore
+            from core.embedding_client import EmbeddingClient
+
+            db_path = Path.home() / ".swarm-ai" / "data.db"
+            conn = sqlite3.connect(str(db_path))
+            conn.enable_load_extension(True)
+            sqlite_vec.load(conn)
+            conn.enable_load_extension(False)
+
+            store = MemoryEmbeddingStore(conn)
+            store.ensure_tables()
+
+            client = EmbeddingClient()
+            stats = store.sync_from_memory(
+                memory_content,
+                embed_fn=lambda text: client.embed_text(text) or [],
+            )
+            conn.close()
+
+            if stats["embedded"] > 0:
+                logger.info(
+                    "context_health: memory embeddings synced — "
+                    "%d embedded, %d skipped, %d removed",
+                    stats["embedded"], stats["skipped"], stats["removed"],
+                )
+        except Exception as exc:
+            logger.debug("context_health: memory embedding sync skipped: %s", exc)
 
     # ------------------------------------------------------------------
     # Deep check — once per day, <10s

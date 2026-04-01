@@ -538,9 +538,10 @@ class ContextDirectoryLoader:
         model_context_window: int = 200_000,
         token_budget: int | None = None,
         exclude_filenames: set[str] | None = None,
-        memory_progressive: bool = False,
+        memory_smart: bool = False,
         user_message: str = "",
         session_signals: dict | None = None,
+        context_percent_used: float = 0.0,
     ) -> str:
         """Read all source files, enforce token budget, and assemble.
 
@@ -606,20 +607,21 @@ class ContextDirectoryLoader:
             if not content:
                 continue
 
-            # Progressive Memory Disclosure: for MEMORY.md, replace flat
-            # content with index + selected sections when enabled.
-            if spec.filename == "MEMORY.md" and memory_progressive:
+            # Smart Memory Injection: auto-selects full injection (<30K)
+            # or selective mode (≥30K) based on MEMORY.md token count.
+            if spec.filename == "MEMORY.md" and memory_smart:
                 try:
                     from .memory_index import select_memory_sections
                     content = select_memory_sections(
                         memory_content=content,
                         user_message=user_message,
                         session_signals=session_signals,
+                        context_percent_used=context_percent_used,
                     )
                 except Exception as exc:
                     logger.warning(
-                        "Progressive memory disclosure failed, "
-                        "falling back to flat injection: %s", exc
+                        "Smart memory injection failed, "
+                        "falling back to raw injection: %s", exc
                     )
                     # Fall through with original content
 
@@ -929,9 +931,10 @@ class ContextDirectoryLoader:
         self,
         model_context_window: int = 200_000,
         exclude_filenames: set[str] | None = None,
-        memory_progressive: bool = False,
+        memory_smart: bool = False,
         user_message: str = "",
         session_signals: dict | None = None,
+        context_percent_used: float = 0.0,
     ) -> str:
         """Load and assemble context based on model context window.
 
@@ -973,7 +976,7 @@ class ContextDirectoryLoader:
 
             # When files are excluded (group channels) or progressive memory
             # is active, skip L1 cache — both are session-specific.
-            if not exclude_filenames and not memory_progressive:
+            if not exclude_filenames and not memory_smart:
                 cached = self._load_l1_if_fresh(expected_budget=dynamic_budget)
                 if cached:
                     return cached
@@ -983,14 +986,15 @@ class ContextDirectoryLoader:
                 model_context_window=model_context_window,
                 token_budget=dynamic_budget,
                 exclude_filenames=exclude_filenames,
-                memory_progressive=memory_progressive,
+                memory_smart=memory_smart,
                 user_message=user_message,
                 session_signals=session_signals,
+                context_percent_used=context_percent_used,
             )
 
             # Only write L1 cache when no exclusions and no progressive memory
             # (both produce session-specific content that would poison shared cache)
-            if assembled and not exclude_filenames and not memory_progressive:
+            if assembled and not exclude_filenames and not memory_smart:
                 self._write_l1_cache(assembled, budget=dynamic_budget)
 
             return assembled

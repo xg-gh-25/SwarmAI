@@ -53,8 +53,13 @@ ALWAYS_LOAD_SECTIONS = {"Open Threads"}
 # Keyword relevance threshold for L1 section loading
 KEYWORD_THRESHOLD = 0.15
 
-# Default max tokens for L0+L1 combined injection
-DEFAULT_MAX_TOKENS = 10_000
+# Default max tokens for selective injection (only used above threshold)
+DEFAULT_MAX_TOKENS = 50_000
+
+# Full-injection threshold: below this, inject entire MEMORY.md.
+# At 30K tokens (~375 entries), MEMORY.md uses 30% of 100K system prompt budget.
+# Below this, Claude reads everything — no selection needed.
+FULL_INJECTION_THRESHOLD = 30_000
 
 # Prefix patterns for index entry keys
 SECTION_KEY_PREFIX = {
@@ -101,10 +106,10 @@ def _parse_entries(section_content: str) -> list[dict]:
     entries = []
     # Match entries: - YYYY-MM-DD: **title** — rest
     # Also match: - 🔵 **title** — rest (Open Threads format)
-    # Only process top-level bullets (column 0). Any leading space means
-    # indented sub-bullet — skip to avoid polluting the index.
+    # Only process top-level bullets (column 0). Any leading whitespace
+    # means indented sub-bullet — skip to avoid polluting the index.
     for raw_line in section_content.split("\n"):
-        if not raw_line or raw_line[0] == " ":
+        if not raw_line or raw_line[0] in (" ", "\t"):
             continue
         line = raw_line.strip()
         if not line.startswith("- "):
@@ -254,11 +259,12 @@ def generate_memory_index(content: str) -> str:
                 line += f" | {alias_str}"
             permanent_lines.append(line)
 
-    # ── Build Active tier (Recent Context + Lessons, within age limits) ──
+    # ── Build Active tier (Recent Context + Lessons — no age cutoff) ──
+    # Power-first: every entry stays in Active tier until explicitly
+    # archived by LLM maintenance (superseded by newer entry).
     active_lines: list[str] = []
-    archived_count = 0
 
-    for sec_name, age_limit_days in [("Recent Context", 90), ("Lessons Learned", 180)]:
+    for sec_name in ("Recent Context", "Lessons Learned"):
         prefix = SECTION_KEY_PREFIX[sec_name]
         entries = _parse_entries(sections.get(sec_name, ""))
         for i, entry in enumerate(entries, 1):
@@ -267,12 +273,6 @@ def generate_memory_index(content: str) -> str:
             alias_str = ", ".join(aliases) if aliases else ""
             date_prefix = f"{entry['date_str']} " if entry.get("date_str") else ""
             title = entry["title"]
-
-            # Check age
-            entry_date = entry.get("date")
-            if entry_date and (today - entry_date).days > age_limit_days:
-                archived_count += 1
-                continue
 
             line = f"- [{key}] {date_prefix}{title}"
             if alias_str:
@@ -312,12 +312,6 @@ def generate_memory_index(content: str) -> str:
         lines.extend(active_lines)
         if ot_lines:
             lines.extend(ot_lines)
-
-    if archived_count > 0:
-        lines.append("")
-        lines.append(
-            f"### Archived ({archived_count} entries — detail available via Read tool)"
-        )
 
     lines.append(MEMORY_INDEX_END)
 
@@ -492,47 +486,47 @@ def _hybrid_section_scores(user_message: str) -> dict[str, float]:
         from .embedding_client import EmbeddingClient
 
         conn = _sqlite3.connect(str(db_path))
-        conn.enable_load_extension(True)
-        sqlite_vec.load(conn)
-        conn.enable_load_extension(False)
-
-        store = MemoryEmbeddingStore(conn)
-
-        # Check if tables exist and have data
         try:
-            count = conn.execute("SELECT COUNT(*) FROM memory_vec").fetchone()[0]
-        except _sqlite3.OperationalError:
+            conn.enable_load_extension(True)
+            sqlite_vec.load(conn)
+            conn.enable_load_extension(False)
+
+            store = MemoryEmbeddingStore(conn)
+
+            # Check if tables exist and have data
+            try:
+                count = conn.execute("SELECT COUNT(*) FROM memory_vec").fetchone()[0]
+            except _sqlite3.OperationalError:
+                return {}
+
+            if count == 0:
+                return {}
+
+            # Get vector scores
+            client = EmbeddingClient()
+            query_embedding = client.embed_text(user_message)
+
+            vector_scores: dict[str, float] = {}
+            if query_embedding is not None:
+                raw = store.vector_search_raw(query_embedding, top_k=20)
+                # sqlite-vec cosine distance = 2*(1-cos_sim). Convert to similarity.
+                vector_scores = {key: max(0.0, 1.0 - dist / 2.0) for key, dist in raw}
+
+            # Get keyword scores + entry→section mapping from stored entries
+            keyword_scores: dict[str, float] = {}
+            entry_sections: dict[str, str] = {}
+            rows = conn.execute(
+                "SELECT key, section, title, keywords FROM memory_entries"
+            ).fetchall()
+            for row in rows:
+                key, section, title, kw_json = row
+                entry_sections[key] = section
+                aliases = json.loads(kw_json) if kw_json else []
+                score = keyword_relevance(user_message, title, aliases)
+                if score > 0:
+                    keyword_scores[key] = score
+        finally:
             conn.close()
-            return {}
-
-        if count == 0:
-            conn.close()
-            return {}
-
-        # Get vector scores
-        client = EmbeddingClient()
-        query_embedding = client.embed_text(user_message)
-
-        vector_scores: dict[str, float] = {}
-        if query_embedding is not None:
-            raw = store.vector_search_raw(query_embedding, top_k=20)
-            vector_scores = {key: max(0.0, 1.0 - dist) for key, dist in raw}
-
-        # Get keyword scores + entry→section mapping from stored entries
-        keyword_scores: dict[str, float] = {}
-        entry_sections: dict[str, str] = {}
-        rows = conn.execute(
-            "SELECT key, section, title, keywords FROM memory_entries"
-        ).fetchall()
-        for row in rows:
-            key, section, title, kw_json = row
-            entry_sections[key] = section
-            aliases = json.loads(kw_json) if kw_json else []
-            score = keyword_relevance(user_message, title, aliases)
-            if score > 0:
-                keyword_scores[key] = score
-
-        conn.close()
 
         # Hybrid merge
         ranked = hybrid_memory_search(
@@ -555,6 +549,46 @@ def _hybrid_section_scores(user_message: str) -> dict[str, float]:
         return {}
 
 
+# ── Full Injection Helpers ────────────────────────────────────────────
+
+
+def _full_injection(memory_content: str) -> str:
+    """Full injection mode: index + entire MEMORY.md body.
+
+    Power-first: Claude reads everything. No selection, no filtering.
+    The index serves as a navigation table of contents.
+    """
+    index_block = extract_index_from_memory(memory_content)
+    if not index_block:
+        index_block = generate_memory_index(memory_content)
+
+    body = extract_body_without_index(memory_content)
+    if not body.strip():
+        return index_block
+
+    return index_block + "\n\n" + body
+
+
+def _channel_minimal(memory_content: str) -> str:
+    """Channel sessions: index + Open Threads only (no personal sections)."""
+    index_block = extract_index_from_memory(memory_content)
+    if not index_block:
+        index_block = generate_memory_index(memory_content)
+
+    sections = parse_memory_sections(memory_content)
+    parts = [index_block]
+
+    ot_content = sections.get("Open Threads", "")
+    if ot_content.strip():
+        parts.append(f"## Open Threads\n{ot_content}")
+
+    parts.append(
+        f"\n[Full MEMORY.md available via Read tool — "
+        f"{len(sections)} sections not loaded]"
+    )
+    return "\n\n".join(parts)
+
+
 def select_memory_sections(
     memory_content: str,
     user_message: str = "",
@@ -563,50 +597,62 @@ def select_memory_sections(
     context_percent_used: float = 0.0,
     memory_embeddings: bool = False,
 ) -> str:
-    """Select MEMORY.md sections for L1 injection.
+    """Assemble MEMORY.md content for system prompt injection.
 
-    Combines rule-based triggers (session signals) with keyword matching
-    (and optionally hybrid vector+keyword scoring) to select relevant sections.
-    Always includes the index block and Open Threads.
+    Two modes, auto-selected by token count:
+
+    **Full injection** (<FULL_INJECTION_THRESHOLD tokens):
+      Inject index + entire MEMORY.md body. Claude reads everything.
+      No keyword matching, no vector search, no section selection.
+      This is the default for typical memory sizes (~100-300 entries).
+
+    **Selective injection** (≥FULL_INJECTION_THRESHOLD tokens):
+      Inject index + keyword/hybrid-matched sections within budget.
+      Falls back to keyword-only if vector search fails.
 
     Args:
         memory_content: Full MEMORY.md content.
         user_message: User's first message (for keyword matching).
         session_signals: Dict with keys like is_channel, is_resume, etc.
-        max_tokens: Maximum tokens for the combined L0+L1 output.
+        max_tokens: Maximum tokens for selective injection mode.
         context_percent_used: Current context window usage (0-100).
-        memory_embeddings: If True, use hybrid vector+keyword scoring.
+        memory_embeddings: If True, use hybrid vector+keyword in selective mode.
 
     Returns:
-        Assembled content string: index + selected sections.
+        Assembled content string for system prompt.
     """
     from .context_directory_loader import ContextDirectoryLoader
 
     signals = session_signals or {}
 
-    # ── Adaptive budget: override max_tokens based on context usage ──
+    # ── Auto-detect mode: full injection vs selective ──
+    total_tokens = ContextDirectoryLoader.estimate_tokens(memory_content)
+
+    # Channel sessions: always minimal (index + Open Threads only)
+    if signals.get("is_channel"):
+        return _channel_minimal(memory_content)
+
+    # Full injection mode: MEMORY.md is small enough to inject entirely.
+    # Power-first: Claude reads everything, no selection needed.
+    if total_tokens < FULL_INJECTION_THRESHOLD:
+        return _full_injection(memory_content)
+
+    # ── Selective injection mode (MEMORY.md exceeds threshold) ──
+    logger.info(
+        "Memory exceeds full-injection threshold (%d >= %d tokens), "
+        "using selective injection",
+        total_tokens, FULL_INJECTION_THRESHOLD,
+    )
+
+    # Adaptive budget for selective mode
     if context_percent_used > 0:
         max_tokens = _adaptive_max_tokens(context_percent_used)
 
     sections = parse_memory_sections(memory_content)
 
-    # ── Critical usage: return L0 index only, skip everything else ──
-    if max_tokens == 0:
-        index_block = extract_index_from_memory(memory_content)
-        if not index_block:
-            index_block = generate_memory_index(memory_content)
-        unloaded = set(sections.keys()) - {"Memory"}
-        footer = (
-            f"\n[Context {context_percent_used:.0f}% used — memory injection "
-            f"skipped to preserve working memory. {len(unloaded)} sections "
-            f"available via Read tool]"
-        )
-        return index_block + footer
-
     # ── L0: Always include index ──
     index_block = extract_index_from_memory(memory_content)
     if not index_block:
-        # Generate index on the fly if missing
         index_block = generate_memory_index(memory_content)
 
     parts: list[str] = [index_block]
@@ -620,14 +666,6 @@ def select_memory_sections(
         if used_tokens + ot_tokens <= max_tokens:
             parts.append(ot_section)
             used_tokens += ot_tokens
-
-    # ── Channel sessions: minimal (index + Open Threads only) ──
-    if signals.get("is_channel"):
-        parts.append(
-            f"\n[Full MEMORY.md available via Read tool — "
-            f"{len(sections)} sections not loaded]"
-        )
-        return "\n\n".join(parts)
 
     # ── Rule-based section loading ──
     sections_to_load: set[str] = set()
@@ -646,11 +684,19 @@ def select_memory_sections(
     if user_message:
         if memory_embeddings:
             # Try hybrid scoring; fall back to keyword-only on any failure
+            # or when hybrid returns empty (no embeddings in DB yet)
             try:
                 matched_sections = _hybrid_section_scores(user_message)
             except Exception as exc:
                 logger.warning("Hybrid scoring failed, falling back to keyword: %s", exc)
-                matched_sections = _keyword_section_scores(user_message, index_block)
+                matched_sections = {}
+
+            # Hybrid empty = no embeddings yet or Bedrock down.
+            # Merge in keyword results so we never lose recall.
+            kw_sections = _keyword_section_scores(user_message, index_block)
+            for sec, score in kw_sections.items():
+                if sec not in matched_sections or score > matched_sections[sec]:
+                    matched_sections[sec] = score
         else:
             matched_sections = _keyword_section_scores(user_message, index_block)
 

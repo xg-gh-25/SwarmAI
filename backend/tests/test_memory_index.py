@@ -289,19 +289,20 @@ class TestSelectMemorySections:
         # Open Threads should be present
         assert "Signal fetcher" in result or "P0" in result
 
-    def test_respects_token_cap(self):
-        """Selected content should not exceed the token budget."""
+    def test_full_injection_for_small_memory(self):
+        """Small MEMORY.md (<30K tokens) is fully injected — all sections present."""
         from core.memory_index import select_memory_sections
-        from core.context_directory_loader import ContextDirectoryLoader
 
         result = select_memory_sections(
             memory_content=SAMPLE_MEMORY,
             user_message="tell me everything about all topics",
             session_signals={},
-            max_tokens=500,
         )
-        tokens = ContextDirectoryLoader.estimate_tokens(result)
-        assert tokens <= 600  # Some slack for estimation imprecision
+        # Full injection: all sections should be present
+        assert "Recent Context" in result
+        assert "Key Decisions" in result
+        assert "Lessons Learned" in result
+        assert "Open Threads" in result
 
 
 # ── Integration: Index in MEMORY.md ──────────────────────────────────
