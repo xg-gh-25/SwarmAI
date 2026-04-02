@@ -139,6 +139,7 @@ from core.exceptions import (
     ValidationException,
     AgentExecutionException,
     AgentTimeoutException,
+    ResourceExhaustedException,
 )
 import json
 import asyncio
@@ -459,6 +460,17 @@ async def chat_stream(request: Request):
                 "message": "The AI agent took too long to respond. This can happen when the Claude API is under heavy load or processing a complex request.",
                 "suggested_action": "Your conversation is saved. Send your message again to continue."
             }
+        except ResourceExhaustedException as e:
+            logger.warning(
+                "Resource exhausted for agent %s: %s",
+                chat_request.agent_id, e.message,
+            )
+            yield _build_error_event(
+                code="RESOURCE_EXHAUSTED",
+                message=e.message,
+                detail=e.detail,
+                suggested_action=e.suggested_action,
+            )
         except Exception as e:
             import traceback
             error_traceback = traceback.format_exc()
