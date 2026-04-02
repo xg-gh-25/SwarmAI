@@ -601,41 +601,27 @@ class LifecycleManager:
             if evicted > 0:
                 return  # Evicted everything we could
 
-            # ── Tier 2: circuit breaker — kill heaviest STREAMING ────
-            # Only triggers when NO idle units exist AND memory > 92%.
-            # This is the last resort before macOS kills everything.
-            if mem.percent_used < self.MEMORY_CIRCUIT_BREAKER_PCT:
-                return
-
-            streaming_units = [
-                u for u in self._router.list_units()
-                if u.state in (SessionState.STREAMING, SessionState.WAITING_INPUT)
-            ]
-            if not streaming_units:
-                return
-
-            streaming_units.sort(key=_rss, reverse=True)
-            victim = streaming_units[0]
-
-            logger.critical(
-                "lifecycle.CIRCUIT_BREAKER: memory %.1f%% > %.0f%% with "
-                "0 IDLE units — KILLING streaming session %s (rss=%dMB) "
-                "to prevent OS-level kill of entire app",
-                mem.percent_used,
-                self.MEMORY_CIRCUIT_BREAKER_PCT,
-                victim.session_id,
-                _rss(victim) // (1024 * 1024),
-            )
-
-            # Fire hooks best-effort before killing
-            if not victim._hooks_enqueued and self._hook_executor:
-                ctx = await self._build_hook_context(victim)
-                if ctx:
-                    self.enqueue_hooks(ctx)
-                    victim._hooks_enqueued = True
-
-            await victim.kill()
-            resource_monitor.invalidate_cache()
+            # ── Tier 2: LOG ONLY — never kill STREAMING sessions ────
+            # Previous design had a circuit breaker that killed the heaviest
+            # STREAMING session at 92%.  Removed: killing STREAMING causes
+            # data loss, context truncation, and broken responses.  If we
+            # reach this point, all IDLE units are evicted and memory is
+            # still high.  Let macOS jetsam decide — our L3 continuation
+            # hint in session_unit handles the recovery.  The spawn settle
+            # window (L1) prevents over-commitment in the first place.
+            if mem.percent_used >= self.MEMORY_CIRCUIT_BREAKER_PCT:
+                streaming_count = sum(
+                    1 for u in self._router.list_units()
+                    if u.state in (SessionState.STREAMING, SessionState.WAITING_INPUT)
+                )
+                logger.warning(
+                    "lifecycle.memory_critical: %.1f%% > %.0f%% with "
+                    "%d STREAMING sessions — NOT killing (L1/L3 handles). "
+                    "If jetsam kills a subprocess, retry+continuation will recover.",
+                    mem.percent_used,
+                    self.MEMORY_CIRCUIT_BREAKER_PCT,
+                    streaming_count,
+                )
         except Exception as exc:
             logger.error("_check_memory_pressure failed: %s", exc)
 

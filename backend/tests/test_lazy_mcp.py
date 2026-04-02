@@ -7,6 +7,8 @@ Acceptance criteria:
   AC4: on-demand MCPs listed in system prompt as deferred
   AC5: Session can respawn with additional MCPs via reclaim_for_mcp_swap()
   AC6: All existing tests pass (0 regressions) — covered by full suite run
+  AC7: Force-load matches both name AND id fields (no silent failures)
+  AC8: _extra_mcps survives kill/respawn cycle
 """
 
 import json
@@ -85,6 +87,41 @@ def mcp_workspace_no_tiers(tmp_path):
             "connection_type": "stdio",
             "config": {"command": "/usr/bin/outlook-mcp", "args": []},
             "enabled": True,
+        },
+    ]
+
+    (mcps_dir / "mcp-dev.json").write_text(json.dumps(entries))
+    (mcps_dir / "mcp-catalog.json").write_text("[]")
+    return tmp_path
+
+
+@pytest.fixture
+def mcp_workspace_divergent_names(tmp_path):
+    """Workspace where entry name ≠ id — tests the dual-match logic.
+
+    Real-world scenario: mcp-dev.json has `id: "user-custom-tool"` but
+    `name: "custom-tool"`.  Agent/frontend might use either string when
+    requesting force-load via enable_mcp_for_session().
+    """
+    mcps_dir = tmp_path / ".claude" / "mcps"
+    mcps_dir.mkdir(parents=True)
+
+    entries = [
+        {
+            "id": "user-custom-tool",
+            "name": "custom-tool",
+            "connection_type": "stdio",
+            "config": {"command": "/usr/bin/custom", "args": []},
+            "enabled": True,
+            "tier": "ondemand",
+        },
+        {
+            "id": "user-internal-tool",
+            "name": "internal-tool",
+            "connection_type": "stdio",
+            "config": {"command": "/usr/bin/internal", "args": []},
+            "enabled": True,
+            "tier": "ondemand",
         },
     ]
 
@@ -347,7 +384,8 @@ class TestDeferredPromptInjection:
 class TestMcpRespawn:
     """Session can add MCPs and respawn via reclaim_for_mcp_swap."""
 
-    def test_reclaim_for_mcp_swap_requires_idle(self):
+    @pytest.mark.asyncio
+    async def test_reclaim_for_mcp_swap_requires_idle(self):
         """reclaim_for_mcp_swap raises if not IDLE."""
         from core.session_unit import SessionUnit, SessionState
 
@@ -357,12 +395,10 @@ class TestMcpRespawn:
         unit._extra_mcps = set()
 
         with pytest.raises(RuntimeError, match="Cannot reclaim"):
-            import asyncio
-            asyncio.get_event_loop().run_until_complete(
-                unit.reclaim_for_mcp_swap()
-            )
+            await unit.reclaim_for_mcp_swap()
 
-    def test_reclaim_stores_mcp_name(self):
+    @pytest.mark.asyncio
+    async def test_reclaim_stores_mcp_name(self):
         """reclaim_for_mcp_swap stores mcp_name in _extra_mcps."""
         from core.session_unit import SessionUnit, SessionState
 
@@ -376,32 +412,151 @@ class TestMcpRespawn:
 
         unit.kill = mock_kill
 
-        import asyncio
-        asyncio.get_event_loop().run_until_complete(
-            unit.reclaim_for_mcp_swap(mcp_name="aws-outlook-mcp")
-        )
+        await unit.reclaim_for_mcp_swap(mcp_name="aws-outlook-mcp")
         assert "aws-outlook-mcp" in unit._extra_mcps
         assert unit.state == SessionState.COLD
+
+    @pytest.mark.asyncio
+    async def test_reclaim_for_waiting_input_raises(self):
+        """reclaim_for_mcp_swap raises on WAITING_INPUT — protected state."""
+        from core.session_unit import SessionUnit, SessionState
+
+        unit = SessionUnit.__new__(SessionUnit)
+        unit.state = SessionState.WAITING_INPUT
+        unit.session_id = "test-session"
+        unit._extra_mcps = set()
+
+        with pytest.raises(RuntimeError, match="Cannot reclaim"):
+            await unit.reclaim_for_mcp_swap(mcp_name="some-mcp")
+
+
+# ---------------------------------------------------------------------------
+# AC7: Force-load matches both name AND id (no silent failures)
+# ---------------------------------------------------------------------------
+
+class TestNameIdDualMatch:
+    """Force-load should match against both name and id fields."""
+
+    def test_force_by_name_when_name_differs_from_id(self, mcp_workspace_divergent_names):
+        """Using display name to force-load works."""
+        from core.mcp_config_loader import load_mcp_config_tiered
+
+        servers, _, deferred = load_mcp_config_tiered(
+            mcp_workspace_divergent_names, enable_mcp=True,
+            extra_always={"custom-tool"},
+        )
+        assert "custom-tool" in servers
+
+    def test_force_by_id_when_name_differs_from_id(self, mcp_workspace_divergent_names):
+        """Using the id field to force-load also works."""
+        from core.mcp_config_loader import load_mcp_config_tiered
+
+        servers, _, deferred = load_mcp_config_tiered(
+            mcp_workspace_divergent_names, enable_mcp=True,
+            extra_always={"user-custom-tool"},
+        )
+        # Should match via id even though name is "custom-tool"
+        assert "custom-tool" in servers
+
+    def test_force_by_id_second_entry(self, mcp_workspace_divergent_names):
+        """Force-load using the id field of a different entry."""
+        from core.mcp_config_loader import load_mcp_config_tiered
+
+        servers, _, deferred = load_mcp_config_tiered(
+            mcp_workspace_divergent_names, enable_mcp=True,
+            extra_always={"user-internal-tool"},
+        )
+        # Matched via id "user-internal-tool", loaded as name "internal-tool"
+        assert "internal-tool" in servers
+
+    def test_force_neither_name_nor_id_no_match(self, mcp_workspace_divergent_names):
+        """Completely wrong name doesn't load anything extra."""
+        from core.mcp_config_loader import load_mcp_config_tiered
+
+        servers, _, deferred = load_mcp_config_tiered(
+            mcp_workspace_divergent_names, enable_mcp=True,
+            extra_always={"wrong-name"},
+        )
+        assert len(servers) == 0
+        assert len(deferred) == 2  # Both entries still deferred
+
+
+# ---------------------------------------------------------------------------
+# AC8: _extra_mcps survives kill/respawn (cleanup doesn't reset it)
+# ---------------------------------------------------------------------------
+
+class TestExtraMcpsSurvival:
+    """_extra_mcps persists across kill/respawn — not cleared by cleanup."""
+
+    def test_cleanup_internal_preserves_extra_mcps(self):
+        """_cleanup_internal() must NOT reset _extra_mcps."""
+        from core.session_unit import SessionUnit, SessionState
+
+        unit = SessionUnit.__new__(SessionUnit)
+        unit.session_id = "test-session"
+        unit._extra_mcps = {"aws-outlook-mcp", "slack-mcp"}
+        unit._client = MagicMock()
+        unit._wrapper = MagicMock()
+        unit._interrupted = False
+        unit._retry_count = 0
+        unit._model_name = "claude-4.6-opus"
+        unit._peak_tree_rss_bytes = 1024
+
+        unit._cleanup_internal()
+
+        # _extra_mcps must survive — this is the whole point of lazy MCP
+        assert unit._extra_mcps == {"aws-outlook-mcp", "slack-mcp"}
+        # Other fields should be cleaned
+        assert unit._client is None
+        assert unit._wrapper is None
+
+    def test_full_cleanup_preserves_extra_mcps(self):
+        """_full_cleanup() preserves _extra_mcps even for non-resumable crashes.
+
+        Rationale: user explicitly enabled these MCPs. Even after a crash,
+        their next send() should still spawn with the same MCP set.
+        Only a new session (new tab) should start with defaults.
+        """
+        from core.session_unit import SessionUnit
+
+        unit = SessionUnit.__new__(SessionUnit)
+        unit.session_id = "test-session"
+        unit._extra_mcps = {"aws-outlook-mcp"}
+        unit._client = None
+        unit._wrapper = None
+        unit._interrupted = False
+        unit._retry_count = 0
+        unit._model_name = None
+        unit._peak_tree_rss_bytes = 0
+        unit._sdk_session_id = "old-session-id"
+        unit._lifecycle_response_count = 0
+        unit._consecutive_oom_kills = 0
+
+        unit._full_cleanup()
+
+        # _extra_mcps survives — user intent persists across crashes
+        assert unit._extra_mcps == {"aws-outlook-mcp"}
+        # But session identity is cleared (non-resumable)
+        assert unit._sdk_session_id is None
 
 
 class TestEnableMcpForSession:
     """SessionRouter.enable_mcp_for_session delegates to reclaim_for_mcp_swap."""
 
-    def test_enable_mcp_unknown_session(self):
+    @pytest.mark.asyncio
+    async def test_enable_mcp_unknown_session(self):
         """Returns failure for unknown session_id."""
         from core.session_router import SessionRouter
 
         router = SessionRouter.__new__(SessionRouter)
         router._units = {}
 
-        import asyncio
-        result = asyncio.get_event_loop().run_until_complete(
-            router.enable_mcp_for_session("nonexistent", "outlook")
-        )
+        result = await router.enable_mcp_for_session("nonexistent", "outlook")
         assert result["success"] is False
         assert "not found" in result["message"]
 
-    def test_enable_mcp_not_idle(self):
+    @pytest.mark.asyncio
+    async def test_enable_mcp_not_idle(self):
         """Returns failure when session is not IDLE."""
         from core.session_router import SessionRouter
         from core.session_unit import SessionUnit, SessionState
@@ -413,14 +568,12 @@ class TestEnableMcpForSession:
         unit._extra_mcps = set()
         router._units = {"test-sess": unit}
 
-        import asyncio
-        result = asyncio.get_event_loop().run_until_complete(
-            router.enable_mcp_for_session("test-sess", "outlook")
-        )
+        result = await router.enable_mcp_for_session("test-sess", "outlook")
         assert result["success"] is False
         assert "Cannot reclaim" in result["message"]
 
-    def test_enable_mcp_success(self):
+    @pytest.mark.asyncio
+    async def test_enable_mcp_success(self):
         """Returns success when session is IDLE and reclaim works."""
         from core.session_router import SessionRouter
         from core.session_unit import SessionUnit, SessionState
@@ -438,10 +591,7 @@ class TestEnableMcpForSession:
         unit.kill = mock_kill
         router._units = {"test-sess": unit}
 
-        import asyncio
-        result = asyncio.get_event_loop().run_until_complete(
-            router.enable_mcp_for_session("test-sess", "aws-outlook-mcp")
-        )
+        result = await router.enable_mcp_for_session("test-sess", "aws-outlook-mcp")
         assert result["success"] is True
         assert "aws-outlook-mcp" in result["message"]
         # Verify the MCP name is stored for next spawn
