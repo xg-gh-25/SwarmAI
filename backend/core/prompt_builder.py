@@ -28,6 +28,7 @@ Key public symbols:
 No subprocess lifecycle, routing, or hook logic lives here.
 """
 
+import asyncio
 import logging
 import os
 import platform
@@ -638,7 +639,7 @@ class PromptBuilder:
             is_channel = channel_context is not None
 
             # ── DailyActivity reading — last 2 files by date (ephemeral) ──
-            # Skipped for channel sessions: Slack/Feishu DMs are quick exchanges
+            # Skipped for channel sessions: Slack DMs are quick exchanges
             # that don't need yesterday's session logs (~4K tokens saved).
             daily_activity_dir = Path(working_directory) / "Knowledge" / "DailyActivity"
             if daily_activity_dir.is_dir() and not is_channel:
@@ -682,6 +683,22 @@ class PromptBuilder:
                         context_text += f"\n\n{briefing}"
                 except Exception as exc:
                     logger.warning("Proactive intelligence injection failed: %s", exc)
+
+            # ── Layer 6: Recalled Knowledge (Library recall) ──────────
+            # Pre-session recall: use focus keywords to search the Knowledge
+            # Library (730K tokens of DailyActivity, Designs, Notes, etc.)
+            # via hybrid FTS5 + vector search. Inject relevant chunks.
+            # Skipped for channel sessions (quick exchanges, no deep recall).
+            # Wrapped in to_thread to avoid blocking the event loop (~50ms).
+            if not is_channel and memory_keyword_hint:
+                try:
+                    recalled = await asyncio.to_thread(
+                        self._recall_knowledge, working_directory, memory_keyword_hint,
+                    )
+                    if recalled:
+                        context_text += f"\n\n{recalled}"
+                except Exception as exc:
+                    logger.debug("Knowledge recall skipped: %s", exc)
 
             # ── L3: Active Session Digest (sibling awareness) ──────────
             # Inject a brief summary of what other active sessions are doing
@@ -830,6 +847,63 @@ class PromptBuilder:
         else:
             # Default: adaptive — model decides when thinking is useful
             return {"type": "adaptive"}
+
+    # ------------------------------------------------------------------
+    # Knowledge Recall (Layer 6)
+    # ------------------------------------------------------------------
+
+    def _recall_knowledge(
+        self,
+        working_directory: str,
+        query: str,
+        max_tokens: int = 15_000,
+    ) -> str:
+        """Recall relevant knowledge from Library via hybrid FTS5 + vector search.
+
+        Pre-session recall: uses focus keywords from proactive briefing to
+        search the indexed Knowledge/ directory. Returns formatted markdown
+        or empty string if nothing relevant found.
+
+        Args:
+            working_directory: Workspace root path.
+            query: Search query (typically focus keywords).
+            max_tokens: Token budget for recalled content.
+
+        Returns:
+            Formatted "## Recalled Knowledge" section, or "".
+        """
+        if not query or not query.strip():
+            return ""
+
+        from .knowledge_store import KnowledgeStore
+        from .recall_engine import RecallEngine
+        from .embedding_client import EmbeddingClient
+        from .vec_db import get_vec_conn
+
+        conn = get_vec_conn()
+        if conn is None:
+            return ""
+
+        try:
+            store = KnowledgeStore(conn)
+            engine = RecallEngine(store)
+
+            client = EmbeddingClient()
+
+            def _safe_embed(text: str) -> list[float] | None:
+                return client.embed_text(text)
+
+            recalled = engine.recall_knowledge(
+                query, embed_fn=_safe_embed, max_tokens=max_tokens,
+            )
+        except Exception as exc:
+            logger.debug("Knowledge recall failed: %s", exc)
+            recalled = ""
+
+        if not recalled:
+            return ""
+
+        return f"## Recalled Knowledge\n{recalled}"
 
     # ------------------------------------------------------------------
     # L3: Active Session Digest

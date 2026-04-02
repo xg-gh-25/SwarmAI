@@ -693,7 +693,7 @@ export interface PluginUninstallResponse {
 
 // ============== Channel Types ==============
 
-export type ChannelType = 'feishu' | 'slack' | 'discord' | 'web_widget';
+export type ChannelType = 'slack' | 'discord' | 'web_widget';
 export type ChannelStatus = 'active' | 'inactive' | 'error' | 'starting' | 'failed';
 export type ChannelAccessMode = 'open' | 'allowlist' | 'blocklist';
 

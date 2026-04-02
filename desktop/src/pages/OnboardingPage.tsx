@@ -141,11 +141,8 @@ function Step2Auth({ onVerified }: { onVerified: () => void }) {
 
 function Step3Channels({ onContinue, onSkip }: { onContinue: () => void; onSkip: () => void }) {
   const [showSlack, setShowSlack] = useState(false);
-  const [showFeishu, setShowFeishu] = useState(false);
   const [slackDone, setSlackDone] = useState(false);
-  const [feishuDone, setFeishuDone] = useState(false);
   const [existingSlack, setExistingSlack] = useState<Channel | null>(null);
-  const [existingFeishu, setExistingFeishu] = useState<Channel | null>(null);
 
   // Load existing channel configs so tokens are pre-filled
   useEffect(() => {
@@ -155,9 +152,6 @@ function Step3Channels({ onContinue, onSkip }: { onContinue: () => void; onSkip:
           if (ch.channelType === 'slack') {
             setExistingSlack(ch);
             setSlackDone(true);
-          } else if (ch.channelType === 'feishu') {
-            setExistingFeishu(ch);
-            setFeishuDone(true);
           }
         }
       })
@@ -168,7 +162,7 @@ function Step3Channels({ onContinue, onSkip }: { onContinue: () => void; onSkip:
     <div>
       <h2 className="text-2xl font-bold text-[var(--color-text)] mb-2">Connect Channels</h2>
       <p className="text-[var(--color-text-muted)] mb-6">
-        Talk to Swarm from Slack or Feishu — not just the desktop app. This is optional.
+        Talk to Swarm from Slack — not just the desktop app. This is optional.
       </p>
       <div className="space-y-4 mb-6">
         {/* Slack */}
@@ -203,37 +197,6 @@ function Step3Channels({ onContinue, onSkip }: { onContinue: () => void; onSkip:
           )}
         </div>
 
-        {/* Feishu */}
-        <div className="bg-[var(--color-card)] rounded-lg p-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <span className="text-xl">🐦</span>
-              <div>
-                <span className="text-[var(--color-text)] font-medium">Feishu</span>
-                {feishuDone && <span className="ml-2 text-green-400 text-xs">Connected</span>}
-              </div>
-            </div>
-            {!feishuDone && (
-              <button
-                onClick={() => setShowFeishu(!showFeishu)}
-                className="px-3 py-1 text-sm bg-[var(--color-bg)] text-[var(--color-text-muted)] rounded hover:text-[var(--color-text)] transition-colors"
-              >
-                {showFeishu ? 'Cancel' : 'Set Up'}
-              </button>
-            )}
-          </div>
-          {showFeishu && !feishuDone && (
-            <div className="mt-4 pt-4 border-t border-[var(--color-border)]">
-              <ChannelConfigForm
-                channelType="feishu"
-                existingConfig={existingFeishu}
-                compact
-                onSave={() => { setFeishuDone(true); setShowFeishu(false); }}
-                onCancel={() => setShowFeishu(false)}
-              />
-            </div>
-          )}
-        </div>
       </div>
 
       <div className="flex gap-3">
@@ -243,7 +206,7 @@ function Step3Channels({ onContinue, onSkip }: { onContinue: () => void; onSkip:
         >
           Skip for now
         </button>
-        {(slackDone || feishuDone) && (
+        {slackDone && (
           <button
             onClick={onContinue}
             className="px-6 py-2 text-sm bg-[var(--color-primary)] text-white rounded-lg hover:bg-[var(--color-primary)]/80"

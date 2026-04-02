@@ -7,7 +7,7 @@ a token budget, and returns a formatted string for system prompt injection.
 **Budget scaling**: Limits scale with model context window.  1M models
 (Claude 4.6) get up to 200K tokens / 500 messages — effectively the full
 conversation.  Small models (<200K) use a conservative 12K / 40 message
-budget.  Channel sessions (Slack/Feishu) use a fixed 32K / 50 message
+budget.  Channel sessions (Slack) use a fixed 32K / 50 message
 budget regardless of model size — enough continuity for "continue where
 we left off" without the massive prefill cost on frequent cold resumes.
 See ``_compute_resume_budget()`` for the tier logic.
@@ -246,7 +246,7 @@ def _compute_resume_budget(
     For 1M models, we inject the full conversation — no practical truncation.
     For smaller models, use conservative limits to leave room for new work.
 
-    Channel sessions (Slack/Feishu) use a tight budget regardless of model
+    Channel sessions (Slack) use a tight budget regardless of model
     size.  Channel conversations are quick exchanges — injecting hundreds of
     messages causes massive prefill latency on cold resume (the channel
     subprocess is evicted frequently since there's only 1 channel slot).
@@ -297,7 +297,7 @@ async def build_resume_context(
             Auto-computed from model_context_window if None.
         token_budget: Maximum estimated tokens for the formatted output.
             Auto-computed from model_context_window if None.
-        is_channel: Whether this is a channel session (Slack/Feishu).
+        is_channel: Whether this is a channel session (Slack).
             Channel sessions use a tighter budget to avoid slow prefill
             from accumulated conversation history.
 

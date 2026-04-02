@@ -25,6 +25,8 @@ dependencies = [
     "boto3>=1.35.0",
     # System monitoring
     "psutil>=5.9.0",
+    # Vector search for hybrid memory retrieval
+    "sqlite-vec>=0.1.6",
     # Utilities
     "pyyaml>=6.0.0",
     "anyio>=4.0.0",
@@ -33,7 +35,6 @@ dependencies = [
     "pyinstaller>=6.18.0",
     "pyinstaller-hooks-contrib==2025.11",
     "setuptools>=80.9.0",
-    "lark-oapi>=1.5.3",
     # Slack Socket Mode adapter
     "slack-bolt>=1.27.0",
     # MCP server (for channel file sending tool)
@@ -63,11 +64,9 @@ asyncio_default_fixture_loop_scope = "session"
 python_files = ["test_*.py"]
 # Cache last-run results so --lf (last-failed) works out of the box
 cache_dir = ".pytest_cache"
-# Sane defaults — avoid -x + tail truncation, keep enough error context.
-# -n auto activates xdist; conftest pytest_configure clamps to memory-safe
-# worker count (max 4, or 0 if <6GB available → serial fallback).
-# Override per-run: pytest --override-ini="addopts=" tests/specific_test.py
-addopts = "--maxfail=3 --tb=short -q -n 4"
+# Default: parallel with 4 workers. Conftest clamps to memory-safe count.
+# For single-file runs during coding: pytest -n 0 (conftest respects it).
+addopts = "-n 4 --maxfail=3 --tb=short -q"
 markers = [
     "pbt: property-based tests using Hypothesis (auto-applied by conftest)",
     "slow: marks tests as slow-running (deselect with '-m not slow')",

@@ -363,7 +363,7 @@ class ChannelGateway:
         async def _run_adapter(cid: str, adp: ChannelAdapter) -> None:
             # NOTE: This handler catches exceptions from blocking start()
             # implementations.  For adapters whose start() spawns a
-            # background thread and returns immediately (e.g. Feishu),
+            # background thread and returns immediately (e.g. Slack),
             # runtime failures are reported via the on_error callback
             # instead, which invokes _handle_adapter_error.  The two
             # paths do not overlap for the same failure.
@@ -773,7 +773,7 @@ class ChannelGateway:
                 channel_config = {}
 
         # Determine if this is a group conversation.  Adapters set
-        # ``chat_type`` in msg.metadata (e.g. Feishu: "p2p" / "group",
+        # ``chat_type`` in msg.metadata (e.g. Slack: "p2p" / "group",
         # Slack: "channel" / "im").  We normalize to a boolean here so
         # downstream code (context loader) can exclude personal files
         # like MEMORY.md and USER.md from group prompts.
@@ -797,10 +797,7 @@ class ChannelGateway:
         }
         # Inject platform-specific credential keys for channel MCP tools
         channel_type = channel.get("channel_type", "")
-        if channel_type == "feishu":
-            channel_context["app_id"] = channel_config.get("app_id", "")
-            channel_context["app_secret"] = channel_config.get("app_secret", "")
-        elif channel_type == "slack":
+        if channel_type == "slack":
             channel_context["bot_token"] = channel_config.get("bot_token", "")
             channel_context["app_token"] = channel_config.get("app_token", "")
 

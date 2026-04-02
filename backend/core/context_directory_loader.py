@@ -78,7 +78,7 @@ GROUP_CHANNEL_EXCLUDE: frozenset[str] = frozenset({"MEMORY.md", "USER.md"})
 CHANNEL_LIGHT_EXCLUDE: frozenset[str] = frozenset({
     "EVOLUTION.md", "PROJECTS.md",
 })
-"""Files excluded from channel (Slack/Feishu DM) sessions.
+"""Files excluded from channel (Slack DM) sessions.
 
 Channel messages are typically quick exchanges (56% of sessions) that
 don't need Evolution registry or project index.  MEMORY.md and USER.md

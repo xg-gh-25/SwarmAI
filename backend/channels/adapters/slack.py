@@ -4,7 +4,7 @@ Connects to Slack via the official slack-bolt SDK's Socket Mode handler,
 so no public URL or webhook endpoint is needed. Messages are received
 through the persistent WS connection and sent back via the Web API.
 
-This follows the same architectural pattern as the Feishu adapter:
+This follows the Architectural pattern:
 background thread with its own event loop, bridging events to the
 main FastAPI asyncio loop via ``call_soon_threadsafe``.
 """
@@ -214,7 +214,7 @@ class SlackChannelAdapter(ChannelAdapter):
             },
         )
 
-        # Bridge to main asyncio loop (same pattern as Feishu)
+        # Bridge to main asyncio loop (same pattern)
         main_loop = self._loop
         if main_loop is not None and not main_loop.is_closed() and not self._stopped:
             main_loop.call_soon_threadsafe(

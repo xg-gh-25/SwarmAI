@@ -516,7 +516,7 @@ def _collect_session_stats(ws_path: Path) -> dict[str, Any]:
     """Session volume from DailyActivity files (last 7 days).
 
     Separates interactive sessions (user-initiated chat) from channel
-    sessions (Slack/Feishu bot pings) to avoid inflating the count.
+    sessions (Slack bot pings) to avoid inflating the count.
     """
     da_dir = ws_path / "Knowledge" / "DailyActivity"
     if not da_dir.is_dir():
