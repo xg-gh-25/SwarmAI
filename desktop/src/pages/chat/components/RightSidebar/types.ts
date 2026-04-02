@@ -10,10 +10,8 @@
  * - localStorage key constants   — Canonical keys for sidebar persistence
  */
 
-import type { RefObject, MutableRefObject, ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import type { Agent, ChatSession } from '../../../../types';
-import type { UnifiedTab, TabStatus } from '../../../../hooks/useUnifiedTabState';
-import type { OpenTab } from '../../types';
 import type { GroupedSessions } from '../../utils';
 
 // ---------------------------------------------------------------------------
@@ -47,13 +45,6 @@ export interface RadarArtifact {
 
 /** Props for the top-level RadarSidebar shell component. */
 export interface RadarSidebarProps {
-  tabMapRef: RefObject<Map<string, UnifiedTab>>;
-  activeTabIdRef: RefObject<string | null>;
-  openTabs: OpenTab[];
-  tabStatuses: Record<string, TabStatus>;
-  onTabSelect: (tabId: string) => void;
-  inputValueMapRef: MutableRefObject<Map<string, string>>;
-  onInputValueChange: (tabId: string, value: string) => void;
   groupedSessions: GroupedSessions[];
   agents: Agent[];
   onSelectSession: (session: ChatSession) => void;

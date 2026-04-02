@@ -607,7 +607,11 @@ class TestP10ExistingReaperPatterns:
 
     @pytest.mark.asyncio
     async def test_reaper_patterns_and_flags(self):
-        """_reap_orphans calls claude without require_orphaned, others with it."""
+        """_reap_orphans calls patterns with require_orphaned=True.
+
+        dev_backend pattern was removed (caused self-kill via ancestor
+        chain walking — see COE: orphan reaper kills daemon backend).
+        """
         from core.lifecycle_manager import LifecycleManager
 
         mock_router = MagicMock()
@@ -629,22 +633,23 @@ class TestP10ExistingReaperPatterns:
             await manager._reap_orphans()
 
         # Find the claude pattern call
-        claude_calls = [c for c in calls_log if "claude" in c["pattern"]]
+        claude_calls = [c for c in calls_log if "claude" in c["label"]]
         assert len(claude_calls) >= 1, "Should have at least one 'claude' pattern call"
         assert claude_calls[0]["require_orphaned"] is True, (
-            "claude pattern should require orphaned (ppid==1) to avoid killing active sessions"
+            "claude pattern should require orphaned to avoid killing active sessions"
         )
 
-        # Find the python main.py pattern call
-        python_calls = [c for c in calls_log if "python main.py" in c["pattern"]]
-        assert len(python_calls) >= 1, "Should have at least one 'python main.py' pattern call"
-        assert python_calls[0]["require_orphaned"] is True, (
-            "python main.py pattern should require orphaned (ppid==1)"
+        # dev_backend pattern restored — safe with ownership-based detection.
+        # Ownership model (SWARMAI_OWNER_PID) prevents false positives.
+        python_calls = [c for c in calls_log if "dev_backend" in c["label"]]
+        assert len(python_calls) >= 1, (
+            "dev_backend pattern should exist (safe with ownership model)"
         )
+        assert python_calls[0]["require_orphaned"] is True
 
         # Find the pytest pattern call
-        pytest_calls = [c for c in calls_log if c["pattern"] == "pytest"]
+        pytest_calls = [c for c in calls_log if c["label"] == "pytest"]
         assert len(pytest_calls) >= 1, "Should have at least one 'pytest' pattern call"
         assert pytest_calls[0]["require_orphaned"] is True, (
-            "pytest pattern should require orphaned (ppid==1)"
+            "pytest pattern should require orphaned"
         )

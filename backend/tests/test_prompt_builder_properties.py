@@ -240,42 +240,43 @@ class TestChannelMCPInjection:
 # ---------------------------------------------------------------------------
 
 class TestMCPSubsetConfiguration:
-    """Property 17: MCP subset configuration.
+    """Property 17: MCP tier-based lazy loading.
 
-    # Feature: multi-session-rearchitecture, Property 17: MCP subset
+    # Feature: lazy-mcp-loading, Property 17: MCP tier filtering
 
-    When lazy=True, build_mcp_config must return only builder-mcp.
+    build_mcp_config delegates to load_mcp_config_tiered, returning
+    (servers, disallowed, deferred) — a 3-tuple.
 
     **Validates: Requirements 9.1, 9.3**
     """
 
-    def test_lazy_true_returns_only_builder_mcp(self):
-        """lazy=True filters to builder-mcp only."""
+    def test_tiered_returns_three_values(self):
+        """build_mcp_config returns (servers, disallowed, deferred)."""
         builder = _make_builder()
 
         import unittest.mock as mock
-        full_servers = {
-            "builder-mcp": {"command": "uvx", "args": ["builder"]},
-            "slack-mcp": {"command": "uvx", "args": ["slack"]},
-            "outlook-mcp": {"command": "uvx", "args": ["outlook"]},
-        }
-        with mock.patch("core.mcp_config_loader.load_mcp_config", return_value=(full_servers, [])):
-            servers, _ = builder.build_mcp_config("/tmp", enable_mcp=True, lazy=True)
+        with mock.patch(
+            "core.mcp_config_loader.load_mcp_config_tiered",
+            return_value=({"builder-mcp": {"command": "uvx"}}, [], [{"name": "slack-mcp", "tier": "channel"}]),
+        ):
+            result = builder.build_mcp_config("/tmp", enable_mcp=True)
 
+        assert len(result) == 3
+        servers, disallowed, deferred = result
         assert "builder-mcp" in servers
-        assert len(servers) == 1
+        assert len(deferred) == 1
 
-    def test_lazy_false_returns_all_servers(self):
-        """lazy=False returns all configured servers."""
+    def test_channel_context_passed_through(self):
+        """channel_context is forwarded to load_mcp_config_tiered."""
         builder = _make_builder()
 
         import unittest.mock as mock
-        full_servers = {
-            "builder-mcp": {"command": "uvx"},
-            "slack-mcp": {"command": "uvx"},
-            "outlook-mcp": {"command": "uvx"},
-        }
-        with mock.patch("core.mcp_config_loader.load_mcp_config", return_value=(full_servers, [])):
-            servers, _ = builder.build_mcp_config("/tmp", enable_mcp=True, lazy=False)
+        with mock.patch(
+            "core.mcp_config_loader.load_mcp_config_tiered",
+            return_value=({}, [], []),
+        ) as mock_load:
+            builder.build_mcp_config("/tmp", enable_mcp=True, channel_context={"channel_type": "slack"})
 
-        assert len(servers) == 3
+        mock_load.assert_called_once()
+        call_kwargs = mock_load.call_args
+        assert call_kwargs[1]["channel_context"] == {"channel_type": "slack"}

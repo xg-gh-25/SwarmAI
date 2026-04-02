@@ -82,6 +82,12 @@ class ContextHealthHook:
         except Exception as exc:
             logger.warning("context_health: KNOWLEDGE.md refresh failed: %s", exc)
 
+        # Knowledge Library vector+FTS5 indexing (incremental, <5s)
+        try:
+            self._sync_knowledge_library(root)
+        except Exception as exc:
+            logger.debug("context_health: knowledge library sync skipped: %s", exc)
+
         self._last_refresh_rev = current_rev
         logger.info("context_health: indexes refreshed (rev=%s)",
                     current_rev[:8] if current_rev else "?")
@@ -208,13 +214,11 @@ class ContextHealthHook:
             import sqlite_vec
             from core.memory_embeddings import MemoryEmbeddingStore
             from core.embedding_client import EmbeddingClient
+            from core.vec_db import open_vec_db
 
-            db_path = Path.home() / ".swarm-ai" / "data.db"
-            conn = sqlite3.connect(str(db_path))
-            try:
-                conn.enable_load_extension(True)
-                sqlite_vec.load(conn)
-                conn.enable_load_extension(False)
+            with open_vec_db() as conn:
+                if conn is None:
+                    return
 
                 store = MemoryEmbeddingStore(conn)
                 store.ensure_tables()
@@ -233,8 +237,6 @@ class ContextHealthHook:
                     memory_content,
                     embed_fn=_safe_embed,
                 )
-            finally:
-                conn.close()
 
             if stats["embedded"] > 0:
                 logger.info(
@@ -244,6 +246,47 @@ class ContextHealthHook:
                 )
         except Exception as exc:
             logger.debug("context_health: memory embedding sync skipped: %s", exc)
+
+    def _sync_knowledge_library(self, root: Path) -> None:
+        """Incremental sync of Knowledge/ files into FTS5 + sqlite-vec.
+
+        Scans Knowledge/ for new/changed .md files, chunks them, and
+        delta-syncs into knowledge_chunks + knowledge_fts + knowledge_vec.
+        Typical: 1-3 file changes, <5s. First full index: ~100s.
+
+        Failures are silent — recall engine degrades gracefully.
+        """
+        knowledge_dir = root / "Knowledge"
+        if not knowledge_dir.is_dir():
+            return
+
+        from core.knowledge_store import KnowledgeStore, sync_knowledge_index
+        from core.embedding_client import EmbeddingClient
+        from core.vec_db import open_vec_db
+
+        with open_vec_db() as conn:
+            if conn is None:
+                logger.debug("context_health: sqlite-vec not available, skipping library sync")
+                return
+
+            store = KnowledgeStore(conn)
+            store.ensure_tables()
+
+            # Create embedding function (graceful fallback if Bedrock unavailable)
+            client = EmbeddingClient()
+
+            def _safe_embed(text: str) -> list[float] | None:
+                return client.embed_text(text)
+
+            stats = sync_knowledge_index(store, knowledge_dir, embed_fn=_safe_embed)
+
+        if stats.get("chunks_added", 0) > 0 or stats.get("files_removed", 0) > 0:
+            logger.info(
+                "context_health: knowledge library synced — "
+                "%d files scanned, %d chunks added, %d skipped, %d removed",
+                stats["files_scanned"], stats["chunks_added"],
+                stats["chunks_skipped"], stats["files_removed"],
+            )
 
     # ------------------------------------------------------------------
     # Deep check — once per day, <10s

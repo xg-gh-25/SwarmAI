@@ -726,6 +726,28 @@ async def compact_session(session_id: str, body: Optional[dict] = None):
         return {"status": "not_found", "message": result["message"]}
 
 
+@router.post("/sessions/{session_id}/enable-mcp")
+async def enable_mcp_for_session(session_id: str, body: dict):
+    """Activate a deferred MCP for an existing session.
+
+    Kills the subprocess (must be IDLE) so the next message spawns fresh
+    with the requested MCP included. Used by Lazy MCP Loading when the
+    agent needs an on-demand MCP mid-conversation.
+
+    JSON body:
+        { "mcp_name": "aws-outlook-mcp" }
+    """
+    mcp_name = body.get("mcp_name", "")
+    if not mcp_name:
+        raise HTTPException(status_code=400, detail="mcp_name is required")
+
+    result = await _get_router().enable_mcp_for_session(session_id, mcp_name)
+    if result["success"]:
+        return {"status": "reclaimed", "message": result["message"]}
+    else:
+        raise HTTPException(status_code=409, detail=result["message"])
+
+
 @router.delete("/sessions/{session_id}", status_code=204)
 async def delete_session(session_id: str):
     """Delete a chat session and all its messages.

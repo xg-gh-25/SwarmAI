@@ -595,7 +595,7 @@ def _check_stage_order(stage: str, profile: str, stages_list: list[dict]) -> boo
         prior_record = _find_stage_record(prior_stage_name, stages_list)
         if prior_record is None:
             return False  # Prior stage not even recorded
-        if prior_record.get("status") not in ("completed", "skipped"):
+        if prior_record.get("status") not in ("completed", "done", "skipped"):
             return False  # Prior stage not done
 
     return True
@@ -738,7 +738,7 @@ def main() -> None:
 
         for stage_rec in run.get("stages", []):
             stage_name = stage_rec.get("stage", stage_rec.get("name"))
-            if stage_rec.get("status") in ("completed", "running"):
+            if stage_rec.get("status") in ("completed", "done", "running"):
                 result = validate(args.project, args.run_id, stage_name)
                 all_results.append(result)
                 total_errors += len(result["errors"])

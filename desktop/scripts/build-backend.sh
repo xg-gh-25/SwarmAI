@@ -368,7 +368,6 @@ local_modules = [
     'channels.base',
     'channels.gateway',
     'channels.registry',
-    'channels.adapters.feishu',
     'channels.adapters.slack',
     # MCP servers (channel tool injection)
     'mcp_servers',

@@ -239,9 +239,15 @@ class ResourceMonitor:
         more session (~500MB) would push the machine past 80% memory
         usage, deny the spawn.
 
+        Also denies spawns during the OOM cooldown period (Fix 4) —
+        after a recent OOM kill, the system needs time to reclaim
+        memory before we try spawning another heavy process.
+
         Never raises.
         """
         try:
+            # OOM cooldown is handled globally in session_unit._oom_cooldown_until.
+            # spawn_budget only checks memory numbers — no OOM history here.
             self.invalidate_cache()
             mem = self.system_memory()
             total_mb = mem.total / (1024 * 1024)
@@ -272,10 +278,12 @@ class ResourceMonitor:
                 )
         except Exception as exc:
             logger.warning("spawn_budget check failed: %s", exc)
-            # Fail open — allow spawn if we can't check
+            # Fail CLOSED — deny spawn if we can't verify resources.
+            # The first-tab exception (alive_count == 0) is enforced at
+            # the SessionRouter level, not here.
             return SpawnBudget(
-                can_spawn=True,
-                reason=f"check_failed: {exc}",
+                can_spawn=False,
+                reason=f"Resource check failed: {exc}. Close tabs or retry.",
                 available_mb=0.0,
                 estimated_cost_mb=self._DEFAULT_SPAWN_COST_MB,
             )

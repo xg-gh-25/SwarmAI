@@ -2202,15 +2202,6 @@ export default function ChatPage() {
 
         {/* Right Sidebar — persistent Radar panel */}
         <RadarSidebar
-          tabMapRef={tabMapRef}
-          activeTabIdRef={activeTabIdRef}
-          openTabs={openTabs}
-          tabStatuses={tabStatuses}
-          onTabSelect={selectTab}
-          inputValueMapRef={inputValueMapRef}
-          onInputValueChange={(tabId: string, value: string) => {
-            inputValueMapRef.current.set(tabId, value);
-          }}
           groupedSessions={groupedSessions}
           agents={agents}
           onSelectSession={handleSelectSession}

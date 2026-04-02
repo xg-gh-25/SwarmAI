@@ -1428,10 +1428,10 @@ class ChannelGateway:
 
     # Channel session idle TTL: after this duration of inactivity, the next
     # message starts a fresh session with cold resume context injection
-    # instead of resuming the stale CLI session.  Keeps each conversation
-    # focused and prevents multi-hour context accumulation.
+    # instead of resuming the stale CLI session.
+    # Aligned with lifecycle_manager.TTL_SECONDS (12h) for consistency.
     # Does NOT affect chat tabs — only channel_sessions resolved here.
-    _CHANNEL_SESSION_IDLE_TTL_S = 2 * 60 * 60  # 2 hours
+    _CHANNEL_SESSION_IDLE_TTL_S = 12 * 60 * 60  # 12 hours (was 2h, aligned 2026-04-02)
 
     async def _resolve_session(
         self,

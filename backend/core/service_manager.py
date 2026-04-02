@@ -54,7 +54,7 @@ class ManagedService:
 
     __slots__ = (
         "name", "command", "cwd", "env", "restart_policy",
-        "process", "crash_count", "last_start_time", "enabled",
+        "process", "pgid", "crash_count", "last_start_time", "enabled",
     )
 
     def __init__(
@@ -73,6 +73,7 @@ class ManagedService:
         self.restart_policy = restart_policy  # "always" | "never"
         self.enabled = enabled
         self.process: Optional[subprocess.Popen] = None
+        self.pgid: Optional[int] = None  # Process group ID for tree-kill
         self.crash_count = 0
         self.last_start_time: float = 0
 
@@ -275,9 +276,12 @@ class ServiceManager:
                 preexec_fn=os.setpgrp if sys.platform != "win32" else None,
             )
             svc.last_start_time = time.monotonic()
+            # Track pgid for clean tree-kill on shutdown (G4 fix).
+            # setpgrp makes the child its own group leader, so pgid == pid.
+            svc.pgid = svc.process.pid if sys.platform != "win32" else None
             logger.info(
-                "Started service %s (pid=%d, cmd=%s)",
-                svc.name, svc.process.pid, " ".join(svc.command),
+                "Started service %s (pid=%d, pgid=%s, cmd=%s)",
+                svc.name, svc.process.pid, svc.pgid, " ".join(svc.command),
             )
             return True
 
@@ -287,18 +291,33 @@ class ServiceManager:
             return False
 
     def _stop_service(self, svc: ManagedService) -> None:
-        """Stop a service with SIGTERM, fallback to SIGKILL."""
+        """Stop a service with SIGTERM to process group, fallback to SIGKILL."""
         if not svc.process or not svc.is_running:
             return
 
         pid = svc.process.pid
+        pgid = getattr(svc, "pgid", None)
         try:
-            svc.process.terminate()  # SIGTERM
+            # Kill entire process group if available (catches forked children)
+            if pgid is not None:
+                try:
+                    os.killpg(pgid, signal.SIGTERM)
+                except (ProcessLookupError, PermissionError):
+                    svc.process.terminate()  # fallback to direct SIGTERM
+            else:
+                svc.process.terminate()  # SIGTERM
             try:
                 svc.process.wait(timeout=_SHUTDOWN_GRACE_SECONDS)
                 logger.info("Service %s (pid=%d) stopped gracefully", svc.name, pid)
             except subprocess.TimeoutExpired:
-                svc.process.kill()  # SIGKILL
+                # SIGKILL the entire group to prevent orphans
+                if pgid is not None:
+                    try:
+                        os.killpg(pgid, signal.SIGKILL)
+                    except (ProcessLookupError, PermissionError):
+                        svc.process.kill()
+                else:
+                    svc.process.kill()  # SIGKILL
                 svc.process.wait(timeout=2)
                 logger.warning(
                     "Service %s (pid=%d) killed after %ds grace period",

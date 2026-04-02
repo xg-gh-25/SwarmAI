@@ -17,7 +17,7 @@ The dynamic limit is computed as `clamp(floor((available_ram_mb - 1024) / 500), 
 - **Spawn_Cost**: The estimated memory cost of one CLI+MCP subprocess (~500MB from COE measurement data), stored as `_DEFAULT_SPAWN_COST_MB` in ResourceMonitor.
 - **Headroom**: A 1024MB memory reserve subtracted before computing max tabs, ensuring OS and background processes remain stable.
 - **Memory_Pressure_Warning**: A UI indicator shown when system memory is under pressure after tabs are already open.
-- **ChannelGateway**: Existing backend component (`backend/channels/gateway.py`) that routes inbound messages from external channels (Slack, Feishu, Teams) through `SessionRouter.run_conversation()`. Currently shares the same concurrency pool as desktop tabs — future channel support will use a separate lightweight session pool.
+- **ChannelGateway**: Existing backend component (`backend/channels/gateway.py`) that routes inbound messages from external channels (Slack) through `SessionRouter.run_conversation()`. Currently shares the same concurrency pool as desktop tabs — future channel support will use a separate lightweight session pool.
 - **Tab_Pool**: The set of concurrency slots reserved for desktop tab sessions (full CLI+MCP subprocesses, ~500MB each). Governed by `compute_max_tabs()`.
 - **Channel_Pool**: (Future) A separate set of lightweight sessions for channel integrations (~10MB each, API-direct). Not implemented in this feature but the architecture must not preclude it.
 
@@ -116,7 +116,7 @@ The dynamic limit is computed as `clamp(floor((available_ram_mb - 1024) / 500), 
 
 ### Requirement 8: Channel-Forward Architecture Compatibility
 
-**User Story:** As a platform architect, I want the dynamic tab scaling design to not preclude future channel integrations (Slack, Feishu, Teams), so that channels can be added as a separate session pool without rewriting the tab budget logic.
+**User Story:** As a platform architect, I want the dynamic tab scaling design to not preclude future channel integrations (Slack), so that channels can be added as a separate session pool without rewriting the tab budget logic.
 
 #### Acceptance Criteria
 

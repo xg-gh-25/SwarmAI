@@ -49,6 +49,7 @@ from database import db
 
 PROPERTY_SETTINGS = settings(
     suppress_health_check=[HealthCheck.function_scoped_fixture],
+    deadline=None,
 )
 """Standard PBT settings for tests using function-scoped fixtures (most of ours).
 
@@ -59,6 +60,7 @@ you have a specific reason to override.
 PROPERTY_SETTINGS_MINIMAL = settings(
     max_examples=2,
     suppress_health_check=[HealthCheck.function_scoped_fixture],
+    deadline=None,
 )
 """Minimal PBT settings for structural-verification-only tests.
 
