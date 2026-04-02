@@ -32,3 +32,6 @@ SIGNAL_DIGEST_FILE = SWARMWS / "Services" / "signals" / "signal_digest.json"
 
 # MCP config
 MCPS_DIR = SWARMWS / ".claude" / "mcps"
+
+# Estimation learner (EMA-based job duration prediction)
+ESTIMATION_LEARNER_FILE = Path.home() / ".swarm-ai" / "estimation_learner.json"

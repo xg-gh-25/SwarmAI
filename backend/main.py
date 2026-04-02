@@ -641,16 +641,18 @@ async def lifespan(app: FastAPI):
     # Create fire-and-forget executor — hooks never block the chat path
     hook_executor = BackgroundHookExecutor(hook_manager)
 
-    # Order matters: extraction → commit → health → distillation → evolution → improvement
+    # Order matters: extraction → commit → distillation → health → evolution → improvement
+    # Distillation BEFORE health so embeddings capture freshly-distilled entries.
     hook_manager.register(DailyActivityExtractionHook(
         summarization_pipeline=summarization_pipeline,
         compliance_tracker=compliance_tracker,
     ))
     # Pass shared git lock to auto-commit hook to prevent .git/index.lock contention
     hook_manager.register(WorkspaceAutoCommitHook(git_lock=hook_executor.git_lock))
-    # Context health: light refresh every session (if changed), deep check daily
-    hook_manager.register(ContextHealthHook())
     hook_manager.register(DistillationTriggerHook())
+    # Context health: light refresh every session (if changed), deep check daily.
+    # Runs AFTER distillation so embedding sync picks up fresh MEMORY.md entries.
+    hook_manager.register(ContextHealthHook())
     hook_manager.register(EvolutionMaintenanceHook())
     # IMPROVEMENT.md write-back: closes the DDD learning loop.
     # Runs after auto-commit so workspace state is settled.

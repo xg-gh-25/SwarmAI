@@ -25,7 +25,6 @@ from ..paths import SWARMWS, PROJECTS_DIR
 
 logger = logging.getLogger("swarm.jobs.ddd_refresh")
 
-MODEL_ID = "us.anthropic.claude-sonnet-4-6"
 MAX_OUTPUT_TOKENS = 4096
 _GIT_TIMEOUT = 10
 
@@ -199,24 +198,13 @@ def _gather_project_context(project_dir: Path, stale_info: dict) -> dict:
 
 def _generate_proposal(project_name: str, context: dict) -> dict:
     """Call Bedrock Sonnet 4.6 to generate DDD doc update proposals."""
-    import boto3
+    from jobs.bedrock import invoke
 
     prompt = _build_prompt(project_name, context)
 
-    client = boto3.client("bedrock-runtime", region_name="us-west-2")
-    body = json.dumps({
-        "anthropic_version": "bedrock-2023-05-31",
-        "max_tokens": MAX_OUTPUT_TOKENS,
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.2,
-    })
-
-    response = client.invoke_model(modelId=MODEL_ID, body=body)
-    result = json.loads(response["body"].read())
-
-    content = result["content"][0]["text"]
-    input_tokens = result.get("usage", {}).get("input_tokens", 0)
-    output_tokens = result.get("usage", {}).get("output_tokens", 0)
+    content, input_tokens, output_tokens = invoke(
+        prompt, max_tokens=MAX_OUTPUT_TOKENS, temperature=0.2,
+    )
 
     logger.info(
         "DDD refresh LLM: %d input tokens, %d output tokens (~$%.3f)",

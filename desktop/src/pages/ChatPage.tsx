@@ -245,6 +245,7 @@ export default function ChatPage() {
     resetUserScroll,
     createStreamHandler,
     createCompleteHandler,
+    createDisconnectHandler,
     createErrorHandler,
     contextWarning,
     setContextWarning,
@@ -1482,7 +1483,8 @@ export default function ChatPage() {
       },
       wrappedCreateStreamHandler(assistantMessageId),
       createErrorHandler(assistantMessageId, activeTabIdRef.current ?? undefined),
-      createCompleteHandler(activeTabIdRef.current ?? undefined)
+      createCompleteHandler(activeTabIdRef.current ?? undefined),
+      createDisconnectHandler(activeTabIdRef.current ?? undefined),
     );
 
     // Store abort function in the tab map for per-tab stop isolation.
@@ -1505,6 +1507,7 @@ export default function ChatPage() {
           wrappedCreateStreamHandler(assistantMessageId),
           createErrorHandler(assistantMessageId, capturedTabIdForRetry),
           createCompleteHandler(capturedTabIdForRetry),
+          createDisconnectHandler(capturedTabIdForRetry),
         );
       };
 
@@ -1516,7 +1519,7 @@ export default function ChatPage() {
         retryStreamFn,
       });
     }
-  }, [selectedAgentId, enableSkills, enableMCP, handlePluginCommand, buildContentArray, clearAttachments, resetUserScroll, incrementStreamGen, setIsStreaming, setMessages, setInputValue, updateTabStatus, updateTabTitle, setTabIsNew, initTabState, wrappedCreateStreamHandler, createErrorHandler, createCompleteHandler, activeTabIdRef, tabMapRef, pendingStreamTabs, queryClient, t]);
+  }, [selectedAgentId, enableSkills, enableMCP, handlePluginCommand, buildContentArray, clearAttachments, resetUserScroll, incrementStreamGen, setIsStreaming, setMessages, setInputValue, updateTabStatus, updateTabTitle, setTabIsNew, initTabState, wrappedCreateStreamHandler, createErrorHandler, createCompleteHandler, createDisconnectHandler, activeTabIdRef, tabMapRef, pendingStreamTabs, queryClient, t]);
 
   // Handle WelcomeScreen focus item click — injects title as input and sends immediately
   const handleFocusClick = useCallback((title: string) => {
@@ -1610,6 +1613,7 @@ export default function ChatPage() {
         createStreamHandler(assistantMessageId, tabId),
         createErrorHandler(assistantMessageId, tabId),
         createCompleteHandler(tabId),
+        createDisconnectHandler(tabId),
       );
 
       // Store abort function in tab map
@@ -1691,7 +1695,8 @@ export default function ChatPage() {
       { agentId: selectedAgentId, sessionId: tabSessionId, toolUseId, answers, enableSkills, enableMCP },
       wrappedCreateStreamHandler(assistantMessageId),
       createErrorHandler(assistantMessageId, tabId),
-      createCompleteHandler(tabId)
+      createCompleteHandler(tabId),
+      createDisconnectHandler(tabId),
     );
 
     // Store abort function in the tab map for per-tab stop isolation.
@@ -1704,6 +1709,7 @@ export default function ChatPage() {
           wrappedCreateStreamHandler(assistantMessageId),
           createErrorHandler(assistantMessageId, capturedTabIdForRetry),
           createCompleteHandler(capturedTabIdForRetry),
+          createDisconnectHandler(capturedTabIdForRetry),
         );
       };
       updateTabState(tabId, {
@@ -1761,6 +1767,7 @@ export default function ChatPage() {
       wrappedCreateStreamHandler(assistantMessageId),
       createErrorHandler(assistantMessageId, tabId),
       createCompleteHandler(tabId),
+      createDisconnectHandler(tabId),
     );
 
     // Store abort function
@@ -1770,7 +1777,7 @@ export default function ChatPage() {
       isReconnecting: false,
       reconnectionAttempt: 0,
     });
-  }, [selectedAgentId, enableSkills, enableMCP, incrementStreamGen, setIsStreaming, setMessages, updateTabStatus, wrappedCreateStreamHandler, createErrorHandler, createCompleteHandler, activeTabIdRef, tabMapRef]);
+  }, [selectedAgentId, enableSkills, enableMCP, incrementStreamGen, setIsStreaming, setMessages, updateTabStatus, wrappedCreateStreamHandler, createErrorHandler, createCompleteHandler, createDisconnectHandler, activeTabIdRef, tabMapRef]);
 
   // Handle inline permission decision — called from InlinePermissionRequest component
   // via ContentBlockRenderer → AssistantMessageView → MessageBubble prop chain.
@@ -1857,7 +1864,8 @@ export default function ChatPage() {
       // emits 'cmd_permission_acknowledged', so no special-casing needed.
       streamHandler,
       (error) => { createErrorHandler(assistantMessageId, capturedTabId)(error); if (capturedTabId) permissionLoadingTabs.current.delete(capturedTabId); },
-      () => { createCompleteHandler(capturedTabId)(); if (capturedTabId) permissionLoadingTabs.current.delete(capturedTabId); }
+      () => { createCompleteHandler(capturedTabId)(); if (capturedTabId) permissionLoadingTabs.current.delete(capturedTabId); },
+      createDisconnectHandler(capturedTabId),
     );
 
     // Store abort function in the tab map for per-tab stop isolation.

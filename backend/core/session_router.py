@@ -173,14 +173,21 @@ class SessionRouter:
         blocks: list[dict],
         model: str | None,
         label: str = "",
-    ) -> None:
+    ) -> bool:
         """Save accumulated assistant content blocks to DB.
 
         Called from ``finally`` blocks in streaming methods to ensure
         partial content is persisted even on abort or error.
+
+        The DB layer retries transient errors (SQLITE_BUSY) up to 3 times.
+        If all retries fail, logs at ERROR level and returns False so the
+        caller can notify the frontend.
+
+        Returns:
+            True if persisted successfully, False on failure.
         """
         if not blocks:
-            return
+            return True
         from database import db
         try:
             await db.messages.put({
@@ -191,11 +198,14 @@ class SessionRouter:
                 "model": model,
                 "created_at": datetime.now().isoformat(),
             })
+            return True
         except Exception as exc:
-            logger.warning(
-                "Failed to save assistant message%s for session %s: %s",
+            logger.error(
+                "Failed to save assistant message%s for session %s: %s "
+                "(content may be lost on resume)",
                 f" ({label})" if label else "", session_id, exc,
             )
+            return False
 
     def get_unit(self, session_id: str) -> Optional[SessionUnit]:
         """Look up a SessionUnit by session_id."""
@@ -520,15 +530,24 @@ class SessionRouter:
         )
         if user_content:
             title = (user_message or "Chat")[:50]
-            await session_manager.store_session(session_id, agent_id, title)
-            await db.messages.put({
-                "id": str(uuid4()),
-                "session_id": session_id,
-                "role": "user",
-                "content": user_content,
-                "model": None,
-                "created_at": datetime.now().isoformat(),
-            })
+            try:
+                await session_manager.store_session(session_id, agent_id, title)
+                await db.messages.put({
+                    "id": str(uuid4()),
+                    "session_id": session_id,
+                    "role": "user",
+                    "content": user_content,
+                    "model": None,
+                    "created_at": datetime.now().isoformat(),
+                })
+            except Exception as exc:
+                # Non-fatal: proceed even if persist fails.  The message
+                # will still be sent to the agent (just not in DB for
+                # future cold resume).  Log at ERROR so it's visible.
+                logger.error(
+                    "Failed to persist user message for session %s: %s",
+                    session_id, exc,
+                )
 
         # Acquire concurrency slot — may queue with SSE indicator
         # Check if we need to queue BEFORE blocking, so we can emit the
@@ -599,6 +618,16 @@ class SessionRouter:
             and unit._sdk_session_id is None
             and session_id is not None
         )
+        # Log cold resume detection inputs for diagnostics (COE: 2026-04-02
+        # resume context silently skipped — no visibility into why).
+        logger.info(
+            "cold_resume_check session_id=%s state=%s sdk_session=%s "
+            "→ is_cold_resume=%s",
+            session_id,
+            unit.state.value if unit.state else "None",
+            "set" if unit._sdk_session_id else "None",
+            is_cold_resume,
+        )
         # Channel TTL rotation: the gateway created a fresh session_id but
         # the prior session's messages should carry forward for continuity.
         # prior_session_id is set by gateway._resolve_session on TTL rotation.
@@ -620,6 +649,11 @@ class SessionRouter:
             # persisted above (before slot acquisition).  A truly new session
             # has exactly 1 message (the one we just saved).  Cold resume
             # requires at least 2 (prior conversation + current message).
+            logger.info(
+                "cold_resume_decision session_id=%s msg_count=%d "
+                "→ injecting=%s",
+                session_id, msg_count, msg_count > 1,
+            )
             if msg_count > 1:
                 agent_config["needs_context_injection"] = True
                 agent_config["resume_app_session_id"] = resume_from
@@ -681,19 +715,37 @@ class SessionRouter:
         #   as it arrives, we guarantee crash recovery up to the last emitted
         #   message.  The cost is one small DB write per assistant turn — a
         #   typical conversation has 5-15 of these, each <10KB.
-        async for event in unit.send(
-            query_content=query_content,
-            options=options,
-            app_session_id=session_id,
-            config=self._config,
-        ):
-            # Persist assistant content blocks immediately — crash-safe
-            if event.get("type") == "assistant" and event.get("content"):
-                await self._persist_assistant_blocks(
-                    session_id, event["content"], event.get("model"),
-                )
+        try:
+            async for event in unit.send(
+                query_content=query_content,
+                options=options,
+                app_session_id=session_id,
+                config=self._config,
+            ):
+                # Persist assistant content blocks immediately — crash-safe
+                if event.get("type") == "assistant" and event.get("content"):
+                    await self._persist_assistant_blocks(
+                        session_id, event["content"], event.get("model"),
+                    )
 
-            yield event
+                yield event
+        except Exception as send_err:
+            # SessionBusyError: session is actively streaming, reject new send.
+            # Yield structured error so frontend can queue the message.
+            from .exceptions import SessionBusyError
+            if isinstance(send_err, SessionBusyError):
+                logger.info(
+                    "session_router.session_busy session_id=%s — "
+                    "yielding SESSION_BUSY error to frontend",
+                    session_id,
+                )
+                yield _build_error_event(
+                    code="SESSION_BUSY",
+                    message=str(send_err.message),
+                    suggested_action=str(send_err.suggested_action),
+                )
+                return
+            raise  # Re-raise non-SessionBusyError exceptions
 
     async def interrupt_session(self, session_id: str) -> dict:
         """Delegate to SessionUnit.interrupt()."""

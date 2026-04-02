@@ -574,6 +574,11 @@ class PromptBuilder:
         agent_config["system_prompt"] = ""
         prompt_metadata: dict = {"files": [], "total_tokens": 0, "full_text": ""}
         context_text = ""
+        # Defaults for variables set inside the try block — ensures
+        # resume context injection (which runs outside the try) can
+        # use them even if ContextDirectoryLoader fails early.
+        model_context_window = 200_000
+        is_channel = channel_context is not None
         try:
             context_dir = Path(working_directory) / ".context"
             # Reserve headroom for ephemeral injections (DailyActivity, Bootstrap,
@@ -726,22 +731,9 @@ class PromptBuilder:
             except Exception as exc:
                 logger.debug("Active session digest failed (non-fatal): %s", exc)
 
-            # ── Resume context injection (ephemeral, for resumed sessions) ──
-            if agent_config.get("needs_context_injection") and agent_config.get("resume_app_session_id"):
-                from .context_injector import build_resume_context
-                resume_ctx = await build_resume_context(
-                    agent_config["resume_app_session_id"],
-                    model_context_window=model_context_window,
-                    is_channel=is_channel,
-                )
-                if resume_ctx:
-                    context_text += f"\n\n{resume_ctx}"
-                    logger.info(
-                        "Resume context injected: ~%d tokens",
-                        ContextDirectoryLoader.estimate_tokens(resume_ctx),
-                    )
-                else:
-                    logger.info("Resume context skipped: no injectable messages")
+            # NOTE: Resume context injection moved OUTSIDE this try block
+            # (after the except) so it runs even when ContextDirectoryLoader
+            # fails.  See "Resume context injection" section below.
 
             # ── Editor context injection (ephemeral, per-request) ──
             if editor_context:
@@ -815,6 +807,45 @@ class PromptBuilder:
 
         except Exception as e:
             logger.warning("ContextDirectoryLoader failed: %s", e)
+
+        # ── Resume context injection (independent of ContextDirectoryLoader) ──
+        # CRITICAL: This MUST run outside the ContextDirectoryLoader try block.
+        # Previously it was inside, and any upstream exception (e.g. zlib
+        # decompression errors) would jump to the except, silently skipping
+        # resume context injection — causing total loss of prior conversation
+        # on "resume" after retry exhaustion (COE: 2026-04-02).
+        try:
+            if agent_config.get("needs_context_injection") and agent_config.get("resume_app_session_id"):
+                from .context_injector import build_resume_context
+                resume_ctx = await build_resume_context(
+                    agent_config["resume_app_session_id"],
+                    model_context_window=model_context_window,
+                    is_channel=is_channel,
+                )
+                if resume_ctx:
+                    # Inject into system_prompt directly — context_text may
+                    # have been lost if ContextDirectoryLoader failed.
+                    existing = agent_config.get("system_prompt", "") or ""
+                    agent_config["system_prompt"] = (
+                        existing + f"\n\n{resume_ctx}" if existing else resume_ctx
+                    )
+                    logger.info(
+                        "Resume context injected: ~%d tokens (independent path)",
+                        len(resume_ctx) // 4,  # rough estimate, no loader dependency
+                    )
+                else:
+                    logger.info("Resume context skipped: no injectable messages")
+            else:
+                logger.debug(
+                    "Resume context not requested: needs_injection=%s, resume_session=%s",
+                    agent_config.get("needs_context_injection"),
+                    bool(agent_config.get("resume_app_session_id")),
+                )
+        except Exception as exc:
+            logger.error(
+                "Resume context injection FAILED — user will lose prior context: %s",
+                exc, exc_info=True,
+            )
 
         # Store metadata on agent_config for later retrieval by session init
         agent_config["_system_prompt_metadata"] = prompt_metadata

@@ -624,6 +624,7 @@ export interface ChatStreamingLifecycle {
   // Factories — tab-aware (Fix 6)
   createStreamHandler: (assistantMessageId: string, tabId?: string) => (event: StreamEvent) => void;
   createCompleteHandler: (tabId?: string) => () => void;
+  createDisconnectHandler: (tabId?: string) => () => void;
   createErrorHandler: (assistantMessageId: string, tabId?: string) => (error: Error) => void;
 
   // Fix 5: sessionStorage persistence
@@ -1426,6 +1427,25 @@ export function useChatStreamingLifecycle(
             return;
           }
 
+          // SESSION_BUSY: Backend rejected our send because the session is
+          // still actively streaming (SSE disconnect caused a race).
+          // Don't show error — silently inform user the message is queued.
+          // See: 2026-04-02 SSE disconnect kill chain diagnosis.
+          if (event.code === 'SESSION_BUSY') {
+            console.log('[StreamHandler] SESSION_BUSY — session still streaming', { capturedTabId });
+            // Clean up streaming state from this failed send attempt
+            setIsStreaming(false, capturedTabId ?? undefined);
+            incrementStreamGen();
+            if (capturedTabId) updateTabStatus(capturedTabId, 'streaming');
+            // Show a lightweight toast instead of error in chat
+            addToast({
+              severity: 'info',
+              message: 'Session is still processing. Your message will be sent when ready.',
+              id: `session-busy-${capturedTabId}`,
+            });
+            return;
+          }
+
           const errorMsg =
             event.message ||
             event.error ||
@@ -1925,6 +1945,53 @@ export function useChatStreamingLifecycle(
   }, [setIsStreaming]);
 
   /**
+   * Create a handler for premature SSE disconnects (HTTP stream closed
+   * without [DONE] sentinel). Unlike ``createCompleteHandler``, this
+   * keeps ``isStreaming=true`` and sets ``isReconnecting=true`` so the
+   * user sees a "Reconnecting..." indicator instead of the stream
+   * silently stopping.
+   *
+   * See: 2026-04-02 SSE disconnect kill chain diagnosis.
+   */
+  const createDisconnectHandler = useCallback((tabId?: string) => {
+    const capturedTabId = tabId ?? activeTabIdRef.current;
+    const DISCONNECT_TIMEOUT_MS = 30_000; // 30s before giving up
+
+    return () => {
+      console.warn('[DisconnectHandler] Premature SSE disconnect', { capturedTabId });
+
+      if (capturedTabId) {
+        const tabState = tabMapRef.current.get(capturedTabId);
+        if (tabState) {
+          // Keep isStreaming=true — backend may still be processing
+          tabState.isReconnecting = true;
+          // Force re-render so ChatPage shows "Reconnecting..." indicator
+          const isActive = capturedTabId === activeTabIdRef.current;
+          if (isActive) {
+            setIsStreaming(true, capturedTabId);
+          }
+
+          // Safety timeout: if no recovery within 30s, clear reconnecting
+          // state.  Without this, the user sees "Reconnecting..." forever
+          // when the backend finished processing but the SSE dropped.
+          setTimeout(() => {
+            const currentTabState = tabMapRef.current.get(capturedTabId);
+            if (currentTabState?.isReconnecting) {
+              console.warn('[DisconnectHandler] Timeout — clearing reconnecting state', { capturedTabId });
+              currentTabState.isReconnecting = false;
+              currentTabState.isStreaming = false;
+              const stillActive = capturedTabId === activeTabIdRef.current;
+              if (stillActive) {
+                setIsStreaming(false, capturedTabId);
+              }
+            }
+          }, DISCONNECT_TIMEOUT_MS);
+        }
+      }
+    };
+  }, [setIsStreaming]);
+
+  /**
    * Remove a specific tab from ``pendingStreamTabs``. Called by ChatPage
    * when closing a tab to prevent stale entries from lingering in the Set
    * after the tab's map entry has been deleted.
@@ -2011,6 +2078,7 @@ export function useChatStreamingLifecycle(
     resetUserScroll,
     createStreamHandler,
     createCompleteHandler,
+    createDisconnectHandler,
     createErrorHandler,
     removePendingStateForSession: removePendingState,
     contextWarning,

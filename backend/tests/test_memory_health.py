@@ -86,14 +86,17 @@ class TestApplyReport:
     def test_removes_stale_memory(self, tmp_path):
         from jobs.handlers.memory_health import _remove_memory_entry
         memory_path = tmp_path / "MEMORY.md"
-        memory_path.write_text(
+        file_content = (
             "## Recent Context\n\n"
-            "- 2026-03-10: Old entry that is stale\n"
-            "- 2026-03-25: Fresh entry\n"
+            "- [RC01] 2026-03-10: Old entry that is stale | keywords\n"
+            "- [RC02] 2026-03-25: Fresh entry | keywords\n"
         )
+        memory_path.write_text(file_content)
         with patch("jobs.handlers.memory_health.CONTEXT_DIR", tmp_path):
-            _remove_memory_entry("Recent Context", "2026-03-10: Old entry")
+            # Prefix as LLM would return it (no markdown formatting)
+            result = _remove_memory_entry("RC01 2026-03-10: Old entry that is stale")
 
+        assert result is True
         content = memory_path.read_text()
         assert "Old entry" not in content
         assert "Fresh entry" in content

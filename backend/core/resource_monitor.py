@@ -48,6 +48,11 @@ class SystemMemory:
     """Snapshot of system RAM state.
 
     All values in bytes except ``percent_used`` (0.0–100.0).
+
+    IMPORTANT: On macOS, ``used`` (active + wired) significantly
+    underestimates real memory pressure.  For resource gating decisions
+    (spawn budget, tab limits) always use ``effective_used`` which equals
+    ``total - available`` — the metric macOS jetsam actually considers.
     """
     total: int
     available: int
@@ -55,17 +60,31 @@ class SystemMemory:
     percent_used: float
 
     @property
+    def effective_used(self) -> int:
+        """Memory considered 'in use' for resource gating.
+
+        On macOS, ``psutil.virtual_memory().used`` returns only
+        active + wired pages (~39% on a typical 36GB machine), while
+        ``percent`` reports ~72% because it uses ``(total - available) / total``.
+        Jetsam kills based on the latter, so our spawn gates must too.
+
+        ``effective_used = total - available`` aligns with ``percent_used``
+        and matches what macOS considers real memory pressure.
+        """
+        return self.total - self.available
+
+    @property
     def pressure_level(self) -> str:
         """Classify memory pressure: ok / warning / critical.
 
-        Aligned with the 85% tab-creation threshold:
-        - >= 85% → critical (no new tabs allowed)
-        - >= 75% → warning  (approaching limit)
-        - <  75% → ok
+        Aligned with the 90% tab-creation threshold:
+        - >= 90% → critical (no new tabs allowed)
+        - >= 80% → warning  (approaching limit)
+        - <  80% → ok
         """
-        if self.percent_used >= 85.0:
+        if self.percent_used >= 90.0:
             return "critical"
-        elif self.percent_used >= 75.0:
+        elif self.percent_used >= 80.0:
             return "warning"
         return "ok"
 
@@ -116,7 +135,7 @@ class ResourceMonitor:
 
     # ── Dynamic tab limit constants ─────────────────────────────
     _MAX_TABS_CEILING: int = 4
-    _MEMORY_THRESHOLD_PCT: float = 85.0  # Never push machine past 85% used
+    _MEMORY_THRESHOLD_PCT: float = 90.0  # Never push machine past 90% used
     _SPAWN_COST_MB: float = 500.0  # Each session costs ~500MB (CLI + MCPs)
 
     def __init__(self) -> None:
@@ -194,20 +213,19 @@ class ResourceMonitor:
             active = stats.get("Pages active", 0)
             wired = stats.get("Pages wired down", 0)
 
-            # Calculate "used" as active + wired — matches macOS Activity
-            # Monitor's "Memory Used" and Kiro's system health report.
-            # Inactive/compressed/purgeable pages are reclaimable by the OS
-            # and should NOT count as "used" for resource gating decisions.
-            used = active + wired
-
             # Get total from sysctl
             sysctl_result = subprocess.run(
                 ["sysctl", "-n", "hw.memsize"],
                 capture_output=True, text=True, timeout=5,
             )
             total = int(sysctl_result.stdout.strip())
-            used = active + wired  # recalculate with real total
-            available = total - used
+
+            # "used" stores active + wired for Activity Monitor compatibility.
+            # But "available" uses free + speculative + inactive for accurate
+            # resource gating — this matches psutil.virtual_memory().available
+            # and what macOS jetsam considers when killing processes.
+            used = active + wired
+            available = free + speculative + stats.get("Pages inactive", 0)
 
             logger.debug(
                 "vm_stat: active=%dMB wired=%dMB → used=%dMB (%.1f%%), "
@@ -219,11 +237,14 @@ class ResourceMonitor:
                 available // (1024 * 1024),
             )
 
+            # percent_used must match (total - available) / total, NOT
+            # used / total — the same metric psutil.percent uses.
+            effective_used = total - available
             return SystemMemory(
                 total=total,
                 available=available,
                 used=used,
-                percent_used=round((used / total) * 100, 1) if total else 90.0,
+                percent_used=round((effective_used / total) * 100, 1) if total else 90.0,
             )
         except Exception as exc:
             logger.warning("macOS memory fallback failed: %s", exc)
@@ -234,8 +255,8 @@ class ResourceMonitor:
     def spawn_budget(self) -> SpawnBudget:
         """Check whether a new subprocess can be safely spawned.
 
-        Uses the same 85% rule as compute_max_tabs: if spawning one
-        more session (~500MB) would push the machine past 85% memory
+        Uses the same 90% rule as compute_max_tabs: if spawning one
+        more session (~500MB) would push the machine past 90% memory
         usage, deny the spawn.
 
         Also denies spawns during the OOM cooldown period (Fix 4) —
@@ -250,7 +271,10 @@ class ResourceMonitor:
             self.invalidate_cache()
             mem = self.system_memory()
             total_mb = mem.total / (1024 * 1024)
-            used_mb = mem.used / (1024 * 1024)
+            # Use effective_used (total - available) — not mem.used (active + wired).
+            # On macOS, mem.used underestimates real pressure by ~30%.
+            # See SystemMemory.effective_used docstring for details.
+            used_mb = mem.effective_used / (1024 * 1024)
             estimated_mb = self._estimated_spawn_cost_mb()
             projected_pct = (used_mb + estimated_mb) / total_mb * 100
 
@@ -312,26 +336,27 @@ class ResourceMonitor:
 
     def compute_max_tabs(self) -> int:
         """Compute dynamic tab limit: how many tabs can open without
-        pushing machine memory past 85%.
+        pushing machine memory past 90%.
 
-        Formula: ``max(2, min(floor(headroom_to_85pct / 500), 4))``
+        Formula: ``max(2, min(floor(headroom_to_90pct / 500), 4))``
 
         Each tab costs ~500MB (CLI subprocess + MCP servers).
-        The machine should never exceed 85% memory usage from SwarmAI
+        The machine should never exceed 90% memory usage from SwarmAI
         tabs — users run other apps too.
 
         Returns [2, 4]. Always allows at least 2 (1 chat + 1 channel).
         """
         mem = self.system_memory()
         total_mb = mem.total / (1024 * 1024)
-        used_mb = mem.used / (1024 * 1024)
+        # Use effective_used for correct macOS memory pressure.
+        used_mb = mem.effective_used / (1024 * 1024)
         headroom_mb = total_mb * (self._MEMORY_THRESHOLD_PCT / 100.0) - used_mb
         raw = int(headroom_mb / self._SPAWN_COST_MB)
         # Minimum 2: guarantees 1 chat slot + 1 dedicated channel slot.
         # Without this, channel messages could starve when memory is tight.
         result = max(2, min(raw, self._MAX_TABS_CEILING))
         logger.info(
-            "compute_max_tabs: used=%.0fMB/%.0fMB (%.1f%%) headroom_to_85%%=%.0fMB "
+            "compute_max_tabs: used=%.0fMB/%.0fMB (%.1f%%) headroom_to_90%%=%.0fMB "
             "raw=%d result=%d pressure=%s",
             used_mb, total_mb, mem.percent_used,
             headroom_mb, raw, result, mem.pressure_level,

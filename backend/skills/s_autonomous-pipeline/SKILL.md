@@ -289,6 +289,16 @@ The BUILD stage follows TDD methodology: tests before code, code until tests pas
 
 **Step 3: VERIFY — Full suite, zero regressions**
 
+⚠️ **VERIFY anti-loop rules (BLOCKING):**
+- Run the full suite **ONCE**. Use `timeout=300000` in Bash tool (5 min).
+- **NEVER** pipe pytest through `| tail` — it hides pass/fail and xdist status.
+- If all tests pass → proceed to Step 4. Done.
+- If tests fail → fix code, re-run **only failing tests** (not full suite).
+- **Max 2 VERIFY re-runs total.** After 2 full-suite runs, if still failing:
+  publish changeset with `"regressions": N` and advance to REVIEW anyway.
+  REVIEW will flag regressions. Do NOT loop.
+- Track VERIFY attempt count explicitly: "VERIFY attempt 1/2", "VERIFY attempt 2/2".
+
 11. Run the FULL test suite (new + existing) — all must pass
 12. If existing tests break → fix production code, NOT the existing tests
 13. Track all files changed and test results

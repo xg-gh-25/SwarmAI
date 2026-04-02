@@ -39,7 +39,7 @@ from .models import (
 
 logger = logging.getLogger("swarm.jobs.executor")
 
-from .paths import SWARMWS, JOB_RESULTS_DIR, JOB_RESULTS_JSONL, MCPS_DIR, DB_PATH
+from .paths import SWARMWS, JOB_RESULTS_DIR, JOB_RESULTS_JSONL, MCPS_DIR, DB_PATH, ESTIMATION_LEARNER_FILE
 
 
 # ── Module-level PATH fix ────────────────────────────────────────────
@@ -66,6 +66,19 @@ _fix_path_from_login_shell()
 # Sonnet 4.6 pricing (us.anthropic.claude-sonnet-4-6)
 _SONNET_INPUT_PRICE = 3.0 / 1_000_000   # $3 per 1M input tokens
 _SONNET_OUTPUT_PRICE = 15.0 / 1_000_000  # $15 per 1M output tokens
+
+
+# ── Estimation Learner (lazy singleton) ──────────────────────────────
+_estimation_learner = None
+
+
+def _get_learner():
+    """Return the module-level EstimationLearner, lazily initialized."""
+    global _estimation_learner
+    if _estimation_learner is None:
+        from .estimation_learner import EstimationLearner
+        _estimation_learner = EstimationLearner(ESTIMATION_LEARNER_FILE)
+    return _estimation_learner
 
 
 def execute_job(
@@ -353,85 +366,16 @@ def _cli_supports_bare(claude_path: str) -> bool:
 
 
 def _load_mcp_config() -> dict:
-    """Load MCP config using the same two-layer merge as SwarmAI chat sessions.
+    """Load MCP config in Claude CLI ``--mcp-config`` format.
 
-    Reads:
-      1. .claude/mcps/mcp-catalog.json (product-seeded, default enabled=false)
-      2. .claude/mcps/mcp-dev.json (user/dev, default enabled=true)
-
-    Merges: dev overrides catalog by id, filters disabled entries.
-    Converts to Claude CLI format: {"mcpServers": {"name": {...}}}
+    Delegates to the shared ``mcp_config_loader.load_mcp_config_for_cli()``
+    which performs the canonical two-layer merge (catalog + dev overlay).
 
     Returns empty dict if no MCP files exist (graceful no-op).
     """
-    mcps_dir = MCPS_DIR
-    catalog_path = mcps_dir / "mcp-catalog.json"
-    dev_path = mcps_dir / "mcp-dev.json"
+    from core.mcp_config_loader import load_mcp_config_for_cli
 
-    # Read both layers
-    def _read_layer(path: Path, default_enabled: bool) -> list[dict]:
-        if not path.exists():
-            return []
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-            if not isinstance(data, list):
-                return []
-            for entry in data:
-                if isinstance(entry, dict) and "enabled" not in entry:
-                    entry["enabled"] = default_enabled
-            return data
-        except (json.JSONDecodeError, OSError) as e:
-            logger.warning("Cannot read MCP layer %s: %s", path, e)
-            return []
-
-    catalog = _read_layer(catalog_path, default_enabled=False)
-    dev = _read_layer(dev_path, default_enabled=True)
-
-    # Merge: dev overrides catalog by id, filter disabled
-    merged: dict[str, dict] = {}
-    for entry in catalog:
-        eid = entry.get("id")
-        if eid:
-            merged[eid] = entry
-    for entry in dev:
-        eid = entry.get("id")
-        if eid:
-            merged[eid] = entry
-
-    enabled = [e for e in merged.values() if e.get("enabled") is not False]
-
-    if not enabled:
-        return {}
-
-    # Convert to Claude CLI mcpServers format
-    mcp_servers = {}
-    for entry in enabled:
-        name = entry.get("name", entry.get("id", "unknown"))
-        conn_type = entry.get("connection_type", "stdio")
-        config = entry.get("config", {})
-
-        if conn_type == "stdio":
-            command = config.get("command")
-            if not command:
-                continue
-            server = {
-                "type": "stdio",
-                "command": command,
-                "args": [os.path.expandvars(a) for a in config.get("args", [])],
-            }
-            env = config.get("env")
-            if env and isinstance(env, dict):
-                server["env"] = {
-                    k: os.path.expandvars(v) if isinstance(v, str) else v
-                    for k, v in env.items()
-                }
-            mcp_servers[name] = server
-        elif conn_type in ("sse", "http"):
-            url = config.get("url")
-            if url:
-                mcp_servers[name] = {"type": conn_type, "url": url}
-
-    return {"mcpServers": mcp_servers} if mcp_servers else {}
+    return load_mcp_config_for_cli(SWARMWS)
 
 
 def _handle_agent_task(job: Job, state: SchedulerState) -> JobResult:
@@ -617,6 +561,14 @@ def _handle_agent_task(job: Job, state: SchedulerState) -> JobResult:
         if job.config.get("create_todos", False) and result_text and status == "success":
             _create_todos_from_result(job, result_text)
 
+        # Record actual duration for EMA learner (improves future predictions)
+        try:
+            _get_learner().record(
+                job.name, predicted=float(safety.timeout_seconds), actual=duration,
+            )
+        except Exception:
+            pass  # Learner is best-effort, never blocks job execution
+
         return JobResult(
             job_id=job.id, timestamp=start,
             status=status,
@@ -628,6 +580,15 @@ def _handle_agent_task(job: Job, state: SchedulerState) -> JobResult:
 
     except subprocess.TimeoutExpired:
         duration = (datetime.now(timezone.utc) - start).total_seconds()
+
+        # Record timeout as actual = timeout_seconds (learner learns timeouts too)
+        try:
+            _get_learner().record(
+                job.name, predicted=float(safety.timeout_seconds), actual=duration,
+            )
+        except Exception:
+            pass
+
         return JobResult(
             job_id=job.id, timestamp=start,
             status="failed",
@@ -1213,7 +1174,11 @@ def _create_todos_from_result(job: Job, result_text: str) -> None:
     if not DB_PATH.exists():
         return
 
-    source_type = job.config.get("todo_source_type", "email")
+    _VALID_SOURCE_TYPES = frozenset({
+        "manual", "email", "slack", "meeting", "integration", "chat", "ai_detected",
+    })
+    raw_source = job.config.get("todo_source_type", "email")
+    source_type = raw_source if raw_source in _VALID_SOURCE_TYPES else "integration"
     default_priority = job.config.get("todo_priority", "medium")
     max_todos = job.config.get("todo_max", 5)
 

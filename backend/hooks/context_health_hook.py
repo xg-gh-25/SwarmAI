@@ -198,20 +198,15 @@ class ContextHealthHook:
     def _sync_memory_embeddings(self, memory_content: str) -> None:
         """Delta-sync MEMORY.md entries into sqlite-vec for hybrid retrieval.
 
+        Always-on: keeps memory_entries indexed regardless of MEMORY.md size.
+        Power-first (KD03) — infrastructure stays warm so selective injection
+        has zero cold-start when MEMORY.md grows, and vector search is
+        available for user recall queries even in full-injection mode.
+
         Only re-embeds entries whose content changed (via content_hash).
         Failures are silent — hybrid retrieval degrades to keyword-only.
         """
         try:
-            # Auto-trigger: only sync embeddings when MEMORY.md exceeds
-            # the full-injection threshold (vector search needed for selective mode)
-            from core.memory_index import FULL_INJECTION_THRESHOLD
-            from core.context_directory_loader import ContextDirectoryLoader
-            tokens = ContextDirectoryLoader.estimate_tokens(memory_content)
-            if tokens < FULL_INJECTION_THRESHOLD:
-                return  # Full injection mode — vector not needed
-
-            import sqlite3
-            import sqlite_vec
             from core.memory_embeddings import MemoryEmbeddingStore
             from core.embedding_client import EmbeddingClient
             from core.vec_db import open_vec_db
