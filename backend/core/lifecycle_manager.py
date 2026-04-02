@@ -370,8 +370,15 @@ class LifecycleManager:
                         unit._hooks_enqueued = True
 
                 # compact → kill (preserves _sdk_session_id for lazy resume)
+                # 30s timeout prevents compact hang from blocking maintenance loop.
                 try:
-                    await unit.compact()
+                    await asyncio.wait_for(unit.compact(), timeout=30.0)
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        "lifecycle.proactive_rss_restart compact timed out "
+                        "session=%s — proceeding to kill",
+                        unit.session_id[:8],
+                    )
                 except Exception as exc:
                     logger.warning(
                         "lifecycle.proactive_rss_restart compact failed "
