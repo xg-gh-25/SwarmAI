@@ -403,16 +403,7 @@ def inject_channel_mcp(
         "WORKSPACE_DIR": working_directory,
     }
 
-    if channel_type == "feishu":
-        env_vars.update({
-            "FEISHU_APP_ID": channel_context.get("app_id", ""),
-            "FEISHU_APP_SECRET": channel_context.get("app_secret", ""),
-            "CHAT_ID": channel_context.get("chat_id", ""),
-        })
-        reply_to = channel_context.get("reply_to_message_id")
-        if reply_to:
-            env_vars["REPLY_TO_MESSAGE_ID"] = reply_to
-    elif channel_type == "slack":
+    if channel_type == "slack":
         env_vars.update({
             "SLACK_BOT_TOKEN": channel_context.get("bot_token", ""),
             "SLACK_CHANNEL_ID": channel_context.get("chat_id", ""),

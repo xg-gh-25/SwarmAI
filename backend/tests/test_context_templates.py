@@ -116,10 +116,6 @@ class TestAgentTemplate:
         content = _read_template("AGENT.md")
         assert "## Channel Behavior" in content
 
-    def test_channel_feishu(self):
-        content = _read_template("AGENT.md")
-        assert "Feishu" in content
-
     def test_channel_slack(self):
         content = _read_template("AGENT.md")
         assert "Slack" in content

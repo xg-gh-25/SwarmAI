@@ -51,31 +51,138 @@ logger = logging.getLogger(__name__)
 _spawn_lock = asyncio.Lock()
 
 
-def _kill_child_pids(parent_pid: int) -> int:
-    """SIGKILL all direct children of *parent_pid*. Returns count killed.
-
-    Uses ``pgrep -P`` to enumerate children.  Best-effort — failures
-    are silently swallowed since the caller retries with a second pass.
-    """
-    killed = 0
+def _get_children(pid: int) -> list[int]:
+    """Get direct child PIDs via ``pgrep -P``. Best-effort."""
     try:
         result = subprocess.run(
-            ["pgrep", "-P", str(parent_pid)],
+            ["pgrep", "-P", str(pid)],
             capture_output=True, text=True, timeout=3,
         )
+        children = []
         for line in result.stdout.strip().split("\n"):
-            child_pid_str = line.strip()
-            if not child_pid_str:
+            line = line.strip()
+            if line:
+                try:
+                    children.append(int(line))
+                except ValueError:
+                    pass
+        return children
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return []
+
+
+def _snapshot_process_table() -> dict[int, int]:
+    """Snapshot the entire process table as {pid: ppid} in one call.
+
+    Uses ``ps -eo pid,ppid`` which is a single fork — O(1) subprocess
+    invocations regardless of tree depth.  Falls back to empty dict
+    on failure.
+
+    Parsing is defensive: skips any line that doesn't contain exactly
+    two integer fields, handling header variations across macOS/Linux.
+    """
+    try:
+        result = subprocess.run(
+            ["ps", "-eo", "pid,ppid"],
+            capture_output=True, text=True, timeout=5,
+        )
+        table: dict[int, int] = {}
+        for line in result.stdout.strip().split("\n"):
+            parts = line.split()
+            if len(parts) != 2:
                 continue
             try:
-                child_pid = int(child_pid_str)
-                os.kill(child_pid, signal.SIGKILL)
-                killed += 1
-            except (ValueError, ProcessLookupError, PermissionError):
-                pass
+                pid, ppid = int(parts[0]), int(parts[1])
+                table[pid] = ppid
+            except ValueError:
+                continue  # header line or malformed — skip
+        return table
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
-        pass
+        return {}
+
+
+def _snapshot_descendant_tree(parent_pid: int) -> list[int]:
+    """Snapshot the full descendant tree of *parent_pid* WITHOUT killing.
+
+    Returns PIDs in bottom-up order (deepest leaves first) so the caller
+    can kill them in one atomic sweep — no reparenting race.
+
+    Uses a single ``ps -eo pid,ppid`` call to snapshot the entire process
+    table, then builds the tree in-memory.  This is O(1) subprocess
+    invocations regardless of tree depth (previous approach was O(N)
+    pgrep calls for N nodes).
+    """
+    table = _snapshot_process_table()
+    if not table:
+        # Fallback to pgrep-based approach if ps fails
+        return _snapshot_descendant_tree_pgrep(parent_pid)
+
+    # Build children map from the process table
+    children_map: dict[int, list[int]] = {}
+    for pid, ppid in table.items():
+        children_map.setdefault(ppid, []).append(pid)
+
+    # BFS to collect all descendants
+    to_kill: list[int] = []
+    stack = list(children_map.get(parent_pid, []))
+    visited: set[int] = set()
+    while stack:
+        pid = stack.pop()
+        if pid in visited:
+            continue
+        visited.add(pid)
+        to_kill.append(pid)
+        stack.extend(children_map.get(pid, []))
+
+    # Reverse: deepest descendants first (bottom-up kill order)
+    to_kill.reverse()
+    return to_kill
+
+
+def _snapshot_descendant_tree_pgrep(parent_pid: int) -> list[int]:
+    """Fallback: snapshot tree via per-node pgrep -P calls.
+
+    Used when ``ps -eo pid,ppid`` fails (shouldn't happen on macOS/Linux).
+    """
+    to_kill: list[int] = []
+    stack = _get_children(parent_pid)
+    visited: set[int] = set()
+    while stack:
+        pid = stack.pop()
+        if pid in visited:
+            continue
+        visited.add(pid)
+        to_kill.append(pid)
+        stack.extend(_get_children(pid))
+
+    to_kill.reverse()
+    return to_kill
+
+
+def _kill_pids(pids: list[int]) -> int:
+    """SIGKILL a list of PIDs. Returns count successfully killed."""
+    killed = 0
+    for pid in pids:
+        try:
+            os.kill(pid, signal.SIGKILL)
+            killed += 1
+        except (ProcessLookupError, PermissionError):
+            pass
     return killed
+
+
+def _kill_child_pids(parent_pid: int) -> int:
+    """SIGKILL all descendants of *parent_pid* (recursive). Returns count killed.
+
+    Two-phase approach to prevent orphan creation:
+    1. SNAPSHOT: enumerate the entire tree via recursive pgrep -P
+    2. KILL: bottom-up in one sweep (leaves first, no reparenting race)
+
+    The old approach interleaved enum+kill per level, which caused children
+    to reparent to pid=1 when their parent was killed mid-enumeration.
+    """
+    tree = _snapshot_descendant_tree(parent_pid)
+    return _kill_pids(tree)
 
 
 # ---------------------------------------------------------------------------
@@ -196,7 +303,7 @@ class SessionUnit:
         self.state: SessionState = SessionState.COLD
         self.created_at: float = time.time()
         self.last_used: float = time.time()
-        # True when this unit serves channel conversations (Slack, Feishu, etc.)
+        # True when this unit serves channel conversations (Slack, etc.)
         # Channel units use a dedicated slot pool, separate from chat tabs.
         self.is_channel_session: bool = False
 
@@ -1981,20 +2088,18 @@ class SessionUnit:
                     )
                 else:
                     # UNSAFE: child shares our pgid — killpg would kill us too.
-                    # Two-pass child kill to prevent MCP server orphans:
-                    # Pass 1: enumerate and kill known children
-                    # Pass 2: kill parent, then re-enumerate for stragglers
-
-                    # Pass 1: kill known children (MCP servers)
-                    pass1 = _kill_child_pids(pid)
-                    # Kill parent (stops it from spawning new children)
+                    # Snapshot-then-kill: enumerate the ENTIRE tree first,
+                    # then kill bottom-up in one sweep + kill parent last.
+                    # This prevents the reparenting race where killing a
+                    # middle node (zsh) orphans its children (pytest/workers).
+                    tree = _snapshot_descendant_tree(pid)
+                    tree_killed = _kill_pids(tree)
+                    # Kill parent last (after all children are dead)
                     os.kill(pid, signal.SIGKILL)
-                    # Pass 2: kill any stragglers spawned between pass 1 and parent kill
-                    pass2 = _kill_child_pids(pid)
                     logger.info(
-                        "session_unit.force_kill_children session_id=%s pid=%d "
-                        "pass1=%d pass2=%d (shared pgid=%d)",
-                        self.session_id, pid, pass1, pass2, pgid,
+                        "session_unit.force_kill_tree session_id=%s pid=%d "
+                        "tree_size=%d tree_killed=%d (shared pgid=%d)",
+                        self.session_id, pid, len(tree), tree_killed, pgid,
                     )
             except (ProcessLookupError, PermissionError):
                 logger.debug(
@@ -2022,11 +2127,11 @@ class SessionUnit:
             try:
                 await asyncio.wait_for(
                     self._wrapper.__aexit__(None, None, None),
-                    timeout=5.0,
+                    timeout=10.0,
                 )
             except asyncio.TimeoutError:
                 logger.warning(
-                    "Wrapper __aexit__ timed out after 5s for session %s",
+                    "Wrapper __aexit__ timed out after 10s for session %s",
                     self.session_id,
                 )
             except Exception:

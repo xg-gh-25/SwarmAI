@@ -85,7 +85,7 @@ class SystemPromptBuilder:
         """Inject sender identity and permission constraints for channel sessions.
 
         This section is ONLY added when channel_context is present (Slack,
-        Feishu, etc.) — desktop chat tabs don't need it because the user
+        etc.) — desktop chat tabs don't need it because the user
         IS the owner by definition.
 
         The permission model enforces three tiers:

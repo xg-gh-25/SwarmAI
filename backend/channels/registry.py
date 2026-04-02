@@ -30,15 +30,6 @@ def get_adapter_class(channel_type: str) -> Optional[Type[ChannelAdapter]]:
 def list_supported_types() -> list[dict]:
     """List all supported channel types with metadata."""
     type_info = {
-        "feishu": {
-            "id": "feishu",
-            "label": "Feishu (飞书)",
-            "description": "Connect to Feishu/Lark via WebSocket long connection",
-            "config_fields": [
-                {"key": "app_id", "label": "App ID", "type": "text", "required": True},
-                {"key": "app_secret", "label": "App Secret", "type": "password", "required": True},
-            ],
-        },
         "slack": {
             "id": "slack",
             "label": "Slack",
@@ -82,12 +73,6 @@ def load_adapters() -> None:
     Each adapter module checks for its dependencies and registers
     itself if available.
     """
-    # Feishu adapter
-    try:
-        from channels.adapters import feishu  # noqa: F401
-    except ImportError:
-        logger.info("Feishu adapter not available (lark-oapi not installed)")
-
     # Slack adapter
     try:
         from channels.adapters import slack  # noqa: F401

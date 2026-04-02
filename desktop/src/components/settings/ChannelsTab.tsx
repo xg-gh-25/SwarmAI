@@ -1,7 +1,7 @@
 /**
  * Channels settings tab.
  *
- * Lists connected channels with status. Add/edit/disconnect Slack and Feishu.
+ * Lists connected channels with status. Add/edit/disconnect Slack.
  * Uses shared ChannelConfigForm for token input.
  */
 import { useState, useEffect } from 'react';
@@ -13,7 +13,7 @@ export default function ChannelsTab() {
   const [channels, setChannels] = useState<Channel[]>([]);
   const [loading, setLoading] = useState(true);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [addingType, setAddingType] = useState<'slack' | 'feishu' | null>(null);
+  const [addingSlack, setAddingSlack] = useState(false);
 
   const loadChannels = async () => {
     try {
@@ -48,178 +48,116 @@ export default function ChannelsTab() {
   };
 
   const slackChannel = channels.find(c => c.channelType === 'slack');
-  const feishuChannel = channels.find(c => c.channelType === 'feishu');
 
   if (loading) {
     return <div className="text-[var(--color-text-muted)]">Loading channels...</div>;
   }
 
+  const isConnected = slackChannel && slackChannel.status === 'active';
+  const isError = slackChannel && (slackChannel.status === 'error' || slackChannel.status === 'inactive' || slackChannel.status === 'failed');
+  const showForm = editingId === slackChannel?.id || addingSlack;
+
   return (
     <div className="space-y-4">
-      {/* Slack card */}
-      <ChannelCard
-        icon="💬"
-        name="Slack"
-        channel={slackChannel}
-        channelType="slack"
-        editing={editingId === slackChannel?.id}
-        adding={addingType === 'slack'}
-        onEdit={() => setEditingId(slackChannel?.id || null)}
-        onAdd={() => setAddingType('slack')}
-        onDisconnect={() => slackChannel && handleDisconnect(slackChannel)}
-        onReconnect={() => slackChannel && handleReconnect(slackChannel)}
-        onSave={() => { setEditingId(null); setAddingType(null); loadChannels(); }}
-        onCancel={() => { setEditingId(null); setAddingType(null); }}
-      />
-
-      {/* Feishu card */}
-      <ChannelCard
-        icon="🐦"
-        name="Feishu"
-        channel={feishuChannel}
-        channelType="feishu"
-        editing={editingId === feishuChannel?.id}
-        adding={addingType === 'feishu'}
-        onEdit={() => setEditingId(feishuChannel?.id || null)}
-        onAdd={() => setAddingType('feishu')}
-        onDisconnect={() => feishuChannel && handleDisconnect(feishuChannel)}
-        onReconnect={() => feishuChannel && handleReconnect(feishuChannel)}
-        onSave={() => { setEditingId(null); setAddingType(null); loadChannels(); }}
-        onCancel={() => { setEditingId(null); setAddingType(null); }}
-      />
-    </div>
-  );
-}
-
-interface ChannelCardProps {
-  icon: string;
-  name: string;
-  channel?: Channel;
-  channelType: 'slack' | 'feishu';
-  editing: boolean;
-  adding: boolean;
-  onEdit: () => void;
-  onAdd: () => void;
-  onDisconnect: () => void;
-  onReconnect: () => void;
-  onSave: () => void;
-  onCancel: () => void;
-}
-
-function ChannelCard({
-  icon, name, channel, channelType, editing, adding,
-  onEdit, onAdd, onDisconnect, onReconnect, onSave, onCancel,
-}: ChannelCardProps) {
-  const isConnected = channel && channel.status === 'active';
-  const isError = channel && (channel.status === 'error' || channel.status === 'inactive' || channel.status === 'failed');
-
-  return (
-    <div className="bg-[var(--color-card)] rounded-lg p-5">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <span className="text-xl">{icon}</span>
-          <div>
-            <span className="text-[var(--color-text)] font-medium">{name}</span>
-            {isConnected ? (
-              <span className="ml-2 text-green-400 text-xs flex items-center gap-1 inline-flex">
-                <span className="w-1.5 h-1.5 bg-green-400 rounded-full" />
-                Connected
-              </span>
-            ) : isError ? (
-              <span className="ml-2 text-red-400 text-xs flex items-center gap-1 inline-flex">
-                <span className="w-1.5 h-1.5 bg-red-400 rounded-full" />
-                {channel.status === 'error' ? 'Error' : channel.status === 'failed' ? 'Failed' : 'Disconnected'}
-              </span>
-            ) : (
-              <span className="ml-2 text-[var(--color-text-muted)] text-xs">Not set up</span>
+      <div className="bg-[var(--color-card)] rounded-lg p-5">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <span className="text-xl">💬</span>
+            <div>
+              <span className="text-[var(--color-text)] font-medium">Slack</span>
+              {isConnected ? (
+                <span className="ml-2 text-green-400 text-xs flex items-center gap-1 inline-flex">
+                  <span className="w-1.5 h-1.5 bg-green-400 rounded-full" />
+                  Connected
+                </span>
+              ) : isError ? (
+                <span className="ml-2 text-red-400 text-xs flex items-center gap-1 inline-flex">
+                  <span className="w-1.5 h-1.5 bg-red-400 rounded-full" />
+                  {slackChannel.status === 'error' ? 'Error' : slackChannel.status === 'failed' ? 'Failed' : 'Disconnected'}
+                </span>
+              ) : (
+                <span className="ml-2 text-[var(--color-text-muted)] text-xs">Not set up</span>
+              )}
+            </div>
+          </div>
+          <div className="flex gap-2">
+            {isConnected && !showForm && (
+              <>
+                <button
+                  onClick={() => setEditingId(slackChannel?.id || null)}
+                  className="px-3 py-1 text-xs bg-[var(--color-bg)] text-[var(--color-text-muted)] rounded hover:text-[var(--color-text)] transition-colors"
+                >
+                  Edit
+                </button>
+                <button
+                  onClick={() => slackChannel && handleDisconnect(slackChannel)}
+                  className="px-3 py-1 text-xs text-red-400 hover:text-red-300 transition-colors"
+                >
+                  Disconnect
+                </button>
+              </>
+            )}
+            {isError && !showForm && (
+              <>
+                <button
+                  onClick={() => slackChannel && handleReconnect(slackChannel)}
+                  className="px-3 py-1 text-xs bg-[var(--color-primary)] text-white rounded hover:bg-[var(--color-primary)]/80 transition-colors"
+                >
+                  Reconnect
+                </button>
+                <button
+                  onClick={() => setEditingId(slackChannel?.id || null)}
+                  className="px-3 py-1 text-xs bg-[var(--color-bg)] text-[var(--color-text-muted)] rounded hover:text-[var(--color-text)] transition-colors"
+                >
+                  Edit
+                </button>
+                <button
+                  onClick={() => slackChannel && handleDisconnect(slackChannel)}
+                  className="px-3 py-1 text-xs text-red-400 hover:text-red-300 transition-colors"
+                >
+                  Remove
+                </button>
+              </>
+            )}
+            {!slackChannel && !addingSlack && (
+              <button
+                onClick={() => setAddingSlack(true)}
+                className="px-3 py-1 text-xs bg-[var(--color-primary)] text-white rounded hover:bg-[var(--color-primary)]/80 transition-colors"
+              >
+                Set Up
+              </button>
             )}
           </div>
         </div>
-        <div className="flex gap-2">
-          {/* Connected: Edit + Disconnect */}
-          {isConnected && !editing && (
-            <>
-              <button
-                onClick={onEdit}
-                className="px-3 py-1 text-xs bg-[var(--color-bg)] text-[var(--color-text-muted)] rounded hover:text-[var(--color-text)] transition-colors"
-              >
-                Edit
-              </button>
-              <button
-                onClick={onDisconnect}
-                className="px-3 py-1 text-xs text-red-400 hover:text-red-300 transition-colors"
-              >
-                Disconnect
-              </button>
-            </>
-          )}
-          {/* Error/Stopped: Reconnect + Edit + Disconnect */}
-          {isError && !editing && (
-            <>
-              <button
-                onClick={onReconnect}
-                className="px-3 py-1 text-xs bg-[var(--color-primary)] text-white rounded hover:bg-[var(--color-primary)]/80 transition-colors"
-              >
-                Reconnect
-              </button>
-              <button
-                onClick={onEdit}
-                className="px-3 py-1 text-xs bg-[var(--color-bg)] text-[var(--color-text-muted)] rounded hover:text-[var(--color-text)] transition-colors"
-              >
-                Edit
-              </button>
-              <button
-                onClick={onDisconnect}
-                className="px-3 py-1 text-xs text-red-400 hover:text-red-300 transition-colors"
-              >
-                Remove
-              </button>
-            </>
-          )}
-          {/* No channel: Set Up */}
-          {!channel && !adding && (
-            <button
-              onClick={onAdd}
-              className="px-3 py-1 text-xs bg-[var(--color-primary)] text-white rounded hover:bg-[var(--color-primary)]/80 transition-colors"
-            >
-              Set Up
-            </button>
-          )}
-        </div>
+
+        {/* Config summary */}
+        {slackChannel && !showForm && (
+          <div className="mt-3 pt-3 border-t border-[var(--color-border)]">
+            <ConfigSummary channel={slackChannel} />
+          </div>
+        )}
+
+        {showForm && (
+          <div className="mt-4 pt-4 border-t border-[var(--color-border)]">
+            <ChannelConfigForm
+              channelType="slack"
+              existingConfig={slackChannel}
+              onSave={() => { setEditingId(null); setAddingSlack(false); loadChannels(); }}
+              onCancel={() => { setEditingId(null); setAddingSlack(false); }}
+            />
+          </div>
+        )}
       </div>
-
-      {/* Show existing config summary when channel exists but not editing */}
-      {channel && !editing && !adding && (
-        <div className="mt-3 pt-3 border-t border-[var(--color-border)]">
-          <ConfigSummary channel={channel} />
-        </div>
-      )}
-
-      {(editing || adding) && (
-        <div className="mt-4 pt-4 border-t border-[var(--color-border)]">
-          <ChannelConfigForm
-            channelType={channelType}
-            existingConfig={channel}
-            onSave={onSave}
-            onCancel={onCancel}
-          />
-        </div>
-      )}
     </div>
   );
 }
 
 function ConfigSummary({ channel }: { channel: Channel }) {
   const cfg = channel.config as Record<string, string>;
-  const fields = channel.channelType === 'slack'
-    ? [
-        { label: 'Bot Token', value: cfg.bot_token },
-        { label: 'App Token', value: cfg.app_token },
-      ]
-    : [
-        { label: 'App ID', value: cfg.app_id },
-        { label: 'App Secret', value: cfg.app_secret },
-      ];
+  const fields = [
+    { label: 'Bot Token', value: cfg.bot_token },
+    { label: 'App Token', value: cfg.app_token },
+  ];
 
   return (
     <div className="space-y-1.5">

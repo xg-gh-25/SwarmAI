@@ -348,7 +348,7 @@ class TestPerChannelSessionIsolation:
 # ===================================================================
 
 class TestGenericChannelContext:
-    """Gateway should build generic channel_context (not hardcoded to Feishu)."""
+    """Gateway should build generic channel_context (not hardcoded to one adapter)."""
 
     @pytest.mark.asyncio
     async def test_channel_context_includes_slack_keys(self, gateway, mock_db):
@@ -479,7 +479,7 @@ class TestGatewayLifecycle:
         """startup() should attempt to start all channels from DB."""
         mock_db.channels.list.return_value = [
             {"id": "ch-1", "name": "Slack"},
-            {"id": "ch-2", "name": "Feishu"},
+            {"id": "ch-2", "name": "Slack-2"},
         ]
         with patch.object(gateway, "start_channel", new=AsyncMock()) as mock_start:
             await gateway.startup()

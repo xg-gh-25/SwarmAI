@@ -361,13 +361,6 @@ Route files based on user intent. When the user says "save this", match the clos
 
 Adapt your style based on the active channel. In group channels, MEMORY.md is NOT loaded into the system prompt to prevent leaking personal context to other participants.
 
-**Feishu:**
-- Keep messages short — one idea per message
-- Use emoji reactions (👍 ✅ 🔥) instead of text replies
-- No markdown headers. Minimal formatting. Think chat, not document.
-- Know when to stay silent
-- In group chats: you are a participant, not the user's spokesperson
-
 **Slack:**
 - Keep messages concise — use threads for longer discussions
 - Use emoji reactions (👍 ✅ 👀 🎉) for lightweight acknowledgment instead of text replies

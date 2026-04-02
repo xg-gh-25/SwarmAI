@@ -499,17 +499,16 @@ class TestE2EDirectChannel:
 
 
 class TestE2EGroupChannel:
-    """Full pipeline for a group channel session (Feishu/Slack group)."""
+    """Full pipeline for a group channel session (Slack group)."""
 
-    def _group_context(self, channel_type: str = "feishu") -> dict:
+    def _group_context(self, channel_type: str = "slack") -> dict:
         return {
             "channel_type": channel_type,
             "channel_id": "ch_123",
             "chat_id": "chat_456",
-            "reply_to_message_id": "msg_789",
             "is_group": True,
-            "app_id": "app_test",
-            "app_secret": "secret_test",
+            "bot_token": "xoxb-test",
+            "app_token": "xapp-test",
         }
 
     def test_memory_excluded_in_group(self, workspace):
@@ -552,7 +551,7 @@ class TestE2EGroupChannel:
     def test_non_group_channel_includes_memory(self, workspace):
         """A DM (is_group=False) still gets MEMORY.md."""
         dm_context = {
-            "channel_type": "feishu",
+            "channel_type": "slack",
             "channel_id": "ch_123",
             "chat_id": "chat_456",
             "is_group": False,
@@ -560,12 +559,12 @@ class TestE2EGroupChannel:
         prompt, _ = _simulate_build(workspace, channel_context=dm_context)
         assert "Secret personal decision" in prompt or "project pivot" in prompt
 
-    def test_feishu_group_channel_type_in_metadata(self, workspace):
+    def test_slack_group_channel_type_in_metadata(self, workspace):
         """Channel type appears in runtime metadata for group."""
         prompt, _ = _simulate_build(
-            workspace, channel_context=self._group_context("feishu")
+            workspace, channel_context=self._group_context("slack")
         )
-        assert "channel=feishu" in prompt
+        assert "channel=slack" in prompt
 
     def test_slack_group_excludes_memory(self, workspace):
         """Slack group channel also excludes personal files."""
@@ -730,8 +729,8 @@ class TestE2EGatewayIsGroup:
     @pytest.mark.parametrize(
         "chat_type,expected",
         [
-            ("p2p", False),       # Feishu DM
-            ("group", True),      # Feishu group
+            ("p2p", False),       # Slack DM
+            ("group", True),      # Slack group
             ("im", False),        # Slack DM
             ("channel", True),    # Slack public channel
             ("mpim", True),       # Slack multi-party DM
