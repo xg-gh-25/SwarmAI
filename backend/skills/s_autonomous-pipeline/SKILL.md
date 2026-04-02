@@ -287,19 +287,24 @@ The BUILD stage follows TDD methodology: tests before code, code until tests pas
    than the shortcut, do the complete thing. Cover edge cases, handle errors.
 10. Use atomic commits: one commit per logical change
 
-**Step 3: VERIFY — Full suite, zero regressions**
+**Step 3: VERIFY — Targeted tests, zero regressions**
 
-⚠️ **VERIFY anti-loop rules (BLOCKING):**
-- Run the full suite **ONCE**. Use `timeout=300000` in Bash tool (5 min).
+⚠️ **VERIFY rules (BLOCKING):**
+- Run **changed test files + test files that import changed modules**. NOT the full suite.
+  ```
+  pytest tests/test_foo.py tests/test_bar.py --timeout=60
+  ```
+- If you're unsure which tests to run, use `pytest --lf --timeout=60` (last-failed).
+- **NEVER** run bare `pytest` without specifying files — conftest blocks >300 tests.
+- **NEVER** use `--run-all` — that's for humans running `make test-all`, not pipeline.
 - **NEVER** pipe pytest through `| tail` — it hides pass/fail and xdist status.
 - If all tests pass → proceed to Step 4. Done.
-- If tests fail → fix code, re-run **only failing tests** (not full suite).
-- **Max 2 VERIFY re-runs total.** After 2 full-suite runs, if still failing:
+- If tests fail → fix code, re-run **only failing tests**.
+- **Max 2 VERIFY re-runs total.** After 2 runs, if still failing:
   publish changeset with `"regressions": N` and advance to REVIEW anyway.
-  REVIEW will flag regressions. Do NOT loop.
 - Track VERIFY attempt count explicitly: "VERIFY attempt 1/2", "VERIFY attempt 2/2".
 
-11. Run the FULL test suite (new + existing) — all must pass
+11. Run changed + related test files — all must pass
 12. If existing tests break → fix production code, NOT the existing tests
 13. Track all files changed and test results
 
@@ -406,7 +411,7 @@ python backend/scripts/artifact_cli.py advance --project <PROJECT> --state test
    → halt if wtf_score >= 5 (judgment decision → L2 BLOCK)
    ```
 5. Max 20 fixes per session
-6. Run full test suite after all fixes
+6. Run changed + related test files after all fixes (NOT full suite)
 
 Publish artifact:
 ```bash

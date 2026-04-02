@@ -872,7 +872,7 @@ async def health_check():
     db_healthy = True
     try:
         from database import db
-        await db.execute("SELECT 1")
+        db_healthy = await db.health_check()
     except Exception:
         db_healthy = False
 

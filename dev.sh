@@ -152,6 +152,17 @@ _deploy_daemon_binary() {
     mv -f "${DAEMON_BINARY_PATH}.tmp" "$DAEMON_BINARY_PATH"  # atomic replace
     chmod +x "$DAEMON_BINARY_PATH"
     _ok "Daemon binary deployed: $DAEMON_BINARY_PATH ($(du -h "$DAEMON_BINARY_PATH" | cut -f1))"
+
+    # Deploy resources alongside the binary so the frozen executable can
+    # find default-agent.json, mcp-catalog.json, etc. via bundle_paths.
+    local res_src="$DESKTOP_DIR/resources"
+    local res_dst="$DAEMON_BINARY_DIR/resources"
+    if [ -d "$res_src" ]; then
+        mkdir -p "$res_dst"
+        cp -f "$res_src"/*.json "$res_dst/" 2>/dev/null || true
+        cp -f "$res_src"/*.db "$res_dst/" 2>/dev/null || true
+        _ok "Daemon resources deployed: $res_dst"
+    fi
 }
 
 # ── Commands ────────────────────────────────────────────────

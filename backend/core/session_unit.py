@@ -386,6 +386,11 @@ class SessionUnit:
         # so they load regardless of their tier in mcp-dev.json.
         self._extra_mcps: set[str] = set()
 
+        # ── Proactive RSS restart cooldown ────────────────────────
+        # Monotonic timestamp of last proactive compact→kill cycle.
+        # Prevents repeated restarts within the PROACTIVE_COOLDOWN window.
+        self._last_proactive_restart: float = 0.0
+
         # ── Resource observability ─────────────────────────────────
         self._last_error_type: Optional[str] = None  # FailureType.value: "oom" | "rate_limit" | "api_error" | "timeout" | "unknown"
         self._last_metrics: Optional[Any] = None      # ProcessMetrics from health_check
@@ -773,6 +778,14 @@ class SessionUnit:
             classify_failure,
             compute_backoff,
         )
+
+        # ── Resume injection: COLD + _sdk_session_id → spawn with --resume
+        # Covers ALL kill-then-respawn paths (proactive restart, eviction,
+        # OOM crash, streaming timeout) — not just the retry path.
+        # This fixes an entire class of context-loss bugs where kill()
+        # preserved _sdk_session_id but the next spawn didn't use it.
+        if self._sdk_session_id:
+            options = self._build_retry_options(options, self._sdk_session_id)
 
         try:
             await self._spawn(options, config)
@@ -1800,6 +1813,18 @@ class SessionUnit:
                 self._transition(SessionState.IDLE)
                 self.last_used = time.time()
                 self._retry_count = 0
+
+                # ── Proactive RSS check (Trigger B: post-turn) ────
+                # Now in IDLE — check if process tree RSS is too high.
+                # If so, compact → kill → lazy resume on next send().
+                try:
+                    await self._check_rss_and_proactive_restart()
+                except Exception as rss_exc:
+                    logger.debug(
+                        "session_unit.post_turn_rss_check failed "
+                        "(non-fatal): %s", rss_exc,
+                    )
+
                 return
 
         # Stream ended without a result message.
@@ -2100,6 +2125,72 @@ class SessionUnit:
                 self.session_id, mcp_name, self._extra_mcps,
             )
         await self.kill()
+
+    # ── Proactive RSS-based restart ────────────────────────────────
+    # Threshold and cooldown for proactive compact→kill cycle.
+    # When a single session's process tree RSS exceeds this threshold
+    # while IDLE, we compact (to generate a checkpoint), then kill
+    # the subprocess.  The next send() will lazy-restart with --resume.
+    # This prevents macOS jetsam from OOM-killing the entire backend.
+    PROACTIVE_RSS_THRESHOLD: int = 1_200_000_000  # 1.2GB
+    PROACTIVE_COOLDOWN: float = 180.0  # 3 minutes
+
+    async def _check_rss_and_proactive_restart(self) -> None:
+        """Proactive restart: if tree RSS > threshold, compact → kill.
+
+        Called after each agent turn completes (STREAMING → IDLE) and
+        by LifecycleManager's 60s maintenance loop.
+
+        Sequence:
+        1. Check cooldown — skip if last restart was < 3 minutes ago
+        2. Measure process tree RSS via psutil
+        3. If above threshold: compact() → kill()
+        4. Unit ends in COLD state with _sdk_session_id preserved
+        5. Next send() lazy-restarts with --resume
+
+        Non-fatal — if compact() fails, kill() still proceeds.
+        If RSS measurement fails, silently skips.
+        """
+        if time.time() - self._last_proactive_restart < self.PROACTIVE_COOLDOWN:
+            return
+
+        pid = self.pid
+        if not pid:
+            return
+
+        try:
+            from .resource_monitor import resource_monitor
+            tree_rss = await asyncio.to_thread(
+                resource_monitor.process_tree_rss, pid,
+            )
+        except Exception:
+            return  # psutil failure — skip silently
+
+        if tree_rss <= self.PROACTIVE_RSS_THRESHOLD:
+            return
+
+        logger.warning(
+            "session_unit.proactive_restart session_id=%s "
+            "tree_rss=%dMB > threshold=%dMB — compact → kill → lazy resume",
+            self.session_id,
+            tree_rss // (1024 * 1024),
+            self.PROACTIVE_RSS_THRESHOLD // (1024 * 1024),
+        )
+
+        # Step 1: compact to generate checkpoint (best-effort)
+        try:
+            await self.compact()
+        except Exception as exc:
+            logger.warning(
+                "session_unit.proactive_restart compact failed "
+                "session_id=%s: %s — proceeding to kill",
+                self.session_id, exc,
+            )
+
+        # Step 2: kill → COLD (preserves _sdk_session_id for lazy resume)
+        await self.kill()
+
+        self._last_proactive_restart = time.time()
 
     async def compact(self, instructions: Optional[str] = None) -> dict:
         """Trigger /compact on the subprocess.
