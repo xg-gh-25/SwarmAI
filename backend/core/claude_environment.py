@@ -201,7 +201,14 @@ def _configure_claude_environment(config: AppConfigManager) -> None:
     # create conflicting writes and duplicate context injection.
     os.environ["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
 
-    # 4. SDK initialize timeout — controls how long the SDK waits for the
+    # 4. Ownership tag — all child processes inherit this so the orphan
+    # reaper can identify which backend instance spawned them.  This is
+    # the foundation of the ownership-based orphan detection model:
+    # only processes with this tag AND a dead owner are killed.
+    os.environ["SWARMAI_OWNER_PID"] = str(os.getpid())
+    logger.info("Ownership tag set: SWARMAI_OWNER_PID=%d", os.getpid())
+
+    # 5. SDK initialize timeout — controls how long the SDK waits for the
     # CLI subprocess to complete its `initialize` control handshake (MCP
     # server startup, plugin sync, etc.).  Default is 60s which is too
     # tight for cross-region Bedrock (Beijing → us-east-1) + 5 MCP servers.
@@ -210,7 +217,7 @@ def _configure_claude_environment(config: AppConfigManager) -> None:
     # Set to 180s to match our session_unit.INIT_TIMEOUT.
     os.environ.setdefault("CLAUDE_CODE_STREAM_CLOSE_TIMEOUT", "180000")
 
-    # 5. Pre-flight auth validation
+    # 6. Pre-flight auth validation
     # AWS credentials are NOT checked here — the SDK resolves them via the
     # standard credential chain at query time. Auth errors from expired
     # credentials are caught by session_unit's retry logic.

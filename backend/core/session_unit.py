@@ -50,6 +50,14 @@ logger = logging.getLogger(__name__)
 # If you need multiple SessionRouter instances (e.g., tests), mock this lock.
 _spawn_lock = asyncio.Lock()
 
+# Global OOM cooldown: after any session gets OOM-killed, ALL sessions must
+# wait before retrying.  Prevents the death spiral where two sessions retry
+# simultaneously, each spawning ~500MB, and both get killed again.
+# Value: monotonic timestamp when the cooldown expires (0 = no cooldown).
+_oom_cooldown_until: float = 0.0
+_OOM_COOLDOWN_BASE: float = 30.0  # seconds, doubles per consecutive OOM
+_OOM_COOLDOWN_CAP: float = 120.0  # max backoff cap for OOM retries
+
 
 def _get_children(pid: int) -> list[int]:
     """Get direct child PIDs via ``pgrep -P``. Best-effort."""
@@ -383,6 +391,14 @@ class SessionUnit:
         # a new send() started while the old interrupt was in-flight.
         self._send_generation: int = 0
 
+        # ── OOM tracking (persists across send() calls) ───────────
+        # Counts consecutive OOM kills for this session.  NOT reset in
+        # send() — prevents the death spiral where OOM → retry → OOM
+        # loops forever because _retry_count resets each send().
+        # Reset only on successful stream completion.
+        self._consecutive_oom_kills: int = 0
+        self._OOM_KILL_LIMIT: int = 3  # After 3 consecutive OOMs, stop retrying
+
     # ── Properties ────────────────────────────────────────────────
 
     @property
@@ -637,6 +653,8 @@ class SessionUnit:
         try:
             async for event in self._stream_response(query_content):
                 yield event
+            # Success — reset OOM counter (session is healthy)
+            self._consecutive_oom_kills = 0
         except Exception as exc:
             error_str = str(exc)
             tb_str = traceback.format_exc()
@@ -896,9 +914,11 @@ class SessionUnit:
     ) -> AsyncIterator[dict]:
         """Retry loop with failure-aware backoff and ``--resume``.
 
-        Handles failure-type-aware backoff (OOM → 30s flat, rate limit →
-        wait for reset, else → exponential), spawn budget re-check after
-        backoff, and ``--resume`` flag for conversation context restoration.
+        Handles failure-type-aware backoff (OOM → exponential 30/60/120s,
+        rate limit → wait for reset, else → exponential), global OOM
+        cooldown to prevent parallel retry storms, spawn budget re-check
+        after backoff, and ``--resume`` flag for conversation context
+        restoration.
 
         Yields stream events on success.  Yields error event + ``_abort``
         sentinel when all retries are exhausted or resources denied.
@@ -916,6 +936,8 @@ class SessionUnit:
             compute_backoff,
         )
 
+        global _oom_cooldown_until
+
         error_str = initial_error_str
         # Capture SDK session ID before cleanup for --resume
         resume_session_id = self._sdk_session_id
@@ -928,12 +950,66 @@ class SessionUnit:
             self._retry_count += 1
 
             # ── Structured failure classification ─────────────
-            # Hook-captured context (rate limits, notifications)
-            # takes priority over string pattern matching.
             failure_type, failure_meta = classify_failure(
                 error_str, self._hook_session_context,
             )
             self._last_error_type = failure_type.value
+
+            # ── Fix 3: Per-session OOM counter (persists across send()) ──
+            if failure_type == FailureType.OOM:
+                self._consecutive_oom_kills += 1
+
+                # OOM cooldown is handled by _oom_cooldown_until (global,
+                # module-level in session_unit). spawn_budget checks memory
+                # numbers only — no duplicate cooldown in resource_monitor.
+
+                # ── Fix 5: Notify frontend about OOM ─────────────
+                yield {
+                    "type": "status",
+                    "message": (
+                        f"Memory pressure detected — the AI process was killed by the system "
+                        f"(attempt {self._consecutive_oom_kills}). "
+                        f"Close unused tabs or apps to free memory."
+                    ),
+                    "code": "OOM_DETECTED",
+                }
+
+                # Stop retrying after too many consecutive OOMs
+                if self._consecutive_oom_kills >= self._OOM_KILL_LIMIT:
+                    logger.warning(
+                        "session_unit: %d consecutive OOM kills for session %s — "
+                        "giving up (system cannot sustain this session)",
+                        self._consecutive_oom_kills, self.session_id,
+                    )
+                    await self._crash_to_cold_async(clear_identity=True)
+                    yield _build_error_event(
+                        code="OOM_LIMIT_REACHED",
+                        message=(
+                            "The AI service keeps running out of memory. "
+                            "Close other tabs and apps to free memory, "
+                            "then try again."
+                        ),
+                        suggested_action=(
+                            "Close idle chat tabs, quit memory-heavy apps "
+                            "(Chrome, Slack), then send your message again."
+                        ),
+                    )
+                    yield {"_abort": True}
+                    return
+
+                # ── Fix 2: Global OOM cooldown ────────────────────
+                # Set a global cooldown so OTHER sessions also wait.
+                cooldown_secs = min(
+                    _OOM_COOLDOWN_BASE * (2 ** (self._consecutive_oom_kills - 1)),
+                    _OOM_COOLDOWN_CAP,
+                )
+                _oom_cooldown_until = time.monotonic() + cooldown_secs
+                logger.info(
+                    "session_unit: global OOM cooldown set for %.0fs "
+                    "(session=%s, consecutive_ooms=%d)",
+                    cooldown_secs, self.session_id,
+                    self._consecutive_oom_kills,
+                )
 
             # Track consecutive timeouts to abandon --resume
             if failure_type == FailureType.TIMEOUT:
@@ -942,9 +1018,7 @@ class SessionUnit:
                 _consecutive_timeouts = 0
 
             # After 2 consecutive timeouts with --resume, the resume target
-            # is likely broken (e.g., OOM'd predecessor, corrupted session).
-            # Abandon resume and start fresh to avoid sitting in a 10-minute
-            # retry loop watching nothing happen.
+            # is likely broken.  Abandon resume and start fresh.
             if _consecutive_timeouts >= 2 and resume_session_id:
                 logger.warning(
                     "session_unit: %d consecutive timeouts with --resume, "
@@ -954,11 +1028,24 @@ class SessionUnit:
                 resume_session_id = None
 
             # Failure-type-aware backoff:
-            # OOM → 30s flat, Rate limit → wait for reset, else → exponential
+            # OOM → exponential 30/60/120s, Rate limit → wait for reset
             backoff = compute_backoff(
                 failure_type, failure_meta,
                 self._retry_count, self.RETRY_BACKOFF_SECONDS,
             )
+
+            # ── Fix 2: Respect global OOM cooldown ────────────────
+            # If another session set a cooldown, wait at least that long.
+            now = time.monotonic()
+            if _oom_cooldown_until > now:
+                remaining_cooldown = _oom_cooldown_until - now
+                if remaining_cooldown > backoff:
+                    logger.info(
+                        "session_unit: extending backoff %.0fs → %.0fs "
+                        "(global OOM cooldown, session=%s)",
+                        backoff, remaining_cooldown, self.session_id,
+                    )
+                    backoff = remaining_cooldown
 
             logger.info(
                 "Retry %d/%d for session %s after %.1fs backoff "
@@ -972,10 +1059,15 @@ class SessionUnit:
                 {k: v for k, v in failure_meta.items() if k != "message"},
             )
 
+            yield {
+                "type": "status",
+                "message": f"Reconnecting (attempt {self._retry_count}/{self.MAX_RETRY_ATTEMPTS})...",
+                "code": "RETRY_SPAWN",
+            }
+
             await self._crash_to_cold_async()
 
-            # Clear hook failure context after reading — prevents stale
-            # context from a previous failure leaking into the next retry.
+            # Clear hook failure context after reading
             if self._hook_session_context:
                 self._hook_session_context.pop("_last_notification", None)
                 self._hook_session_context.pop("_stop_info", None)
@@ -1017,8 +1109,6 @@ class SessionUnit:
             try:
                 await self._spawn(retry_options, config)
             except Exception as spawn_exc:
-                # Capture traceback immediately — awaits in async generators
-                # can clear sys.exc_info() before format_exc() runs.
                 spawn_tb = traceback.format_exc()
                 error_str = str(spawn_exc)
                 if _is_retriable_error(error_str):
@@ -1044,7 +1134,9 @@ class SessionUnit:
             try:
                 async for event in self._stream_response(query_content):
                     yield event
-                return  # success
+                # Success — reset OOM counter
+                self._consecutive_oom_kills = 0
+                return
             except Exception as retry_exc:
                 error_str = str(retry_exc)
                 logger.warning(
@@ -2144,15 +2236,23 @@ class SessionUnit:
         """Reset transient subprocess fields after subprocess death.
 
         Called during DEAD → COLD transition.  Clears client, wrapper,
-        and retry state so the unit is ready for reuse.
+        and subprocess-specific state so the unit is ready for reuse.
 
         Preserves ``_sdk_session_id`` so that evicted units can resume
         via ``--resume`` when the user returns to the tab.
+
+        IMPORTANT: Does NOT reset ``_retry_count``.  This method is
+        called inside retry loops (via ``_crash_to_cold_async``).
+        Resetting the counter here caused an infinite retry loop
+        (COE: 2026-04-02 retry counter reset bug — 26 retries in 4min
+        instead of capping at MAX_RETRY_ATTEMPTS=3).  The retry counter
+        is reset only at ``send()`` entry and on successful completion.
         """
         self._client = None
         self._wrapper = None
         self._interrupted = False
-        self._retry_count = 0
+        # NOTE: self._retry_count is intentionally NOT reset here.
+        # It is reset in send() (line ~620) and on success (line ~1672).
         self._model_name = None
         self._peak_tree_rss_bytes = 0
         # Don't reset _lifecycle_response_count — it tracks across the

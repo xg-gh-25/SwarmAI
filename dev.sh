@@ -103,7 +103,7 @@ _start_backend() {
     # Wait for health check
     _log "Waiting for backend..."
     for i in $(seq 1 30); do
-        if curl -s --max-time 1 "http://localhost:$BACKEND_PORT/api/health" >/dev/null 2>&1; then
+        if curl -s --max-time 1 "http://localhost:$BACKEND_PORT/health" >/dev/null 2>&1; then
             _ok "Backend running (PID $pid, port $BACKEND_PORT)"
             return 0
         fi
@@ -135,6 +135,25 @@ _build_time() {
     echo "${min}m ${sec}s"
 }
 
+DAEMON_BINARY_DIR="${HOME}/.swarm-ai/daemon"
+DAEMON_BINARY_PATH="${DAEMON_BINARY_DIR}/python-backend"
+
+_deploy_daemon_binary() {
+    # Copy the PyInstaller binary from the build output to the daemon directory.
+    # The daemon wrapper script (swarmai_backend.sh) runs this binary instead
+    # of the dev source directory, so untested code never crashes production.
+    local src="$DESKTOP_DIR/src-tauri/binaries/python-backend-aarch64-apple-darwin"
+    if [ ! -f "$src" ]; then
+        _warn "No sidecar binary found at $src — daemon will use venv fallback"
+        return
+    fi
+    mkdir -p "$DAEMON_BINARY_DIR"
+    cp -f "$src" "${DAEMON_BINARY_PATH}.tmp"
+    mv -f "${DAEMON_BINARY_PATH}.tmp" "$DAEMON_BINARY_PATH"  # atomic replace
+    chmod +x "$DAEMON_BINARY_PATH"
+    _ok "Daemon binary deployed: $DAEMON_BINARY_PATH ($(du -h "$DAEMON_BINARY_PATH" | cut -f1))"
+}
+
 # ── Commands ────────────────────────────────────────────────
 
 cmd_start() {
@@ -163,16 +182,11 @@ cmd_backend() {
     _ok "Backend restarted in $(_build_time $start)"
     _log "Tail logs: tail -f $LOG_DIR/backend.log"
 
-    # Auto-restart daemon if it's running — pick up new backend code
+    # NOTE: Daemon is NOT restarted here. The daemon runs the built binary,
+    # not dev source code. Use './dev.sh build' to update the daemon.
     if _daemon_is_running; then
-        _log "Daemon running — restarting to pick up code changes..."
-        launchctl kickstart -k "$GUI_TARGET"
-        sleep 2
-        if _daemon_health >/dev/null; then
-            _ok "Daemon restarted with new code"
-        else
-            _warn "Daemon restarted but health check failed — check: ./dev.sh daemon logs"
-        fi
+        _warn "Daemon is running (built binary). Dev backend on port $BACKEND_PORT."
+        _warn "To update daemon: ./dev.sh build"
     fi
 }
 
@@ -207,13 +221,19 @@ cmd_build() {
         _log "Install: open \"$dmg\""
     fi
 
-    # Auto-restart daemon if it's running — pick up new backend code
+    # ── Deploy binary to daemon directory ────────────────────────
+    # The daemon runs from ~/.swarm-ai/daemon/python-backend (NOT the
+    # dev source directory).  This ensures untested code changes never
+    # crash the production daemon.  Flow: code change → build → deploy.
+    _deploy_daemon_binary
+
+    # Auto-restart daemon if it's running — pick up new binary
     if _daemon_is_running; then
-        _log "Daemon running — restarting to pick up code changes..."
+        _log "Daemon running — restarting to pick up new binary..."
         launchctl kickstart -k "$GUI_TARGET"
         sleep 2
         if _daemon_health >/dev/null; then
-            _ok "Daemon restarted with new code"
+            _ok "Daemon restarted with new binary"
         else
             _warn "Daemon restarted but health check failed — check: ./dev.sh daemon logs"
         fi
@@ -280,8 +300,8 @@ cmd_status() {
     # Backend
     if _is_backend_running; then
         local pid=$(cat "$BACKEND_PID_FILE" 2>/dev/null || lsof -i :$BACKEND_PORT -t 2>/dev/null | head -1)
-        local health=$(curl -s --max-time 2 "http://localhost:$BACKEND_PORT/api/health" 2>/dev/null)
-        if echo "$health" | python3 -c "import sys,json; d=json.load(sys.stdin); exit(0 if d.get('status')=='ok' else 1)" 2>/dev/null; then
+        local health=$(curl -s --max-time 2 "http://localhost:$BACKEND_PORT/health" 2>/dev/null)
+        if echo "$health" | python3 -c "import sys,json; d=json.load(sys.stdin); exit(0 if d.get('status')=='healthy' else 1)" 2>/dev/null; then
             _ok "Backend: running (PID $pid, port $BACKEND_PORT)"
         else
             _warn "Backend: process alive but not healthy (PID $pid)"

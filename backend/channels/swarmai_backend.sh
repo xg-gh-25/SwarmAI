@@ -1,9 +1,14 @@
 #!/bin/bash
 # SwarmAI Backend Daemon — wrapper script for launchd
 #
-# Starts the FastAPI backend on a fixed port (18321) with caffeinate
-# to keep channels (Slack, etc.) and background jobs alive when
-# macOS is locked or sleeping.
+# Runs the PyInstaller-built backend binary from ~/.swarm-ai/daemon/.
+# This binary is produced by `./dev.sh build` and copied here automatically.
+#
+# IMPORTANT: The daemon NEVER runs from the dev source directory.
+# Code changes only take effect after: ./dev.sh build
+# This prevents untested changes from crashing the production daemon.
+#
+# Fallback: if no binary exists (first install), falls back to venv Python.
 #
 # Usage: launchd runs this via com.swarmai.backend.plist
 #        Manual: ./swarmai_backend.sh
@@ -17,15 +22,16 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 
 DAEMON_PORT=18321
-# BACKEND_DIR can be set by the plist EnvironmentVariables (daemon mode)
-# or derived from the script's location (manual mode / dev).
+DAEMON_BINARY="${HOME}/.swarm-ai/daemon/python-backend"
+LOG_DIR="${HOME}/.swarm-ai/logs"
+
+# Fallback: source directory (only used if binary not built yet)
 if [ -n "${SWARMAI_BACKEND_DIR:-}" ]; then
     BACKEND_DIR="${SWARMAI_BACKEND_DIR}"
 else
     BACKEND_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 fi
 VENV_PYTHON="${BACKEND_DIR}/.venv/bin/python"
-LOG_DIR="${HOME}/.swarm-ai/logs"
 
 # ---------------------------------------------------------------------------
 # Port conflict check
@@ -91,29 +97,45 @@ export HOME="${HOME}"
 unset HTTP_PROXY HTTPS_PROXY http_proxy https_proxy ALL_PROXY all_proxy NO_PROXY no_proxy 2>/dev/null || true
 
 # ---------------------------------------------------------------------------
-# Resolve Python
+# Resolve backend executable
 # ---------------------------------------------------------------------------
+# Priority: PyInstaller binary > venv Python (fallback)
+# The binary is placed by `./dev.sh build` into ~/.swarm-ai/daemon/.
+# This ensures the daemon ONLY runs tested, built code.
 
-if [ ! -x "${VENV_PYTHON}" ]; then
-    echo "[swarmai-backend] ERROR: venv Python not found at ${VENV_PYTHON}" >&2
+if [ -x "${DAEMON_BINARY}" ]; then
+    LAUNCH_MODE="binary"
+    echo "[swarmai-backend] Starting BINARY on port ${DAEMON_PORT} at $(date '+%Y-%m-%d %H:%M:%S')"
+    echo "[swarmai-backend] Binary: ${DAEMON_BINARY}"
+    echo "[swarmai-backend] Binary age: $(( ($(date +%s) - $(stat -f %m "${DAEMON_BINARY}")) / 60 ))min"
+    echo "[swarmai-backend] PATH: ${PATH}"
+    echo "[swarmai-backend] ada: $(which ada 2>/dev/null || echo 'NOT FOUND')"
+
+    # caffeinate -is: prevent idle sleep (-i) and system sleep (-s)
+    exec caffeinate -is "${DAEMON_BINARY}" \
+        --host 127.0.0.1 \
+        --port "${DAEMON_PORT}"
+
+elif [ -x "${VENV_PYTHON}" ]; then
+    LAUNCH_MODE="venv-fallback"
+    echo "[swarmai-backend] WARNING: No binary at ${DAEMON_BINARY}"
+    echo "[swarmai-backend] Falling back to venv Python (run './dev.sh build' to fix)"
+    echo "[swarmai-backend] Starting VENV FALLBACK on port ${DAEMON_PORT} at $(date '+%Y-%m-%d %H:%M:%S')"
+    echo "[swarmai-backend] Backend dir: ${BACKEND_DIR}"
+    echo "[swarmai-backend] Python: ${VENV_PYTHON}"
+    echo "[swarmai-backend] PATH: ${PATH}"
+    echo "[swarmai-backend] ada: $(which ada 2>/dev/null || echo 'NOT FOUND')"
+
+    cd "${BACKEND_DIR}"
+    exec caffeinate -is "${VENV_PYTHON}" -m uvicorn main:app \
+        --host 127.0.0.1 \
+        --port "${DAEMON_PORT}" \
+        --log-level info
+
+else
+    echo "[swarmai-backend] ERROR: No backend binary or venv found" >&2
+    echo "[swarmai-backend]   Binary: ${DAEMON_BINARY} (not found)" >&2
+    echo "[swarmai-backend]   Venv:   ${VENV_PYTHON} (not found)" >&2
+    echo "[swarmai-backend]   Run './dev.sh build' to create the binary" >&2
     exit 1
 fi
-
-# ---------------------------------------------------------------------------
-# Launch with sleep prevention
-# ---------------------------------------------------------------------------
-
-echo "[swarmai-backend] Starting on port ${DAEMON_PORT} at $(date '+%Y-%m-%d %H:%M:%S')"
-echo "[swarmai-backend] Backend dir: ${BACKEND_DIR}"
-echo "[swarmai-backend] Python: ${VENV_PYTHON}"
-echo "[swarmai-backend] PATH: ${PATH}"
-echo "[swarmai-backend] ada: $(which ada 2>/dev/null || echo 'NOT FOUND')"
-
-# caffeinate -is: prevent idle sleep (-i) and system sleep (-s)
-# The backend process becomes a child of caffeinate — when it exits,
-# caffeinate exits too, and launchd restarts everything.
-cd "${BACKEND_DIR}"
-exec caffeinate -is "${VENV_PYTHON}" -m uvicorn main:app \
-    --host 127.0.0.1 \
-    --port "${DAEMON_PORT}" \
-    --log-level info

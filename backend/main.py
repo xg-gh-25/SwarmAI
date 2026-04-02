@@ -193,10 +193,34 @@ def write_backend_json(
     p.write_text(_json.dumps(data, indent=2))
 
 
-def remove_backend_json(path: str = _BACKEND_JSON_DEFAULT) -> None:
-    """Delete ``backend.json`` on clean shutdown."""
+def remove_backend_json(
+    path: str = _BACKEND_JSON_DEFAULT,
+    startup_mode: str | None = None,
+) -> None:
+    """Delete ``backend.json`` on clean shutdown.
+
+    **Mode guard:** If ``startup_mode`` is provided, only delete when the
+    mode recorded in the file matches.  This prevents a sidecar that briefly
+    co-existed with a daemon from deleting the daemon's discovery file on exit.
+    """
+    p = Path(path)
+    if not p.exists():
+        return
+    if startup_mode is not None:
+        try:
+            import json as _json
+            data = _json.loads(p.read_text())
+            file_mode = data.get("mode")
+            if file_mode is not None and file_mode != startup_mode:
+                logger.info(
+                    "Skipping backend.json removal: file mode=%s != startup mode=%s",
+                    file_mode, startup_mode,
+                )
+                return
+        except (ValueError, OSError):
+            pass  # corrupt file — safe to remove
     try:
-        Path(path).unlink(missing_ok=True)
+        p.unlink(missing_ok=True)
     except Exception:
         pass  # best-effort
 
@@ -409,6 +433,9 @@ async def lifespan(app: FastAPI):
     logger.info(f"Debug mode: {settings.debug}")
     logger.info(f"Database type: {settings.database_type}")
     logger.info(f"Rate limit: {settings.rate_limit_per_minute}/minute")
+
+    # NOTE: SWARMAI_OWNER_PID is set in claude_environment._configure_claude_environment()
+    # which runs before any child process is spawned.  Do NOT duplicate it here.
 
     # Ensure database exists (copy seed DB if needed)
     # Validates: Requirements 2.1, 2.2, 2.5, 2.6, 3.1
@@ -726,8 +753,8 @@ async def lifespan(app: FastAPI):
     logger.info("LifecycleManager stopped")
     await session_registry.disconnect_all()
     logger.info("All sessions disconnected")
-    remove_backend_json()
-    logger.info("backend.json removed")
+    remove_backend_json(startup_mode=backend_mode)
+    logger.info("backend.json removed (mode=%s)", backend_mode)
 
 
 # Create FastAPI application

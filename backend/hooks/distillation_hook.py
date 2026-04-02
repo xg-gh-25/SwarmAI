@@ -322,11 +322,19 @@ class DistillationTriggerHook:
                 corrections = self._extract_corrections(body)
                 competence = self._extract_competence(body)
 
-                # Batch entries (write happens after the loop)
+                # Extract git commit(s) from this day for provenance
+                da_rel_path = f"DailyActivity/{da_file.name}"
+                day_commit = self._extract_day_commit(body)
+
+                # Batch entries with enriched provenance (write happens after the loop)
                 for decision in decisions:
-                    all_decisions.append(f"- {file_date}: {decision}")
+                    all_decisions.append(self._format_enriched_entry(
+                        decision, file_date, da_rel_path, day_commit,
+                    ))
                 for lesson in lessons:
-                    all_lessons.append(f"- {file_date}: {lesson}")
+                    all_lessons.append(self._format_enriched_entry(
+                        lesson, file_date, da_rel_path, day_commit,
+                    ))
 
                 # Collect corrections and competence for EVOLUTION.md
                 for correction in corrections:
@@ -429,6 +437,58 @@ class DistillationTriggerHook:
             )
 
         return distilled_count
+
+    @staticmethod
+    def _format_enriched_entry(
+        text: str,
+        date_str: str,
+        source_file: str,
+        commit_hash: str | None = None,
+    ) -> str:
+        """Format a distillation entry with source provenance.
+
+        Enriched format: summary + source file + optional commit hash.
+        This connects Brain entries back to Library for episodic recall.
+
+        Args:
+            text: The distilled entry text (decision, lesson, etc.).
+            date_str: Date string (YYYY-MM-DD).
+            source_file: Relative path to the source DailyActivity file.
+            commit_hash: Optional git commit hash associated with the entry.
+
+        Returns:
+            Formatted entry string like:
+            ``- 2026-03-23: **Two credential chains** — summary text.
+            Detail: DailyActivity/2026-03-23.md, commit aca865b.``
+        """
+        entry = f"- {date_str}: {text}"
+        detail_parts = [f"Detail: {source_file}"]
+        if commit_hash:
+            detail_parts.append(f"commit {commit_hash}")
+        entry += f"\n  {', '.join(detail_parts)}."
+        return entry
+
+    @staticmethod
+    def _extract_day_commit(body: str) -> str | None:
+        """Extract the first git commit hash from a DailyActivity body.
+
+        Looks for patterns like ``commit abc1234`` or backtick-wrapped hashes
+        in **Git activity:** sections.
+        """
+        # Look for **Git activity:** section
+        git_match = re.search(r"\*\*Git activity:\*\*\s*\n((?:- .+\n?)+)", body)
+        if git_match:
+            # Extract first commit hash (7+ hex chars after backtick)
+            hash_match = re.search(r"`([0-9a-f]{7,40})", git_match.group(1))
+            if hash_match:
+                return hash_match.group(1)[:7]
+
+        # Fallback: look for commit hashes anywhere
+        hash_match = re.search(r"commit[s ]?\s*`?([0-9a-f]{7,40})", body, re.IGNORECASE)
+        if hash_match:
+            return hash_match.group(1)[:7]
+
+        return None
 
     @staticmethod
     def _extract_decisions(body: str) -> list[str]:
