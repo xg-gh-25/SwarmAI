@@ -227,6 +227,7 @@ class LifecycleManager:
                 try:
                     await self._health_check_all()
                     await self._sample_process_memory()
+                    await self._proactive_rss_restart()
                     await self._check_streaming_timeout()
                     await self._fire_idle_hooks()
                     await self._check_ttl()
@@ -319,6 +320,68 @@ class LifecycleManager:
                 )
         except Exception as exc:
             logger.debug("_sample_process_memory failed (non-fatal): %s", exc)
+
+    async def _proactive_rss_restart(self) -> None:
+        """Proactive compact→kill for IDLE sessions with high RSS (Trigger A).
+
+        Fallback to the post-turn check in SessionUnit (Trigger B).
+        Runs every 60s maintenance cycle.  For each IDLE session:
+        1. Check per-unit cooldown (3 minutes between restarts)
+        2. Measure process tree RSS
+        3. If > 1.2GB: compact → kill → lazy resume on next send()
+
+        Only touches IDLE sessions — STREAMING/WAITING_INPUT are never
+        interrupted.  Non-fatal — failures logged and skipped.
+        """
+        try:
+            from .resource_monitor import resource_monitor
+            from .session_unit import SessionUnit
+
+            for unit in self._router.list_units():
+                if unit.state != SessionState.IDLE:
+                    continue
+                if not unit.pid:
+                    continue
+                if (
+                    time.time() - unit._last_proactive_restart
+                    < SessionUnit.PROACTIVE_COOLDOWN
+                ):
+                    continue
+
+                tree_rss = await asyncio.to_thread(
+                    resource_monitor.process_tree_rss, unit.pid,
+                )
+                if tree_rss <= SessionUnit.PROACTIVE_RSS_THRESHOLD:
+                    continue
+
+                logger.warning(
+                    "lifecycle.proactive_rss_restart session=%s "
+                    "rss=%dMB > threshold=%dMB — compact → kill → lazy resume",
+                    unit.session_id[:8],
+                    tree_rss // (1024 * 1024),
+                    SessionUnit.PROACTIVE_RSS_THRESHOLD // (1024 * 1024),
+                )
+
+                # Fire hooks before killing (same pattern as Tier 1 eviction)
+                if not unit._hooks_enqueued and self._hook_executor:
+                    ctx = await self._build_hook_context(unit)
+                    if ctx:
+                        self.enqueue_hooks(ctx)
+                        unit._hooks_enqueued = True
+
+                # compact → kill (preserves _sdk_session_id for lazy resume)
+                try:
+                    await unit.compact()
+                except Exception as exc:
+                    logger.warning(
+                        "lifecycle.proactive_rss_restart compact failed "
+                        "session=%s: %s — proceeding to kill",
+                        unit.session_id[:8], exc,
+                    )
+                await unit.kill()
+                unit._last_proactive_restart = time.time()
+        except Exception as exc:
+            logger.debug("_proactive_rss_restart failed (non-fatal): %s", exc)
 
     async def _check_streaming_timeout(self) -> None:
         """Force-unstick sessions that have been STREAMING with no SDK

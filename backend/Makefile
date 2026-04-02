@@ -29,9 +29,9 @@ PROFILE ?= default
 test:
 	$(PYTEST) --timeout=120 -m "not pbt and not slow"
 
-## Full suite: all ~2000 tests (~40s with 4 workers)
+## Full suite: all tests (~40s with 4 workers). --run-all bypasses collection cap.
 test-all:
-	HYPOTHESIS_PROFILE=$(PROFILE) $(PYTEST) --timeout=120
+	HYPOTHESIS_PROFILE=$(PROFILE) $(PYTEST) --timeout=120 --run-all
 
 ## Property-based tests only (~25s)
 test-pbt:

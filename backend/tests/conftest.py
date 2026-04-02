@@ -9,21 +9,25 @@ Single authority for all test infrastructure:
 2. **xdist enforcement** — pyproject.toml addopts has ``-n 4``. Conftest
    clamps to memory-safe worker count, respects explicit ``-n 0`` for serial.
 
-3. **Tiered test selection** — Three markers for selective running:
+3. **Collection cap** — If >300 tests collected without ``--run-all``,
+   pytest aborts with a clear message.  Prevents agents from accidentally
+   running the full 1000+ test suite.  Bypass: ``pytest --run-all``.
+
+4. **Tiered test selection** — Three markers for selective running:
    - ``pbt`` — auto-applied to all Hypothesis property-based tests
    - ``slow`` — auto-applied to stress/e2e files and high-example PBT
    - ``integration`` — manually applied to tests needing external resources
-   Run fast subset: ``pytest -m 'not pbt'`` (~1400 unit tests, <15s)
-   Run PBT only:   ``pytest -m pbt`` (~470 tests)
-   Run everything:  ``pytest`` (all ~2000 tests)
+   Run fast subset: ``pytest -m 'not pbt'``
+   Run PBT only:   ``pytest -m pbt``
+   Run everything:  ``pytest --run-all``
 
-4. **Memory safety** — MemoryWatchdogPlugin checks RSS every test.
+5. **Memory safety** — MemoryWatchdogPlugin checks RSS every test.
    GC at 512MB, abort at 2GB. System-level check every 5 tests.
 
-5. **Per-test timeout** — SIGALRM kills hanging tests at the OS level.
+6. **Per-test timeout** — SIGALRM kills hanging tests at the OS level.
    Default 30s, override with @pytest.mark.timeout(N).
 
-6. **DB isolation** — Temp SQLite DB created once per process, tables
+7. **DB isolation** — Temp SQLite DB created once per process, tables
    cleared between tests via a single executescript() call.
 """
 
@@ -159,6 +163,20 @@ def _compute_safe_worker_count() -> int:
 
 
 # ---------------------------------------------------------------------------
+# pytest_addoption — custom CLI flags
+# ---------------------------------------------------------------------------
+
+def pytest_addoption(parser):
+    """Register custom CLI options."""
+    parser.addoption(
+        "--run-all",
+        action="store_true",
+        default=False,
+        help="Bypass the collection cap and run the full test suite.",
+    )
+
+
+# ---------------------------------------------------------------------------
 # pytest_configure — markers, plugins, xdist enforcement
 # ---------------------------------------------------------------------------
 
@@ -234,6 +252,9 @@ def pytest_configure(config):
 # Auto-mark tests for tiered execution
 # ---------------------------------------------------------------------------
 
+_MAX_COLLECT = 300  # abort if more tests selected without --run-all
+
+
 def pytest_collection_modifyitems(config, items):
     """Auto-mark tests: ``pbt`` for Hypothesis, ``slow`` for heavy tests."""
     pbt_marker = pytest.mark.pbt
@@ -268,6 +289,34 @@ def pytest_collection_modifyitems(config, items):
                 hyp_settings = getattr(test_func, "_hypothesis_internal_use_settings", None)
                 if hyp_settings is not None and hyp_settings.max_examples >= 100:
                     item.add_marker(slow_marker)
+
+
+def pytest_runtestloop(session):
+    """Enforce collection cap AFTER all deselection (-m, -k, --lf, etc.).
+
+    Fires right before tests execute.  Checks the final selected count,
+    not the raw collected count — so ``-m "not pbt"`` or ``--lf`` won't
+    false-trigger the cap.
+
+    Bypass: ``pytest --run-all`` or ``make test-all``.
+    """
+    run_all = session.config.getoption("--run-all", default=False)
+    selected = len(session.items)
+    if not run_all and selected > _MAX_COLLECT:
+        raise pytest.UsageError(
+            f"\n{'=' * 60}\n"
+            f"🛑 COLLECTION CAP: {selected} tests selected (limit: {_MAX_COLLECT})\n"
+            f"\n"
+            f"Running the full suite during a coding loop causes OOM\n"
+            f"kills and 20-minute hangs.  Be targeted.\n"
+            f"\n"
+            f"  Run specific files:  pytest tests/test_foo.py --timeout=60\n"
+            f"  Run last-failed:    pytest --lf --timeout=60\n"
+            f"  Run full suite:     pytest --run-all --timeout=120\n"
+            f"  Via Makefile:       make test-all\n"
+            f"{'=' * 60}"
+        )
+    # Return None to let the default test loop run
 
 
 # ---------------------------------------------------------------------------

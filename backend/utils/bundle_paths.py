@@ -70,12 +70,12 @@ def _get_tauri_bundle_resource_candidates(exe_dir: Path) -> list[Path]:
         List of candidate paths to check, in priority order
     """
     return [
+        # Daemon mode: resources/ next to the binary (~/.swarm-ai/daemon/resources/)
+        exe_dir / "resources",
         # macOS .app bundle: Contents/MacOS/../Resources/_up_/resources/
         exe_dir.parent / "Resources" / "_up_" / "resources",
         # Alternative macOS path (using string navigation)
         (exe_dir / ".." / "Resources" / "_up_" / "resources").resolve(),
-        # Windows/Linux: resources folder next to executable
-        exe_dir / "resources",
     ]
 
 
