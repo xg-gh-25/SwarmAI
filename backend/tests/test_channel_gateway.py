@@ -332,9 +332,9 @@ class TestPerChannelSessionIsolation:
         assert gateway._is_session_stale(recent) is False
 
     def test_is_session_stale_beyond_ttl(self, gateway):
-        """Session beyond TTL is stale."""
+        """Session beyond TTL (12h) is stale."""
         from datetime import datetime, timedelta
-        old = (datetime.now() - timedelta(hours=3)).isoformat()
+        old = (datetime.now() - timedelta(hours=13)).isoformat()
         assert gateway._is_session_stale(old) is True
 
     def test_is_session_stale_invalid_timestamp(self, gateway):
