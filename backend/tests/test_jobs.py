@@ -203,16 +203,16 @@ class TestSystemJobs:
         from jobs.system_jobs import SYSTEM_JOBS
         proposer = next(j for j in SYSTEM_JOBS if j.id == "skill-proposer")
         assert not proposer.schedule.startswith("after:")
-        assert "* * 0" in proposer.schedule  # Still Sunday
+        assert "* * 1" in proposer.schedule  # Monday
 
     def test_standalone_jobs_have_weekly_schedule(self):
         """memory-health, ddd-refresh run on their own weekly schedule."""
         from jobs.system_jobs import SYSTEM_JOBS
         mh = next(j for j in SYSTEM_JOBS if j.id == "memory-health")
         ddd = next(j for j in SYSTEM_JOBS if j.id == "ddd-refresh")
-        # Both run on Sundays (day 0)
-        assert "* * 0" in mh.schedule
-        assert "* * 0" in ddd.schedule
+        # Both run on Mondays (day 1)
+        assert "* * 1" in mh.schedule
+        assert "* * 1" in ddd.schedule
 
     def test_new_job_types_in_enum(self):
         """All new job types are registered in JobType enum."""

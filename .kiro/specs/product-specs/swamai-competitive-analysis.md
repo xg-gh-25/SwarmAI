@@ -180,7 +180,7 @@ Open-source autonomous AI assistant (300k+ GitHub stars) with 21+ messaging inte
 | **Philosophy** | Deep workspace — context compounds | Wide connector — AI everywhere |
 | **Memory** | 3-layer pipeline + self-evolution | Session pruning, no distillation |
 | **Context** | 11-file priority chain, token budgets, L0/L1 cache | Standard system prompt |
-| **Channels** | Desktop + Slack + Feishu | 21+ messaging platforms |
+| **Channels** | Desktop + Slack | 21+ messaging platforms |
 | **Skills** | 50+ curated + self-built | 5,400+ marketplace |
 | **Voice/Mobile** | -- | Wake word + iOS/Android |
 

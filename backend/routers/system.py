@@ -2,6 +2,7 @@
 import json as _json
 import logging
 import os
+import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -660,6 +661,42 @@ async def get_managed_services():
     """Get status of all managed sidecar services (Slack bot, etc.)."""
     from core.service_manager import service_manager
     return {"services": service_manager.get_status()}
+
+
+def _run_install_daemon() -> dict:
+    """Run the daemon installer and return result.
+
+    Separated for testability (mock target).
+    """
+    from channels.install_backend_daemon import install
+    install()
+    return {"status": "installed", "port": 18321}
+
+
+@router.post("/install-daemon")
+async def install_daemon():
+    """Install the SwarmAI backend daemon (launchd plist).
+
+    Enables 24/7 operation: channels (Slack) and background jobs stay
+    alive even when the desktop app is closed.  macOS only.
+    Idempotent — safe to call when already installed.
+    """
+    if sys.platform != "darwin":
+        from fastapi.responses import JSONResponse
+        return JSONResponse(
+            status_code=400,
+            content={"status": "error", "detail": "Daemon mode is only available on macOS"},
+        )
+    try:
+        result = _run_install_daemon()
+        return result
+    except Exception as e:
+        logger.error("Failed to install daemon: %s", e)
+        from fastapi.responses import JSONResponse
+        return JSONResponse(
+            status_code=500,
+            content={"status": "error", "detail": str(e)},
+        )
 
 
 @router.post("/uninstall-cleanup")

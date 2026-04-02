@@ -295,7 +295,7 @@
   <rect x="735" y="112" width="50" height="18" rx="4" fill="#ec4899" fill-opacity="0.1" stroke="#ec4899" stroke-width="0.5"/>
   <text x="760" y="125" text-anchor="middle" fill="#f472b6" font-family="Arial,Helvetica,sans-serif" font-size="8">Slack</text>
   <rect x="793" y="112" width="50" height="18" rx="4" fill="#06b6d4" fill-opacity="0.1" stroke="#06b6d4" stroke-width="0.5"/>
-  <text x="818" y="125" text-anchor="middle" fill="#22d3ee" font-family="Arial,Helvetica,sans-serif" font-size="8">Feishu</text>
+  <text x="818" y="125" text-anchor="middle" fill="#22d3ee" font-family="Arial,Helvetica,sans-serif" font-size="8"></text>
   <rect x="851" y="112" width="44" height="18" rx="4" fill="#334155" stroke="#475569" stroke-width="0.5" stroke-dasharray="2 2"/>
   <text x="873" y="125" text-anchor="middle" fill="#475569" font-family="Arial,Helvetica,sans-serif" font-size="7">Future</text>
   <text x="815" y="150" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">1 dedicated slot, shared session</text>
@@ -601,7 +601,7 @@
   <tr><td>Pipeline Stages</td><td>8 (EVALUATE &rarr; REFLECT)</td></tr>
   <tr><td>Session States</td><td>5 (COLD &rarr; STREAMING &rarr; IDLE &rarr; WAITING_INPUT &rarr; DEAD)</td></tr>
   <tr><td>Core Engine Level</td><td>L2 (Self-Improving) complete; L3 (Self-Governing) in progress</td></tr>
-  <tr><td>Channels</td><td>Desktop + Slack + Feishu (unified brain)</td></tr>
+  <tr><td>Channels</td><td>Desktop + Slack (unified brain)</td></tr>
   <tr><td>Tech Stack</td><td>4 languages: Rust (Tauri), TypeScript (React), Python (FastAPI), SQL (SQLite)</td></tr>
 </table>
 
@@ -735,7 +735,7 @@
   <rect x="735" y="112" width="50" height="18" rx="4" fill="#ec4899" fill-opacity="0.1" stroke="#ec4899" stroke-width="0.5"/>
   <text x="760" y="125" text-anchor="middle" fill="#f472b6" font-family="Arial,Helvetica,sans-serif" font-size="8">Slack</text>
   <rect x="793" y="112" width="50" height="18" rx="4" fill="#06b6d4" fill-opacity="0.1" stroke="#06b6d4" stroke-width="0.5"/>
-  <text x="818" y="125" text-anchor="middle" fill="#22d3ee" font-family="Arial,Helvetica,sans-serif" font-size="8">Feishu</text>
+  <text x="818" y="125" text-anchor="middle" fill="#22d3ee" font-family="Arial,Helvetica,sans-serif" font-size="8"></text>
   <rect x="851" y="112" width="44" height="18" rx="4" fill="#334155" stroke="#475569" stroke-width="0.5" stroke-dasharray="2 2"/>
   <text x="873" y="125" text-anchor="middle" fill="#475569" font-family="Arial,Helvetica,sans-serif" font-size="7">Future</text>
   <text x="815" y="150" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">1 dedicated slot, shared session</text>
@@ -970,7 +970,7 @@
   <tr>
     <td><strong>Interface</strong></td>
     <td>User interaction surfaces: visual workspace, multi-tab chat, attention dashboard, multi-channel messaging</td>
-    <td>SwarmWS Explorer, Chat Center (1&ndash;4 tabs), Swarm Radar, Channel Gateway (Slack, Feishu)</td>
+    <td>SwarmWS Explorer, Chat Center (1&ndash;4 tabs), Swarm Radar, Channel Gateway (Slack)</td>
   </tr>
   <tr>
     <td><strong>Intelligence</strong></td>
@@ -2138,7 +2138,7 @@
   <text x="732" y="184" fill="#a78bfa" font-family="Arial,Helvetica,sans-serif" font-size="11" font-weight="bold">Channel — DEDICATED</text>
 
   <text x="815" y="210" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">1 reserved slot (always)</text>
-  <text x="815" y="226" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Shared across Slack/Feishu</text>
+  <text x="815" y="226" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Shared across Slack</text>
   <text x="815" y="242" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Claude --resume for continuity</text>
 
   <!-- Channel adapters -->
@@ -2146,7 +2146,7 @@
   <text x="745" y="275" text-anchor="middle" fill="#f472b6" font-family="Arial,Helvetica,sans-serif" font-size="9">Slack</text>
 
   <rect x="785" y="260" width="60" height="22" rx="4" fill="#06b6d4" fill-opacity="0.1" stroke="#06b6d4" stroke-width="0.5"/>
-  <text x="815" y="275" text-anchor="middle" fill="#22d3ee" font-family="Arial,Helvetica,sans-serif" font-size="9">Feishu</text>
+  <text x="815" y="275" text-anchor="middle" fill="#22d3ee" font-family="Arial,Helvetica,sans-serif" font-size="9"></text>
 
   <rect x="855" y="260" width="60" height="22" rx="4" fill="#334155" fill-opacity="0.3" stroke="#334155" stroke-width="0.5" stroke-dasharray="3 2"/>
   <text x="885" y="275" text-anchor="middle" fill="#475569" font-family="Arial,Helvetica,sans-serif" font-size="8">Future</text>
@@ -2211,7 +2211,7 @@
 
 <h3>5.2 Swarm Brain &mdash; Multi-Channel</h3>
 
-<p>The Swarm Brain architecture ensures that regardless of which channel the user communicates through &mdash; desktop chat tab, Slack, Feishu, or future platforms &mdash; it is always the <strong>same Swarm, same memory, same context</strong>.</p>
+<p>The Swarm Brain architecture ensures that regardless of which channel the user communicates through &mdash; desktop chat tab, Slack, or future platforms &mdash; it is always the <strong>same Swarm, same memory, same context</strong>.</p>
 
 <div class="svg-container">
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 560" width="960" height="560">
@@ -2349,9 +2349,8 @@
   <line x1="636" y1="412" x2="700" y2="392" stroke="#f472b6" stroke-width="1" opacity="0.4"/>
   <polygon points="698,389 702,395 696,394" fill="#f472b6" opacity="0.4"/>
 
-  <!-- Feishu -->
   <rect x="690" y="412" width="72" height="26" rx="6" fill="#06b6d4" fill-opacity="0.1" stroke="#06b6d4" stroke-width="0.7"/>
-  <text x="726" y="430" text-anchor="middle" fill="#22d3ee" font-family="Arial,Helvetica,sans-serif" font-size="10" font-weight="bold">Feishu</text>
+  <text x="726" y="430" text-anchor="middle" fill="#22d3ee" font-family="Arial,Helvetica,sans-serif" font-size="10" font-weight="bold"></text>
   <line x1="726" y1="412" x2="740" y2="392" stroke="#22d3ee" stroke-width="1" opacity="0.4"/>
   <polygon points="738,389 742,395 736,394" fill="#22d3ee" opacity="0.4"/>
 
@@ -2368,7 +2367,7 @@
   <!-- ================================================================ -->
   <rect x="320" y="498" width="320" height="38" rx="8" fill="#f59e0b" fill-opacity="0.06" stroke="#f59e0b" stroke-width="0.8" stroke-dasharray="4 2" stroke-opacity="0.4"/>
   <text x="480" y="515" text-anchor="middle" fill="#fbbf24" font-family="Arial,Helvetica,sans-serif" font-size="10" font-weight="bold">USER IDENTITY MAP</text>
-  <text x="480" y="530" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Slack W017T04E  =  Feishu ou_abc  =  WeChat wxid_xxx  =  user_key "xg"</text>
+  <text x="480" y="530" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Slack W017T04E  =  WeChat wxid_xxx  =  user_key "xg"</text>
 
   <!-- Identity arrows from channels to map -->
   <line x1="636" y1="438" x2="550" y2="498" stroke="#f59e0b" stroke-width="0.8" opacity="0.2" stroke-dasharray="3 2"/>
@@ -2404,7 +2403,7 @@
 <table>
   <tr><th>Layer</th><th>Mechanism</th><th>Scope</th></tr>
   <tr><td><strong>L1: Shared Memory</strong></td><td>11 context files loaded at every prompt build</td><td>All sessions (tabs + channels)</td></tr>
-  <tr><td><strong>L2: Cross-Channel Session</strong></td><td>All channels share ONE Claude conversation (<code>--resume</code>)</td><td>Slack + Feishu + future</td></tr>
+  <tr><td><strong>L2: Cross-Channel Session</strong></td><td>All channels share ONE Claude conversation (<code>--resume</code>)</td><td>Slack + future</td></tr>
   <tr><td><strong>L3: Active Session Digest</strong></td><td>Sibling session summaries injected into prompts</td><td>Tabs &harr; Channels (bidirectional)</td></tr>
 </table>
 
@@ -2933,7 +2932,7 @@
     <td>Channel architecture</td>
     <td>Shared session (serialized)</td>
     <td>Independent sessions per channel</td>
-    <td>"One brain" principle: user says something on Slack, Feishu knows it too. Independent sessions fragment the agent's understanding of the user.</td>
+    <td>"One brain" principle: user says something on Slack knows it too. Independent sessions fragment the agent's understanding of the user.</td>
   </tr>
   <tr>
     <td>Skill system</td>

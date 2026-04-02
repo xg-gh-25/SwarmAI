@@ -53,6 +53,15 @@ class LifecycleManager:
     LOOP_INTERVAL: float = 60.0  # Check every 60 seconds
     IDLE_HOOK_GRACE: float = 120.0  # Fire hooks after 120s idle (grace period)
     STREAMING_TIMEOUT_SECONDS: float = 300.0  # 5 min no SDK events → stuck stream
+    STARTUP_BACKLOG_CAP: int = 5  # Max sessions to process on startup scan
+
+    # Memory pressure thresholds (configurable via env vars).
+    # SWARMAI_MEMORY_EVICT_PCT: % used → start evicting IDLE sessions
+    # SWARMAI_MEMORY_CIRCUIT_BREAKER_PCT: % used → kill heaviest STREAMING session
+    MEMORY_EVICT_PCT: float = float(os.environ.get("SWARMAI_MEMORY_EVICT_PCT", "85"))
+    MEMORY_CIRCUIT_BREAKER_PCT: float = float(
+        os.environ.get("SWARMAI_MEMORY_CIRCUIT_BREAKER_PCT", "92")
+    )
 
     def __init__(
         self,
@@ -223,9 +232,12 @@ class LifecycleManager:
                     await self._check_ttl()
                     await self._cleanup_dead()
                     await self._check_memory_pressure()
-                    # Reap orphans every 10th cycle (~10 min)
-                    if cycle % 10 == 0:
+                    # Reap orphans every 3rd cycle (~3 min) — was 10th (~10 min).
+                    # Reduced after zombie process incident (248% CPU, 2026-04-01).
+                    if cycle % 3 == 0:
                         await self._reap_orphans()
+                    # Heavier cleanup every 10th cycle (~10 min)
+                    if cycle % 10 == 0:
                         await self._purge_stale_cold()
                         await self._cleanup_stale_channel_sessions()
                         await self._cleanup_expired_messages()
@@ -274,8 +286,12 @@ class LifecycleManager:
                 if tree_rss <= 0:
                     continue
 
-                # Update peak watermark; warn on first 1.5GB crossing
+                # Update peak watermark; warn on first 1.5GB crossing.
+                # On first sample (peak was 0), record the spawn cost
+                # for adaptive spawn budget estimation (G4 fix).
                 prev_peak = unit._peak_tree_rss_bytes
+                if prev_peak == 0 and tree_rss > 0:
+                    resource_monitor.record_spawn_cost(tree_rss)
                 if tree_rss > prev_peak:
                     unit._peak_tree_rss_bytes = tree_rss
                     if tree_rss > 1_500_000_000 and prev_peak <= 1_500_000_000:
@@ -467,9 +483,9 @@ class LifecycleManager:
         try:
             from database import db
 
-            # 2× gateway TTL = 4 hours.  Conservative: avoids racing with
-            # a user who comes back just after the 2h mark.
-            CLEANUP_TTL_S = 4 * 60 * 60
+            # 2× gateway TTL = 24 hours.  Conservative: avoids racing with
+            # a user who comes back just after the 12h mark.
+            CLEANUP_TTL_S = 24 * 60 * 60
 
             stale = await db.channel_sessions.find_stale(CLEANUP_TTL_S)
             if not stale:
@@ -515,16 +531,17 @@ class LifecycleManager:
 
     # ── Memory pressure relief ─────────────────────────────────────
 
-    # Two-tier memory thresholds:
-    #  85-92% → evict IDLE only (gentle — session can resume cheaply)
-    #  >92%   → KILL heaviest STREAMING session (circuit breaker —
+    # Two-tier memory thresholds (defaults from MEMORY_EVICT_PCT / MEMORY_CIRCUIT_BREAKER_PCT):
+    #  tier 1 → evict IDLE only (gentle — session can resume cheaply)
+    #  tier 2 → KILL heaviest STREAMING session (circuit breaker —
     #            sacrificing one session beats macOS killing everything)
-    _CIRCUIT_BREAKER_PCT: float = 92.0
 
     async def _check_memory_pressure(self) -> None:
         """Two-tier memory pressure relief.
 
-        Tier 1 (>85%): Evict IDLE units — gentle, session resumes cheaply.
+        Tier 1 (>85%): Evict ALL IDLE units (heaviest first) until memory
+          drops below threshold or no IDLE units remain.  Previous behavior
+          evicted only one per 60s cycle — too slow when memory spikes.
         Tier 2 (>92%): Circuit breaker — kill heaviest STREAMING session.
           Losing one streaming session is better than macOS jetsam killing
           the entire app (and losing ALL sessions' in-flight data).
@@ -534,28 +551,31 @@ class LifecycleManager:
         try:
             from .resource_monitor import resource_monitor
             mem = resource_monitor.system_memory()
-            if mem.pressure_level != "critical":
+            if mem.percent_used < self.MEMORY_EVICT_PCT:
                 return
 
             def _rss(u) -> int:
                 metrics = getattr(u, "_last_metrics", None)
                 return metrics.rss_bytes if metrics else 0
 
-            # ── Tier 1: evict IDLE units first ──────────────────────
-            idle_units = [
-                u for u in self._router.list_units()
-                if u.state == SessionState.IDLE
-            ]
-            if idle_units:
-                idle_units.sort(key=_rss, reverse=True)
-                victim = idle_units[0]
-
+            # ── Tier 1: evict IDLE units until headroom restored ────
+            # Sort heaviest first, evict in a loop until memory is OK
+            # or no IDLE units remain.
+            idle_units = sorted(
+                [u for u in self._router.list_units()
+                 if u.state == SessionState.IDLE],
+                key=_rss, reverse=True,
+            )
+            evicted = 0
+            for victim in idle_units:
                 logger.warning(
                     "lifecycle.memory_pressure_tier1: %.1f%% — evicting "
-                    "IDLE session %s (rss=%dMB)",
+                    "IDLE session %s (rss=%dMB) [%d/%d]",
                     mem.percent_used,
                     victim.session_id,
                     _rss(victim) // (1024 * 1024),
+                    evicted + 1,
+                    len(idle_units),
                 )
 
                 if not victim._hooks_enqueued and self._hook_executor:
@@ -565,13 +585,26 @@ class LifecycleManager:
                         victim._hooks_enqueued = True
 
                 await victim.kill()
+                evicted += 1
                 resource_monitor.invalidate_cache()
-                return
+
+                # Re-check: if memory dropped below eviction threshold, stop
+                mem = resource_monitor.system_memory()
+                if mem.percent_used < self.MEMORY_EVICT_PCT:
+                    logger.info(
+                        "lifecycle.memory_pressure_tier1: pressure relieved "
+                        "after evicting %d session(s) (now %.1f%%)",
+                        evicted, mem.percent_used,
+                    )
+                    return
+
+            if evicted > 0:
+                return  # Evicted everything we could
 
             # ── Tier 2: circuit breaker — kill heaviest STREAMING ────
             # Only triggers when NO idle units exist AND memory > 92%.
             # This is the last resort before macOS kills everything.
-            if mem.percent_used < self._CIRCUIT_BREAKER_PCT:
+            if mem.percent_used < self.MEMORY_CIRCUIT_BREAKER_PCT:
                 return
 
             streaming_units = [
@@ -589,7 +622,7 @@ class LifecycleManager:
                 "0 IDLE units — KILLING streaming session %s (rss=%dMB) "
                 "to prevent OS-level kill of entire app",
                 mem.percent_used,
-                self._CIRCUIT_BREAKER_PCT,
+                self.MEMORY_CIRCUIT_BREAKER_PCT,
                 victim.session_id,
                 _rss(victim) // (1024 * 1024),
             )
@@ -644,7 +677,13 @@ class LifecycleManager:
                     pass
 
             fired = 0
+            # Cap startup backlog to prevent flooding the hook queue.
+            # 19+ unprocessed sessions × 7 hooks each = 133 items serial.
+            # Process only the most recent — older sessions are less
+            # valuable and the next startup will catch them.
             for session in sessions:
+                if fired >= self.STARTUP_BACKLOG_CAP:
+                    break
                 created = getattr(session, "created_at", "") or ""
                 if created < cutoff:
                     continue  # Too old
@@ -682,6 +721,85 @@ class LifecycleManager:
 
     # ── Startup orphan reaper ─────────────────────────────────────
 
+    # ── Ownership-based orphan detection ──────────────────────────
+    #
+    # Design: every child process inherits SWARMAI_OWNER_PID=<backend_pid>
+    # via os.environ.  The reaper uses this to answer three questions:
+    #
+    # 1. Is this process MINE?  (SWARMAI_OWNER_PID == my_pid)
+    #    → Yes: check if parent is alive.  Dead parent = orphan.
+    #    → No:  not my process.  Never touch it.
+    #
+    # 2. Is this process from a PREVIOUS instance?
+    #    (SWARMAI_OWNER_PID set but != my_pid, and that PID is dead)
+    #    → Yes: stale orphan from a crashed previous backend.  Kill.
+    #
+    # 3. No SWARMAI_OWNER_PID at all?
+    #    → Not a SwarmAI-managed process.  Never touch it.
+    #
+    # This eliminates ALL heuristic-based orphan detection (ancestor
+    # chain walking, ppid==1 checks) and replaces it with a definitive
+    # ownership tag.  No more false positives.
+
+    async def _is_owned_orphan(self, pid: int) -> bool:
+        """Check if a process is an orphan owned by this or a previous backend.
+
+        Reads the process's environment to find SWARMAI_OWNER_PID.
+        Returns True only if the process is definitively a SwarmAI orphan:
+        - Has SWARMAI_OWNER_PID set (it's a SwarmAI child process)
+        - The owner PID is dead (the backend that spawned it has exited)
+
+        Returns False (safe — don't kill) if:
+        - No SWARMAI_OWNER_PID → not a SwarmAI process
+        - Owner PID is alive → legitimate child of a running backend
+        - Can't read env → assume not orphan (fail safe)
+        """
+        try:
+            # Read the process's environment via /proc or ps
+            owner_pid = await self._read_process_owner_pid(pid)
+            if owner_pid is None:
+                return False  # No ownership tag → not ours, don't touch
+
+            # If the owner is us, check if the process's direct parent is alive
+            # (it should be — if it's not, the process was reparented = orphan)
+            my_pid = os.getpid()
+            if owner_pid == my_pid:
+                # Our child — check if it's in known_pids (active session).
+                # If not in known_pids, it's a leaked child from a crashed
+                # session within THIS instance.  But we only kill it if its
+                # parent is dead (reparented to launchd).
+                try:
+                    ppid_result = await asyncio.to_thread(
+                        subprocess.run,
+                        ["ps", "-o", "ppid=", "-p", str(pid)],
+                        capture_output=True, text=True, timeout=5,
+                    )
+                    ppid = int(ppid_result.stdout.strip())
+                    return ppid == 1  # Reparented to launchd = orphan
+                except (ValueError, subprocess.TimeoutExpired):
+                    return False
+
+            # Owner is a different PID — check if that backend is still alive
+            try:
+                os.kill(owner_pid, 0)  # Signal 0 = existence check
+                return False  # Owner is alive → legitimate child
+            except ProcessLookupError:
+                return True  # Owner is dead → orphan from previous instance
+            except PermissionError:
+                return False  # Can't check → assume alive (fail safe)
+
+        except Exception:
+            return False  # Any error → don't kill (fail safe)
+
+    async def _read_process_owner_pid(self, pid: int) -> int | None:
+        """Read SWARMAI_OWNER_PID from a process's environment.
+
+        Delegates to ``session_utils.read_owner_pid()`` (single source
+        of truth) via ``asyncio.to_thread`` for non-blocking I/O.
+        """
+        from .session_utils import read_owner_pid
+        return await asyncio.to_thread(read_owner_pid, pid)
+
     async def _reap_by_pattern(
         self,
         pattern: str,
@@ -693,10 +811,11 @@ class LifecycleManager:
 
         Args:
             pattern: Regex passed to ``pgrep -f``.
-            label: Human-readable name for log messages (e.g. "claude", "pytest").
-            known_pids: PIDs to skip (our own + active session PIDs).
-            require_orphaned: If True, only kill processes whose ppid==1
-                (reparented to launchd/init — truly orphaned).
+            label: Human-readable name for log messages.
+            known_pids: PIDs to skip (active session PIDs + self).
+            require_orphaned: If True, only kill processes confirmed as
+                SwarmAI orphans via ownership tag (SWARMAI_OWNER_PID).
+                Processes without the tag are never killed.
 
         Returns:
             Number of processes killed.
@@ -723,22 +842,13 @@ class LifecycleManager:
                 continue
 
             if require_orphaned:
-                try:
-                    ppid_result = await asyncio.to_thread(
-                        subprocess.run,
-                        ["ps", "-o", "ppid=", "-p", str(pid)],
-                        capture_output=True, text=True, timeout=5,
-                    )
-                    ppid = int(ppid_result.stdout.strip())
-                    if ppid != 1:
-                        continue  # Has a living parent — skip
-                except (ValueError, subprocess.TimeoutExpired):
-                    continue  # Can't determine ppid — skip
+                if not await self._is_owned_orphan(pid):
+                    continue
 
             try:
                 os.kill(pid, signal.SIGKILL)
                 killed += 1
-                logger.info("lifecycle_manager.reap_%s_orphan pid=%d", label, pid)
+                logger.info("lifecycle_manager.reap_%s pid=%d", label, pid)
             except (ProcessLookupError, PermissionError):
                 pass
 
@@ -749,16 +859,25 @@ class LifecycleManager:
         return killed
 
     def _snapshot_known_pids(self) -> set[int]:
-        """Snapshot PIDs from active SessionUnits + tracked children.
+        """Snapshot PIDs from active SessionUnits + tracked children + self.
 
         Re-snapshot before each reap call to close the TOCTOU window
         where a new subprocess spawns between snapshot and kill.
+        Includes our own PID and parent PID to prevent self-kill.
         """
         pids = {
             u.pid for u in self._router.list_units()
             if u.pid is not None
         }
         pids.update(self._tracked_child_pids)
+        # Always protect ourselves and our parent (caffeinate wrapper)
+        pids.add(os.getpid())
+        try:
+            ppid = os.getppid()
+            if ppid > 1:
+                pids.add(ppid)
+        except OSError:
+            pass
         return pids
 
     def _get_mcp_server_patterns(self) -> list[str]:
@@ -809,42 +928,60 @@ class LifecycleManager:
             return _FALLBACK_PATTERNS
 
     async def _reap_orphans(self) -> None:
-        """Find and kill orphaned processes not owned by any SessionUnit.
+        """Find and kill orphaned SwarmAI processes via ownership tags.
 
-        Four categories (all use require_orphaned=True to avoid killing
-        active sessions during spawn race):
-        1. Claude CLI processes (bundled SDK binary) — only if orphaned (ppid=1)
-        2. Dev backend (``python main.py``) — only if orphaned (ppid=1)
-        3. Zombie pytest — only if orphaned (ppid=1)
-        4. MCP server processes (dynamic from config) — only if orphaned (ppid=1)
+        Guarded by a 30s total timeout — individual pgrep calls have 5s
+        timeouts, but the aggregate (5 patterns × N PIDs × ownership checks)
+        could take much longer in pathological cases.  The timeout prevents
+        the maintenance loop from stalling.
+
+        Only kills processes that have ``SWARMAI_OWNER_PID`` set in their
+        environment AND whose owner backend is dead.  Processes without
+        the tag are never touched — this is the core safety guarantee.
+        """
+        try:
+            await asyncio.wait_for(self._reap_orphans_impl(), timeout=30.0)
+        except asyncio.TimeoutError:
+            logger.warning("Orphan reaper timed out after 30s — skipping cycle")
+        except Exception as exc:
+            logger.warning("Orphan reaper failed (non-fatal): %s", exc)
+
+    async def _reap_orphans_impl(self) -> None:
+        """Inner implementation of orphan reaping (called with timeout guard).
+
+        Categories:
+        1. Claude CLI + SDK workers
+        2. Dev backend (``python main.py``)
+        3. Zombie pytest (including xdist workers)
+        4. MCP server processes (dynamic from config)
 
         Re-snapshots known_pids before each pattern to minimize the
         TOCTOU window between PID discovery and kill.
         """
         try:
+            known = self._snapshot_known_pids()
+
             await self._reap_by_pattern(
-                "claude_agent_sdk/_bundled/claude", "claude",
-                self._snapshot_known_pids(),
-                require_orphaned=True,
+                "claude_agent_sdk/(_bundled/claude|-c.*from claude_agent_sdk)",
+                "claude", known, require_orphaned=True,
             )
             await self._reap_by_pattern(
                 "python main.py", "dev_backend",
-                self._snapshot_known_pids(),
-                require_orphaned=True,
+                self._snapshot_known_pids(), require_orphaned=True,
             )
             await self._reap_by_pattern(
                 "pytest", "pytest",
-                self._snapshot_known_pids(),
-                require_orphaned=True,
+                self._snapshot_known_pids(), require_orphaned=True,
             )
 
             # ── MCP server orphan reaping ──────────────────────────────────
-            # Read MCP server names dynamically from config, fall back to
-            # static list if config read fails.
+            # Merge all MCP patterns into a single pgrep call to reduce
+            # fork overhead (was: one pgrep per MCP server name).
             mcp_patterns = self._get_mcp_server_patterns()
-            for pattern in mcp_patterns:
+            if mcp_patterns:
+                merged_pattern = "|".join(mcp_patterns)
                 await self._reap_by_pattern(
-                    pattern, f"mcp_{pattern}",
+                    merged_pattern, "mcp",
                     self._snapshot_known_pids(),
                     require_orphaned=True,
                 )

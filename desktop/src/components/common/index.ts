@@ -30,4 +30,5 @@ export { ResizableTable, ResizableTableCell } from './ResizableTable';
 export { default as BackendStartupOverlay } from './BackendStartupOverlay';
 export { default as UpdateNotification } from './UpdateNotification';
 export { default as ShutdownOverlay } from './ShutdownOverlay';
+export { default as DaemonNudgeBanner } from './DaemonNudgeBanner';
 

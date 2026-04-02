@@ -394,7 +394,7 @@ SwarmAI/
 │   ├── routers/             # API 路由 (chat, skills, mcp, settings, workspace)
 │   ├── hooks/               # 会话后钩子 (DailyActivity, auto-commit, distillation)
 │   ├── skills/              # 内置技能定义 (55+)
-│   ├── channels/            # 渠道适配器 (Slack, Feishu) + 网关
+│   ├── channels/            # 渠道适配器 (Slack) + 网关
 │   ├── services/            # Sidecar 服务 (jobs, signals, Slack bot)
 │   └── database/            # SQLite + 迁移
 │

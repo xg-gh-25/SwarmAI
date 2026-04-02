@@ -866,12 +866,23 @@ async def health_check():
         else 0
     )
 
+    # F6: Verify DB is actually reachable — prevents "false healthy"
+    db_healthy = True
+    try:
+        from database import db
+        await db.execute("SELECT 1")
+    except Exception:
+        db_healthy = False
+
+    status = "healthy" if db_healthy else "degraded"
+
     return {
-        "status": "healthy",
+        "status": status,
         "version": settings.app_version,
         "sdk": "claude-agent-sdk",
         "pending_hook_tasks": pending_hooks,
         "boot_id": _boot_id,
+        "db_healthy": db_healthy,
     }
 
 
@@ -896,7 +907,12 @@ async def shutdown():
     """
     logger.info("Shutdown endpoint called - disconnecting all clients")
     t0 = time.monotonic()
-    await session_registry.disconnect_all()
+    try:
+        # Timeout 8s — 2s shorter than Tauri's 10s curl timeout.
+        # Ensures normal path finishes before force-kill.
+        await asyncio.wait_for(session_registry.disconnect_all(), timeout=8.0)
+    except asyncio.TimeoutError:
+        logger.warning("disconnect_all timed out after 8s — proceeding with shutdown")
     elapsed = time.monotonic() - t0
     logger.info("Shutdown endpoint completed in %.2fs", elapsed)
     return {"status": "shutting_down"}

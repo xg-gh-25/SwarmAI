@@ -161,7 +161,7 @@ cover_highlights = [
     ["3-Layer Memory Pipeline", "Session capture → distillation → curated long-term memory (git-verified)"],
     ["55+ Skills", "Self-evolution: agent builds new skills when it hits capability gaps"],
     ["8-Stage Autonomous Pipeline", "EVALUATE → THINK → PLAN → BUILD → REVIEW → TEST → DELIVER → REFLECT"],
-    ["Multi-Channel Unified Brain", "Desktop + Slack + Feishu — same agent, same memory, same context"],
+    ["Multi-Channel Unified Brain", "Desktop + Slack — same agent, same memory, same context"],
 ]
 t = Table(cover_highlights, colWidths=[5*cm, 12.5*cm])
 t.setStyle(TableStyle([
@@ -239,7 +239,7 @@ story.append(make_table(
         ["Pipeline Stages", "8 (EVALUATE → REFLECT)"],
         ["Session States", "5 (COLD → STREAMING → IDLE → WAITING_INPUT → DEAD)"],
         ["Core Engine Level", "L4 (Autonomous) — two compound-value loops closed: DDD auto-refresh + auto-skill proposals"],
-        ["Channels", "Desktop + Slack + Feishu (unified brain)"],
+        ["Channels", "Desktop + Slack (unified brain)"],
         ["Tech Stack", "4 languages: Rust (Tauri), TypeScript (React), Python (FastAPI), SQL (SQLite)"],
     ],
     col_widths=[5.5*cm, 12*cm]
@@ -261,7 +261,7 @@ _fw = CONTENT_W
 story.append(make_table(
     ["Layer", "What It Does", "Key Components"],
     [
-        ["Interface", "Visual workspace, multi-tab chat, dashboard, channels", "SwarmWS Explorer, Chat (1–4 tabs), Radar, Gateway (Slack/Feishu)"],
+        ["Interface", "Visual workspace, multi-tab chat, dashboard, channels", "SwarmWS Explorer, Chat (1–4 tabs), Radar, Gateway (Slack)"],
         ["Intelligence", "Proactive awareness, autonomous execution, jobs", "Proactive Intelligence, Signal Pipeline, Autonomous Pipeline, Job System"],
         ["Harness", "Core: raw Claude → persistent, evolving agent", "Context (11 files), Memory (3-layer), Evolution (55+ skills), Safety"],
         ["Session", "Multi-session lifecycle, isolation, recovery", "SessionRouter, SessionUnit (5-state), LifecycleManager, 7 Hooks"],
@@ -436,7 +436,7 @@ story.append(PageBreak())
 story.append(heading("5. Swarm Brain — Multi-Channel Architecture"))
 story.append(hr())
 story.append(body(
-    "Swarm is a personal assistant with <b>one brain</b>. Regardless of channel — desktop, Slack, Feishu — "
+    "Swarm is a personal assistant with <b>one brain</b>. Regardless of channel — desktop, Slack — "
     "it is the same Swarm, same memory, same context. Adding a new channel: write an adapter (~250 lines), "
     "register in gateway, map user identity. Zero architecture change."
 ))
@@ -446,7 +446,7 @@ story.append(make_table(
     ["Layer", "Mechanism", "Scope"],
     [
         ["L1: Shared Memory", "11 context files loaded at every prompt build", "All sessions (tabs + channels)"],
-        ["L2: Cross-Channel Session", "All channels share ONE Claude conversation (--resume)", "Slack + Feishu + future"],
+        ["L2: Cross-Channel Session", "All channels share ONE Claude conversation (--resume)", "Slack + future"],
         ["L3: Active Session Digest", "Sibling session summaries injected into prompts", "Tabs ↔ Channels (bidirectional)"],
     ],
     col_widths=[CONTENT_W*0.22, CONTENT_W*0.44, CONTENT_W*0.34]
@@ -456,7 +456,7 @@ for item in [
     "<b>Chat tabs are parallel</b> (multi-slot, per-topic) — for deep work",
     "<b>Channel session is serialized</b> (single dedicated slot) — for quick exchanges across platforms",
     "<b>One dedicated channel slot always reserved</b> (min_tabs = 2) — channels never starve chat, chat never starves channels",
-    "<b>User identity mapping</b> ties platform IDs (Slack W017T04E, Feishu ou_abc) to one unified user_key",
+    "<b>User identity mapping</b> ties platform IDs (Slack W017T04E,  ou_abc) to one unified user_key",
 ]:
     story.append(bullet(item))
 story.append(PageBreak())
@@ -594,7 +594,7 @@ story.append(make_table(
         ["Memory", "3-layer distillation (files)", "Vector DB (RAG)", "Files are git-trackable, human-readable, editable, version-controlled"],
         ["Sessions", "4-component decomposition", "Monolithic AgentManager", "5,428-line God Object caused 15+ bugs (COE). Clean error boundaries."],
         ["Context", "11-file priority chain + budget", "Single system prompt", "Priority truncation ensures identity/safety survive under pressure"],
-        ["Channels", "Shared session (serialized)", "Independent per channel", "'One brain': Slack knows what Feishu said. No fragmentation."],
+        ["Channels", "Shared session (serialized)", "Independent per channel", "'One brain': Slack knows what  said. No fragmentation."],
         ["Skills", "SKILL.md instruction files", "Compiled plugins", "LLM-native: agent reads as natural language. New skill = markdown file."],
         ["Data", "All local (SQLite + filesystem)", "Cloud database", "Zero cloud dependency. Privacy by default. Works offline."],
         ["Safety", "Defense-in-depth (7 layers)", "Single permission gate", "No single layer sufficient. Redundant protection."],

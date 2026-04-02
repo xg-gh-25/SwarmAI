@@ -647,6 +647,7 @@ class SessionRouter:
             session_context=unit._hook_session_context,
             channel_context=channel_context,
             editor_context=editor_context,
+            extra_mcps=unit._extra_mcps or None,
         )
 
         # Copy system prompt metadata to registry for TSCC viewer
@@ -762,6 +763,38 @@ class SessionRouter:
         if unit is None:
             return {"success": False, "message": f"Session {session_id} not found"}
         return await unit.compact(instructions)
+
+    async def enable_mcp_for_session(
+        self, session_id: str, mcp_name: str,
+    ) -> dict:
+        """Activate a deferred MCP for a session via kill+respawn.
+
+        The session must be IDLE (not streaming). Kills the subprocess so
+        the next ``send()`` spawns fresh with the updated MCP list.
+        The caller is responsible for updating the MCP config (e.g. changing
+        the entry's tier from ``ondemand`` to ``always`` for this session).
+
+        Returns dict with success status and message.
+        """
+        unit = self.get_unit(session_id)
+        if unit is None:
+            return {
+                "success": False,
+                "message": f"Session {session_id} not found",
+            }
+        try:
+            await unit.reclaim_for_mcp_swap(mcp_name=mcp_name)
+            logger.info(
+                "Reclaimed session %s for MCP swap (requested: %s)",
+                session_id, mcp_name,
+            )
+            return {
+                "success": True,
+                "message": f"Session reclaimed for MCP '{mcp_name}'. "
+                           f"Next message will spawn with updated MCPs.",
+            }
+        except RuntimeError as exc:
+            return {"success": False, "message": str(exc)}
 
     async def disconnect_all(self) -> None:
         """Kill all alive SessionUnits. Called at shutdown.

@@ -200,43 +200,56 @@ class PromptBuilder:
         self,
         working_directory: str,
         enable_mcp: bool,
-        lazy: bool = False,
-    ) -> tuple[dict, list[str]]:
-        """Build MCP server configuration from file-based layers.
+        channel_context: Optional[dict] = None,
+        extra_always: Optional[set[str]] = None,
+    ) -> tuple[dict, list[str], list[dict]]:
+        """Build MCP server configuration with tier-based lazy loading.
 
-        Delegates to ``mcp_config_loader.load_mcp_config()`` which reads
-        ``.claude/mcps/mcp-catalog.json`` and ``.claude/mcps/mcp-dev.json``.
-
-        When ``lazy=True``, only ``builder-mcp`` is included in the initial
-        config. Other MCPs (outlook, slack, sentral, taskei) are loaded
-        on-demand via MCP hot-swap (Phase 4).
+        Delegates to ``mcp_config_loader.load_mcp_config_tiered()`` which
+        reads ``.claude/mcps/mcp-catalog.json`` and ``.claude/mcps/mcp-dev.json``
+        and filters by tier (always/channel/ondemand).
 
         Args:
             working_directory: Workspace root path.
             enable_mcp: Whether MCP servers are enabled.
-            lazy: If True, only include builder-mcp (Phase 4 optimization).
+            channel_context: If provided, also loads ``channel`` tier MCPs.
+            extra_always: MCP names to force-load regardless of tier
+                (from per-session ``_extra_mcps``).
 
         Returns:
-            Tuple of ``(mcp_servers, disallowed_tools)`` in the format
-            expected by ``ClaudeAgentOptions``.
+            Tuple of ``(mcp_servers, disallowed_tools, deferred)`` where
+            *deferred* is metadata about MCPs not loaded (for system prompt).
         """
-        from .mcp_config_loader import load_mcp_config
-        mcp_servers, disallowed_tools = load_mcp_config(Path(working_directory), enable_mcp)
+        from .mcp_config_loader import load_mcp_config_tiered
+        return load_mcp_config_tiered(
+            Path(working_directory), enable_mcp,
+            channel_context=channel_context,
+            extra_always=extra_always,
+        )
 
-        if lazy and mcp_servers:
-            # Keep only builder-mcp for initial spawn
-            filtered = {
-                name: config for name, config in mcp_servers.items()
-                if "builder" in name.lower()
-            }
-            if filtered:
-                logger.info(
-                    "Lazy MCP: loading %d/%d servers (builder-mcp only)",
-                    len(filtered), len(mcp_servers),
-                )
-                return filtered, disallowed_tools
+    @staticmethod
+    def format_deferred_mcp_section(deferred: list[dict]) -> str:
+        """Format deferred MCPs as a system prompt section.
 
-        return mcp_servers, disallowed_tools
+        Returns an empty string if no MCPs are deferred.
+        """
+        if not deferred:
+            return ""
+
+        lines = [
+            "\n## Deferred MCPs (available but not loaded)",
+            "These MCP tool servers are installed but NOT started (to save memory).",
+            "When you need one of these MCPs, tell the user which MCP you need and why.",
+            "The user's UI will show an 'Enable' button to load it. Once loaded,",
+            "it will be available for all subsequent messages in this session.\n",
+        ]
+        for item in deferred:
+            desc = item.get("description", "")
+            tier = item.get("tier", "ondemand")
+            desc_part = f" — {desc}" if desc else ""
+            lines.append(f"- **{item['name']}** [{tier}]{desc_part}")
+
+        return "\n".join(lines)
 
     # ------------------------------------------------------------------
     # merge_user_local_mcp_servers
@@ -742,6 +755,13 @@ class PromptBuilder:
                         f"context when responding."
                     )
 
+            # ── Deferred MCP list (Lazy MCP Loading) ──
+            _deferred = agent_config.get("_deferred_mcps")
+            if _deferred:
+                deferred_section = self.format_deferred_mcp_section(_deferred)
+                if deferred_section:
+                    context_text += f"\n\n{deferred_section}"
+
             if context_text:
                 existing = agent_config.get("system_prompt", "") or ""
                 agent_config["system_prompt"] = (
@@ -986,6 +1006,7 @@ class PromptBuilder:
         session_context: Optional[dict] = None,
         channel_context: Optional[dict] = None,
         editor_context: Optional[dict] = None,
+        extra_mcps: Optional[set[str]] = None,
     ) -> "ClaudeAgentOptions":
         """Orchestrate helper methods to assemble ClaudeAgentOptions.
 
@@ -1077,8 +1098,16 @@ class PromptBuilder:
                 allowed_directories.extend(extra_dirs)
             file_access_handler = create_file_access_permission_handler(allowed_directories)
 
-        # 4. Build MCP server configuration (file-based, no DB)
-        mcp_servers, mcp_disallowed_tools = self.build_mcp_config(working_directory, enable_mcp)
+        # 4. Build MCP server configuration (file-based, tier-aware lazy loading)
+        mcp_servers, mcp_disallowed_tools, deferred_mcps = self.build_mcp_config(
+            working_directory, enable_mcp,
+            channel_context=channel_context,
+            extra_always=extra_mcps,
+        )
+
+        # 4a. Store deferred MCPs for system prompt injection
+        if deferred_mcps:
+            agent_config["_deferred_mcps"] = deferred_mcps
 
         # 5. Build sandbox configuration
         sandbox_settings = self.build_sandbox_config()

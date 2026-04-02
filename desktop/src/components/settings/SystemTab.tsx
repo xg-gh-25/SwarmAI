@@ -30,14 +30,21 @@ export default function SystemTab() {
 
   useEffect(() => {
     const loadStatus = async () => {
-      const port = getBackendPort();
       try {
-        const resp = await fetch(`http://localhost:${port}/health`, {
-          signal: AbortSignal.timeout(2000),
-        });
-        setBackendStatus({ running: resp.ok, port, is_daemon_mode: false });
+        // Prefer Tauri state — includes is_daemon_mode from lib.rs
+        const status = await tauriService.getBackendStatus();
+        setBackendStatus(status);
       } catch {
-        setBackendStatus({ running: false, port, is_daemon_mode: false });
+        // Fallback: health check only (dev mode or Tauri unavailable)
+        const port = getBackendPort();
+        try {
+          const resp = await fetch(`http://localhost:${port}/health`, {
+            signal: AbortSignal.timeout(2000),
+          });
+          setBackendStatus({ running: resp.ok, port, is_daemon_mode: false });
+        } catch {
+          setBackendStatus({ running: false, port, is_daemon_mode: false });
+        }
       }
     };
     loadStatus();
@@ -72,6 +79,12 @@ export default function SystemTab() {
             <div className="flex items-center justify-between">
               <span className="text-[var(--color-text-muted)]">Port</span>
               <span className="text-[var(--color-text)]">{backendStatus.port}</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-[var(--color-text-muted)]">Mode</span>
+              <span className={backendStatus.is_daemon_mode ? 'text-green-400' : 'text-[var(--color-text)]'}>
+                {backendStatus.is_daemon_mode ? 'Daemon (24/7)' : 'Sidecar'}
+              </span>
             </div>
           </div>
         ) : (

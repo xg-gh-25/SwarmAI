@@ -372,6 +372,12 @@ class SessionUnit:
         # ── Zombie detection — set True when meaningful content emitted ──
         self._content_emitted: bool = False
 
+        # ── Lazy MCP: per-session overrides ──────────────────────────
+        # MCP names added via enable_mcp_for_session().  On next spawn,
+        # these names are passed to load_mcp_config_tiered(extra_always=...)
+        # so they load regardless of their tier in mcp-dev.json.
+        self._extra_mcps: set[str] = set()
+
         # ── Resource observability ─────────────────────────────────
         self._last_error_type: Optional[str] = None  # FailureType.value: "oom" | "rate_limit" | "api_error" | "timeout" | "unknown"
         self._last_metrics: Optional[Any] = None      # ProcessMetrics from health_check
@@ -2035,13 +2041,17 @@ class SessionUnit:
             await self._crash_to_cold_async(clear_identity=False)
             raise
 
-    async def reclaim_for_mcp_swap(self) -> None:
+    async def reclaim_for_mcp_swap(self, mcp_name: Optional[str] = None) -> None:
         """Kill subprocess to prepare for MCP hot-swap.
 
         Called when the session needs a different set of MCP servers.
         Kills the current subprocess (IDLE → COLD), so the next
         ``send()`` call will spawn a fresh subprocess with the new
         MCP configuration.
+
+        If *mcp_name* is provided, it's added to ``_extra_mcps`` so
+        ``load_mcp_config_tiered(extra_always=...)`` forces it to load
+        on the next spawn — regardless of its tier in mcp-dev.json.
 
         State: IDLE → DEAD → COLD.
         Raises RuntimeError if not in IDLE state.
@@ -2050,6 +2060,12 @@ class SessionUnit:
             raise RuntimeError(
                 f"Cannot reclaim for MCP swap in state {self.state.value} "
                 f"(session_id={self.session_id})"
+            )
+        if mcp_name:
+            self._extra_mcps.add(mcp_name)
+            logger.info(
+                "Session %s: added '%s' to extra_mcps (total: %s)",
+                self.session_id, mcp_name, self._extra_mcps,
             )
         await self.kill()
 

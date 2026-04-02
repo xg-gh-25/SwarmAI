@@ -7,8 +7,7 @@ Single authority for all test infrastructure:
 1. **Concurrency guard** — File-based lock prevents multiple pytest runs.
 
 2. **xdist enforcement** — pyproject.toml addopts has ``-n 4``. Conftest
-   only *downgrades* (low memory) or *overrides bypasses* (-n 0, --override-ini).
-   Never silently falls back to serial.
+   clamps to memory-safe worker count, respects explicit ``-n 0`` for serial.
 
 3. **Tiered test selection** — Three markers for selective running:
    - ``pbt`` — auto-applied to all Hypothesis property-based tests
@@ -218,8 +217,11 @@ def pytest_configure(config):
         return
 
     # --- xdist enforcement ---
-    # pyproject.toml addopts has -n 4. This block ONLY overrides when needed:
-    # memory pressure → downgrade, agent bypass (-n 0, --override-ini) → force back.
+    # pyproject.toml addopts has -n 4. This block handles two cases:
+    # 1. Memory pressure → downgrade to fewer workers or serial
+    # 2. Explicit -n 0 → RESPECT it (agent coding runs small test sets where
+    #    serial is faster due to ~8s worker startup overhead)
+    # Never force xdist back on when explicitly disabled.
     try:
         import xdist  # noqa: F401
     except ImportError:
@@ -233,13 +235,9 @@ def pytest_configure(config):
     safe_count = _compute_safe_worker_count()
 
     if not hasattr(config.option, "numprocesses"):
-        # --override-ini="addopts=" stripped -n flag. Re-inject.
-        if safe_count > 0:
-            config.option.numprocesses = safe_count
-            config.option.dist = "load"
-            print(f"⚠️  xdist re-injected: {safe_count} workers (was stripped)", file=_sys.stderr)
-        else:
-            print("⚠️  xdist: insufficient memory + no -n flag. Serial.", file=_sys.stderr)
+        # --override-ini="addopts=" stripped -n flag entirely.
+        # Don't re-inject — the caller explicitly removed it.
+        print("ℹ️  xdist: -n flag stripped by caller. Serial.", file=_sys.stderr)
         return
 
     requested = config.option.numprocesses or 0
@@ -248,10 +246,10 @@ def pytest_configure(config):
         config.option.numprocesses = 0
         config.option.dist = "no"
         print("⚠️  xdist DISABLED — insufficient memory. Serial.", file=_sys.stderr)
-    elif requested == 0 and safe_count > 0:
-        config.option.numprocesses = safe_count
-        config.option.dist = "load"
-        print(f"⚠️  xdist: overrode -n 0 → {safe_count} workers", file=_sys.stderr)
+    elif requested == 0:
+        # Explicit -n 0 — respect the caller's choice. Serial is faster
+        # for small test sets (<50 tests) due to worker startup overhead.
+        print("ℹ️  xdist: -n 0 respected. Serial.", file=_sys.stderr)
     elif requested > safe_count:
         config.option.numprocesses = safe_count
         print(f"⚠️  xdist: clamped {requested} → {safe_count} workers", file=_sys.stderr)

@@ -39,25 +39,6 @@ def list_supported_types() -> list[dict]:
                 {"key": "app_token", "label": "App Token (xapp-)", "type": "password", "required": True},
             ],
         },
-        "discord": {
-            "id": "discord",
-            "label": "Discord",
-            "description": "Connect to Discord via Gateway WebSocket",
-            "config_fields": [
-                {"key": "bot_token", "label": "Bot Token", "type": "password", "required": True},
-                {"key": "guild_id", "label": "Guild ID (optional)", "type": "text", "required": False},
-            ],
-        },
-        "web_widget": {
-            "id": "web_widget",
-            "label": "Web Widget",
-            "description": "Embeddable chat widget for websites",
-            "config_fields": [
-                {"key": "allowed_origins", "label": "Allowed Origins", "type": "text_list", "required": False},
-                {"key": "widget_theme", "label": "Theme", "type": "select", "options": ["light", "dark"], "required": False},
-                {"key": "greeting_message", "label": "Greeting Message", "type": "text", "required": False},
-            ],
-        },
     }
 
     result = []
@@ -78,9 +59,3 @@ def load_adapters() -> None:
         from channels.adapters import slack  # noqa: F401
     except ImportError:
         logger.info("Slack adapter not available (slack-bolt not installed)")
-
-    # Future: Discord adapter
-    # try:
-    #     from channels.adapters import discord  # noqa: F401
-    # except ImportError:
-    #     logger.info("Discord adapter not available (discord.py not installed)")

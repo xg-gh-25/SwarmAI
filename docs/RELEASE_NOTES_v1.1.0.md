@@ -32,7 +32,7 @@ Six interconnected flywheels create compound growth: Self-Evolution, Self-Memory
 
 ### Swarm Brain — One AI, Every Channel
 
-One brain across Desktop, Slack, and Feishu. Ask something on Slack, continue the conversation on desktop — Swarm remembers everything from both. All channels share memory, context, and session state.
+One brain across Desktop, Slack, Ask something on Slack, continue the conversation on desktop — Swarm remembers everything from both. All channels share memory, context, and session state.
 
 ### Autonomous Pipeline — Requirement to PR
 

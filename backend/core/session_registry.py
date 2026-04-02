@@ -107,6 +107,16 @@ def configure_hooks(
 
 # ── Startup / Shutdown ────────────────────────────────────────────
 
+
+def _read_owner_pid_sync(pid: int) -> int | None:
+    """Read SWARMAI_OWNER_PID from a process's environment (sync).
+
+    Delegates to ``session_utils.read_owner_pid()`` — single source of truth.
+    """
+    from .session_utils import read_owner_pid
+    return read_owner_pid(pid)
+
+
 def kill_all_claude_processes() -> int:
     """Kill SwarmAI's own leftover claude CLI processes at startup.
 
@@ -128,8 +138,13 @@ def kill_all_claude_processes() -> int:
         return 0
 
     killed = 0
+    my_pid = os.getpid()
     try:
-        # Match ONLY SwarmAI's bundled claude binary — NOT user's claude CLI
+        # Match ONLY SwarmAI's bundled claude binary — NOT user's claude CLI.
+        # At startup, kill processes owned by a PREVIOUS backend instance
+        # (SWARMAI_OWNER_PID set but owner PID is dead).  Processes owned
+        # by the CURRENT instance (shouldn't exist at startup) are skipped.
+        # Processes without the tag are skipped (not SwarmAI-managed).
         result = subprocess.run(
             ["pgrep", "-f", "claude_agent_sdk/_bundled/claude"],
             capture_output=True, text=True, timeout=5,
@@ -138,22 +153,38 @@ def kill_all_claude_processes() -> int:
             return 0
 
         pids = [int(p) for p in result.stdout.strip().split("\n") if p.strip()]
-        my_pid = os.getpid()
         for pid in pids:
             if pid == my_pid:
                 continue
             try:
-                # Kill children first (MCP servers), then parent
-                try:
-                    subprocess.run(
-                        ["pkill", "-9", "-P", str(pid)],
-                        capture_output=True, timeout=3,
-                    )
-                except Exception:
-                    pass
+                # Ownership check: only kill processes from a previous
+                # backend instance.  Read SWARMAI_OWNER_PID from the
+                # process's environment.
+                owner_pid = _read_owner_pid_sync(pid)
+                if owner_pid is not None and owner_pid == my_pid:
+                    continue  # Our own child (shouldn't exist at startup, but safe)
+                if owner_pid is not None:
+                    # Has ownership tag — check if owner is alive
+                    try:
+                        os.kill(owner_pid, 0)
+                        continue  # Owner is alive — not an orphan
+                    except ProcessLookupError:
+                        pass  # Owner dead — proceed to kill
+                    except PermissionError:
+                        continue  # Can't check — assume alive
+                # owner_pid is None (no tag) at startup = legacy process
+                # from before ownership model.  Kill it (startup guarantee).
+
+                from core.session_unit import _snapshot_descendant_tree, _kill_pids
+                tree = _snapshot_descendant_tree(pid)
+                tree_killed = _kill_pids(tree)
                 os.kill(pid, signal.SIGKILL)
                 killed += 1
-                logger.info("Startup: killed leftover SwarmAI claude pid=%d", pid)
+                logger.info(
+                    "Startup: killed leftover SwarmAI claude pid=%d "
+                    "(+%d descendants, owner=%s)", pid, tree_killed,
+                    owner_pid,
+                )
             except (ProcessLookupError, PermissionError):
                 pass
             except Exception as exc:

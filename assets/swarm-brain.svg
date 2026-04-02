@@ -133,9 +133,7 @@
   <line x1="636" y1="412" x2="700" y2="392" stroke="#f472b6" stroke-width="1" opacity="0.4"/>
   <polygon points="698,389 702,395 696,394" fill="#f472b6" opacity="0.4"/>
 
-  <!-- Feishu -->
   <rect x="690" y="412" width="72" height="26" rx="6" fill="#06b6d4" fill-opacity="0.1" stroke="#06b6d4" stroke-width="0.7"/>
-  <text x="726" y="430" text-anchor="middle" fill="#22d3ee" font-family="Arial,Helvetica,sans-serif" font-size="10" font-weight="bold">Feishu</text>
   <line x1="726" y1="412" x2="740" y2="392" stroke="#22d3ee" stroke-width="1" opacity="0.4"/>
   <polygon points="738,389 742,395 736,394" fill="#22d3ee" opacity="0.4"/>
 
@@ -152,7 +150,6 @@
   <!-- ================================================================ -->
   <rect x="320" y="498" width="320" height="38" rx="8" fill="#f59e0b" fill-opacity="0.06" stroke="#f59e0b" stroke-width="0.8" stroke-dasharray="4 2" stroke-opacity="0.4"/>
   <text x="480" y="515" text-anchor="middle" fill="#fbbf24" font-family="Arial,Helvetica,sans-serif" font-size="10" font-weight="bold">USER IDENTITY MAP</text>
-  <text x="480" y="530" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Slack W017T04E  =  Feishu ou_abc  =  WeChat wxid_xxx  =  user_key "xg"</text>
 
   <!-- Identity arrows from channels to map -->
   <line x1="636" y1="438" x2="550" y2="498" stroke="#f59e0b" stroke-width="0.8" opacity="0.2" stroke-dasharray="3 2"/>

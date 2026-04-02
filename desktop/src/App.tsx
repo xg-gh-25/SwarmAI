@@ -12,7 +12,7 @@ import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-quer
 import { ThemeProvider } from './contexts/ThemeContext';
 import { ToastProvider } from './contexts/ToastContext';
 import { HealthProvider } from './contexts/HealthContext';
-import { BackendStartupOverlay, UpdateNotification, ShutdownOverlay } from './components/common';
+import { BackendStartupOverlay, UpdateNotification, ShutdownOverlay, DaemonNudgeBanner } from './components/common';
 import { getBackendPort } from './services/tauri';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { ToastStack } from './components/common/ToastStack';
@@ -97,6 +97,8 @@ export default function App() {
           {!isDev && <BackendStartupOverlay onReady={() => setIsBackendReady(true)} />}
           {/* Update notification - only shown in production mode */}
           {!isDev && <UpdateNotification />}
+          {/* Daemon mode nudge - only shown in production sidecar mode */}
+          {!isDev && <DaemonNudgeBanner />}
           {/* Only render routes after backend is ready to prevent race conditions */}
           {isBackendReady && <AppRoutes />}
           </ErrorBoundary>

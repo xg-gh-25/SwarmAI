@@ -118,7 +118,6 @@
   <rect x="735" y="112" width="50" height="18" rx="4" fill="#ec4899" fill-opacity="0.1" stroke="#ec4899" stroke-width="0.5"/>
   <text x="760" y="125" text-anchor="middle" fill="#f472b6" font-family="Arial,Helvetica,sans-serif" font-size="8">Slack</text>
   <rect x="793" y="112" width="50" height="18" rx="4" fill="#06b6d4" fill-opacity="0.1" stroke="#06b6d4" stroke-width="0.5"/>
-  <text x="818" y="125" text-anchor="middle" fill="#22d3ee" font-family="Arial,Helvetica,sans-serif" font-size="8">Feishu</text>
   <rect x="851" y="112" width="44" height="18" rx="4" fill="#334155" stroke="#475569" stroke-width="0.5" stroke-dasharray="2 2"/>
   <text x="873" y="125" text-anchor="middle" fill="#475569" font-family="Arial,Helvetica,sans-serif" font-size="7">Future</text>
   <text x="815" y="150" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">1 dedicated slot, shared session</text>

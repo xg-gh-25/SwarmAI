@@ -694,9 +694,25 @@ async fn ensure_daemon_bootstrapped() -> Result<(), String> {
             Ok(())
         }
         Some(5) | Some(37) => {
-            println!("[Tauri] Daemon already loaded (code {}) — launchd will manage",
-                     output.status.code().unwrap_or(-1));
-            Ok(())
+            // Code 5 can mean "already loaded" (Ventura+) or genuine I/O error.
+            // Code 37 = "already bootstrapped". Verify with launchctl list.
+            let code = output.status.code().unwrap_or(-1);
+            let verify = std::process::Command::new("launchctl")
+                .args(["list", "com.swarmai.backend"])
+                .output();
+            match verify {
+                Ok(v) if v.status.success() => {
+                    println!("[Tauri] Daemon already loaded (code {}, verified via launchctl list)", code);
+                    Ok(())
+                }
+                _ => {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    Err(format!(
+                        "launchctl bootstrap returned code {} but service not found in launchctl list: {}",
+                        code, stderr
+                    ))
+                }
+            }
         }
         Some(code) => {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -743,8 +759,10 @@ fn spawn_daemon_health_watchdog(
         let mut known_boot_id: Option<String> = None;
 
         loop {
-            // Normal interval when healthy, fast poll during recovery
-            let sleep_secs = if was_healthy { interval_secs } else { RECOVERY_POLL_SECS };
+            // Adaptive interval: 30s when healthy (saves battery), 3s during recovery.
+            // The caller's interval_secs is used as a minimum — we use max(interval, 30)
+            // to ensure battery-friendly polling in steady state.
+            let sleep_secs = if was_healthy { std::cmp::max(interval_secs, 30) } else { RECOVERY_POLL_SECS };
             tokio::time::sleep(tokio::time::Duration::from_secs(sleep_secs)).await;
 
             // Check if we're still in daemon mode (user might have stopped backend)
@@ -860,7 +878,9 @@ async fn start_backend(
                     backend.pid = None;
                 }
                 // Start background health watchdog (10s interval for faster detection)
-                spawn_daemon_health_watchdog(app_clone, state_inner, 10);
+                spawn_daemon_health_watchdog(app_clone.clone(), state_inner, 10);
+                // Notify frontend of backend mode for UI display / onboarding
+                let _ = app_clone.emit("backend-mode", "daemon");
                 DAEMON_PORT
             }
         };
@@ -960,6 +980,8 @@ async fn start_backend(
                 if let Ok(body) = resp.text().await {
                     if body.contains("\"healthy\"") {
                         println!("[Tauri] Backend healthy after {} attempts", attempt);
+                        // Notify frontend: running in sidecar mode (no 24/7 daemon)
+                        let _ = app.emit("backend-mode", "sidecar");
                         return Ok(port);
                     }
                     println!(

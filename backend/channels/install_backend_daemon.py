@@ -77,14 +77,6 @@ def _deploy_daemon_binary() -> bool:
     daemon_dir = Path.home() / ".swarm-ai" / "daemon"
     daemon_binary = daemon_dir / "python-backend"
 
-    # Already deployed and recent (< 1 hour) — skip
-    if daemon_binary.exists():
-        import time
-        age_hours = (time.time() - daemon_binary.stat().st_mtime) / 3600
-        if age_hours < 1:
-            print(f"  Daemon binary already deployed ({age_hours:.0f}h old)")
-            return True
-
     # Source 1: Installed Tauri app bundle
     app_binary = Path("/Applications/SwarmAI.app/Contents/MacOS/python-backend")
     if not app_binary.exists():
@@ -108,6 +100,15 @@ def _deploy_daemon_binary() -> bool:
     if source is None:
         print("  No backend binary found — daemon will use venv fallback")
         return False
+
+    # Skip if deployed binary is newer than (or same age as) source.
+    # Compares mtime directly — catches app updates immediately.
+    if daemon_binary.exists():
+        deployed_mtime = daemon_binary.stat().st_mtime
+        source_mtime = source.stat().st_mtime
+        if deployed_mtime >= source_mtime:
+            print(f"  Daemon binary already up-to-date (deployed >= source)")
+            return True
 
     # Atomic copy: write to .tmp then rename
     daemon_dir.mkdir(parents=True, exist_ok=True)

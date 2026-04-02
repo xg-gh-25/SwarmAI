@@ -484,6 +484,110 @@ def load_mcp_config(
 
 
 # ---------------------------------------------------------------------------
+# Tier-aware entry point (Lazy MCP Loading)
+# ---------------------------------------------------------------------------
+
+# Valid tier values. Unknown tiers default to "always" (backward-compat).
+_VALID_TIERS = frozenset({"always", "channel", "ondemand"})
+
+
+def _get_tier(entry: dict) -> str:
+    """Return the tier for an MCP entry, defaulting to 'always'."""
+    tier = entry.get("tier", "always")
+    if tier not in _VALID_TIERS:
+        logger.warning(
+            "MCP entry '%s' has unknown tier '%s', treating as 'always'",
+            entry.get("id", "<unknown>"), tier,
+        )
+        return "always"
+    return tier
+
+
+def load_mcp_config_tiered(
+    workspace_path: Path,
+    enable_mcp: bool,
+    channel_context: Optional[dict] = None,
+    extra_always: Optional[set[str]] = None,
+) -> tuple[dict, list[str], list[dict]]:
+    """Load MCP config with tier-based filtering for lazy loading.
+
+    Like ``load_mcp_config()`` but splits entries by tier:
+
+    - ``always``: loaded immediately (every session).
+    - ``channel``: loaded only when *channel_context* is provided.
+    - ``ondemand``: never loaded at spawn — returned as deferred metadata.
+
+    Entries without a ``tier`` field default to ``always`` (backward-compat).
+
+    Args:
+        extra_always: MCP names to force-load regardless of their tier.
+            Used by per-session overrides (``SessionUnit._extra_mcps``)
+            after ``enable_mcp_for_session()``.
+
+    Returns:
+        Tuple of ``(mcp_servers, disallowed_tools, deferred)`` where
+        *deferred* is a list of ``{"name": str, "tier": str,
+        "description": str}`` dicts for MCPs not loaded.
+    """
+    mcp_servers: dict = {}
+    disallowed_tools: list[str] = []
+    deferred: list[dict] = []
+
+    if not enable_mcp:
+        return mcp_servers, disallowed_tools, deferred
+
+    catalog_path, dev_path = get_mcp_file_paths(workspace_path)
+
+    catalog_entries = read_layer(catalog_path, default_enabled=False)
+    dev_entries = read_layer(dev_path, default_enabled=True)
+
+    enabled_entries = merge_layers(catalog_entries, dev_entries)
+
+    is_channel = channel_context is not None
+    _forced = extra_always or set()
+
+    used_names: set = set()
+    for entry in enabled_entries:
+        errors = validate_config_entry(entry)
+        if errors:
+            entry_id = entry.get("id", "<unknown>")
+            logger.warning(
+                "Skipping invalid MCP entry '%s': %s",
+                entry_id, "; ".join(errors),
+            )
+            continue
+
+        entry_name = entry.get("name", entry.get("id", "<unknown>"))
+        tier = _get_tier(entry)
+
+        # Force-load if the session explicitly requested this MCP
+        force = entry_name in _forced
+
+        if force or tier == "always":
+            add_mcp_server_to_dict(
+                entry, mcp_servers, disallowed_tools, used_names,
+            )
+            if force:
+                logger.info(
+                    "Force-loading MCP '%s' (tier=%s) via extra_always",
+                    entry_name, tier,
+                )
+        elif tier == "channel" and is_channel:
+            add_mcp_server_to_dict(
+                entry, mcp_servers, disallowed_tools, used_names,
+            )
+        else:
+            # Deferred — not spawned, but tracked for system prompt
+            deferred.append({
+                "name": entry_name,
+                "tier": tier,
+                "description": entry.get("description", ""),
+            })
+
+    return mcp_servers, disallowed_tools, deferred
+
+
+# ---------------------------------------------------------------------------
 # Plugin MCP helpers
 # ---------------------------------------------------------------------------
 

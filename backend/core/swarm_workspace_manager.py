@@ -1192,14 +1192,15 @@ class SwarmWorkspaceManager:
                 gitignore.write_text(GITIGNORE_CONTENT, encoding="utf-8")
             subprocess.run(
                 ["git", "init"], cwd=workspace_path,
-                capture_output=True, check=True,
+                capture_output=True, check=True, timeout=30,
             )
             subprocess.run(
-                ["git", "add", "-A"], cwd=workspace_path, capture_output=True,
+                ["git", "add", "-A"], cwd=workspace_path,
+                capture_output=True, timeout=30,
             )
             subprocess.run(
                 ["git", "commit", "-m", "Initial SwarmWS state", "--allow-empty"],
-                cwd=workspace_path, capture_output=True,
+                cwd=workspace_path, capture_output=True, timeout=30,
             )
             logger.info("Git repo initialized at %s", workspace_path)
             return True
@@ -1593,11 +1594,11 @@ class SwarmWorkspaceManager:
             uid = _uid()
             subprocess.run(
                 ["launchctl", "bootout", f"gui/{uid}/{NEW_LABEL}"],
-                capture_output=True,
+                capture_output=True, timeout=10,
             )
             subprocess.run(
                 ["launchctl", "bootstrap", f"gui/{uid}", str(dest)],
-                capture_output=True,
+                capture_output=True, timeout=10,
             )
             logger.info("Scheduler plist installed: %s", dest)
 

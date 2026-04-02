@@ -31,7 +31,7 @@ const MIN_WIDTH = 240;
 const MAX_WIDTH = 600;
 
 const FEATURE_TIP_TEXT =
-  'SwarmRadar keeps you in the loop. ToDos show your pending tasks — ask your agent to create them or pull from Slack and email. Artifacts show recently changed files in your workspace — drag any item to chat. Sessions show your open tabs and their live status. Jobs display background automations. Drag items from ToDo or Artifacts into chat to reference them.';
+  'SwarmRadar keeps you in the loop. ToDos show your pending tasks — ask your agent to create them or pull from Slack and email. Artifacts show recently changed files in your workspace. Jobs display background automations. Drag items from ToDo or Artifacts into chat to reference them.';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -69,9 +69,6 @@ function persistWidth(width: number): void {
 type SidebarMode = 'radar' | 'history';
 
 export function RadarSidebar({
-  openTabs,
-  tabStatuses,
-  onTabSelect,
   groupedSessions,
   agents,
   onSelectSession,
@@ -90,6 +87,7 @@ export function RadarSidebar({
       'chatSidebarCollapsed',
       'rightSidebarCollapsed',
       'todoRadarSidebarCollapsed',
+      'radar-section-sessions',  // Sessions section removed
     ];
     try {
       for (const key of legacyKeys) {
@@ -261,14 +259,6 @@ export function RadarSidebar({
   );
 
   // -------------------------------------------------------------------------
-  // Switch to history from RadarView (e.g. "Chat History" link)
-  // -------------------------------------------------------------------------
-
-  const handleSwitchToHistory = useCallback(() => {
-    setMode('history');
-  }, []);
-
-  // -------------------------------------------------------------------------
   // Back from history to radar
   // -------------------------------------------------------------------------
 
@@ -394,10 +384,6 @@ export function RadarSidebar({
         {mode === 'radar' ? (
           <RadarView
             workspaceId={workspaceId}
-            openTabs={openTabs}
-            tabStatuses={tabStatuses}
-            onTabSelect={onTabSelect}
-            onSwitchToHistory={handleSwitchToHistory}
           />
         ) : (
           <HistoryView

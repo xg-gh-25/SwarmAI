@@ -44,7 +44,7 @@ Six layers turn a stateless LLM into a persistent, evolving agent:
 
 | Layer | What It Does | Key Components |
 |-------|-------------|----------------|
-| **Interface** | Three-column UI + multi-channel access | SwarmWS Explorer, Chat Center (1-4 tabs), Swarm Radar, Channel Gateway (Slack/Feishu) |
+| **Interface** | Three-column UI + multi-channel access | SwarmWS Explorer, Chat Center (1-4 tabs), Swarm Radar, Channel Gateway (Slack) |
 | **Intelligence** | Proactive awareness + autonomous execution | Proactive Intelligence (L0-L4), Signal Pipeline, Autonomous Pipeline (8 stages), Job System |
 | **Harness** | The core innovation — what makes raw Claude into an agentic OS (L4 Autonomous) | Context Engineering (11 files), Memory Pipeline (3-layer), Self-Evolution (55+ skills), Safety + Self-Harness |
 | **Session** | Multi-session lifecycle with isolation and recovery | SessionRouter, SessionUnit (5-state machine), LifecycleManager, Post-Session Hooks (7 hooks) |
@@ -132,7 +132,7 @@ This isn't a feature list — it's a growth architecture. Every session makes th
 
 ### 5. Swarm Brain — One AI, Every Channel, Shared Memory
 
-Swarm is a personal assistant. It has **one brain**. Whether you talk to it via a chat tab, Slack, Feishu, or any future channel — it's the same Swarm, the same memory, the same context.
+Swarm is a personal assistant. It has **one brain**. Whether you talk to it via a chat tab, Slack, or any future channel — it's the same Swarm, the same memory, the same context.
 
 <div align="center">
 <img src="./assets/swarm-brain.svg" alt="Swarm Brain — Unified Session Architecture" width="800"/>
@@ -143,12 +143,12 @@ Three layers of continuity ensure nothing is lost across touchpoints:
 | Layer | What It Does | Scope |
 |-------|-------------|-------|
 | **L1: Shared Memory** | 11 context files (MEMORY.md, USER.md, EVOLUTION.md, DailyActivity...) loaded at every prompt build | All sessions — tabs + channels |
-| **L2: Cross-Channel Session** | All channels for the same person share ONE Claude conversation (`--resume`) | Slack + Feishu + future channels |
+| **L2: Cross-Channel Session** | All channels for the same person share ONE Claude conversation (`--resume`) | Slack + future channels |
 | **L3: Active Session Digest** | Sibling session summaries injected into prompts — Tab knows what Channel did, Channel knows what Tab is working on | Tabs ↔ Channels (bidirectional) |
 
 **How it works in practice:**
 
-- Ask Swarm something on Slack → continue the conversation on Feishu → Claude remembers everything from both
+- Ask Swarm something on Slack → continue the conversation on → Claude remembers everything from both
 - Work on a deployment in Chat Tab 1 → ask on Slack "how's the deployment?" → Swarm knows (L3 digest)
 - Say "remember to deploy at 10am" on any channel → every future session knows (L1 memory)
 - Add WeChat or Teams next year → zero architecture change. Write an adapter (~250 lines), map user identity, done.
@@ -157,7 +157,7 @@ Three layers of continuity ensure nothing is lost across touchpoints:
 - Chat tabs are **parallel** (multi-slot, per-topic) — for deep work
 - Channel session is **serialized** (single dedicated slot) — for quick exchanges across platforms
 - One dedicated channel slot always reserved (`min_tabs = 2`) — channels never starve chat, chat never starves channels
-- User identity mapping ties platform-specific IDs (Slack `W017T04E`, Feishu `ou_abc`) to one unified `user_key`
+- User identity mapping ties platform-specific IDs (Slack `W017T04E` `ou_abc`) to one unified `user_key`
 
 ### 6. Autonomous Pipeline — From Requirement to PR
 
@@ -290,7 +290,7 @@ Claude Code is a powerful CLI coding agent. SwarmAI wraps the same Claude Agent 
 | **Visual workspace** | File explorer, radar dashboard, drag-to-chat | Terminal only |
 | **Skills** | 55+ built-in (browser, PDF, Slack, Outlook, research...) | Tool use only |
 | **Autonomous pipeline** | 8-stage lifecycle with ROI gate, escalation, artifact chaining | Manual workflow |
-| **Multi-channel** | Desktop + Slack + Feishu (unified brain) | Terminal only |
+| **Multi-channel** | Desktop + Slack (unified brain) | Terminal only |
 
 **TL;DR**: Claude Code is a coding assistant. SwarmAI is an agentic operating system for all knowledge work.
 
@@ -328,7 +328,7 @@ Code editors with AI autocomplete. Fundamentally different category:
 | **Philosophy** | Deep workspace — context compounds | Wide connector — AI everywhere |
 | **Memory** | 3-layer pipeline + self-evolution | Session pruning, no distillation |
 | **Context** | 11-file priority chain, token budgets, L0/L1 cache | Standard system prompt |
-| **Channels** | Desktop + Slack + Feishu (unified brain — one session across all) | 21+ messaging platforms (isolated per-channel) |
+| **Channels** | Desktop + Slack (unified brain — one session across all) | 21+ messaging platforms (isolated per-channel) |
 | **Skills** | 55+ curated + self-built | 5,400+ marketplace |
 | **Voice/Mobile** | -- | Wake word + iOS/Android |
 
@@ -406,7 +406,7 @@ SwarmAI/
 │   ├── routers/             # API routes (chat, skills, mcp, settings, workspace)
 │   ├── hooks/               # Post-session hooks (DailyActivity, auto-commit, distillation)
 │   ├── skills/              # Built-in skill definitions (55+)
-│   ├── channels/            # Channel adapters (Slack, Feishu) + gateway
+│   ├── channels/            # Channel adapters (Slack) + gateway
 │   ├── services/            # Sidecar services (jobs, signals, Slack bot)
 │   └── database/            # SQLite with migrations
 │

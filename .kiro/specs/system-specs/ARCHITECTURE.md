@@ -121,7 +121,7 @@ desktop/src/
 │   ├── AgentsPage.tsx            # Agent configuration
 │   ├── SkillsPage.tsx            # Skill management
 │   ├── PluginsPage.tsx           # Plugin marketplace
-│   ├── ChannelsPage.tsx          # Channel gateway (Feishu, etc.)
+│   ├── ChannelsPage.tsx          # Channel gateway Slack
 │   ├── SwarmCorePage.tsx         # Core system page
 │   └── chat/
 │       ├── components/           # ChatHeader, ChatInput, SessionTabBar, TSCCPanel
@@ -284,7 +284,7 @@ backend/
 │   ├── memory.py                  # Memory compliance, one-click save-session
 │   ├── projects.py                # Project CRUD
 │   ├── artifacts.py               # Artifact management
-│   ├── channels.py                # Channel gateway (Feishu, etc.)
+│   ├── channels.py                # Channel gateway Slack
 │   ├── tasks.py                   # Task management
 │   ├── todos.py                   # ToDo management
 │   ├── tscc.py                    # TSCC state API
@@ -300,7 +300,7 @@ backend/
 │   ├── generate_seed_db.py        # Build-time seed database generator
 │   └── locked_write.py            # Locked read-modify-write for MEMORY.md
 ├── skills/                        # Built-in skill definitions
-├── channels/                      # Channel gateway (Feishu integration)
+├── channels/                      # Channel gateway (Slack integration)
 └── templates/                     # Agent/skill templates
 ```
 
@@ -618,11 +618,11 @@ Default config includes: `use_bedrock`, `aws_region`, `default_model`, `availabl
 
 ## 8. Channel Gateway
 
-`ChannelGateway` in `backend/channels/gateway.py` manages external channel adapters (Feishu, future Slack/Web):
+`ChannelGateway` in `backend/channels/gateway.py` manages external channel adapters (Slack):
 
 - **Startup**: Deferred to background `asyncio.Task` when channels exist (doesn't block `_startup_complete`)
 - **Zero channels**: Gateway startup skipped entirely
-- **Channel injection**: `_inject_channel_mcp()` adds a `channel-tools` MCP server with channel-specific env vars (FEISHU_APP_ID, CHAT_ID, etc.)
+- **Channel injection**: `_inject_channel_mcp()` adds a `channel-tools` MCP server with channel-specific env vars (SLACK_BOT_TOKEN, CHANNEL_ID, etc.)
 - **Lifecycle states**: `not_started` → `starting` → `started` (or `failed`)
 - **Shutdown**: `channel_gateway.shutdown()` called during graceful app shutdown
 

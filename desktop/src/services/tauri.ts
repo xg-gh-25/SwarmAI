@@ -72,6 +72,11 @@ export const tauriService = {
     return listen<number>('backend-restarted', (event) => callback(event.payload));
   },
 
+  /** Backend mode notification: "daemon" or "sidecar". */
+  async onBackendMode(callback: (mode: string) => void): Promise<UnlistenFn> {
+    return listen<string>('backend-mode', (event) => callback(event.payload));
+  },
+
   // System dependencies check
   async checkNodejsVersion(): Promise<string> {
     return invoke<string>('check_nodejs_version');
@@ -89,20 +94,17 @@ export const tauriService = {
 
 // Initialize backend connection
 export async function initializeBackend(): Promise<number> {
-  try {
-    // First check if backend is already running
-    const status = await tauriService.getBackendStatus();
-    if (status.running) {
-      setBackendPort(status.port);
-      return status.port;
-    }
-
-    // Start the backend
-    const port = await tauriService.startBackend();
-    return port;
-  } catch (error) {
-    console.error('Failed to initialize backend:', error);
-    // Fallback to default port
-    return 8000;
+  // First check if backend is already running
+  const status = await tauriService.getBackendStatus();
+  if (status.running) {
+    setBackendPort(status.port);
+    return status.port;
   }
+
+  // Start the backend — let errors propagate to BackendStartupOverlay
+  // which already has error handling UI (L402-408).
+  // Previously this caught and returned 8000, which is never correct
+  // in production (random port or daemon port 18321).
+  const port = await tauriService.startBackend();
+  return port;
 }

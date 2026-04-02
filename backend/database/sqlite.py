@@ -50,6 +50,9 @@ class _WALConnection:
         if self._db_path not in _WALConnection._wal_initialized:
             await self._conn.execute("PRAGMA journal_mode=WAL")
             await self._conn.execute("PRAGMA busy_timeout=5000")
+            # Checkpoint every 1000 pages (~4MB) to prevent WAL bloat.
+            # Without this, WAL grows unbounded until a reader closes.
+            await self._conn.execute("PRAGMA wal_autocheckpoint=1000")
             _WALConnection._wal_initialized.add(self._db_path)
             logger.info("SQLite WAL mode enabled for %s", self._db_path)
         else:
