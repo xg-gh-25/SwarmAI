@@ -10,13 +10,20 @@ Public symbols:
 - ``_sanitize_sdk_error``                — Map raw SDK errors to user-friendly messages.
 - ``_build_error_event``                 — Build a sanitized SSE error event dict.
 - ``fuzzy_title_matches_deliverable``    — Fuzzy text matching (shared by proactive + distillation).
+- ``read_owner_pid``                     — Read SWARMAI_OWNER_PID from a process's environment.
 """
 from __future__ import annotations
 
+import logging
+import platform
 import re
+import subprocess
 import time
 from enum import Enum
+from pathlib import Path
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 from config import settings
 
@@ -128,14 +135,18 @@ def compute_backoff(
 ) -> float:
     """Compute backoff seconds based on failure type.
 
-    - OOM:        flat 30s (memory needs time to free)
+    - OOM:        exponential 30/60/120s (capped at _OOM_COOLDOWN_CAP)
     - RATE_LIMIT: wait until resets_at, or 60s default, capped at 300s
     - TIMEOUT:    exponential (base * retry_count), capped at 60s
     - API_ERROR:  exponential (base * retry_count), capped at 60s
     - UNKNOWN:    exponential (base * retry_count), capped at 60s
     """
     if failure_type == FailureType.OOM:
-        return 30.0
+        # Exponential backoff for OOM: 30s, 60s, 120s.
+        # Flat 30s caused death spirals — two sessions retrying every 30s
+        # would spawn simultaneously and get killed again immediately.
+        from .session_unit import _OOM_COOLDOWN_BASE, _OOM_COOLDOWN_CAP
+        return min(_OOM_COOLDOWN_BASE * (2 ** (retry_count - 1)), _OOM_COOLDOWN_CAP)
 
     if failure_type == FailureType.RATE_LIMIT:
         resets_at = metadata.get("resets_at")
@@ -366,3 +377,47 @@ def fuzzy_title_matches_deliverable(
             return True
 
     return False
+
+
+# ---------------------------------------------------------------------------
+# Process ownership — single source of truth for SWARMAI_OWNER_PID reads
+# ---------------------------------------------------------------------------
+
+def read_owner_pid(pid: int) -> int | None:
+    """Read SWARMAI_OWNER_PID from a process's environment.
+
+    Uses ``ps eww -o command= -p <pid>`` on macOS to get the full
+    command line with environment variables.  Falls back to
+    ``/proc/<pid>/environ`` on Linux.
+
+    Returns the owner PID as int, or None if not found.
+
+    This is the single source of truth — used by both
+    ``lifecycle_manager._is_owned_orphan()`` and
+    ``session_registry.kill_all_claude_processes()``.
+    """
+    if platform.system() == "Darwin":
+        try:
+            result = subprocess.run(
+                ["ps", "eww", "-o", "command=", "-p", str(pid)],
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.returncode != 0:
+                return None
+            match = re.search(r"SWARMAI_OWNER_PID=(\d+)", result.stdout)
+            if match:
+                return int(match.group(1))
+        except (subprocess.TimeoutExpired, OSError):
+            pass
+    else:
+        try:
+            environ_path = Path(f"/proc/{pid}/environ")
+            if environ_path.exists():
+                content = environ_path.read_bytes()
+                for entry in content.split(b"\x00"):
+                    if entry.startswith(b"SWARMAI_OWNER_PID="):
+                        return int(entry.split(b"=", 1)[1])
+        except (OSError, ValueError):
+            pass
+
+    return None

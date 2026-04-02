@@ -40,8 +40,6 @@
         <string>__HOME__/.toolbox/bin:__HOME__/.local/bin:__HOME__/.local/share/mise/shims:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
         <key>SWARMAI_MODE</key>
         <string>daemon</string>
-        <key>SWARMAI_BACKEND_DIR</key>
-        <string>__BACKEND_DIR__</string>
     </dict>
 </dict>
 </plist>
