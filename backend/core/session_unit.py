@@ -2177,9 +2177,19 @@ class SessionUnit:
             self.PROACTIVE_RSS_THRESHOLD // (1024 * 1024),
         )
 
-        # Step 1: compact to generate checkpoint (best-effort)
+        # Step 1: compact to generate checkpoint (best-effort, 30s timeout)
+        # compact() internally calls client.query() + receive_response()
+        # with no timeout — if CLI hangs during compact, this would block
+        # the entire proactive restart (and maintenance loop if called from
+        # lifecycle_manager).  30s is generous for a summarization call.
         try:
-            await self.compact()
+            await asyncio.wait_for(self.compact(), timeout=30.0)
+        except asyncio.TimeoutError:
+            logger.warning(
+                "session_unit.proactive_restart compact timed out "
+                "session_id=%s — proceeding to kill",
+                self.session_id,
+            )
         except Exception as exc:
             logger.warning(
                 "session_unit.proactive_restart compact failed "
