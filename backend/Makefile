@@ -10,9 +10,9 @@
 #   make test-ci       → CI mode: full suite, 100 Hypothesis examples
 #   make dev           → start backend in dev mode (port 8000)
 #
-# xdist is controlled ONLY by pyproject.toml addopts (-n 4).
-# conftest.py enforces memory-adaptive clamping — never bypassed.
-# There is no N= override. One way to run tests. One source of truth.
+# xdist -n 4 auto-injected from pyproject.toml addopts.
+# pytest-timeout available: pass --timeout=60 for hang protection.
+# conftest.py enforces memory-adaptive xdist clamping.
 
 SHELL := /bin/bash
 PYTHON := .venv/bin/python
@@ -27,31 +27,31 @@ PROFILE ?= default
 
 ## Fast tests: skip PBT and slow (unit tests only, ~10s)
 test:
-	$(PYTEST) -m "not pbt and not slow"
+	$(PYTEST) --timeout=120 -m "not pbt and not slow"
 
 ## Full suite: all ~2000 tests (~40s with 4 workers)
 test-all:
-	HYPOTHESIS_PROFILE=$(PROFILE) $(PYTEST)
+	HYPOTHESIS_PROFILE=$(PROFILE) $(PYTEST) --timeout=120
 
 ## Property-based tests only (~25s)
 test-pbt:
-	HYPOTHESIS_PROFILE=$(PROFILE) $(PYTEST) -m pbt
+	HYPOTHESIS_PROFILE=$(PROFILE) $(PYTEST) --timeout=120 -m pbt
 
 ## Re-run only last failures (fastest iteration loop)
 test-lf:
-	$(PYTEST) --lf
+	$(PYTEST) --timeout=60 --lf
 
 ## Single file: make test-file F=tests/test_foo.py
 test-file:
-	$(PYTEST) $(F)
+	$(PYTEST) --timeout=60 $(F)
 
 ## Keyword filter: make test-grep K=session_unit
 test-grep:
-	$(PYTEST) -k "$(K)"
+	$(PYTEST) --timeout=60 -k "$(K)"
 
 ## CI mode: full suite with 100 Hypothesis examples per property
 test-ci:
-	HYPOTHESIS_PROFILE=ci $(PYTEST) --tb=long
+	HYPOTHESIS_PROFILE=ci $(PYTEST) --timeout=120 --tb=long
 
 ## Start backend in dev mode
 dev:
