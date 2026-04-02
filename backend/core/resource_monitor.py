@@ -199,7 +199,6 @@ class ResourceMonitor:
             # Inactive/compressed/purgeable pages are reclaimable by the OS
             # and should NOT count as "used" for resource gating decisions.
             used = active + wired
-            available = total - used if 'total' in dir() else free + speculative
 
             # Get total from sysctl
             sysctl_result = subprocess.run(
@@ -235,8 +234,8 @@ class ResourceMonitor:
     def spawn_budget(self) -> SpawnBudget:
         """Check whether a new subprocess can be safely spawned.
 
-        Uses the same 80% rule as compute_max_tabs: if spawning one
-        more session (~500MB) would push the machine past 80% memory
+        Uses the same 85% rule as compute_max_tabs: if spawning one
+        more session (~500MB) would push the machine past 85% memory
         usage, deny the spawn.
 
         Also denies spawns during the OOM cooldown period (Fix 4) —
@@ -318,7 +317,7 @@ class ResourceMonitor:
         Formula: ``max(2, min(floor(headroom_to_85pct / 500), 4))``
 
         Each tab costs ~500MB (CLI subprocess + MCP servers).
-        The machine should never exceed 80% memory usage from SwarmAI
+        The machine should never exceed 85% memory usage from SwarmAI
         tabs — users run other apps too.
 
         Returns [2, 4]. Always allows at least 2 (1 chat + 1 channel).

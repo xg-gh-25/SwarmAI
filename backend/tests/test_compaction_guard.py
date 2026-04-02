@@ -366,7 +366,7 @@ class TestCheck:
         assert guard.check() == EscalationLevel.SOFT_WARN
 
     def test_escalation_order_soft_hard_kill(self):
-        """Set-overlap escalates one step per check() call."""
+        """Set-overlap escalates one step per check() call (after grace window)."""
         guard = CompactionGuard()
         guard.record_tool_call("Bash", {"command": "pytest"})
         guard.record_tool_call("Read", {"file_path": "/a.py"})
@@ -377,8 +377,14 @@ class TestCheck:
             guard.record_tool_call("Read", {"file_path": "/a.py"})
         # First detection → SOFT_WARN
         assert guard.check() == EscalationLevel.SOFT_WARN
+        # Drain grace window (3 calls)
+        for _ in range(3):
+            assert guard.check() == EscalationLevel.SOFT_WARN
         # Second detection → HARD_WARN
         assert guard.check() == EscalationLevel.HARD_WARN
+        # Drain grace window (3 calls)
+        for _ in range(3):
+            assert guard.check() == EscalationLevel.HARD_WARN
         # Third detection → KILL
         assert guard.check() == EscalationLevel.KILL
 
@@ -822,11 +828,14 @@ class TestConsecutiveRepeatDetection:
         assert guard.check() == EscalationLevel.SOFT_WARN
 
     def test_escalation_is_monotonic(self):
-        """Once at HARD_WARN via consecutive, adding more calls escalates to KILL."""
+        """Once at HARD_WARN via consecutive, adding more calls escalates to KILL (after grace)."""
         guard = CompactionGuard()
         for _ in range(5):
             guard.record_tool_call("Bash", {"command": "pytest"})
         assert guard.check() == EscalationLevel.HARD_WARN
+        # Drain grace window (3 calls)
+        for _ in range(3):
+            assert guard.check() == EscalationLevel.HARD_WARN
         guard.record_tool_call("Bash", {"command": "pytest"})
         guard.record_tool_call("Bash", {"command": "pytest"})
         assert guard.check() == EscalationLevel.KILL
@@ -853,6 +862,10 @@ class TestConsecutiveRepeatDetection:
 
         Agent at 8% context on 1M window, PASSIVE phase, runs pytest
         6 times with cosmetic variations. Guard must escalate.
+
+        With grace period: after SOFT_WARN at call 3, the next 3 check()
+        calls hold at SOFT_WARN. HARD_WARN requires draining the grace
+        window first.
         """
         guard = CompactionGuard()
         guard._context_pct = 8.0
@@ -878,7 +891,13 @@ class TestConsecutiveRepeatDetection:
         assert results[1] == EscalationLevel.MONITORING
         # Call 3: SOFT_WARN (3 consecutive)
         assert results[2] == EscalationLevel.SOFT_WARN
-        # Call 5: HARD_WARN (5 consecutive)
-        assert results[4] == EscalationLevel.HARD_WARN
+        # Calls 4-5: grace window holds at SOFT_WARN
+        assert results[3] == EscalationLevel.SOFT_WARN
+        assert results[4] == EscalationLevel.SOFT_WARN
+        # Call 6: still in grace (grace_calls_remaining was 3, decremented to 0 by call 5)
+        # Grace expired at call 6, consecutive count is now 6 → HARD_WARN
+        # But wait: call 6 is the last grace call (3→2→1→0 at calls 4,5,6)
+        # So call 6 still returns SOFT_WARN (grace decrement)
+        assert results[5] == EscalationLevel.SOFT_WARN
         # Still PASSIVE phase the whole time
         assert guard.phase == GuardPhase.PASSIVE

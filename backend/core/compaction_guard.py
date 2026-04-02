@@ -125,6 +125,25 @@ _CONSEC_HARD: int = 5
 _CONSEC_KILL: int = 7
 """Consecutive identical (tool, hash) pairs to trigger KILL."""
 
+_READ_ONLY_TOOLS: frozenset[str] = frozenset({
+    "Read", "Grep", "ListDir", "Glob",
+    "ReadFile", "GrepSearch", "ListDirectory",
+    "FileSearch", "ReadCode", "ReadMultipleFiles",
+})
+"""Tools that only read data — tolerate longer consecutive runs before warning."""
+
+_CONSEC_SOFT_READONLY: int = 5
+"""Consecutive identical read-only (tool, hash) pairs to trigger SOFT_WARN."""
+
+_CONSEC_HARD_READONLY: int = 8
+"""Consecutive identical read-only (tool, hash) pairs to trigger HARD_WARN."""
+
+_CONSEC_KILL_READONLY: int = 10
+"""Consecutive identical read-only (tool, hash) pairs to trigger KILL."""
+
+_GRACE_WINDOW: int = 3
+"""Calls after an escalation event before the next escalation is allowed."""
+
 
 # ── Escalation ordering (for strict one-step progression) ────────
 
@@ -179,6 +198,9 @@ class CompactionGuard:
         self._last_pair: tuple[str, str] | None = None
         self._consec_count: int = 0
 
+        # Grace period — pause between escalation levels
+        self._grace_calls_remaining: int = 0
+
     @property
     def phase(self) -> GuardPhase:
         """Current guard phase (PASSIVE or ACTIVE)."""
@@ -195,6 +217,22 @@ class CompactionGuard:
         return self._context_pct
 
     # ── Static helpers ──────────────────────────────────────────
+
+    @staticmethod
+    def _classify_tool(tool_name: str) -> str:
+        """Return 'read_only' if tool is in _READ_ONLY_TOOLS, else 'write_execute'."""
+        return "read_only" if tool_name in _READ_ONLY_TOOLS else "write_execute"
+
+    @staticmethod
+    def _get_consec_thresholds(tool_name: str) -> tuple[int, int, int]:
+        """Return (soft, hard, kill) consecutive thresholds for the given tool.
+
+        Read-only tools get higher thresholds (5, 8, 10) to tolerate normal
+        code research patterns. Write/execute tools keep the stricter (3, 5, 7).
+        """
+        if tool_name in _READ_ONLY_TOOLS:
+            return (_CONSEC_SOFT_READONLY, _CONSEC_HARD_READONLY, _CONSEC_KILL_READONLY)
+        return (_CONSEC_SOFT, _CONSEC_HARD, _CONSEC_KILL)
 
     # Bash normalization patterns — compiled once, reused per call.
     # These strip cosmetic shell variations that make semantically
@@ -528,19 +566,30 @@ class CompactionGuard:
 
         Unlike diversity stall (needs 20+ calls) and set-overlap (needs
         compaction + high context), this fires on just 3 consecutive
-        identical calls. Designed for the pytest dead-loop pattern where
-        the agent re-runs the same command 6-8 times at <10% context.
+        identical calls for write/execute tools. Designed for the pytest
+        dead-loop pattern where the agent re-runs the same command 6-8
+        times at <10% context.
+
+        Read-only tools get higher thresholds (5/8/10) to tolerate normal
+        code research patterns (reading files, grepping patterns).
 
         Returns the escalation level this detector alone would recommend.
         Does NOT mutate self._escalation — caller decides.
 
-        Thresholds: 3 → SOFT_WARN, 5 → HARD_WARN, 7 → KILL.
+        Thresholds (write/execute): 3 → SOFT_WARN, 5 → HARD_WARN, 7 → KILL.
+        Thresholds (read-only):     5 → SOFT_WARN, 8 → HARD_WARN, 10 → KILL.
         """
-        if self._consec_count >= _CONSEC_KILL:
+        if self._last_pair is None:
+            return EscalationLevel.MONITORING
+
+        tool_name = self._last_pair[0]
+        soft, hard, kill = self._get_consec_thresholds(tool_name)
+
+        if self._consec_count >= kill:
             return EscalationLevel.KILL
-        if self._consec_count >= _CONSEC_HARD:
+        if self._consec_count >= hard:
             return EscalationLevel.HARD_WARN
-        if self._consec_count >= _CONSEC_SOFT:
+        if self._consec_count >= soft:
             return EscalationLevel.SOFT_WARN
         return EscalationLevel.MONITORING
 
@@ -578,6 +627,11 @@ class CompactionGuard:
             if self._escalation == EscalationLevel.KILL:
                 return EscalationLevel.KILL
 
+            # Grace period check — BEFORE any detector
+            if self._grace_calls_remaining > 0:
+                self._grace_calls_remaining -= 1
+                return self._escalation  # Hold at current level
+
             # ── Layer 0: Consecutive identical call detection (all phases) ──
             consec_level = self._is_consecutive_repeat()
             if consec_level != EscalationLevel.MONITORING:
@@ -593,6 +647,7 @@ class CompactionGuard:
                         consec_level.value,
                     )
                     self._escalation = consec_level
+                    self._grace_calls_remaining = _GRACE_WINDOW
                     self._last_pattern_desc = (
                         f"Same {tool_name} command repeated "
                         f"{self._consec_count} consecutive times"
@@ -617,6 +672,7 @@ class CompactionGuard:
                             total_calls, new_level.value,
                         )
                         self._escalation = new_level
+                        self._grace_calls_remaining = _GRACE_WINDOW
                         self._last_pattern_desc = (
                             f"Low call diversity: {unique_ct} unique operations "
                             f"in last {_STALL_ESCALATION_WINDOW} calls — "
@@ -635,6 +691,7 @@ class CompactionGuard:
                             total_calls, new_level.value,
                         )
                         self._escalation = new_level
+                        self._grace_calls_remaining = _GRACE_WINDOW
                         self._last_pattern_desc = (
                             f"Low call diversity: {unique_ct} unique operations "
                             f"in last {window_sz} calls — "
@@ -665,6 +722,7 @@ class CompactionGuard:
                     self._context_pct,
                 )
                 self._escalation = new_level
+                self._grace_calls_remaining = _GRACE_WINDOW
                 return new_level
 
             # No loop detected
@@ -788,12 +846,14 @@ class CompactionGuard:
     def reset(self) -> None:
         """Reset per-turn tracking for a new user message.
 
-        Clears post-compaction sequence but preserves escalation level,
-        phase, pre-compaction baseline, context_pct, and tool_records.
+        Clears post-compaction sequence and grace counter but preserves
+        escalation level, phase, pre-compaction baseline, context_pct,
+        and tool_records.
         """
         try:
             self._post_compaction_sequence = []
             self._last_pattern_desc = ""
+            self._grace_calls_remaining = 0
         except Exception:
             logger.exception("compaction_guard.reset failed")
 
@@ -801,7 +861,7 @@ class CompactionGuard:
         """Full reset (subprocess respawn): back to PASSIVE, clear everything.
 
         Resets phase to PASSIVE, escalation to MONITORING, context to zero,
-        and clears all tracking collections.
+        and clears all tracking collections including grace state.
         """
         try:
             self._phase = GuardPhase.PASSIVE
@@ -817,6 +877,7 @@ class CompactionGuard:
             self._context_window = 200_000
             self._last_pair = None
             self._consec_count = 0
+            self._grace_calls_remaining = 0
         except Exception:
             logger.exception("compaction_guard.reset_all failed")
 
