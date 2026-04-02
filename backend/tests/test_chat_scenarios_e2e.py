@@ -478,12 +478,16 @@ class TestScenario4_AutoRecoverStuck:
     async def test_send_from_stuck_streaming_auto_recovers(
         self, _reset_session_infrastructure
     ):
-        """send() when state is STREAMING should force_unstick -> COLD -> spawn."""
-        from core.session_unit import SessionUnit, SessionState
+        """send() when state is STREAMING and genuinely stuck (stall > threshold)
+        should force_unstick -> COLD -> spawn."""
+        from core.session_unit import SessionUnit, SessionState, AUTO_RECOVER_STALL_THRESHOLD
 
         unit = SessionUnit(session_id="test-stuck", agent_id="default")
         unit._transition(SessionState.IDLE)
         unit._transition(SessionState.STREAMING)
+        # Simulate a genuinely stuck session — last event well beyond threshold
+        unit._last_event_time = time.time() - (AUTO_RECOVER_STALL_THRESHOLD + 30)
+        unit._streaming_start_time = time.time() - (AUTO_RECOVER_STALL_THRESHOLD + 60)
 
         # Old client (stuck)
         old_client = MagicMock()

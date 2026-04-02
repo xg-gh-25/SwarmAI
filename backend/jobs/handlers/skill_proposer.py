@@ -26,8 +26,6 @@ from ..paths import SWARMWS, PROJECTS_DIR
 
 logger = logging.getLogger("swarm.jobs.skill_proposer")
 
-# Opus 4.6 for skill creation — needs best reasoning for architecture decisions
-MODEL_ID = "us.anthropic.claude-opus-4-6-v1"
 MAX_OUTPUT_TOKENS = 4096
 
 # Gate thresholds
@@ -275,24 +273,14 @@ def _gather_skill_context(gap: dict) -> dict:
 
 def _generate_skill_proposal(gap: dict, context: dict) -> dict:
     """Call Bedrock Opus 4.6 to generate a SKILL.md proposal."""
-    import boto3
+    from jobs.bedrock import invoke
 
     prompt = _build_prompt(gap, context)
 
-    client = boto3.client("bedrock-runtime", region_name="us-west-2")
-    body = json.dumps({
-        "anthropic_version": "bedrock-2023-05-31",
-        "max_tokens": MAX_OUTPUT_TOKENS,
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.3,
-    })
-
-    response = client.invoke_model(modelId=MODEL_ID, body=body)
-    result = json.loads(response["body"].read())
-
-    content = result["content"][0]["text"]
-    input_tokens = result.get("usage", {}).get("input_tokens", 0)
-    output_tokens = result.get("usage", {}).get("output_tokens", 0)
+    content, input_tokens, output_tokens = invoke(
+        prompt, model_key="claude-opus-4-6", max_tokens=MAX_OUTPUT_TOKENS,
+        temperature=0.3,
+    )
 
     # Opus pricing: $15/1M input, $75/1M output
     cost = input_tokens * 15.0 / 1_000_000 + output_tokens * 75.0 / 1_000_000
@@ -399,7 +387,7 @@ def _write_skill_proposal(
     # Write metadata
     metadata = {
         "generated_at": datetime.now().isoformat(timespec="seconds"),
-        "model": MODEL_ID,
+        "model": "claude-opus-4-6",
         "gap_pattern": gap.get("pattern", ""),
         "gap_occurrences": gap.get("occurrences", 0),
         "gap_evidence": gap.get("evidence", []),

@@ -203,3 +203,18 @@ class AgentTimeoutException(AgentExecutionException):
     code = "AGENT_TIMEOUT"
     message = "Agent response timed out. Your conversation has been saved."
     suggested_action = "Your conversation is saved. Send your message again to continue."
+
+
+class SessionBusyError(ConflictException):
+    """Raised when a new send() arrives while the session is actively streaming.
+
+    The session's subprocess is alive and processing (stall < threshold).
+    The frontend should queue the message and retry after the current
+    stream completes, NOT kill the subprocess.
+
+    See: 2026-04-02 SSE disconnect kill chain diagnosis.
+    """
+
+    code = "SESSION_BUSY"
+    message = "Session is actively streaming. Your message will be queued."
+    suggested_action = "The current response is still in progress. Your message has been saved and will be sent automatically when the session is ready."

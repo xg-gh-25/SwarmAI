@@ -659,20 +659,24 @@ async def get_session(session_id: str):
     )
 
 
-@router.get("/sessions/{session_id}/messages", response_model=list[ChatMessageResponse])
+@router.get("/sessions/{session_id}/messages")
 async def get_session_messages(
     session_id: str,
+    request: Request,
     limit: Optional[int] = Query(None, ge=1, le=200),
     before_id: Optional[str] = Query(None),
 ):
     """Get messages for a chat session with optional cursor-based pagination.
 
-    When ``limit`` or ``before_id`` is provided, uses paginated query
-    (most recent N messages, or messages before a cursor).  When neither
-    is provided, returns all messages for backward compatibility.
+    Supports ETag caching: the ETag is ``"session_id:msg_count"``.
+    Messages are append-only, so count change = content change.
+    Frontend sends ``If-None-Match`` → 304 when unchanged (no message
+    fetch, no serialization).  ETag skipped for cursor-paginated requests.
 
     Returns messages in chronological order.
     """
+    from fastapi.responses import JSONResponse, Response as FastAPIResponse
+
     # Verify session exists
     session = await session_manager.get_session(session_id)
     if not session:
@@ -681,6 +685,17 @@ async def get_session_messages(
             suggested_action="Please check the session ID and try again"
         )
 
+    # ── ETag: count query → 304 if unchanged ──
+    # Only for non-cursor queries (before_id changes per request).
+    etag: str | None = None
+    if before_id is None:
+        msg_count = await db.messages.count_by_session(session_id)
+        etag = f'"{session_id}:{msg_count}"'
+        if_none_match = request.headers.get("if-none-match")
+        if if_none_match and if_none_match == etag:
+            return FastAPIResponse(status_code=304, headers={"ETag": etag})
+
+    # ── Fetch messages ──
     if limit is not None or before_id is not None:
         messages = await db.messages.list_by_session_paginated(
             session_id, limit=limit, before_id=before_id
@@ -688,17 +703,20 @@ async def get_session_messages(
     else:
         messages = await db.messages.list_by_session(session_id)
 
-    return [
-        ChatMessageResponse(
-            id=msg.get("id"),
-            session_id=msg.get("session_id"),
-            role=msg.get("role"),
-            content=msg.get("content", []),
-            model=msg.get("model"),
-            created_at=msg.get("created_at"),
-        )
+    data = [
+        {
+            "id": msg.get("id"),
+            "session_id": msg.get("session_id"),
+            "role": msg.get("role"),
+            "content": msg.get("content", []),
+            "model": msg.get("model"),
+            "created_at": msg.get("created_at"),
+        }
         for msg in messages
     ]
+
+    headers = {"ETag": etag} if etag else {}
+    return JSONResponse(content=data, headers=headers)
 
 
 @router.post("/stop/{session_id}")

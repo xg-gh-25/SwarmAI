@@ -58,6 +58,14 @@ _oom_cooldown_until: float = 0.0
 _OOM_COOLDOWN_BASE: float = 30.0  # seconds, doubles per consecutive OOM
 _OOM_COOLDOWN_CAP: float = 120.0  # max backoff cap for OOM retries
 
+# Threshold for auto-recovery of stuck STREAMING sessions.
+# If a new send() arrives while STREAMING and the last SDK event was
+# less than this many seconds ago, the session is ACTIVELY PROCESSING
+# (not stuck) — raise SessionBusyError instead of force-killing.
+# Only force-kill when stall exceeds this value.
+# See: 2026-04-02 diagnosis — auto_recover_stuck killed session with stall=1s.
+AUTO_RECOVER_STALL_THRESHOLD: float = 180.0
+
 
 def _get_children(pid: int) -> list[int]:
     """Get direct child PIDs via ``pgrep -P``. Best-effort."""
@@ -611,13 +619,37 @@ class SessionUnit:
         # the unit stays in STREAMING forever.  Instead of rejecting the
         # new message with an error, force-recover to COLD and proceed.
         # The user never sees an error — just a slightly longer response.
+        #
+        # GUARD (2026-04-02 fix): Only force-kill if the session is
+        # genuinely stuck (stall > AUTO_RECOVER_STALL_THRESHOLD).
+        # If actively streaming (stall < threshold), raise SessionBusyError
+        # so the frontend can queue the message instead.
+        # Root cause: SSE disconnect caused frontend to send a new request
+        # while backend was still STREAMING → force_unstick killed active
+        # subprocess with stall=1s, losing the in-progress response.
         if self.state == SessionState.STREAMING:
             stall = self.streaming_stall_seconds
+            if stall is not None and stall < AUTO_RECOVER_STALL_THRESHOLD:
+                from .exceptions import SessionBusyError
+                logger.info(
+                    "session_unit.active_streaming_rejected "
+                    "session_id=%s stall=%.0fs (threshold=%.0fs) "
+                    "— rejecting send, frontend should queue",
+                    self.session_id, stall, AUTO_RECOVER_STALL_THRESHOLD,
+                )
+                raise SessionBusyError(
+                    detail=(
+                        f"Session {self.session_id} is actively streaming "
+                        f"(last event {stall:.0f}s ago, threshold "
+                        f"{AUTO_RECOVER_STALL_THRESHOLD:.0f}s). "
+                        f"Queue the message on the frontend."
+                    ),
+                )
             logger.warning(
                 "session_unit.auto_recover_stuck session_id=%s state=%s "
-                "stall=%.0fs — forcing COLD before retry",
+                "stall=%.0fs (threshold=%.0fs) — forcing COLD before retry",
                 self.session_id, self.state.value,
-                stall or 0,
+                stall or 0, AUTO_RECOVER_STALL_THRESHOLD,
             )
             await self.force_unstick_streaming()
             # After force_unstick, state is COLD — fall through to spawn

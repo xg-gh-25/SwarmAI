@@ -541,7 +541,7 @@ For each modified source file, assign every finding a **confidence score (1-10)*
   ```
   Or via make: `make test`, `make test-file F=tests/test_x.py`, `make test-lf`, `make test-all`.
   
-  **Key rules:** (1) Always specify test file(s) after code changes — never run full suite for a 1-file edit. (2) Always include `--timeout=60` (or 120 for full suite) — prevents infinite hangs. (3) `| tail` is OK for targeted tests, but unnecessary for full suite output.
+  **Key rules:** (1) Always specify test file(s) after code changes — never run full suite for a 1-file edit. (2) Always include `--timeout=60` (or 120 for full suite) — prevents infinite hangs. (3) **NEVER pipe pytest through `| tail`** — it hides xdist status, pass/fail summary, and causes re-run loops. (4) For full suite runs, set Bash tool `timeout=300000` (5 min). (5) **Anti-loop: max 2 full-suite runs per task.** After 2 runs, stop and report results as-is — never re-run the same command hoping for different results.
 - **Time awareness** — The system prompt shows both UTC and the user’s local time. ALWAYS use the user’s local time (check USER.md for timezone). Never reference UTC time when talking to the user. The header format is `YYYY-MM-DD HH:MM UTC / YYYY-MM-DD HH:MM <local>` — use the part AFTER the `/`. When estimating "current time" mid-session, add elapsed conversation time to the local start time.
 
 ## UX Development Rules

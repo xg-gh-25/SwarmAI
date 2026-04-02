@@ -33,7 +33,6 @@ SIGNALS_DIR = Path(os.environ.get(
 L4_DIGEST_PATH = SWARMWS / "Services" / "signals" / "signal_digest.json"
 
 # Bedrock config
-MODEL_ID = "us.anthropic.claude-sonnet-4-6"
 MAX_INPUT_TOKENS = 4000
 MAX_OUTPUT_TOKENS = 2000
 
@@ -133,9 +132,7 @@ def _llm_digest(
     Returns:
         (markdown_content, scored_items, tokens_used)
     """
-    import boto3
-
-    client = boto3.client("bedrock-runtime", region_name="us-west-2")
+    from jobs.bedrock import invoke
 
     # Tier descriptions for prompt context
     tier_labels = {
@@ -195,19 +192,9 @@ After the markdown, output a line "---JSON---" then a JSON array of objects, one
 
 Output the markdown first, then ---JSON--- separator, then the JSON array. Nothing else."""
 
-    body = json.dumps({
-        "anthropic_version": "bedrock-2023-05-31",
-        "max_tokens": MAX_OUTPUT_TOKENS,
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.3,
-    })
-
-    response = client.invoke_model(modelId=MODEL_ID, body=body)
-    result = json.loads(response["body"].read())
-
-    content = result["content"][0]["text"]
-    input_tokens = result.get("usage", {}).get("input_tokens", 0)
-    output_tokens = result.get("usage", {}).get("output_tokens", 0)
+    content, input_tokens, output_tokens = invoke(
+        prompt, max_tokens=MAX_OUTPUT_TOKENS, temperature=0.3,
+    )
     total_tokens = input_tokens + output_tokens
 
     # Split markdown and JSON parts
@@ -421,9 +408,7 @@ def _handle_rollup(
 
 def _llm_rollup(combined_digests: str, user_context: str, window_days: int) -> tuple[str, int]:
     """Use Bedrock Sonnet 4.6 to produce a weekly rollup summary."""
-    import boto3
-
-    client = boto3.client("bedrock-runtime", region_name="us-west-2")
+    from jobs.bedrock import invoke
 
     # Truncate to fit context
     truncated = combined_digests[:8000]
@@ -445,19 +430,9 @@ Create a concise weekly summary with:
 
 Be concise. This is a rollup, not a repeat — synthesize patterns, don't list individual signals."""
 
-    body = json.dumps({
-        "anthropic_version": "bedrock-2023-05-31",
-        "max_tokens": MAX_OUTPUT_TOKENS,
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.3,
-    })
-
-    response = client.invoke_model(modelId=MODEL_ID, body=body)
-    result = json.loads(response["body"].read())
-
-    content = result["content"][0]["text"]
-    input_tokens = result.get("usage", {}).get("input_tokens", 0)
-    output_tokens = result.get("usage", {}).get("output_tokens", 0)
+    content, input_tokens, output_tokens = invoke(
+        prompt, max_tokens=MAX_OUTPUT_TOKENS, temperature=0.3,
+    )
 
     header = (
         f"---\ndate: {datetime.now(timezone.utc).strftime('%Y-%m-%d')}\n"

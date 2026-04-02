@@ -1,34 +1,48 @@
 """Conversation context injection for resumed sessions.
 
-This module provides a stateless function that loads recent messages from
-SQLite, filters tool-only turns, formats them with role prefixes, enforces
-a token budget, and returns a formatted string for system prompt injection.
+Two-layer resume: structured checkpoint (~1-3K tokens) + recent turns
+(~2-5K tokens).  The checkpoint gives the new agent an instant picture
+of what was happening; the recent turns provide enough conversational
+context to continue naturally.
 
-**Budget scaling**: Limits scale with model context window.  1M models
-(Claude 4.6) get up to 200K tokens / 500 messages — effectively the full
-conversation.  Small models (<200K) use a conservative 12K / 40 message
-budget.  Channel sessions (Slack) use a fixed 32K / 50 message
-budget regardless of model size — enough continuity for "continue where
-we left off" without the massive prefill cost on frequent cold resumes.
-See ``_compute_resume_budget()`` for the tier logic.
+**Stability contract**: if checkpoint extraction fails for any reason,
+the module falls back to the legacy raw-history injection.  Every
+extraction helper is wrapped in its own try/except — one failure never
+cascades to another.
 
-- ``_compute_resume_budget``        — Scale limits by model context window
-- ``build_resume_context``          — Public async entry point
-- ``_filter_tool_only_messages``    — Remove tool-only messages
-- ``_format_message``               — Format a single message with role prefix
-- ``_apply_token_budget``           — Enforce token budget, oldest-first truncation
-- ``_assemble_context``             — Wrap in section header and preamble
+Public API (unchanged):
+- ``build_resume_context(app_session_id, ...)`` → str
 """
 
+import json
 import logging
+import re
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
 _TOOL_ONLY_TYPES = {"tool_use", "tool_result"}
 
-_SECTION_HEADER = "## Previous Conversation Context"
+# ─── Section headers & preamble ─────────────────────────────────────
 
-_PREAMBLE = (
+_SECTION_HEADER = "## Session Resume"
+
+_CHECKPOINT_PREAMBLE = (
+    "The previous session ended (app restart, timeout, or eviction). "
+    "Below is a structured checkpoint extracted from that session's "
+    "message history, followed by the last few conversation turns.\n"
+    "\n"
+    "RULES:\n"
+    "- Do NOT re-execute any actions, tool calls, or code changes.\n"
+    "- Use the checkpoint to understand what was happening.\n"
+    "- Use the recent turns to understand conversational context.\n"
+    "- Wait for the user's NEW message and respond ONLY to that.\n"
+    "- If the user says 'resume' or 'continue', pick up the task "
+    "described in the checkpoint."
+)
+
+# Legacy preamble kept for fallback path
+_LEGACY_PREAMBLE = (
     "The user resumed this chat after an app restart. The turns below are "
     "READ-ONLY history from the previous session — treat them as background "
     "context, NOT as prompts to respond to.\n"
@@ -43,19 +57,10 @@ _PREAMBLE = (
 _TRUNCATION_NOTE = "[Earlier messages truncated to fit token budget]"
 
 
+# ─── Message helpers (shared by both paths) ──────────────────────────
+
 def _filter_tool_only_messages(messages: list[dict]) -> list[dict]:
-    """Remove messages whose content blocks are exclusively tool_use or tool_result.
-
-    A message is retained if it has at least one content block with a ``type``
-    not in ``{"tool_use", "tool_result"}`` (e.g. text, image, document).
-
-    Args:
-        messages: List of message dicts, each with a ``content`` key
-            containing a list of content block dicts.
-
-    Returns:
-        Filtered list containing only messages with human-readable content.
-    """
+    """Remove messages whose content blocks are exclusively tool_use or tool_result."""
     result = []
     for msg in messages:
         content = msg.get("content")
@@ -72,12 +77,7 @@ def _filter_tool_only_messages(messages: list[dict]) -> list[dict]:
 
 
 def _compact_tool_args(inp: dict) -> str:
-    """Produce a compact summary of tool arguments (file paths, key params).
-
-    Keeps file_path, command (first 80 chars), and pattern fields.
-    Returns a short string like ``file_path=agent_manager.py`` or
-    ``command=git status...``.
-    """
+    """Produce a compact summary of tool arguments (file paths, key params)."""
     parts: list[str] = []
     for key in ("file_path", "path", "command", "pattern", "query", "content"):
         val = inp.get(key)
@@ -92,10 +92,7 @@ def _compact_tool_args(inp: dict) -> str:
 
 
 def _summarize_tool_blocks(content: list[dict]) -> list[str]:
-    """Summarize tool_use blocks as compact action descriptions.
-
-    Returns a list of strings like ``→ Read(file_path=agent_manager.py)``.
-    """
+    """Summarize tool_use blocks as compact action descriptions."""
     summaries: list[str] = []
     for block in content:
         if not isinstance(block, dict):
@@ -109,19 +106,7 @@ def _summarize_tool_blocks(content: list[dict]) -> list[str]:
 
 
 def _format_message(message: dict) -> str | None:
-    """Format a single message as ``Role: content`` with placeholder handling.
-
-    Extracts text blocks and joins them with newline separators.  Image blocks
-    become ``[image attachment]``, document blocks become
-    ``[document attachment]``.  Tool-use blocks are summarized as compact
-    action descriptions so the resumed agent knows what tools were used.
-
-    Args:
-        message: A message dict with ``role`` and ``content`` keys.
-
-    Returns:
-        Formatted string like ``"User: hello\\nworld"`` or ``None`` on error.
-    """
+    """Format a single message as ``Role: content`` with placeholder handling."""
     try:
         role = message.get("role", "")
         prefix = "User:" if role == "user" else "Assistant:"
@@ -143,12 +128,7 @@ def _format_message(message: dict) -> str | None:
                 parts.append("[image attachment]")
             elif block_type == "document":
                 parts.append("[document attachment]")
-            # tool_use and tool_result handled below
 
-        # Summarize tool usage ONLY when the message has no text blocks.
-        # When text is present, it already provides context (e.g. "I read
-        # the file and found...").  Tool summaries are most valuable for
-        # messages that would otherwise be empty after filtering.
         has_text = any(
             isinstance(b, dict) and b.get("type") == "text" and b.get("text")
             for b in content
@@ -171,19 +151,7 @@ def _format_message(message: dict) -> str | None:
 def _apply_token_budget(
     formatted_messages: list[str], token_budget: int
 ) -> tuple[list[str], bool]:
-    """Remove oldest messages until total estimated tokens fit within budget.
-
-    Uses ``ContextDirectoryLoader.estimate_tokens`` for the heuristic token
-    count.  Messages are removed from the front (oldest first).
-
-    Args:
-        formatted_messages: Pre-formatted message strings in chronological order.
-        token_budget: Maximum allowed estimated tokens.
-
-    Returns:
-        Tuple of ``(surviving_messages, was_truncated)`` where
-        ``was_truncated`` is True if any messages were dropped.
-    """
+    """Remove oldest messages until total estimated tokens fit within budget."""
     try:
         from .context_directory_loader import ContextDirectoryLoader
 
@@ -193,7 +161,6 @@ def _apply_token_budget(
         token_counts = [ContextDirectoryLoader.estimate_tokens(m) for m in messages]
         total = sum(token_counts)
 
-        # O(n) index-based truncation instead of O(n²) pop(0)
         start_idx = 0
         while total > token_budget and start_idx < len(messages):
             total -= token_counts[start_idx]
@@ -206,71 +173,422 @@ def _apply_token_budget(
         return ([], False)
 
 
-def _assemble_context(messages: list[str], was_truncated: bool) -> str:
-    """Wrap formatted messages in section header and preamble.
+# ─── Checkpoint extraction helpers ───────────────────────────────────
+# Each function is independently guarded.  Returns empty/default on error.
 
-    Returns an empty string when ``messages`` is empty.  When
-    ``was_truncated`` is True, a truncation note is prepended before the
-    message turns.
-
-    Args:
-        messages: Pre-formatted message strings in chronological order.
-        was_truncated: Whether older messages were dropped to fit the
-            token budget.
-
-    Returns:
-        Assembled context string ready for system prompt injection,
-        or ``""`` if no messages.
-    """
-    if not messages:
+def _extract_text_from_content(content: list | None) -> str:
+    """Pull concatenated text blocks from a message's content list."""
+    if not isinstance(content, list):
         return ""
-
-    parts: list[str] = [_SECTION_HEADER, "", _PREAMBLE]
-
-    if was_truncated:
-        parts.append("")
-        parts.append(_TRUNCATION_NOTE)
-
-    for msg in messages:
-        parts.append("")
-        parts.append(msg)
-
+    parts = []
+    for block in content:
+        if isinstance(block, dict) and block.get("type") == "text":
+            t = block.get("text", "")
+            if t:
+                parts.append(t)
     return "\n".join(parts)
 
+
+def _find_last_user_text(messages: list[dict]) -> str:
+    """Return the text of the last user message."""
+    try:
+        for msg in reversed(messages):
+            if msg.get("role") == "user":
+                text = _extract_text_from_content(msg.get("content"))
+                if text:
+                    # Cap at 500 chars — enough to identify the task
+                    return text[:500]
+        return ""
+    except Exception:
+        return ""
+
+
+def _extract_tool_summary(messages: list[dict]) -> dict[str, set[str]]:
+    """Scan recent messages for tool_use blocks → {tool_name: {key args}}.
+
+    Returns a dict like {"Read": {"agent.py"}, "Bash": {"git status..."}}.
+    Only scans the last ``messages`` provided (caller should slice).
+
+    NOTE: DB persists tool_use as {name, summary, category} without the
+    full ``input`` dict.  We extract info from both ``input`` (live) and
+    ``summary`` (DB) to work in all contexts.
+    """
+    try:
+        summary: dict[str, set[str]] = {}
+        for msg in messages:
+            content = msg.get("content")
+            if not isinstance(content, list):
+                continue
+            for block in content:
+                if not isinstance(block, dict) or block.get("type") != "tool_use":
+                    continue
+                name = block.get("name", "")
+                if not name:
+                    continue
+
+                arg = ""
+                inp = block.get("input")
+
+                if isinstance(inp, dict) and inp:
+                    # Live path: full input dict available
+                    if name in ("Read", "Write", "Edit", "Glob"):
+                        arg = inp.get("file_path") or inp.get("path") or inp.get("pattern") or ""
+                    elif name == "Bash":
+                        arg = (inp.get("command") or "")[:60]
+                    elif name == "Grep":
+                        arg = (inp.get("pattern") or "")[:60]
+                    elif name == "Agent":
+                        arg = (inp.get("description") or "")[:80]
+                    elif name == "Skill":
+                        arg = inp.get("skill") or ""
+                    else:
+                        arg = _compact_tool_args(inp)[:60]
+                else:
+                    # DB path: only summary string available
+                    s = block.get("summary", "")
+                    if s:
+                        arg = s[:80]
+
+                if name not in summary:
+                    summary[name] = set()
+                if arg:
+                    summary[name].add(arg)
+        return summary
+    except Exception:
+        logger.debug("Tool summary extraction failed", exc_info=True)
+        return {}
+
+
+def _extract_files_touched(tool_summary: dict[str, set[str]]) -> list[str]:
+    """From tool summary, extract unique file paths that were read/edited.
+
+    Works with both live (input.file_path) and DB (summary string) data.
+    Summary strings look like 'Reading /path/to/file.py' or
+    'Editing /path/to/file.py'.
+    """
+    try:
+        files: set[str] = set()
+        for tool_name in ("Read", "Write", "Edit"):
+            for arg in tool_summary.get(tool_name, set()):
+                if not arg:
+                    continue
+                # Try to find a path in the string
+                # Match patterns like /path/to/file.ext or file_path=path
+                for token in arg.split():
+                    if "/" in token and "." in token.rsplit("/", 1)[-1]:
+                        basename = token.rsplit("/", 1)[-1]
+                        # Clean trailing punctuation
+                        basename = basename.rstrip(".,;:\"')")
+                        if basename and len(basename) < 60:
+                            files.add(basename)
+                            break
+        return sorted(files)[:20]
+    except Exception:
+        return []
+
+
+def _extract_git_activity(messages: list[dict]) -> list[str]:
+    """Scan Bash tool calls for git commit commands → extract commit messages.
+
+    Works with both live (input.command) and DB (summary) paths.
+    """
+    try:
+        commits: list[str] = []
+        for msg in messages:
+            content = msg.get("content")
+            if not isinstance(content, list):
+                continue
+            for block in content:
+                if not isinstance(block, dict) or block.get("type") != "tool_use":
+                    continue
+                if block.get("name") != "Bash":
+                    continue
+                # Try input.command first (live), then summary (DB)
+                inp = block.get("input")
+                cmd = ""
+                if isinstance(inp, dict):
+                    cmd = inp.get("command", "")
+                if not cmd:
+                    cmd = block.get("summary", "")
+                if "git commit" in cmd:
+                    # Try standard -m "msg" first
+                    m = re.search(r'-m\s+["\']([^"\']+)', cmd)
+                    if m:
+                        msg_text = m.group(1).strip()
+                        # Skip HEREDOC markers like "$(cat <<'EOF'"
+                        if msg_text and not msg_text.startswith("$("):
+                            commits.append(msg_text[:80])
+        return commits[-5:]
+    except Exception:
+        return []
+
+
+def _extract_agent_spawns(messages: list[dict]) -> list[str]:
+    """Scan for Agent tool calls → extract descriptions of sub-tasks.
+
+    Works with both live (input.description) and DB (summary) paths.
+    """
+    try:
+        spawns: list[str] = []
+        for msg in messages:
+            content = msg.get("content")
+            if not isinstance(content, list):
+                continue
+            for block in content:
+                if not isinstance(block, dict) or block.get("type") != "tool_use":
+                    continue
+                if block.get("name") != "Agent":
+                    continue
+                # Try input.description first (live), then summary (DB)
+                inp = block.get("input")
+                desc = ""
+                if isinstance(inp, dict):
+                    desc = inp.get("description", "")
+                if not desc:
+                    desc = block.get("summary", "")
+                if desc:
+                    # Strip "Agent: " prefix from summary
+                    if desc.startswith("Agent: "):
+                        desc = desc[7:]
+                    spawns.append(desc[:100])
+        return spawns[-5:]
+    except Exception:
+        return []
+
+
+def _extract_skill_invocations(messages: list[dict]) -> list[str]:
+    """Scan for Skill tool calls → extract skill names.
+
+    Works with both live (input.skill) and DB (summary) paths.
+    """
+    try:
+        skills: list[str] = []
+        seen: set[str] = set()
+        for msg in messages:
+            content = msg.get("content")
+            if not isinstance(content, list):
+                continue
+            for block in content:
+                if not isinstance(block, dict) or block.get("type") != "tool_use":
+                    continue
+                if block.get("name") != "Skill":
+                    continue
+                inp = block.get("input")
+                skill_name = ""
+                if isinstance(inp, dict):
+                    skill_name = inp.get("skill", "")
+                if not skill_name:
+                    skill_name = block.get("summary", "")[:60]
+                if skill_name and skill_name not in seen:
+                    seen.add(skill_name)
+                    skills.append(skill_name)
+        return skills
+    except Exception:
+        return []
+
+
+def _estimate_session_timespan(messages: list[dict]) -> str:
+    """Estimate session duration from first and last message timestamps."""
+    try:
+        first_ts = messages[0].get("created_at", "")
+        last_ts = messages[-1].get("created_at", "")
+        if not first_ts or not last_ts:
+            return ""
+        # Parse ISO timestamps
+        t0 = datetime.fromisoformat(first_ts)
+        t1 = datetime.fromisoformat(last_ts)
+        delta = t1 - t0
+        minutes = int(delta.total_seconds() / 60)
+        return f"{t0.strftime('%H:%M')} → {t1.strftime('%H:%M')} ({minutes} min)"
+    except Exception:
+        return ""
+
+
+def _count_user_turns(messages: list[dict]) -> int:
+    """Count user messages (= number of conversation turns)."""
+    try:
+        return sum(1 for m in messages if m.get("role") == "user")
+    except Exception:
+        return 0
+
+
+# ─── Checkpoint assembly ─────────────────────────────────────────────
+
+def _build_checkpoint(messages: list[dict]) -> str:
+    """Build a structured task checkpoint from raw messages.
+
+    Pure mechanical extraction — no LLM calls.  Each section is
+    independently guarded; partial checkpoints are valid.
+
+    Returns empty string only if all extractions fail.
+    """
+    sections: list[str] = []
+
+    # 1. Last user request (= the task)
+    last_request = _find_last_user_text(messages)
+    if last_request:
+        sections.append(f"**Last request:** {last_request}")
+
+    # 2. Session stats
+    timespan = _estimate_session_timespan(messages)
+    turns = _count_user_turns(messages)
+    if timespan or turns:
+        stats_parts = []
+        if turns:
+            stats_parts.append(f"{turns} turns")
+        if timespan:
+            stats_parts.append(timespan)
+        sections.append(f"**Session:** {', '.join(stats_parts)}")
+
+    # 3. Tool usage summary (last 40 messages)
+    tool_summary = _extract_tool_summary(messages[-40:])
+
+    # 4. Files touched
+    files = _extract_files_touched(tool_summary)
+    if files:
+        sections.append(f"**Files touched:** {', '.join(files)}")
+
+    # 5. Git commits
+    commits = _extract_git_activity(messages)
+    if commits:
+        commit_lines = "\n".join(f"  - {c}" for c in commits)
+        sections.append(f"**Git commits:**\n{commit_lines}")
+
+    # 6. Sub-agent tasks
+    spawns = _extract_agent_spawns(messages[-20:])
+    if spawns:
+        spawn_lines = "\n".join(f"  - {s}" for s in spawns)
+        sections.append(f"**Sub-tasks spawned:**\n{spawn_lines}")
+
+    # 7. Skills used
+    skills = _extract_skill_invocations(messages)
+    if skills:
+        sections.append(f"**Skills used:** {', '.join(skills)}")
+
+    # 8. Key tool stats
+    tool_counts = {name: len(args) for name, args in tool_summary.items()}
+    if tool_counts:
+        top_tools = sorted(tool_counts.items(), key=lambda x: -x[1])[:6]
+        tool_str = ", ".join(f"{name}×{count}" for name, count in top_tools)
+        sections.append(f"**Tool activity:** {tool_str}")
+
+    if not sections:
+        return ""
+
+    return "### Task Checkpoint\n" + "\n".join(sections)
+
+
+# ─── Recent turns formatting ─────────────────────────────────────────
+
+def _format_recent_turns(messages: list[dict], max_turns: int = 5) -> str:
+    """Format the last N user-assistant turn pairs.
+
+    Returns a compact section with just enough conversational context
+    for the new agent to understand what was being discussed.
+    """
+    try:
+        filtered = _filter_tool_only_messages(messages)
+        # Drop last assistant message (anti-duplication, same as legacy)
+        if filtered and filtered[-1].get("role") == "assistant":
+            filtered = filtered[:-1]
+
+        # Take last max_turns * 2 messages (pairs of user + assistant)
+        recent = filtered[-(max_turns * 2):]
+
+        formatted: list[str] = []
+        for msg in recent:
+            text = _format_message(msg)
+            if text is not None:
+                # Cap each message at 800 chars for recent turns
+                if len(text) > 800:
+                    text = text[:797] + "..."
+                formatted.append(text)
+
+        if not formatted:
+            return ""
+
+        return "### Recent Conversation\n" + "\n\n".join(formatted)
+    except Exception:
+        logger.debug("Recent turns formatting failed", exc_info=True)
+        return ""
+
+
+# ─── Budget computation ──────────────────────────────────────────────
 
 def _compute_resume_budget(
     model_context_window: int, is_channel: bool = False
 ) -> tuple[int, int, int]:
     """Compute resume context limits scaled to model context window.
 
-    For 1M models, we inject the full conversation — no practical truncation.
-    For smaller models, use conservative limits to leave room for new work.
-
-    Channel sessions (Slack) use a tight budget regardless of model
-    size.  Channel conversations are quick exchanges — injecting hundreds of
-    messages causes massive prefill latency on cold resume (the channel
-    subprocess is evicted frequently since there's only 1 channel slot).
-
     Returns:
         Tuple of ``(token_budget, max_messages, db_fetch_limit)``.
     """
     if is_channel:
-        # Channel sessions: last ~50 messages / 32K tokens.
-        # Covers ~25 round-trips — enough for "continue where we left off"
-        # without the 200K prefill cost that makes cold resume sluggish.
         return (32_000, 50, 120)
 
     if model_context_window >= 500_000:
-        # 1M models: 200K budget, 500 messages, fetch 1000 from DB.
-        # With 1M context, conversation history is valuable — don't discard it.
         return (200_000, 500, 1000)
     elif model_context_window >= 200_000:
-        # 200K models: 40K budget, 100 messages
         return (40_000, 100, 250)
     else:
-        # Small models (<200K): conservative 12K budget
         return (12_000, 40, 100)
 
+
+# ─── Legacy assembly (kept for backward compat + fallback) ───────────
+
+def _assemble_context(messages: list[str], was_truncated: bool) -> str:
+    """Wrap formatted messages in section header and preamble.
+
+    Kept for backward compatibility with existing tests and callers.
+    """
+    if not messages:
+        return ""
+
+    parts: list[str] = ["## Previous Conversation Context", "", _LEGACY_PREAMBLE]
+    if was_truncated:
+        parts.append("")
+        parts.append(_TRUNCATION_NOTE)
+    for msg in messages:
+        parts.append("")
+        parts.append(msg)
+    return "\n".join(parts)
+
+
+# ─── Legacy raw-history builder (fallback) ───────────────────────────
+
+def _build_legacy_context(raw_messages: list[dict], max_messages: int,
+                          token_budget: int) -> str:
+    """Original raw-history injection — used as fallback."""
+    filtered = _filter_tool_only_messages(raw_messages)
+    if filtered and filtered[-1].get("role") == "assistant":
+        filtered = filtered[:-1]
+    recent = filtered[-max_messages:]
+
+    formatted: list[str] = []
+    for msg in recent:
+        text = _format_message(msg)
+        if text is not None:
+            formatted.append(text)
+
+    if not formatted:
+        return ""
+
+    surviving, was_truncated = _apply_token_budget(formatted, token_budget)
+    return _assemble_context(surviving, was_truncated)
+
+
+# ─── Per-session checkpoint cache ────────────────────────────────────
+# Key: session_id, Value: (msg_count_at_build_time, result_string).
+# Messages are append-only → count change = cache invalid.
+# LRU eviction: cap at 50 entries (~100-250KB) to prevent unbounded
+# growth in long-running daemon.  OrderedDict for O(1) eviction.
+from collections import OrderedDict
+
+_RESUME_CACHE_MAX = 50
+_resume_cache: OrderedDict[str, tuple[int, str]] = OrderedDict()
+
+
+# ─── Public API ──────────────────────────────────────────────────────
 
 async def build_resume_context(
     app_session_id: str,
@@ -280,33 +598,28 @@ async def build_resume_context(
     token_budget: int | None = None,
     is_channel: bool = False,
 ) -> str:
-    """Load recent messages and format them for system prompt injection.
+    """Load recent messages and build resume context for system prompt.
 
-    Limits scale with model context window — 1M models get the full
-    conversation, small models get a conservative subset.  Explicit
-    overrides take precedence over auto-computed values.
+    Two-layer approach:
+    1. **Structured checkpoint** (~1-3K tokens) — mechanical extraction
+       of task state, files touched, git activity, sub-tasks.
+    2. **Recent turns** (~2-5K tokens) — last 5 conversation turn pairs
+       for conversational continuity.
+
+    Falls back to legacy raw-history injection if the structured path
+    produces nothing.
 
     Args:
-        app_session_id: The stable tab-level session ID to query messages for.
-        model_context_window: Model's context window in tokens.  Used to
-            auto-compute token_budget, max_messages, and db_fetch_limit
-            when they are not explicitly provided.
-        max_messages: Maximum number of human-readable messages in the final
-            output.  Auto-computed from model_context_window if None.
-        db_fetch_limit: Number of messages to fetch from DB before filtering.
-            Auto-computed from model_context_window if None.
-        token_budget: Maximum estimated tokens for the formatted output.
-            Auto-computed from model_context_window if None.
-        is_channel: Whether this is a channel session (Slack).
-            Channel sessions use a tighter budget to avoid slow prefill
-            from accumulated conversation history.
+        app_session_id: The stable tab-level session ID to query.
+        model_context_window: Model's context window in tokens.
+        max_messages: Max messages for legacy fallback path.
+        db_fetch_limit: Messages to fetch from DB.
+        token_budget: Token budget for legacy fallback path.
+        is_channel: Channel session (tighter budget).
 
     Returns:
-        Formatted context string with section header, preamble, and message
-        turns.  Returns empty string if no injectable messages exist or on
-        any error.
+        Formatted context string, or ``""`` on error/no messages.
     """
-    # Auto-compute limits from model context window, allow explicit overrides
     auto_budget, auto_max, auto_fetch = _compute_resume_budget(
         model_context_window, is_channel=is_channel
     )
@@ -319,46 +632,69 @@ async def build_resume_context(
     try:
         from database import db
 
+        # ── Cache check: skip DB fetch if msg_count unchanged ──
+        msg_count = await db.messages.count_by_session(app_session_id)
+        cached = _resume_cache.get(app_session_id)
+        if cached and cached[0] == msg_count:
+            _resume_cache.move_to_end(app_session_id)  # LRU touch
+            logger.info("Resume context cache hit: session=%s count=%d",
+                        app_session_id[:12], msg_count)
+            return cached[1]
+
         raw_messages = await db.messages.list_by_session_paginated(
             app_session_id, limit=db_fetch_limit
         )
 
         if not raw_messages:
-            logger.info("Resume context skipped: no messages for session %s", app_session_id)
+            logger.info("Resume context skipped: no messages for session %s",
+                        app_session_id)
             return ""
 
-        filtered = _filter_tool_only_messages(raw_messages)
-        # Drop the last assistant message — Claude will generate a fresh
-        # response to the user's new message.  Keeping it in the injected
-        # context triggers the "re-answer" duplication pattern where Claude
-        # sees its own previous response and paraphrases it again.
-        if filtered and filtered[-1].get("role") == "assistant":
-            filtered = filtered[:-1]
-        recent = filtered[-max_messages:]
+        # ── Try structured checkpoint + recent turns ──────────────
+        checkpoint = ""
+        recent = ""
+        try:
+            checkpoint = _build_checkpoint(raw_messages)
+            recent = _format_recent_turns(raw_messages, max_turns=5)
+        except Exception:
+            logger.warning("Structured checkpoint extraction failed",
+                           exc_info=True)
 
-        formatted: list[str] = []
-        for msg in recent:
-            text = _format_message(msg)
-            if text is not None:
-                formatted.append(text)
-
-        if not formatted:
-            logger.info("Resume context skipped: no injectable messages after filtering")
-            return ""
-
-        surviving, was_truncated = _apply_token_budget(formatted, token_budget)
-        result = _assemble_context(surviving, was_truncated)
-
-        if result:
+        if checkpoint or recent:
+            parts = [_SECTION_HEADER, "", _CHECKPOINT_PREAMBLE]
+            if checkpoint:
+                parts.append("")
+                parts.append(checkpoint)
+            if recent:
+                parts.append("")
+                parts.append(recent)
+            result = "\n".join(parts)
+            _resume_cache[app_session_id] = (msg_count, result)
+            if len(_resume_cache) > _RESUME_CACHE_MAX:
+                _resume_cache.popitem(last=False)  # evict oldest
             logger.info(
-                "Resume context built: %d messages, truncated=%s",
-                len(surviving),
-                was_truncated,
+                "Resume context built (structured): checkpoint=%d chars, "
+                "recent=%d chars, total=~%d tokens",
+                len(checkpoint), len(recent), len(result) // 4,
+            )
+            return result
+
+        # ── Fallback: legacy raw-history injection ────────────────
+        logger.info("Structured resume empty — falling back to legacy "
+                    "raw-history injection")
+        result = _build_legacy_context(raw_messages, max_messages, token_budget)
+        if result:
+            _resume_cache[app_session_id] = (msg_count, result)
+            if len(_resume_cache) > _RESUME_CACHE_MAX:
+                _resume_cache.popitem(last=False)  # evict oldest
+            logger.info(
+                "Resume context built (legacy fallback): ~%d tokens",
+                len(result) // 4,
             )
         else:
-            logger.info("Resume context skipped: empty after token budget enforcement")
-
+            logger.info("Resume context skipped: no injectable messages")
         return result
+
     except Exception:
         logger.warning(
             "Failed to build resume context for session %s",

@@ -483,6 +483,22 @@ def load_mcp_config(
     return mcp_servers, disallowed_tools
 
 
+def load_mcp_config_for_cli(workspace_path: Path) -> dict:
+    """Load MCP config in Claude CLI ``--mcp-config`` format.
+
+    Convenience wrapper around :func:`load_mcp_config` that returns the
+    ``{"mcpServers": {...}}`` dict expected by the ``--mcp-config`` CLI
+    flag.  Used by the job executor for headless CLI subprocess runs.
+
+    Returns an **empty dict** when no enabled MCPs are found (callers
+    should skip ``--mcp-config`` entirely in that case).
+    """
+    mcp_servers, _ = load_mcp_config(workspace_path, enable_mcp=True)
+    if not mcp_servers:
+        return {}
+    return {"mcpServers": mcp_servers}
+
+
 # ---------------------------------------------------------------------------
 # Tier-aware entry point (Lazy MCP Loading)
 # ---------------------------------------------------------------------------

@@ -122,7 +122,13 @@ def main():
     parser = argparse.ArgumentParser(description="Claude Agent Platform Backend")
     parser.add_argument("--port", type=int, default=8000, help="Port to run on")
     parser.add_argument("--host", type=str, default="127.0.0.1", help="Host to bind to")
-    args = parser.parse_args()
+    # parse_known_args: ignore unknown flags so the binary never crash-loops
+    # if the daemon script or Tauri passes an unexpected argument.
+    # See: 2026-04-02 --log-level crash loop (commit 6829745).
+    args, _unknown = parser.parse_known_args()
+    if _unknown:
+        write_startup_log(f"Ignoring unknown arguments: {_unknown}")
+        print(f"[python-backend] Ignoring unknown arguments: {_unknown}", flush=True)
 
     write_startup_log(f"Starting server on {args.host}:{args.port}")
     print(f"Starting backend server on {args.host}:{args.port}", flush=True)

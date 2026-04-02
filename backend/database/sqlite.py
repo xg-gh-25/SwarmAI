@@ -109,40 +109,76 @@ class SQLiteTable(BaseTable[T], Generic[T]):
             return 1 if value else 0
         return value
 
+    _PUT_MAX_RETRIES = 3
+    _PUT_RETRY_DELAYS = (0.05, 0.2, 0.5)  # exponential-ish, total < 1s
+
     async def put(self, item: T) -> T:
-        """Insert or update an item."""
+        """Insert or update an item with retry on transient DB errors.
+
+        Retries up to 3 times on SQLITE_BUSY / OperationalError with
+        exponential backoff (50ms → 200ms → 500ms).  Total worst-case
+        wait: ~750ms.  Non-transient errors propagate immediately.
+        """
+        import asyncio
+
         if "id" not in item:
             item["id"] = str(uuid4())
         if "created_at" not in item:
             item["created_at"] = datetime.now().isoformat()
         item["updated_at"] = datetime.now().isoformat()
 
-        # Get existing item to decide insert vs update
+        last_error: Exception | None = None
+        for attempt in range(self._PUT_MAX_RETRIES):
+            try:
+                # Refresh updated_at on retry so timestamp reflects actual write time
+                if attempt > 0:
+                    item["updated_at"] = datetime.now().isoformat()
+                return await self._put_once(item)
+            except Exception as exc:
+                last_error = exc
+                err_str = str(exc).lower()
+                # Only retry on transient SQLite locking errors.
+                # Disk I/O errors are NOT transient (hardware/corruption).
+                is_transient = (
+                    "database is locked" in err_str
+                    or "busy" in err_str
+                )
+                if not is_transient or attempt >= self._PUT_MAX_RETRIES - 1:
+                    raise
+                delay = self._PUT_RETRY_DELAYS[min(attempt, len(self._PUT_RETRY_DELAYS) - 1)]
+                logger.info(
+                    "DB put retry %d/%d for %s (table=%s): %s",
+                    attempt + 1, self._PUT_MAX_RETRIES,
+                    item.get("id", "?")[:12], self.table_name,
+                    str(exc)[:80],
+                )
+                await asyncio.sleep(delay)
+
+        # Should not reach here, but satisfy type checker
+        raise last_error  # type: ignore[misc]
+
+    async def _put_once(self, item: T) -> T:
+        """Single put attempt (insert or update)."""
         existing = await self.get(item["id"])
 
         async with self._get_connection() as conn:
             if existing:
-                # Update
                 columns = [k for k in item.keys() if k != "id"]
                 set_clause = ", ".join(f"{col} = ?" for col in columns)
                 values = [self._serialize_value(item[col]) for col in columns]
                 values.append(item["id"])
-
                 await conn.execute(
                     f"UPDATE {self.table_name} SET {set_clause} WHERE id = ?",
                     values
                 )
             else:
-                # Insert
                 columns = list(item.keys())
                 placeholders = ", ".join("?" for _ in columns)
                 values = [self._serialize_value(item[col]) for col in columns]
-
                 await conn.execute(
                     f"INSERT INTO {self.table_name} ({', '.join(columns)}) VALUES ({placeholders})",
                     values
                 )
-
             await conn.commit()
         return item
 

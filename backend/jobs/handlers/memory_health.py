@@ -31,8 +31,6 @@ from ..paths import SWARMWS, CONTEXT_DIR, DAILY_DIR
 
 logger = logging.getLogger("swarm.jobs.memory_health")
 
-# Sonnet 4.6 for maintenance — good reasoning at low cost for background jobs
-MODEL_ID = "us.anthropic.claude-sonnet-4-6"
 MAX_OUTPUT_TOKENS = 2048
 
 
@@ -210,24 +208,17 @@ Output ONLY the JSON object, nothing else."""
 
 
 def _call_llm(prompt: str) -> dict:
-    """Call Bedrock Sonnet 4.6 and parse the JSON response."""
-    import boto3
+    """Call Bedrock Sonnet 4.6 and parse the JSON response.
 
-    client = boto3.client("bedrock-runtime", region_name="us-west-2")
+    Uses the shared jobs.bedrock client (same credential chain as the
+    SwarmAI app — AppConfigManager region, proper timeouts, credential
+    eviction on auth errors).
+    """
+    from jobs.bedrock import invoke
 
-    body = json.dumps({
-        "anthropic_version": "bedrock-2023-05-31",
-        "max_tokens": MAX_OUTPUT_TOKENS,
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.2,  # Low temp for maintenance decisions
-    })
-
-    response = client.invoke_model(modelId=MODEL_ID, body=body)
-    result = json.loads(response["body"].read())
-
-    content = result["content"][0]["text"]
-    input_tokens = result.get("usage", {}).get("input_tokens", 0)
-    output_tokens = result.get("usage", {}).get("output_tokens", 0)
+    content, input_tokens, output_tokens = invoke(
+        prompt, max_tokens=MAX_OUTPUT_TOKENS, temperature=0.2,
+    )
 
     logger.info(
         "LLM response: %d input tokens, %d output tokens",
@@ -269,9 +260,10 @@ def _apply_report(report: dict, memory_md: str, evolution_md: str) -> list[str]:
     if stale:
         for entry in stale[:5]:  # Cap at 5 per run
             prefix = entry.get("entry_prefix", "")
-            if prefix and prefix in memory_md:
-                _remove_memory_entry("Recent Context", prefix)
-                actions.append(f"Removed stale memory: {prefix[:60]}")
+            if prefix:
+                removed = _remove_memory_entry(prefix)
+                if removed:
+                    actions.append(f"Removed stale memory: {prefix[:60]}")
 
     # 2. Resolve Open Threads
     resolved = report.get("resolved_threads", [])
@@ -282,13 +274,17 @@ def _apply_report(report: dict, memory_md: str, evolution_md: str) -> list[str]:
                 _resolve_open_thread(title)
                 actions.append(f"Resolved thread: {title}")
 
-    # 3. Archive stale Evolution entries
+    # 3. Archive stale Evolution entries (remove from EVOLUTION.md)
     archived = report.get("archived_capabilities", [])
     if archived:
         for cap in archived[:3]:
             cap_id = cap.get("id", "")
             if cap_id:
-                actions.append(f"Flagged for archive: {cap_id} — {cap.get('reason', '')}")
+                removed = _remove_evolution_entry(cap_id)
+                if removed:
+                    actions.append(f"Archived: {cap_id} — {cap.get('reason', '')[:80]}")
+                else:
+                    actions.append(f"Flagged for archive (not found): {cap_id}")
 
     # 4. Flag stale decisions (log only, don't auto-remove)
     stale_decisions = report.get("stale_decisions", [])
@@ -311,30 +307,81 @@ def _apply_report(report: dict, memory_md: str, evolution_md: str) -> list[str]:
     return actions
 
 
-def _remove_memory_entry(section: str, entry_prefix: str) -> None:
-    """Remove a specific entry from MEMORY.md by finding and deleting the line."""
+def _normalize_prefix(prefix: str) -> str:
+    """Strip index formatting so LLM prefixes match file content.
+
+    The LLM returns e.g. ``"RC24 2026-03-13: MCP not working"``
+    but the file has ``"- [RC24] 2026-03-13: MCP not working"``.
+    Extract the date+topic core for fuzzy matching.
+    """
+    import re
+    # Strip leading "- [RC24] " or "RC24 " but NOT dates like "2026-03-13"
+    # Entry IDs are 1-3 uppercase letters + digits (RC24, KD01, COE03, LL12)
+    cleaned = re.sub(r"^-?\s*\[?[A-Z]{1,3}\d+\]?\s*", "", prefix).strip()
+    return cleaned[:50]  # First 50 chars of the content portion
+
+
+def _remove_memory_entry(entry_prefix: str) -> bool:
+    """Remove a specific entry from MEMORY.md (both index and body).
+
+    Uses flock for safe concurrent access. Fuzzy-matches the entry
+    prefix against each line to handle formatting differences between
+    the LLM output and actual file content.
+
+    Returns True if any lines were removed.
+    """
     memory_path = CONTEXT_DIR / "MEMORY.md"
     if not memory_path.exists():
-        return
+        return False
 
+    needle = _normalize_prefix(entry_prefix)
+    if len(needle) < 10:
+        logger.warning("Prefix too short for safe matching: %r", needle)
+        return False
+
+    lock_path = memory_path.with_suffix(".md.lock")
+    fd = None
     try:
+        import fcntl
+        fd = open(lock_path, "w")  # noqa: SIM115
+        fcntl.flock(fd, fcntl.LOCK_EX)
+
         content = memory_path.read_text(encoding="utf-8")
         lines = content.split("\n")
-        new_lines = [l for l in lines if entry_prefix not in l]
-        if len(new_lines) < len(lines):
+        new_lines = [l for l in lines if needle not in l]
+        removed = len(lines) - len(new_lines)
+
+        if removed > 0:
             memory_path.write_text("\n".join(new_lines), encoding="utf-8")
-            logger.info("Removed entry matching: %s", entry_prefix[:50])
+            logger.info("Removed %d line(s) matching: %s", removed, needle[:50])
+            return True
+        else:
+            logger.debug("No match for: %s", needle[:50])
+            return False
     except Exception as e:
         logger.warning("Failed to remove memory entry: %s", e)
+        return False
+    finally:
+        if fd:
+            fd.close()
 
 
 def _resolve_open_thread(title: str) -> None:
-    """Move an Open Thread to the Resolved section in MEMORY.md."""
+    """Move an Open Thread to the Resolved section in MEMORY.md.
+
+    Uses flock for safe concurrent access.
+    """
     memory_path = CONTEXT_DIR / "MEMORY.md"
     if not memory_path.exists():
         return
 
+    lock_path = memory_path.with_suffix(".md.lock")
+    fd = None
     try:
+        import fcntl
+        fd = open(lock_path, "w")  # noqa: SIM115
+        fcntl.flock(fd, fcntl.LOCK_EX)
+
         content = memory_path.read_text(encoding="utf-8")
 
         # Find the thread line (fuzzy match on title)
@@ -344,25 +391,84 @@ def _resolve_open_thread(title: str) -> None:
 
         for line in lines:
             if title.lower() in line.lower() and ("🔵" in line or "🟡" in line or "🔴" in line):
-                # Convert to resolved
                 today = datetime.now(timezone.utc).strftime("%m/%d")
                 resolved_entry = line.replace("🔵", "✅").replace("🟡", "✅").replace("🔴", "✅")
                 resolved_entry = resolved_entry.rstrip() + f" (auto-resolved {today})"
-                # Don't include original line
             else:
                 new_lines.append(line)
 
         if resolved_entry:
-            # Add to resolved section
+            inserted = False
             for i, line in enumerate(new_lines):
                 if "### Resolved" in line:
                     new_lines.insert(i + 1, resolved_entry)
+                    inserted = True
                     break
+
+            if not inserted:
+                # No "### Resolved" section — append one at the end of
+                # the Open Threads area so the entry isn't silently dropped.
+                new_lines.append("")
+                new_lines.append("### Resolved")
+                new_lines.append(resolved_entry)
 
             memory_path.write_text("\n".join(new_lines), encoding="utf-8")
             logger.info("Resolved thread: %s", title)
     except Exception as e:
         logger.warning("Failed to resolve thread: %s", e)
+    finally:
+        if fd:
+            fd.close()
+
+
+def _remove_evolution_entry(entry_id: str) -> bool:
+    """Remove an entry block from EVOLUTION.md by its ID (e.g. E003).
+
+    Removes the ``### EXXX | ...`` header and all subsequent lines until
+    the next ``### `` header or section boundary.  Uses flock.
+
+    Returns True if the entry was found and removed.
+    """
+    evo_path = CONTEXT_DIR / "EVOLUTION.md"
+    if not evo_path.exists():
+        return False
+
+    lock_path = evo_path.with_suffix(".md.lock")
+    fd = None
+    try:
+        import fcntl
+        fd = open(lock_path, "w")  # noqa: SIM115
+        fcntl.flock(fd, fcntl.LOCK_EX)
+
+        content = evo_path.read_text(encoding="utf-8")
+        lines = content.split("\n")
+        new_lines = []
+        skipping = False
+        removed = False
+
+        for line in lines:
+            # Detect entry header: "### E003 | reactive | skill | 2026-03-08"
+            if line.startswith("### ") and f" {entry_id} " in line:
+                skipping = True
+                removed = True
+                continue
+            # Stop skipping at next entry header or section header
+            if skipping and (line.startswith("### ") or line.startswith("## ")):
+                skipping = False
+            if not skipping:
+                new_lines.append(line)
+
+        if removed:
+            evo_path.write_text("\n".join(new_lines), encoding="utf-8")
+            logger.info("Removed evolution entry: %s", entry_id)
+            return True
+        return False
+    except Exception as e:
+        logger.warning("Failed to remove evolution entry %s: %s", entry_id, e)
+        return False
+    finally:
+        if fd:
+            fd.close()
 
 
 # ── Reporting ──────────────────────────────────────────────────────

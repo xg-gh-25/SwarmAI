@@ -58,9 +58,9 @@ class LifecycleManager:
     # Memory pressure thresholds (configurable via env vars).
     # SWARMAI_MEMORY_EVICT_PCT: % used → start evicting IDLE sessions
     # SWARMAI_MEMORY_CIRCUIT_BREAKER_PCT: % used → kill heaviest STREAMING session
-    MEMORY_EVICT_PCT: float = float(os.environ.get("SWARMAI_MEMORY_EVICT_PCT", "85"))
+    MEMORY_EVICT_PCT: float = float(os.environ.get("SWARMAI_MEMORY_EVICT_PCT", "90"))
     MEMORY_CIRCUIT_BREAKER_PCT: float = float(
-        os.environ.get("SWARMAI_MEMORY_CIRCUIT_BREAKER_PCT", "92")
+        os.environ.get("SWARMAI_MEMORY_CIRCUIT_BREAKER_PCT", "95")
     )
 
     def __init__(

@@ -298,9 +298,13 @@ class KnowledgeStore:
             cleaned = re.sub(r'["\(\)\{\}\^]', '', word)
             if cleaned:
                 clean_words.append(cleaned)
-        clean_query = " ".join(clean_words)
-        if not clean_query:
+        if not clean_words:
             return []
+        # Use OR semantics: queries are typically focus keywords where
+        # ANY matching term is relevant. AND is too restrictive —
+        # "daemon crash SIGKILL OOM" matches zero chunks with AND but
+        # 356 with OR. FTS5 rank still boosts chunks matching more terms.
+        clean_query = " OR ".join(clean_words)
 
         try:
             rows = self._conn.execute(

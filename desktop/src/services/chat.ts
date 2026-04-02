@@ -164,9 +164,11 @@ async function consumeSSEStream(
   clearStallTimer: () => void,
   onMessage: (event: StreamEvent) => void,
   onComplete: () => void,
+  onDisconnect?: () => void,
 ): Promise<void> {
   const decoder = new TextDecoder();
   let buffer = '';
+  let receivedDone = false;
 
   startStallTimer(reader);
 
@@ -181,7 +183,7 @@ async function consumeSSEStream(
         for (const line of remaining.split('\n')) {
           if (line.startsWith('data: ')) {
             const data = line.slice(6);
-            if (data === '[DONE]') break;
+            if (data === '[DONE]') { receivedDone = true; break; }
             try {
               const event = parseSSEEvent(data);
               if (event.type !== 'heartbeat') {
@@ -192,7 +194,19 @@ async function consumeSSEStream(
         }
       }
       clearStallTimer();
-      onComplete();
+      if (receivedDone) {
+        // Clean completion — backend sent [DONE] sentinel
+        onComplete();
+      } else if (onDisconnect) {
+        // Premature disconnect — HTTP stream closed without [DONE].
+        // Backend may still be streaming. Don't clear isStreaming.
+        // See: 2026-04-02 SSE disconnect kill chain diagnosis.
+        console.warn('[SSE] Premature disconnect detected (no [DONE] sentinel)');
+        onDisconnect();
+      } else {
+        // No disconnect handler — fall back to complete (legacy behavior)
+        onComplete();
+      }
       break;
     }
 
@@ -209,6 +223,7 @@ async function consumeSSEStream(
       if (line.startsWith('data: ')) {
         const data = line.slice(6);
         if (data === '[DONE]') {
+          receivedDone = true;
           clearStallTimer();
           onComplete();
           return;
@@ -266,7 +281,8 @@ export const chatService = {
     request: ChatRequest,
     onMessage: (event: StreamEvent) => void,
     onError: (error: Error) => void,
-    onComplete: () => void
+    onComplete: () => void,
+    onDisconnect?: () => void,
   ): () => void {
     const controller = new AbortController();
     const port = getBackendPort();
@@ -293,6 +309,11 @@ export const chatService = {
       requestBody.message = request.message;
     }
 
+    // Invalidate ETag cache — new message means history will change.
+    if (request.sessionId) {
+      this.invalidateMessageCache(request.sessionId);
+    }
+
     fetch(`http://localhost:${port}/api/chat/stream`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -310,7 +331,7 @@ export const chatService = {
         }
         const reader = response.body?.getReader();
         if (!reader) throw new Error('No response body');
-        await consumeSSEStream(reader, startStallTimer, clearStallTimer, onMessage, onComplete);
+        await consumeSSEStream(reader, startStallTimer, clearStallTimer, onMessage, onComplete, onDisconnect);
       })
       .catch((error) => {
         clearStallTimer();
@@ -339,10 +360,34 @@ export const chatService = {
     return toSessionCamelCase(response.data);
   },
 
+  // ── Per-session ETag cache for message endpoint ──
+  // Messages are append-only → ETag "session:count" changes only on new
+  // messages.  Avoids refetching identical history on tab switches / restarts.
+  _messageEtags: new Map<string, { etag: string; messages: ChatMessage[] }>(),
+
   // Get messages for a session
   async getSessionMessages(sessionId: string): Promise<ChatMessage[]> {
-    const response = await api.get<Record<string, unknown>[]>(`/chat/sessions/${sessionId}/messages`);
-    return response.data.map(toMessageCamelCase);
+    const cached = this._messageEtags.get(sessionId);
+    const headers: Record<string, string> = {};
+    if (cached?.etag) headers['If-None-Match'] = cached.etag;
+
+    const response = await api.get<Record<string, unknown>[]>(
+      `/chat/sessions/${sessionId}/messages`,
+      { headers, validateStatus: (s: number) => s === 200 || s === 304 },
+    );
+
+    // 304 = unchanged. Guard: if cache was cleared between send and
+    // response (race), fall through to empty array instead of crash.
+    if (response.status === 304) {
+      return cached?.messages ?? [];
+    }
+
+    const messages = (response.data ?? []).map(toMessageCamelCase);
+    const etag = response.headers?.['etag'];
+    if (etag) {
+      this._messageEtags.set(sessionId, { etag, messages });
+    }
+    return messages;
   },
 
   // Get messages for a session with cursor-based pagination
@@ -355,12 +400,40 @@ export const chatService = {
     if (limit !== undefined) params.set('limit', String(limit));
     if (beforeId !== undefined) params.set('before_id', beforeId);
     const url = `/chat/sessions/${sessionId}/messages?${params.toString()}`;
-    const response = await api.get<Record<string, unknown>[]>(url);
-    return response.data.map(toMessageCamelCase);
+
+    // ETag only for non-cursor queries (initial load)
+    const cached = !beforeId ? this._messageEtags.get(sessionId) : undefined;
+    const headers: Record<string, string> = {};
+    if (cached?.etag) headers['If-None-Match'] = cached.etag;
+
+    const response = await api.get<Record<string, unknown>[]>(url, {
+      headers,
+      validateStatus: (s: number) => s === 200 || s === 304,
+    });
+
+    if (response.status === 304) {
+      return cached?.messages ?? [];
+    }
+
+    const messages = (response.data ?? []).map(toMessageCamelCase);
+    // Only cache non-cursor responses (full initial loads)
+    if (!beforeId) {
+      const etag = response.headers?.['etag'];
+      if (etag) {
+        this._messageEtags.set(sessionId, { etag, messages });
+      }
+    }
+    return messages;
+  },
+
+  // Invalidate ETag cache for a session (call after sending a message)
+  invalidateMessageCache(sessionId: string): void {
+    this._messageEtags.delete(sessionId);
   },
 
   // Delete chat session
   async deleteSession(sessionId: string): Promise<void> {
+    this._messageEtags.delete(sessionId);
     await api.delete(`/chat/sessions/${sessionId}`);
   },
 
@@ -389,11 +462,17 @@ export const chatService = {
     },
     onMessage: (event: StreamEvent) => void,
     onError: (error: Error) => void,
-    onComplete: () => void
+    onComplete: () => void,
+    onDisconnect?: () => void,
   ): () => void {
     const controller = new AbortController();
     const port = getBackendPort();
     const { clearStallTimer, startStallTimer } = createStallDetection(onError, 'answer-question');
+
+    // Invalidate ETag — answer continuation produces new assistant messages.
+    if (request.sessionId) {
+      this.invalidateMessageCache(request.sessionId);
+    }
 
     fetch(`http://localhost:${port}/api/chat/answer-question`, {
       method: 'POST',
@@ -419,7 +498,7 @@ export const chatService = {
         }
         const reader = response.body?.getReader();
         if (!reader) throw new Error('No response body');
-        await consumeSSEStream(reader, startStallTimer, clearStallTimer, onMessage, onComplete);
+        await consumeSSEStream(reader, startStallTimer, clearStallTimer, onMessage, onComplete, onDisconnect);
       })
       .catch((error) => {
         clearStallTimer();
@@ -456,11 +535,17 @@ export const chatService = {
     },
     onMessage: (event: StreamEvent) => void,
     onError: (error: Error) => void,
-    onComplete: () => void
+    onComplete: () => void,
+    onDisconnect?: () => void,
   ): () => void {
     const controller = new AbortController();
     const port = getBackendPort();
     const { clearStallTimer, startStallTimer } = createStallDetection(onError, 'cmd-permission-continue');
+
+    // Invalidate ETag — permission continuation produces new assistant messages.
+    if (request.sessionId) {
+      this.invalidateMessageCache(request.sessionId);
+    }
 
     fetch(`http://localhost:${port}/api/chat/cmd-permission-continue`, {
       method: 'POST',
@@ -486,7 +571,7 @@ export const chatService = {
         }
         const reader = response.body?.getReader();
         if (!reader) throw new Error('No response body');
-        await consumeSSEStream(reader, startStallTimer, clearStallTimer, onMessage, onComplete);
+        await consumeSSEStream(reader, startStallTimer, clearStallTimer, onMessage, onComplete, onDisconnect);
       })
       .catch((error) => {
         clearStallTimer();
