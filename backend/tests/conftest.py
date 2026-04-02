@@ -49,7 +49,7 @@ if _os.path.isdir(_VENV_DIR) and not _sys.prefix.startswith(
     _sys.exit(1)
 
 import atexit
-import fcntl
+
 import gc
 import logging
 import os
@@ -68,73 +68,46 @@ from database.sqlite import SQLiteDatabase
 _logger = logging.getLogger("test")
 
 
+
+# Concurrency guard REMOVED (2026-04-02): Each pytest process creates its own
+# temp DB via tempfile.mkstemp() — no shared state, no conflict. Two tabs
+# running different test files concurrently is safe and expected. The lock was
+# based on a stale assumption that tests shared a single DB file.
+
 # ---------------------------------------------------------------------------
-# Concurrency guard — only one pytest run at a time
+# Child process cleanup — kill xdist workers on master exit
 # ---------------------------------------------------------------------------
-_LOCK_PATH = os.path.join(tempfile.gettempdir(), "swarmai_pytest.lock")
-_lock_fd = None
+def _kill_child_processes():
+    """Kill all child processes on exit to prevent orphans.
 
-
-def _is_pid_alive(pid_str: str) -> bool:
-    """Check if a PID is still running."""
+    When pytest master exits (normal, timeout, SIGTERM), this ensures xdist
+    workers don't survive as orphans. Uses os.getpid() to find our children
+    via psutil if available, falls back to SIGTERM to process group.
+    """
     try:
-        os.kill(int(pid_str), 0)
-        return True
-    except (ValueError, ProcessLookupError, PermissionError):
-        return False
-
-
-def _acquire_pytest_lock():
-    """Acquire exclusive file lock. Fails fast if another pytest is running."""
-    global _lock_fd
-    try:
-        _lock_fd = open(_LOCK_PATH, "w")
-        fcntl.flock(_lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        _lock_fd.write(f"{os.getpid()}\n")
-        _lock_fd.flush()
-    except (IOError, OSError):
-        other_pid = "unknown"
-        try:
-            with open(_LOCK_PATH) as f:
-                other_pid = f.read().strip()
-        except Exception:
-            pass
-
-        if other_pid != "unknown" and not _is_pid_alive(other_pid):
-            _logger.warning(f"Stale lock from dead PID {other_pid} — reclaiming")
+        import psutil
+        current = psutil.Process()
+        children = current.children(recursive=True)
+        for child in children:
             try:
-                if _lock_fd:
-                    _lock_fd.close()
-                os.unlink(_LOCK_PATH)
-                _lock_fd = open(_LOCK_PATH, "w")
-                fcntl.flock(_lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                _lock_fd.write(f"{os.getpid()}\n")
-                _lock_fd.flush()
-                return
-            except (IOError, OSError):
+                child.terminate()
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
                 pass
-
-        pytest.exit(
-            f"\nBLOCKED: Another pytest run is active (PID {other_pid})\n"
-            f"Wait for it to finish, or: kill -9 {other_pid}",
-            returncode=1,
-        )
-
-
-def _release_pytest_lock():
-    """Release file lock on exit."""
-    global _lock_fd
-    if _lock_fd is not None:
+        # Wait briefly then force-kill survivors
+        _, alive = psutil.wait_procs(children, timeout=2)
+        for child in alive:
+            try:
+                child.kill()
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+    except ImportError:
+        # No psutil — best effort: send SIGTERM to our process group
         try:
-            fcntl.flock(_lock_fd, fcntl.LOCK_UN)
-            _lock_fd.close()
-            os.unlink(_LOCK_PATH)
-        except OSError:
+            os.killpg(os.getpid(), signal.SIGTERM)
+        except (OSError, ProcessLookupError):
             pass
-        _lock_fd = None
 
-
-atexit.register(_release_pytest_lock)
+atexit.register(_kill_child_processes)
 
 
 # ---------------------------------------------------------------------------
@@ -195,12 +168,12 @@ def pytest_configure(config):
 
     # Master-only setup
     if not is_xdist_worker:
-        _acquire_pytest_lock()
-        # Process group so xdist workers die with master (not orphan to ppid=1)
-        try:
-            os.setpgrp()
-        except OSError:
-            pass
+        # NOTE: os.setpgrp() was here but REMOVED (2026-04-02). It detached
+        # pytest from the shell's process group, making it invisible to the
+        # Bash tool's SIGTERM cleanup. Result: Bash timeout kills the shell
+        # but pytest + xdist workers survive as orphans (the 30-min hang bug).
+        # Without setpgrp, pytest stays in the shell's group and dies with it.
+        pass
 
     # Markers
     config.addinivalue_line("markers", "pbt: property-based tests using Hypothesis")

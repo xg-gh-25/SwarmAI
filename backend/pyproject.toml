@@ -66,6 +66,9 @@ python_files = ["test_*.py"]
 cache_dir = ".pytest_cache"
 # Default: parallel with 4 workers. Conftest clamps to memory-safe count.
 # For single-file runs during coding: pytest -n 0 (conftest respects it).
+# xdist -n 4: conftest clamps to memory-safe count. Serial for small sets: -n 0.
+# Per-test timeout: conftest SIGALRM at 30s (override with @pytest.mark.timeout(N)).
+# For coding loops: `make test-changed` (serial, only changed files).
 addopts = "-n 4 --maxfail=3 --tb=short -q"
 markers = [
     "pbt: property-based tests using Hypothesis (auto-applied by conftest)",
@@ -79,6 +82,7 @@ dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.24.0,<1.0.0",
     "pytest-xdist>=3.5.0",
+    "pytest-timeout>=2.3.0",
     "httpx>=0.27.0",
     "hypothesis>=6.151.6",
 ]

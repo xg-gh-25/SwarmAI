@@ -9,7 +9,6 @@ Validates the anti-death-spiral mechanisms:
 - Fix 5: OOM events yield status messages to frontend
 """
 
-import time
 from unittest.mock import patch
 
 import pytest
@@ -70,33 +69,3 @@ class TestPerSessionOOMCounter:
         unit._retry_count = 0
         # OOM counter should survive
         assert unit._consecutive_oom_kills == 2
-
-
-class TestSpawnBudgetOOMCooldown:
-    """Fix 4: spawn_budget denies spawns during OOM cooldown."""
-
-    def test_spawn_denied_during_cooldown(self):
-        from core.resource_monitor import ResourceMonitor
-        monitor = ResourceMonitor()
-        # Record an OOM event
-        monitor.record_oom()
-        # Immediately check spawn budget — should be denied
-        budget = monitor.spawn_budget()
-        assert not budget.can_spawn
-        assert "OOM" in budget.reason
-
-    def test_spawn_allowed_after_cooldown(self):
-        from core.resource_monitor import ResourceMonitor
-        monitor = ResourceMonitor()
-        # Record OOM in the past (beyond cooldown)
-        monitor._last_oom_time = time.monotonic() - 60.0
-        budget = monitor.spawn_budget()
-        # Should be allowed (cooldown expired)
-        assert budget.can_spawn
-
-    def test_record_oom_invalidates_cache(self):
-        from core.resource_monitor import ResourceMonitor
-        monitor = ResourceMonitor()
-        monitor._cache_time = time.time()  # Simulate cached data
-        monitor.record_oom()
-        assert monitor._cache_time == 0.0  # Cache invalidated

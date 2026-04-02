@@ -83,6 +83,9 @@ def get_vec_conn(db_path: Optional[Path] = None) -> Optional[sqlite3.Connection]
         path = db_path or _DEFAULT_DB_PATH
         try:
             conn = sqlite3.connect(str(path), check_same_thread=False)
+            # WAL mode enables concurrent reads during writes — required
+            # since check_same_thread=False allows multi-task access.
+            conn.execute("PRAGMA journal_mode=WAL")
             conn.enable_load_extension(True)
             _sqlite_vec.load(conn)
             conn.enable_load_extension(False)
