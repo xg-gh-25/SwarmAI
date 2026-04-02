@@ -544,7 +544,7 @@ def load_mcp_config_tiered(
     enabled_entries = merge_layers(catalog_entries, dev_entries)
 
     is_channel = channel_context is not None
-    _forced = extra_always or set()
+    _forced: frozenset = frozenset(extra_always) if extra_always else frozenset()
 
     used_names: set = set()
     for entry in enabled_entries:
@@ -558,10 +558,14 @@ def load_mcp_config_tiered(
             continue
 
         entry_name = entry.get("name", entry.get("id", "<unknown>"))
+        entry_id = entry.get("id", "")
         tier = _get_tier(entry)
 
-        # Force-load if the session explicitly requested this MCP
-        force = entry_name in _forced
+        # Force-load if the session explicitly requested this MCP.
+        # Match against BOTH name and id — the agent/frontend may use
+        # either value, so matching only one causes silent force-load
+        # failures when name ≠ id.
+        force = bool(_forced & {entry_name, entry_id})
 
         if force or tier == "always":
             add_mcp_server_to_dict(
