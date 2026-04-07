@@ -179,6 +179,7 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: "v${{ needs.prepare.outputs.version }}"
           name: "SwarmAI v${{ needs.prepare.outputs.version }}"
           draft: true
           generate_release_notes: true
