@@ -4,10 +4,12 @@ Shared Bedrock client for job handlers.
 All background job handlers that call Bedrock LLMs MUST use this module
 instead of creating raw ``boto3.client("bedrock-runtime")`` inline.
 
-Why: the raw pattern fails in launchd context because credential_process
-(ada → Isengard) DNS resolution fails. This module uses the same credential
-path as the SwarmAI app — reading region from AppConfigManager and applying
-proper BotoConfig (timeouts, retries, credential eviction on auth errors).
+Credential strategy (same as the main SwarmAI app):
+  1. Try boto3 default chain (credential_process → ada → Isengard)
+  2. If that fails (launchd context, VPN off, mwinit expired), fall back
+     to AWS SSO IdC tokens from ``~/.aws/sso/cache/``
+  3. Pre-resolve credentials and inject them explicitly into the boto3
+     client — avoids credential_process resolution at call time.
 
 Usage::
 
@@ -46,11 +48,107 @@ def _load_config() -> tuple[str, dict]:
     return region, model_map
 
 
-def get_client(*, force_new: bool = False) -> Any:
-    """Return a cached bedrock-runtime client with proper config.
+def _resolve_credentials() -> dict[str, str]:
+    """Pre-resolve AWS credentials using the same strategy as executor.py.
 
-    Uses the same credential chain as the SwarmAI app (AppConfigManager
-    region, boto3 default chain with SSO token support).
+    Tries boto3 default chain first (credential_process → ada → Isengard).
+    If that fails (launchd context, VPN off, mwinit expired), tries to
+    find SSO IdC cached credentials from ``~/.aws/sso/cache/``.
+
+    Returns dict with AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, and
+    optionally AWS_SESSION_TOKEN. Returns empty dict if all methods fail.
+    """
+    # Method 1: boto3 default chain (same as executor._get_aws_credentials)
+    try:
+        import boto3
+
+        session = boto3.Session()
+        credentials = session.get_credentials()
+        if credentials is not None:
+            frozen = credentials.get_frozen_credentials()
+            if frozen.access_key:
+                creds = {
+                    "aws_access_key_id": frozen.access_key,
+                    "aws_secret_access_key": frozen.secret_key,
+                }
+                if frozen.token:
+                    creds["aws_session_token"] = frozen.token
+                logger.info("Credentials resolved via boto3 default chain")
+                return creds
+    except Exception as e:
+        logger.debug("boto3 credential resolution failed: %s", e)
+
+    # Method 2: SSO IdC cached credentials (same tokens Claude CLI uses)
+    try:
+        import json
+        from pathlib import Path
+
+        sso_cache_dir = Path.home() / ".aws" / "sso" / "cache"
+        if sso_cache_dir.is_dir():
+            # Find the newest non-expired SSO token
+            from datetime import datetime, timezone
+            now = datetime.now(timezone.utc)
+            best_token = None
+            best_expiry = None
+
+            for f in sso_cache_dir.glob("*.json"):
+                try:
+                    data = json.loads(f.read_text())
+                    # SSO token files have accessToken + expiresAt
+                    if "accessToken" not in data:
+                        continue
+                    expires = datetime.fromisoformat(
+                        data["expiresAt"].replace("Z", "+00:00")
+                    )
+                    if expires > now and (best_expiry is None or expires > best_expiry):
+                        best_token = data
+                        best_expiry = expires
+                except Exception:
+                    continue
+
+            if best_token:
+                # Use STS to exchange SSO token for temporary credentials
+                import boto3
+                sso_client = boto3.client(
+                    "sso",
+                    region_name=best_token.get("region", "us-east-1"),
+                )
+                # We need accountId and roleName from the SSO config
+                # Read from ~/.aws/config
+                import configparser
+                aws_config = configparser.ConfigParser()
+                aws_config.read(str(Path.home() / ".aws" / "config"))
+
+                # Find the first profile with sso_account_id
+                for section in aws_config.sections():
+                    acct = aws_config.get(section, "sso_account_id", fallback=None)
+                    role = aws_config.get(section, "sso_role_name", fallback=None)
+                    if acct and role:
+                        resp = sso_client.get_role_credentials(
+                            roleName=role,
+                            accountId=acct,
+                            accessToken=best_token["accessToken"],
+                        )
+                        role_creds = resp["roleCredentials"]
+                        logger.info("Credentials resolved via SSO IdC cache")
+                        return {
+                            "aws_access_key_id": role_creds["accessKeyId"],
+                            "aws_secret_access_key": role_creds["secretAccessKey"],
+                            "aws_session_token": role_creds["sessionToken"],
+                        }
+    except Exception as e:
+        logger.debug("SSO IdC credential resolution failed: %s", e)
+
+    logger.warning("All credential resolution methods failed")
+    return {}
+
+
+def get_client(*, force_new: bool = False) -> Any:
+    """Return a cached bedrock-runtime client with pre-resolved credentials.
+
+    Pre-resolves credentials in-process (where PATH is correct), then
+    injects them explicitly into the boto3 client. This avoids the
+    credential_process resolution at call time which fails in launchd.
 
     Args:
         force_new: Bypass cache and create a fresh client (useful after
@@ -71,13 +169,29 @@ def get_client(*, force_new: bool = False) -> Any:
         connect_timeout=10,
         read_timeout=60,  # Job prompts can be 20K+ chars; 30s too tight
     )
-    _client = boto3.client(
-        "bedrock-runtime",
-        region_name=region,
-        config=boto_config,
-    )
+
+    # Pre-resolve credentials (same strategy as executor._get_aws_credentials)
+    creds = _resolve_credentials()
+
+    if creds:
+        # Inject explicit credentials — bypasses credential_process entirely
+        _client = boto3.client(
+            "bedrock-runtime",
+            region_name=region,
+            config=boto_config,
+            **creds,
+        )
+        logger.debug("Created Bedrock client with pre-resolved creds for region=%s", region)
+    else:
+        # Fallback to default chain (may work if running interactively)
+        _client = boto3.client(
+            "bedrock-runtime",
+            region_name=region,
+            config=boto_config,
+        )
+        logger.warning("Created Bedrock client with default chain (no pre-resolved creds) for region=%s", region)
+
     _client_region = region
-    logger.debug("Created Bedrock client for region=%s", region)
     return _client
 
 
