@@ -1429,18 +1429,22 @@ export function useChatStreamingLifecycle(
 
           // SESSION_BUSY: Backend rejected our send because the session is
           // still actively streaming (SSE disconnect caused a race).
-          // Don't show error — silently inform user the message is queued.
+          // Backend deletes the orphaned user message from DB on SESSION_BUSY,
+          // so no auto-retry is needed.  The message text stays in the input field.
           // See: 2026-04-02 SSE disconnect kill chain diagnosis.
           if (event.code === 'SESSION_BUSY') {
             console.log('[StreamHandler] SESSION_BUSY — session still streaming', { capturedTabId });
-            // Clean up streaming state from this failed send attempt
+            // Clear THIS send's streaming state (isStreaming=false) while
+            // keeping the tab badge as 'streaming' — the original request
+            // is still running on the backend.  These are two different
+            // state dimensions: isStreaming = "am I sending?", tab status
+            // badge = "is the backend processing?"
             setIsStreaming(false, capturedTabId ?? undefined);
             incrementStreamGen();
             if (capturedTabId) updateTabStatus(capturedTabId, 'streaming');
-            // Show a lightweight toast instead of error in chat
             addToast({
               severity: 'info',
-              message: 'Session is still processing. Your message will be sent when ready.',
+              message: 'Session is busy. Please re-send your message when the current response completes.',
               id: `session-busy-${capturedTabId}`,
             });
             return;

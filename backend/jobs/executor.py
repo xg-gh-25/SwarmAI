@@ -76,8 +76,10 @@ def _get_learner():
     """Return the module-level EstimationLearner, lazily initialized."""
     global _estimation_learner
     if _estimation_learner is None:
+        import atexit
         from .estimation_learner import EstimationLearner
         _estimation_learner = EstimationLearner(ESTIMATION_LEARNER_FILE)
+        atexit.register(lambda: _estimation_learner.flush() if _estimation_learner else None)
     return _estimation_learner
 
 
