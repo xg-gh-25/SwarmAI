@@ -1184,11 +1184,12 @@ class PromptBuilder:
         max_buffer_size = int(os.environ.get("MAX_BUFFER_SIZE", 10 * 1024 * 1024))
 
         # Build add_dirs from sandbox_additional_write_paths config.
+        # Expand ~ to actual home directory — the SDK CLI needs absolute paths.
         add_dirs: list[str] = []
         raw_write_paths = self._config.get("sandbox_additional_write_paths", "") if self._config else ""
         if raw_write_paths:
             add_dirs = [
-                p.strip() for p in raw_write_paths.split(",")
+                os.path.expanduser(p.strip()) for p in raw_write_paths.split(",")
                 if p.strip()
             ]
 
