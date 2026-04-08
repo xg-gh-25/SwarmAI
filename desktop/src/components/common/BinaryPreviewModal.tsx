@@ -165,8 +165,15 @@ export default function BinaryPreviewModal({
         setMimeType(response.data.mime_type ?? 'application/octet-stream');
       }
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Failed to load file';
-      setError(msg);
+      if (mode === 'unsupported') {
+        // For unsupported files, metadata is nice-to-have — show the
+        // friendly file-info UI even when the fetch fails (e.g. 404).
+        // The user still gets Open/Copy Path buttons.
+        setFileSize(0);
+      } else {
+        const msg = err instanceof Error ? err.message : 'Failed to load file';
+        setError(msg);
+      }
     } finally {
       setLoading(false);
     }
@@ -371,8 +378,14 @@ export default function BinaryPreviewModal({
         >
           {fileTypeInfo.icon}
         </span>
-        <div className="text-center">
+        <div className="text-center max-w-md">
           <p className="text-sm font-medium text-[var(--color-text)] mb-1">{fileName}</p>
+          <p
+            className="text-[11px] text-[var(--color-text-muted)] mb-2 font-mono break-all select-all cursor-text"
+            title="Click to select path"
+          >
+            {filePath}
+          </p>
           <div className="flex items-center justify-center gap-2 mb-3">
             {ext && (
               <span

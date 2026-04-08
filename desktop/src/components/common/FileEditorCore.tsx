@@ -299,6 +299,7 @@ export default function FileEditorCore({
   const [showUnsavedWarning, setShowUnsavedWarning] = useState(false);
   const [showDiff, setShowDiff] = useState(false);
   const [showMarkdownPreview, setShowMarkdownPreview] = useState(false);
+  const [showSvgPreview, setShowSvgPreview] = useState(false);
   const [showSearch, setShowSearch] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [currentMatchIndex, setCurrentMatchIndex] = useState(0);
@@ -336,6 +337,7 @@ export default function FileEditorCore({
   const hasUnsavedEdits = isDirtyState(content, savedContent ?? initialContent);
   const language = detectLanguage(fileName);
   const isMarkdown = /\.md$/i.test(fileName);
+  const isSvg = /\.svg$/i.test(fileName);
 
   // L3: Review mode — inline comments
   const review = useReviewMode(content);
@@ -432,6 +434,7 @@ export default function FileEditorCore({
     setShowUnsavedWarning(false);
     setShowDiff(false);
     setShowMarkdownPreview(false);
+    setShowSvgPreview(false);
     setShowSearch(false);
     setSearchQuery('');
     setCurrentMatchIndex(0);
@@ -502,7 +505,7 @@ export default function FileEditorCore({
   // surface so CMD+F should target it regardless of current focus.
   // Skipped in diff view and markdown preview (search bar operates on raw content only).
   useEffect(() => {
-    if (showDiff || showMarkdownPreview) return; // no search in diff/preview modes
+    if (showDiff || showMarkdownPreview || showSvgPreview) return; // no search in diff/preview modes
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
         e.preventDefault();
@@ -662,6 +665,24 @@ export default function FileEditorCore({
                   {showMarkdownPreview ? 'edit' : 'visibility'}
                 </span>
                 {showMarkdownPreview ? 'Edit' : 'Preview'}
+              </button>
+            )}
+            {/* SVG Preview toggle */}
+            {isSvg && (
+              <button
+                onClick={() => { setShowSvgPreview((p) => !p); if (showDiff) setShowDiff(false); }}
+                className={clsx(
+                  'flex items-center gap-1 px-2 py-1 rounded-lg text-xs transition-colors',
+                  showSvgPreview
+                    ? 'bg-blue-500/20 text-[var(--color-primary)] font-medium'
+                    : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)]'
+                )}
+                data-testid="svg-preview-toggle"
+              >
+                <span className="material-symbols-outlined text-sm">
+                  {showSvgPreview ? 'edit' : 'image'}
+                </span>
+                {showSvgPreview ? 'Edit' : 'Preview'}
               </button>
             )}
             {/* Review Mode toggle (L3) */}
@@ -840,6 +861,14 @@ export default function FileEditorCore({
                 content={content}
                 className="max-w-4xl mx-auto"
                 basePath={filePath.includes('/') ? filePath.replace(/\/[^/]*$/, '') : ''}
+              />
+            </div>
+          ) : showSvgPreview ? (
+            <div className="flex-1 relative overflow-auto p-6 bg-[var(--color-background)] flex items-center justify-center">
+              <div
+                className="max-w-full max-h-full [&>svg]:max-w-full [&>svg]:max-h-full [&>svg]:w-auto [&>svg]:h-auto"
+                dangerouslySetInnerHTML={{ __html: content }}
+                data-testid="svg-preview"
               />
             </div>
           ) : (
