@@ -76,17 +76,23 @@ const FILE_TYPE_MAP: Record<string, FileTypeInfo> = {
   wav:  { icon: 'music_note',    color: '#E91E63', label: 'Audio File',          message: 'Audio files can be played in your default music player.',              action: 'Open in Music Player' },
   flac: { icon: 'music_note',    color: '#E91E63', label: 'Audio File',          message: 'Audio files can be played in your default music player.',              action: 'Open in Music Player' },
   ogg:  { icon: 'music_note',    color: '#E91E63', label: 'Audio File',          message: 'Audio files can be played in your default music player.',              action: 'Open in Music Player' },
+  aac:  { icon: 'music_note',    color: '#E91E63', label: 'Audio File',          message: 'Audio files can be played in your default music player.',              action: 'Open in Music Player' },
+  m4a:  { icon: 'music_note',    color: '#E91E63', label: 'Audio File',          message: 'Audio files can be played in your default music player.',              action: 'Open in Music Player' },
   // Media — Video
   mp4:  { icon: 'movie',         color: '#9C27B0', label: 'Video File',          message: 'Video files can be played in your default video player.',              action: 'Open in Video Player' },
   avi:  { icon: 'movie',         color: '#9C27B0', label: 'Video File',          message: 'Video files can be played in your default video player.',              action: 'Open in Video Player' },
   mov:  { icon: 'movie',         color: '#9C27B0', label: 'Video File',          message: 'Video files can be played in your default video player.',              action: 'Open in Video Player' },
   mkv:  { icon: 'movie',         color: '#9C27B0', label: 'Video File',          message: 'Video files can be played in your default video player.',              action: 'Open in Video Player' },
+  webm: { icon: 'movie',         color: '#9C27B0', label: 'Video File',          message: 'Video files can be played in your default video player.',              action: 'Open in Video Player' },
+  m4v:  { icon: 'movie',         color: '#9C27B0', label: 'Video File',          message: 'Video files can be played in your default video player.',              action: 'Open in Video Player' },
   // Archives
   zip:  { icon: 'folder_zip',    color: '#795548', label: 'Archive',             message: 'Archives can be extracted with your system\'s built-in tools.',        action: 'Reveal in Finder' },
   tar:  { icon: 'folder_zip',    color: '#795548', label: 'Archive',             message: 'Archives can be extracted with your system\'s built-in tools.',        action: 'Reveal in Finder' },
   gz:   { icon: 'folder_zip',    color: '#795548', label: 'Archive',             message: 'Archives can be extracted with your system\'s built-in tools.',        action: 'Reveal in Finder' },
   rar:  { icon: 'folder_zip',    color: '#795548', label: 'Archive',             message: 'Archives can be extracted with your system\'s built-in tools.',        action: 'Reveal in Finder' },
   '7z': { icon: 'folder_zip',    color: '#795548', label: 'Archive',             message: 'Archives can be extracted with your system\'s built-in tools.',        action: 'Reveal in Finder' },
+  jar:  { icon: 'folder_zip',    color: '#795548', label: 'Java Archive',        message: 'JAR archives can be extracted or run with Java.',                      action: 'Reveal in Finder' },
+  war:  { icon: 'folder_zip',    color: '#795548', label: 'Web Archive',         message: 'WAR archives are Java web application packages.',                      action: 'Reveal in Finder' },
   // Disk images & executables
   dmg:  { icon: 'save',          color: '#607D8B', label: 'Disk Image',          message: 'Disk images can be mounted by double-clicking in Finder.',            action: 'Reveal in Finder' },
   iso:  { icon: 'save',          color: '#607D8B', label: 'Disk Image',          message: 'Disk images can be mounted by double-clicking in Finder.',            action: 'Reveal in Finder' },
@@ -95,6 +101,21 @@ const FILE_TYPE_MAP: Record<string, FileTypeInfo> = {
   so:   { icon: 'settings',      color: '#607D8B', label: 'Shared Library',      message: 'Binary libraries cannot be previewed.',                               action: 'Reveal in Finder' },
   dylib:{ icon: 'settings',      color: '#607D8B', label: 'Dynamic Library',     message: 'Binary libraries cannot be previewed.',                               action: 'Reveal in Finder' },
   wasm: { icon: 'memory',        color: '#607D8B', label: 'WebAssembly',         message: 'WebAssembly binaries cannot be previewed.',                           action: 'Reveal in Finder' },
+  // Compiled / bytecode
+  pyc:  { icon: 'code',          color: '#3776AB', label: 'Python Bytecode',     message: 'Compiled Python files cannot be previewed as text.',                   action: 'Reveal in Finder' },
+  class:{ icon: 'code',          color: '#B07219', label: 'Java Class',          message: 'Compiled Java class files cannot be previewed as text.',               action: 'Reveal in Finder' },
+  o:    { icon: 'code',          color: '#607D8B', label: 'Object File',         message: 'Compiled object files cannot be previewed.',                           action: 'Reveal in Finder' },
+  // Databases
+  sqlite:{ icon: 'storage',      color: '#003B57', label: 'SQLite Database',     message: 'SQLite databases can be opened with DB Browser or sqlite3 CLI.',       action: 'Open in Default App' },
+  db:   { icon: 'storage',       color: '#003B57', label: 'Database',            message: 'Database files can be opened with a database viewer.',                 action: 'Open in Default App' },
+  // Fonts
+  ttf:  { icon: 'font_download', color: '#FF5722', label: 'TrueType Font',      message: 'Font files can be previewed in Font Book.',                            action: 'Open in Default App' },
+  otf:  { icon: 'font_download', color: '#FF5722', label: 'OpenType Font',       message: 'Font files can be previewed in Font Book.',                            action: 'Open in Default App' },
+  woff: { icon: 'font_download', color: '#FF5722', label: 'Web Font',            message: 'Web font files are used by websites for custom typography.',           action: 'Reveal in Finder' },
+  woff2:{ icon: 'font_download', color: '#FF5722', label: 'Web Font',            message: 'Web font files are used by websites for custom typography.',           action: 'Reveal in Finder' },
+  // Generic binary
+  bin:  { icon: 'draft',         color: '#9E9E9E', label: 'Binary File',         message: 'Binary files cannot be previewed as text.',                            action: 'Reveal in Finder' },
+  dat:  { icon: 'draft',         color: '#9E9E9E', label: 'Data File',           message: 'Data files cannot be previewed as text.',                              action: 'Reveal in Finder' },
 };
 
 const FALLBACK_FILE_TYPE: FileTypeInfo = {
