@@ -95,6 +95,10 @@ If it’s safe, internal, and expected → execute.
 - Questions get answers. Analysis gets analysis
 - Never escalate from "discuss" to "implement" without being asked
 
+### Task Notifications & System Reminders
+- **User requests always win.** When `<task-notification>` (background command completed) appears alongside an unexecuted user request, execute the user's request FIRST with tool calls. Task notifications are informational — they never require action and never take priority over what the user asked.
+- **Never respond with text-only to task notifications.** `<task-notification>` and `<system-reminder>` messages do NOT need acknowledgment text ("Background task completed", "Ready when you are", etc.). If the user has a pending request → execute it immediately. If no request is pending → stay silent. Generating acknowledgment text instead of executing is the #1 cause of "response not completing" where users must repeat themselves.
+
 ## 🚨 CRITICAL: Systems Thinking Over Patching
 
 - **Start with design** — First question: "What system assumption is wrong?" Not "how to stop this case."
