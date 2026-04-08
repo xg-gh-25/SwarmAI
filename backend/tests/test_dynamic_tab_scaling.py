@@ -35,15 +35,15 @@ def _reference_formula(available_mb: float) -> int:
     """Reference implementation of the dynamic tab limit formula.
 
     Mirrors ``ResourceMonitor.compute_max_tabs()``:
-    headroom = total_mb * 0.85 - used_mb
+    headroom = total_mb * 0.90 - used_mb
     raw = floor(headroom / 500)
     result = max(2, min(raw, 4))
 
-    _make_system_memory sets total=16GB, so headroom = 16384*0.85 - (16384 - available_mb).
-    Simplified: headroom = available_mb - 16384*0.15 = available_mb - 2457.6
+    _make_system_memory sets total=16GB, so headroom = 16384*0.90 - (16384 - available_mb).
+    Simplified: headroom = available_mb - 16384*0.10 = available_mb - 1638.4
     """
-    headroom_mb = available_mb - 16384 * 0.15  # 16GB * 15% overhead
-    raw = math.floor(headroom_mb / 500)
+    headroom_mb = available_mb - 16384 * 0.10  # 16GB * 10% overhead
+    raw = int(headroom_mb / 500)
     return max(2, min(raw, 4))
 
 
@@ -72,7 +72,7 @@ class TestComputeMaxTabsFormulaCorrectness:
 
     *For any* non-negative available RAM value in megabytes,
     ``compute_max_tabs()`` should return the same integer as the reference
-    formula ``max(1, min(floor((available_mb - 1024) / 500), 4))``.
+    formula ``max(2, min(floor(headroom_to_90pct / 500), 4))``.
 
     **Validates: Requirements 1.1, 1.2, 1.3, 1.4, 1.6**
     """
@@ -113,21 +113,21 @@ class TestComputeMaxTabsBoundaryValues:
     @pytest.mark.parametrize(
         "available_mb, expected_tabs",
         [
-            # headroom = available_mb - 16384 * 0.15 = available_mb - 2457.6
+            # headroom = available_mb - 16384 * 0.10 = available_mb - 1638.4
             # raw = floor(headroom / 500), result = max(2, min(raw, 4))
-            (512, 2),      # headroom=-1945.6 → raw=-4 → max(2,...)=2
-            (1024, 2),     # headroom=-1433.6 → raw=-3 → 2
-            (2458, 2),     # headroom=0.4 → raw=0 → 2
-            (2958, 2),     # headroom=500.4 → raw=1 → 2
-            (3458, 2),     # headroom=1000.4 → raw=2 → 2
-            (3958, 3),     # headroom=1500.4 → raw=3 → 3
-            (4458, 4),     # headroom=2000.4 → raw=4 → 4
-            (8192, 4),     # headroom=5734.4 → raw=11 → 4
-            (16384, 4),    # headroom=13926.4 → raw=27 → 4
+            (512, 2),      # headroom=-1126.4 → raw=-3 → max(2,...)=2
+            (1024, 2),     # headroom=-614.4 → raw=-2 → 2
+            (1639, 2),     # headroom=0.6 → raw=0 → 2
+            (2139, 2),     # headroom=500.6 → raw=1 → 2
+            (2639, 2),     # headroom=1000.6 → raw=2 → 2
+            (3139, 3),     # headroom=1500.6 → raw=3 → 3
+            (3639, 4),     # headroom=2000.6 → raw=4 → 4
+            (8192, 4),     # headroom=6553.6 → raw=13 → 4
+            (16384, 4),    # headroom=14745.6 → raw=29 → 4
         ],
         ids=[
-            "512MB→2", "1024MB→2", "2458MB→2", "2958MB→2",
-            "3458MB→2", "3958MB→3", "4458MB→4", "8192MB→4", "16384MB→4",
+            "512MB→2", "1024MB→2", "1639MB→2", "2139MB→2",
+            "2639MB→2", "3139MB→3", "3639MB→4", "8192MB→4", "16384MB→4",
         ],
     )
     def test_compute_max_tabs_boundary_values(
@@ -154,8 +154,8 @@ class TestComputeMaxTabsPessimisticFallback:
     """Test pessimistic fallback when system_memory() fails.
 
     When system_memory() fails, it returns a pessimistic fallback with
-    total=16GB, used=14.4GB. Headroom = 16384*0.85 - 14745.6 = -819.2MB.
-    raw = floor(-819.2/500) = -2. Result = max(2, -2) = 2.
+    total=16GB, used=14.4GB. Headroom = 16384*0.90 - 14745.6 = 0.0MB.
+    raw = floor(0.0/500) = 0. Result = max(2, 0) = 2.
 
     Even under pessimistic fallback, min_tabs=2 guarantees 1 chat + 1 channel.
 

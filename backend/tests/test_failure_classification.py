@@ -144,9 +144,11 @@ class TestClassifyFailure:
 class TestComputeBackoff:
     """Failure-type-aware backoff computation."""
 
-    def test_oom_flat_30s(self):
+    def test_oom_exponential_backoff(self):
+        """OOM uses exponential backoff: 30s, 60s, 120s (capped)."""
         assert compute_backoff(FailureType.OOM, {}, retry_count=1) == 30.0
-        assert compute_backoff(FailureType.OOM, {}, retry_count=3) == 30.0
+        assert compute_backoff(FailureType.OOM, {}, retry_count=2) == 60.0
+        assert compute_backoff(FailureType.OOM, {}, retry_count=3) == 120.0
 
     def test_rate_limit_default_60s(self):
         """No resets_at → 60s default."""

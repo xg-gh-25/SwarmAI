@@ -5,6 +5,88 @@ All notable changes to SwarmAI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.3] - 2026-04-08
+
+### Added
+
+- **Proactive OOM Prevention**: RSS-based proactive restart-with-resume — when
+  a session's process tree exceeds 1.2GB, compact → kill → lazy resume on next
+  send, preventing macOS jetsam from OOM-killing the entire backend
+- **Resume Context Overhaul**: Structured checkpoint + recent turns (~600
+  tokens) replaces 200K-token raw history dump; LRU cache, independent
+  try/except guards, legacy fallback
+- **SSE Resilience**: `SessionBusyError` rejects send on active sessions
+  instead of force-killing; frontend detects premature disconnect with 30s
+  reconnection timeout; `onDisconnect` handler on all streaming paths
+- **Persistence Hardening**: SQLite retry on SQLITE_BUSY (3 attempts,
+  exponential backoff), ETag caching on messages endpoint with per-session
+  `If-None-Match`, crash-safe incremental assistant message persistence
+- **Shared Bedrock Client**: Centralized `jobs/bedrock.py` with pre-resolved
+  credentials, 30-minute TTL auto-refresh, SSO IdC fallback preferring
+  `default` profile, credential eviction + retry on auth errors
+- **Estimation Learner**: EMA-based job execution time predictor with batched
+  persistence (every 5 records or 60s) and atexit flush
+- **Sandbox Defaults**: `~/.swarm-ai/` in default write paths, all known
+  seatbelt-blocked commands excluded, tilde expansion via `os.path.expanduser`
+- **File Preview Unification**: Single `classifyFileForPreview()` source of
+  truth; SVG inline via `<img>`, PDF/Office show info modal with Open/Copy
+  Path, lightweight `/workspace/file/meta` endpoint
+- **Collection Cap**: Pytest aborts at 300 tests without `--run-all` to prevent
+  agent OOM during coding loops
+- **Daemon Resource Deployment**: `dev.sh` deploys `resources/` alongside the
+  frozen binary so bundle_paths resolves default-agent.json in daemon mode
+
+### Fixed
+
+- **SSE Disconnect Kill Chain**: Force-unstick no longer kills active sessions
+  with low stall time; `recover_from_disconnect` transitions STREAMING → IDLE
+  with background pipe flush
+- **Orphaned Messages on SESSION_BUSY**: Backend deletes the pre-persisted user
+  message when `SessionBusyError` is raised, preventing cold resume from
+  injecting unsent messages
+- **Resume Context Independence**: Resume injection moved outside the
+  `ContextDirectoryLoader` try block — upstream exceptions no longer silently
+  skip resume context (COE: 2026-04-02)
+- **Compact Timeout**: Both proactive restart paths use
+  `asyncio.wait_for(compact(), timeout=30)` to prevent compact hangs from
+  blocking the restart sequence or maintenance loop
+- **Monotonic Clock**: Proactive restart cooldown uses `time.monotonic()`
+  instead of `time.time()` — immune to NTP sync and sleep/wake clock jumps
+- **SQLite Busy Timeout Alignment**: `busy_timeout` reduced from 5000ms to
+  100ms to align with app-level retry budget (50+200+500ms)
+- **CI Release Action**: Explicit `tag_name` in `gh-release` action — fixes
+  `GITHUB_REF` resolving to `refs/heads/main` instead of tag ref
+- **Credential Resolution in Daemon**: `jobs/bedrock.py` pre-resolves
+  credentials in-process before creating boto3 client, fixing launchd auth
+  failures where `credential_process` fails due to minimal PATH
+- **Task Notification Stalls**: AGENT.md rules ensure user requests always win
+  over `<task-notification>` XML; never generate text-only acknowledgments
+- **Build Script Crash Loop**: `parse_known_args` in frozen backend binary
+  ignores unknown CLI flags instead of crashing
+- **Dynamic Tab Scaling Tests**: Reference formula and boundary values updated
+  from 85% to 90% threshold to match production `resource_monitor.py`
+- **OOM Backoff Test**: Updated from flat 30s assertion to exponential
+  30/60/120s to match production `compute_backoff` implementation
+
+### Changed
+
+- **Memory Threshold**: Resource monitor thresholds raised from 85%/75% to
+  90%/80% — uses `effective_used` (total − available) instead of
+  `used` (active + wired) for accurate macOS memory pressure measurement
+- **Hook Ordering**: Distillation hook runs before context health hook so
+  embedding sync picks up freshly-distilled MEMORY.md entries
+- **Memory Embedding Sync**: Always-on (removed `FULL_INJECTION_THRESHOLD`
+  gate) — keeps vector index warm for zero cold-start selective injection
+- **Knowledge Store FTS5**: OR semantics for keyword queries — "daemon crash
+  SIGKILL OOM" now matches chunks containing any term instead of requiring all
+- **Bundle Path Priority**: Daemon mode `resources/` path checked before macOS
+  `.app` bundle paths
+
+### Removed
+
+- **react-pdf**: Removed dependency (~1.5MB bundle savings) — PDF preview now
+  uses info modal with "Open in Default App" button
+
 ## [1.2.0] - 2026-04-02
 
 ### Added
@@ -195,6 +277,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Human-in-the-loop approval for destructive operations
 - Error sanitization in production mode
 
+[1.2.3]: https://github.com/xg-gh-25/SwarmAI/releases/tag/v1.2.3
 [1.2.0]: https://github.com/xg-gh-25/SwarmAI/releases/tag/v1.2.0
 [1.1.2]: https://github.com/xg-gh-25/SwarmAI/releases/tag/v1.1.2
 [1.1.1]: https://github.com/xg-gh-25/SwarmAI/releases/tag/v1.1.1
