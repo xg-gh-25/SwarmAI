@@ -229,12 +229,23 @@ export function useUnifiedAttachments(
               textContent = await readTextContent(file);
               preview = generatePreview(file, fileType, textContent);
             } else {
-              // path_hint for large text files from File Picker —
-              // content will be read at send time via buildContentArray
-              const text = await readTextContent(file);
-              preview = generatePreview(file, fileType, text);
-              // Store textContent so buildContentArray can use it
-              textContent = text;
+              // path_hint: ALL file types from File Picker (binary docs, large text, audio, video).
+              // Read as base64 so backend can save to Attachments/ and generate a path hint.
+              // Do NOT readTextContent for binary files — produces megabytes of garbage.
+              // Large text files also go through this path to avoid inlining MBs of tokens.
+              base64 = await readFileAsBase64(file);
+              // Generate text preview for text/csv (first 200 chars) so user sees content
+              if (fileType === 'text' || fileType === 'csv') {
+                try {
+                  const previewText = await readTextContent(file);
+                  preview = previewText.length > 200 ? previewText.slice(0, 200) + '…' : previewText;
+                } catch {
+                  preview = file.name;
+                }
+              } else {
+                // Office docs, audio, video — show filename as preview
+                preview = file.name;
+              }
             }
 
             // 6. Update attachment with encoded data — re-read tabId from ref

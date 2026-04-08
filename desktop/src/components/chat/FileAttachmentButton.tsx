@@ -10,13 +10,27 @@ interface FileAttachmentButtonProps {
 
 // Accepted file types for the file input
 const ACCEPT_TYPES = [
-  'image/png',
-  'image/jpeg',
-  'image/gif',
-  'image/webp',
+  // Images (Claude-native)
+  'image/png', 'image/jpeg', 'image/gif', 'image/webp',
+  // Images (non-native — saved to workspace, agent reads with tools)
+  'image/svg+xml', 'image/bmp', 'image/tiff', 'image/heic',
+  // Documents
   'application/pdf',
-  'text/plain',
-  'text/csv',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation', // .pptx
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',   // .docx
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',          // .xlsx
+  'application/vnd.ms-powerpoint',  // .ppt
+  'application/msword',             // .doc
+  'application/vnd.ms-excel',       // .xls
+  // Text & data — include extensions as fallback (some browsers send generic MIME for .csv/.json)
+  'text/plain', 'text/csv', 'text/markdown', 'text/html',
+  'application/json', 'application/xml', 'application/x-yaml',
+  '.py', '.ts', '.tsx', '.js', '.jsx', '.rs', '.go', '.java', '.sh', '.sql',  // code by extension
+  '.md', '.txt', '.csv', '.json', '.yaml', '.yml', '.toml', '.xml', '.log',   // data by extension
+  // Audio
+  'audio/mpeg', 'audio/mp4', 'audio/wav', 'audio/ogg', 'audio/flac',
+  // Video
+  'video/mp4', 'video/quicktime', 'video/webm',
 ].join(',');
 
 export function FileAttachmentButton({

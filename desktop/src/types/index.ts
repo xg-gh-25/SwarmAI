@@ -337,12 +337,12 @@ export interface DocumentContentBlock {
 /** Per-type maximum file size in bytes. */
 export const SIZE_LIMITS = {
   image: 20 * 1024 * 1024,       // 20MB  — Claude API max per image
-  pdf: 25 * 1024 * 1024,         // 25MB  — Bedrock 32MB payload minus base64 overhead
-  document: 25 * 1024 * 1024,    // 25MB  — same as PDF (base64_document)
+  pdf: 23 * 1024 * 1024,         // 23MB  — base64 overhead (×4/3) → ~30.7MB, under 32MB Bedrock limit
+  document: 23 * 1024 * 1024,    // 23MB  — same as PDF (saved via backend, not sent to Claude API)
   audio: 500 * 1024 * 1024,      // 500MB — path_hint only, file stays local
   video: 1024 * 1024 * 1024,     // 1GB   — path_hint only, file stays local
-  text: 2 * 1024 * 1024,         // 2MB   — inlined into prompt, keep conservative
-  csv: 2 * 1024 * 1024,          // 2MB   — inlined into prompt, keep conservative
+  text: 5 * 1024 * 1024,         // 5MB   — path_hint saves to Attachments/ for large files
+  csv: 5 * 1024 * 1024,          // 5MB   — path_hint saves to Attachments/ for large files
 } as const;
 
 /** @deprecated Use SIZE_LIMITS instead. */

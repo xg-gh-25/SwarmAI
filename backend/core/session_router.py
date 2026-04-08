@@ -41,6 +41,76 @@ logger = logging.getLogger(__name__)
 _SDK_SUPPORTS_MULTIMODAL: bool = False
 
 
+def _get_access_hint(ext: str, filename: str) -> str:
+    """Return file-type-specific guidance for how the agent should access the file."""
+    ext_lower = ext.lower()
+    if ext_lower == ".pdf":
+        return "use Read tool to read this PDF"
+    elif ext_lower in (".pptx", ".ppt"):
+        return "use /s_pptx skill to extract slides and content"
+    elif ext_lower in (".docx", ".doc"):
+        return "use /s_docx skill to extract text and content"
+    elif ext_lower in (".xlsx", ".xls"):
+        return "use /s_xlsx skill to extract spreadsheet data"
+    elif ext_lower in (".mp3", ".m4a", ".wav", ".ogg", ".flac", ".aac"):
+        return "use /s_whisper-transcribe skill to transcribe audio to text"
+    elif ext_lower in (".mp4", ".mov", ".avi", ".mkv", ".webm"):
+        return "video file — extract audio first with ffmpeg, then transcribe"
+    elif ext_lower in (".png", ".jpg", ".jpeg", ".gif", ".webp"):
+        return "use Read tool to view this image"
+    elif ext_lower in (".svg", ".bmp", ".tiff", ".tif", ".heic", ".heif"):
+        return "non-native image format — use Read tool to view"
+    elif ext_lower in (".txt", ".md", ".csv", ".json", ".xml", ".yaml", ".yml",
+                        ".py", ".ts", ".tsx", ".js", ".jsx", ".rs", ".go",
+                        ".java", ".sh", ".sql", ".html", ".css", ".toml"):
+        return "use Read tool to read this text file"
+    else:
+        return f"use Read tool to access this file"
+
+
+# MIME types that Claude API accepts natively in content blocks.
+# Everything else must be converted to path hints even when SDK supports multimodal.
+_CLAUDE_NATIVE_MIMES = {
+    # Images
+    "image/jpeg", "image/png", "image/gif", "image/webp",
+    # Documents (PDF only)
+    "application/pdf",
+}
+
+
+async def _convert_non_native_blocks_to_path_hints(
+    content: list[dict],
+    session_id: str | None,
+) -> list[dict]:
+    """Convert non-native image/document blocks when SDK supports multimodal.
+
+    Passes through Claude-native blocks (jpeg/png/gif/webp images, PDF docs)
+    and converts everything else (office docs, audio, video, non-native images)
+    to path hints via the same save-to-Attachments mechanism.
+    """
+    converted: list[dict] = []
+    non_native: list[dict] = []
+    for block in content:
+        block_type = block.get("type")
+        if block_type in ("image", "document"):
+            media_type = block.get("source", {}).get("media_type", "")
+            if media_type in _CLAUDE_NATIVE_MIMES:
+                converted.append(block)  # pass through natively
+            else:
+                non_native.append(block)
+        else:
+            converted.append(block)
+
+    if non_native:
+        # Reuse the same save-and-hint mechanism for non-native blocks
+        hints = await _convert_unsupported_blocks_to_path_hints(
+            non_native, session_id,
+        )
+        converted.extend(hints)
+
+    return converted
+
+
 async def _convert_unsupported_blocks_to_path_hints(
     content: list[dict],
     session_id: str | None,
@@ -79,6 +149,36 @@ async def _convert_unsupported_blocks_to_path_hints(
                 "image/gif": ".gif",
                 "image/webp": ".webp",
                 "application/pdf": ".pdf",
+                # Office documents
+                "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
+                "application/vnd.ms-powerpoint": ".ppt",
+                "application/msword": ".doc",
+                "application/vnd.ms-excel": ".xls",
+                # Audio/video
+                "audio/mpeg": ".mp3",
+                "audio/mp4": ".m4a",
+                "audio/wav": ".wav",
+                "audio/ogg": ".ogg",
+                "audio/flac": ".flac",
+                "audio/aac": ".aac",
+                "audio/webm": ".weba",
+                "video/mp4": ".mp4",
+                "video/quicktime": ".mov",
+                "video/x-msvideo": ".avi",
+                "video/x-matroska": ".mkv",
+                "video/webm": ".webm",
+                # Text (large text files also come through base64 path now)
+                "text/plain": ".txt",
+                "text/csv": ".csv",
+                "application/csv": ".csv",
+                "text/html": ".html",
+                "text/markdown": ".md",
+                "application/json": ".json",
+                "application/xml": ".xml",
+                "text/xml": ".xml",
+                "application/x-yaml": ".yaml",
             }
             ext = ext_map.get(media_type, ".bin")
 
@@ -114,11 +214,13 @@ async def _convert_unsupported_blocks_to_path_hints(
                     block_type, file_path, session_id or "unknown",
                 )
                 rel_path = file_path.relative_to(ws_path) if ws_path else file_path
+                # Generate file-type-specific guidance for the agent
+                access_hint = _get_access_hint(ext, file_path.name)
                 converted.append({
                     "type": "text",
                     "text": (
-                        f"[Attached {block_type}: {file_path.name}] "
-                        f"saved at {rel_path} - use Read tool to access"
+                        f"[Attached file: {file_path.name}] "
+                        f"saved at {rel_path} — {access_hint}"
                     ),
                 })
             except Exception as e:
@@ -697,13 +799,21 @@ class SessionRouter:
         # Convert image/document blocks to text path hints, saving the file
         # data to SwarmWS/Attachments/{date}/ so they're browsable in the
         # Workspace Explorer and persist for the user.
-        if (
-            not _SDK_SUPPORTS_MULTIMODAL
-            and isinstance(query_content, list)
-        ):
-            query_content = await _convert_unsupported_blocks_to_path_hints(
-                query_content, session_id,
-            )
+        #
+        # When _SDK_SUPPORTS_MULTIMODAL is True, we STILL convert non-native
+        # blocks (office docs, audio, video) — Claude API only accepts
+        # native images (jpeg/png/gif/webp) and PDF documents natively.
+        if isinstance(query_content, list):
+            if not _SDK_SUPPORTS_MULTIMODAL:
+                # Convert ALL image/document blocks to path hints
+                query_content = await _convert_unsupported_blocks_to_path_hints(
+                    query_content, session_id,
+                )
+            else:
+                # SDK supports multimodal — only convert non-native blocks
+                query_content = await _convert_non_native_blocks_to_path_hints(
+                    query_content, session_id,
+                )
 
         # Stream response — persist each assistant message IMMEDIATELY.
         #
