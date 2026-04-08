@@ -64,10 +64,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "claude-sonnet-4-6": "us.anthropic.claude-sonnet-4-6",
     },
     "anthropic_base_url": None,
-    "sandbox_additional_write_paths": "",
+    "sandbox_additional_write_paths": "~/.swarm-ai/",
     "sandbox_enabled_default": False,
     "sandbox_auto_allow_bash": True,
-    "sandbox_excluded_commands": "docker",
+    "sandbox_excluded_commands": "docker,ps,pgrep,pkill,top,open,screencapture,osascript,launchctl",
     "sandbox_allow_unsandboxed": False,
     "sandbox_allowed_hosts": "*",
     "evolution": {
