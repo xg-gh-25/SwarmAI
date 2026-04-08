@@ -244,7 +244,7 @@ class TestAC3_Cooldown:
             assert unit.kill.await_count == 1
 
             # Simulate cooldown expiry
-            unit._last_proactive_restart = time.time() - 200  # 200s > 180s
+            unit._last_proactive_restart = time.monotonic() - 200  # 200s > 180s
 
             unit.compact.reset_mock()
             unit.kill.reset_mock()
@@ -351,7 +351,7 @@ class TestLifecycleProactiveRestart:
         unit = _make_unit()
         _set_idle_with_pid(unit)
         unit._sdk_session_id = "sdk-session-789"
-        unit._last_proactive_restart = time.time()  # Just restarted
+        unit._last_proactive_restart = time.monotonic()  # Just restarted
         unit.compact = AsyncMock()
         unit.kill = AsyncMock()
 

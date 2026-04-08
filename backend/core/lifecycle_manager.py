@@ -343,7 +343,7 @@ class LifecycleManager:
                 if not unit.pid:
                     continue
                 if (
-                    time.time() - unit._last_proactive_restart
+                    time.monotonic() - unit._last_proactive_restart
                     < SessionUnit.PROACTIVE_COOLDOWN
                 ):
                     continue
@@ -386,7 +386,7 @@ class LifecycleManager:
                         unit.session_id[:8], exc,
                     )
                 await unit.kill()
-                unit._last_proactive_restart = time.time()
+                unit._last_proactive_restart = time.monotonic()
         except Exception as exc:
             logger.debug("_proactive_rss_restart failed (non-fatal): %s", exc)
 

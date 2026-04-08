@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -27,6 +28,10 @@ ALPHA = 0.1
 
 # Don't adjust predictions until we have enough observations.
 MIN_SAMPLES = 5
+
+# Batch persistence: save at most every N records or M seconds, whichever first.
+_SAVE_BATCH_SIZE = 5
+_SAVE_INTERVAL_SECONDS = 60.0
 
 
 @dataclass
@@ -74,6 +79,8 @@ class EstimationLearner:
     def __init__(self, path: Path) -> None:
         self._path = path
         self._models: dict[str, CategoryModel] = {}
+        self._dirty: int = 0  # records since last save
+        self._last_save: float = time.monotonic()
         self._load()
 
     def predict(self, category: str, base_estimate: float) -> float:
@@ -86,11 +93,24 @@ class EstimationLearner:
     def record(
         self, category: str, predicted: float, actual: float
     ) -> None:
-        """Record an observation and persist."""
+        """Record an observation and persist (batched).
+
+        Saves to disk every ``_SAVE_BATCH_SIZE`` records or every
+        ``_SAVE_INTERVAL_SECONDS``, whichever comes first.  Call
+        :meth:`flush` to force an immediate write.
+        """
         if category not in self._models:
             self._models[category] = CategoryModel()
         self._models[category].update(predicted, actual)
-        self._save()
+        self._dirty += 1
+        elapsed = time.monotonic() - self._last_save
+        if self._dirty >= _SAVE_BATCH_SIZE or elapsed >= _SAVE_INTERVAL_SECONDS:
+            self._save()
+
+    def flush(self) -> None:
+        """Force-write pending changes to disk."""
+        if self._dirty > 0:
+            self._save()
 
     # -- Persistence --------------------------------------------------
 
@@ -118,6 +138,8 @@ class EstimationLearner:
                 ),
                 encoding="utf-8",
             )
+            self._dirty = 0
+            self._last_save = time.monotonic()
         except OSError as exc:
             logger.warning(
                 "Cannot save estimation learner to %s: %s", self._path, exc
