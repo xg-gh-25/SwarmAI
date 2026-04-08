@@ -54,11 +54,10 @@ export const PRIORITY_COLORS: Record<string, string> = {
 // Pure helpers (exported for testing)
 // ---------------------------------------------------------------------------
 
-/** Return only active (pending | overdue) ToDo items. */
+/** Return only active (not handled/cancelled/deleted) ToDo items. */
 export function filterActiveTodos(todos: RadarTodo[]): RadarTodo[] {
-  return todos.filter(
-    (t) => t.status === 'pending' || t.status === 'overdue',
-  );
+  const inactive = new Set(['handled', 'cancelled', 'deleted']);
+  return todos.filter((t) => !inactive.has(t.status));
 }
 
 /**
