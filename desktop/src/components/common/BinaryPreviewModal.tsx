@@ -1,50 +1,25 @@
 /**
- * Binary file preview modal for images, PDFs, and unsupported file types.
+ * Binary file preview modal for images and non-text file types.
  *
- * This component is opened by ThreeColumnLayout when a user double-clicks
- * a non-text file in the Workspace Explorer. It fetches binary content from
- * the backend (`GET /workspace/file`) as base64 and renders it according
- * to the detected file type:
+ * Opened by ThreeColumnLayout when a user double-clicks a non-text file
+ * in the Workspace Explorer.
  *
- * - **Image mode** — `<img>` with data-URI, zoom (mouse-wheel) and pan (drag)
- * - **PDF mode**   — `react-pdf` Document + Page with vertical scroll
- * - **Unsupported** — file-name badge + "cannot preview" message
+ * - **Image mode** — `<img>` with data-URI (PNG, JPG, SVG, etc.), zoom + pan
+ * - **Unsupported** — file type icon, label, "Open in Default App" + "Copy Path"
+ *   (PDF, Office docs, TIFF/HEIC, media, archives, executables)
  *
- * Exports:
- * - ``BinaryPreviewModal``      — The modal React component
- * - ``BinaryPreviewModalProps`` — Props interface
+ * Unsupported mode skips content fetch — only shows metadata and action buttons.
  */
-import { useState, useEffect, useRef, useCallback, useMemo, lazy, Suspense } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import clsx from 'clsx';
 import api from '../../services/api';
 import { copyToClipboard } from '../../utils/clipboard';
-
-// Lazy-load react-pdf so pdfjs-dist (which requires DOMMatrix) is never
-// imported at module scope.  This prevents test suites that transitively
-// import this file from crashing in jsdom/happy-dom environments.
-const LazyPdfDocument = lazy(async () => {
-  const mod = await import('react-pdf');
-  // Side-effect imports for annotation/text layers
-  await import('react-pdf/dist/Page/AnnotationLayer.css');
-  await import('react-pdf/dist/Page/TextLayer.css');
-  // Configure worker once
-  mod.pdfjs.GlobalWorkerOptions.workerSrc = new URL(
-    'pdfjs-dist/build/pdf.worker.min.mjs',
-    import.meta.url,
-  ).toString();
-  return { default: mod.Document };
-});
-
-const LazyPdfPage = lazy(async () => {
-  const mod = await import('react-pdf');
-  return { default: mod.Page };
-});
 
 export interface BinaryPreviewModalProps {
   isOpen: boolean;
   fileName: string;
   filePath: string;
-  mode: 'image' | 'pdf' | 'unsupported';
+  mode: 'image' | 'unsupported';
   onClose: () => void;
 }
 
@@ -82,6 +57,8 @@ interface FileTypeInfo {
 }
 
 const FILE_TYPE_MAP: Record<string, FileTypeInfo> = {
+  // PDF
+  pdf:  { icon: 'picture_as_pdf', color: '#EA4335', label: 'PDF Document',        message: 'PDF documents can be opened in Preview or Adobe Acrobat.',             action: 'Open in Default App' },
   // Documents
   doc:  { icon: 'description',   color: '#4285F4', label: 'Word Document',       message: 'Word documents can be opened in Microsoft Word or Pages.',             action: 'Open in Default App' },
   docx: { icon: 'description',   color: '#4285F4', label: 'Word Document',       message: 'Word documents can be opened in Microsoft Word or Pages.',             action: 'Open in Default App' },
@@ -89,6 +66,11 @@ const FILE_TYPE_MAP: Record<string, FileTypeInfo> = {
   xlsx: { icon: 'table_chart',   color: '#0F9D58', label: 'Excel Spreadsheet',   message: 'Spreadsheets can be opened in Microsoft Excel or Numbers.',            action: 'Open in Default App' },
   ppt:  { icon: 'slideshow',     color: '#DB4437', label: 'PowerPoint',          message: 'Presentations can be opened in Microsoft PowerPoint or Keynote.',      action: 'Open in Default App' },
   pptx: { icon: 'slideshow',     color: '#DB4437', label: 'PowerPoint',          message: 'Presentations can be opened in Microsoft PowerPoint or Keynote.',      action: 'Open in Default App' },
+  // Images (non-browser-renderable)
+  tiff: { icon: 'image',         color: '#FF9800', label: 'TIFF Image',          message: 'TIFF images can be opened in Preview or any image viewer.',            action: 'Open in Default App' },
+  tif:  { icon: 'image',         color: '#FF9800', label: 'TIFF Image',          message: 'TIFF images can be opened in Preview or any image viewer.',            action: 'Open in Default App' },
+  heic: { icon: 'image',         color: '#FF9800', label: 'HEIC Image',          message: 'HEIC images can be opened in Preview or Photos.',                     action: 'Open in Default App' },
+  heif: { icon: 'image',         color: '#FF9800', label: 'HEIF Image',          message: 'HEIF images can be opened in Preview or Photos.',                     action: 'Open in Default App' },
   // Media — Audio
   mp3:  { icon: 'music_note',    color: '#E91E63', label: 'Audio File',          message: 'Audio files can be played in your default music player.',              action: 'Open in Music Player' },
   wav:  { icon: 'music_note',    color: '#E91E63', label: 'Audio File',          message: 'Audio files can be played in your default music player.',              action: 'Open in Music Player' },
@@ -148,41 +130,51 @@ export default function BinaryPreviewModal({
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
   const [imageDimensions, setImageDimensions] = useState({ w: 0, h: 0 });
 
-  // PDF state
-  const [numPages, setNumPages] = useState<number>(0);
-
   const overlayRef = useRef<HTMLDivElement>(null);
   const modalRef = useRef<HTMLDivElement>(null);
+  // Cache workspace root to avoid repeated /workspace API calls
+  const wsRootRef = useRef<string | null>(null);
 
-  // Fetch file content when modal opens
+  // Fetch file content (image) or metadata (unsupported) when modal opens
   const fetchContent = useCallback(async () => {
     setLoading(true);
     setError(null);
     setContent(null);
     setScale(1);
     setTranslate({ x: 0, y: 0 });
-    setNumPages(0);
     setImageDimensions({ w: 0, h: 0 });
+
     try {
-      const response = await api.get<FileResponse>('/workspace/file', {
-        params: { path: filePath },
-      });
-      const data = response.data;
-      setContent(data.content);
-      // Handle both snake_case (backend) and camelCase (if transformed)
-      const mime = data.mime_type ?? data.mimeType ?? 'application/octet-stream';
-      setMimeType(mime);
-      setFileSize(data.size ?? 0);
+      if (mode === 'image') {
+        // Image mode: fetch full content for inline rendering
+        const response = await api.get<FileResponse>('/workspace/file', {
+          params: { path: filePath },
+        });
+        const data = response.data;
+        setContent(data.content);
+        const mime = data.mime_type ?? data.mimeType ?? 'application/octet-stream';
+        setMimeType(mime);
+        setFileSize(data.size ?? 0);
+      } else {
+        // Unsupported mode: lightweight metadata fetch only (no content)
+        const response = await api.get<{ size: number; mime_type: string }>(
+          '/workspace/file/meta',
+          { params: { path: filePath } },
+        );
+        setFileSize(response.data.size ?? 0);
+        setMimeType(response.data.mime_type ?? 'application/octet-stream');
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Failed to load file';
       setError(msg);
     } finally {
       setLoading(false);
     }
-  }, [filePath]);
+  }, [filePath, mode]);
 
   useEffect(() => {
     if (isOpen) {
+      wsRootRef.current = null; // reset cache when a new file opens
       fetchContent();
     }
   }, [isOpen, fetchContent]);
@@ -269,12 +261,15 @@ export default function BinaryPreviewModal({
   const getAbsolutePath = useCallback(async (): Promise<string> => {
     // If filePath is already absolute, return it as-is
     if (filePath.startsWith('/')) return filePath;
-    const configResp = await api.get<{ file_path?: string; filePath?: string }>('/workspace');
-    const wsRoot = configResp.data.file_path ?? configResp.data.filePath ?? '';
-    return wsRoot ? `${wsRoot}/${filePath}` : filePath;
+    // Use cached workspace root to avoid repeated API calls
+    if (!wsRootRef.current) {
+      const configResp = await api.get<{ file_path?: string; filePath?: string }>('/workspace');
+      wsRootRef.current = configResp.data.file_path ?? configResp.data.filePath ?? '';
+    }
+    return wsRootRef.current ? `${wsRootRef.current}/${filePath}` : filePath;
   }, [filePath]);
 
-  const handleRevealInFinder = useCallback(async () => {
+  const handleOpenInDefaultApp = useCallback(async () => {
     try {
       const absolutePath = await getAbsolutePath();
       const { openPath } = await import('@tauri-apps/plugin-opener');
@@ -299,25 +294,6 @@ export default function BinaryPreviewModal({
       setTimeout(() => setCopyFeedback(false), 2000);
     } catch { /* best effort */ }
   }, [getAbsolutePath, copyFeedback]);
-
-  const handlePdfLoadSuccess = useCallback(({ numPages: n }: { numPages: number }) => {
-    setNumPages(n);
-  }, []);
-
-  // Memoize PDF binary decode to avoid re-decoding on every render
-  const pdfData = useMemo(() => {
-    if (!content || mode !== 'pdf') return null;
-    try {
-      const binaryString = atob(content);
-      const bytes = new Uint8Array(binaryString.length);
-      for (let i = 0; i < binaryString.length; i++) {
-        bytes[i] = binaryString.charCodeAt(i);
-      }
-      return bytes;
-    } catch {
-      return null;
-    }
-  }, [content, mode]);
 
   if (!isOpen) return null;
 
@@ -384,56 +360,6 @@ export default function BinaryPreviewModal({
     );
   };
 
-  const renderPdfMode = () => {
-    if (!content) return null;
-    if (!pdfData) {
-      return (
-        <div className="flex flex-col items-center justify-center py-16 gap-3">
-          <span className="material-symbols-outlined text-3xl text-red-400">error</span>
-          <p className="text-sm text-red-400">Failed to decode PDF content</p>
-          <button
-            onClick={handleRevealInFinder}
-            className="px-3 py-1.5 text-sm rounded-lg bg-[var(--color-primary)] text-white hover:opacity-90 transition-opacity"
-          >
-            Open in File Manager
-          </button>
-        </div>
-      );
-    }
-
-    return (
-      <div className="flex flex-col flex-1 overflow-hidden">
-        {numPages > 0 && (
-          <div className="text-xs text-[var(--color-text-muted)] text-center py-1 shrink-0">
-            {numPages} {numPages === 1 ? 'page' : 'pages'}
-          </div>
-        )}
-        <div
-          className="flex-1 overflow-y-auto flex flex-col items-center gap-2 p-2"
-          aria-label={`${fileName} PDF document`}
-        >
-          <Suspense fallback={renderLoading()}>
-            <LazyPdfDocument
-              file={{ data: pdfData }}
-              onLoadSuccess={handlePdfLoadSuccess}
-              onLoadError={() => setError('Failed to load PDF. The file may be corrupted or password-protected.')}
-              loading={renderLoading()}
-            >
-              {Array.from({ length: numPages }, (_, i) => (
-                <LazyPdfPage
-                  key={i + 1}
-                  pageNumber={i + 1}
-                  width={Math.min(800, window.innerWidth * 0.8)}
-                  className="shadow-md mb-2"
-                />
-              ))}
-            </LazyPdfDocument>
-          </Suspense>
-        </div>
-      </div>
-    );
-  };
-
   const renderUnsupportedMode = () => {
     const ext = getExtension(fileName).toLowerCase();
     const fileTypeInfo = getFileTypeInfo(ext);
@@ -472,7 +398,7 @@ export default function BinaryPreviewModal({
         </div>
         <div className="flex items-center gap-2">
           <button
-            onClick={handleRevealInFinder}
+            onClick={handleOpenInDefaultApp}
             className="flex items-center gap-2 px-4 py-2 text-sm rounded-lg bg-[var(--color-primary)] text-white hover:opacity-90 transition-opacity"
           >
             <span className="material-symbols-outlined text-base">open_in_new</span>
@@ -499,8 +425,6 @@ export default function BinaryPreviewModal({
     switch (mode) {
       case 'image':
         return renderImageMode();
-      case 'pdf':
-        return renderPdfMode();
       case 'unsupported':
         return renderUnsupportedMode();
       default:
@@ -535,7 +459,7 @@ export default function BinaryPreviewModal({
         <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--color-border)] shrink-0">
           <div className="flex items-center gap-2 min-w-0">
             <span className="material-symbols-outlined text-lg text-[var(--color-text-muted)]">
-              {mode === 'image' ? 'image' : mode === 'pdf' ? 'picture_as_pdf' : 'description'}
+              {mode === 'image' ? 'image' : 'description'}
             </span>
             <h2 className="text-sm font-medium text-[var(--color-text)] truncate">
               {fileName}
@@ -543,7 +467,7 @@ export default function BinaryPreviewModal({
           </div>
           <div className="flex items-center gap-1">
             <button
-              onClick={handleRevealInFinder}
+              onClick={handleOpenInDefaultApp}
               className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-hover)] transition-colors"
               title="Open with system default app"
             >

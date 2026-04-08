@@ -1,8 +1,19 @@
+/**
+ * File preview modal used by the ChatPage file browser (right sidebar).
+ *
+ * Uses the unified `classifyFileForPreview()` from fileUtils.ts to ensure
+ * consistent file type routing across the app.
+ *
+ * - **image**: inline `<img>` with base64 data-URI
+ * - **text**: syntax-highlighted code preview via CodePreview
+ * - **unsupported**: metadata card with "Reveal in Finder" button
+ */
 import { useQuery } from '@tanstack/react-query';
 import { useCallback } from 'react';
 import Modal from '../common/Modal';
 import CodePreview from './CodePreview';
 import { workspaceService } from '../../services/workspace';
+import { classifyFileForPreview } from '../../utils/fileUtils';
 
 interface FilePreviewModalProps {
   isOpen: boolean;
@@ -12,25 +23,6 @@ interface FilePreviewModalProps {
   /** Optional custom base path for file reading (e.g., from "work in a folder" selection) */
   basePath?: string;
 }
-
-// Image file extensions (previewable)
-const IMAGE_EXTENSIONS = new Set([
-  'png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'ico', 'bmp'
-]);
-
-// Text/code file extensions (previewable)
-const TEXT_EXTENSIONS = new Set([
-  'txt', 'md', 'py', 'js', 'ts', 'tsx', 'jsx', 'json', 'yaml', 'yml',
-  'xml', 'html', 'css', 'scss', 'less', 'sh', 'bash', 'zsh', 'fish',
-  'go', 'rs', 'java', 'c', 'cpp', 'h', 'hpp', 'rb', 'php', 'sql',
-  'env', 'gitignore', 'dockerignore', 'editorconfig', 'eslintrc',
-  'prettierrc', 'toml', 'ini', 'cfg', 'conf', 'log', 'csv'
-]);
-
-// Special filenames that are text (no extension)
-const TEXT_FILENAMES = new Set([
-  'dockerfile', 'makefile', 'readme', 'license', 'changelog'
-]);
 
 // Format file size for display
 const formatFileSize = (bytes: number): string => {
@@ -45,24 +37,6 @@ const formatFileSize = (bytes: number): string => {
   return `${size.toFixed(unitIndex > 0 ? 1 : 0)} ${units[unitIndex]}`;
 };
 
-// Check if file is an image
-const isImageFile = (filename: string): boolean => {
-  const ext = filename.split('.').pop()?.toLowerCase();
-  return IMAGE_EXTENSIONS.has(ext || '');
-};
-
-// Check if file is a text/code file
-const isTextFile = (filename: string): boolean => {
-  const ext = filename.split('.').pop()?.toLowerCase();
-  const name = filename.toLowerCase();
-  return TEXT_EXTENSIONS.has(ext || '') || TEXT_FILENAMES.has(name);
-};
-
-// Check if file is previewable (image or text)
-const isPreviewable = (filename: string): boolean => {
-  return isImageFile(filename) || isTextFile(filename);
-};
-
 // Get file extension for display
 const getFileExtension = (filename: string): string => {
   const ext = filename.split('.').pop()?.toUpperCase();
@@ -70,8 +44,9 @@ const getFileExtension = (filename: string): string => {
 };
 
 export function FilePreviewModal({ isOpen, onClose, agentId, file, basePath }: FilePreviewModalProps) {
-  // Check if file is previewable
-  const canPreview = file ? isPreviewable(file.name) : false;
+  // Classify using the single source of truth
+  const previewType = file ? classifyFileForPreview(file.name) : 'unsupported';
+  const canPreview = previewType === 'image' || previewType === 'text';
 
   // Fetch file content only for previewable files
   const {
@@ -184,7 +159,7 @@ export function FilePreviewModal({ isOpen, onClose, agentId, file, basePath }: F
     );
 
     // Image preview
-    if (isImageFile(file.name) && fileContent.encoding === 'base64') {
+    if (previewType === 'image' && fileContent.encoding === 'base64') {
       return (
         <div className="flex flex-col items-center">
           <img
