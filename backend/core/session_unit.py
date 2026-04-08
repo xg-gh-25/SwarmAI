@@ -389,7 +389,8 @@ class SessionUnit:
         # ── Proactive RSS restart cooldown ────────────────────────
         # Monotonic timestamp of last proactive compact→kill cycle.
         # Prevents repeated restarts within the PROACTIVE_COOLDOWN window.
-        self._last_proactive_restart: float = 0.0
+        # Uses monotonic clock — immune to NTP sync / sleep-wake clock jumps.
+        self._last_proactive_restart: float = 0.0  # monotonic
 
         # ── Resource observability ─────────────────────────────────
         self._last_error_type: Optional[str] = None  # FailureType.value: "oom" | "rate_limit" | "api_error" | "timeout" | "unknown"
@@ -2151,7 +2152,7 @@ class SessionUnit:
         Non-fatal — if compact() fails, kill() still proceeds.
         If RSS measurement fails, silently skips.
         """
-        if time.time() - self._last_proactive_restart < self.PROACTIVE_COOLDOWN:
+        if time.monotonic() - self._last_proactive_restart < self.PROACTIVE_COOLDOWN:
             return
 
         pid = self.pid
@@ -2200,7 +2201,7 @@ class SessionUnit:
         # Step 2: kill → COLD (preserves _sdk_session_id for lazy resume)
         await self.kill()
 
-        self._last_proactive_restart = time.time()
+        self._last_proactive_restart = time.monotonic()
 
     async def compact(self, instructions: Optional[str] = None) -> dict:
         """Trigger /compact on the subprocess.

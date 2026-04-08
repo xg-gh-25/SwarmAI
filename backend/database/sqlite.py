@@ -31,8 +31,11 @@ class _WALConnection:
     chat sessions save messages in parallel.
 
     WAL mode is set once per db_path per process (it persists in the DB file).
-    Busy timeout (5 seconds) prevents immediate SQLITE_BUSY errors under
-    concurrent write pressure from parallel chat sessions.
+    Busy timeout (100ms) is short — just enough to handle brief lock
+    contention.  Application-level retry (SQLiteTable.put: 50+200+500ms)
+    controls the actual backoff strategy.  Previously this was 5000ms which
+    meant SQLite's internal wait dominated and app retries never fired.
+    Total worst-case: 100ms (SQLite) × 3 attempts + 750ms (app sleep) ≈ 1050ms.
     """
 
     # Class-level set: tracks which db_paths have had WAL mode enabled
@@ -49,7 +52,7 @@ class _WALConnection:
         # Enable WAL mode if not already done for this db_path in this process.
         if self._db_path not in _WALConnection._wal_initialized:
             await self._conn.execute("PRAGMA journal_mode=WAL")
-            await self._conn.execute("PRAGMA busy_timeout=5000")
+            await self._conn.execute("PRAGMA busy_timeout=100")
             # Checkpoint every 1000 pages (~4MB) to prevent WAL bloat.
             # Without this, WAL grows unbounded until a reader closes.
             await self._conn.execute("PRAGMA wal_autocheckpoint=1000")
@@ -57,7 +60,7 @@ class _WALConnection:
             logger.info("SQLite WAL mode enabled for %s", self._db_path)
         else:
             # Still set busy_timeout per connection (not persisted in DB file)
-            await self._conn.execute("PRAGMA busy_timeout=5000")
+            await self._conn.execute("PRAGMA busy_timeout=100")
         return self._conn
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
@@ -377,6 +380,28 @@ class SQLiteMessagesTable(SQLiteTable[T], Generic[T]):
             )
             await conn.commit()
             return cursor.rowcount
+
+    async def delete_last_user_message(self, session_id: str) -> bool:
+        """Delete the most recent user message for a session.
+
+        Used to clean up orphaned messages when SessionBusyError is raised
+        after the user message was already persisted but before it was sent
+        to the agent.
+
+        Returns True if a message was deleted, False if no user message found.
+        """
+        async with self._get_connection() as conn:
+            # Find the rowid of the most recent user message
+            cursor = await conn.execute(
+                f"DELETE FROM {self.table_name} WHERE rowid = ("
+                f"  SELECT rowid FROM {self.table_name}"
+                f"  WHERE session_id = ? AND role = 'user'"
+                f"  ORDER BY created_at DESC LIMIT 1"
+                f")",
+                (session_id,),
+            )
+            await conn.commit()
+            return cursor.rowcount > 0
 
     async def count_by_session(self, session_id: str) -> int:
         """Count messages for a session without loading them into memory."""
@@ -1677,9 +1702,9 @@ class SQLiteDatabase(BaseDatabase):
 
             # Enable WAL mode for concurrent read/write from parallel chat sessions.
             # WAL persists in the DB file, so this is idempotent across restarts.
-            # busy_timeout prevents immediate SQLITE_BUSY under write contention.
+            # busy_timeout: short (100ms) — app-level retry handles longer waits.
             await conn.execute("PRAGMA journal_mode=WAL")
-            await conn.execute("PRAGMA busy_timeout=5000")
+            await conn.execute("PRAGMA busy_timeout=100")
             _WALConnection._wal_initialized.add(str(self.db_path))
             logger.info("DB init: WAL mode enabled")
 

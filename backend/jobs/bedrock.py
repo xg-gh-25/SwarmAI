@@ -27,8 +27,11 @@ from typing import Any
 logger = logging.getLogger("swarm.jobs.bedrock")
 
 # Module-level cached client — reused across calls within the same process.
+# TTL prevents stale credentials from causing persistent auth failures.
 _client: Any | None = None
 _client_region: str | None = None
+_client_created_at: float = 0.0  # monotonic timestamp
+_CLIENT_TTL: float = 1800.0  # 30 minutes — STS temporary creds have 1-12h TTL
 
 
 def _load_config() -> tuple[str, dict]:
@@ -119,8 +122,12 @@ def _resolve_credentials() -> dict[str, str]:
                 aws_config = configparser.ConfigParser()
                 aws_config.read(str(Path.home() / ".aws" / "config"))
 
-                # Find the first profile with sso_account_id
-                for section in aws_config.sections():
+                # Prefer [default] profile, then first match with sso_account_id.
+                # Without this, multi-profile configs could pick the wrong account.
+                sections = aws_config.sections()
+                # Sort so 'default' (or 'profile default') comes first
+                sections.sort(key=lambda s: (0 if 'default' in s.lower() else 1, s))
+                for section in sections:
                     acct = aws_config.get(section, "sso_account_id", fallback=None)
                     role = aws_config.get(section, "sso_role_name", fallback=None)
                     if acct and role:
@@ -154,11 +161,15 @@ def get_client(*, force_new: bool = False) -> Any:
         force_new: Bypass cache and create a fresh client (useful after
             credential eviction on auth errors).
     """
-    global _client, _client_region
+    global _client, _client_region, _client_created_at
+    import time
 
     region, _ = _load_config()
 
-    if not force_new and _client is not None and _client_region == region:
+    # TTL check — recreate client periodically to pick up refreshed credentials.
+    # STS temporary credentials have 1-12h TTL; 30min refresh is conservative.
+    expired = (time.monotonic() - _client_created_at) > _CLIENT_TTL
+    if not force_new and not expired and _client is not None and _client_region == region:
         return _client
 
     import boto3
@@ -192,6 +203,7 @@ def get_client(*, force_new: bool = False) -> Any:
         logger.warning("Created Bedrock client with default chain (no pre-resolved creds) for region=%s", region)
 
     _client_region = region
+    _client_created_at = time.monotonic()
     return _client
 
 
@@ -201,9 +213,10 @@ def evict_client() -> None:
     Call this when you get a credential/auth error so the next attempt
     picks up refreshed credentials.
     """
-    global _client, _client_region
+    global _client, _client_region, _client_created_at
     _client = None
     _client_region = None
+    _client_created_at = 0.0
 
 
 def get_model_id(model_key: str = "claude-sonnet-4-6") -> str:

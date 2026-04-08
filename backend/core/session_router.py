@@ -739,6 +739,22 @@ class SessionRouter:
                     "yielding SESSION_BUSY error to frontend",
                     session_id,
                 )
+                # Delete the orphaned user message that was persisted before
+                # slot acquisition.  Without this, cold resume would inject
+                # a message that was never actually sent to the agent.
+                if user_content:
+                    try:
+                        await db.messages.delete_last_user_message(session_id)
+                        logger.info(
+                            "session_router.deleted_orphan_msg session_id=%s",
+                            session_id,
+                        )
+                    except Exception as del_exc:
+                        logger.warning(
+                            "session_router.orphan_msg_delete_failed "
+                            "session_id=%s: %s",
+                            session_id, del_exc,
+                        )
                 yield _build_error_event(
                     code="SESSION_BUSY",
                     message=str(send_err.message),
