@@ -171,9 +171,11 @@ export type FilePreviewType = 'image' | 'text' | 'unsupported';
  *  All listed formats are supported by modern browsers (Chrome, Safari, Firefox).
  *  BMP: supported but uncommon — kept here since all target browsers render it.
  *  TIFF/HEIC: NOT included — no browser <img> support, routed to unsupported.
+ *  SVG: NOT included — it's editable XML text, routed to FileEditorCore with
+ *  a Preview toggle for visual rendering (same UX pattern as markdown preview).
  */
 const IMAGE_EXTENSIONS = new Set([
-  'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'ico', 'svg',
+  'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'ico',
 ]);
 
 /** Binary/document formats that can't be edited as text.
@@ -185,18 +187,28 @@ const NON_TEXT_BINARY = new Set([
   // Images not renderable in browser <img> — need system viewer
   'tiff', 'tif', 'heic', 'heif',
   // Media — Audio
-  'mp4', 'mp3', 'wav', 'avi', 'mov', 'mkv', 'flac', 'ogg',
+  'mp3', 'wav', 'flac', 'ogg', 'aac', 'm4a',
+  // Media — Video
+  'mp4', 'avi', 'mov', 'mkv', 'webm', 'm4v',
   // Archives
-  'zip', 'tar', 'gz', 'rar', '7z', 'dmg', 'iso',
+  'zip', 'tar', 'gz', 'rar', '7z', 'dmg', 'iso', 'jar', 'war',
   // Executables & libraries
   'exe', 'dll', 'so', 'dylib', 'wasm',
+  // Compiled / bytecode
+  'pyc', 'class', 'o',
+  // Databases
+  'sqlite', 'db',
+  // Fonts
+  'ttf', 'otf', 'woff', 'woff2',
+  // Generic binary
+  'bin', 'dat',
 ]);
 
 /**
  * Classify a file for preview routing based on its extension.
- * - 'image': viewable inline via <img> (png, jpg, svg, etc.)
+ * - 'image': viewable inline via <img> (png, jpg, gif, webp, bmp, ico)
  * - 'unsupported': show info modal with file path, "Open in Default App", and "Copy Path"
- * - 'text': open in FileEditor
+ * - 'text': open in FileEditor (includes SVG — editable XML with visual preview toggle)
  */
 export function classifyFileForPreview(fileName: string): FilePreviewType {
   const ext = fileName.split('.').pop()?.toLowerCase() ?? '';
