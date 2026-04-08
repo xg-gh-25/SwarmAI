@@ -1125,25 +1125,21 @@ export default function ChatPage() {
             break;
           }
           case 'path_hint':
-            // File Picker files with path_hint have textContent but no workspacePath.
-            // Fall back to inline_text delivery for these (content already read at attach time).
-            if (att.textContent && !att.workspacePath) {
-              content.push({
-                type: 'text',
-                text: `--- File: ${att.name} ---\n${att.textContent}\n--- End: ${att.name} ---`,
-              } as ContentBlock);
-            } else if (att.workspacePath) {
+            if (att.workspacePath) {
+              // Workspace Explorer drag — file already on disk, just reference it
               content.push({
                 type: 'text',
                 text: `[Attached file: ${att.name}] saved at ${att.workspacePath} - use Read tool to access`,
               } as ContentBlock);
             } else if (att.base64) {
-              // Audio/video files can't be sent as base64 documents to Claude.
-              // Inform the agent about the file so it can suggest alternatives.
+              // File Picker: all path_hint files (binary docs, large text, audio, video).
+              // Send as a document block so the backend can save to Attachments/
+              // and generate a smart path hint with file-type-specific guidance.
               content.push({
-                type: 'text',
-                text: `[Attached ${att.type} file: ${att.name} (${(att.size / (1024 * 1024)).toFixed(1)}MB) — binary file attached from system file picker, cannot be processed inline. Save to workspace and use tools to access.]`,
-              } as ContentBlock);
+                type: 'document',
+                source: { type: 'base64', media_type: att.mediaType || 'application/octet-stream', data: att.base64 },
+                _filename: att.name,
+              } as unknown as ContentBlock);
             } else {
               // Fallback: mention the file by name so agent knows it was attached
               content.push({
