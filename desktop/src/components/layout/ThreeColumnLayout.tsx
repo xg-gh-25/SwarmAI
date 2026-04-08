@@ -16,7 +16,7 @@ import type { FileTreeItem } from '../workspace-explorer/FileTreeNode';
 import type { GitStatus } from '../../types';
 import api from '../../services/api';
 import { useToast } from '../../contexts/ToastContext';
-import { copyToClipboard } from '../../utils/clipboard';
+
 
 // Left sidebar width constant
 const LEFT_SIDEBAR_WIDTH = LAYOUT_CONSTANTS.LEFT_SIDEBAR_WIDTH;
@@ -245,7 +245,7 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
     isOpen: boolean;
     fileName: string;
     filePath: string;
-    mode: 'image' | 'pdf' | 'unsupported';
+    mode: 'image' | 'unsupported';
   } | null>(null);
 
   // Swarm workspace warning state - Requirement 4.3
@@ -331,34 +331,6 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
 
 
   // Handle file double-click - Requirement 9.1, 1.1-1.5, 7.1-7.2
-  /**
-   * Open a file with the system default app.
-   * Used for PDFs, Office docs, and other files that can't be rendered in-app.
-   * Falls back to copying the absolute path to clipboard on failure.
-   */
-  const openWithSystemApp = useCallback(async (filePath: string) => {
-    let absolutePath = filePath;
-    // Only prepend workspace root for relative paths
-    if (!filePath.startsWith('/')) {
-      try {
-        const configResp = await api.get<{ file_path?: string; filePath?: string }>('/workspace');
-        const wsRoot = configResp.data.file_path ?? configResp.data.filePath ?? '';
-        absolutePath = wsRoot ? `${wsRoot}/${filePath}` : filePath;
-      } catch { /* use relative path as fallback */ }
-    }
-
-    try {
-      const { openPath } = await import('@tauri-apps/plugin-opener');
-      await openPath(absolutePath);
-    } catch {
-      // Fallback: copy absolute path to clipboard
-      try {
-        await copyToClipboard(absolutePath);
-        console.info(`[FileOpen] Copied path to clipboard: ${absolutePath}`);
-      } catch { /* best effort */ }
-    }
-  }, []);
-
   const handleFileDoubleClick = useCallback(async (file: FileTreeItem) => {
     if (file.isSwarmWorkspace) {
       setSwarmWarning({ isOpen: true, pendingFile: file });
@@ -369,11 +341,9 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
 
     if (previewType === 'text') {
       await openFileEditor(file, file.gitStatus);
-    } else if (previewType === 'pdf' || previewType === 'system-open') {
-      // PDF, docx, xlsx, pptx, svg — open directly with system default app
-      await openWithSystemApp(file.path);
     } else {
       // 'image' or 'unsupported' — show in BinaryPreviewModal
+      // (images render inline; unsupported shows file info + Open/Copy Path)
       setBinaryPreviewState({
         isOpen: true,
         fileName: file.name,
@@ -381,7 +351,7 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
         mode: previewType,
       });
     }
-  }, [openFileEditor, openWithSystemApp]);
+  }, [openFileEditor]);
 
   // Assign ref now that handleFileDoubleClick is defined
   handleFileDoubleClickRef.current = handleFileDoubleClick;
@@ -430,8 +400,8 @@ function ThreeColumnLayoutInner({ children }: ThreeColumnLayoutProps) {
         workspaceName: '',
       };
 
-      // Route through handleFileDoubleClick so pdf/docx/xlsx/pptx open with
-      // system app instead of being forced into the text editor.
+      // Route through handleFileDoubleClick for proper file type handling
+      // (images preview inline, binary files show info modal, text opens editor).
       try {
         await handleFileDoubleClickRef.current(fileItem);
       } catch {

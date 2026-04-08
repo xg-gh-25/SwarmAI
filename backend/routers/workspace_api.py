@@ -934,6 +934,39 @@ async def resolve_workspace_file(
     raise HTTPException(status_code=404, detail=f"Could not resolve file: {path}")
 
 
+@router.get("/workspace/file/meta")
+async def get_workspace_file_meta(
+    path: str = Query(..., description="Absolute or workspace-relative file path"),
+):
+    """Return lightweight file metadata (size, mime type) without reading content.
+
+    Used by the BinaryPreviewModal unsupported mode to display file size
+    and type information without fetching potentially large binary files.
+    """
+    expanded_path = await _get_workspace_path()
+    workspace_root = Path(expanded_path)
+    target, _is_external = _resolve_file_path(path, workspace_root)
+
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail=f"File not found: {path}")
+
+    try:
+        stat = target.stat()
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"Cannot stat file: {exc}")
+
+    mime_type, _ = mimetypes.guess_type(target.name)
+    if mime_type is None:
+        mime_type = "application/octet-stream"
+
+    return {
+        "name": target.name,
+        "path": path,
+        "size": stat.st_size,
+        "mime_type": mime_type,
+    }
+
+
 @router.get("/workspace/file/raw")
 async def get_workspace_file_raw(
     path: str = Query(..., description="Absolute or workspace-relative file path"),

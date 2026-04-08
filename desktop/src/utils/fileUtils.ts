@@ -165,43 +165,42 @@ export function fileIconColor(name: string): string {
 // File preview classification
 // ---------------------------------------------------------------------------
 
-export type FilePreviewType = 'image' | 'pdf' | 'system-open' | 'text' | 'unsupported';
+export type FilePreviewType = 'image' | 'text' | 'unsupported';
 
-const IMAGE_EXTENSIONS = new Set([
-  'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'ico'
-]);
-
-const PDF_EXTENSIONS = new Set(['pdf']);
-
-/**
- * Files that should open directly with the system default app.
- * These are document formats that can't be rendered in-app but have
- * native apps that handle them well (Preview, Word, Excel, etc.).
+/** Image formats renderable inline via <img> tag.
+ *  All listed formats are supported by modern browsers (Chrome, Safari, Firefox).
+ *  BMP: supported but uncommon — kept here since all target browsers render it.
+ *  TIFF/HEIC: NOT included — no browser <img> support, routed to unsupported.
  */
-const SYSTEM_OPEN_EXTENSIONS = new Set([
-  'docx', 'xlsx', 'pptx', 'doc', 'xls', 'ppt',
-  'svg',
+const IMAGE_EXTENSIONS = new Set([
+  'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'ico', 'svg',
 ]);
 
-const UNSUPPORTED_BINARY = new Set([
+/** Binary/document formats that can't be edited as text.
+ *  Shown in BinaryPreviewModal with file info + "Open in Default App" + "Copy Path".
+ */
+const NON_TEXT_BINARY = new Set([
+  // Documents
+  'pdf', 'docx', 'xlsx', 'pptx', 'doc', 'xls', 'ppt',
+  // Images not renderable in browser <img> — need system viewer
+  'tiff', 'tif', 'heic', 'heif',
+  // Media — Audio
   'mp4', 'mp3', 'wav', 'avi', 'mov', 'mkv', 'flac', 'ogg',
+  // Archives
   'zip', 'tar', 'gz', 'rar', '7z', 'dmg', 'iso',
+  // Executables & libraries
   'exe', 'dll', 'so', 'dylib', 'wasm',
 ]);
 
 /**
  * Classify a file for preview routing based on its extension.
- * - 'image': viewable inline (png, jpg, etc.)
- * - 'pdf': open with system app (Preview.app on macOS)
- * - 'system-open': open with system default app (docx, xlsx, pptx, svg)
- * - 'unsupported': show info modal with "Open in Default App" button
+ * - 'image': viewable inline via <img> (png, jpg, svg, etc.)
+ * - 'unsupported': show info modal with file path, "Open in Default App", and "Copy Path"
  * - 'text': open in FileEditor
  */
 export function classifyFileForPreview(fileName: string): FilePreviewType {
   const ext = fileName.split('.').pop()?.toLowerCase() ?? '';
   if (IMAGE_EXTENSIONS.has(ext)) return 'image';
-  if (PDF_EXTENSIONS.has(ext)) return 'pdf';
-  if (SYSTEM_OPEN_EXTENSIONS.has(ext)) return 'system-open';
-  if (UNSUPPORTED_BINARY.has(ext)) return 'unsupported';
+  if (NON_TEXT_BINARY.has(ext)) return 'unsupported';
   return 'text';
 }
