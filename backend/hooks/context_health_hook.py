@@ -12,6 +12,7 @@ it can, logs what it can't.  Total budget: <3s light, <10s deep.
 
 import logging
 import os
+import re
 import subprocess
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -539,76 +540,131 @@ class ContextHealthHook:
                 except (ValueError, IndexError):
                     continue
 
-        # 3. Archive resolved Open Threads >7 days
+        # 3. Archive resolved Open Threads >7 days — remove from MEMORY.md
+        #    and append to MEMORY-archive-YYYY-MM.md (same pattern as
+        #    _enforce_section_caps in distillation_hook.py).
         memory_path = root / ".context" / "MEMORY.md"
         if memory_path.exists():
+            self._archive_resolved_open_threads(memory_path, root, cutoff_7)
+
+    # ------------------------------------------------------------------
+    # Open Thread archival
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _parse_ot_entry_date(line: str) -> Optional[datetime]:
+        """Parse date from an Open Thread entry line. Returns None if unparseable."""
+        # Format 1: ISO date at line start: "- 2024-03-22: ..."
+        iso_start = re.match(r"- (\d{4}-\d{2}-\d{2})", line)
+        if iso_start:
+            try:
+                return datetime.strptime(iso_start.group(1), "%Y-%m-%d")
+            except ValueError:
+                pass
+        # Format 2: ISO date anywhere in parens: "- ... (2024-03-22)"
+        iso_any = re.search(r"\((\d{4}-\d{2}-\d{2})\)", line)
+        if iso_any:
+            try:
+                return datetime.strptime(iso_any.group(1), "%Y-%m-%d")
+            except ValueError:
+                pass
+        # Format 3: Short month/day in parens: (3/22), (12/5)
+        short_date = re.search(r"\((\d{1,2})/(\d{1,2})\)", line)
+        if short_date:
+            try:
+                month = int(short_date.group(1))
+                day = int(short_date.group(2))
+                return datetime(datetime.now().year, month, day)
+            except (ValueError, OverflowError):
+                pass
+        return None
+
+    def _archive_resolved_open_threads(
+        self, memory_path: Path, root: Path, cutoff: datetime
+    ) -> None:
+        """Remove resolved OT entries >cutoff from MEMORY.md, append to archive.
+
+        Uses fcntl.flock on the MEMORY.md.lock sidecar file, matching the
+        locking pattern in distillation_hook._enforce_section_caps and
+        scripts/locked_write.py.
+        """
+        import fcntl
+
+        lock_path = memory_path.with_suffix(memory_path.suffix + ".lock")
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        fd = None
+        try:
+            fd = open(lock_path, "w")  # noqa: SIM115
+            fcntl.flock(fd, fcntl.LOCK_EX)
             try:
                 content = memory_path.read_text(encoding="utf-8")
-                # Find Open Threads section and check for resolved entries
-                import re as _re
-                ot_match = _re.search(
-                    r"## Open Threads\n(.*?)(?=\n## |\Z)",
-                    content, _re.DOTALL,
+                ot_match = re.search(
+                    r"(## Open Threads\n)(.*?)(?=\n## |\Z)",
+                    content, re.DOTALL,
                 )
-                if ot_match:
-                    ot_content = ot_match.group(1)
-                    for line in ot_content.split("\n"):
-                        line = line.strip()
-                        if not line.startswith("- "):
-                            continue
-                        # Check for resolved marker (checkmark)
-                        if "\u2705" not in line:
-                            continue
-                        # Try multiple date formats:
-                        #   1. ISO date at start: "- 2024-03-22: ✅ ..."
-                        #   2. ISO date anywhere: "- ✅ ... (2024-03-22)"
-                        #   3. Short date in parens: "- ✅ ... (3/22)"
-                        # If no date parseable, skip the entry (don't archive without a date).
-                        entry_date = None
-                        # Format 1: ISO date at line start
-                        iso_start = _re.match(r"- (\d{4}-\d{2}-\d{2})", line)
-                        if iso_start:
-                            try:
-                                entry_date = datetime.strptime(
-                                    iso_start.group(1), "%Y-%m-%d"
-                                )
-                            except ValueError:
-                                pass
-                        # Format 2: ISO date anywhere (e.g. in parentheses)
-                        if entry_date is None:
-                            iso_any = _re.search(r"\((\d{4}-\d{2}-\d{2})\)", line)
-                            if iso_any:
-                                try:
-                                    entry_date = datetime.strptime(
-                                        iso_any.group(1), "%Y-%m-%d"
-                                    )
-                                except ValueError:
-                                    pass
-                        # Format 3: Short month/day in parens: (3/22), (12/5)
-                        if entry_date is None:
-                            short_date = _re.search(r"\((\d{1,2})/(\d{1,2})\)", line)
-                            if short_date:
-                                try:
-                                    month = int(short_date.group(1))
-                                    day = int(short_date.group(2))
-                                    # Assume current year
-                                    entry_date = datetime(
-                                        datetime.now().year, month, day
-                                    )
-                                except (ValueError, OverflowError):
-                                    pass
-                        # No parseable date — skip this entry
-                        if entry_date is None:
-                            continue
-                        if entry_date < cutoff_7:
-                            logger.info(
-                                "Resolved OT entry >7d: %s",
-                                line[:80],
-                            )
-            except Exception as exc:
-                logger.warning(
-                    "context_health: OT archival check failed: %s", exc
+                if not ot_match:
+                    return
+
+                ot_header = ot_match.group(1)
+                ot_body = ot_match.group(2)
+                lines = ot_body.split("\n")
+                keep_lines: list[str] = []
+                archived_lines: list[str] = []
+
+                for line in lines:
+                    stripped = line.strip()
+                    if not stripped.startswith("- ") or "\u2705" not in stripped:
+                        keep_lines.append(line)
+                        continue
+                    entry_date = self._parse_ot_entry_date(stripped)
+                    if entry_date is None or entry_date >= cutoff:
+                        keep_lines.append(line)
+                        continue
+                    # Resolved and older than cutoff — archive it
+                    archived_lines.append(stripped)
+                    logger.info("Archiving resolved OT entry: %s", stripped[:80])
+
+                if not archived_lines:
+                    return
+
+                # Rewrite MEMORY.md without the archived entries
+                new_ot_body = "\n".join(keep_lines)
+                new_content = (
+                    content[:ot_match.start()]
+                    + ot_header + new_ot_body
+                    + content[ot_match.end():]
                 )
+                memory_path.write_text(new_content, encoding="utf-8")
+
+                # Append archived entries to MEMORY-archive-YYYY-MM.md
+                archive_dir = root / "Knowledge" / "Archives"
+                archive_dir.mkdir(parents=True, exist_ok=True)
+                today = date.today()
+                archive_name = f"MEMORY-archive-{today.strftime('%Y-%m')}.md"
+                archive_path = archive_dir / archive_name
+
+                archive_block = f"\n### Archived Open Threads ({today.isoformat()})\n"
+                archive_block += "\n".join(archived_lines) + "\n"
+
+                if archive_path.exists():
+                    existing = archive_path.read_text(encoding="utf-8")
+                    archive_path.write_text(existing + archive_block, encoding="utf-8")
+                else:
+                    archive_path.write_text(
+                        f"# Memory Archive — {today.strftime('%Y-%m')}\n" + archive_block,
+                        encoding="utf-8",
+                    )
+                logger.info(
+                    "context_health: archived %d resolved OT entries to %s",
+                    len(archived_lines), archive_name,
+                )
+            finally:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+        except Exception as exc:
+            logger.warning("context_health: OT archival failed: %s", exc)
+        finally:
+            if fd:
+                fd.close()
 
     # ------------------------------------------------------------------
     # Helpers

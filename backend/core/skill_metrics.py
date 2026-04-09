@@ -67,6 +67,9 @@ class SkillMetricsStore:
         self._conn = sqlite3.connect(str(db_path), check_same_thread=False)
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA busy_timeout=5000")
+        # The canonical migration lives in database/sqlite.py._run_migrations().
+        # We repeat CREATE TABLE IF NOT EXISTS here so the store works standalone
+        # (e.g., in tests with a temp DB that hasn't run migrations).
         self._conn.execute(_CREATE_TABLE)
         self._conn.execute(_CREATE_INDEX)
         self._conn.commit()

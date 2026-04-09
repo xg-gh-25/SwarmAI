@@ -15,6 +15,8 @@ import re
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from core.extraction_patterns import CORRECTION_PATTERNS as _CORRECTION_PATTERNS
+
 logger = logging.getLogger(__name__)
 
 
@@ -26,13 +28,6 @@ class EvalExample:
     user_correction: str | None  # None if user accepted output
     final_outcome: str
     score: float             # 1.0 if accepted, 0.5 if corrected, 0.0 if abandoned
-
-
-# Patterns indicating user correction
-_CORRECTION_PATTERNS = re.compile(
-    r"\b(?:no|don'?t|stop|wrong|incorrect|fix|undo|revert|instead|actually|wait)\b",
-    re.IGNORECASE,
-)
 
 # Patterns indicating abandonment
 _ABANDON_PATTERNS = re.compile(

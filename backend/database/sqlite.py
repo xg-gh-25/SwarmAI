@@ -2177,6 +2177,15 @@ class SQLiteDatabase(BaseDatabase):
                     VALUES('delete', old.rowid, old.content);
                 END
             """)
+            await conn.execute("""
+                CREATE TRIGGER IF NOT EXISTS messages_fts_update
+                AFTER UPDATE ON messages BEGIN
+                    INSERT INTO messages_fts(messages_fts, rowid, content)
+                    VALUES('delete', old.rowid, old.content);
+                    INSERT INTO messages_fts(rowid, content)
+                    VALUES (new.rowid, new.content);
+                END
+            """)
             await conn.commit()
             # Rebuild index from existing data (idempotent)
             try:

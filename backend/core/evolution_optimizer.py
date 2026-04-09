@@ -199,8 +199,32 @@ class EvolutionOptimizer:
 def run_evolution_cycle(skills_dir: Path, transcripts_dir: Path, evals_dir: Path) -> dict:
     """Run a full evolution cycle: mine -> score -> optimize for all eligible skills.
 
-    Returns summary dict with {skills_checked, eligible, optimized, changes}.
-    Can be invoked manually or from a scheduled job.
+    This is the primary entry point for the ``s_job-manager`` scheduled job
+    system and for manual invocation from the CLI or a hook.
+
+    Returns summary dict with keys:
+        ``skills_checked``, ``eligible``, ``optimized``, ``changes``.
+
+    Usage (scheduled job via ``s_job-manager``)::
+
+        from core.evolution_optimizer import run_evolution_cycle
+        result = run_evolution_cycle(
+            skills_dir=Path("backend/skills"),
+            transcripts_dir=Path.home() / ".claude" / "projects",
+            evals_dir=workspace / "Knowledge" / "SkillEvals",
+        )
+
+    Usage (manual one-off)::
+
+        python -c "
+        from pathlib import Path
+        from core.evolution_optimizer import run_evolution_cycle
+        print(run_evolution_cycle(
+            Path('backend/skills'),
+            Path.home() / '.claude/projects',
+            Path('Knowledge/SkillEvals'),
+        ))
+        "
 
     Steps:
     1. Creates SessionMiner, mines all skills for eval examples.

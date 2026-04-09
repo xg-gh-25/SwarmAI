@@ -85,18 +85,29 @@ class TestArchiveResolvedOpenThreads:
     def test_archive_resolved_open_threads(self, hook, ws):
         memory_path = ws / ".context" / "MEMORY.md"
         old_date = (datetime.now() - timedelta(days=10)).strftime("%Y-%m-%d")
-        # Use real unicode characters (✅ and 🔵), not escaped sequences
+        today_date = datetime.now().strftime("%Y-%m-%d")
+        # Use real unicode characters
         memory_content = (
             "# MEMORY\n\n"
             "## Open Threads\n"
             f"- {old_date}: \u2705 **Resolved task** \u2014 This was done\n"
-            f"- {datetime.now().strftime('%Y-%m-%d')}: \U0001f535 **Active task** \u2014 Still working\n"
+            f"- {today_date}: \U0001f535 **Active task** \u2014 Still working\n"
         )
         memory_path.write_text(memory_content)
 
         hook._enforce_retention_policies(str(ws))
-        # Method should detect the resolved entry and log it
-        assert True
+
+        # Resolved entry should be removed from MEMORY.md
+        content = memory_path.read_text()
+        assert "Resolved task" not in content
+        # Active entry should remain
+        assert "Active task" in content
+        # Archived entry should be in archive file
+        archive_dir = ws / "Knowledge" / "Archives"
+        archive_files = list(archive_dir.glob("MEMORY-archive-*.md"))
+        assert len(archive_files) >= 1
+        archive_content = archive_files[0].read_text()
+        assert "Resolved task" in archive_content
 
 
 class TestKeepUnresolvedOpenThreads:
