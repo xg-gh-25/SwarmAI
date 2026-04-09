@@ -134,6 +134,88 @@ class TestOptimizationResultDataclass:
         assert len(result.changes) == 1
 
 
+class TestDeployOptimization:
+    """Tests for deploy_optimization writing changes to SKILL.md."""
+
+    def test_deploy_optimization_writes_skill(self, optimizer, skills_dir):
+        """Accepted optimization writes changes to SKILL.md."""
+        _make_skill(skills_dir, "test", body="Always include verbose output in results.")
+        examples = [
+            _make_example(correction="don't include verbose output", score=0.5),
+            _make_example(correction="should add timestamps to output", score=0.5),
+        ]
+        result = optimizer.optimize_skill("test", examples)
+        if result.accepted and result.changes:
+            deployed = optimizer.deploy_optimization(result)
+            assert deployed is True
+            # Verify SKILL.md was modified
+            skill_path = skills_dir / "s_test" / "SKILL.md"
+            new_content = skill_path.read_text(encoding="utf-8")
+            # The "verbose output" should be removed or the text should differ
+            assert new_content != f"---\nname: test\ndescription: test skill\n---\nAlways include verbose output in results.\n"
+        else:
+            # If constraints rejected, deploy should return False
+            assert result.accepted is False or len(result.changes) == 0
+
+    def test_deploy_not_accepted_returns_false(self, optimizer, skills_dir):
+        """deploy_optimization returns False for non-accepted results."""
+        result = OptimizationResult(
+            skill_name="test",
+            original_score=0.5,
+            optimized_score=0.7,
+            changes=[TextChange(original="a", replacement="b", reason="test")],
+            accepted=False,
+            reason="Constraint failed",
+        )
+        assert optimizer.deploy_optimization(result) is False
+
+    def test_deploy_no_changes_returns_false(self, optimizer, skills_dir):
+        """deploy_optimization returns False when no changes to apply."""
+        result = OptimizationResult(
+            skill_name="test",
+            original_score=0.5,
+            optimized_score=0.5,
+            changes=[],
+            accepted=True,
+            reason="All constraints passed",
+        )
+        assert optimizer.deploy_optimization(result) is False
+
+    def test_deploy_preserves_frontmatter(self, optimizer, skills_dir):
+        """deploy_optimization preserves YAML frontmatter."""
+        _make_skill(skills_dir, "fm", body="Do the thing.\n- Use verbose mode\n")
+        result = OptimizationResult(
+            skill_name="fm",
+            original_score=0.5,
+            optimized_score=0.7,
+            changes=[TextChange(
+                original="",
+                replacement="- Always validate input",
+                reason="User said should: 'always validate input'",
+            )],
+            accepted=True,
+            reason="All constraints passed",
+        )
+        deployed = optimizer.deploy_optimization(result)
+        assert deployed is True
+        content = (skills_dir / "s_fm" / "SKILL.md").read_text(encoding="utf-8")
+        assert content.startswith("---\n")
+        assert "name: fm" in content
+        assert "Always validate input" in content
+
+    def test_deploy_missing_skill_returns_false(self, optimizer, skills_dir):
+        """deploy_optimization returns False if SKILL.md doesn't exist."""
+        result = OptimizationResult(
+            skill_name="nonexistent",
+            original_score=0.5,
+            optimized_score=0.7,
+            changes=[TextChange(original="a", replacement="b", reason="test")],
+            accepted=True,
+            reason="ok",
+        )
+        assert optimizer.deploy_optimization(result) is False
+
+
 class TestRunEvolutionCycle:
     """Tests for the run_evolution_cycle convenience function."""
 

@@ -222,6 +222,9 @@ class EvolutionMaintenanceHook:
                 pruned_count,
             )
 
+        # Run evolution cycle weekly (check last run date)
+        self._maybe_run_evolution(ctx_dir)
+
     def _deprecate_entry(
         self, evo_path: Path, section: str, entry_id: str, changelog_path: Path
     ) -> None:
@@ -238,6 +241,74 @@ class EvolutionMaintenanceHook:
             logger.debug("Deprecated %s in %s", entry_id, section)
         except (ValueError, LockedWriteError) as exc:
             logger.warning("Failed to deprecate %s: %s", entry_id, exc)
+
+    def _maybe_run_evolution(self, ctx_dir: Path) -> None:
+        """Run the evolution cycle if >7 days since last run.
+
+        Checks ``.context/.evolution_last_run`` for the last run date.
+        If >7 days ago (or file doesn't exist), runs ``run_evolution_cycle()``.
+        Writes today's date to the state file after a successful run.
+
+        Evolution failure never blocks session close -- all errors are caught.
+        """
+        state_file = ctx_dir / ".evolution_last_run"
+        now = datetime.now(timezone.utc)
+        run_interval_days = 7
+
+        try:
+            if state_file.exists():
+                last_run_str = state_file.read_text(encoding="utf-8").strip()
+                try:
+                    last_run = datetime.strptime(last_run_str, "%Y-%m-%d").replace(
+                        tzinfo=timezone.utc
+                    )
+                except ValueError:
+                    last_run = datetime.min.replace(tzinfo=timezone.utc)
+
+                days_since = (now - last_run).days
+                if days_since < run_interval_days:
+                    logger.debug(
+                        "Evolution cycle: %d days since last run (threshold %d), skipping",
+                        days_since,
+                        run_interval_days,
+                    )
+                    return
+        except OSError as exc:
+            logger.debug("Cannot read evolution state file: %s", exc)
+
+        # Time to run the evolution cycle
+        logger.info("Evolution cycle: triggering (>%d days since last run)", run_interval_days)
+        try:
+            from core.evolution_optimizer import run_evolution_cycle
+
+            # Resolve skills_dir: use the backend module's own location
+            # (Path(__file__) → hooks/ → parent → backend/)
+            backend_dir = Path(__file__).resolve().parent.parent
+            skills_dir = backend_dir / "skills"
+            if not skills_dir.is_dir():
+                logger.debug("Evolution cycle: skills_dir not found at %s, skipping", skills_dir)
+                return
+
+            # Transcripts directory: Claude Code session transcripts
+            transcripts_dir = Path.home() / ".claude" / "projects"
+            # Find the project-specific subdir with .jsonl files
+            if transcripts_dir.is_dir():
+                for subdir in sorted(transcripts_dir.iterdir()):
+                    if subdir.is_dir() and list(subdir.glob("*.jsonl")):
+                        transcripts_dir = subdir
+                        break
+
+            evals_dir = ctx_dir / "SkillEvals"
+
+            summary = run_evolution_cycle(skills_dir, transcripts_dir, evals_dir)
+            logger.info("Evolution cycle complete: %s", summary)
+
+            # Write today's date to state file
+            state_file.write_text(
+                now.strftime("%Y-%m-%d"), encoding="utf-8"
+            )
+        except Exception as exc:
+            logger.warning("Evolution cycle failed (non-blocking): %s", exc)
 
     def _prune_entry(
         self, evo_path: Path, section: str, entry_id: str, changelog_path: Path

@@ -100,13 +100,30 @@ class SessionMiner:
         except Exception:
             return text
 
+    def _is_tool_result_content(self, content: object) -> bool:
+        """Check if content is a list of tool_result blocks (SDK-generated, not real user input)."""
+        if not isinstance(content, list):
+            return False
+        return all(
+            isinstance(block, dict) and block.get("type") == "tool_result"
+            for block in content
+        )
+
     def _get_message_content(self, record: dict) -> str:
-        """Extract text content from a transcript record."""
+        """Extract text content from a transcript record.
+
+        Handles both string content (user messages) and list content
+        (assistant messages with text/tool_use blocks, or user messages
+        with tool_result blocks).
+        """
         msg = record.get("message", {})
         content = msg.get("content", "")
         if isinstance(content, str):
             return content
         if isinstance(content, list):
+            # tool_result lists are SDK-generated, return empty
+            if self._is_tool_result_content(content):
+                return ""
             parts = []
             for block in content:
                 if isinstance(block, dict):
@@ -119,11 +136,78 @@ class SessionMiner:
             return " ".join(parts)
         return str(content)
 
+    def _find_next_real_user_message(self, records: list[dict], start: int) -> int | None:
+        """Find the next user message that is real text (not a tool_result list).
+
+        Scans from ``start`` forward, skipping assistant messages and user
+        messages whose content is a tool_result list (SDK-generated).
+
+        Returns the index of the next real user message, or None.
+        """
+        for idx in range(start, len(records)):
+            rec = records[idx]
+            if rec.get("type") != "user":
+                continue
+            msg = rec.get("message", {})
+            content = msg.get("content", "")
+            # Skip tool_result lists
+            if self._is_tool_result_content(content):
+                continue
+            # Skip empty string content
+            if isinstance(content, str) and content.strip():
+                return idx
+        return None
+
+    def _detect_correction(self, records: list[dict], after_idx: int) -> tuple[str | None, float]:
+        """Detect user correction/abandonment in the next real user message after ``after_idx``.
+
+        Returns (correction_text | None, score).
+        """
+        next_idx = self._find_next_real_user_message(records, after_idx)
+        if next_idx is None:
+            return None, 1.0
+
+        next_text = self._get_message_content(records[next_idx])
+        if _ABANDON_PATTERNS.search(next_text):
+            return next_text, 0.0
+        if _CORRECTION_PATTERNS.search(next_text):
+            return next_text, 0.5
+        return None, 1.0
+
+    def _extract_skill_from_tool_use(self, block: dict) -> str | None:
+        """Extract skill name from a tool_use block if it invokes the Skill tool.
+
+        Returns the skill name (with ``s_`` prefix stripped) or None.
+        """
+        if not isinstance(block, dict):
+            return None
+        if block.get("type") != "tool_use" or block.get("name") != "Skill":
+            return None
+        inp = block.get("input", {})
+        skill = inp.get("skill", "")
+        if not skill:
+            return None
+        # Strip s_ prefix if present
+        if skill.startswith("s_"):
+            skill = skill[2:]
+        return skill
+
     def _extract_skill_invocations(
         self, records: list[dict], skill_name: str, keywords: list[str]
     ) -> list[EvalExample]:
-        """Find sequences where a skill was invoked."""
+        """Find sequences where a skill was invoked.
+
+        Detects skill invocations two ways:
+        1. **Keyword match** -- user message text matches skill keywords.
+        2. **Tool use match** -- assistant message contains a ``tool_use`` block
+           with ``name == "Skill"`` and ``input.skill`` matching ``skill_name``.
+
+        For correction detection, scans for the next *real* user message
+        (skipping tool_result lists which are SDK-generated).
+        """
         examples: list[EvalExample] = []
+        seen_indices: set[int] = set()  # avoid duplicate examples
+
         kw_pattern = re.compile(
             r"\b(?:" + "|".join(re.escape(kw) for kw in keywords) + r")\b",
             re.IGNORECASE,
@@ -132,50 +216,81 @@ class SessionMiner:
         i = 0
         while i < len(records):
             record = records[i]
-            if record.get("type") != "user":
-                i += 1
-                continue
 
-            user_text = self._get_message_content(record)
-            if not kw_pattern.search(user_text):
-                i += 1
-                continue
+            # --- Path 1: keyword match in user message ---
+            if record.get("type") == "user" and i not in seen_indices:
+                user_text = self._get_message_content(record)
+                if user_text and kw_pattern.search(user_text):
+                    # Collect assistant response(s) immediately following
+                    agent_text = ""
+                    j = i + 1
+                    while j < len(records) and records[j].get("type") == "assistant":
+                        agent_text += self._get_message_content(records[j]) + " "
+                        j += 1
+                    agent_text = agent_text.strip()
 
-            # Found a user message matching skill keywords.
-            # Collect assistant response(s) immediately following.
-            agent_text = ""
-            j = i + 1
-            while j < len(records) and records[j].get("type") == "assistant":
-                agent_text += self._get_message_content(records[j]) + " "
-                j += 1
-            agent_text = agent_text.strip()
+                    user_correction, score = self._detect_correction(records, j)
 
-            # Find the next user message for correction/abandonment detection.
-            # Skip any intervening assistant messages (tool use sequences).
-            user_correction = None
-            score = 1.0
-            next_user_idx = j  # j already points past assistant messages
-            if next_user_idx < len(records) and records[next_user_idx].get("type") == "user":
-                next_text = self._get_message_content(records[next_user_idx])
-                if _ABANDON_PATTERNS.search(next_text):
-                    user_correction = next_text
-                    score = 0.0
-                elif _CORRECTION_PATTERNS.search(next_text):
-                    user_correction = next_text
-                    score = 0.5
+                    examples.append(EvalExample(
+                        user_prompt=user_text,
+                        skill_invoked=skill_name,
+                        agent_actions=agent_text[:500],
+                        user_correction=user_correction,
+                        final_outcome="completed" if score > 0 else "abandoned",
+                        score=score,
+                    ))
+                    seen_indices.add(i)
+                    i = j + 1 if j < len(records) else i + 1
+                    continue
 
-            examples.append(EvalExample(
-                user_prompt=user_text,
-                skill_invoked=skill_name,
-                agent_actions=agent_text[:500],  # truncate
-                user_correction=user_correction,
-                final_outcome="completed" if score > 0 else "abandoned",
-                score=score,
-            ))
+            # --- Path 2: tool_use block in assistant message ---
+            if record.get("type") == "assistant" and i not in seen_indices:
+                msg = record.get("message", {})
+                content = msg.get("content", [])
+                if isinstance(content, list):
+                    for block in content:
+                        invoked = self._extract_skill_from_tool_use(block)
+                        if invoked == skill_name:
+                            # Find the preceding user message for prompt context
+                            user_text = ""
+                            for k in range(i - 1, -1, -1):
+                                if records[k].get("type") == "user":
+                                    user_text = self._get_message_content(records[k])
+                                    if user_text:
+                                        break
 
-            # Skip past the matched sequence
-            i = next_user_idx + 1 if next_user_idx < len(records) else i + 1
-            continue
+                            # Collect text from this + following assistant messages
+                            # (skill output often spans multiple assistant turns
+                            # separated by tool_result round-trips)
+                            agent_parts = []
+                            for j in range(i, len(records)):
+                                if records[j].get("type") == "assistant":
+                                    text = self._get_message_content(records[j])
+                                    if text:
+                                        agent_parts.append(text)
+                                elif records[j].get("type") == "user":
+                                    uc = records[j].get("message", {}).get("content", "")
+                                    if self._is_tool_result_content(uc):
+                                        continue  # skip SDK tool_result, keep scanning
+                                    break  # real user message = end of agent turn
+                                else:
+                                    break
+                            agent_text = " ".join(agent_parts).strip()
+
+                            user_correction, score = self._detect_correction(records, i + 1)
+
+                            examples.append(EvalExample(
+                                user_prompt=user_text,
+                                skill_invoked=skill_name,
+                                agent_actions=agent_text[:500],
+                                user_correction=user_correction,
+                                final_outcome="completed" if score > 0 else "abandoned",
+                                score=score,
+                            ))
+                            seen_indices.add(i)
+                            break  # one example per assistant record
+
+            i += 1
 
         return examples
 

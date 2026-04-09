@@ -20,6 +20,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -116,10 +117,34 @@ class SessionRecall:
 
             total_matches = len(rows)
 
-            # Step 4: Top sessions by match count
+            # Step 4: Rank sessions by relevance score (not just match count)
+            # Scoring: match_density * recency_boost * content_richness
+            now = datetime.now()
+
+            def _session_relevance(item: tuple[str, list[dict]]) -> float:
+                sid, matches = item
+                # Match density: more matches = more relevant (diminishing returns)
+                density = min(len(matches), 10) / 10.0
+
+                # Recency boost: newer sessions score higher (decay over 90 days)
+                try:
+                    newest = max(m.get("created_at", "") for m in matches)
+                    match_date = datetime.fromisoformat(newest.replace("Z", "+00:00"))
+                    days_old = max((now - match_date.replace(tzinfo=None)).days, 0)
+                    recency = max(0.1, 1.0 - days_old / 90.0)
+                except (ValueError, TypeError):
+                    recency = 0.5
+
+                # Content richness: prefer sessions with longer matched content
+                avg_len = sum(len(m.get("content", "")) for m in matches) / max(len(matches), 1)
+                richness = min(avg_len / 500.0, 1.0)  # cap at 500 chars avg
+
+                return density * 0.4 + recency * 0.35 + richness * 0.25
+
             top_sessions = sorted(
                 session_matches.items(),
-                key=lambda x: -len(x[1]),
+                key=_session_relevance,
+                reverse=True,
             )[:max_sessions]
 
             # Step 5: Load context window around each match
@@ -194,23 +219,59 @@ class SessionRecall:
             })
         return result
 
-    def recall_about(self, topic: str, max_sessions: int = 3) -> str:
+    def recall_about(self, topic: str, max_sessions: int = 3, budget_chars: int = 3000) -> str:
         """Search + format as readable text for system prompt injection.
 
-        Returns empty string if no matches found.
+        Returns empty string if no matches found.  Distributes the character
+        budget across sessions, prioritizing user and assistant messages that
+        contain the search terms.  Truncates individual messages at sentence
+        boundaries when possible to preserve readability.
         """
         result = self.search(topic, max_sessions=max_sessions)
         if not result.sessions:
             return ""
 
+        topic_lower = topic.lower()
+        per_session = max(budget_chars // max(len(result.sessions), 1), 400)
+
         lines: list[str] = [f'## Session Recall: "{topic}"', ""]
 
         for sess in result.sessions:
             lines.append(f"### Session {sess.session_id} ({sess.date}, {sess.match_count} matches)")
-            for msg in sess.key_messages[:10]:  # Limit display
+            chars_used = 0
+            # Prefer messages that actually contain the topic terms
+            ranked = sorted(
+                sess.key_messages,
+                key=lambda m: (topic_lower in m.get("content", "").lower(), len(m.get("content", ""))),
+                reverse=True,
+            )
+            for msg in ranked:
+                if chars_used >= per_session:
+                    break
                 role = msg.get("role", "unknown").capitalize()
-                content = msg.get("content", "")[:120]
-                lines.append(f"- {role}: \"{content}\"")
+                content = msg.get("content", "")
+                remaining = per_session - chars_used
+                if len(content) > remaining:
+                    content = self._truncate_at_sentence(content, remaining)
+                lines.append(f"- {role}: {content}")
+                chars_used += len(content)
             lines.append("")
 
         return "\n".join(lines)
+
+    @staticmethod
+    def _truncate_at_sentence(text: str, max_chars: int) -> str:
+        """Truncate text at the nearest sentence boundary within max_chars."""
+        if len(text) <= max_chars:
+            return text
+        # Find last sentence-ending punctuation before max_chars
+        truncated = text[:max_chars]
+        for end_marker in (". ", ".\n", "! ", "? "):
+            pos = truncated.rfind(end_marker)
+            if pos > max_chars // 3:  # Don't cut too early
+                return truncated[: pos + 1]
+        # No good sentence boundary — cut at last space
+        space_pos = truncated.rfind(" ")
+        if space_pos > max_chars // 3:
+            return truncated[:space_pos] + "…"
+        return truncated + "…"

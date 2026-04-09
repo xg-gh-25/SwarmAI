@@ -97,5 +97,41 @@ class UserObserverHook:
                 len(new_obs), context.session_id, len(consolidated),
             )
 
+            # Close the loop: surface USER.md suggestions when patterns emerge
+            self._maybe_suggest_updates(observer, consolidated, ws_path)
+
         except Exception as exc:
             logger.error("UserObserverHook failed: %s", exc, exc_info=True)
+
+    @staticmethod
+    def _maybe_suggest_updates(
+        observer: UserObserver,
+        consolidated: list,
+        ws_path: str,
+    ) -> None:
+        """Check for enough observations to suggest USER.md updates.
+
+        Writes suggestions to .context/user_suggestions.md for the agent
+        to surface during the next session's proactive briefing.
+        """
+        try:
+            suggestions = observer.suggest_user_md_updates(consolidated)
+            if not suggestions:
+                return
+
+            suggestions_path = Path(ws_path) / ".context" / "user_suggestions.md"
+            # Write (overwrite) — only latest suggestions matter
+            content = "## Suggested USER.md Updates\n\n"
+            content += "_Based on observed patterns across sessions:_\n\n"
+            for s in suggestions:
+                content += f"- {s}\n"
+            content += (
+                "\n_Review and apply manually, or ask Swarm to update USER.md._\n"
+            )
+            suggestions_path.write_text(content, encoding="utf-8")
+            logger.info(
+                "UserObserver: wrote %d USER.md suggestions to %s",
+                len(suggestions), suggestions_path,
+            )
+        except Exception as exc:
+            logger.debug("Failed to write user suggestions: %s", exc)
