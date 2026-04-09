@@ -69,11 +69,11 @@ from datetime import datetime
 def get_log_dir() -> Path:
     """Get the log directory based on platform."""
     if platform.system() == "Darwin":
-        log_dir = Path.home() / "Library" / "Application Support" / "Owork" / "logs"
+        log_dir = Path.home() / "Library" / "Application Support" / "SwarmAI" / "logs"
     elif platform.system() == "Windows":
-        log_dir = Path.home() / "AppData" / "Local" / "Owork" / "logs"
+        log_dir = Path.home() / "AppData" / "Local" / "SwarmAI" / "logs"
     else:
-        log_dir = Path.home() / ".local" / "share" / "owork" / "logs"
+        log_dir = Path.home() / ".local" / "share" / "swarmai" / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     return log_dir
 
