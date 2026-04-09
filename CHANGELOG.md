@@ -5,6 +5,41 @@ All notable changes to SwarmAI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-04-09
+
+### Added
+
+- **Markdown-to-PDF Pipeline**: New `md2pdf.sh` using pandoc + tectonic
+  (XeLaTeX) with professional and minimal LaTeX templates — full CJK support,
+  syntax-highlighted code blocks, styled blockquotes, booktabs tables, and
+  optional TOC generation
+- **Broad File Attachment Support**: File picker and paste handler now accept
+  40+ file types (Office docs, audio, video, code files, non-native images)
+  instead of just images and plain text
+- **Smart File-Type Hints**: Backend generates file-type-specific agent
+  guidance (e.g. "use /s_pptx skill" for .pptx, "use /s_whisper-transcribe"
+  for audio) instead of generic "use Read tool"
+- **SVG Editor Preview**: SVG files route to the text editor with a visual
+  Preview toggle (same UX pattern as markdown preview)
+- **Expanded Binary File Coverage**: BinaryPreviewModal now handles ~20 more
+  formats (aac, m4a, webm, pyc, class, sqlite, fonts, jar/war, etc.)
+
+### Fixed
+
+- **Binary File Crash**: Files attached via File Picker no longer crash with
+  "Prompt is too long" — all non-native types now route through the backend's
+  save-to-Attachments pipeline with base64 encoding instead of inline text
+- **Non-Native Multimodal Handling**: When SDK supports multimodal, non-native
+  blocks (Office, audio, video) are correctly converted to path hints while
+  Claude-native formats (jpeg/png/gif/webp/pdf) pass through natively
+- **Size Limit Accuracy**: PDF/document limit reduced from 25MB to 23MB to
+  account for base64 overhead under 32MB Bedrock payload limit; text/csv
+  raised to 5MB since they now use path_hint instead of inline tokens
+- **Unsupported File Modal Resilience**: BinaryPreviewModal shows friendly
+  file-info UI even when metadata fetch fails (e.g. 404), with selectable
+  file path display
+- **Radar Sidebar**: in_discussion todos now appear in the Radar sidebar
+
 ## [1.2.3] - 2026-04-08
 
 ### Added
