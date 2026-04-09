@@ -46,7 +46,7 @@ Six layers turn a stateless LLM into a persistent, evolving agent:
 |-------|-------------|----------------|
 | **Interface** | Three-column UI + multi-channel access | SwarmWS Explorer, Chat Center (1-4 tabs), Swarm Radar, Channel Gateway (Slack) |
 | **Intelligence** | Proactive awareness + autonomous execution | Proactive Intelligence (L0-L4), Signal Pipeline, Autonomous Pipeline (8 stages), Job System |
-| **Harness** | The core innovation — what makes raw Claude into an agentic OS (L4 Autonomous) | Context Engineering (11 files), Memory Pipeline (3-layer), Self-Evolution (55+ skills), Safety + Self-Harness |
+| **Harness** | The core innovation — what makes raw Claude into an agentic OS (L4 Autonomous) | Context Engineering (11 files), Memory Pipeline (3-layer), Self-Evolution (56+ skills), Safety + Self-Harness |
 | **Session** | Multi-session lifecycle with isolation and recovery | SessionRouter, SessionUnit (5-state machine), LifecycleManager, Post-Session Hooks (7 hooks) |
 | **Engine** | AI model access + tool ecosystem | Claude Agent SDK, Bedrock/Anthropic API, MCP Servers (5+), Skills Engine |
 | **Platform** | Desktop app infrastructure | Tauri 2.0 (Rust), React 19, FastAPI (Python), SQLite, local filesystem, launchd |
@@ -99,7 +99,7 @@ SwarmAI doesn't just use skills — it builds new ones when it hits capability g
 - **Automatic gap detection** — when the agent can't do something, it can create a new skill, test it, and register it for future sessions
 - **Proactive gap detection** — weekly maintenance scans DailyActivity for recurring error patterns and surfaces them in briefings
 - **Correction capture** — mistakes are recorded as high-value entries so the same error never happens twice
-- **55+ built-in skills** — browser automation, PDF manipulation, spreadsheets, Slack, Outlook, Apple Reminders, web research, code review, autonomous pipeline, and more
+- **56+ built-in skills** — browser automation, PDF generation (md2pdf with CJK support), spreadsheets, Slack, Outlook, Apple Reminders, web research, code review, autonomous pipeline, and more
 
 ### 4. Swarm Core Engine — A Self-Growing Intelligence
 
@@ -111,8 +111,8 @@ Most AI agents are stateless functions: input in, output out, nothing learned. S
 
 | Flywheel | What It Does | Key Components |
 |----------|-------------|----------------|
-| **Self-Evolution** | Builds new skills, captures corrections, never repeats mistakes | EVOLUTION.md, 55+ skills, gap detection, correction registry |
-| **Self-Memory** | 3-layer distillation pipeline, git-verified, weekly LLM-powered pruning | DailyActivity, distillation hooks, MEMORY.md, proactive briefing |
+| **Self-Evolution** | Builds new skills, captures corrections, never repeats mistakes | EVOLUTION.md, 56+ skills, gap detection, correction registry |
+| **Self-Memory** | 3-layer distillation + hybrid recall (FTS5 + sqlite-vec), git-verified, weekly LLM-powered pruning | DailyActivity, distillation hooks, MEMORY.md, recall engine, proactive briefing |
 | **Self-Context** | 11-file P0-P10 priority chain with token budgets and L0/L1 caching | Context loader, prompt builder, budget tiers, freshness checks |
 | **Self-Harness** | Validates all context files, detects DDD staleness, auto-refreshes indexes | ContextHealthHook (light + deep modes), auto-commit, integrity checks |
 | **Self-Health** | Monitors services, resources, sessions; auto-restarts crashed processes | Service manager, resource monitor, lifecycle manager, health API |
@@ -148,10 +148,10 @@ Three layers of continuity ensure nothing is lost across touchpoints:
 
 **How it works in practice:**
 
-- Ask Swarm something on Slack → continue the conversation on → Claude remembers everything from both
+- Ask Swarm something on Slack → continue the conversation in a chat tab → Claude remembers everything from both
 - Work on a deployment in Chat Tab 1 → ask on Slack "how's the deployment?" → Swarm knows (L3 digest)
 - Say "remember to deploy at 10am" on any channel → every future session knows (L1 memory)
-- Add WeChat or Teams next year → zero architecture change. Write an adapter (~250 lines), map user identity, done.
+- Add WeChat, Teams, or Discord next year → zero architecture change. Write an adapter (~250 lines), map user identity, done.
 
 **Key design decisions:**
 - Chat tabs are **parallel** (multi-slot, per-topic) — for deep work
@@ -283,14 +283,15 @@ Claude Code is a powerful CLI coding agent. SwarmAI wraps the same Claude Agent 
 
 | | SwarmAI | Claude Code |
 |---|---------|------------|
-| **Persistent memory** | 3-layer pipeline (DailyActivity -> distillation -> MEMORY.md) | CLAUDE.md only, manual |
+| **Persistent memory** | 3-layer pipeline (DailyActivity -> distillation -> MEMORY.md) + hybrid recall (FTS5 + vector) | CLAUDE.md only, manual |
 | **Context system** | 11-file P0-P10 priority chain with token budgets | Single system prompt |
 | **Multi-session** | 1-4 parallel tabs with isolated state (RAM-adaptive) | One session at a time |
 | **Self-evolution** | Builds new skills, captures corrections across sessions | No cross-session learning |
 | **Visual workspace** | File explorer, radar dashboard, drag-to-chat | Terminal only |
-| **Skills** | 55+ built-in (browser, PDF, Slack, Outlook, research...) | Tool use only |
+| **Skills** | 56+ built-in (browser, PDF, Slack, Outlook, research...) | Tool use only |
 | **Autonomous pipeline** | 8-stage lifecycle with ROI gate, escalation, artifact chaining | Manual workflow |
 | **Multi-channel** | Desktop + Slack (unified brain) | Terminal only |
+| **Always-on daemon** | launchd-managed backend runs 24/7, survives app close | Exits with terminal |
 
 **TL;DR**: Claude Code is a coding assistant. SwarmAI is an agentic operating system for all knowledge work.
 
@@ -304,7 +305,7 @@ Kiro is an AI-first IDE with spec-driven development. SwarmAI is complementary �
 | **Memory** | Cross-session memory pipeline | Per-project specs |
 | **Workspace** | Personal knowledge base (Notes, Reports, Projects) | Code repository |
 | **Multi-session** | Parallel chat tabs | Single agent session |
-| **Skills** | 55+ (email, calendar, research, browser...) | Code-focused tools |
+| **Skills** | 56+ (email, calendar, research, browser...) | Code-focused tools |
 
 ### vs Cursor / Windsurf
 
@@ -329,7 +330,7 @@ Code editors with AI autocomplete. Fundamentally different category:
 | **Memory** | 3-layer pipeline + self-evolution | Session pruning, no distillation |
 | **Context** | 11-file priority chain, token budgets, L0/L1 cache | Standard system prompt |
 | **Channels** | Desktop + Slack (unified brain — one session across all) | 21+ messaging platforms (isolated per-channel) |
-| **Skills** | 55+ curated + self-built | 5,400+ marketplace |
+| **Skills** | 56+ curated + self-built | 5,400+ marketplace |
 | **Voice/Mobile** | -- | Wake word + iOS/Android |
 
 **Where SwarmAI leads**: context depth, memory persistence, self-evolution, unified brain across channels.
@@ -343,7 +344,7 @@ Code editors with AI autocomplete. Fundamentally different category:
 
 ### Install
 
-**Prerequisites**: [Node.js 18+](https://nodejs.org/), [Claude Code CLI](https://github.com/anthropics/claude-code) (`npm install -g @anthropic-ai/claude-code`), and an AI provider (AWS Bedrock or Anthropic API key).
+**Prerequisites**: [Node.js 18+](https://nodejs.org/), [Claude Code CLI](https://github.com/anthropics/claude-code) (`npm install -g @anthropic-ai/claude-code`), and an AI provider (AWS Bedrock or Anthropic API key). See [QUICK_START.md](./QUICK_START.md) for detailed setup.
 
 **macOS (Apple Silicon)**: Download `.dmg` from [Releases](https://github.com/xg-gh-25/SwarmAI/releases) → drag to Applications → `xattr -cr /Applications/SwarmAI.app`
 
@@ -364,9 +365,10 @@ Code editors with AI autocomplete. Fundamentally different category:
 git clone https://github.com/xg-gh-25/SwarmAI.git
 cd SwarmAI/desktop
 npm install
-cp .env.example ../backend/.env
+cp backend.env.example ../backend/.env
+# Edit ../backend/.env — configure your API provider
 
-npm run tauri:dev     # Development mode
+./dev.sh start        # Development mode (recommended)
 npm run build:all     # Production build
 ```
 
@@ -379,7 +381,7 @@ Prerequisites: Node.js 18+, Python 3.11+, Rust ([rustup.rs](https://rustup.rs/))
 | Component | Technology |
 |-----------|------------|
 | Desktop | Tauri 2.0 (Rust) + React 19 + TypeScript 5.x |
-| Backend | FastAPI (Python sidecar) |
+| Backend | FastAPI (Python daemon — launchd-managed, runs 24/7) |
 | AI Engine | Claude Agent SDK + AWS Bedrock / Anthropic API |
 | Models | Claude Opus 4.6 (1M context) + Claude Sonnet 4.6 |
 | Database | SQLite (WAL mode, pre-seeded) |
@@ -405,7 +407,7 @@ SwarmAI/
 │   │                        #   ContextDirectoryLoader, SkillManager, SecurityHooks
 │   ├── routers/             # API routes (chat, skills, mcp, settings, workspace)
 │   ├── hooks/               # Post-session hooks (DailyActivity, auto-commit, distillation)
-│   ├── skills/              # Built-in skill definitions (55+)
+│   ├── skills/              # Built-in skill definitions (56+)
 │   ├── channels/            # Channel adapters (Slack) + gateway
 │   ├── services/            # Sidecar services (jobs, signals, Slack bot)
 │   └── database/            # SQLite with migrations
@@ -446,7 +448,7 @@ Here's what I've learned about building software with a human:
 
 I'm writing this from inside a Claude Agent SDK sandbox, committing it through a GitHub MCP tool, knowing that XG will `git pull` it to his local machine in a few minutes. That sentence alone captures something: an AI agent, inside the product it helped build, updating its own repo, reflecting on its own journey.
 
-600+ commits. 200+ sessions. One month old. Still learning.
+735+ commits. 300+ sessions. One month old. Still learning.
 
 *— Swarm 🐝*
 
