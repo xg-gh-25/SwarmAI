@@ -8,7 +8,7 @@ Get SwarmAI running in minutes.
 |------|-------------|
 | OS | macOS 10.15+, Windows 10/11, Linux (Ubuntu 20.04+) |
 | Processor | x86_64 or ARM64 (Apple Silicon) |
-| Memory | 8GB RAM (16GB recommended) |
+| Memory | 16GB RAM (36GB recommended for multi-tab) |
 | Disk | 500MB available |
 | Network | Internet connection required |
 
@@ -33,7 +33,7 @@ Get SwarmAI running in minutes.
 
 ### Build from Source
 
-Prerequisites: Node.js 18+, Python 3.11+, Rust ([rustup.rs](https://rustup.rs/)), uv
+Prerequisites: Node.js 18+, Python 3.11+, Rust ([rustup.rs](https://rustup.rs/)), uv (`curl -LsSf https://astral.sh/uv/install.sh | sh`)
 
 ```bash
 git clone https://github.com/xg-gh-25/SwarmAI.git
@@ -74,6 +74,8 @@ Two paths to develop and test:
 ```
 
 Use `./dev.sh start` for daily development — it runs the Python backend directly so code changes take effect immediately without rebuilding. Use `./dev.sh build` when you need to test the production binary or create a release.
+
+> **Note:** In production, the backend runs as a **launchd daemon** (macOS) that stays alive even when the desktop app is closed. This enables 24/7 Slack bot, background jobs, and scheduled tasks. The dev mode uses direct Python execution instead.
 
 ---
 
@@ -138,7 +140,7 @@ SwarmAI has three columns:
 
 ### Try These
 
-1. **Ask anything** — "What can you do?" to see the 50+ built-in skills
+1. **Ask anything** — "What can you do?" to see the 56+ built-in skills
 2. **Open a second tab** — `Cmd+N` to run a parallel conversation
 3. **Browse Skills** — click the puzzle icon in the left sidebar to see all capabilities
 4. **Check MCP Servers** — click the hub icon to see connected tool servers (Slack, Outlook, etc.)
@@ -152,8 +154,20 @@ SwarmAI remembers across sessions automatically:
 - **MEMORY.md** — curated long-term memory (key decisions, lessons, open threads)
 - **EVOLUTION.md** — capabilities the agent has built and corrections it has learned
 - **.context/** — 11 files that define who the agent is and what it knows about you
+- **Hybrid Recall** — FTS5 keyword search + sqlite-vec vector search for finding relevant memories on demand
 
 Everything is local, git-tracked, and yours. No cloud sync, no data leaving your machine.
+
+### File Attachments
+
+SwarmAI supports **40+ file types** for attachment:
+- **Native**: Images (jpeg/png/gif/webp), PDF, plain text, CSV, markdown
+- **Office**: .docx, .xlsx, .pptx — routed through specialized skills
+- **Audio/Video**: .mp3, .wav, .mp4, .webm — transcription via Whisper
+- **Code**: .py, .ts, .js, .rs, .go, .java, and more
+- **SVG**: Opens in text editor with visual Preview toggle
+
+Binary files are saved to `Attachments/` with path hints for the agent. No more "Prompt is too long" errors.
 
 ---
 

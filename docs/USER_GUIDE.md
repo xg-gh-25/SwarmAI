@@ -29,6 +29,7 @@
   - [Memory & Context](#memory--context)
   - [Skills](#skills)
   - [Drag-to-Chat](#drag-to-chat)
+- [File Attachments](#file-attachments)
 - [Channel Integration](#channel-integration)
   - [Slack](#slack)
 - [Keyboard Shortcuts](#keyboard-shortcuts)
@@ -111,17 +112,22 @@ cd desktop
 npm install
 
 # Set up backend environment
-cp .env.example ../backend/.env
+cp backend.env.example ../backend/.env
 # Edit ../backend/.env if needed (see AI Provider Setup below)
 
-# Run in development mode
-npm run tauri:dev
+# Run in development mode (recommended — picks up code changes instantly)
+cd .. && ./dev.sh start
 
-# Or build for production
+# Or run via Tauri dev mode (starts Tauri window + Vite + backend)
+cd desktop && npm run tauri:dev
+
+# Build for production
 npm run build:all
 ```
 
-The development server starts the Tauri window, Vite dev server, and Python backend automatically.
+`./dev.sh start` runs the Python backend directly so code changes take effect immediately without rebuilding. Use `npm run build:all` when you need the production binary.
+
+> **Note:** In production, the backend runs as a **launchd daemon** (macOS) that stays alive even when the desktop app is closed — enabling 24/7 Slack bot, background jobs, and scheduled tasks.
 
 ---
 
@@ -179,12 +185,18 @@ Send a test message in the chat — any greeting like "hello" will do. If you ge
 
 ### Settings Overview
 
-| Setting | What It Does |
-|---------|-------------|
-| **AI Provider** | Bedrock or Anthropic API |
-| **Model** | Claude Opus 4.6 (most capable) or Sonnet 4.6 (faster, cheaper) |
-| **AWS Region** | Which Bedrock region to use |
-| **MCP Servers** | External tool servers (Slack, GitHub, etc.) |
+SwarmAI Settings has 8 tabs:
+
+| Tab | What It Does |
+|-----|-------------|
+| **General** | Theme, language, workspace path |
+| **AI** | Provider (Bedrock/Anthropic), model selection, AWS region |
+| **Channels** | Slack bot configuration |
+| **Skills** | Browse and manage 56+ built-in skills |
+| **MCP** | External tool servers (Slack, GitHub, Outlook, etc.) |
+| **Engine** | Core Engine growth dashboard — flywheel metrics |
+| **System** | Backend status, resource usage, daemon health |
+| **About** | Version info, license, links |
 
 ---
 
@@ -276,6 +288,10 @@ SwarmAI remembers across sessions. This is the core differentiator.
 - Open threads and their status
 - Git commits and deliverables from each session
 
+**Hybrid Recall** — when MEMORY.md grows large, SwarmAI uses a two-part recall system:
+- **FTS5 keyword search** (0.4 weight) + **sqlite-vec vector search** (0.6 weight) powered by Bedrock Titan v2 embeddings
+- Finds relevant memories even when exact keywords don't match
+
 **How to interact with memory:**
 ```
 "Remember that the deploy key is in 1Password"  → Saves to MEMORY.md
@@ -294,13 +310,13 @@ The more Swarm knows about you, the better it helps.
 
 ### Skills
 
-SwarmAI comes with 55+ built-in skills. You don't need to install or configure them — just ask naturally:
+SwarmAI comes with 56+ built-in skills. You don't need to install or configure them — just ask naturally:
 
 | Category | Examples |
 |----------|---------|
 | **Productivity** | "Check my email", "What's on my calendar?", "Set a reminder" |
 | **Research** | "Research this topic", "Summarize this article", "Deep dive into X" |
-| **Documents** | "Create a PDF report", "Make a PowerPoint", "Write a Word doc" |
+| **Documents** | "Create a PDF report" (md2pdf with CJK support), "Make a PowerPoint", "Write a Word doc" |
 | **Data** | "Create a spreadsheet", "Analyze this CSV" |
 | **Code** | "Review this PR", "Run QA on my changes", "Build a landing page" |
 | **Browser** | "Go to this website and extract data", "Fill out this form" |
@@ -316,6 +332,27 @@ One of SwarmAI's most powerful features — **drag any item into chat**:
 - **Drag an artifact** → Swarm analyzes pipeline output
 
 No copy-paste, no re-explaining. Just drag and go.
+
+---
+
+## File Attachments
+
+SwarmAI supports **40+ file types** for attachment via the file picker or paste:
+
+| Category | Formats | How They're Handled |
+|----------|---------|-------------------|
+| **Images** | jpeg, png, gif, webp | Native multimodal — sent directly to Claude |
+| **PDF** | pdf (up to 23MB) | Native multimodal — parsed by Claude directly |
+| **Text/Code** | md, txt, csv, py, ts, js, rs, go, java, etc. | Inline text — included in the prompt |
+| **Office** | docx, xlsx, pptx | Saved to `Attachments/`, agent uses specialized skills (/s_docx, /s_xlsx, /s_pptx) |
+| **Audio/Video** | mp3, wav, m4a, mp4, webm | Saved to `Attachments/`, agent transcribes via Whisper |
+| **SVG** | svg | Opens in text editor with visual Preview toggle |
+| **Binary** | sqlite, pyc, ttf, woff, jar, etc. | Info modal with "Open in Default App" button |
+
+**Key behaviors:**
+- Binary files are **never** sent inline — they're saved to `Attachments/` with a path hint for the agent
+- The agent receives file-type-specific guidance (e.g., "use /s_pptx skill" for .pptx files)
+- Size limits: PDF/documents 23MB (accounts for base64 overhead), text/CSV 5MB, images 20MB
 
 ---
 
@@ -346,6 +383,7 @@ SwarmAI can run as a Slack bot, giving you access to Swarm from any Slack conver
 | `Cmd/Ctrl + N` | New chat tab |
 | `Cmd/Ctrl + W` | Close current tab |
 | `Cmd/Ctrl + 1-4` | Switch to tab 1-4 |
+| `Cmd/Ctrl + F` | Search in current chat |
 | `Cmd/Ctrl + ,` | Open Settings |
 | `Enter` | Send message |
 | `Shift + Enter` | New line in message |
@@ -425,6 +463,15 @@ Fix: close other tabs, wait 30 seconds, try again. The timeout is set to 180 sec
 ### Is my data sent to the cloud?
 
 Your **workspace files** stay local — they never leave your machine. The only data sent externally is your **chat messages** to the AI provider (AWS Bedrock or Anthropic API) for generating responses. No workspace files, memory, or context files are uploaded anywhere.
+
+### What happens when I close the app?
+
+In production mode, the **backend daemon** keeps running via macOS launchd. This means:
+- Slack bot stays responsive 24/7
+- Scheduled jobs continue running (signal digests, self-tune, etc.)
+- Memory and context are maintained
+
+When you reopen the app, it reconnects to the running daemon. To fully stop the backend: `launchctl bootout gui/$(id -u) com.swarmai.backend`.
 
 ### Can I use SwarmAI offline?
 
