@@ -706,7 +706,10 @@ class PromptBuilder:
             if not is_channel:
                 try:
                     from .skill_registry import SkillRegistry
-                    registry = SkillRegistry(Path(working_directory) / ".claude" / "skills")
+                    # .claude/skills/ is the standard projection directory
+                    # managed by ProjectionLayer — see projection_layer.py.
+                    skills_dir = Path(working_directory) / ".claude" / "skills"
+                    registry = SkillRegistry(skills_dir)
                     compact = registry.generate_compact_registry()
                     if compact:
                         context_text += f"\n\n{compact}"

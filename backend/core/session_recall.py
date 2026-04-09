@@ -4,6 +4,11 @@ Enables searching past conversations by topic and returning contextual
 message windows around matches. Uses SQLite FTS5 for efficient full-text
 indexing with automatic sync via triggers.
 
+The FTS5 virtual table and sync triggers are created by the DB migration
+in ``database/sqlite.py``.  This module only *verifies* the table exists
+at init time and performs read-only searches.  Connections are opened with
+WAL mode and busy_timeout to match the main DB layer's settings.
+
 Key public symbols:
 
 - ``SessionRecall``  — Search + recall engine.
@@ -40,50 +45,34 @@ class SessionRecall:
 
     def __init__(self, db_path: Path) -> None:
         self._db_path = db_path
-        self._ensure_fts()
+        self._verify_fts()
 
-    def _ensure_fts(self) -> None:
-        """Create FTS5 virtual table + triggers if not exists.
-
-        The messages table uses TEXT PRIMARY KEY (id), but SQLite still
-        maintains an implicit rowid column. FTS5 with content=messages
-        uses this implicit rowid.
-        """
+    def _open_conn(self) -> sqlite3.Connection:
+        """Open a connection with WAL mode and busy_timeout matching the main DB layer."""
         conn = sqlite3.connect(str(self._db_path))
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=5000")
+        return conn
+
+    def _verify_fts(self) -> None:
+        """Verify that the FTS5 virtual table exists (created by DB migration).
+
+        Does NOT recreate the table or triggers — that is the responsibility
+        of ``database/sqlite.py``.  Logs a warning if the table is missing
+        so callers know search will return empty results.
+        """
+        conn = self._open_conn()
         try:
-            conn.execute("""
-                CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
-                    content,
-                    content=messages,
-                    content_rowid=rowid
+            row = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='messages_fts'"
+            ).fetchone()
+            if row is None:
+                logger.warning(
+                    "messages_fts table not found — session recall search "
+                    "will return empty results until the DB migration runs"
                 )
-            """)
-
-            # Triggers to keep FTS in sync
-            conn.execute("""
-                CREATE TRIGGER IF NOT EXISTS messages_fts_insert
-                AFTER INSERT ON messages BEGIN
-                    INSERT INTO messages_fts(rowid, content) VALUES (new.rowid, new.content);
-                END
-            """)
-
-            conn.execute("""
-                CREATE TRIGGER IF NOT EXISTS messages_fts_delete
-                AFTER DELETE ON messages BEGIN
-                    INSERT INTO messages_fts(messages_fts, rowid, content)
-                    VALUES('delete', old.rowid, old.content);
-                END
-            """)
-
-            # Rebuild index from existing data
-            try:
-                conn.execute("INSERT INTO messages_fts(messages_fts) VALUES('rebuild')")
-            except sqlite3.OperationalError as exc:
-                logger.debug("FTS rebuild skipped: %s", exc)
-
-            conn.commit()
         except Exception as exc:
-            logger.error("Failed to create FTS5 table: %s", exc)
+            logger.error("Failed to verify FTS5 table: %s", exc)
         finally:
             conn.close()
 
@@ -96,7 +85,7 @@ class SessionRecall:
         4. Take top max_sessions by match count
         5. For each session: load +/-10 messages around each match
         """
-        conn = sqlite3.connect(str(self._db_path))
+        conn = self._open_conn()
         conn.row_factory = sqlite3.Row
         try:
             # Escape FTS5 special characters by quoting the query

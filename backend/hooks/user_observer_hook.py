@@ -10,6 +10,7 @@ Key public symbols:
 from __future__ import annotations
 
 import logging
+import tempfile
 from pathlib import Path
 
 from core.session_hooks import HookContext, SessionLifecycleHook
@@ -73,10 +74,23 @@ class UserObserverHook:
             existing = observer.load_existing()
             consolidated = observer.consolidate(new_obs, existing)
 
-            # Save (overwrite with consolidated set)
+            # Save atomically: write consolidated set to temp file, then rename.
+            # This prevents data loss if the process crashes mid-write.
             obs_path.parent.mkdir(parents=True, exist_ok=True)
-            obs_path.write_text("")  # Clear
-            observer.save_observations(consolidated)
+            tmp_fd, tmp_name = tempfile.mkstemp(
+                dir=str(obs_path.parent), suffix=".tmp", prefix=".obs_"
+            )
+            tmp_path = Path(tmp_name)
+            try:
+                with open(tmp_fd, "w", encoding="utf-8") as f:
+                    import json
+                    from dataclasses import asdict
+                    for obs in consolidated:
+                        f.write(json.dumps(asdict(obs), ensure_ascii=False) + "\n")
+                tmp_path.replace(obs_path)
+            except Exception:
+                tmp_path.unlink(missing_ok=True)
+                raise
 
             logger.info(
                 "UserObserver: %d new observations for session %s (%d total)",

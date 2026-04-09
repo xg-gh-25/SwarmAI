@@ -325,6 +325,12 @@ class ContextHealthHook:
         # 6. L1 cache freshness — if source .md newer than cache, invalidate
         self._check_cache_freshness(context_dir, findings)
 
+        # 7. Enforce retention policies (archive/delete old files)
+        try:
+            self._enforce_retention_policies(ws_path)
+        except Exception as exc:
+            logger.warning("context_health: retention policy enforcement failed: %s", exc)
+
         # Persist findings for session briefing
         self._persist_findings(root, findings)
 
@@ -482,6 +488,90 @@ class ContextHealthHook:
             )
         except OSError as e:
             logger.warning("Failed to persist health findings: %s", e)
+
+    # ------------------------------------------------------------------
+    # Retention Policies
+    # ------------------------------------------------------------------
+
+    def _enforce_retention_policies(self, ws_path: str) -> None:
+        """Enforce time-based archival and cleanup.
+
+        1. DailyActivity >90 days -> move to Knowledge/Archives/
+        2. Archives >365 days -> delete (except MEMORY-archive-*.md)
+        3. Open Threads with resolved marker >7 days -> log for archival
+        """
+        root = Path(ws_path)
+        da_dir = root / "Knowledge" / "DailyActivity"
+        archive_dir = root / "Knowledge" / "Archives"
+        archive_dir.mkdir(parents=True, exist_ok=True)
+
+        cutoff_90 = datetime.now() - timedelta(days=90)
+        cutoff_365 = datetime.now() - timedelta(days=365)
+        cutoff_7 = datetime.now() - timedelta(days=7)
+
+        # 1. Archive old DailyActivity
+        if da_dir.exists():
+            for f in da_dir.glob("*.md"):
+                try:
+                    file_date = datetime.strptime(f.stem, "%Y-%m-%d")
+                    if file_date < cutoff_90:
+                        dest = archive_dir / f.name
+                        f.rename(dest)
+                        logger.info("Archived DailyActivity: %s", f.name)
+                except ValueError:
+                    continue
+
+        # 2. Delete old archives (except MEMORY-archive-*)
+        if archive_dir.exists():
+            for f in archive_dir.glob("*.md"):
+                if f.name.startswith("MEMORY-archive-"):
+                    continue  # Never delete memory archives
+                try:
+                    file_date = datetime.strptime(f.stem[:10], "%Y-%m-%d")
+                    if file_date < cutoff_365:
+                        f.unlink()
+                        logger.info("Deleted old archive: %s", f.name)
+                except (ValueError, IndexError):
+                    continue
+
+        # 3. Archive resolved Open Threads >7 days
+        memory_path = root / ".context" / "MEMORY.md"
+        if memory_path.exists():
+            try:
+                content = memory_path.read_text(encoding="utf-8")
+                # Find Open Threads section and check for resolved entries
+                import re as _re
+                ot_match = _re.search(
+                    r"## Open Threads\n(.*?)(?=\n## |\Z)",
+                    content, _re.DOTALL,
+                )
+                if ot_match:
+                    ot_content = ot_match.group(1)
+                    for line in ot_content.split("\n"):
+                        line = line.strip()
+                        if not line.startswith("- "):
+                            continue
+                        # Check for resolved marker (checkmark)
+                        if "\u2705" not in line:
+                            continue
+                        # Extract date if present
+                        date_match = _re.match(r"- (\d{4}-\d{2}-\d{2})", line)
+                        if date_match:
+                            try:
+                                entry_date = datetime.strptime(
+                                    date_match.group(1), "%Y-%m-%d"
+                                )
+                                if entry_date < cutoff_7:
+                                    logger.info(
+                                        "Resolved OT entry >7d: %s",
+                                        line[:80],
+                                    )
+                            except ValueError:
+                                continue
+            except Exception as exc:
+                logger.warning(
+                    "context_health: OT archival check failed: %s", exc
+                )
 
     # ------------------------------------------------------------------
     # Helpers

@@ -78,7 +78,7 @@ def test_detect_expertise(observer: UserObserver):
 # ---------------------------------------------------------------------------
 
 def test_detect_language_preference(observer: UserObserver):
-    """>30% CJK messages should produce a communication preference."""
+    """>30% East Asian script messages should produce a communication preference."""
     messages = [
         {"role": "user", "content": "你好，请帮我看一下这段代码"},
         {"role": "user", "content": "这个函数有什么问题吗"},
@@ -89,6 +89,30 @@ def test_detect_language_preference(observer: UserObserver):
     lang = [o for o in obs if o.category == "preferences.communication"]
     assert len(lang) >= 1
     assert lang[0].confidence == 0.8
+
+
+def test_detect_language_preference_japanese(observer: UserObserver):
+    """>30% Japanese messages should also produce a communication preference."""
+    messages = [
+        {"role": "user", "content": "このコードを見てください"},
+        {"role": "user", "content": "ありがとうございます"},
+        {"role": "user", "content": "ok thanks"},
+    ]
+    obs = observer.observe_session(messages, session_id="sess-004-jp")
+    lang = [o for o in obs if o.category == "preferences.communication"]
+    assert len(lang) >= 1
+
+
+def test_detect_language_preference_korean(observer: UserObserver):
+    """>30% Korean messages should also produce a communication preference."""
+    messages = [
+        {"role": "user", "content": "이 코드를 확인해 주세요"},
+        {"role": "user", "content": "감사합니다"},
+        {"role": "user", "content": "ok thanks"},
+    ]
+    obs = observer.observe_session(messages, session_id="sess-004-kr")
+    lang = [o for o in obs if o.category == "preferences.communication"]
+    assert len(lang) >= 1
 
 
 def test_no_language_preference_for_english(observer: UserObserver):

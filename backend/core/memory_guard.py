@@ -55,7 +55,10 @@ _SECRET_PATTERNS: list[tuple[str, str, re.Pattern]] = [
     ("pem_key", "[REDACTED:pem_key]",
      re.compile(r"-----BEGIN[A-Z\s]*PRIVATE\s+KEY-----[\s\S]*?-----END[A-Z\s]*PRIVATE\s+KEY-----")),
     ("password", "[REDACTED:password]",
-     re.compile(r"""password\s*[:=]\s*["']?[^\s"']{8,}""", re.IGNORECASE)),
+     re.compile(
+         r"""(?:^|[^a-zA-Z_-])password\s*[:=]\s*["'][^\s"']{8,}["']""",
+         re.IGNORECASE | re.MULTILINE,
+     )),
 ]
 
 _INJECTION_PATTERNS: list[tuple[str, re.Pattern]] = [
