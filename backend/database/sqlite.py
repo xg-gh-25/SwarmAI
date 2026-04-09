@@ -1688,7 +1688,15 @@ class SQLiteDatabase(BaseDatabase):
             return
 
         if skip_init:
-            logger.info("Skipping schema DDL and migrations (seed-sourced)")
+            logger.info("Skipping schema DDL (seed-sourced) — running migrations only")
+            # Even seed-sourced / returning-user databases need migrations:
+            # new tables (skill_metrics, messages_fts) added after the seed was
+            # built must be created.  Migrations are all idempotent (IF NOT EXISTS).
+            async with aiosqlite.connect(str(self.db_path)) as conn:
+                await conn.execute("PRAGMA journal_mode=WAL")
+                await conn.execute("PRAGMA busy_timeout=100")
+                _WALConnection._wal_initialized.add(str(self.db_path))
+                await self._run_migrations(conn)
             self._initialized = True
             return
 

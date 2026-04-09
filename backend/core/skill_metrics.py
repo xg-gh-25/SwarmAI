@@ -50,7 +50,14 @@ CREATE INDEX IF NOT EXISTS idx_skill_metrics_name ON skill_metrics(skill_name);
 
 
 class SkillMetricsStore:
-    """Tracks skill invocation metrics in a local SQLite database."""
+    """Tracks skill invocation metrics in a local SQLite database.
+
+    Opens its own ``sqlite3`` connection with WAL mode and busy_timeout
+    to match the main DB layer's settings.  This is intentional: the
+    metrics table is append-heavy and read-infrequently, so a dedicated
+    connection avoids contention with the main async DB pool.  All
+    public methods are thread-safe via ``_lock``.
+    """
 
     def __init__(self, db_path: Path) -> None:
         """Initialize with path to SQLite DB. Creates table if not exists."""
@@ -126,16 +133,33 @@ class SkillMetricsStore:
         )
 
     def get_all_stats(self) -> list[SkillStats]:
-        """Get stats for all tracked skills."""
+        """Get stats for all tracked skills in a single atomic query."""
         with self._lock:
             rows = self._conn.execute(
-                "SELECT DISTINCT skill_name FROM skill_metrics"
+                """
+                SELECT
+                    skill_name,
+                    COUNT(*) as cnt,
+                    SUM(CASE WHEN outcome = 'success' THEN 1 ELSE 0 END) as successes,
+                    AVG(duration_seconds) as avg_dur,
+                    SUM(CASE WHEN user_satisfaction = 'correction' THEN 1 ELSE 0 END) as corrections,
+                    MAX(invocation_date) as last_used
+                FROM skill_metrics
+                GROUP BY skill_name
+                """
             ).fetchall()
         results = []
-        for (name,) in rows:
-            stats = self.get_stats(name)
-            if stats:
-                results.append(stats)
+        for row in rows:
+            name, cnt, successes, avg_dur, corrections, last_used = row
+            if cnt > 0:
+                results.append(SkillStats(
+                    skill_name=name,
+                    invocation_count=cnt,
+                    success_rate=successes / cnt,
+                    avg_duration=avg_dur or 0.0,
+                    correction_rate=corrections / cnt,
+                    last_used=last_used or "",
+                ))
         return results
 
     def get_evolution_candidates(self) -> list[str]:

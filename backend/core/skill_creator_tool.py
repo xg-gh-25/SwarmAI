@@ -3,6 +3,10 @@
 Allows the agent to create new skills programmatically, with
 SkillGuard scanning and optional user approval flow.
 
+Note: This module provides programmatic skill creation with validation.
+For interactive skill creation via the Claude SDK, see ``skill_creator.py``.
+Both write to the same ``backend/skills/`` directory.
+
 Key public symbols:
 - ``SkillResult``      -- Result of skill creation attempt.
 - ``SkillProposal``    -- Deferred proposal awaiting user approval.
@@ -58,7 +62,10 @@ class SkillCreatorTool:
             if yaml is not None:
                 meta = yaml.safe_load(parts[1])
             else:
-                # Fallback: basic parsing without PyYAML
+                # Fallback: basic key:value parsing without PyYAML.
+                # WARNING: Does not handle multi-line values, folded scalars (>),
+                # or nested structures. Install PyYAML for full YAML support.
+                logger.warning("PyYAML not installed — using basic frontmatter parser")
                 meta = {}
                 for line in parts[1].strip().split("\n"):
                     if ":" in line:
@@ -108,12 +115,13 @@ class SkillCreatorTool:
             from core.skill_guard import SkillGuard, TrustLevel
 
             guard = SkillGuard()
-            with tempfile.NamedTemporaryFile(
-                mode="w", suffix=".md", delete=False
-            ) as f:
-                f.write(content)
-                tmp_path = Path(f.name)
+            tmp_path = None
             try:
+                with tempfile.NamedTemporaryFile(
+                    mode="w", suffix=".md", delete=False
+                ) as f:
+                    f.write(content)
+                    tmp_path = Path(f.name)
                 result = guard.scan_skill(tmp_path, TrustLevel.AGENT_CREATED)
                 if not result.allowed:
                     return SkillResult(
@@ -123,7 +131,8 @@ class SkillCreatorTool:
                         message=f"SkillGuard blocked: {[f.pattern_name for f in result.findings]}",
                     )
             finally:
-                tmp_path.unlink(missing_ok=True)
+                if tmp_path is not None:
+                    tmp_path.unlink(missing_ok=True)
         except ImportError:
             logger.warning("SkillGuard not available, skipping scan")
 

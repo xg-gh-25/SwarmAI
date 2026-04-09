@@ -8,6 +8,7 @@ Key public symbols:
 - ``OptimizationResult``  -- Result of optimization attempt.
 - ``TextChange``          -- A single text replacement.
 - ``EvolutionOptimizer``  -- Orchestrates skill optimization.
+- ``run_evolution_cycle`` -- Convenience function for full mine-score-optimize cycle.
 """
 from __future__ import annotations
 
@@ -81,11 +82,12 @@ class EvolutionOptimizer:
         new_text = skill_text
         for correction, action_type in corrections:
             if action_type == "remove":
-                # Find similar phrase in skill text and mark for removal
-                if correction.lower() in new_text.lower():
-                    idx = new_text.lower().index(correction.lower())
-                    original = new_text[idx : idx + len(correction)]
-                    new_text = new_text[:idx] + new_text[idx + len(correction) :]
+                # Find similar phrase in skill text using re.search for
+                # safe case-insensitive matching (handles non-ASCII correctly).
+                match = re.search(re.escape(correction), new_text, re.IGNORECASE)
+                if match:
+                    original = match.group()
+                    new_text = new_text[:match.start()] + new_text[match.end():]
                     changes.append(TextChange(
                         original=original,
                         replacement="",
@@ -116,14 +118,22 @@ class EvolutionOptimizer:
             if growth > 0.20:
                 return False, f"Growth {growth:.0%} exceeds 20% limit"
 
-        # Injection check via SkillGuard
+        # Injection check via SkillGuard (uses full scan with trust gate)
         try:
-            from core.skill_guard import SCAN_PATTERNS
-            for cat, patterns in SCAN_PATTERNS.items():
-                for name, pat, sev in patterns:
-                    if pat.search(new_text):
-                        if sev == "high":
-                            return False, f"Injection detected: {name}"
+            import tempfile as _tmpfile
+            from core.skill_guard import SkillGuard, TrustLevel
+            guard = SkillGuard()
+            tmp = _tmpfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False)
+            tmp_path = Path(tmp.name)
+            try:
+                tmp.write(new_text)
+                tmp.close()
+                result = guard.scan_skill(tmp_path, TrustLevel.AGENT_CREATED)
+                if not result.allowed:
+                    high_findings = [f.pattern_name for f in result.findings if f.severity == "high"]
+                    return False, f"SkillGuard blocked: {high_findings}"
+            finally:
+                tmp_path.unlink(missing_ok=True)
         except ImportError:
             pass  # SkillGuard not available, skip check
 
@@ -165,13 +175,14 @@ class EvolutionOptimizer:
                 reason="No applicable changes found",
             )
 
-        # Score improvement estimate
+        # Score improvement estimate: build a natural language "expected"
+        # string from the correction texts (not Python repr).
         from core.skill_fitness import SkillFitnessEvaluator
 
         evaluator = SkillFitnessEvaluator()
-        corrections_str = str(corrections)
-        original_score = evaluator.score(corrections_str, original_text).overall
-        optimized_score = evaluator.score(corrections_str, new_text).overall
+        expected_text = " ".join(text for text, _ in corrections)
+        original_score = evaluator.score(expected_text, original_text).overall
+        optimized_score = evaluator.score(expected_text, new_text).overall
 
         passed, reason = self._validate_constraints(skill_name, new_text, original_text)
 
@@ -183,3 +194,71 @@ class EvolutionOptimizer:
             accepted=passed,
             reason=reason,
         )
+
+
+def run_evolution_cycle(skills_dir: Path, transcripts_dir: Path, evals_dir: Path) -> dict:
+    """Run a full evolution cycle: mine -> score -> optimize for all eligible skills.
+
+    Returns summary dict with {skills_checked, eligible, optimized, changes}.
+    Can be invoked manually or from a scheduled job.
+
+    Steps:
+    1. Creates SessionMiner, mines all skills for eval examples.
+    2. For each eligible skill (>=5 examples), runs SkillFitnessEvaluator.
+    3. For skills scoring < 0.7, runs EvolutionOptimizer.
+    4. Returns summary.
+    """
+    from core.session_miner import SessionMiner
+    from core.skill_fitness import SkillFitnessEvaluator
+
+    miner = SessionMiner(transcripts_dir, skills_dir, evals_dir)
+    optimizer = EvolutionOptimizer(skills_dir)
+    evaluator = SkillFitnessEvaluator()
+
+    # Step 1: Mine all skills
+    all_examples = miner.mine_all()
+    skills_checked = len(all_examples)
+
+    # Step 2: Filter eligible (>=5 examples)
+    eligible_skills: list[str] = []
+    for name, examples in all_examples.items():
+        if len(examples) >= 5:
+            eligible_skills.append(name)
+
+    # Step 3: Score and optimize
+    optimized_count = 0
+    total_changes = 0
+    results: list[OptimizationResult] = []
+
+    for skill_name in eligible_skills:
+        examples = all_examples[skill_name]
+
+        # Score current fitness using correction examples
+        score_pairs = []
+        for ex in examples:
+            if ex.user_correction:
+                score_pairs.append((ex.user_correction, ex.agent_actions))
+        avg_score = evaluator.score_batch(score_pairs) if score_pairs else 1.0
+
+        if avg_score < 0.7:
+            result = optimizer.optimize_skill(skill_name, examples)
+            results.append(result)
+            if result.accepted and result.changes:
+                optimized_count += 1
+                total_changes += len(result.changes)
+                # Save eval examples for audit trail
+                miner.save_evals(skill_name, examples)
+                logger.info(
+                    "Evolution cycle: optimized %s (score %.2f -> %.2f, %d changes)",
+                    skill_name, result.original_score, result.optimized_score,
+                    len(result.changes),
+                )
+
+    summary = {
+        "skills_checked": skills_checked,
+        "eligible": len(eligible_skills),
+        "optimized": optimized_count,
+        "changes": total_changes,
+    }
+    logger.info("Evolution cycle complete: %s", summary)
+    return summary
