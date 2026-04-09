@@ -755,7 +755,15 @@ def select_memory_sections(
     if not sections_to_load and user_message:
         try:
             from core.session_recall import SessionRecall
-            db_path = Path.home() / ".swarm-ai" / "data.db"
+            from core.app_config_manager import app_config_manager
+            # Resolve DB path from config (single source of truth),
+            # falling back to the default location.
+            data_dir = Path(
+                app_config_manager.get("data_dir", str(Path.home() / ".swarm-ai"))
+                if app_config_manager is not None
+                else str(Path.home() / ".swarm-ai")
+            )
+            db_path = data_dir / "data.db"
             if db_path.exists():
                 recall = SessionRecall(db_path)
                 recall_text = recall.recall_about(user_message, max_sessions=2)

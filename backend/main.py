@@ -671,6 +671,14 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         logger.warning("UserObserverHook registration failed: %s", exc)
 
+    # SkillMetricsHook: records skill invocation metrics post-session
+    try:
+        from hooks.skill_metrics_hook import SkillMetricsHook
+        hook_manager.register(SkillMetricsHook())
+        logger.info("Registered SkillMetricsHook")
+    except Exception as exc:
+        logger.warning("SkillMetricsHook registration failed: %s", exc)
+
     # Wire hooks into session_registry (new architecture)
     set_compliance_tracker(compliance_tracker)
     logger.info("Session lifecycle hooks registered (8 hooks, background executor)")

@@ -19,7 +19,6 @@ import re
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from pathlib import Path
-from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +69,7 @@ class UserObserver:
         Detection strategies:
         1. Explicit corrections: match CORRECTION_PATTERNS on user messages
         2. Expertise indicators: count EXPERTISE_KEYWORDS matches
-        3. Language preference: detect Chinese characters in user messages
+        3. Language preference: detect East Asian scripts (CJK/Kana/Hangul) in user messages
         """
         if not messages:
             return []

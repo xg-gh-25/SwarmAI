@@ -132,3 +132,80 @@ class TestOptimizationResultDataclass:
         assert result.skill_name == "test"
         assert result.optimized_score > result.original_score
         assert len(result.changes) == 1
+
+
+class TestRunEvolutionCycle:
+    """Tests for the run_evolution_cycle convenience function."""
+
+    def test_empty_transcripts(self, tmp_path):
+        """No transcripts -> no skills checked."""
+        from core.evolution_optimizer import run_evolution_cycle
+
+        skills_dir = tmp_path / "skills"
+        skills_dir.mkdir()
+        transcripts_dir = tmp_path / "transcripts"
+        transcripts_dir.mkdir()
+        evals_dir = tmp_path / "evals"
+
+        summary = run_evolution_cycle(skills_dir, transcripts_dir, evals_dir)
+        assert summary["skills_checked"] == 0
+        assert summary["eligible"] == 0
+        assert summary["optimized"] == 0
+        assert summary["changes"] == 0
+
+    def test_cycle_with_skills_but_no_transcripts(self, tmp_path):
+        """Skills exist but no transcripts -> 0 checked (no matching examples)."""
+        from core.evolution_optimizer import run_evolution_cycle
+
+        skills_dir = tmp_path / "skills"
+        _make_skill(skills_dir, "myskill", body="Do something useful.")
+        transcripts_dir = tmp_path / "transcripts"
+        transcripts_dir.mkdir()
+        evals_dir = tmp_path / "evals"
+
+        summary = run_evolution_cycle(skills_dir, transcripts_dir, evals_dir)
+        assert summary["skills_checked"] == 0
+        assert summary["eligible"] == 0
+
+    def test_cycle_with_insufficient_examples(self, tmp_path):
+        """Skills with <5 examples are not eligible."""
+        import json
+        from core.evolution_optimizer import run_evolution_cycle
+
+        skills_dir = tmp_path / "skills"
+        skill_dir = skills_dir / "s_weather"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            "---\nname: weather\ndescription: >\n  Get weather\n  TRIGGER: weather, forecast\n---\nCheck the weather.\n"
+        )
+
+        transcripts_dir = tmp_path / "transcripts"
+        transcripts_dir.mkdir()
+        # Create 3 transcript entries (< 5 threshold)
+        records = []
+        for i in range(3):
+            records.append(json.dumps({"type": "user", "message": {"content": f"weather forecast {i}"}}))
+            records.append(json.dumps({"type": "assistant", "message": {"content": f"The weather is {i}C"}}))
+        (transcripts_dir / "session1.jsonl").write_text("\n".join(records))
+
+        evals_dir = tmp_path / "evals"
+
+        summary = run_evolution_cycle(skills_dir, transcripts_dir, evals_dir)
+        # Has examples but < 5 so not eligible
+        assert summary["eligible"] == 0
+
+    def test_cycle_returns_dict_keys(self, tmp_path):
+        """Summary dict always has the expected keys."""
+        from core.evolution_optimizer import run_evolution_cycle
+
+        skills_dir = tmp_path / "skills"
+        skills_dir.mkdir()
+        transcripts_dir = tmp_path / "transcripts"
+        transcripts_dir.mkdir()
+        evals_dir = tmp_path / "evals"
+
+        summary = run_evolution_cycle(skills_dir, transcripts_dir, evals_dir)
+        assert "skills_checked" in summary
+        assert "eligible" in summary
+        assert "optimized" in summary
+        assert "changes" in summary

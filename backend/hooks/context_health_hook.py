@@ -498,7 +498,8 @@ class ContextHealthHook:
 
         1. DailyActivity >90 days -> move to Knowledge/Archives/
         2. Archives >365 days -> delete (except MEMORY-archive-*.md)
-        3. Open Threads with resolved marker >7 days -> log for archival
+        3. Open Threads with resolved marker >7 days -> log for manual review
+           (actual removal is handled by section cap enforcement, not here)
         """
         root = Path(ws_path)
         da_dir = root / "Knowledge" / "DailyActivity"
@@ -522,6 +523,10 @@ class ContextHealthHook:
                     continue
 
         # 2. Delete old archives (except MEMORY-archive-*)
+        # Note: MEMORY-archive-* files are double-protected:
+        # (a) name prefix check skips them explicitly, and
+        # (b) their stems (e.g. "MEMORY-archive-2026-04") fail strptime
+        #     on [:10] slice ("MEMORY-arc"), so they'd be skipped anyway.
         if archive_dir.exists():
             for f in archive_dir.glob("*.md"):
                 if f.name.startswith("MEMORY-archive-"):
@@ -554,20 +559,52 @@ class ContextHealthHook:
                         # Check for resolved marker (checkmark)
                         if "\u2705" not in line:
                             continue
-                        # Extract date if present
-                        date_match = _re.match(r"- (\d{4}-\d{2}-\d{2})", line)
-                        if date_match:
+                        # Try multiple date formats:
+                        #   1. ISO date at start: "- 2024-03-22: ✅ ..."
+                        #   2. ISO date anywhere: "- ✅ ... (2024-03-22)"
+                        #   3. Short date in parens: "- ✅ ... (3/22)"
+                        # If no date parseable, skip the entry (don't archive without a date).
+                        entry_date = None
+                        # Format 1: ISO date at line start
+                        iso_start = _re.match(r"- (\d{4}-\d{2}-\d{2})", line)
+                        if iso_start:
                             try:
                                 entry_date = datetime.strptime(
-                                    date_match.group(1), "%Y-%m-%d"
+                                    iso_start.group(1), "%Y-%m-%d"
                                 )
-                                if entry_date < cutoff_7:
-                                    logger.info(
-                                        "Resolved OT entry >7d: %s",
-                                        line[:80],
-                                    )
                             except ValueError:
-                                continue
+                                pass
+                        # Format 2: ISO date anywhere (e.g. in parentheses)
+                        if entry_date is None:
+                            iso_any = _re.search(r"\((\d{4}-\d{2}-\d{2})\)", line)
+                            if iso_any:
+                                try:
+                                    entry_date = datetime.strptime(
+                                        iso_any.group(1), "%Y-%m-%d"
+                                    )
+                                except ValueError:
+                                    pass
+                        # Format 3: Short month/day in parens: (3/22), (12/5)
+                        if entry_date is None:
+                            short_date = _re.search(r"\((\d{1,2})/(\d{1,2})\)", line)
+                            if short_date:
+                                try:
+                                    month = int(short_date.group(1))
+                                    day = int(short_date.group(2))
+                                    # Assume current year
+                                    entry_date = datetime(
+                                        datetime.now().year, month, day
+                                    )
+                                except (ValueError, OverflowError):
+                                    pass
+                        # No parseable date — skip this entry
+                        if entry_date is None:
+                            continue
+                        if entry_date < cutoff_7:
+                            logger.info(
+                                "Resolved OT entry >7d: %s",
+                                line[:80],
+                            )
             except Exception as exc:
                 logger.warning(
                     "context_health: OT archival check failed: %s", exc

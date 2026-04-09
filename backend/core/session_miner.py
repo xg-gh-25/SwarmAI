@@ -52,6 +52,7 @@ class SessionMiner:
         self._transcripts_dir = transcripts_dir
         self._skills_dir = skills_dir
         self._evals_dir = evals_dir
+        self._guard = None  # Lazy-init MemoryGuard for secret scrubbing
 
     def _load_skill_keywords(self, skill_name: str) -> list[str]:
         """Extract TRIGGER keywords from SKILL.md description field."""
@@ -92,11 +93,12 @@ class SessionMiner:
         return records
 
     def _scrub_secrets(self, text: str) -> str:
-        """Use MemoryGuard patterns to redact secrets from text."""
+        """Use MemoryGuard patterns to redact secrets from text (cached instance)."""
         try:
-            from core.memory_guard import MemoryGuard
-            guard = MemoryGuard()
-            result = guard.scan(text)
+            if self._guard is None:
+                from core.memory_guard import MemoryGuard
+                self._guard = MemoryGuard()
+            result = self._guard.scan(text)
             return result.sanitized_content
         except ImportError:
             return text
@@ -144,15 +146,20 @@ class SessionMiner:
                 i += 1
                 continue
 
-            # Found a user message matching skill keywords
+            # Found a user message matching skill keywords.
+            # Collect assistant response(s) immediately following.
             agent_text = ""
-            if i + 1 < len(records) and records[i + 1].get("type") == "assistant":
-                agent_text = self._get_message_content(records[i + 1])
+            j = i + 1
+            while j < len(records) and records[j].get("type") == "assistant":
+                agent_text += self._get_message_content(records[j]) + " "
+                j += 1
+            agent_text = agent_text.strip()
 
-            # Check next user message for correction/abandonment
+            # Find the next user message for correction/abandonment detection.
+            # Skip any intervening assistant messages (tool use sequences).
             user_correction = None
             score = 1.0
-            next_user_idx = i + 2
+            next_user_idx = j  # j already points past assistant messages
             if next_user_idx < len(records) and records[next_user_idx].get("type") == "user":
                 next_text = self._get_message_content(records[next_user_idx])
                 if _ABANDON_PATTERNS.search(next_text):

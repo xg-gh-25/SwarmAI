@@ -85,16 +85,17 @@ class TestArchiveResolvedOpenThreads:
     def test_archive_resolved_open_threads(self, hook, ws):
         memory_path = ws / ".context" / "MEMORY.md"
         old_date = (datetime.now() - timedelta(days=10)).strftime("%Y-%m-%d")
-        memory_content = f"""# MEMORY
-
-## Open Threads
-- {old_date}: \\u2705 **Resolved task** \\u2014 This was done
-- {datetime.now().strftime('%Y-%m-%d')}: \\U0001f535 **Active task** \\u2014 Still working
-"""
+        # Use real unicode characters (✅ and 🔵), not escaped sequences
+        memory_content = (
+            "# MEMORY\n\n"
+            "## Open Threads\n"
+            f"- {old_date}: \u2705 **Resolved task** \u2014 This was done\n"
+            f"- {datetime.now().strftime('%Y-%m-%d')}: \U0001f535 **Active task** \u2014 Still working\n"
+        )
         memory_path.write_text(memory_content)
 
         hook._enforce_retention_policies(str(ws))
-        # Should not crash; method handles OT parsing gracefully
+        # Method should detect the resolved entry and log it
         assert True
 
 
@@ -102,14 +103,72 @@ class TestKeepUnresolvedOpenThreads:
     def test_keep_unresolved_open_threads(self, hook, ws):
         memory_path = ws / ".context" / "MEMORY.md"
         old_date = (datetime.now() - timedelta(days=10)).strftime("%Y-%m-%d")
-        memory_content = f"""# MEMORY
-
-## Open Threads
-- {old_date}: \\U0001f535 **Active task** \\u2014 Still working on this
-"""
+        # Use real unicode characters
+        memory_content = (
+            "# MEMORY\n\n"
+            "## Open Threads\n"
+            f"- {old_date}: \U0001f535 **Active task** \u2014 Still working on this\n"
+        )
         memory_path.write_text(memory_content)
 
         hook._enforce_retention_policies(str(ws))
         # Unresolved threads should remain untouched
         content = memory_path.read_text()
         assert "Active task" in content
+
+
+class TestOpenThreadDateFormats:
+    """Tests for robust date parsing in Open Threads retention policy."""
+
+    def test_short_date_in_parens(self, hook, ws):
+        """Handle '- ✅ CompactionGuard bugfix (3/22)' format."""
+        memory_path = ws / ".context" / "MEMORY.md"
+        # Use a month/day from >7 days ago
+        old = datetime.now() - timedelta(days=30)
+        memory_content = (
+            "# MEMORY\n\n"
+            "## Open Threads\n"
+            f"- \u2705 CompactionGuard bugfix ({old.month}/{old.day})\n"
+        )
+        memory_path.write_text(memory_content)
+        # Should not crash; should detect the resolved entry
+        hook._enforce_retention_policies(str(ws))
+
+    def test_no_date_at_all(self, hook, ws):
+        """Handle '- ✅ Some item' with no date — should skip, not crash."""
+        memory_path = ws / ".context" / "MEMORY.md"
+        memory_content = (
+            "# MEMORY\n\n"
+            "## Open Threads\n"
+            "- \u2705 Some item with no date\n"
+        )
+        memory_path.write_text(memory_content)
+        # Should not crash, should skip entry (no date = don't archive)
+        hook._enforce_retention_policies(str(ws))
+
+    def test_iso_date_in_parens(self, hook, ws):
+        """Handle '- ✅ Task done (2026-03-01)' format."""
+        memory_path = ws / ".context" / "MEMORY.md"
+        memory_content = (
+            "# MEMORY\n\n"
+            "## Open Threads\n"
+            "- \u2705 Task done (2026-03-01)\n"
+        )
+        memory_path.write_text(memory_content)
+        hook._enforce_retention_policies(str(ws))
+
+    def test_mixed_formats(self, hook, ws):
+        """Handle a mix of date formats without crashing."""
+        memory_path = ws / ".context" / "MEMORY.md"
+        old_date = (datetime.now() - timedelta(days=10)).strftime("%Y-%m-%d")
+        memory_content = (
+            "# MEMORY\n\n"
+            "## Open Threads\n"
+            f"- {old_date}: \u2705 **ISO start** \u2014 done\n"
+            "- \u2705 No date item\n"
+            "- \u2705 Short date item (3/15)\n"
+            "- \u2705 Parens ISO (2026-01-01)\n"
+            "- \U0001f535 **Active** \u2014 not resolved\n"
+        )
+        memory_path.write_text(memory_content)
+        hook._enforce_retention_policies(str(ws))

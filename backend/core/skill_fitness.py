@@ -38,6 +38,12 @@ class SkillFitnessEvaluator:
             "the", "and", "for", "that", "this", "with", "from",
             "have", "been", "were", "will", "would", "could",
             "should", "also", "than", "then", "into", "about", "which",
+            "are", "was", "not", "can", "all", "but", "when",
+            "your", "you", "they", "them", "their", "there", "here",
+            "what", "where", "how", "does", "each", "some", "more",
+            "other", "only", "just", "like", "over", "such", "after",
+            "before", "between", "through", "during", "without",
+            "being", "those", "these", "very", "most", "make",
         }
         words = set(re.findall(r"\b[a-zA-Z_]\w{3,}\b", text.lower()))
         return words - stopwords
