@@ -110,6 +110,26 @@ SYSTEM_JOBS: list[Job] = [
         category="system",
         config={"window_days": 7},
     ),
+
+    # --- Evolution Cycle (standalone fallback) ---
+    # Primary trigger is session-close hook (evolution_maintenance_hook.py),
+    # but if the user's laptop is closed for days, sessions don't end and
+    # the hook never fires. This scheduled job ensures the mine→score→optimize
+    # pipeline runs at least once per week regardless of session activity.
+    # Uses the same run_evolution_cycle() as the hook — idempotent via the
+    # .evolution_last_run state file (7-day minimum interval).
+    Job(
+        id="evolution-cycle",
+        name="Evolution Cycle",
+        type="script",
+        schedule="0 4 * * 4",          # Thursday 04:00 UTC = 12:00 ICT
+        enabled=True,
+        category="system",
+        config={
+            "command": "python -m backend.jobs.run_evolution",
+            "cwd": _SWARMAI_ROOT,
+        },
+    ),
 ]
 
 SYSTEM_JOB_IDS: set[str] = {j.id for j in SYSTEM_JOBS}

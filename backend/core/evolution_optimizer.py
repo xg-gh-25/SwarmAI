@@ -12,9 +12,11 @@ Key public symbols:
 """
 from __future__ import annotations
 
+import json
 import logging
 import re
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -195,6 +197,107 @@ class EvolutionOptimizer:
             reason=reason,
         )
 
+    def deploy_optimization(self, result: OptimizationResult) -> bool:
+        """Write accepted optimization to SKILL.md and log to EVOLUTION.md.
+
+        1. Read current SKILL.md (full content including YAML frontmatter).
+        2. Apply changes to body text (below frontmatter).
+        3. Write back to file.
+        4. Log to EVOLUTION.md K-entry (if EVOLUTION.md exists).
+        5. Return True if deployed successfully.
+        """
+        if not result.accepted or not result.changes:
+            return False
+
+        skill_path = self._skills_dir / f"s_{result.skill_name}" / "SKILL.md"
+        if not skill_path.exists():
+            logger.warning("Cannot deploy: %s not found", skill_path)
+            return False
+
+        try:
+            content = skill_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            logger.warning("Cannot read %s: %s", skill_path, exc)
+            return False
+
+        # Split into frontmatter and body
+        parts = content.split("---", 2)
+        if len(parts) >= 3:
+            frontmatter = parts[0] + "---" + parts[1] + "---"
+            body = parts[2]
+        else:
+            frontmatter = ""
+            body = content
+
+        # Apply each change to the body
+        new_body = body
+        for change in result.changes:
+            if change.original and change.replacement:
+                # Replace
+                new_body = new_body.replace(change.original, change.replacement, 1)
+            elif change.original and not change.replacement:
+                # Remove
+                new_body = new_body.replace(change.original, "", 1)
+            elif not change.original and change.replacement:
+                # Add (append)
+                new_body = new_body.rstrip() + "\n" + change.replacement + "\n"
+
+        # Write back
+        new_content = frontmatter + new_body if frontmatter else new_body
+        try:
+            skill_path.write_text(new_content, encoding="utf-8")
+            logger.info(
+                "Deployed %d changes to %s (score %.2f -> %.2f)",
+                len(result.changes),
+                skill_path.name,
+                result.original_score,
+                result.optimized_score,
+            )
+        except OSError as exc:
+            logger.warning("Cannot write %s: %s", skill_path, exc)
+            return False
+
+        # Log to EVOLUTION.md if it exists
+        self._log_to_evolution(result)
+
+        return True
+
+    def _log_to_evolution(self, result: OptimizationResult) -> None:
+        """Append an optimization entry to EVOLUTION.md (best-effort)."""
+        try:
+            # Look for EVOLUTION.md in common locations
+            evo_candidates = [
+                self._skills_dir.parent.parent / ".context" / "EVOLUTION.md",
+                self._skills_dir.parent / ".context" / "EVOLUTION.md",
+            ]
+            evo_path = None
+            for candidate in evo_candidates:
+                if candidate.is_file():
+                    evo_path = candidate
+                    break
+
+            if evo_path is None:
+                return
+
+            today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            changes_summary = "; ".join(c.reason for c in result.changes[:3])
+            entry = (
+                f"\n- **[{today}]** Auto-optimized `{result.skill_name}` "
+                f"(score {result.original_score:.2f} -> {result.optimized_score:.2f}): "
+                f"{changes_summary}\n"
+            )
+
+            # Append to Competence Learned section if it exists, else append at end
+            content = evo_path.read_text(encoding="utf-8")
+            if "## Competence Learned" in content:
+                from scripts.locked_write import locked_read_modify_write
+                locked_read_modify_write(evo_path, "Competence Learned", entry, "append")
+            else:
+                with open(evo_path, "a", encoding="utf-8") as f:
+                    f.write(entry)
+        except Exception as exc:
+            logger.debug("Failed to log to EVOLUTION.md: %s", exc)
+
 
 def run_evolution_cycle(skills_dir: Path, transcripts_dir: Path, evals_dir: Path) -> dict:
     """Run a full evolution cycle: mine -> score -> optimize for all eligible skills.
@@ -264,19 +367,34 @@ def run_evolution_cycle(skills_dir: Path, transcripts_dir: Path, evals_dir: Path
                 score_pairs.append((ex.user_correction, ex.agent_actions))
         avg_score = evaluator.score_batch(score_pairs) if score_pairs else 1.0
 
-        if avg_score < 0.7:
+        # Adaptive threshold: require more evidence (lower threshold) when
+        # example count is low to avoid noisy optimizations on sparse data.
+        # 5 examples → 0.5, 10 examples → 0.6, 20+ examples → 0.7
+        n = len(score_pairs)
+        threshold = min(0.7, 0.4 + 0.015 * n) if n > 0 else 0.7
+
+        if avg_score < threshold:
             result = optimizer.optimize_skill(skill_name, examples)
             results.append(result)
             if result.accepted and result.changes:
-                optimized_count += 1
-                total_changes += len(result.changes)
-                # Save eval examples for audit trail
-                miner.save_evals(skill_name, examples)
-                logger.info(
-                    "Evolution cycle: optimized %s (score %.2f -> %.2f, %d changes)",
-                    skill_name, result.original_score, result.optimized_score,
-                    len(result.changes),
-                )
+                # Deploy the accepted changes to SKILL.md
+                deployed = optimizer.deploy_optimization(result)
+                if deployed:
+                    optimized_count += 1
+                    total_changes += len(result.changes)
+                    # Save eval examples for audit trail
+                    miner.save_evals(skill_name, examples)
+                    logger.info(
+                        "Evolution cycle: optimized and deployed %s "
+                        "(score %.2f -> %.2f, %d changes)",
+                        skill_name, result.original_score, result.optimized_score,
+                        len(result.changes),
+                    )
+                else:
+                    logger.warning(
+                        "Evolution cycle: optimization accepted but deploy failed for %s",
+                        skill_name,
+                    )
 
     summary = {
         "skills_checked": skills_checked,

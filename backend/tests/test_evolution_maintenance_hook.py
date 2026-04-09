@@ -109,6 +109,18 @@ class TestGetField:
         assert _get_field(block, "Usage Count") is None
 
 
+def _write_recent_evolution_state(ctx_dir: Path) -> None:
+    """Write a recent .evolution_last_run so _maybe_run_evolution skips.
+
+    Without this, the hook tries to run the full evolution cycle against
+    real transcript files (~1152 JSONL), which takes minutes in CI/test.
+    """
+    state_file = ctx_dir / ".evolution_last_run"
+    state_file.write_text(
+        datetime.now(timezone.utc).strftime("%Y-%m-%d"), encoding="utf-8"
+    )
+
+
 class TestEvolutionMaintenanceHook:
     """Integration tests for the full hook lifecycle."""
 
@@ -117,6 +129,7 @@ class TestEvolutionMaintenanceHook:
         """Active entry idle >30 days with 0 usage → deprecated."""
         ctx_dir = tmp_path / ".context"
         ctx_dir.mkdir()
+        _write_recent_evolution_state(ctx_dir)
         evo = ctx_dir / "EVOLUTION.md"
         changelog = ctx_dir / "EVOLUTION_CHANGELOG.jsonl"
         changelog.write_text("")
@@ -142,6 +155,7 @@ class TestEvolutionMaintenanceHook:
         """Active entry with usage_count > 0 is never deprecated."""
         ctx_dir = tmp_path / ".context"
         ctx_dir.mkdir()
+        _write_recent_evolution_state(ctx_dir)
         evo = ctx_dir / "EVOLUTION.md"
         changelog = ctx_dir / "EVOLUTION_CHANGELOG.jsonl"
         changelog.write_text("")
@@ -162,6 +176,7 @@ class TestEvolutionMaintenanceHook:
         """Deprecated entry with 0 usage and old date → removed."""
         ctx_dir = tmp_path / ".context"
         ctx_dir.mkdir()
+        _write_recent_evolution_state(ctx_dir)
         evo = ctx_dir / "EVOLUTION.md"
         changelog = ctx_dir / "EVOLUTION_CHANGELOG.jsonl"
         changelog.write_text("")
@@ -193,6 +208,7 @@ class TestEvolutionMaintenanceHook:
         """Entry created 5 days ago → not deprecated."""
         ctx_dir = tmp_path / ".context"
         ctx_dir.mkdir()
+        _write_recent_evolution_state(ctx_dir)
         evo = ctx_dir / "EVOLUTION.md"
         changelog = ctx_dir / "EVOLUTION_CHANGELOG.jsonl"
         changelog.write_text("")
@@ -207,3 +223,94 @@ class TestEvolutionMaintenanceHook:
         content = evo.read_text()
         assert "active" in content.split("## Optimizations")[0]
         assert changelog.read_text().strip() == ""
+
+
+class TestEvolutionWeeklyTrigger:
+    """Tests for the weekly evolution cycle trigger logic.
+
+    These tests mock ``run_evolution_cycle`` to avoid scanning real
+    transcript files (1000+ JSONL files that hang tests for minutes).
+    """
+
+    def test_evolution_runs_after_7_days(self, tmp_path, monkeypatch):
+        """Evolution cycle triggers when last run > 7 days ago."""
+        ctx_dir = tmp_path / ".context"
+        ctx_dir.mkdir()
+        state_file = ctx_dir / ".evolution_last_run"
+        state_file.write_text(_days_ago(10), encoding="utf-8")
+
+        # Mock the actual cycle to return immediately
+        called = []
+        def _mock_cycle(*args, **kwargs):
+            called.append(True)
+            return {"skills_checked": 0, "eligible": 0, "optimized": 0, "changes": 0}
+
+        monkeypatch.setattr(
+            "core.evolution_optimizer.run_evolution_cycle", _mock_cycle
+        )
+
+        hook = EvolutionMaintenanceHook(context_dir=ctx_dir)
+        hook._maybe_run_evolution(ctx_dir)
+
+        assert len(called) == 1, "Evolution cycle should have been triggered"
+        # State file should be updated to today
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        assert state_file.read_text(encoding="utf-8").strip() == today
+
+    def test_evolution_skips_if_recent(self, tmp_path):
+        """Evolution cycle does NOT trigger when last run < 7 days ago."""
+        ctx_dir = tmp_path / ".context"
+        ctx_dir.mkdir()
+        state_file = ctx_dir / ".evolution_last_run"
+        state_file.write_text(_days_ago(2), encoding="utf-8")
+
+        hook = EvolutionMaintenanceHook(context_dir=ctx_dir)
+        hook._maybe_run_evolution(ctx_dir)
+
+        # State file should NOT be updated
+        assert state_file.read_text(encoding="utf-8") == _days_ago(2)
+
+    def test_evolution_runs_if_no_state_file(self, tmp_path, monkeypatch):
+        """Evolution cycle triggers when state file doesn't exist."""
+        ctx_dir = tmp_path / ".context"
+        ctx_dir.mkdir()
+        state_file = ctx_dir / ".evolution_last_run"
+        assert not state_file.exists()
+
+        called = []
+        def _mock_cycle(*args, **kwargs):
+            called.append(True)
+            return {"skills_checked": 0, "eligible": 0, "optimized": 0, "changes": 0}
+
+        monkeypatch.setattr(
+            "core.evolution_optimizer.run_evolution_cycle", _mock_cycle
+        )
+
+        hook = EvolutionMaintenanceHook(context_dir=ctx_dir)
+        hook._maybe_run_evolution(ctx_dir)
+
+        assert len(called) == 1, "Should trigger when no state file exists"
+
+    def test_evolution_with_valid_skills_dir(self, tmp_path, monkeypatch):
+        """Evolution cycle runs end-to-end when skills_dir exists."""
+        ctx_dir = tmp_path / ".context"
+        ctx_dir.mkdir()
+        state_file = ctx_dir / ".evolution_last_run"
+        state_file.write_text(_days_ago(10), encoding="utf-8")
+
+        called_with = []
+        def _mock_cycle(skills_dir, transcripts_dir, evals_dir):
+            called_with.append((skills_dir, transcripts_dir, evals_dir))
+            return {"skills_checked": 2, "eligible": 1, "optimized": 1, "changes": 3}
+
+        monkeypatch.setattr(
+            "core.evolution_optimizer.run_evolution_cycle", _mock_cycle
+        )
+
+        hook = EvolutionMaintenanceHook(context_dir=ctx_dir)
+        hook._maybe_run_evolution(ctx_dir)
+
+        assert len(called_with) == 1
+        # State file should be updated to today
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        assert state_file.read_text(encoding="utf-8").strip() == today

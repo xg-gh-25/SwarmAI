@@ -76,3 +76,18 @@ Keep confirmation to one line. Don't repeat the content back.
 - **Don't duplicate** — check if the content is already in MEMORY.md before adding (match by content, ignore date)
 - **MEMORY.md location** — always at `.context/MEMORY.md` (relative to workspace root)
 - **Size management** — if MEMORY.md exceeds ~5KB (~100 entries), move the oldest entries from each section to `Knowledge/Archives/MEMORY-archive-YYYY-MM.md` before adding new ones. Keep MEMORY.md focused on the most recent and relevant items
+- cache the store instance.
+- overrides, channel context, and prompt builder wiring are al
+- assigned on line 693. If before_id is not None, the if befor
+- cache the store instance.
+- overrides, channel context, and prompt builder wiring are al
+- assigned on line 693. If before_id is not None, the if befor
+- cache the store instance.
+- overrides, channel context, and prompt builder wiring are al
+- assigned on line 693. If before_id is not None, the if befor
+- cache the store instance.
+- overrides, channel context, and prompt builder wiring are al
+- assigned on line 693. If before_id is not None, the if befor
+- cache the store instance.
+- overrides, channel context, and prompt builder wiring are al
+- assigned on line 693. If before_id is not None, the if befor
