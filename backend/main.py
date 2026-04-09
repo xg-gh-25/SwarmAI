@@ -663,9 +663,17 @@ async def lifespan(app: FastAPI):
     # Runs after auto-commit so git log reflects the session's work.
     hook_manager.register(TodoLifecycleHook())
 
+    # UserObserverHook: tracks user interaction patterns for evolution
+    try:
+        from hooks.user_observer_hook import UserObserverHook
+        hook_manager.register(UserObserverHook())
+        logger.info("Registered UserObserverHook")
+    except Exception as exc:
+        logger.warning("UserObserverHook registration failed: %s", exc)
+
     # Wire hooks into session_registry (new architecture)
     set_compliance_tracker(compliance_tracker)
-    logger.info("Session lifecycle hooks registered (7 hooks, background executor)")
+    logger.info("Session lifecycle hooks registered (8 hooks, background executor)")
 
     # ── Initialize new session architecture ──────────────────────────
     session_registry.initialize(app_config)

@@ -45,8 +45,13 @@ EXPERTISE_KEYWORDS: dict[str, list[str]] = {
     "languages": ["python", "typescript", "rust", "go", "java", "sql"],
 }
 
-# CJK Unicode ranges
-_CJK_PATTERN = re.compile(r"[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]")
+# East Asian script detection: CJK Unified Ideographs (Chinese),
+# Hiragana + Katakana (Japanese), Hangul Syllables (Korean).
+_EAST_ASIAN_PATTERN = re.compile(
+    r"[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff"   # CJK Unified Ideographs
+    r"\u3040-\u309f\u30a0-\u30ff"                   # Hiragana + Katakana
+    r"\uac00-\ud7af]"                               # Hangul Syllables
+)
 
 
 class UserObserver:
@@ -110,16 +115,16 @@ class UserObserver:
 
         # 3. Language preference (user messages only)
         if user_messages:
-            cjk_count = sum(1 for m in user_messages if _CJK_PATTERN.search(m.get("content", "")))
+            cjk_count = sum(1 for m in user_messages if _EAST_ASIAN_PATTERN.search(m.get("content", "")))
             ratio = cjk_count / len(user_messages)
             if ratio > 0.3:
                 observations.append(Observation(
                     date=today,
                     category="preferences.communication",
-                    observation="User frequently communicates in Chinese",
+                    observation="User frequently communicates in an East Asian language",
                     confidence=0.8,
                     source_session=session_id,
-                    evidence=f"{cjk_count}/{len(user_messages)} messages contain CJK characters",
+                    evidence=f"{cjk_count}/{len(user_messages)} messages contain CJK/Kana/Hangul characters",
                 ))
 
         return observations

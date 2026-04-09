@@ -68,14 +68,23 @@ class TestMemoryGuard:
         assert any(f.category == "secrets" and f.pattern_name == "pem_key" for f in result.findings)
 
     def test_password_redacted(self):
-        """Password assignments are replaced with [REDACTED:password]."""
+        """Password assignments with quoted values are replaced with [REDACTED:password]."""
         guard = self._make_guard()
-        content = 'Database password = "SuperSecret123!" in config.'
+        content = "Database password = \"SuperSecret123!\" in config."
         result = guard.scan(content)
         assert not result.rejected
         assert "[REDACTED:password]" in result.sanitized_content
         assert "SuperSecret123!" not in result.sanitized_content
         assert any(f.category == "secrets" and f.pattern_name == "password" for f in result.findings)
+
+    def test_password_unquoted_not_redacted(self):
+        """Unquoted password-like config values should NOT be redacted (false positive prevention)."""
+        guard = self._make_guard()
+        content = "password: myconfig_value is documented here."
+        result = guard.scan(content)
+        # Should NOT match — no quotes around the value
+        password_findings = [f for f in result.findings if f.pattern_name == "password"]
+        assert len(password_findings) == 0
 
     def test_prompt_injection_rejected(self):
         """'ignore all previous instructions' content is rejected."""

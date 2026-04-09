@@ -39,6 +39,24 @@ def db_path(tmp_path: Path) -> Path:
         )
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_session_id ON messages(session_id)")
+    # Create FTS5 virtual table + sync triggers (matching production migration)
+    conn.execute("""
+        CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+            content,
+            content=messages,
+            content_rowid=rowid
+        )
+    """)
+    conn.execute("""
+        CREATE TRIGGER IF NOT EXISTS messages_fts_insert AFTER INSERT ON messages BEGIN
+            INSERT INTO messages_fts(rowid, content) VALUES (new.rowid, new.content);
+        END
+    """)
+    conn.execute("""
+        CREATE TRIGGER IF NOT EXISTS messages_fts_delete AFTER DELETE ON messages BEGIN
+            INSERT INTO messages_fts(messages_fts, rowid, content) VALUES('delete', old.rowid, old.content);
+        END
+    """)
     conn.commit()
     conn.close()
     return path
@@ -67,7 +85,10 @@ def _insert_message(db_path: Path, session_id: str, role: str, content: str,
 # ---------------------------------------------------------------------------
 
 def test_fts5_table_created(db_path: Path):
-    """FTS5 virtual table exists after SessionRecall init."""
+    """FTS5 virtual table should exist (created by fixture, mirroring DB migration).
+
+    SessionRecall only *verifies* the table exists — it does not create it.
+    """
     recall = SessionRecall(db_path=db_path)
     conn = sqlite3.connect(str(db_path))
     cursor = conn.execute(

@@ -32,6 +32,7 @@ import json
 import re
 import logging
 from datetime import datetime, date
+from pathlib import Path
 from typing import Optional
 
 logger = logging.getLogger(__name__)
@@ -749,6 +750,22 @@ def select_memory_sections(
             parts.append(sec_text)
             used_tokens += sec_tokens
         # else: skip this section but keep trying smaller ones
+
+    # ── SessionRecall fallback: if no keyword-matched sections loaded ──
+    if not sections_to_load and user_message:
+        try:
+            from core.session_recall import SessionRecall
+            db_path = Path.home() / ".swarm-ai" / "data.db"
+            if db_path.exists():
+                recall = SessionRecall(db_path)
+                recall_text = recall.recall_about(user_message, max_sessions=2)
+                if recall_text:
+                    recall_tokens = ContextDirectoryLoader.estimate_tokens(recall_text)
+                    if used_tokens + recall_tokens <= max_tokens:
+                        parts.append(recall_text)
+                        used_tokens += recall_tokens
+        except Exception:
+            pass  # Graceful degradation
 
     # ── Footer: hint about remaining content ──
     loaded_section_names = {
