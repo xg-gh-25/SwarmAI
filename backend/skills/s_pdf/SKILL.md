@@ -50,13 +50,64 @@ Choose the right workflow based on the task:
 
 | Task | Workflow | Primary Tool |
 |------|----------|-------------|
+| **Convert markdown to PDF** | [md2pdf](#markdown-to-pdf-pandoc--tectonic) | **pandoc + tectonic** (PREFERRED) |
 | Create new PDF from scratch | [Create New PDF](#creating-a-new-pdf) | reportlab (Python) |
-| Create PDF from markdown/HTML | [Convert to PDF](#converting-markdown-or-html-to-pdf) | reportlab Platypus |
+| Create PDF from structured data | [Create New PDF](#creating-a-new-pdf) | reportlab Platypus |
 | Extract text | [Extract Content](#extracting-content) | pdfplumber |
 | Extract tables | [Extract Content](#extracting-content) | pdfplumber + pandas |
 | Merge/split/rotate | [Manipulate PDFs](#manipulating-existing-pdfs) | pypdf |
 | Fill PDF forms | [forms.md](forms.md) | pdf-lib or pypdf |
 | OCR scanned PDFs | [OCR Workflow](#ocr-scanned-pdfs) | pytesseract + pdf2image |
+
+---
+
+## Markdown to PDF (pandoc + tectonic)
+
+**This is the PREFERRED method for converting any markdown file to PDF.** Uses pandoc for parsing and tectonic (XeLaTeX) for typesetting. Produces production-grade output with full CJK support, professional tables, syntax-highlighted code blocks, and styled blockquotes.
+
+### Quick Start
+
+```bash
+# Basic conversion (uses professional template by default)
+scripts/md2pdf.sh input.md
+
+# With options
+scripts/md2pdf.sh input.md output.pdf --style professional --toc --preview
+
+# Suppress YAML frontmatter title (when .md has both YAML title and # heading)
+scripts/md2pdf.sh input.md output.pdf -V "title="
+```
+
+### Available Templates
+
+| Template | Font | Style | Best For |
+|----------|------|-------|----------|
+| `professional` | Helvetica Neue | Colored section rules, styled blockquotes, dark header | Design docs, HLDs, reports |
+| `minimal` | Times New Roman | Clean, minimal visual noise | Narratives, long-form docs |
+
+### What It Handles
+
+- **Tables**: pandoc parses markdown tables → LaTeX longtable with booktabs rules
+- **Code blocks**: Syntax highlighting via tango theme, framed with background color
+- **CJK**: PingFang SC for Chinese/Japanese/Korean, auto-detected
+- **Blockquotes**: Left-bordered callout boxes (red accent in professional, gray in minimal)
+- **Unicode symbols**: →, ←, ✓, ✗, • all render correctly via PingFang fallback
+- **Images**: SVG shows placeholder text (LaTeX limitation), PNG/JPG render inline
+- **TOC**: `--toc` flag generates a table of contents on its own page
+- **Page numbers**: `Page / Total` in footer
+
+### When NOT to Use md2pdf
+
+- **Pixel-perfect layout control** (custom positioning, overlapping elements) → use reportlab
+- **Programmatic PDF from structured data** (invoices, certificates) → use reportlab
+- **Non-markdown source** (HTML, JSON, database) → use reportlab
+
+### Dependencies
+
+```bash
+brew install pandoc tectonic  # Required
+brew install poppler          # Optional (for --preview)
+```
 
 ---
 
