@@ -1,0 +1,217 @@
+%% professional.tex — pandoc XeLaTeX template for production-grade PDF
+%% Features: CJK, tables, code blocks, blockquotes, images, TOC, page numbers
+%% Engine: XeLaTeX via tectonic
+%% Required by: md2pdf.sh
+
+% ── Pre-class options (must come before \documentclass) ──
+\PassOptionsToPackage{table}{xcolor}
+
+\documentclass[$if(fontsize)$$fontsize$$else$10pt$endif$,$for(classoption)$$classoption$$sep$,$endfor$]{article}
+
+% ── Page geometry ──
+\usepackage[$if(geometry)$$geometry$$else$a4paper,margin=2.2cm$endif$]{geometry}
+
+% ── Fonts (XeLaTeX) ──
+\usepackage{fontspec}
+\defaultfontfeatures{Ligatures=TeX}
+\setmainfont{Helvetica Neue}[
+  BoldFont={Helvetica Neue Bold},
+  ItalicFont={Helvetica Neue Italic},
+  BoldItalicFont={Helvetica Neue Bold Italic}
+]
+\setsansfont{Helvetica Neue}
+\setmonofont{$if(monofont)$$monofont$$else$Menlo$endif$}[Scale=0.85]
+
+% ── CJK support ──
+\usepackage{xeCJK}
+\setCJKmainfont{$if(CJKmainfont)$$CJKmainfont$$else$PingFang SC$endif$}
+\setCJKsansfont{$if(CJKsansfont)$$CJKsansfont$$else$PingFang SC$endif$}
+\setCJKmonofont{$if(CJKmonofont)$$CJKmonofont$$else$PingFang SC$endif$}
+
+% ── Unicode symbol fallback (Helvetica Neue lacks these glyphs) ──
+\usepackage{newunicodechar}
+\newfontfamily\symbolfallback{PingFang SC}
+\newunicodechar{→}{{\symbolfallback →}}
+\newunicodechar{←}{{\symbolfallback ←}}
+\newunicodechar{↑}{{\symbolfallback ↑}}
+\newunicodechar{↓}{{\symbolfallback ↓}}
+\newunicodechar{✓}{{\symbolfallback ✓}}
+\newunicodechar{✗}{{\symbolfallback ✗}}
+\newunicodechar{•}{{\symbolfallback •}}
+\newunicodechar{─}{{\symbolfallback ─}}
+\newunicodechar{│}{{\symbolfallback │}}
+\newunicodechar{┌}{{\symbolfallback ┌}}
+\newunicodechar{┐}{{\symbolfallback ┐}}
+\newunicodechar{└}{{\symbolfallback └}}
+\newunicodechar{┘}{{\symbolfallback ┘}}
+\newunicodechar{├}{{\symbolfallback ├}}
+\newunicodechar{┤}{{\symbolfallback ┤}}
+\newunicodechar{┬}{{\symbolfallback ┬}}
+\newunicodechar{┴}{{\symbolfallback ┴}}
+\newunicodechar{▲}{{\symbolfallback ▲}}
+\newunicodechar{▼}{{\symbolfallback ▼}}
+\newunicodechar{►}{{\symbolfallback ►}}
+\newunicodechar{◄}{{\symbolfallback ◄}}
+\newunicodechar{★}{{\symbolfallback ★}}
+\newunicodechar{☆}{{\symbolfallback ☆}}
+\newunicodechar{⚠}{{\symbolfallback ⚠}}
+\newunicodechar{…}{{\symbolfallback …}}
+
+% ── Colors ──
+\usepackage{xcolor}
+\definecolor{primary}{HTML}{1a1a2e}
+\definecolor{accent}{HTML}{e94560}
+\definecolor{linkblue}{HTML}{2563eb}
+\definecolor{codebg}{HTML}{f5f5f5}
+\definecolor{codeborder}{HTML}{d4d4d4}
+\definecolor{blockquotebg}{HTML}{fef9f9}
+\definecolor{blockquoteborder}{HTML}{e94560}
+\definecolor{headergray}{HTML}{37475a}
+\definecolor{rowalt}{HTML}{f8f9fa}
+\definecolor{tableborder}{HTML}{d5dbdb}
+
+% ── Section styling ──
+\usepackage{titlesec}
+\titleformat{\section}{\Large\bfseries\color{primary}}{}{0em}{}[\vspace{2pt}\color{accent}\rule{\textwidth}{1.5pt}]
+\titleformat{\subsection}{\large\bfseries\color{primary}}{}{0em}{}
+\titleformat{\subsubsection}{\normalsize\bfseries\color{headergray}}{}{0em}{}
+\titlespacing*{\section}{0pt}{18pt}{8pt}
+\titlespacing*{\subsection}{0pt}{14pt}{6pt}
+\titlespacing*{\subsubsection}{0pt}{10pt}{4pt}
+
+% ── Tables ──
+\usepackage{longtable,booktabs,array}
+\usepackage{multirow}
+\usepackage{colortbl}
+\arrayrulecolor{tableborder}
+
+% ── Code blocks ──
+$if(highlighting-macros)$
+$highlighting-macros$
+$endif$
+\usepackage{fancyvrb}
+\DefineVerbatimEnvironment{Highlighting}{Verbatim}{
+  commandchars=\\\{\},
+  frame=single,
+  rulecolor=\color{codeborder},
+  fillcolor=\color{codebg},
+  fontsize=\small,
+  xleftmargin=4pt,
+  xrightmargin=4pt,
+  framesep=6pt
+}
+\RecustomVerbatimEnvironment{verbatim}{Verbatim}{
+  frame=single,
+  rulecolor=\color{codeborder},
+  fillcolor=\color{codebg},
+  fontsize=\small,
+  xleftmargin=4pt,
+  xrightmargin=4pt,
+  framesep=6pt
+}
+
+% ── Blockquotes ──
+\usepackage{mdframed}
+\renewenvironment{quote}{%
+  \begin{mdframed}[
+    backgroundcolor=blockquotebg,
+    linecolor=blockquoteborder,
+    linewidth=3pt,
+    topline=false,
+    bottomline=false,
+    rightline=false,
+    innerleftmargin=12pt,
+    innerrightmargin=12pt,
+    innertopmargin=8pt,
+    innerbottommargin=8pt,
+    skipabove=8pt,
+    skipbelow=8pt
+  ]
+}{%
+  \end{mdframed}
+}
+
+% ── Links ──
+\usepackage{hyperref}
+\hypersetup{
+  colorlinks=true,
+  linkcolor=linkblue,
+  urlcolor=linkblue,
+  citecolor=linkblue,
+  pdfborder={0 0 0}
+}
+
+% ── Lists ──
+\usepackage{enumitem}
+\setlist[itemize]{topsep=2pt, itemsep=1pt, parsep=1pt}
+\setlist[enumerate]{topsep=2pt, itemsep=1pt, parsep=1pt}
+
+% ── Images ──
+\usepackage{graphicx}
+$if(graphics)$
+\makeatletter
+\def\maxwidth{\ifdim\Gin@nat@width>\linewidth\linewidth\else\Gin@nat@width\fi}
+\def\maxheight{\ifdim\Gin@nat@height>\textheight\textheight\else\Gin@nat@height\fi}
+\makeatother
+\setkeys{Gin}{width=\maxwidth,height=\maxheight,keepaspectratio}
+$endif$
+
+% ── Pandoc 3.x compatibility ──
+% \pandocbounded: wraps images in pandoc 3.x output
+\providecommand{\pandocbounded}[1]{#1}
+% \includesvg: pandoc emits this for .svg files — md2pdf.sh pre-converts to .pdf,
+% so by the time LaTeX sees it, the file is .pdf and \includegraphics works.
+% If SVG wasn't converted, this falls back to a text placeholder.
+\newcommand{\includesvg}[2][]{%
+  \IfFileExists{#2}{\includegraphics[width=\linewidth,keepaspectratio]{#2}}%
+  {\textit{[Image: #2 — SVG requires rsvg-convert]}}%
+}
+% \LTcaptype: pandoc uses \def\LTcaptype{none} to suppress longtable captions
+\newcommand{\LTcaptype}{}
+
+% ── Misc ──
+\usepackage{calc}
+\setlength{\emergencystretch}{3em}
+\providecommand{\tightlist}{\setlength{\itemsep}{0pt}\setlength{\parskip}{0pt}}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{6pt}
+
+% ── Header/Footer ──
+\usepackage{fancyhdr}
+\usepackage{lastpage}
+\pagestyle{fancy}
+\fancyhf{}
+\renewcommand{\headrulewidth}{0pt}
+\fancyfoot[C]{\small\color{headergray}\thepage\ / \pageref{LastPage}}
+
+% ── TOC styling ──
+$if(toc)$
+\usepackage{tocloft}
+\renewcommand{\cftsecfont}{\bfseries\color{primary}}
+\renewcommand{\cftsubsecfont}{\color{headergray}}
+\renewcommand{\cftsecpagefont}{\bfseries\color{primary}}
+$endif$
+
+% ══════════════════════════════════════════════
+\begin{document}
+
+$if(title)$
+\begin{center}
+{\huge\bfseries\color{primary} $title$}\\[8pt]
+$if(subtitle)${\large\color{headergray} $subtitle$}\\[6pt]$endif$
+$if(author)${\normalsize\color{headergray} $author$}\\[4pt]$endif$
+$if(date)${\small\color{headergray} $date$}\\[4pt]$endif$
+\end{center}
+\vspace{2pt}
+{\color{accent}\rule{\textwidth}{1.5pt}}
+\vspace{12pt}
+$endif$
+
+$if(toc)$
+\tableofcontents
+\clearpage
+$endif$
+
+$body$
+
+\end{document}

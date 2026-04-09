@@ -1,0 +1,103 @@
+%% minimal.tex — Clean, minimal pandoc LaTeX template
+%% Optimized for readability with minimal visual noise
+\documentclass[$if(fontsize)$$fontsize$$else$11pt$endif$,$for(classoption)$$classoption$$sep$,$endfor$]{article}
+
+\usepackage[$if(geometry)$$geometry$$else$a4paper,margin=2.5cm$endif$]{geometry}
+
+% ── Fonts ──
+\usepackage{fontspec}
+\setmainfont{Times New Roman}
+\setsansfont{Helvetica Neue}
+\setmonofont{$if(monofont)$$monofont$$else$Menlo$endif$}[Scale=0.85]
+
+% ── CJK ──
+\usepackage{xeCJK}
+\setCJKmainfont{$if(CJKmainfont)$$CJKmainfont$$else$Songti SC$endif$}
+\setCJKsansfont{$if(CJKsansfont)$$CJKsansfont$$else$PingFang SC$endif$}
+\setCJKmonofont{$if(CJKmonofont)$$CJKmonofont$$else$PingFang SC$endif$}
+
+% ── Colors (muted) ──
+\usepackage{xcolor}
+\definecolor{darktext}{HTML}{222222}
+\definecolor{mutedgray}{HTML}{666666}
+\definecolor{codebg}{HTML}{fafafa}
+\definecolor{codeborder}{HTML}{e0e0e0}
+\definecolor{linkblue}{HTML}{0066cc}
+\definecolor{rowalt}{HTML}{f9f9f9}
+\definecolor{tableborder}{HTML}{dddddd}
+
+% ── Sections ──
+\usepackage{titlesec}
+\titleformat{\section}{\Large\bfseries\color{darktext}}{}{0em}{}
+\titleformat{\subsection}{\large\bfseries\color{darktext}}{}{0em}{}
+\titleformat{\subsubsection}{\normalsize\bfseries\color{mutedgray}}{}{0em}{}
+
+% ── Tables ──
+\usepackage{longtable,booktabs,array,colortbl}
+\arrayrulecolor{tableborder}
+\let\oldlongtable\longtable
+\let\endoldlongtable\endlongtable
+\renewenvironment{longtable}[1]{\rowcolors{2}{white}{rowalt}\oldlongtable{#1}}{\endoldlongtable}
+
+% ── Code ──
+$if(highlighting-macros)$
+$highlighting-macros$
+$endif$
+\usepackage{fancyvrb}
+\DefineVerbatimEnvironment{Highlighting}{Verbatim}{
+  commandchars=\\\{\}, frame=single, rulecolor=\color{codeborder},
+  fillcolor=\color{codebg}, fontsize=\small, framesep=6pt
+}
+\RecustomVerbatimEnvironment{verbatim}{Verbatim}{
+  frame=single, rulecolor=\color{codeborder}, fillcolor=\color{codebg},
+  fontsize=\small, framesep=6pt
+}
+
+% ── Pandoc 3.x compatibility ──
+\providecommand{\pandocbounded}[1]{#1}
+\providecommand{\includesvg}[2][]{\textit{[SVG image: #2]}}
+\newcommand{\LTcaptype}{}
+
+% ── Blockquotes ──
+\usepackage{mdframed}
+\renewenvironment{quote}{%
+  \begin{mdframed}[linecolor=tableborder, linewidth=2pt,
+    topline=false, bottomline=false, rightline=false,
+    innerleftmargin=12pt, innertopmargin=6pt, innerbottommargin=6pt]
+}{\end{mdframed}}
+
+% ── Links, lists, images ──
+\usepackage{hyperref}
+\hypersetup{colorlinks=true, linkcolor=linkblue, urlcolor=linkblue, pdfborder={0 0 0}}
+\usepackage{enumitem}
+\setlist{topsep=2pt, itemsep=1pt, parsep=1pt}
+\usepackage{graphicx}
+$if(graphics)$
+\makeatletter
+\def\maxwidth{\ifdim\Gin@nat@width>\linewidth\linewidth\else\Gin@nat@width\fi}
+\def\maxheight{\ifdim\Gin@nat@height>\textheight\textheight\else\Gin@nat@height\fi}
+\makeatother
+\setkeys{Gin}{width=\maxwidth,height=\maxheight,keepaspectratio}
+$endif$
+
+% ── Misc ──
+\setlength{\emergencystretch}{3em}
+\providecommand{\tightlist}{\setlength{\itemsep}{0pt}\setlength{\parskip}{0pt}}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{6pt}
+
+\usepackage{fancyhdr,lastpage}
+\pagestyle{fancy}\fancyhf{}
+\renewcommand{\headrulewidth}{0pt}
+\fancyfoot[C]{\small\color{mutedgray}\thepage}
+
+\begin{document}
+$if(title)$
+{\huge\bfseries $title$}\par\vspace{4pt}
+$if(author)${\color{mutedgray} $author$}$endif$
+$if(date)$\hfill{\small\color{mutedgray} $date$}$endif$
+\par\vspace{4pt}\rule{\textwidth}{0.4pt}\vspace{12pt}
+$endif$
+$if(toc)$\tableofcontents\clearpage$endif$
+$body$
+\end{document}
