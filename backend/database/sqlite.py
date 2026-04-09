@@ -2123,6 +2123,25 @@ class SQLiteDatabase(BaseDatabase):
         # Assign SwarmWS.id to tasks with NULL workspace_id
         await self._migrate_existing_task_data(conn)
 
+        # Migration: Create skill_metrics table (added 2026-04-09)
+        # Tracks skill invocation outcomes for evolution candidate detection.
+        # Idempotent: IF NOT EXISTS.
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS skill_metrics (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                skill_name TEXT NOT NULL,
+                invocation_date TEXT NOT NULL,
+                session_id TEXT,
+                outcome TEXT NOT NULL CHECK(outcome IN ('success', 'partial', 'failure', 'abandoned')),
+                duration_seconds REAL DEFAULT 0.0,
+                user_satisfaction TEXT DEFAULT 'unknown' CHECK(user_satisfaction IN ('correction', 'accepted', 'unknown'))
+            )
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_skill_metrics_name ON skill_metrics(skill_name)
+        """)
+        await conn.commit()
+
     async def _migrate_existing_task_data(self, conn: aiosqlite.Connection) -> None:
         """Migrate existing task data for workspace refactor.
         
