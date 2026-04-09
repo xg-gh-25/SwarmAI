@@ -2142,6 +2142,44 @@ class SQLiteDatabase(BaseDatabase):
         """)
         await conn.commit()
 
+        # ============================================================================
+        # FTS5 Full-Text Search on messages (Session Recall — Phase 2)
+        # Creates a content-synced FTS5 virtual table for fast full-text search
+        # across session messages. The messages table uses TEXT PRIMARY KEY (id)
+        # but SQLite maintains an implicit rowid which FTS5 uses.
+        # ============================================================================
+        try:
+            await conn.execute("""
+                CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+                    content,
+                    content=messages,
+                    content_rowid=rowid
+                )
+            """)
+            await conn.execute("""
+                CREATE TRIGGER IF NOT EXISTS messages_fts_insert
+                AFTER INSERT ON messages BEGIN
+                    INSERT INTO messages_fts(rowid, content) VALUES (new.rowid, new.content);
+                END
+            """)
+            await conn.execute("""
+                CREATE TRIGGER IF NOT EXISTS messages_fts_delete
+                AFTER DELETE ON messages BEGIN
+                    INSERT INTO messages_fts(messages_fts, rowid, content)
+                    VALUES('delete', old.rowid, old.content);
+                END
+            """)
+            await conn.commit()
+            # Rebuild index from existing data (idempotent)
+            try:
+                await conn.execute("INSERT INTO messages_fts(messages_fts) VALUES('rebuild')")
+                await conn.commit()
+            except Exception:
+                pass  # Rebuild may fail if already synced
+            logger.info("Migration complete: messages_fts FTS5 table and triggers created")
+        except Exception as exc:
+            logger.warning("FTS5 migration skipped (may already exist): %s", exc)
+
     async def _migrate_existing_task_data(self, conn: aiosqlite.Connection) -> None:
         """Migrate existing task data for workspace refactor.
         

@@ -702,6 +702,17 @@ class PromptBuilder:
                 except Exception as exc:
                     logger.warning("Proactive intelligence injection failed: %s", exc)
 
+            # ── Skill Registry (compact skill index) ──
+            if not is_channel:
+                try:
+                    from .skill_registry import SkillRegistry
+                    registry = SkillRegistry(Path(working_directory) / ".claude" / "skills")
+                    compact = registry.generate_compact_registry()
+                    if compact:
+                        context_text += f"\n\n{compact}"
+                except Exception as exc:
+                    logger.warning("Skill registry injection failed: %s", exc)
+
             # ── Layer 6: Recalled Knowledge (Library recall) ──────────
             # Pre-session recall: use focus keywords to search the Knowledge
             # Library (730K tokens of DailyActivity, Designs, Notes, etc.)
