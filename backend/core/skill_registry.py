@@ -89,7 +89,7 @@ class SkillRegistry:
                 if skill_md.exists():
                     mtime = os.path.getmtime(str(skill_md))
                     parts.append(f"{entry.name}:{mtime}")
-        return hashlib.md5("|".join(parts).encode()).hexdigest()
+        return hashlib.md5("|".join(parts).encode(), usedforsecurity=False).hexdigest()
 
     def _discover_skills(self) -> list[str]:
         """List all skill names from s_*/SKILL.md directories."""

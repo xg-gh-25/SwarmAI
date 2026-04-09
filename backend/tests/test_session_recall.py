@@ -57,6 +57,12 @@ def db_path(tmp_path: Path) -> Path:
             INSERT INTO messages_fts(messages_fts, rowid, content) VALUES('delete', old.rowid, old.content);
         END
     """)
+    conn.execute("""
+        CREATE TRIGGER IF NOT EXISTS messages_fts_update AFTER UPDATE ON messages BEGIN
+            INSERT INTO messages_fts(messages_fts, rowid, content) VALUES('delete', old.rowid, old.content);
+            INSERT INTO messages_fts(rowid, content) VALUES (new.rowid, new.content);
+        END
+    """)
     conn.commit()
     conn.close()
     return path

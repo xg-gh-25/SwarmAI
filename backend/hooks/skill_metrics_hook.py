@@ -14,6 +14,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 
+from core.extraction_patterns import CORRECTION_PATTERNS as _CORRECTION_PATTERNS
 from core.session_hooks import HookContext
 
 logger = logging.getLogger(__name__)
@@ -21,12 +22,6 @@ logger = logging.getLogger(__name__)
 # Patterns in assistant text content indicating skill invocation
 _SKILL_TEXT_PATTERNS = re.compile(
     r"(?:Using Skill|Launching skill|Invoking skill)[:\s]+['\"]?(\S+)",
-    re.IGNORECASE,
-)
-
-# Correction indicators in user messages following a skill invocation
-_CORRECTION_PATTERNS = re.compile(
-    r"\b(?:no|don'?t|stop|wrong|incorrect|fix|undo|revert|instead|actually|wait)\b",
     re.IGNORECASE,
 )
 
@@ -44,6 +39,16 @@ class SkillMetricsHook:
     6. Estimates duration from timestamps between skill invocation and next user message
     """
 
+    def __init__(self) -> None:
+        self._store: "SkillMetricsStore | None" = None
+
+    def _get_store(self, db_path: "Path") -> "SkillMetricsStore":
+        """Return a cached SkillMetricsStore instance, creating on first call."""
+        if self._store is None:
+            from core.skill_metrics import SkillMetricsStore
+            self._store = SkillMetricsStore(db_path)
+        return self._store
+
     @property
     def name(self) -> str:
         return "skill-metrics"
@@ -53,7 +58,6 @@ class SkillMetricsHook:
         try:
             from database import db
             from config import get_app_data_dir
-            from core.skill_metrics import SkillMetricsStore
 
             # Load messages for this session
             messages_raw = await db.messages.list(
@@ -68,24 +72,21 @@ class SkillMetricsHook:
             if not invocations:
                 return
 
-            # Record each invocation
+            # Record each invocation (cached store avoids re-creation per session)
             db_path = get_app_data_dir() / "data.db"
-            store = SkillMetricsStore(db_path)
-            try:
-                for inv in invocations:
-                    store.record(
-                        skill_name=inv["skill_name"],
-                        session_id=context.session_id,
-                        outcome=inv["outcome"],
-                        duration_seconds=inv["duration_seconds"],
-                        user_satisfaction=inv["user_satisfaction"],
-                    )
-                logger.info(
-                    "SkillMetricsHook: recorded %d skill invocation(s) for session %s",
-                    len(invocations), context.session_id,
+            store = self._get_store(db_path)
+            for inv in invocations:
+                store.record(
+                    skill_name=inv["skill_name"],
+                    session_id=context.session_id,
+                    outcome=inv["outcome"],
+                    duration_seconds=inv["duration_seconds"],
+                    user_satisfaction=inv["user_satisfaction"],
                 )
-            finally:
-                store.close()
+            logger.info(
+                "SkillMetricsHook: recorded %d skill invocation(s) for session %s",
+                len(invocations), context.session_id,
+            )
 
         except Exception as exc:
             logger.error("SkillMetricsHook failed: %s", exc, exc_info=True)
@@ -175,6 +176,10 @@ def _detect_skill_invocations(messages: list[dict]) -> list[dict]:
             next_timestamp = next_user_msg.get("created_at", "")
             duration_seconds = _estimate_duration(msg_timestamp, next_timestamp)
 
+        # NOTE: when multiple skills appear in the same assistant message,
+        # all share the same outcome/satisfaction from the single next user
+        # message. Separating per-skill correction detection would require
+        # NLU to map correction text to specific skills — deferred.
         for skill_name in skill_names:
             invocations.append({
                 "skill_name": skill_name,
@@ -187,22 +192,12 @@ def _detect_skill_invocations(messages: list[dict]) -> list[dict]:
 
 
 def _estimate_duration(start_ts: str, end_ts: str) -> float:
-    """Estimate duration in seconds between two ISO timestamps.
-
-    Returns 0.0 if either timestamp is missing or unparseable.
-    """
+    """Estimate duration between two ISO timestamps."""
     if not start_ts or not end_ts:
         return 0.0
     try:
-        # Handle both with and without microseconds
-        for fmt in ("%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S"):
-            try:
-                start = datetime.fromisoformat(start_ts.replace("Z", "+00:00"))
-                end = datetime.fromisoformat(end_ts.replace("Z", "+00:00"))
-                delta = (end - start).total_seconds()
-                return max(0.0, delta)
-            except (ValueError, TypeError):
-                continue
-    except Exception:
-        pass
-    return 0.0
+        start = datetime.fromisoformat(start_ts)
+        end = datetime.fromisoformat(end_ts)
+        return max(0.0, (end - start).total_seconds())
+    except (ValueError, TypeError):
+        return 0.0

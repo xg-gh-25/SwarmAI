@@ -15,6 +15,7 @@ Key public symbols:
 - ``LESSON_PATTERNS``      — Matches lesson/learning phrases.
 - ``AGENT_MONOLOGUE``      — Matches agent internal monologue (filter).
 - ``NOISE_PATTERNS``       — Matches filler/noise in user messages.
+- ``CORRECTION_PATTERNS``  — Matches user correction indicators.
 - ``is_noise_entry``       — Detect noise leaked from agent monologue or tables.
 
 Design principle: patterns used in summarization (broader, runs on raw
@@ -93,6 +94,18 @@ NOISE_PATTERNS = re.compile(
 
 # Compiled once — used by is_noise_entry()
 _EMOJI_PREFIX = re.compile(r"^(?:\u2705|\u274c|\u26a0\ufe0f|\U0001f534|\U0001f7e1|\U0001f535) ")
+
+
+# ---------------------------------------------------------------------------
+# Correction patterns — detect user corrections after skill/agent output
+# ---------------------------------------------------------------------------
+# Used by both session_miner.py (mining transcripts for eval examples) and
+# skill_metrics_hook.py (detecting corrections in post-session messages).
+
+CORRECTION_PATTERNS = re.compile(
+    r"\b(?:no|don'?t|stop|wrong|incorrect|fix|undo|revert|instead|actually|wait)\b",
+    re.IGNORECASE,
+)
 
 
 def is_noise_entry(entry: str) -> bool:
