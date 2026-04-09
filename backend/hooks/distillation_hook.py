@@ -52,8 +52,10 @@ SCAN_DAYS = 30  # Only check files from last 30 days
 ARCHIVE_DAYS = 90  # Move files older than this to Archives/
 SECTION_CAPS = {  # Max entries per MEMORY.md section after distillation
     "Key Decisions": 30,
-    "Lessons Learned": 20,
+    "Lessons Learned": 25,
     "COE Registry": 15,
+    "Recent Context": 30,
+    "Open Threads": 10,
 }
 
 # Centralized patterns — shared with summarization.py via extraction_patterns.py.
@@ -409,7 +411,7 @@ class DistillationTriggerHook:
 
         # Enforce section caps on MEMORY.md to prevent unbounded growth
         if all_decisions or all_lessons or coe_entries:
-            self._enforce_section_caps(memory_path)
+            self._enforce_section_caps(memory_path, ws_path)
 
         # Mark files as distilled AFTER all writes succeed.
         # Previous ordering (mark inside loop, write after) could lose entries:
@@ -1405,15 +1407,20 @@ class DistillationTriggerHook:
         return archived
 
     @staticmethod
-    def _enforce_section_caps(memory_path: Path) -> None:
+    def _enforce_section_caps(memory_path: Path, ws_path: Path | None = None) -> None:
         """Trim MEMORY.md sections to SECTION_CAPS max entries.
 
         Reads the file, finds each capped section, counts ``- `` prefixed
-        lines, and removes the oldest (bottom) entries that exceed the cap.
-        Writes back atomically under flock.
+        lines, and archives the oldest (bottom) entries that exceed the cap
+        to ``Knowledge/Archives/MEMORY-archive-YYYY-MM.md``.
 
         This runs after distillation writes, so the newest entries are at
         the top of each section (prepend mode).  Oldest = bottom = trimmed.
+
+        Args:
+            memory_path: Path to MEMORY.md.
+            ws_path: Workspace root (for archive directory). If None,
+                     overflow entries are discarded instead of archived.
         """
         import fcntl as _fcntl
         from scripts.locked_write import _find_section_range
@@ -1430,6 +1437,7 @@ class DistillationTriggerHook:
             try:
                 content = memory_path.read_text(encoding="utf-8")
                 modified = False
+                archived_sections: dict[str, list[str]] = {}
 
                 for section_name, cap in SECTION_CAPS.items():
                     section_range = _find_section_range(content, section_name)
@@ -1449,12 +1457,26 @@ class DistillationTriggerHook:
                     if len(entry_indices) <= cap:
                         continue
 
+                    # Collect overflow entries for archival
+                    overflow_indices = set(entry_indices[cap:])
+                    overflow_lines = [
+                        lines[i] for i in entry_indices[cap:]
+                    ]
+                    if overflow_lines:
+                        archived_sections[section_name] = overflow_lines
+
                     # Remove oldest entries (bottom of section)
-                    to_remove = set(entry_indices[cap:])
                     trimmed_lines = [
                         line for i, line in enumerate(lines)
-                        if i not in to_remove
+                        if i not in overflow_indices
                     ]
+                    # Add archive reference
+                    today = date.today()
+                    archive_ref = f"- [Archived] See Knowledge/Archives/MEMORY-archive-{today.strftime('%Y-%m')}.md"
+                    # Check if reference already exists
+                    if not any("[Archived]" in l for l in trimmed_lines):
+                        trimmed_lines.append(archive_ref)
+
                     # Preserve original trailing whitespace between sections
                     new_section = "\n".join(trimmed_lines)
                     if section_text.endswith("\n"):
@@ -1467,12 +1489,38 @@ class DistillationTriggerHook:
                     modified = True
                     removed = len(entry_indices) - cap
                     logger.info(
-                        "Capped %s: removed %d oldest entries (cap=%d)",
+                        "Capped %s: removed %d oldest entries (cap=%d), archived",
                         section_name, removed, cap,
                     )
 
                 if modified:
                     memory_path.write_text(content, encoding="utf-8")
+
+                # Write overflow to archive file
+                if archived_sections and ws_path is not None:
+                    today = date.today()
+                    archive_dir = ws_path / "Knowledge" / "Archives"
+                    archive_dir.mkdir(parents=True, exist_ok=True)
+                    archive_name = f"MEMORY-archive-{today.strftime('%Y-%m')}.md"
+                    archive_path = archive_dir / archive_name
+
+                    # Append to existing archive or create new
+                    archive_content = ""
+                    if archive_path.exists():
+                        archive_content = archive_path.read_text(encoding="utf-8")
+
+                    new_blocks: list[str] = []
+                    for sec_name, entries in archived_sections.items():
+                        new_blocks.append(f"\n## {sec_name} (archived {today.isoformat()})\n")
+                        for entry in entries:
+                            new_blocks.append(entry + "\n")
+
+                    archive_content += "".join(new_blocks)
+                    archive_path.write_text(archive_content, encoding="utf-8")
+                    logger.info(
+                        "Archived overflow entries to %s", archive_path,
+                    )
+
             finally:
                 _fcntl.flock(fd, _fcntl.LOCK_UN)
         except Exception as exc:

@@ -313,7 +313,16 @@ class ContextHealthHook:
         if da_dir.is_dir() and not today_file.exists():
             findings.append(f"MISSING: DailyActivity/{today_file.name} (no session logged today)")
 
-        # 5. L1 cache freshness — if source .md newer than cache, invalidate
+        # 5. Enforce section caps on MEMORY.md (daily, not just post-distillation)
+        memory_path = context_dir / "MEMORY.md"
+        if memory_path.exists():
+            try:
+                from hooks.distillation_hook import DistillationTriggerHook
+                DistillationTriggerHook._enforce_section_caps(memory_path, root)
+            except Exception as exc:
+                logger.warning("context_health: section cap enforcement failed: %s", exc)
+
+        # 6. L1 cache freshness — if source .md newer than cache, invalidate
         self._check_cache_freshness(context_dir, findings)
 
         # Persist findings for session briefing

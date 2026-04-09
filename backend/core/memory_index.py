@@ -188,6 +188,27 @@ def _extract_keywords(entry_text: str) -> list[str]:
     return [t for t, _ in sorted_tokens[:6]]
 
 
+# ── Cross-Reference Extraction ───────────────────────────────────────
+
+def _extract_refs(entry_text: str, self_key: str) -> list[str]:
+    """Extract cross-reference IDs from an entry's full text.
+
+    Scans for patterns like [COE02], [KD01], [RC15] etc.
+    Excludes self-references (where the ref matches the entry's own key).
+
+    Args:
+        entry_text: The full text of the memory entry.
+        self_key: The entry's own key (e.g. "KD01") to exclude self-refs.
+
+    Returns:
+        Sorted list of unique reference IDs (e.g. ["COE02", "RC15"]).
+    """
+    # Extract full reference IDs (e.g. "COE02", "KD01") from bracketed refs
+    full_refs = re.findall(r"\[(COE\d+|KD\d+|RC\d+|LL\d+|OT\d+)\]", entry_text)
+    unique = sorted(set(full_refs) - {self_key})
+    return unique
+
+
 # ── Index Generation ──────────────────────────────────────────────────
 
 
@@ -254,7 +275,10 @@ def generate_memory_index(content: str) -> str:
             alias_str = ", ".join(aliases) if aliases else ""
             date_prefix = f"{entry['date_str']} " if entry.get("date_str") else ""
             title = entry["title"]
+            refs = _extract_refs(entry["full_text"], key)
             line = f"- [{key}] {date_prefix}{title}"
+            if refs:
+                line += f" | refs: {', '.join(refs)}"
             if alias_str:
                 line += f" | {alias_str}"
             permanent_lines.append(line)
@@ -273,8 +297,11 @@ def generate_memory_index(content: str) -> str:
             alias_str = ", ".join(aliases) if aliases else ""
             date_prefix = f"{entry['date_str']} " if entry.get("date_str") else ""
             title = entry["title"]
+            refs = _extract_refs(entry["full_text"], key)
 
             line = f"- [{key}] {date_prefix}{title}"
+            if refs:
+                line += f" | refs: {', '.join(refs)}"
             if alias_str:
                 line += f" | {alias_str}"
             active_lines.append(line)

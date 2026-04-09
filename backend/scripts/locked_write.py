@@ -407,6 +407,23 @@ def locked_read_modify_write(
         LockedWriteError: If the lock cannot be acquired within
             ``LOCK_TIMEOUT`` seconds.
     """
+    # ── MemoryGuard: sanitize content before any file I/O ────────────
+    try:
+        from core.memory_guard import MemoryGuard, MemoryGuardError
+        _guard = MemoryGuard()
+        try:
+            text = _guard.sanitize(text)
+        except MemoryGuardError as e:
+            import logging as _logging
+            _logging.getLogger(__name__).warning(
+                "MemoryGuard rejected write to %s: %s", file_path, e,
+            )
+            raise LockedWriteError(
+                f"Memory injection blocked — {e}"
+            ) from e
+    except ImportError:
+        pass  # memory_guard not available yet — proceed without guard
+
     lock_path = file_path.with_suffix(file_path.suffix + ".lock")
     lock_path.parent.mkdir(parents=True, exist_ok=True)
 
