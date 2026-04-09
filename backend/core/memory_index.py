@@ -455,6 +455,24 @@ def _adaptive_max_tokens(context_percent_used: float) -> int:
     return 999_999  # effectively unlimited
 
 
+# ── SessionRecall singleton cache ────────────────────────────────────
+
+_session_recall_cache: dict[str, object] = {}  # db_path_str → SessionRecall
+
+
+def _get_session_recall(db_path: Path) -> object:
+    """Return a cached SessionRecall instance for the given DB path.
+
+    Avoids re-creating the object (and its sqlite connections) on every
+    ``select_memory_sections()`` call.
+    """
+    key = str(db_path)
+    if key not in _session_recall_cache:
+        from core.session_recall import SessionRecall
+        _session_recall_cache[key] = SessionRecall(db_path)
+    return _session_recall_cache[key]
+
+
 # ── Key→Section mapping ──────────────────────────────────────────────
 
 _KEY_TO_SECTION = {
@@ -752,6 +770,8 @@ def select_memory_sections(
         # else: skip this section but keep trying smaller ones
 
     # ── SessionRecall fallback: if no keyword-matched sections loaded ──
+    # Module-level cache avoids re-creating SessionRecall (and its 2
+    # sqlite connections) on every session start.
     if not sections_to_load and user_message:
         try:
             from core.session_recall import SessionRecall
@@ -765,7 +785,7 @@ def select_memory_sections(
             )
             db_path = data_dir / "data.db"
             if db_path.exists():
-                recall = SessionRecall(db_path)
+                recall = _get_session_recall(db_path)
                 recall_text = recall.recall_about(user_message, max_sessions=2)
                 if recall_text:
                     recall_tokens = ContextDirectoryLoader.estimate_tokens(recall_text)
