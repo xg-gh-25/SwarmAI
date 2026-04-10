@@ -177,7 +177,7 @@ class TestDedup:
 class TestSystemJobs:
     def test_system_jobs_count(self):
         from jobs.system_jobs import SYSTEM_JOBS
-        assert len(SYSTEM_JOBS) == 8
+        assert len(SYSTEM_JOBS) == 9
 
     def test_system_job_ids_unique(self):
         from jobs.system_jobs import SYSTEM_JOBS

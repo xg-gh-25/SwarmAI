@@ -71,22 +71,40 @@ class _MockThinkingBlock:
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _patch_sdk_modules():
-    """Return a patch.dict context manager that injects mock SDK modules."""
-    return patch.dict(sys.modules, {
-        "claude_agent_sdk": MagicMock(**{
-            "ResultMessage": _MockResultMessage,
-            "AssistantMessage": _MockAssistantMessage,
-            "SystemMessage": _MockSystemMessage,
-            "TextBlock": _MockTextBlock,
-            "ToolUseBlock": _MockToolUseBlock,
-            "ToolResultBlock": _MockToolResultBlock,
-        }),
-        "claude_agent_sdk.types": MagicMock(**{
-            "StreamEvent": _MockStreamEvent,
-            "ThinkingBlock": _MockThinkingBlock,
-        }),
-    })
+class _patch_sdk_modules:
+    """Context manager that injects mock SDK modules and patches the
+    permission_manager to avoid cross-event-loop Queue errors in xdist."""
+
+    def __enter__(self):
+        self._dict_patch = patch.dict(sys.modules, {
+            "claude_agent_sdk": MagicMock(**{
+                "ResultMessage": _MockResultMessage,
+                "AssistantMessage": _MockAssistantMessage,
+                "SystemMessage": _MockSystemMessage,
+                "TextBlock": _MockTextBlock,
+                "ToolUseBlock": _MockToolUseBlock,
+                "ToolResultBlock": _MockToolResultBlock,
+            }),
+            "claude_agent_sdk.types": MagicMock(**{
+                "StreamEvent": _MockStreamEvent,
+                "ThinkingBlock": _MockThinkingBlock,
+            }),
+        })
+        # Patch permission_manager.get_session_queue to return a fresh Queue
+        # bound to the current event loop (avoids "bound to a different event
+        # loop" RuntimeError when xdist reuses workers).
+        self._pm_patch = patch(
+            "core.permission_manager.permission_manager.get_session_queue",
+            return_value=asyncio.Queue(),
+        )
+        self._dict_patch.start()
+        self._pm_patch.start()
+        return self
+
+    def __exit__(self, *exc):
+        self._pm_patch.stop()
+        self._dict_patch.stop()
+        return False
 
 
 def _make_unit(session_id: str = "test-preservation") -> SessionUnit:
