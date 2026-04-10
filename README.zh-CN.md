@@ -95,11 +95,13 @@ SwarmAI 不只是使用技能——遇到能力缺口时会自己构建新的。
 <img src="./assets/self-evolution.svg" alt="自我进化 — 持续成长闭环" width="800"/>
 </div>
 
-- **EVOLUTION.md** —— 已构建能力、已学优化、已捕获纠正和失败尝试的持久注册表
-- **自动缺口检测** —— 当 Agent 无法完成某事时，它可以创建新技能、测试并注册供未来会话使用
-- **主动缺口检测** —— 每周维护扫描 DailyActivity 中的重复错误模式并在简报中浮现
-- **纠正捕获** —— 错误被记录为高价值条目，确保同样的错误不会重犯
-- **56+ 内置技能** —— 浏览器自动化、PDF 生成（pandoc + tectonic，支持 CJK）、电子表格、Slack、Outlook、Apple 提醒、网页研究、代码审查、自主管道等
+- **MemoryGuard** —— 所有持久记忆写入均经过安全扫描：密钥→脱敏，注入攻击→拦截，不可见字符→清除。敏感数据永不落盘
+- **UserObserver** —— 检测用户行为模式（语言偏好、专业领域、沟通风格），建议更新 USER.md。Agent 适应你的工作方式，而非相反
+- **SessionRecall** —— 基于 FTS5 的跨会话全文搜索。新对话开始时 Agent 就知道「上周我们讨论过 Kubernetes 部署方案」，无需重复解释
+- **SkillMetrics + SkillFitness** —— 追踪每个技能的调用次数、成功/纠正率，使用三信号评估（Jaccard + bigram + containment）评分。数据驱动，不靠猜测
+- **EvolutionOptimizer** —— 当某技能持续被纠正（"不要 X"、"改用 Y"），优化器自动改写技能指令。修改前备份，所有变更记录到 EVOLUTION.md 供审计
+- **56+ 内置技能** —— 浏览器自动化、PDF 生成（md2pdf，支持 CJK）、电子表格、Slack、Outlook、Apple 提醒、网页研究、代码审查、自主管道等
+- **SkillGuard** —— 按信任等级（内置 > 用户创建 > Agent 创建 > 外部下载）在创建和发现阶段进行安全扫描，危险模式在执行前即被拦截
 
 ### 4. Swarm 核心引擎 —— 自我成长的智能体
 
@@ -111,7 +113,7 @@ SwarmAI 不只是使用技能——遇到能力缺口时会自己构建新的。
 
 | 飞轮 | 功能 | 核心组件 |
 |------|------|---------|
-| **自我进化** | 构建新技能、捕获纠正、永不重犯 | EVOLUTION.md、56+ 技能、缺口检测、纠正注册表 |
+| **自我进化** | 观察用户模式、度量技能表现、自动优化低效技能、永不重犯 | EVOLUTION.md、56+ 技能、SkillMetrics、EvolutionOptimizer、SessionMiner、SkillFitness、UserObserver、SkillGuard |
 | **自我记忆** | 三层蒸馏 + 混合召回（FTS5 + sqlite-vec 向量），git 验证，LLM 驱动的周维护 | DailyActivity、蒸馏钩子、MEMORY.md、召回引擎、主动简报 |
 | **自我上下文** | 11 文件 P0-P10 优先级链 + Token 预算 + L0/L1 缓存 | 上下文加载器、提示词构建器、预算分层、新鲜度检查 |
 | **自我检验** | 验证所有上下文文件、检测 DDD 过期、自动刷新索引 | ContextHealthHook（轻量 + 深度模式）、自动提交、完整性检查 |

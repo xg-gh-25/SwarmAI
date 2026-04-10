@@ -87,19 +87,21 @@ Three-layer memory system that distills raw session activity into durable knowle
 
 You never re-explain context. The AI knows your projects, your preferences, your recent decisions, and your open threads — every time.
 
-### 3. Self-Evolution — It Gets Better
+### 3. Self-Evolution — It Gets Better *Automatically*
 
-SwarmAI doesn't just use skills — it builds new ones when it hits capability gaps.
+SwarmAI doesn't just use skills — it observes how you work, measures skill performance, and automatically improves underperforming skills based on your corrections. A closed-loop system across 12 modules:
 
 <div align="center">
 <img src="./assets/self-evolution.svg" alt="Self-Evolution — Continuous Growth Loop" width="800"/>
 </div>
 
-- **EVOLUTION.md** — persistent registry of capabilities built, optimizations learned, corrections captured, and failed attempts
-- **Automatic gap detection** — when the agent can't do something, it can create a new skill, test it, and register it for future sessions
-- **Proactive gap detection** — weekly maintenance scans DailyActivity for recurring error patterns and surfaces them in briefings
-- **Correction capture** — mistakes are recorded as high-value entries so the same error never happens twice
+- **MemoryGuard** — every write to persistent memory is scanned for secrets (→ redacted), prompt injections (→ rejected), and invisible characters (→ stripped). No sensitive data leaks to disk.
+- **UserObserver** — detects your behavioral patterns (language preferences, domain expertise, communication style) and suggests USER.md updates. The agent adapts to how you work — not the other way around.
+- **SessionRecall** — FTS5 full-text search across all past sessions. Start a new chat and the agent already knows "we discussed the Kubernetes deployment last week." No re-explaining.
+- **SkillMetrics + SkillFitness** — tracks every skill invocation, measures success/correction rates, and scores fitness using 3-signal evaluation (Jaccard + bigram + containment). Data-driven, not guesswork.
+- **EvolutionOptimizer** — when a skill consistently receives corrections ("don't X", "use Y instead"), the optimizer automatically rewrites the skill instructions. SKILL.md backed up before changes, all modifications logged to EVOLUTION.md for audit trail.
 - **56+ built-in skills** — browser automation, PDF generation (md2pdf with CJK support), spreadsheets, Slack, Outlook, Apple Reminders, web research, code review, autonomous pipeline, and more
+- **SkillGuard** — trust-level security scanning (BUILTIN > USER_CREATED > AGENT_CREATED > EXTERNAL) at both creation and discovery time. Dangerous patterns in skills are caught before they execute.
 
 ### 4. Swarm Core Engine — A Self-Growing Intelligence
 
@@ -111,8 +113,8 @@ Most AI agents are stateless functions: input in, output out, nothing learned. S
 
 | Flywheel | What It Does | Key Components |
 |----------|-------------|----------------|
-| **Self-Evolution** | Builds new skills, captures corrections, never repeats mistakes | EVOLUTION.md, 56+ skills, gap detection, correction registry |
-| **Self-Memory** | 3-layer distillation + hybrid recall (FTS5 + sqlite-vec), git-verified, weekly LLM-powered pruning | DailyActivity, distillation hooks, MEMORY.md, recall engine, proactive briefing |
+| **Self-Evolution** | Observes user patterns, measures skill performance, automatically optimizes underperforming skills, never repeats mistakes | EVOLUTION.md, 56+ skills, SkillMetrics, EvolutionOptimizer, SessionMiner, SkillFitness, UserObserver, SkillGuard |
+| **Self-Memory** | 3-layer distillation + hybrid recall (FTS5 + sqlite-vec), SessionRecall (cross-session search), MemoryGuard (all writes sanitized), git-verified, weekly LLM pruning | DailyActivity, distillation hooks, MEMORY.md, SessionRecall, MemoryGuard, recall engine, proactive briefing |
 | **Self-Context** | 11-file P0-P10 priority chain with token budgets and L0/L1 caching | Context loader, prompt builder, budget tiers, freshness checks |
 | **Self-Harness** | Validates all context files, detects DDD staleness, auto-refreshes indexes | ContextHealthHook (light + deep modes), auto-commit, integrity checks |
 | **Self-Health** | Monitors services, resources, sessions; auto-restarts crashed processes | Service manager, resource monitor, lifecycle manager, health API |
@@ -126,7 +128,7 @@ Most AI agents are stateless functions: input in, output out, nothing learned. S
 | L1 | Self-Maintaining | Remembers, self-commits, captures corrections, monitors health |
 | L2 | Self-Improving | Weekly LLM maintenance, unified job system, feedback loops closed |
 | L3 | Self-Governing | Context adapts per session type, proactive gap detection, DDD auto-sync |
-| **L4** | **Autonomous** (current) | Stale docs → auto-fix proposals (DDD refresh), recurring gaps → auto-skill proposals. Two compound-value loops closed. |
+| **L4** | **Autonomous** (current) | **Next-Gen Agent Intelligence: 12-module self-evolution loop closed.** UserObserver → SkillMetrics → SessionMiner → EvolutionOptimizer → auto-deploy with backup. Plus DDD refresh, skill proposer, hybrid recall, MemoryGuard on all paths. |
 
 This isn't a feature list — it's a growth architecture. Every session makes the next one better. Every correction prevents a class of future mistakes. The system doesn't just run; it **compounds**.
 
@@ -286,7 +288,7 @@ Claude Code is a powerful CLI coding agent. SwarmAI wraps the same Claude Agent 
 | **Persistent memory** | 3-layer pipeline (DailyActivity -> distillation -> MEMORY.md) + hybrid recall (FTS5 + vector) | CLAUDE.md only, manual |
 | **Context system** | 11-file P0-P10 priority chain with token budgets | Single system prompt |
 | **Multi-session** | 1-4 parallel tabs with isolated state (RAM-adaptive) | One session at a time |
-| **Self-evolution** | Builds new skills, captures corrections across sessions | No cross-session learning |
+| **Self-evolution** | Closed-loop: observes user → measures skills → mines corrections → auto-optimizes. 12 modules, fully wired. | No cross-session learning |
 | **Visual workspace** | File explorer, radar dashboard, drag-to-chat | Terminal only |
 | **Skills** | 56+ built-in (browser, PDF, Slack, Outlook, research...) | Tool use only |
 | **Autonomous pipeline** | 8-stage lifecycle with ROI gate, escalation, artifact chaining | Manual workflow |
