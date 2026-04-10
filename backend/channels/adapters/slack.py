@@ -4,6 +4,11 @@ Connects to Slack via the official slack-bolt SDK's Socket Mode handler,
 so no public URL or webhook endpoint is needed. Messages are received
 through the persistent WS connection and sent back via the Web API.
 
+When the Web API is unreachable (e.g. Amazon corp proxy blocking direct
+HTTPS to slack.com), outgoing messages fall back to the ``slack-mcp``
+binary via stdio JSON-RPC 2.0 — the MCP binary routes through Slack
+desktop's local IPC, bypassing corp proxy.
+
 This follows the Architectural pattern:
 background thread with its own event loop, bridging events to the
 main FastAPI asyncio loop via ``call_soon_threadsafe``.
@@ -11,8 +16,12 @@ main FastAPI asyncio loop via ``call_soon_threadsafe``.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import os
+import subprocess
 import threading
+from pathlib import Path
 from typing import Optional
 
 try:
@@ -39,6 +48,228 @@ _TEXT_FALLBACK_LIMIT = 39_000   # text field (notification fallback) — hard li
 _BLOCK_SECTION_LIMIT = 3_000   # single section block text limit
 _MAX_BLOCKS_PER_MSG = 50       # max blocks array length per message
 
+# Errors that indicate corp proxy / network blocking (trigger MCP fallback)
+_PROXY_ERRORS = (ConnectionError, OSError, TimeoutError)
+
+
+# ---------------------------------------------------------------------------
+# MCP stdio bridge — fallback path for corp proxy environments
+# ---------------------------------------------------------------------------
+
+def _find_slack_mcp_config() -> Optional[dict]:
+    """Find the slack-mcp server config from mcp-dev.json.
+
+    Returns ``{"command": str, "args": list, "env": dict}`` or None.
+    Searches the SwarmWS mcp-dev.json for the slack-mcp entry.
+    """
+    # SwarmWS location (standard path)
+    mcp_dev = Path.home() / ".swarm-ai" / "SwarmWS" / ".claude" / "mcps" / "mcp-dev.json"
+    if not mcp_dev.is_file():
+        return None
+
+    try:
+        entries = json.loads(mcp_dev.read_text(encoding="utf-8"))
+        if not isinstance(entries, list):
+            return None
+        for entry in entries:
+            eid = entry.get("id", "") or entry.get("name", "")
+            if "slack" in eid.lower() and entry.get("enabled", True):
+                config = entry.get("config", {})
+                cmd = config.get("command", "")
+                if cmd:
+                    return {
+                        "command": cmd,
+                        "args": config.get("args", []),
+                        "env": config.get("env", {}),
+                    }
+    except Exception:
+        logger.debug("Failed to read slack-mcp config from %s", mcp_dev, exc_info=True)
+    return None
+
+
+class SlackMcpBridge:
+    """Thin stdio JSON-RPC 2.0 bridge to the slack-mcp binary.
+
+    Spawns the slack-mcp process on first use, performs the MCP
+    initialization handshake, then reuses the connection for subsequent
+    calls.  Thread-safe: all access serialized by ``_lock``.
+    """
+
+    def __init__(self) -> None:
+        config = _find_slack_mcp_config()
+        if config:
+            self._command: str = config["command"]
+            self._args: list = config["args"]
+            self._env: dict = config["env"]
+        else:
+            self._command = ""
+            self._args = []
+            self._env = {}
+        self._process: Optional[subprocess.Popen] = None
+        self._initialized = False
+        self._request_id = 0
+        self._lock = threading.Lock()
+
+    @property
+    def available(self) -> bool:
+        """True if a slack-mcp binary was found in config."""
+        return bool(self._command)
+
+    def _build_request(self, tool_name: str, arguments: dict) -> dict:
+        """Build a JSON-RPC 2.0 tools/call request."""
+        self._request_id += 1
+        return {
+            "jsonrpc": "2.0",
+            "id": self._request_id,
+            "method": "tools/call",
+            "params": {"name": tool_name, "arguments": arguments},
+        }
+
+    def _spawn(self) -> bool:
+        """Spawn the slack-mcp subprocess if not already running."""
+        if self._process and self._process.poll() is None:
+            return True  # already alive
+
+        if not self._command:
+            return False
+
+        cmd_path = Path(self._command)
+        if not cmd_path.is_file():
+            logger.warning("slack-mcp binary not found: %s", self._command)
+            return False
+
+        env = {**os.environ, **self._env}
+        try:
+            self._process = subprocess.Popen(
+                [self._command, *self._args],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=env,
+                bufsize=0,
+            )
+            self._initialized = False
+            return True
+        except Exception:
+            logger.exception("Failed to spawn slack-mcp process")
+            self._process = None
+            return False
+
+    def _send_receive(self, request: dict, timeout: float = 15.0) -> Optional[dict]:
+        """Send a JSON-RPC request and read the response line."""
+        proc = self._process
+        if not proc or proc.poll() is not None:
+            return None
+
+        line = json.dumps(request) + "\n"
+        try:
+            proc.stdin.write(line.encode())
+            proc.stdin.flush()
+
+            # Read one line with timeout via threading
+            result = [None]
+            exc_holder = [None]
+
+            def _reader():
+                try:
+                    result[0] = proc.stdout.readline()
+                except Exception as e:
+                    exc_holder[0] = e
+
+            t = threading.Thread(target=_reader, daemon=True)
+            t.start()
+            t.join(timeout=timeout)
+
+            if t.is_alive():
+                logger.warning("slack-mcp response timed out after %.1fs", timeout)
+                return None
+            if exc_holder[0]:
+                raise exc_holder[0]
+
+            raw = result[0]
+            if not raw:
+                return None
+            return json.loads(raw)
+        except Exception:
+            logger.debug("slack-mcp send/receive failed", exc_info=True)
+            return None
+
+    def _ensure_initialized(self) -> bool:
+        """Perform the MCP initialize + initialized notification handshake."""
+        if self._initialized:
+            return True
+
+        if not self._spawn():
+            return False
+
+        # Step 1: send initialize
+        init_req = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "swarm-slack-adapter", "version": "1.0"},
+            },
+        }
+        self._request_id = 1
+        resp = self._send_receive(init_req, timeout=10.0)
+        if not resp or "result" not in resp:
+            logger.warning("slack-mcp initialize handshake failed: %s", resp)
+            self.close()
+            return False
+
+        # Step 2: send initialized notification (no id, no response expected)
+        notif = {
+            "jsonrpc": "2.0",
+            "method": "notifications/initialized",
+            "params": {},
+        }
+        proc = self._process
+        if proc and proc.poll() is None:
+            try:
+                proc.stdin.write((json.dumps(notif) + "\n").encode())
+                proc.stdin.flush()
+            except Exception:
+                pass
+
+        self._initialized = True
+        logger.info("slack-mcp bridge initialized (pid=%s)", proc.pid if proc else "?")
+        return True
+
+    def call_tool(self, tool_name: str, arguments: dict) -> Optional[dict]:
+        """Call an MCP tool and return the result (blocking, thread-safe).
+
+        Returns the ``result`` dict from the JSON-RPC response, or None
+        on any error.
+        """
+        with self._lock:
+            if not self._ensure_initialized():
+                return None
+            request = self._build_request(tool_name, arguments)
+            resp = self._send_receive(request)
+            if resp and "result" in resp:
+                return resp["result"]
+            if resp and "error" in resp:
+                logger.warning("slack-mcp tool error: %s", resp["error"])
+            return None
+
+    def close(self) -> None:
+        """Terminate the MCP subprocess."""
+        proc = self._process
+        if proc:
+            try:
+                proc.terminate()
+                proc.wait(timeout=3)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+            self._process = None
+            self._initialized = False
+
 
 class SlackChannelAdapter(ChannelAdapter):
     """Adapter for Slack using Socket Mode WebSocket.
@@ -60,6 +291,8 @@ class SlackChannelAdapter(ChannelAdapter):
         self._stopped = False
         # User name cache: user_id -> display_name
         self._user_cache: dict[str, str] = {}
+        # MCP fallback bridge (lazy — spawned on first proxy error)
+        self._mcp_bridge: Optional[SlackMcpBridge] = None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -161,6 +394,12 @@ class SlackChannelAdapter(ChannelAdapter):
         self._slack_client = None
         self._ws_thread = None
         self._loop = None
+
+        # Clean up MCP bridge subprocess
+        if self._mcp_bridge:
+            self._mcp_bridge.close()
+            self._mcp_bridge = None
+
         logger.info("Slack adapter stopped for channel %s", self.channel_id)
 
     # ------------------------------------------------------------------
@@ -503,7 +742,10 @@ class SlackChannelAdapter(ChannelAdapter):
         external_chat_id: str,
         external_thread_id: Optional[str] = None,
     ) -> Optional[str]:
-        """Post a placeholder message (fallback when native streaming unavailable)."""
+        """Post a placeholder message (fallback when native streaming unavailable).
+
+        Falls back to MCP when WebClient is blocked by corp proxy.
+        """
         if not self._slack_client:
             return None
         try:
@@ -524,6 +766,15 @@ class SlackChannelAdapter(ChannelAdapter):
                 None, lambda: self._slack_client.chat_postMessage(**kwargs)
             )
             return result.get("ts")
+        except _PROXY_ERRORS:
+            logger.warning(
+                "Slack WebClient blocked (proxy?) — falling back to MCP for typing indicator"
+            )
+            return await self._mcp_post_message(
+                external_chat_id,
+                ":bee: _Thinking..._",
+                external_thread_id,
+            )
         except Exception:
             logger.exception("Error sending Slack typing indicator")
             return None
@@ -539,6 +790,7 @@ class SlackChannelAdapter(ChannelAdapter):
         """Update message via chat.update (fallback path).
 
         All sync Slack SDK calls dispatched via ``run_in_executor``.
+        Falls back to MCP when WebClient is blocked by corp proxy.
         """
         if not self._slack_client:
             return
@@ -595,6 +847,11 @@ class SlackChannelAdapter(ChannelAdapter):
                         }
                     ],
                 ))
+        except _PROXY_ERRORS:
+            logger.warning(
+                "Slack WebClient blocked (proxy?) — falling back to MCP for update_message"
+            )
+            await self._mcp_update_message(external_chat_id, message_id, text)
         except Exception:
             logger.exception("Error updating Slack message")
 
@@ -644,6 +901,83 @@ class SlackChannelAdapter(ChannelAdapter):
             logger.debug("Failed to remove reaction %s from %s", emoji, message_ts)
 
     # ------------------------------------------------------------------
+    # MCP fallback helpers (corp proxy bypass)
+    # ------------------------------------------------------------------
+
+    def _get_mcp_bridge(self) -> Optional[SlackMcpBridge]:
+        """Lazily create and return the MCP bridge singleton."""
+        if self._mcp_bridge is None:
+            bridge = SlackMcpBridge()
+            if bridge.available:
+                self._mcp_bridge = bridge
+                logger.info("Slack MCP fallback bridge available")
+            else:
+                logger.debug("Slack MCP fallback bridge not available (no slack-mcp config)")
+                return None
+        return self._mcp_bridge
+
+    async def _mcp_post_message(
+        self,
+        channel: str,
+        text: str,
+        thread_ts: Optional[str] = None,
+    ) -> Optional[str]:
+        """Send a message via slack-mcp MCP fallback (async wrapper).
+
+        Returns the message ``ts`` on success, None on failure.
+        """
+        bridge = self._get_mcp_bridge()
+        if not bridge:
+            return None
+
+        args: dict = {"channel_id": channel, "text": text}
+        if thread_ts:
+            args["thread_ts"] = thread_ts
+
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(
+            None, lambda: bridge.call_tool("post_message", args),
+        )
+        if result:
+            # MCP response: {"content": [{"type": "text", "text": "..."}]}
+            # Try to extract ts from the text content
+            content = result.get("content", [])
+            for item in content:
+                if isinstance(item, dict) and item.get("type") == "text":
+                    response_text = item.get("text", "")
+                    # slack-mcp may return JSON with ts, or just confirmation text
+                    try:
+                        parsed = json.loads(response_text)
+                        if isinstance(parsed, dict) and "ts" in parsed:
+                            return parsed["ts"]
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+                    # If we got any content, the message was sent — return a synthetic ts
+                    if response_text:
+                        logger.info("MCP fallback sent message to %s (no ts in response)", channel)
+                        return "mcp-sent"
+        return None
+
+    async def _mcp_update_message(
+        self,
+        channel: str,
+        message_ts: str,
+        text: str,
+    ) -> bool:
+        """Update a message via slack-mcp MCP fallback (async wrapper)."""
+        bridge = self._get_mcp_bridge()
+        if not bridge:
+            return False
+
+        args: dict = {"channel_id": channel, "message_ts": message_ts, "text": text}
+
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(
+            None, lambda: bridge.call_tool("edit_message", args),
+        )
+        return result is not None
+
+    # ------------------------------------------------------------------
     # Outgoing messages
     # ------------------------------------------------------------------
 
@@ -653,6 +987,9 @@ class SlackChannelAdapter(ChannelAdapter):
         Converts markdown-style text to Slack's ``mrkdwn`` format and
         wraps it in section blocks.  Long messages are automatically
         split across multiple Slack messages to stay within API limits.
+
+        Falls back to ``slack-mcp`` via stdio JSON-RPC when the Web API
+        is unreachable (corp proxy blocking direct HTTPS to slack.com).
         """
         if not self._slack_client:
             return None
@@ -689,6 +1026,15 @@ class SlackChannelAdapter(ChannelAdapter):
                     first_ts = result.get("ts")
 
             return first_ts
+        except _PROXY_ERRORS:
+            logger.warning(
+                "Slack WebClient blocked (proxy?) — falling back to MCP for send_message"
+            )
+            return await self._mcp_post_message(
+                message.external_chat_id,
+                message.text,
+                message.external_thread_id,
+            )
         except Exception:
             logger.exception("Error sending Slack message")
             return None
