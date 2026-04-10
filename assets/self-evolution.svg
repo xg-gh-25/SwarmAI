@@ -1,159 +1,207 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 480" width="960" height="480">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 580" width="960" height="580">
   <defs>
     <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
       <stop offset="0%" stop-color="#0f1019"/>
       <stop offset="100%" stop-color="#1a1a2e"/>
     </linearGradient>
-    <linearGradient id="gold" x1="0%" y1="0%" x2="100%" y2="100%">
+    <linearGradient id="gold" x1="0%" y1="0%" x2="100%" y2="0%">
       <stop offset="0%" stop-color="#f59e0b"/>
       <stop offset="100%" stop-color="#d97706"/>
     </linearGradient>
-    <linearGradient id="blue" x1="0%" y1="0%" x2="100%" y2="100%">
+    <linearGradient id="blue" x1="0%" y1="0%" x2="100%" y2="0%">
       <stop offset="0%" stop-color="#3b82f6"/>
       <stop offset="100%" stop-color="#2563eb"/>
     </linearGradient>
-    <linearGradient id="purple" x1="0%" y1="0%" x2="100%" y2="100%">
+    <linearGradient id="purple" x1="0%" y1="0%" x2="100%" y2="0%">
       <stop offset="0%" stop-color="#8b5cf6"/>
       <stop offset="100%" stop-color="#7c3aed"/>
     </linearGradient>
-    <linearGradient id="green" x1="0%" y1="0%" x2="100%" y2="100%">
+    <linearGradient id="green" x1="0%" y1="0%" x2="100%" y2="0%">
       <stop offset="0%" stop-color="#10b981"/>
       <stop offset="100%" stop-color="#059669"/>
     </linearGradient>
-    <linearGradient id="red" x1="0%" y1="0%" x2="100%" y2="100%">
+    <linearGradient id="red" x1="0%" y1="0%" x2="100%" y2="0%">
       <stop offset="0%" stop-color="#ef4444"/>
       <stop offset="100%" stop-color="#dc2626"/>
     </linearGradient>
-    <linearGradient id="cyan" x1="0%" y1="0%" x2="100%" y2="100%">
+    <linearGradient id="cyan" x1="0%" y1="0%" x2="100%" y2="0%">
       <stop offset="0%" stop-color="#06b6d4"/>
       <stop offset="100%" stop-color="#0891b2"/>
     </linearGradient>
-    <marker id="arrowGold" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+    <linearGradient id="pink" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#ec4899"/>
+      <stop offset="100%" stop-color="#db2777"/>
+    </linearGradient>
+    <marker id="arr" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
       <polygon points="0 0, 8 3, 0 6" fill="#f59e0b" opacity="0.7"/>
     </marker>
-    <marker id="arrowPurple" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+    <marker id="arrP" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
       <polygon points="0 0, 8 3, 0 6" fill="#8b5cf6" opacity="0.7"/>
+    </marker>
+    <marker id="arrG" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#10b981" opacity="0.7"/>
+    </marker>
+    <marker id="arrC" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#06b6d4" opacity="0.7"/>
     </marker>
   </defs>
 
-  <rect width="960" height="480" rx="16" fill="url(#bg)"/>
+  <rect width="960" height="580" rx="16" fill="url(#bg)"/>
 
   <!-- Grid -->
   <g opacity="0.03" stroke="#f59e0b">
-    <line x1="0" y1="100" x2="960" y2="100" stroke-width="0.5"/>
-    <line x1="0" y1="200" x2="960" y2="200" stroke-width="0.5"/>
-    <line x1="0" y1="300" x2="960" y2="300" stroke-width="0.5"/>
-    <line x1="0" y1="400" x2="960" y2="400" stroke-width="0.5"/>
-    <line x1="240" y1="0" x2="240" y2="480" stroke-width="0.5"/>
-    <line x1="480" y1="0" x2="480" y2="480" stroke-width="0.5"/>
-    <line x1="720" y1="0" x2="720" y2="480" stroke-width="0.5"/>
+    <line x1="0" y1="120" x2="960" y2="120" stroke-width="0.5"/>
+    <line x1="0" y1="240" x2="960" y2="240" stroke-width="0.5"/>
+    <line x1="0" y1="360" x2="960" y2="360" stroke-width="0.5"/>
+    <line x1="0" y1="480" x2="960" y2="480" stroke-width="0.5"/>
+    <line x1="240" y1="0" x2="240" y2="580" stroke-width="0.5"/>
+    <line x1="480" y1="0" x2="480" y2="580" stroke-width="0.5"/>
+    <line x1="720" y1="0" x2="720" y2="580" stroke-width="0.5"/>
   </g>
 
   <!-- Title -->
-  <text x="480" y="42" text-anchor="middle" fill="#8b5cf6" font-family="Arial,Helvetica,sans-serif" font-size="18" font-weight="bold" letter-spacing="2">SELF-EVOLUTION</text>
-  <text x="480" y="60" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="11">Capability Building, Correction Capture, and Continuous Growth</text>
+  <text x="480" y="38" text-anchor="middle" fill="#8b5cf6" font-family="Arial,Helvetica,sans-serif" font-size="18" font-weight="bold" letter-spacing="2">NEXT-GEN AGENT INTELLIGENCE</text>
+  <text x="480" y="56" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="11">12 Modules — Observe, Measure, Mine, Score, Optimize, Deploy — Closed Loop</text>
 
-  <!-- ============ EVOLUTION LOOP (circular) ============ -->
+  <!-- ============ PHASE LABELS (left side) ============ -->
+  <text x="22" y="130" fill="#ef4444" font-family="Arial,Helvetica,sans-serif" font-size="9" font-weight="bold" opacity="0.6" transform="rotate(-90 22 130)">PHASE 1</text>
+  <text x="22" y="288" fill="#3b82f6" font-family="Arial,Helvetica,sans-serif" font-size="9" font-weight="bold" opacity="0.6" transform="rotate(-90 22 288)">PHASE 2</text>
+  <text x="22" y="438" fill="#10b981" font-family="Arial,Helvetica,sans-serif" font-size="9" font-weight="bold" opacity="0.6" transform="rotate(-90 22 438)">PHASE 3</text>
 
-  <!-- Center hub -->
-  <rect x="380" y="190" width="200" height="70" rx="35" fill="#1e1e36" stroke="#8b5cf6" stroke-width="2" opacity="0.95"/>
-  <rect x="380" y="190" width="200" height="70" rx="35" fill="url(#purple)" opacity="0.06"/>
-  <text x="480" y="220" text-anchor="middle" fill="#c4b5fd" font-family="Arial,Helvetica,sans-serif" font-size="14" font-weight="bold">EVOLUTION.md</text>
-  <text x="480" y="240" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="10">Persistent Registry</text>
+  <!-- ============ PHASE 1: SAFETY + OBSERVABILITY ============ -->
+  <rect x="42" y="76" width="900" height="108" rx="10" fill="#ef4444" fill-opacity="0.03" stroke="#ef4444" stroke-width="0.5" stroke-opacity="0.15"/>
+  <text x="492" y="95" text-anchor="middle" fill="#fca5a5" font-family="Arial,Helvetica,sans-serif" font-size="10" font-weight="bold" opacity="0.8">Safety + Observability — Build guardrails first</text>
 
-  <!-- Node 1: Gap Detection (top left) -->
-  <rect x="60" y="95" width="190" height="80" rx="10" fill="#1e1e36" stroke="#ef4444" stroke-width="1.2" opacity="0.95"/>
-  <rect x="60" y="95" width="190" height="80" rx="10" fill="url(#red)" opacity="0.06"/>
-  <text x="155" y="120" text-anchor="middle" fill="#fca5a5" font-family="Arial,Helvetica,sans-serif" font-size="11" font-weight="bold">Gap Detection</text>
-  <text x="155" y="138" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Agent hits capability wall</text>
-  <text x="155" y="152" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">DailyActivity error patterns</text>
-  <text x="155" y="166" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="8">s_self-evolution (always-active)</text>
+  <!-- MemoryGuard -->
+  <rect x="55" y="108" width="200" height="62" rx="8" fill="#1e1e36" stroke="#ef4444" stroke-width="1.2" opacity="0.95"/>
+  <text x="155" y="128" text-anchor="middle" fill="#fca5a5" font-family="Arial,Helvetica,sans-serif" font-size="11" font-weight="bold">MemoryGuard</text>
+  <text x="155" y="143" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Secrets redacted, injections blocked</text>
+  <text x="155" y="158" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="8">All MEMORY.md write paths guarded</text>
 
-  <!-- Node 2: Skill Building (top right) -->
-  <rect x="710" y="95" width="190" height="80" rx="10" fill="#1e1e36" stroke="#10b981" stroke-width="1.2" opacity="0.95"/>
-  <rect x="710" y="95" width="190" height="80" rx="10" fill="url(#green)" opacity="0.06"/>
-  <text x="805" y="120" text-anchor="middle" fill="#6ee7b7" font-family="Arial,Helvetica,sans-serif" font-size="11" font-weight="bold">Skill Building</text>
-  <text x="805" y="138" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Create SKILL.md + scripts</text>
-  <text x="805" y="152" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Test and validate</text>
-  <text x="805" y="166" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="8">s_skill-builder (3 attempts max)</text>
+  <!-- SkillMetrics -->
+  <rect x="275" y="108" width="200" height="62" rx="8" fill="#1e1e36" stroke="#ef4444" stroke-width="1.2" opacity="0.95"/>
+  <text x="375" y="128" text-anchor="middle" fill="#fca5a5" font-family="Arial,Helvetica,sans-serif" font-size="11" font-weight="bold">SkillMetrics</text>
+  <text x="375" y="143" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Track invocations, corrections, rates</text>
+  <text x="375" y="158" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="8">Data source for evolution cycle</text>
 
-  <!-- Node 3: Correction Capture (bottom left) -->
-  <rect x="60" y="285" width="190" height="80" rx="10" fill="#1e1e36" stroke="#f59e0b" stroke-width="1.2" opacity="0.95"/>
-  <rect x="60" y="285" width="190" height="80" rx="10" fill="url(#gold)" opacity="0.06"/>
-  <text x="155" y="310" text-anchor="middle" fill="#fbbf24" font-family="Arial,Helvetica,sans-serif" font-size="11" font-weight="bold">Correction Capture</text>
-  <text x="155" y="328" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">User corrects a mistake</text>
-  <text x="155" y="342" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Pattern recorded permanently</text>
-  <text x="155" y="356" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="8">Never deleted (highest value)</text>
+  <!-- SectionCaps -->
+  <rect x="495" y="108" width="200" height="62" rx="8" fill="#1e1e36" stroke="#ef4444" stroke-width="1.2" opacity="0.95"/>
+  <text x="595" y="128" text-anchor="middle" fill="#fca5a5" font-family="Arial,Helvetica,sans-serif" font-size="11" font-weight="bold">SectionCaps</text>
+  <text x="595" y="143" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Memory size limits + auto-archive</text>
+  <text x="595" y="158" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="8">30 KD / 25 LL / 15 COE / 30 RC</text>
 
-  <!-- Node 4: Competence Registry (bottom right) -->
-  <rect x="710" y="285" width="190" height="80" rx="10" fill="#1e1e36" stroke="#3b82f6" stroke-width="1.2" opacity="0.95"/>
-  <rect x="710" y="285" width="190" height="80" rx="10" fill="url(#blue)" opacity="0.06"/>
-  <text x="805" y="310" text-anchor="middle" fill="#93c5fd" font-family="Arial,Helvetica,sans-serif" font-size="11" font-weight="bold">Competence Registry</text>
-  <text x="805" y="328" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Track proven capabilities</text>
-  <text x="805" y="342" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Usage count + auto-archive</text>
-  <text x="805" y="356" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="8">0 usage for 30d = archived</text>
+  <!-- EntryRefs -->
+  <rect x="715" y="108" width="200" height="62" rx="8" fill="#1e1e36" stroke="#ef4444" stroke-width="1.2" opacity="0.95"/>
+  <text x="815" y="128" text-anchor="middle" fill="#fca5a5" font-family="Arial,Helvetica,sans-serif" font-size="11" font-weight="bold">EntryRefs</text>
+  <text x="815" y="143" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Cross-references between entries</text>
+  <text x="815" y="158" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="8">1-hop loading in section selection</text>
 
-  <!-- Arrows forming the loop -->
-  <!-- Gap Detection -> Skill Building -->
-  <path d="M 250,130 C 400,90 600,90 710,130" stroke="#f59e0b" stroke-width="1.5" opacity="0.4" stroke-dasharray="5 3" marker-end="url(#arrowGold)"/>
-  <text x="480" y="100" text-anchor="middle" fill="#f59e0b" font-family="Arial,Helvetica,sans-serif" font-size="9" opacity="0.6">build new skill</text>
+  <!-- ============ PHASE 2: UNDERSTANDING + RECALL ============ -->
+  <rect x="42" y="194" width="900" height="108" rx="10" fill="#3b82f6" fill-opacity="0.03" stroke="#3b82f6" stroke-width="0.5" stroke-opacity="0.15"/>
+  <text x="492" y="213" text-anchor="middle" fill="#93c5fd" font-family="Arial,Helvetica,sans-serif" font-size="10" font-weight="bold" opacity="0.8">Understanding + Recall — Let the agent know the user</text>
 
-  <!-- Skill Building -> EVOLUTION.md -->
-  <path d="M 710,160 C 650,190 580,210 580,220" stroke="#8b5cf6" stroke-width="1.5" opacity="0.4" marker-end="url(#arrowPurple)"/>
-  <text x="660" y="195" fill="#c4b5fd" font-family="Arial,Helvetica,sans-serif" font-size="8" opacity="0.6">register</text>
+  <!-- UserObserver -->
+  <rect x="55" y="226" width="200" height="62" rx="8" fill="#1e1e36" stroke="#3b82f6" stroke-width="1.2" opacity="0.95"/>
+  <text x="155" y="246" text-anchor="middle" fill="#93c5fd" font-family="Arial,Helvetica,sans-serif" font-size="11" font-weight="bold">UserObserver</text>
+  <text x="155" y="261" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Detect behavioral patterns</text>
+  <text x="155" y="276" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="8">Suggests USER.md updates</text>
 
-  <!-- EVOLUTION.md -> Competence Registry -->
-  <path d="M 580,240 C 640,260 680,280 710,300" stroke="#8b5cf6" stroke-width="1.5" opacity="0.4" marker-end="url(#arrowPurple)"/>
+  <!-- SessionRecall -->
+  <rect x="275" y="226" width="200" height="62" rx="8" fill="#1e1e36" stroke="#3b82f6" stroke-width="1.2" opacity="0.95"/>
+  <text x="375" y="246" text-anchor="middle" fill="#93c5fd" font-family="Arial,Helvetica,sans-serif" font-size="11" font-weight="bold">SessionRecall</text>
+  <text x="375" y="261" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">FTS5 cross-session search</text>
+  <text x="375" y="276" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="8">Word-boundary, always-on recall</text>
 
-  <!-- Competence Registry -> Correction Capture (bottom) -->
-  <path d="M 710,330 C 560,380 350,380 250,330" stroke="#f59e0b" stroke-width="1.5" opacity="0.3" stroke-dasharray="5 3"/>
-  <text x="480" y="370" text-anchor="middle" fill="#f59e0b" font-family="Arial,Helvetica,sans-serif" font-size="9" opacity="0.6">feedback loop</text>
+  <!-- SkillRegistry -->
+  <rect x="495" y="226" width="200" height="62" rx="8" fill="#1e1e36" stroke="#3b82f6" stroke-width="1.2" opacity="0.95"/>
+  <text x="595" y="246" text-anchor="middle" fill="#93c5fd" font-family="Arial,Helvetica,sans-serif" font-size="11" font-weight="bold">SkillRegistry</text>
+  <text x="595" y="261" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Compact skill index in prompt</text>
+  <text x="595" y="276" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="8">Singleton cache, discovery-time scan</text>
 
-  <!-- Correction Capture -> EVOLUTION.md -->
-  <path d="M 250,310 C 310,280 350,240 380,230" stroke="#8b5cf6" stroke-width="1.5" opacity="0.4" marker-end="url(#arrowPurple)"/>
-  <text x="300" y="268" fill="#c4b5fd" font-family="Arial,Helvetica,sans-serif" font-size="8" opacity="0.6">record</text>
+  <!-- SkillGuard -->
+  <rect x="715" y="226" width="200" height="62" rx="8" fill="#1e1e36" stroke="#3b82f6" stroke-width="1.2" opacity="0.95"/>
+  <text x="815" y="246" text-anchor="middle" fill="#93c5fd" font-family="Arial,Helvetica,sans-serif" font-size="11" font-weight="bold">SkillGuard</text>
+  <text x="815" y="261" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Trust-level security scanning</text>
+  <text x="815" y="276" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="8">BUILTIN > USER > AGENT > EXT</text>
 
-  <!-- Gap Detection -> EVOLUTION.md -->
-  <path d="M 250,160 C 310,190 350,210 380,218" stroke="#8b5cf6" stroke-width="1.2" opacity="0.3" stroke-dasharray="3 3"/>
+  <!-- ============ PHASE 3: AUTONOMOUS EVOLUTION ============ -->
+  <rect x="42" y="316" width="900" height="108" rx="10" fill="#10b981" fill-opacity="0.03" stroke="#10b981" stroke-width="0.5" stroke-opacity="0.15"/>
+  <text x="492" y="335" text-anchor="middle" fill="#6ee7b7" font-family="Arial,Helvetica,sans-serif" font-size="10" font-weight="bold" opacity="0.8">Autonomous Evolution — The agent improves itself</text>
 
-  <!-- ============ SKILLS INVENTORY (bottom) ============ -->
-  <rect x="110" y="400" width="740" height="55" rx="10" fill="#1e1e36" stroke="#06b6d4" stroke-width="1" opacity="0.95"/>
-  <rect x="110" y="400" width="740" height="55" rx="10" fill="url(#cyan)" opacity="0.04"/>
-  <text x="480" y="422" text-anchor="middle" fill="#67e8f9" font-family="Arial,Helvetica,sans-serif" font-size="11" font-weight="bold">55+ Built-in Skills</text>
-  <text x="480" y="442" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">browser-agent | pdf | xlsx | slack | outlook | deep-research | code-review | qa | autonomous-pipeline | 46 more...</text>
+  <!-- SessionMiner -->
+  <rect x="55" y="348" width="200" height="62" rx="8" fill="#1e1e36" stroke="#10b981" stroke-width="1.2" opacity="0.95"/>
+  <text x="155" y="368" text-anchor="middle" fill="#6ee7b7" font-family="Arial,Helvetica,sans-serif" font-size="11" font-weight="bold">SessionMiner</text>
+  <text x="155" y="383" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Mine transcripts for eval examples</text>
+  <text x="155" y="398" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="8">1500 char actions, secret-scrubbed</text>
 
-  <!-- Arrow from skills to gap detection -->
-  <path d="M 155,400 L 155,365" stroke="#06b6d4" stroke-width="1" opacity="0.25" stroke-dasharray="3 3"/>
+  <!-- SkillFitness -->
+  <rect x="275" y="348" width="200" height="62" rx="8" fill="#1e1e36" stroke="#10b981" stroke-width="1.2" opacity="0.95"/>
+  <text x="375" y="368" text-anchor="middle" fill="#6ee7b7" font-family="Arial,Helvetica,sans-serif" font-size="11" font-weight="bold">SkillFitness</text>
+  <text x="375" y="383" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">3-signal scoring (J + B + C)</text>
+  <text x="375" y="398" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="8">Adaptive threshold per skill</text>
 
-  <!-- ============ EVOLUTION SECTIONS (in center box detail) ============ -->
-  <g transform="translate(310, 275)">
-    <rect x="0" y="0" width="80" height="20" rx="4" fill="#10b981" fill-opacity="0.1" stroke="#10b981" stroke-width="0.5"/>
-    <text x="40" y="14" text-anchor="middle" fill="#6ee7b7" font-family="Arial,Helvetica,sans-serif" font-size="8">Capabilities</text>
-  </g>
-  <g transform="translate(400, 275)">
-    <rect x="0" y="0" width="80" height="20" rx="4" fill="#f59e0b" fill-opacity="0.1" stroke="#f59e0b" stroke-width="0.5"/>
-    <text x="40" y="14" text-anchor="middle" fill="#fbbf24" font-family="Arial,Helvetica,sans-serif" font-size="8">Corrections</text>
-  </g>
-  <g transform="translate(490, 275)">
-    <rect x="0" y="0" width="80" height="20" rx="4" fill="#3b82f6" fill-opacity="0.1" stroke="#3b82f6" stroke-width="0.5"/>
-    <text x="40" y="14" text-anchor="middle" fill="#93c5fd" font-family="Arial,Helvetica,sans-serif" font-size="8">Competence</text>
-  </g>
-  <g transform="translate(580, 275)">
-    <rect x="0" y="0" width="80" height="20" rx="4" fill="#ef4444" fill-opacity="0.1" stroke="#ef4444" stroke-width="0.5"/>
-    <text x="40" y="14" text-anchor="middle" fill="#fca5a5" font-family="Arial,Helvetica,sans-serif" font-size="8">Failed Evos</text>
-  </g>
+  <!-- EvolutionOptimizer -->
+  <rect x="495" y="348" width="200" height="62" rx="8" fill="#1e1e36" stroke="#10b981" stroke-width="1.5" opacity="0.95"/>
+  <rect x="495" y="348" width="200" height="62" rx="8" fill="url(#green)" opacity="0.06"/>
+  <text x="595" y="368" text-anchor="middle" fill="#6ee7b7" font-family="Arial,Helvetica,sans-serif" font-size="11" font-weight="bold">EvolutionOptimizer</text>
+  <text x="595" y="383" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Correction-pattern rewriting</text>
+  <text x="595" y="398" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="8">Backup + deploy + audit log</text>
+
+  <!-- RetentionPolicies -->
+  <rect x="715" y="348" width="200" height="62" rx="8" fill="#1e1e36" stroke="#10b981" stroke-width="1.2" opacity="0.95"/>
+  <text x="815" y="368" text-anchor="middle" fill="#6ee7b7" font-family="Arial,Helvetica,sans-serif" font-size="11" font-weight="bold">RetentionPolicies</text>
+  <text x="815" y="383" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Archive old, prune stale</text>
+  <text x="815" y="398" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="8">90d DA / 365d archive / 7d OT</text>
+
+  <!-- ============ EVOLUTION LOOP ARROWS ============ -->
+
+  <!-- Main loop: Session → UserObserver → SkillMetrics → SessionMiner → SkillFitness → EvolutionOptimizer → Skills → Session -->
+
+  <!-- Phase 1→2: SkillMetrics feeds Phase 3 -->
+  <path d="M 375,170 L 375,226" stroke="#f59e0b" stroke-width="1.5" opacity="0.35" marker-end="url(#arr)"/>
+
+  <!-- Phase 2→3: UserObserver observations accumulate -->
+  <path d="M 155,288 L 155,348" stroke="#f59e0b" stroke-width="1.5" opacity="0.35" marker-end="url(#arr)"/>
+
+  <!-- Phase 3 internal flow: Mine → Score → Optimize -->
+  <path d="M 255,379 L 275,379" stroke="#10b981" stroke-width="2" opacity="0.5" marker-end="url(#arrG)"/>
+  <path d="M 475,379 L 495,379" stroke="#10b981" stroke-width="2" opacity="0.5" marker-end="url(#arrG)"/>
+
+  <!-- Optimizer → SKILL.md deployed (loops back up to SkillRegistry) -->
+  <path d="M 695,379 C 740,379 760,320 760,300 C 760,300 720,288 695,268" stroke="#f59e0b" stroke-width="1.5" opacity="0.35" stroke-dasharray="5 3" marker-end="url(#arr)"/>
+  <text x="755" y="330" fill="#f59e0b" font-family="Arial,Helvetica,sans-serif" font-size="8" opacity="0.5">deploy</text>
+
+  <!-- SkillMetrics candidates → SessionMiner priority -->
+  <path d="M 375,170 C 375,190 200,300 155,348" stroke="#ef4444" stroke-width="1" opacity="0.2" stroke-dasharray="4 3"/>
+  <text x="240" y="250" fill="#fca5a5" font-family="Arial,Helvetica,sans-serif" font-size="7" opacity="0.5">priority candidates</text>
+
+  <!-- ============ CENTRAL COMPOUND LOOP ============ -->
+  <rect x="180" y="438" width="600" height="52" rx="26" fill="#1e1e36" stroke="#8b5cf6" stroke-width="1.5" opacity="0.95"/>
+  <rect x="180" y="438" width="600" height="52" rx="26" fill="url(#purple)" opacity="0.05"/>
+  <text x="480" y="460" text-anchor="middle" fill="#c4b5fd" font-family="Arial,Helvetica,sans-serif" font-size="12" font-weight="bold">The Compound Loop</text>
+  <text x="480" y="478" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Session → Observe → Measure → Mine → Score → Optimize → Deploy → Session (every 7 days)</text>
+
+  <!-- Loop arrow (bottom, wrapping around) -->
+  <path d="M 780,464 C 870,464 920,400 920,260 C 920,120 870,80 780,80 L 180,80 C 90,80 42,120 42,260 C 42,400 90,464 180,464" stroke="#8b5cf6" stroke-width="1" opacity="0.12" fill="none" stroke-dasharray="8 4"/>
 
   <!-- Legend -->
-  <g transform="translate(110, 466)">
-    <circle cx="4" cy="0" r="3.5" fill="#ef4444" opacity="0.6"/>
-    <text x="14" y="4" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Detect gap</text>
-    <circle cx="104" cy="0" r="3.5" fill="#10b981" opacity="0.6"/>
-    <text x="114" y="4" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Build skill</text>
-    <circle cx="204" cy="0" r="3.5" fill="#f59e0b" opacity="0.6"/>
-    <text x="214" y="4" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Capture correction</text>
-    <circle cx="344" cy="0" r="3.5" fill="#3b82f6" opacity="0.6"/>
-    <text x="354" y="4" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Track competence</text>
-    <circle cx="484" cy="0" r="3.5" fill="#8b5cf6" opacity="0.6"/>
-    <text x="494" y="4" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Register in EVOLUTION.md</text>
+  <g transform="translate(100, 510)">
+    <rect x="0" y="0" width="10" height="10" rx="2" fill="#ef4444" opacity="0.5"/>
+    <text x="16" y="9" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Phase 1: Safety</text>
+
+    <rect x="130" y="0" width="10" height="10" rx="2" fill="#3b82f6" opacity="0.5"/>
+    <text x="146" y="9" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Phase 2: Understanding</text>
+
+    <rect x="300" y="0" width="10" height="10" rx="2" fill="#10b981" opacity="0.5"/>
+    <text x="316" y="9" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Phase 3: Evolution</text>
+
+    <rect x="450" y="0" width="10" height="10" rx="2" fill="#8b5cf6" opacity="0.5"/>
+    <text x="466" y="9" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Compound Loop (closed)</text>
+
+    <rect x="620" y="0" width="10" height="10" rx="2" fill="#f59e0b" opacity="0.5"/>
+    <text x="636" y="9" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Data flow</text>
   </g>
+
+  <!-- Stats -->
+  <text x="480" y="552" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="9">12 modules | 4 phases | 227+ tests | 7-day cadence + Thursday cron fallback | SKILL.md backup before every deploy</text>
 </svg>
