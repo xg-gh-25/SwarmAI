@@ -92,7 +92,7 @@ You never re-explain context. The AI knows your projects, your preferences, your
 SwarmAI doesn't just use skills — it observes how you work, measures skill performance, and automatically improves underperforming skills based on your corrections. A closed-loop system across 12 modules:
 
 <div align="center">
-<img src="./assets/self-evolution.svg" alt="Self-Evolution — Continuous Growth Loop" width="800"/>
+<img src="./assets/self-evolution.svg" alt="Next-Gen Agent Intelligence — 12 Modules, 4 Phases, Closed Loop" width="800"/>
 </div>
 
 - **MemoryGuard** — every write to persistent memory is scanned for secrets (→ redacted), prompt injections (→ rejected), and invisible characters (→ stripped). No sensitive data leaks to disk.
