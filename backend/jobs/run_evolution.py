@@ -33,12 +33,25 @@ def main() -> None:
         sys.exit(1)
 
     # Find transcripts directory (Claude Code session transcripts)
+    # Uses _resolve_transcripts_dir: picks subdir with most recent .jsonl
     transcripts_dir = Path.home() / ".claude" / "projects"
-    if transcripts_dir.is_dir():
-        for subdir in sorted(transcripts_dir.iterdir()):
-            if subdir.is_dir() and list(subdir.glob("*.jsonl")):
-                transcripts_dir = subdir
-                break
+    try:
+        from hooks.evolution_maintenance_hook import _resolve_transcripts_dir
+        transcripts_dir = _resolve_transcripts_dir(transcripts_dir)
+    except ImportError:
+        # Fallback: inline most-recent heuristic
+        if transcripts_dir.is_dir():
+            best, best_mtime = None, 0.0
+            for subdir in transcripts_dir.iterdir():
+                if not subdir.is_dir():
+                    continue
+                jsonls = list(subdir.glob("*.jsonl"))
+                if jsonls:
+                    latest = max(f.stat().st_mtime for f in jsonls)
+                    if latest > best_mtime:
+                        best, best_mtime = subdir, latest
+            if best:
+                transcripts_dir = best
 
     evals_dir = Path.home() / ".swarm-ai" / "SwarmWS" / ".context" / "SkillEvals"
     evals_dir.mkdir(parents=True, exist_ok=True)

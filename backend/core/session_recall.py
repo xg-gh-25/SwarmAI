@@ -232,17 +232,33 @@ class SessionRecall:
             return ""
 
         topic_lower = topic.lower()
+        # Build a word-boundary regex for more precise topic matching.
+        # "kubernetes" should not match "mykubernetescluster".
+        import re as _re
+        try:
+            _topic_pattern = _re.compile(
+                r"\b" + _re.escape(topic_lower) + r"\b", _re.IGNORECASE
+            )
+        except _re.error:
+            _topic_pattern = None  # Fallback to substring if regex fails
+
         per_session = max(budget_chars // max(len(result.sessions), 1), 400)
 
         lines: list[str] = [f'## Session Recall: "{topic}"', ""]
 
+        def _topic_match(content: str) -> bool:
+            """Check if content contains topic as a whole word."""
+            if _topic_pattern is not None:
+                return bool(_topic_pattern.search(content))
+            return topic_lower in content.lower()
+
         for sess in result.sessions:
             lines.append(f"### Session {sess.session_id} ({sess.date}, {sess.match_count} matches)")
             chars_used = 0
-            # Prefer messages that actually contain the topic terms
+            # Prefer messages that actually contain the topic terms (word boundary)
             ranked = sorted(
                 sess.key_messages,
-                key=lambda m: (topic_lower in m.get("content", "").lower(), len(m.get("content", ""))),
+                key=lambda m: (_topic_match(m.get("content", "")), len(m.get("content", ""))),
                 reverse=True,
             )
             for msg in ranked:
