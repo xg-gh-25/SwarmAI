@@ -97,9 +97,9 @@
     <circle cx="28" cy="28" r="14" fill="#8b5cf6" opacity="0.15"/>
     <polygon points="28,16 31,25 40,25 33,30 35,39 28,34 21,39 23,30 16,25 25,25" fill="#c4b5fd" opacity="0.8"/>
     <text x="50" y="30" font-family="system-ui,-apple-system,sans-serif" font-size="12" font-weight="700" fill="#c4b5fd" letter-spacing="0.5">Self-Evolution</text>
-    <text x="14" y="52" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="#94a3b8">Learn capabilities</text>
-    <text x="14" y="66" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="#94a3b8">Capture corrections</text>
-    <text x="14" y="80" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="#94a3b8">Never repeat mistakes</text>
+    <text x="14" y="52" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="#94a3b8">Observe → Measure → Optimize</text>
+    <text x="14" y="66" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="#94a3b8">12-module closed loop</text>
+    <text x="14" y="80" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="#94a3b8">Auto-deploy with backup</text>
     <!-- Status dot -->
     <circle cx="142" cy="16" r="4" fill="#10b981"/>
   </g>
@@ -112,9 +112,9 @@
     <circle cx="28" cy="28" r="9" fill="none" stroke="#93c5fd" stroke-width="1.5" opacity="0.8"/>
     <path d="M 22,28 Q 28,20 34,28 Q 28,36 22,28" fill="#93c5fd" opacity="0.5"/>
     <text x="50" y="30" font-family="system-ui,-apple-system,sans-serif" font-size="12" font-weight="700" fill="#93c5fd" letter-spacing="0.5">Self-Memory</text>
-    <text x="14" y="52" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="#94a3b8">3-layer distillation</text>
-    <text x="14" y="66" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="#94a3b8">Git-verified accuracy</text>
-    <text x="14" y="80" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="#94a3b8">LLM-powered pruning</text>
+    <text x="14" y="52" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="#94a3b8">3-layer distill + hybrid recall</text>
+    <text x="14" y="66" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="#94a3b8">SessionRecall + MemoryGuard</text>
+    <text x="14" y="80" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="#94a3b8">Git-verified, vector search</text>
     <circle cx="142" cy="16" r="4" fill="#10b981"/>
   </g>
 
@@ -143,7 +143,7 @@
     <text x="50" y="30" font-family="system-ui,-apple-system,sans-serif" font-size="12" font-weight="700" fill="#fca5a5" letter-spacing="0.5">Self-Health</text>
     <text x="14" y="52" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="#94a3b8">Service monitoring</text>
     <text x="14" y="66" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="#94a3b8">Auto-restart on crash</text>
-    <text x="14" y="80" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="#94a3b8">Resource diagnostics</text>
+    <text x="14" y="80" font-family="system-ui,-apple-system,sans-serif" font-size="10" fill="#94a3b8">Resource diag + proactive restart</text>
     <circle cx="142" cy="16" r="4" fill="#10b981"/>
   </g>
 
