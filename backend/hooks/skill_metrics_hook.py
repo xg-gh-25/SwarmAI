@@ -114,16 +114,25 @@ def _detect_skill_invocations(messages: list[dict]) -> list[dict]:
                 if isinstance(block, dict) and block.get("type") == "tool_use":
                     tool_name = block.get("name", "")
                     if tool_name == "Skill" or tool_name.startswith("Skill"):
-                        # Extract skill name from input
+                        # Try input dict first (full SDK response)
                         inp = block.get("input", {})
                         skill_arg = inp.get("skill", "") if isinstance(inp, dict) else ""
+                        if not skill_arg:
+                            # DB stores summary only, not input (LL04).
+                            # Parse skill name from summary like "Using skill: s_pdf"
+                            summary = block.get("summary", "")
+                            m = _SKILL_TEXT_PATTERNS.search(summary)
+                            if m:
+                                skill_arg = m.group(1).strip("'\"")
                         if skill_arg:
                             skill_names.append(skill_arg)
-            # Also extract text content from blocks for pattern matching
+            # Also extract text content from blocks for pattern matching.
+            # Skip Skill tool_use summaries — already handled above.
             text_parts = []
             for block in content:
-                if isinstance(block, dict) and block.get("type") == "text":
-                    text_parts.append(block.get("text", ""))
+                if isinstance(block, dict):
+                    if block.get("type") == "text":
+                        text_parts.append(block.get("text", ""))
                 elif isinstance(block, str):
                     text_parts.append(block)
             content_text = " ".join(text_parts)
