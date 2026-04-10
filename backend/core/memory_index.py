@@ -62,6 +62,10 @@ DEFAULT_MAX_TOKENS = 50_000
 # Below this, Claude reads everything — no selection needed.
 FULL_INJECTION_THRESHOLD = 30_000
 
+# Maximum additional sections to load via EntryRefs 1-hop expansion.
+# Scale up as MEMORY.md grows and token budget allows.
+MAX_REF_SECTIONS = 3
+
 # Prefix patterns for index entry keys
 SECTION_KEY_PREFIX = {
     "Recent Context": "RC",
@@ -821,7 +825,7 @@ def select_memory_sections(
     ref_sections = _load_referenced_sections(parts, sections, sections_to_load)
     refs_added = 0
     for sec_name in ref_sections:
-        if refs_added >= 3:
+        if refs_added >= MAX_REF_SECTIONS:
             break
         sec_content = sections.get(sec_name, "")
         if not sec_content.strip():
