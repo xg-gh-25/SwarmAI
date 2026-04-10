@@ -121,6 +121,79 @@ class TestDetectSkillInvocations:
         assert "pdf" in names
         assert "translate" in names
 
+    def test_detects_db_format_summary_only(self):
+        """Detect skill from summary field when input dict is absent (LL04).
+
+        DB persists tool_use blocks with summary only, not input.
+        The hook must parse skill name from 'Using skill: s_pdf' in summary.
+        """
+        messages = [
+            {"role": "user", "content": "make a pdf", "created_at": "2026-04-09T10:00:00"},
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_bdrk_01X",
+                        "name": "Skill",
+                        "summary": "Using skill: s_pdf",
+                        "category": "skill",
+                    }
+                ],
+                "created_at": "2026-04-09T10:00:05",
+            },
+            {"role": "user", "content": "looks good", "created_at": "2026-04-09T10:01:00"},
+        ]
+        invocations = _detect_skill_invocations(messages)
+        assert len(invocations) == 1
+        assert invocations[0]["skill_name"] == "s_pdf"
+        assert invocations[0]["outcome"] == "success"
+
+    def test_db_format_summary_with_correction(self):
+        """Summary-only format correctly detects user correction."""
+        messages = [
+            {"role": "user", "content": "run pipeline", "created_at": "2026-04-09T10:00:00"},
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "name": "Skill",
+                        "summary": "Using skill: s_autonomous-pipeline",
+                        "category": "skill",
+                    }
+                ],
+                "created_at": "2026-04-09T10:00:05",
+            },
+            {"role": "user", "content": "wrong, fix this", "created_at": "2026-04-09T10:01:00"},
+        ]
+        invocations = _detect_skill_invocations(messages)
+        assert len(invocations) == 1
+        assert invocations[0]["skill_name"] == "s_autonomous-pipeline"
+        assert invocations[0]["user_satisfaction"] == "correction"
+        assert invocations[0]["outcome"] == "partial"
+
+    def test_db_format_prefers_input_over_summary(self):
+        """When both input and summary exist, input takes precedence."""
+        messages = [
+            {"role": "user", "content": "run it", "created_at": "2026-04-09T10:00:00"},
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "name": "Skill",
+                        "input": {"skill": "slack"},
+                        "summary": "Using skill: s_slack",
+                    }
+                ],
+                "created_at": "2026-04-09T10:00:05",
+            },
+        ]
+        invocations = _detect_skill_invocations(messages)
+        assert len(invocations) == 1
+        assert invocations[0]["skill_name"] == "slack"
+
     def test_empty_messages(self):
         """Empty message list produces no invocations."""
         assert _detect_skill_invocations([]) == []
