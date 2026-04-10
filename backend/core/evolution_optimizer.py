@@ -222,6 +222,14 @@ class EvolutionOptimizer:
             logger.warning("Cannot read %s: %s", skill_path, exc)
             return False
 
+        # Backup original before applying changes — enables manual rollback
+        backup_path = skill_path.with_suffix(".md.bak")
+        try:
+            backup_path.write_text(content, encoding="utf-8")
+        except OSError as exc:
+            logger.warning("Cannot create backup %s: %s", backup_path, exc)
+            # Continue anyway — backup is best-effort, not blocking
+
         # Split into frontmatter and body
         parts = content.split("---", 2)
         if len(parts) >= 3:
@@ -265,18 +273,34 @@ class EvolutionOptimizer:
         return True
 
     def _log_to_evolution(self, result: OptimizationResult) -> None:
-        """Append an optimization entry to EVOLUTION.md (best-effort)."""
+        """Append an optimization entry to EVOLUTION.md (best-effort).
+
+        Uses config-based workspace path resolution first, falls back to
+        relative path heuristics from skills_dir for robustness.
+        """
         try:
-            # Look for EVOLUTION.md in common locations
-            evo_candidates = [
-                self._skills_dir.parent.parent / ".context" / "EVOLUTION.md",
-                self._skills_dir.parent / ".context" / "EVOLUTION.md",
-            ]
             evo_path = None
-            for candidate in evo_candidates:
-                if candidate.is_file():
-                    evo_path = candidate
-                    break
+            # Preferred: resolve via app config (works regardless of skills_dir location)
+            try:
+                from core.app_config_manager import app_config_manager
+                if app_config_manager is not None:
+                    ws_path = app_config_manager.get("workspace_path")
+                    if ws_path:
+                        candidate = Path(ws_path) / ".context" / "EVOLUTION.md"
+                        if candidate.is_file():
+                            evo_path = candidate
+            except (ImportError, Exception):
+                pass  # config not available — fall through to heuristics
+
+            # Fallback: relative path heuristics from skills_dir
+            if evo_path is None:
+                for candidate in [
+                    self._skills_dir.parent.parent / ".context" / "EVOLUTION.md",
+                    self._skills_dir.parent / ".context" / "EVOLUTION.md",
+                ]:
+                    if candidate.is_file():
+                        evo_path = candidate
+                        break
 
             if evo_path is None:
                 return
