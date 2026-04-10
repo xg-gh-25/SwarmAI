@@ -34,6 +34,21 @@ logger = logging.getLogger("swarm.jobs.memory_health")
 MAX_OUTPUT_TOKENS = 2048
 
 
+def _sanitize_memory_content(text: str) -> str:
+    """Sanitize content through MemoryGuard before writing to MEMORY.md.
+
+    Gracefully degrades to returning text unchanged if MemoryGuard is
+    not available (cold start, import failure).
+    """
+    try:
+        from core.memory_guard import MemoryGuard
+        return MemoryGuard().sanitize(text)
+    except ImportError:
+        return text
+    except Exception:
+        return text
+
+
 def run_memory_health(dry_run: bool = False) -> dict:
     """Execute weekly memory health maintenance.
 
@@ -352,7 +367,9 @@ def _remove_memory_entry(entry_prefix: str) -> bool:
         removed = len(lines) - len(new_lines)
 
         if removed > 0:
-            memory_path.write_text("\n".join(new_lines), encoding="utf-8")
+            memory_path.write_text(
+                _sanitize_memory_content("\n".join(new_lines)), encoding="utf-8"
+            )
             logger.info("Removed %d line(s) matching: %s", removed, needle[:50])
             return True
         else:
@@ -412,7 +429,9 @@ def _resolve_open_thread(title: str) -> None:
                 new_lines.append("### Resolved")
                 new_lines.append(resolved_entry)
 
-            memory_path.write_text("\n".join(new_lines), encoding="utf-8")
+            memory_path.write_text(
+                _sanitize_memory_content("\n".join(new_lines)), encoding="utf-8"
+            )
             logger.info("Resolved thread: %s", title)
     except Exception as e:
         logger.warning("Failed to resolve thread: %s", e)

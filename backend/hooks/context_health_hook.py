@@ -634,6 +634,12 @@ class ContextHealthHook:
                     + ot_header + new_ot_body
                     + content[ot_match.end():]
                 )
+                # MemoryGuard: sanitize before writing
+                try:
+                    from core.memory_guard import MemoryGuard
+                    new_content = MemoryGuard().sanitize(new_content)
+                except (ImportError, Exception):
+                    pass  # graceful degradation
                 memory_path.write_text(new_content, encoding="utf-8")
 
                 # Append archived entries to MEMORY-archive-YYYY-MM.md

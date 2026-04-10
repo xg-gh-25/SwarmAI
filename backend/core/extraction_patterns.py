@@ -102,9 +102,13 @@ _EMOJI_PREFIX = re.compile(r"^(?:\u2705|\u274c|\u26a0\ufe0f|\U0001f534|\U0001f7e
 # Used by both session_miner.py (mining transcripts for eval examples) and
 # skill_metrics_hook.py (detecting corrections in post-session messages).
 
+# Tightened: require correction words at sentence start or after
+# sentence-ending punctuation, not mid-sentence casual usage.
+# "actually, let me also add" should NOT match; "Actually, that's wrong" should.
 CORRECTION_PATTERNS = re.compile(
-    r"\b(?:no|don'?t|stop|wrong|incorrect|fix|undo|revert|instead|actually|wait)\b",
-    re.IGNORECASE,
+    r"(?:^|(?<=[.!?]\s))"  # At start of string OR after sentence boundary
+    r"(?:no[,. !]|don'?t |stop |wrong|incorrect|fix |undo|revert|instead[, ]|actually[, ]|wait[,. !])",
+    re.IGNORECASE | re.MULTILINE,
 )
 
 

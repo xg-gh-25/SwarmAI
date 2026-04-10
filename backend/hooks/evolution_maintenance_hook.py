@@ -26,6 +26,35 @@ from core.session_hooks import HookContext
 
 logger = logging.getLogger(__name__)
 
+
+def _resolve_transcripts_dir(base_dir: Path) -> Path:
+    """Resolve the transcript directory with most-recent-activity heuristic.
+
+    Instead of picking the first alphabetically-sorted subdirectory,
+    find the subdir whose most recent .jsonl file has the latest mtime.
+    Falls back to ``base_dir`` if no subdirs contain .jsonl files.
+    """
+    if not base_dir.is_dir():
+        return base_dir
+
+    best_dir = None
+    best_mtime = 0.0
+
+    for subdir in base_dir.iterdir():
+        if not subdir.is_dir():
+            continue
+        jsonl_files = list(subdir.glob("*.jsonl"))
+        if not jsonl_files:
+            continue
+        # Find the most recent .jsonl in this subdir
+        latest_mtime = max(f.stat().st_mtime for f in jsonl_files)
+        if latest_mtime > best_mtime:
+            best_mtime = latest_mtime
+            best_dir = subdir
+
+    return best_dir if best_dir is not None else base_dir
+
+
 # Sections that contain entries with Status + Usage Count fields
 _MANAGED_SECTIONS = [
     ("Capabilities Built", "E"),
@@ -291,12 +320,8 @@ class EvolutionMaintenanceHook:
 
             # Transcripts directory: Claude Code session transcripts
             transcripts_dir = Path.home() / ".claude" / "projects"
-            # Find the project-specific subdir with .jsonl files
-            if transcripts_dir.is_dir():
-                for subdir in sorted(transcripts_dir.iterdir()):
-                    if subdir.is_dir() and list(subdir.glob("*.jsonl")):
-                        transcripts_dir = subdir
-                        break
+            # Find the project-specific subdir with the most recent .jsonl
+            transcripts_dir = _resolve_transcripts_dir(transcripts_dir)
 
             evals_dir = ctx_dir / "SkillEvals"
 

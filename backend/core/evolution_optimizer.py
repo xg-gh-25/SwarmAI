@@ -2,7 +2,9 @@
 
 Analyzes eval examples where users corrected the agent's output,
 extracts actionable patterns, and suggests SKILL.md text changes.
-DSPy/GEPA integration is optional -- falls back to heuristic.
+Uses heuristic-based optimization (correction-pattern matching and
+term-overlap fitness scoring). Designed with extensible interfaces for
+future ML-based optimization if needed.
 
 Key public symbols:
 - ``OptimizationResult``  -- Result of optimization attempt.
@@ -342,14 +344,38 @@ def run_evolution_cycle(skills_dir: Path, transcripts_dir: Path, evals_dir: Path
     optimizer = EvolutionOptimizer(skills_dir)
     evaluator = SkillFitnessEvaluator()
 
+    # Consult SkillMetrics for priority candidates (skills with high
+    # correction rates or low success rates from actual usage data).
+    priority_skills: set[str] = set()
+    try:
+        from core.skill_metrics import SkillMetricsStore
+        from core.app_config_manager import app_config_manager
+        data_dir = Path(
+            app_config_manager.get("data_dir", str(Path.home() / ".swarm-ai"))
+            if app_config_manager is not None
+            else str(Path.home() / ".swarm-ai")
+        )
+        db_path = data_dir / "data.db"
+        if db_path.exists():
+            store = SkillMetricsStore(str(db_path))
+            candidates = store.get_evolution_candidates()
+            priority_skills = set(candidates)
+            if priority_skills:
+                logger.info("SkillMetrics priority candidates: %s", priority_skills)
+    except Exception:
+        pass  # Graceful degradation if metrics not available
+
     # Step 1: Mine all skills
     all_examples = miner.mine_all()
     skills_checked = len(all_examples)
 
-    # Step 2: Filter eligible (>=5 examples)
+    # Step 2: Filter eligible (>=5 examples), prioritize metrics candidates
     eligible_skills: list[str] = []
     for name, examples in all_examples.items():
         if len(examples) >= 5:
+            eligible_skills.append(name)
+        elif name in priority_skills and len(examples) >= 3:
+            # Lower threshold for metrics-flagged skills
             eligible_skills.append(name)
 
     # Step 3: Score and optimize

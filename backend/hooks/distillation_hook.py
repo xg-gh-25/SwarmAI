@@ -964,6 +964,17 @@ class DistillationTriggerHook:
         import fcntl as _fcntl
         from scripts.locked_write import _modify_content
 
+        # MemoryGuard: sanitize content before any file I/O
+        try:
+            from core.memory_guard import MemoryGuard, MemoryGuardError
+            _guard = MemoryGuard()
+            text = _guard.sanitize(text)
+        except MemoryGuardError:
+            logger.warning("MemoryGuard rejected distillation write to %s", section)
+            return
+        except ImportError:
+            pass  # memory_guard not available yet
+
         lock_path = memory_path.with_suffix(memory_path.suffix + ".lock")
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         fd = None
