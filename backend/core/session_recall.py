@@ -18,6 +18,7 @@ Key public symbols:
 from __future__ import annotations
 
 import logging
+import re
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -234,12 +235,11 @@ class SessionRecall:
         topic_lower = topic.lower()
         # Build a word-boundary regex for more precise topic matching.
         # "kubernetes" should not match "mykubernetescluster".
-        import re as _re
         try:
-            _topic_pattern = _re.compile(
-                r"\b" + _re.escape(topic_lower) + r"\b", _re.IGNORECASE
+            _topic_pattern = re.compile(
+                r"\b" + re.escape(topic_lower) + r"\b", re.IGNORECASE
             )
-        except _re.error:
+        except re.error:
             _topic_pattern = None  # Fallback to substring if regex fails
 
         per_session = max(budget_chars // max(len(result.sessions), 1), 400)
