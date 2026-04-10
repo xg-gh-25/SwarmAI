@@ -210,6 +210,52 @@ def _extract_refs(entry_text: str, self_key: str) -> list[str]:
     return unique
 
 
+# Mapping from ref prefix → MEMORY.md section name
+_REF_PREFIX_TO_SECTION: dict[str, str] = {
+    "COE": "COE Registry",
+    "KD": "Key Decisions",
+    "RC": "Recent Context",
+    "LL": "Lessons Learned",
+    "OT": "Open Threads",
+}
+
+
+def _load_referenced_sections(
+    loaded_parts: list[str],
+    sections: dict[str, str],
+    already_loaded: set[str],
+) -> list[str]:
+    """Extract cross-references from loaded memory entries and return
+    section names that should be loaded via 1-hop ref expansion.
+
+    Scans ``refs:`` annotations in the loaded index lines for ref IDs
+    (e.g. COE02, KD01), maps them to section names, and returns any
+    not already loaded.  Returns at most a few sections to control
+    token budget.
+    """
+    ref_ids: set[str] = set()
+    for part in loaded_parts:
+        # Look for refs: annotations in index lines
+        for match in re.finditer(r"refs:\s*([A-Z0-9, ]+)", part):
+            for ref in match.group(1).split(","):
+                ref = ref.strip()
+                if ref:
+                    ref_ids.add(ref)
+
+    # Map ref IDs to section names
+    needed_sections: list[str] = []
+    for ref_id in ref_ids:
+        # Extract prefix (letters before digits)
+        prefix_match = re.match(r"([A-Z]+)", ref_id)
+        if prefix_match:
+            section_name = _REF_PREFIX_TO_SECTION.get(prefix_match.group(1))
+            if section_name and section_name not in already_loaded and section_name in sections:
+                if section_name not in needed_sections:
+                    needed_sections.append(section_name)
+
+    return needed_sections
+
+
 # ── Index Generation ──────────────────────────────────────────────────
 
 
@@ -769,10 +815,30 @@ def select_memory_sections(
             used_tokens += sec_tokens
         # else: skip this section but keep trying smaller ones
 
-    # ── SessionRecall fallback: if no keyword-matched sections loaded ──
+    # ── EntryRefs 1-hop loading: pull in referenced sections ──
+    # Parse refs: annotations from loaded entries, add referenced
+    # sections that aren't already loaded (cap at 3 additional).
+    ref_sections = _load_referenced_sections(parts, sections, sections_to_load)
+    refs_added = 0
+    for sec_name in ref_sections:
+        if refs_added >= 3:
+            break
+        sec_content = sections.get(sec_name, "")
+        if not sec_content.strip():
+            continue
+        sec_text = f"## {sec_name}\n{sec_content}"
+        sec_tokens = ContextDirectoryLoader.estimate_tokens(sec_text)
+        if used_tokens + sec_tokens <= max_tokens:
+            parts.append(sec_text)
+            used_tokens += sec_tokens
+            refs_added += 1
+
+    # ── SessionRecall: supplementary context from past sessions ──
+    # Always run when user_message is available — not just as a fallback.
+    # SessionRecall adds conversational context that keyword matching misses.
     # Module-level cache avoids re-creating SessionRecall (and its 2
-    # sqlite connections) on every session start.
-    if not sections_to_load and user_message:
+    # sqlite connections) on every session start.  Cap at 2 snippets.
+    if user_message:
         try:
             from core.session_recall import SessionRecall
             from core.app_config_manager import app_config_manager

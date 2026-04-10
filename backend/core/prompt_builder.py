@@ -702,14 +702,27 @@ class PromptBuilder:
                 except Exception as exc:
                     logger.warning("Proactive intelligence injection failed: %s", exc)
 
+            # ── UserObserver Suggestions ──
+            # Inject pending USER.md update suggestions if the file exists
+            # and has content. Written by UserObserverHook, consumed here.
+            if not is_channel:
+                try:
+                    suggestions_path = Path(working_directory) / ".context" / "user_suggestions.md"
+                    if suggestions_path.exists():
+                        suggestions_text = suggestions_path.read_text(encoding="utf-8").strip()
+                        if suggestions_text and len(suggestions_text) < 2048:
+                            context_text += f"\n\n## Pending User Profile Suggestions\n{suggestions_text}"
+                except Exception as exc:
+                    logger.debug("User suggestions injection skipped: %s", exc)
+
             # ── Skill Registry (compact skill index) ──
             if not is_channel:
                 try:
-                    from .skill_registry import SkillRegistry
+                    from .skill_registry import _get_skill_registry
                     # .claude/skills/ is the standard projection directory
                     # managed by ProjectionLayer — see projection_layer.py.
                     skills_dir = Path(working_directory) / ".claude" / "skills"
-                    registry = SkillRegistry(skills_dir)
+                    registry = _get_skill_registry(skills_dir)
                     compact = registry.generate_compact_registry()
                     if compact:
                         context_text += f"\n\n{compact}"

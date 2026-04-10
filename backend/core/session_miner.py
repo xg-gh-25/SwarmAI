@@ -234,7 +234,7 @@ class SessionMiner:
                     examples.append(EvalExample(
                         user_prompt=user_text,
                         skill_invoked=skill_name,
-                        agent_actions=agent_text[:500],
+                        agent_actions=agent_text[:1500],
                         user_correction=user_correction,
                         final_outcome="completed" if score > 0 else "abandoned",
                         score=score,
@@ -282,7 +282,7 @@ class SessionMiner:
                             examples.append(EvalExample(
                                 user_prompt=user_text,
                                 skill_invoked=skill_name,
-                                agent_actions=agent_text[:500],
+                                agent_actions=agent_text[:1500],
                                 user_correction=user_correction,
                                 final_outcome="completed" if score > 0 else "abandoned",
                                 score=score,
