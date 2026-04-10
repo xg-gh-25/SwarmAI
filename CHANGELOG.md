@@ -5,6 +5,45 @@ All notable changes to SwarmAI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2026-04-10
+
+### Added — Next-Gen Agent Intelligence
+
+Three-phase delivery building a closed-loop self-improvement pipeline for the agent.
+
+**Phase 1 — Safety + Observability**
+- **MemoryGuard**: Pre-write scanner for MEMORY.md, EVOLUTION.md, USER.md — detects and redacts AWS keys, OpenAI keys, Bearer tokens, PEM blocks, passwords; rejects prompt injection, role hijack, and exfiltration patterns; strips invisible Unicode characters
+- **SkillMetrics**: SQLite-backed per-skill invocation tracking (outcome, duration, user satisfaction) with `get_evolution_candidates()` for optimization targeting
+- **Section Budget Caps**: MEMORY.md sections capped (Key Decisions 30, Lessons Learned 25, COE Registry 15, Recent Context 30, Open Threads 10) with overflow archived to `Knowledge/Archives/` instead of deleted
+- **Entry Relationships**: Auto-detected `refs:` field in memory index entries linking cross-references between COE/KD/RC/LL/OT entries
+
+**Phase 2 — Understanding + Recall**
+- **UserObserver**: Post-session hook extracts correction patterns, expertise indicators, and language preferences (CJK/Kana/Hangul) from user messages; consolidates observations in JSONL; surfaces USER.md update suggestions via proactive briefing
+- **SessionRecall**: FTS5-based full-text search across session messages with multi-signal relevance ranking (match density, recency, content richness), character budget distribution, sentence-boundary truncation, and word-boundary topic matching
+- **SkillRegistry**: Compact skill index injected into system prompt — scans `s_*/SKILL.md`, categorizes into 11 groups, caches with mtime-based hash invalidation
+- **SkillGuard**: Static analysis scanner for skill content with 4 trust levels (BUILTIN/USER_CREATED/AGENT_CREATED/EXTERNAL) and 5 pattern categories (exfiltration, prompt injection, destructive, persistence, privilege escalation)
+
+**Phase 3 — Autonomous Evolution**
+- **SessionMiner**: Mines Claude Code JSONL transcripts for per-skill eval datasets with two-stage filtering (keyword heuristic → structured extraction) and MemoryGuard secret scrubbing
+- **SkillFitness**: Multi-signal heuristic scoring (Jaccard 30% + bigram overlap 30% + containment 40%) replacing pure Jaccard; adaptive threshold scaling with example count
+- **EvolutionOptimizer**: Heuristic skill optimization via correction pattern analysis ("don't X" → remove, "should Y" → add) with constraint gates (15KB size, 20% growth, SkillGuard injection scan), SKILL.md backup before deploy, EVOLUTION.md audit logging
+- **Evolution Cycle**: End-to-end pipeline (mine → score → optimize → deploy) triggered by session-close hook (7-day interval) and weekly scheduled job (Thursday 04:00 UTC) as fallback
+- **Retention Policies**: DailyActivity >90d archived, Archives >365d deleted (MEMORY-archive-* preserved), resolved Open Threads >7d removed from MEMORY.md and archived under fcntl.flock
+- **SkillMetricsHook**: Post-session hook detecting Skill tool_use blocks and "Using Skill:" text patterns, recording invocations with correction detection
+
+### Fixed
+
+- **MemoryGuard bypass**: All MEMORY.md write paths (distillation, context_health, memory_health) now sanitize through MemoryGuard — not just locked_write.py
+- **FTS5 missing UPDATE trigger**: `messages_fts` now has INSERT + DELETE + UPDATE triggers; edited messages no longer return stale search results
+- **Password regex false positives**: Tightened to require quoted values — `password: myconfig_value` no longer triggers redaction
+- **Non-atomic observation writes**: UserObserverHook uses tempfile + atomic rename instead of clear + append
+- **SessionRecall duplicate FTS5 setup**: Removed redundant table/trigger creation; DB migration in sqlite.py is single source of truth
+- **DB migration skip_init path**: Returning users (seed-sourced DB) now run migrations on startup — skill_metrics table and messages_fts FTS5 table are created
+- **Transcript directory resolution**: Picks most-recently-active project subdir instead of first-alphabetical
+- **Shared correction patterns**: Extracted `CORRECTION_PATTERNS` to `extraction_patterns.py` — imported by both session_miner and skill_metrics_hook
+- **Dead code removal**: Deleted unused `SkillCreatorTool` (zero production callers); removed dead `_estimate_duration` loop; replaced DSPy aspirational references
+- **Build script**: Added all 12 new modules to PyInstaller hidden imports; renamed Owork → SwarmAI in startup log paths
+
 ## [1.3.0] - 2026-04-09
 
 ### Added
