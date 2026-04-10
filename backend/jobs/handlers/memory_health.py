@@ -418,7 +418,9 @@ def _resolve_open_thread(title: str) -> None:
             inserted = False
             for i, line in enumerate(new_lines):
                 if "### Resolved" in line:
-                    new_lines.insert(i + 1, resolved_entry)
+                    # Dedup: skip if this entry already exists in Resolved
+                    if resolved_entry not in new_lines:
+                        new_lines.insert(i + 1, resolved_entry)
                     inserted = True
                     break
 
@@ -478,7 +480,9 @@ def _remove_evolution_entry(entry_id: str) -> bool:
                 new_lines.append(line)
 
         if removed:
-            evo_path.write_text("\n".join(new_lines), encoding="utf-8")
+            evo_path.write_text(
+                _sanitize_memory_content("\n".join(new_lines)), encoding="utf-8"
+            )
             logger.info("Removed evolution entry: %s", entry_id)
             return True
         return False
