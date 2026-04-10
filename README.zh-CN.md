@@ -92,7 +92,7 @@ SwarmAI 不会。
 SwarmAI 不只是使用技能——遇到能力缺口时会自己构建新的。
 
 <div align="center">
-<img src="./assets/self-evolution.svg" alt="自我进化 — 持续成长闭环" width="800"/>
+<img src="./assets/self-evolution.svg" alt="新一代 Agent 智能 — 12 模块、4 阶段、闭环系统" width="800"/>
 </div>
 
 - **MemoryGuard** —— 所有持久记忆写入均经过安全扫描：密钥→脱敏，注入攻击→拦截，不可见字符→清除。敏感数据永不落盘
