@@ -29,7 +29,9 @@ env/
 progress.md
 task_plan.md
 findings.md
-.claude/
+# .claude/ — project settings and hooks are committed (per Claude Code convention)
+# Only ignore local overrides
+.claude/settings.local.json
 .specify/
 # Environment variables
 .env
