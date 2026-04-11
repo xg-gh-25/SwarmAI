@@ -14,9 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import sys
-import time
-from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -98,7 +96,11 @@ class _patch_sdk_modules:
             return_value=asyncio.Queue(),
         )
         self._dict_patch.start()
-        self._pm_patch.start()
+        try:
+            self._pm_patch.start()
+        except Exception:
+            self._dict_patch.stop()
+            raise
         return self
 
     def __exit__(self, *exc):

@@ -39,7 +39,7 @@ if _os.path.isdir(_VENV_DIR) and not _sys.prefix.startswith(
         f"WRONG PYTHON: {_sys.executable}\n"
         f"  expected venv: {_os.path.realpath(_VENV_DIR)}\n"
         f"{'=' * 60}\n"
-        f"Fix: .venv/bin/python -m pytest\n"
+        f"Fix: cd backend && python -m pytest  (from activated venv)\n"
         f"{'=' * 60}",
         file=_sys.stderr,
     )
@@ -48,7 +48,6 @@ if _os.path.isdir(_VENV_DIR) and not _sys.prefix.startswith(
 import atexit
 
 import gc
-import logging
 import os
 import resource
 import signal
@@ -61,8 +60,6 @@ from typing import Generator, AsyncGenerator
 
 import database as database_module
 from database.sqlite import SQLiteDatabase
-
-_logger = logging.getLogger("test")
 
 
 
