@@ -541,18 +541,46 @@ def _key_to_section(key: str) -> Optional[str]:
     return None
 
 
+def _extract_superseded_keys(memory_content: str) -> set[str]:
+    """Extract set of entry keys that are marked superseded in MEMORY.md.
+
+    Scans for temporal metadata HTML comments with non-null superseded_by.
+    Returns keys like {'KD03', 'RC14'} for entries that should be down-weighted.
+    """
+    superseded: set[str] = set()
+    # Match entry key followed (within 2 lines) by superseded metadata
+    for m in re.finditer(
+        r"- \[([A-Z]{1,4}\d+)\].*?\n(?:.*?\n)?.*?"
+        r"<!--.*?superseded_by:\s*(?!null)(\S+).*?-->",
+        memory_content,
+    ):
+        superseded.add(m.group(1))
+    return superseded
+
+
 def _keyword_section_scores(
     user_message: str,
     index_block: str,
+    superseded_keys: set[str] | None = None,
 ) -> dict[str, float]:
-    """Score sections by keyword matching (existing behavior, extracted)."""
+    """Score sections by keyword matching, applying temporal weight.
+
+    Entries marked as superseded (via P2 temporal validity) score at
+    0.1x weight, preventing stale decisions from dominating section selection.
+    """
     index_entries = _parse_index_entries(index_block)
     matched: dict[str, float] = {}
+    _superseded = superseded_keys or set()
 
     for entry in index_entries:
         score = keyword_relevance(
             user_message, entry["summary"], entry["aliases"]
         )
+        # Apply temporal weight: superseded entries get 0.1x
+        if entry["key"] in _superseded:
+            score *= _entry_temporal_weight(
+                "<!-- valid_from: x | superseded_by: Y | confidence: high -->"
+            )
         if score >= KEYWORD_THRESHOLD:
             sec_name = _key_to_section(entry["key"])
             if sec_name and (sec_name not in matched or score > matched[sec_name]):
@@ -776,6 +804,9 @@ def select_memory_sections(
     if signals.get("is_first_session_today"):
         sections_to_load.add("Recent Context")
 
+    # ── Temporal validity: extract superseded keys for scoring ──
+    superseded = _extract_superseded_keys(body)
+
     # ── Section scoring: hybrid (vector+keyword) or keyword-only ──
     if user_message:
         if memory_embeddings:
@@ -789,12 +820,12 @@ def select_memory_sections(
 
             # Hybrid empty = no embeddings yet or Bedrock down.
             # Merge in keyword results so we never lose recall.
-            kw_sections = _keyword_section_scores(user_message, index_block)
+            kw_sections = _keyword_section_scores(user_message, index_block, superseded)
             for sec, score in kw_sections.items():
                 if sec not in matched_sections or score > matched_sections[sec]:
                     matched_sections[sec] = score
         else:
-            matched_sections = _keyword_section_scores(user_message, index_block)
+            matched_sections = _keyword_section_scores(user_message, index_block, superseded)
 
         # Add matched sections (sorted by score, best first)
         for sec_name, _ in sorted(
@@ -942,3 +973,176 @@ def extract_body_without_index(content: str) -> str:
     # (avoids returning original content with index still in it)
     stripped = result.strip()
     return stripped + "\n" if stripped else ""
+
+
+# ── Temporal Validity (P2) ───────────────────────────────────────────
+# HTML comment metadata on MEMORY.md entries:
+#   <!-- valid_from: YYYY-MM-DD | superseded_by: KEY | confidence: high -->
+# Superseded entries score 0.1x weight in select_memory_sections().
+
+_TEMPORAL_RE = re.compile(
+    r"<!--\s*valid_from:\s*(\S+)\s*\|\s*superseded_by:\s*(\S+)\s*\|\s*confidence:\s*(\S+)\s*-->"
+)
+
+SUPERSEDED_WEIGHT = 0.1  # Score weight for superseded entries
+
+
+def parse_temporal_metadata(text: str) -> Optional[dict]:
+    """Extract temporal metadata from an HTML comment string.
+
+    Args:
+        text: String that may contain a temporal metadata HTML comment.
+
+    Returns:
+        Dict with keys valid_from, superseded_by (str or None), confidence.
+        Returns None if no temporal metadata found.
+    """
+    if not text:
+        return None
+
+    m = _TEMPORAL_RE.search(text)
+    if not m:
+        return None
+
+    superseded = m.group(2)
+    if superseded.lower() == "null":
+        superseded = None
+
+    return {
+        "valid_from": m.group(1),
+        "superseded_by": superseded,
+        "confidence": m.group(3),
+    }
+
+
+def _entry_temporal_weight(entry_text: str) -> float:
+    """Return temporal score weight for an entry.
+
+    Superseded entries → 0.1, active/no-metadata → 1.0.
+
+    Args:
+        entry_text: The full entry text including any HTML comment.
+
+    Returns:
+        Weight multiplier (0.1 or 1.0).
+    """
+    meta = parse_temporal_metadata(entry_text)
+    if meta and meta.get("superseded_by"):
+        return SUPERSEDED_WEIGHT
+    return 1.0
+
+
+def format_temporal_metadata(
+    valid_from: str,
+    superseded_by: Optional[str] = None,
+    confidence: str = "high",
+) -> str:
+    """Generate an HTML comment string with temporal metadata.
+
+    Args:
+        valid_from: Date string (YYYY-MM-DD).
+        superseded_by: Key of the superseding entry, or None.
+        confidence: Confidence level (high/medium/low).
+
+    Returns:
+        HTML comment string like
+        ``<!-- valid_from: 2026-04-11 | superseded_by: null | confidence: high -->``
+    """
+    sup = superseded_by if superseded_by else "null"
+    return f"<!-- valid_from: {valid_from} | superseded_by: {sup} | confidence: {confidence} -->"
+
+
+def add_temporal_metadata_to_entry(
+    entry: str,
+    valid_from: str,
+    confidence: str = "high",
+) -> str:
+    """Add temporal metadata to a MEMORY.md entry if not already present.
+
+    Appends the HTML comment on the line after the entry text.
+    Idempotent — won't add if already present.
+
+    Args:
+        entry: The entry text (e.g. "- [KD28] 2026-04-11 New decision").
+        valid_from: Date string for valid_from field.
+        confidence: Confidence level.
+
+    Returns:
+        Entry with temporal metadata appended (or unchanged if already present).
+    """
+    if _TEMPORAL_RE.search(entry):
+        return entry  # Already has temporal metadata
+
+    meta = format_temporal_metadata(valid_from=valid_from, confidence=confidence)
+    # Append on the next line with indentation
+    return f"{entry.rstrip()}\n  {meta}"
+
+
+def mark_entry_superseded(
+    content: str,
+    old_key: str,
+    new_key: str,
+) -> str:
+    """Mark a MEMORY.md entry as superseded by another entry.
+
+    If the entry already has temporal metadata, updates the superseded_by field.
+    If not, adds temporal metadata with superseded_by set.
+
+    Args:
+        content: Full MEMORY.md content.
+        old_key: Key of the entry to mark (e.g. "KD02").
+        new_key: Key of the superseding entry (e.g. "KD99").
+
+    Returns:
+        Updated content string, or unchanged if old_key not found.
+    """
+    # Find the entry line by key
+    entry_pattern = re.compile(
+        rf"^(- \[{re.escape(old_key)}\].+?)$",
+        re.MULTILINE,
+    )
+    match = entry_pattern.search(content)
+    if not match:
+        return content  # Key not found
+
+    entry_start = match.start()
+    entry_line = match.group(1)
+
+    # Check if there's existing temporal metadata on the next line(s)
+    # Look at the text after this entry line until the next entry or section
+    after_entry = content[match.end():]
+
+    # Check for existing temporal metadata within the next 2 lines
+    next_lines = after_entry.split("\n", 3)
+    temporal_line_idx = None
+    for i, line in enumerate(next_lines[:3]):
+        if _TEMPORAL_RE.search(line):
+            temporal_line_idx = i
+            break
+
+    if temporal_line_idx is not None:
+        # Update existing metadata
+        old_meta_match = _TEMPORAL_RE.search(next_lines[temporal_line_idx])
+        if old_meta_match:
+            old_meta = old_meta_match.group(0)
+            new_meta = format_temporal_metadata(
+                valid_from=old_meta_match.group(1),
+                superseded_by=new_key,
+                confidence=old_meta_match.group(3),
+            )
+            return content.replace(old_meta, new_meta, 1)
+    else:
+        # Add new metadata after the entry line
+        # Extract date from the entry for valid_from
+        date_match = re.search(r"\d{4}-\d{2}-\d{2}", entry_line)
+        valid_from = date_match.group(0) if date_match else "unknown"
+        meta = format_temporal_metadata(
+            valid_from=valid_from, superseded_by=new_key
+        )
+        return content.replace(
+            entry_line,
+            f"{entry_line}\n  {meta}",
+            1,
+        )
+
+    return content

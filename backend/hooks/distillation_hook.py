@@ -468,6 +468,12 @@ class DistillationTriggerHook:
         if commit_hash:
             detail_parts.append(f"commit {commit_hash}")
         entry += f"\n  {', '.join(detail_parts)}."
+        # P2 Temporal validity: add valid_from metadata to every new entry
+        try:
+            from core.memory_index import add_temporal_metadata_to_entry
+            entry = add_temporal_metadata_to_entry(entry, valid_from=date_str)
+        except ImportError:
+            pass  # Module not available yet (graceful)
         return entry
 
     @staticmethod

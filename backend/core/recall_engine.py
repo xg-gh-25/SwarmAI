@@ -16,6 +16,7 @@ Public symbols:
 - ``RECALL_THRESHOLD``   — Minimum score to include a result (0.05)
 """
 
+import hashlib
 import logging
 from typing import Callable, Optional
 
@@ -28,25 +29,32 @@ KEYWORD_WEIGHT = 0.4
 RECALL_THRESHOLD = 0.05  # Low — power first
 DEFAULT_MAX_TOKENS = 15_000
 _CHARS_PER_TOKEN = 4  # rough estimate; code-heavy content may be ~2-3 chars/token
+_DEDUP_HASH_PREFIX = 200  # Chars used for content deduplication across stores
 
 
 # ── RecallEngine ──────────────────────────────────────────────────────
 
 
 class RecallEngine:
-    """Hybrid search engine over the Knowledge Library.
+    """Hybrid search engine over the Knowledge Library + optional stores.
 
     Combines FTS5 (keyword) and sqlite-vec (vector) search results
     with configurable weights. Formats output with provenance for
     system prompt injection.
+
+    Supports additional stores (e.g. TranscriptStore) for unified search.
     """
 
-    def __init__(self, store: "KnowledgeStore"):
+    def __init__(self, store: "KnowledgeStore", additional_stores: list = None):
         """
         Args:
             store: KnowledgeStore instance with tables already ensured.
+            additional_stores: Optional list of additional stores (e.g.
+                TranscriptStore) that implement fts5_search() and
+                vector_search() with the same return format.
         """
         self._store = store
+        self._additional_stores = additional_stores or []
 
     def search(
         self,
@@ -71,38 +79,53 @@ class RecallEngine:
         if not query or not query.strip():
             return []
 
-        # 1. FTS5 keyword search
-        fts_results = self._store.fts5_search(query, limit=top_k)
+        all_stores = [self._store] + self._additional_stores
 
-        # Normalize FTS5 ranks to 0-1 scores
-        # FTS5 rank is negative (more negative = better match)
-        fts_scored: dict[int, dict] = {}
-        if fts_results:
-            min_rank = min(r["fts_rank"] for r in fts_results)
-            max_rank = max(r["fts_rank"] for r in fts_results)
-            rank_range = max_rank - min_rank if max_rank != min_rank else 1.0
+        fts_scored: dict[str, dict] = {}  # keyed by "storeidx:rowid"
+        vec_scored: dict[str, dict] = {}
 
-            for r in fts_results:
-                # Invert: best rank (most negative) → highest score
-                score = 1.0 - (r["fts_rank"] - min_rank) / rank_range if rank_range else 1.0
-                fts_scored[r["id"]] = {**r, "fts_score": score}
+        for store_idx, store in enumerate(all_stores):
+            prefix = f"s{store_idx}:"
 
-        # 2. Vector search (graceful fallback)
-        vec_scored: dict[int, dict] = {}
-        if embed_fn is not None:
-            query_embedding = embed_fn(query)
-            if query_embedding is not None:
-                vec_results = self._store.vector_search(query_embedding, top_k=top_k)
-                for r in vec_results:
-                    vec_scored[r["id"]] = {**r}
+            # 1. FTS5 keyword search
+            try:
+                fts_results = store.fts5_search(query, limit=top_k)
+            except Exception:
+                fts_results = []
 
-        # 3. Hybrid merge
-        all_ids = set(fts_scored.keys()) | set(vec_scored.keys())
+            if fts_results:
+                min_rank = min(r["fts_rank"] for r in fts_results)
+                max_rank = max(r["fts_rank"] for r in fts_results)
+                rank_range = max_rank - min_rank if max_rank != min_rank else 1.0
+
+                for r in fts_results:
+                    score = 1.0 - (r["fts_rank"] - min_rank) / rank_range if rank_range else 1.0
+                    key = f"{prefix}{r['id']}"
+                    fts_scored[key] = {**r, "fts_score": score}
+
+            # 2. Vector search (graceful fallback — Bedrock down = FTS5-only)
+            if embed_fn is not None:
+                try:
+                    query_embedding = embed_fn(query)
+                except Exception:
+                    query_embedding = None
+                if query_embedding is not None:
+                    try:
+                        vec_results = store.vector_search(query_embedding, top_k=top_k)
+                    except Exception:
+                        vec_results = []
+                    for r in vec_results:
+                        key = f"{prefix}{r['id']}"
+                        vec_scored[key] = {**r}
+
+        # 3. Hybrid merge across all stores
+        all_keys = set(fts_scored.keys()) | set(vec_scored.keys())
         merged: list[dict] = []
+        seen_content: set[str] = set()
 
-        for chunk_id in all_ids:
-            fts_entry = fts_scored.get(chunk_id, {})
-            vec_entry = vec_scored.get(chunk_id, {})
+        for key in all_keys:
+            fts_entry = fts_scored.get(key, {})
+            vec_entry = vec_scored.get(key, {})
 
             fts_score = fts_entry.get("fts_score", 0.0)
             vec_score = vec_entry.get("vector_score", 0.0)
@@ -113,11 +136,19 @@ class RecallEngine:
 
             # Take metadata from whichever source has it
             base = fts_entry or vec_entry
+            content = base.get("content", "")
+
+            # Deduplicate: skip if identical content already seen (hash-based)
+            content_key = hashlib.md5(content[:_DEDUP_HASH_PREFIX].encode()).hexdigest()
+            if content_key in seen_content:
+                continue
+            seen_content.add(content_key)
+
             merged.append({
-                "id": chunk_id,
+                "id": base.get("id", 0),
                 "source_file": base.get("source_file", ""),
                 "heading": base.get("heading", ""),
-                "content": base.get("content", ""),
+                "content": content,
                 "hybrid_score": hybrid,
                 "fts_score": fts_score,
                 "vector_score": vec_score,

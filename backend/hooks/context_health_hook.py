@@ -89,6 +89,12 @@ class ContextHealthHook:
         except Exception as exc:
             logger.debug("context_health: knowledge library sync skipped: %s", exc)
 
+        # Transcript indexing (incremental, <10s) — P1 Memory Architecture v2
+        try:
+            self._sync_transcript_index(root)
+        except Exception as exc:
+            logger.debug("context_health: transcript sync skipped: %s", exc)
+
         self._last_refresh_rev = current_rev
         logger.info("context_health: indexes refreshed (rev=%s)",
                     current_rev[:8] if current_rev else "?")
@@ -282,6 +288,52 @@ class ContextHealthHook:
                 "%d files scanned, %d chunks added, %d skipped, %d removed",
                 stats["files_scanned"], stats["chunks_added"],
                 stats["chunks_skipped"], stats["files_removed"],
+            )
+
+    def _sync_transcript_index(self, root: Path) -> None:
+        """Incremental sync of JSONL transcripts into FTS5 + sqlite-vec.
+
+        Indexes Claude Code session transcripts for verbatim recall via
+        the Recall Engine (Memory Architecture v2, Phase 5 / P1).
+        MemPalace benchmark: raw verbatim scores 96.6% vs 84.2% for summaries.
+
+        Follows the same pattern as _sync_knowledge_library: open vec DB,
+        create store, embed, sync. Failures are silent.
+        """
+        from core.transcript_indexer import TranscriptStore, sync_transcript_index
+        from core.embedding_client import EmbeddingClient
+        from core.vec_db import open_vec_db
+
+        # Resolve transcripts directory (Claude Code session transcripts)
+        transcripts_dir = Path.home() / ".claude" / "projects"
+        try:
+            from hooks.evolution_maintenance_hook import _resolve_transcripts_dir
+            transcripts_dir = _resolve_transcripts_dir(transcripts_dir)
+        except ImportError:
+            pass  # Fallback to base dir
+
+        if not transcripts_dir.is_dir():
+            return
+
+        with open_vec_db() as conn:
+            if conn is None:
+                logger.debug("context_health: sqlite-vec not available, skipping transcript sync")
+                return
+
+            store = TranscriptStore(conn)
+            store.ensure_tables()
+
+            client = EmbeddingClient()
+
+            def _safe_embed(text: str) -> list[float] | None:
+                return client.embed_text(text)
+
+            stats = sync_transcript_index(store, transcripts_dir, embed_fn=_safe_embed)
+
+        if stats.get("files_indexed", 0) > 0:
+            logger.info(
+                "context_health: transcripts synced — %d indexed, %d skipped, %d chunks",
+                stats["files_indexed"], stats["files_skipped"], stats["chunks_added"],
             )
 
     # ------------------------------------------------------------------

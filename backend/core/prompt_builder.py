@@ -991,7 +991,18 @@ class PromptBuilder:
 
         try:
             store = KnowledgeStore(conn)
-            engine = RecallEngine(store)
+
+            # P1: Add TranscriptStore for verbatim conversation recall
+            additional_stores = []
+            try:
+                from .transcript_indexer import TranscriptStore
+                transcript_store = TranscriptStore(conn)
+                transcript_store.ensure_tables()
+                additional_stores.append(transcript_store)
+            except Exception:
+                pass  # Transcript tables may not exist yet — graceful
+
+            engine = RecallEngine(store, additional_stores=additional_stores)
 
             client = EmbeddingClient()
 

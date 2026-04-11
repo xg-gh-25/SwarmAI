@@ -301,10 +301,31 @@ def _apply_report(report: dict, memory_md: str, evolution_md: str) -> list[str]:
                 else:
                     actions.append(f"Flagged for archive (not found): {cap_id}")
 
-    # 4. Flag stale decisions (log only, don't auto-remove)
+    # 4. Stale decisions: mark superseded instead of removing (P2 Temporal Validity)
     stale_decisions = report.get("stale_decisions", [])
     for dec in stale_decisions[:3]:
-        actions.append(f"Stale decision flagged: {dec.get('entry_prefix', '')[:60]}")
+        old_key = dec.get("key", "")
+        new_key = dec.get("superseded_by", "")
+        prefix = dec.get("entry_prefix", "")[:60]
+        if old_key and new_key:
+            try:
+                from core.memory_index import mark_entry_superseded
+                memory_path = CONTEXT_DIR / "MEMORY.md"
+                if memory_path.exists():
+                    content = memory_path.read_text(encoding="utf-8")
+                    updated = mark_entry_superseded(content, old_key, new_key)
+                    if updated != content:
+                        memory_path.write_text(updated, encoding="utf-8")
+                        actions.append(f"Superseded: {old_key} → {new_key} ({prefix})")
+                    else:
+                        actions.append(f"Stale decision flagged (key not found): {prefix}")
+                else:
+                    actions.append(f"Stale decision flagged: {prefix}")
+            except Exception as exc:
+                logger.warning("Failed to mark %s superseded: %s", old_key, exc)
+                actions.append(f"Stale decision flagged: {prefix}")
+        else:
+            actions.append(f"Stale decision flagged: {prefix}")
 
     # 5. Capability gaps (log for briefing, don't auto-act)
     gaps = report.get("capability_gaps", [])
