@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 440" width="960" height="440">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 600" width="960" height="600">
   <defs>
     <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
       <stop offset="0%" stop-color="#0f1019"/>
@@ -24,128 +24,187 @@
       <stop offset="0%" stop-color="#ef4444"/>
       <stop offset="100%" stop-color="#dc2626"/>
     </linearGradient>
+    <linearGradient id="cyan" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#06b6d4"/>
+      <stop offset="100%" stop-color="#0891b2"/>
+    </linearGradient>
     <marker id="arrowGold" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
       <polygon points="0 0, 8 3, 0 6" fill="#f59e0b" opacity="0.7"/>
     </marker>
     <marker id="arrowRed" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
       <polygon points="0 0, 8 3, 0 6" fill="#ef4444" opacity="0.7"/>
     </marker>
+    <marker id="arrowCyan" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#06b6d4" opacity="0.7"/>
+    </marker>
+    <marker id="arrowPurple" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#8b5cf6" opacity="0.7"/>
+    </marker>
   </defs>
 
-  <rect width="960" height="440" rx="16" fill="url(#bg)"/>
+  <rect width="960" height="600" rx="16" fill="url(#bg)"/>
 
   <!-- Grid -->
   <g opacity="0.03" stroke="#f59e0b">
-    <line x1="0" y1="100" x2="960" y2="100" stroke-width="0.5"/>
-    <line x1="0" y1="200" x2="960" y2="200" stroke-width="0.5"/>
-    <line x1="0" y1="300" x2="960" y2="300" stroke-width="0.5"/>
-    <line x1="240" y1="0" x2="240" y2="440" stroke-width="0.5"/>
-    <line x1="480" y1="0" x2="480" y2="440" stroke-width="0.5"/>
-    <line x1="720" y1="0" x2="720" y2="440" stroke-width="0.5"/>
+    <line x1="0" y1="120" x2="960" y2="120" stroke-width="0.5"/>
+    <line x1="0" y1="240" x2="960" y2="240" stroke-width="0.5"/>
+    <line x1="0" y1="360" x2="960" y2="360" stroke-width="0.5"/>
+    <line x1="0" y1="480" x2="960" y2="480" stroke-width="0.5"/>
+    <line x1="240" y1="0" x2="240" y2="600" stroke-width="0.5"/>
+    <line x1="480" y1="0" x2="480" y2="600" stroke-width="0.5"/>
+    <line x1="720" y1="0" x2="720" y2="600" stroke-width="0.5"/>
   </g>
 
   <!-- Title -->
-  <text x="480" y="42" text-anchor="middle" fill="#3b82f6" font-family="Arial,Helvetica,sans-serif" font-size="18" font-weight="bold" letter-spacing="2">MEMORY PIPELINE</text>
-  <text x="480" y="60" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="11">Three-Layer Distillation: Session Activity to Durable Knowledge</text>
+  <text x="480" y="36" text-anchor="middle" fill="#3b82f6" font-family="Arial,Helvetica,sans-serif" font-size="18" font-weight="bold" letter-spacing="2">MEMORY ARCHITECTURE v2</text>
+  <text x="480" y="54" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="11">Write Path (Distillation) + Read Path (4-Layer Recall) + Temporal Validity</text>
 
-  <!-- ============ LAYER 1: Session Capture ============ -->
-  <text x="130" y="92" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="10" letter-spacing="1">LAYER 1: CAPTURE</text>
+  <!-- ============ WRITE PATH ============ -->
+  <text x="60" y="80" fill="#f59e0b" font-family="Arial,Helvetica,sans-serif" font-size="10" font-weight="bold" letter-spacing="1" opacity="0.6">WRITE PATH</text>
 
-  <rect x="40" y="108" width="180" height="120" rx="10" fill="#1e1e36" stroke="#3b82f6" stroke-width="1.2" opacity="0.95"/>
-  <rect x="40" y="108" width="180" height="120" rx="10" fill="url(#blue)" opacity="0.06"/>
-  <text x="130" y="132" text-anchor="middle" fill="#93c5fd" font-family="Arial,Helvetica,sans-serif" font-size="12" font-weight="bold">Chat Session</text>
-  <text x="130" y="150" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Decisions made</text>
-  <text x="130" y="164" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Code committed</text>
-  <text x="130" y="178" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Lessons learned</text>
-  <text x="130" y="192" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Files changed</text>
-  <text x="130" y="212" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="8">DailyActivityExtractionHook</text>
+  <!-- Session Capture -->
+  <rect x="40" y="96" width="170" height="110" rx="10" fill="#1e1e36" stroke="#3b82f6" stroke-width="1.2" opacity="0.95"/>
+  <text x="125" y="118" text-anchor="middle" fill="#93c5fd" font-family="Arial,Helvetica,sans-serif" font-size="11" font-weight="bold">Chat Session</text>
+  <text x="125" y="136" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Decisions, code, lessons</text>
+  <text x="125" y="150" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Files changed, git commits</text>
+  <text x="125" y="170" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="8">DailyActivityHook</text>
+  <text x="125" y="195" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="8">+ JSONL transcript saved</text>
 
-  <!-- Arrow to Layer 2 -->
-  <path d="M 220,168 L 280,168" stroke="#f59e0b" stroke-width="1.5" opacity="0.5" marker-end="url(#arrowGold)"/>
-  <text x="250" y="160" text-anchor="middle" fill="#f59e0b" font-family="Arial,Helvetica,sans-serif" font-size="8" opacity="0.6">auto</text>
+  <!-- Arrow -->
+  <path d="M 210,150 L 258,150" stroke="#f59e0b" stroke-width="1.5" opacity="0.5" marker-end="url(#arrowGold)"/>
 
-  <!-- ============ LAYER 2: DailyActivity ============ -->
-  <text x="395" y="92" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="10" letter-spacing="1">LAYER 2: RAW LOGS</text>
+  <!-- DailyActivity -->
+  <rect x="265" y="96" width="190" height="110" rx="10" fill="#1e1e36" stroke="#f59e0b" stroke-width="1.2" opacity="0.95"/>
+  <text x="360" y="118" text-anchor="middle" fill="#fbbf24" font-family="Arial,Helvetica,sans-serif" font-size="11" font-weight="bold">DailyActivity/</text>
+  <text x="360" y="136" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Per-session summaries</text>
+  <text x="360" y="150" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Deliverables, git, lessons</text>
+  <text x="360" y="170" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="8">Distill when >=3 files</text>
+  <text x="360" y="195" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="8">Git cross-reference</text>
 
-  <rect x="285" y="108" width="220" height="120" rx="10" fill="#1e1e36" stroke="#f59e0b" stroke-width="1.2" opacity="0.95"/>
-  <rect x="285" y="108" width="220" height="120" rx="10" fill="url(#gold)" opacity="0.06"/>
-  <text x="395" y="132" text-anchor="middle" fill="#fbbf24" font-family="Arial,Helvetica,sans-serif" font-size="12" font-weight="bold">DailyActivity/</text>
-  <text x="395" y="150" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">2026-03-26.md (today)</text>
-  <text x="395" y="164" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">2026-03-25.md (yesterday)</text>
-  <text x="395" y="178" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="9">...</text>
-  <text x="395" y="194" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Per-session: deliverables, git,</text>
-  <text x="395" y="208" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">decisions, lessons, next steps</text>
+  <!-- Arrow -->
+  <path d="M 455,150 L 508,150" stroke="#f59e0b" stroke-width="1.5" opacity="0.5" marker-end="url(#arrowGold)"/>
+  <text x="482" y="142" text-anchor="middle" fill="#f59e0b" font-family="Arial,Helvetica,sans-serif" font-size="8" opacity="0.6">distill</text>
 
-  <!-- Arrow to Layer 3 -->
-  <path d="M 505,168 L 565,168" stroke="#f59e0b" stroke-width="1.5" opacity="0.5" marker-end="url(#arrowGold)"/>
-  <text x="535" y="155" text-anchor="middle" fill="#f59e0b" font-family="Arial,Helvetica,sans-serif" font-size="8" opacity="0.6">distill</text>
-  <text x="535" y="167" text-anchor="middle" fill="#f59e0b" font-family="Arial,Helvetica,sans-serif" font-size="8" opacity="0.6">>=3 files</text>
+  <!-- MEMORY.md -->
+  <rect x="515" y="96" width="220" height="110" rx="10" fill="#1e1e36" stroke="#8b5cf6" stroke-width="1.5" opacity="0.95"/>
+  <text x="625" y="118" text-anchor="middle" fill="#c4b5fd" font-family="Arial,Helvetica,sans-serif" font-size="11" font-weight="bold">MEMORY.md (Brain)</text>
+  <text x="625" y="136" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Key Decisions + Lessons + COEs</text>
+  <text x="625" y="150" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Open Threads (P0/P1/P2)</text>
+  <text x="625" y="170" text-anchor="middle" fill="#6ee7b7" font-family="Arial,Helvetica,sans-serif" font-size="9" font-weight="bold">+ valid_from / superseded_by</text>
+  <text x="625" y="190" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="8">Superseded entries: 0.1x weight</text>
 
-  <!-- ============ LAYER 3: MEMORY.md ============ -->
-  <text x="700" y="92" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="10" letter-spacing="1">LAYER 3: CURATED MEMORY</text>
+  <!-- Weekly Maintenance -->
+  <rect x="760" y="96" width="170" height="110" rx="10" fill="#1e1e36" stroke="#10b981" stroke-width="1.2" opacity="0.95"/>
+  <text x="845" y="118" text-anchor="middle" fill="#6ee7b7" font-family="Arial,Helvetica,sans-serif" font-size="11" font-weight="bold">Weekly Health</text>
+  <text x="845" y="136" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Prune stale entries</text>
+  <text x="845" y="150" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Resolve threads</text>
+  <text x="845" y="170" text-anchor="middle" fill="#6ee7b7" font-family="Arial,Helvetica,sans-serif" font-size="9" font-weight="bold">Mark superseded_by</text>
+  <text x="845" y="190" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="8">Monday 11am ICT</text>
+  <path d="M 735,150 L 760,150" stroke="#10b981" stroke-width="1" opacity="0.4" stroke-dasharray="4 3"/>
 
-  <rect x="570" y="108" width="260" height="120" rx="10" fill="#1e1e36" stroke="#8b5cf6" stroke-width="1.5" opacity="0.95"/>
-  <rect x="570" y="108" width="260" height="120" rx="10" fill="url(#purple)" opacity="0.06"/>
-  <text x="700" y="132" text-anchor="middle" fill="#c4b5fd" font-family="Arial,Helvetica,sans-serif" font-size="12" font-weight="bold">MEMORY.md</text>
-  <text x="700" y="150" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Open Threads (P0/P1/P2)</text>
-  <text x="700" y="164" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Key Decisions + Lessons Learned</text>
-  <text x="700" y="178" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">COE Registry (worst bugs)</text>
-  <text x="700" y="192" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Recent Context (rolling 30 days)</text>
-  <text x="700" y="212" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="8">Read at every session start</text>
+  <!-- ============ DIVIDER ============ -->
+  <line x1="40" y1="230" x2="920" y2="230" stroke="#334155" stroke-width="1" opacity="0.3"/>
 
-  <!-- ============ GIT VERIFICATION (bottom center) ============ -->
-  <rect x="260" y="270" width="240" height="60" rx="10" fill="#1e1e36" stroke="#ef4444" stroke-width="1.2" opacity="0.95"/>
-  <rect x="260" y="270" width="240" height="60" rx="10" fill="url(#red)" opacity="0.06"/>
-  <text x="380" y="295" text-anchor="middle" fill="#fca5a5" font-family="Arial,Helvetica,sans-serif" font-size="11" font-weight="bold">Git Cross-Reference</text>
-  <text x="380" y="315" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Verify implementation claims against git log</text>
+  <!-- ============ READ PATH ============ -->
+  <text x="60" y="260" fill="#06b6d4" font-family="Arial,Helvetica,sans-serif" font-size="10" font-weight="bold" letter-spacing="1" opacity="0.6">READ PATH (4-LAYER RECALL)</text>
 
-  <!-- Arrow from distillation down to git -->
-  <path d="M 535,185 C 535,230 500,260 470,270" stroke="#ef4444" stroke-width="1" opacity="0.4" stroke-dasharray="4 3"/>
-  <text x="520" y="240" fill="#fca5a5" font-family="Arial,Helvetica,sans-serif" font-size="8" opacity="0.6">verify before</text>
-  <text x="520" y="252" fill="#fca5a5" font-family="Arial,Helvetica,sans-serif" font-size="8" opacity="0.6">promoting</text>
+  <!-- L0: Memory Index -->
+  <rect x="40" y="276" width="200" height="90" rx="10" fill="#1e1e36" stroke="#8b5cf6" stroke-width="1.2" opacity="0.95"/>
+  <text x="62" y="296" fill="#c4b5fd" font-family="Arial,Helvetica,sans-serif" font-size="10" font-weight="bold">L0</text>
+  <text x="80" y="296" fill="#c4b5fd" font-family="Arial,Helvetica,sans-serif" font-size="10">Memory Index</text>
+  <text x="140" y="314" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">~500 tokens, always injected</text>
+  <text x="140" y="330" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Every entry visible by key</text>
+  <text x="140" y="346" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">[RC14] [KD08] [COE01]...</text>
+  <text x="140" y="358" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="8">Keyword aliases per entry</text>
 
-  <!-- Arrow from git back up to MEMORY -->
-  <path d="M 500,290 C 560,280 600,260 660,228" stroke="#ef4444" stroke-width="1" opacity="0.4" stroke-dasharray="4 3" marker-end="url(#arrowRed)"/>
+  <!-- L1: Section Selection -->
+  <rect x="260" y="276" width="200" height="90" rx="10" fill="#1e1e36" stroke="#8b5cf6" stroke-width="1.2" opacity="0.95"/>
+  <text x="282" y="296" fill="#c4b5fd" font-family="Arial,Helvetica,sans-serif" font-size="10" font-weight="bold">L1</text>
+  <text x="300" y="296" fill="#c4b5fd" font-family="Arial,Helvetica,sans-serif" font-size="10">Section Selection</text>
+  <text x="360" y="314" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Hybrid keyword + vector scoring</text>
+  <text x="360" y="330" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Topic-triggered, budget-capped</text>
+  <text x="360" y="346" text-anchor="middle" fill="#6ee7b7" font-family="Arial,Helvetica,sans-serif" font-size="9" font-weight="bold">Temporal weight: 0.1x superseded</text>
+  <text x="360" y="358" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="8">sqlite-vec + FTS5</text>
 
-  <!-- Unverified tag rejected -->
-  <path d="M 380,330 L 380,360" stroke="#ef4444" stroke-width="1" opacity="0.3"/>
-  <rect x="320" y="360" width="120" height="24" rx="5" fill="#ef4444" fill-opacity="0.08" stroke="#ef4444" stroke-width="0.5" stroke-opacity="0.3"/>
-  <text x="380" y="376" text-anchor="middle" fill="#fca5a5" font-family="Arial,Helvetica,sans-serif" font-size="9">[UNVERIFIED] tagged</text>
+  <!-- L2: Recalled Knowledge -->
+  <rect x="480" y="276" width="220" height="90" rx="10" fill="#1e1e36" stroke="#06b6d4" stroke-width="1.2" opacity="0.95"/>
+  <text x="502" y="296" fill="#67e8f9" font-family="Arial,Helvetica,sans-serif" font-size="10" font-weight="bold">L2</text>
+  <text x="520" y="296" fill="#67e8f9" font-family="Arial,Helvetica,sans-serif" font-size="10">Recalled Knowledge</text>
+  <text x="590" y="314" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Unified: Knowledge/ + Transcripts</text>
+  <text x="590" y="330" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">0.6 vector + 0.4 keyword</text>
+  <text x="590" y="346" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Content dedup across stores</text>
+  <text x="590" y="358" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="8">RecallEngine + Layer 6 injection</text>
 
-  <!-- ============ WEEKLY MAINTENANCE ============ -->
-  <rect x="610" y="270" width="260" height="60" rx="10" fill="#1e1e36" stroke="#10b981" stroke-width="1.2" opacity="0.95"/>
-  <rect x="610" y="270" width="260" height="60" rx="10" fill="url(#green)" opacity="0.06"/>
-  <text x="740" y="295" text-anchor="middle" fill="#6ee7b7" font-family="Arial,Helvetica,sans-serif" font-size="11" font-weight="bold">Weekly LLM Maintenance</text>
-  <text x="740" y="315" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Prune resolved threads, archive stale entries</text>
+  <!-- L3: Transcript Verbatim -->
+  <rect x="720" y="276" width="200" height="90" rx="10" fill="#1e1e36" stroke="#06b6d4" stroke-width="1.5" opacity="0.95"/>
+  <text x="742" y="296" fill="#67e8f9" font-family="Arial,Helvetica,sans-serif" font-size="10" font-weight="bold">L3</text>
+  <text x="760" y="296" fill="#67e8f9" font-family="Arial,Helvetica,sans-serif" font-size="10">Transcript Verbatim</text>
+  <text x="820" y="314" text-anchor="middle" fill="#fbbf24" font-family="Arial,Helvetica,sans-serif" font-size="9" font-weight="bold">1,100+ sessions, 12,800+ chunks</text>
+  <text x="820" y="330" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Raw JSONL: errors, stack traces</text>
+  <text x="820" y="346" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Commands tried, approaches rejected</text>
+  <text x="820" y="358" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="8">TranscriptStore + Bedrock Titan</text>
 
-  <!-- Arrow from MEMORY to maintenance -->
-  <path d="M 740,228 L 740,270" stroke="#10b981" stroke-width="1" opacity="0.3" stroke-dasharray="4 3"/>
+  <!-- Arrows between L layers -->
+  <path d="M 240,320 L 260,320" stroke="#8b5cf6" stroke-width="1" opacity="0.3" marker-end="url(#arrowPurple)"/>
+  <path d="M 460,320 L 480,320" stroke="#06b6d4" stroke-width="1" opacity="0.3" marker-end="url(#arrowCyan)"/>
+  <path d="M 700,320 L 720,320" stroke="#06b6d4" stroke-width="1" opacity="0.3" marker-end="url(#arrowCyan)"/>
 
-  <!-- ============ FEEDBACK LOOP ============ -->
-  <!-- Arrow from MEMORY back to sessions -->
-  <path d="M 570,190 C 400,250 200,250 100,228" stroke="#8b5cf6" stroke-width="1.5" opacity="0.25" stroke-dasharray="5 3"/>
-  <text x="340" y="248" text-anchor="middle" fill="#c4b5fd" font-family="Arial,Helvetica,sans-serif" font-size="9" opacity="0.6">feeds next session</text>
+  <!-- ============ DATA STORES ============ -->
+  <text x="60" y="400" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="10" font-weight="bold" letter-spacing="1" opacity="0.6">DATA STORES</text>
+
+  <!-- Knowledge Library -->
+  <rect x="40" y="416" width="280" height="70" rx="10" fill="#1e1e36" stroke="#f59e0b" stroke-width="1" opacity="0.8"/>
+  <text x="180" y="440" text-anchor="middle" fill="#fbbf24" font-family="Arial,Helvetica,sans-serif" font-size="11" font-weight="bold">Knowledge/ Library (730K tokens)</text>
+  <text x="180" y="458" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">DailyActivity, Designs, Notes, AIDLC</text>
+  <text x="180" y="474" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="8">Chunked by heading → KnowledgeStore → sqlite-vec + FTS5</text>
+
+  <!-- Transcript Corpus -->
+  <rect x="340" y="416" width="280" height="70" rx="10" fill="#1e1e36" stroke="#06b6d4" stroke-width="1" opacity="0.8"/>
+  <text x="480" y="440" text-anchor="middle" fill="#67e8f9" font-family="Arial,Helvetica,sans-serif" font-size="11" font-weight="bold">JSONL Transcripts (750MB)</text>
+  <text x="480" y="458" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">1,100+ sessions, raw verbatim conversations</text>
+  <text x="480" y="474" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="8">Chunked by turn-pair → TranscriptStore → sqlite-vec + FTS5</text>
+
+  <!-- MEMORY.md -->
+  <rect x="640" y="416" width="280" height="70" rx="10" fill="#1e1e36" stroke="#8b5cf6" stroke-width="1" opacity="0.8"/>
+  <text x="780" y="440" text-anchor="middle" fill="#c4b5fd" font-family="Arial,Helvetica,sans-serif" font-size="11" font-weight="bold">MEMORY.md Brain (~5K tokens)</text>
+  <text x="780" y="458" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">83 curated entries + temporal metadata</text>
+  <text x="780" y="474" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="8">MemoryEmbeddingStore → sqlite-vec hybrid search</text>
+
+  <!-- Arrows from stores to recall layers -->
+  <path d="M 180,416 L 360,366" stroke="#f59e0b" stroke-width="1" opacity="0.2" stroke-dasharray="4 3"/>
+  <path d="M 480,416 L 590,366" stroke="#06b6d4" stroke-width="1" opacity="0.2" stroke-dasharray="4 3"/>
+  <path d="M 480,416 L 820,366" stroke="#06b6d4" stroke-width="1" opacity="0.2" stroke-dasharray="4 3"/>
+  <path d="M 780,416 L 360,366" stroke="#8b5cf6" stroke-width="1" opacity="0.2" stroke-dasharray="4 3"/>
+
+  <!-- ============ BENCHMARK ============ -->
+  <rect x="40" y="510" width="880" height="50" rx="10" fill="#1e1e36" stroke="#334155" stroke-width="0.5" opacity="0.7"/>
+  <text x="480" y="533" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="10">
+    <tspan fill="#fbbf24" font-weight="bold">MemPalace benchmark:</tspan>
+    <tspan> raw verbatim 96.6% vs LLM summaries 84.2% (LongMemEval R@5)</tspan>
+    <tspan fill="#64748b"> — "Intelligence at read time, not write time"</tspan>
+  </text>
+  <text x="480" y="550" text-anchor="middle" fill="#64748b" font-family="Arial,Helvetica,sans-serif" font-size="9">SwarmAI: curated Brain (L0/L1) for fast decisions + raw Transcript (L2/L3) for precision recall = best of both worlds</text>
 
   <!-- ============ LIFECYCLE BAR ============ -->
-  <g transform="translate(40, 400)">
-    <line x1="0" y1="10" x2="880" y2="10" stroke="#334155" stroke-width="1.5"/>
+  <g transform="translate(40, 575)">
+    <line x1="0" y1="0" x2="880" y2="0" stroke="#334155" stroke-width="1.5"/>
 
-    <circle cx="80" cy="10" r="5" fill="#3b82f6"/>
-    <text x="80" y="30" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Capture</text>
+    <circle cx="80" cy="0" r="4" fill="#3b82f6"/>
+    <text x="80" y="16" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="8">Capture</text>
 
-    <circle cx="290" cy="10" r="5" fill="#f59e0b"/>
-    <text x="290" y="30" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Log (30 days)</text>
+    <circle cx="250" cy="0" r="4" fill="#f59e0b"/>
+    <text x="250" y="16" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="8">Distill</text>
 
-    <circle cx="500" cy="10" r="5" fill="#ef4444"/>
-    <text x="500" y="30" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Verify (git)</text>
+    <circle cx="390" cy="0" r="4" fill="#ef4444"/>
+    <text x="390" y="16" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="8">Git-verify</text>
 
-    <circle cx="660" cy="10" r="5" fill="#8b5cf6"/>
-    <text x="660" y="30" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Promote</text>
+    <circle cx="530" cy="0" r="4" fill="#8b5cf6"/>
+    <text x="530" y="16" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="8">Recall</text>
 
-    <circle cx="820" cy="10" r="5" fill="#10b981"/>
-    <text x="820" y="30" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="9">Prune (weekly)</text>
+    <circle cx="660" cy="0" r="4" fill="#06b6d4"/>
+    <text x="660" y="16" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="8">Transcript Index</text>
 
-    <!-- Progress fill -->
-    <line x1="0" y1="10" x2="880" y2="10" stroke="#f59e0b" stroke-width="2" opacity="0.2"/>
+    <circle cx="810" cy="0" r="4" fill="#10b981"/>
+    <text x="810" y="16" text-anchor="middle" fill="#94a3b8" font-family="Arial,Helvetica,sans-serif" font-size="8">Weekly Prune</text>
   </g>
 </svg>
