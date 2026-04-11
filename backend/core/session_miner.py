@@ -320,7 +320,13 @@ class SessionMiner:
             return sorted(all_files)
 
         cutoff = time.time() - max_age_days * 86400
-        recent = [f for f in all_files if f.stat().st_mtime > cutoff]
+        recent = []
+        for f in all_files:
+            try:
+                if f.stat().st_mtime > cutoff:
+                    recent.append(f)
+            except (FileNotFoundError, OSError):
+                continue  # File deleted between glob() and stat()
         return sorted(recent)
 
     def mine_for_skill(
@@ -342,10 +348,13 @@ class SessionMiner:
         return examples
 
     def mine_all(self, max_age_days: int = MAX_AGE_DAYS) -> dict[str, list[EvalExample]]:
-        """Mine for all skills in a **single pass** over transcripts.
+        """Mine for all skills with **single-pass I/O** over transcripts.
 
-        Previous approach: O(skills × files) — each transcript read once per
-        skill (56 skills × 1135 files = 63k reads of 632 MB).
+        Previous approach: O(skills × files) file reads — each transcript
+        read once per skill (56 skills × 1135 files = 63k reads of 632 MB).
+        Now: O(files) file reads — each transcript parsed once, then matched
+        against all skill keywords in memory. Matching is still O(files × skills)
+        but the expensive I/O is eliminated.
 
         New approach: O(files) — each transcript parsed once, all skill
         patterns matched against the parsed records.
