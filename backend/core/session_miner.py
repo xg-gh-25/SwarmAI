@@ -6,16 +6,28 @@ to extract per-skill usage examples for automated optimization.
 Key public symbols:
 - ``EvalExample``       -- Single skill usage with prompt/outcome/correction.
 - ``SessionMiner``      -- Mines transcripts and DB for skill-relevant examples.
+
+Performance notes (v1.4.0+):
+- ``mine_all()`` uses single-pass parsing: each transcript read once,
+  all skill patterns matched against the parsed records.
+  Before: O(skills × files) = 56 × 1135 file reads.
+  After:  O(files) = 1135 file reads.
+- mtime filter: ``max_age_days`` (default 90) skips ancient transcripts.
 """
 from __future__ import annotations
 
 import json
 import logging
 import re
+import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from core.extraction_patterns import CORRECTION_PATTERNS as _CORRECTION_PATTERNS
+
+# Default maximum age for transcript files to process.
+# 90 days balances coverage vs. performance as the corpus grows.
+MAX_AGE_DAYS = 90
 
 logger = logging.getLogger(__name__)
 
@@ -294,40 +306,99 @@ class SessionMiner:
 
         return examples
 
-    def mine_for_skill(self, skill_name: str) -> list[EvalExample]:
-        """Mine all transcripts for a specific skill. Returns eval examples."""
+    def _iter_transcripts(self, max_age_days: int = MAX_AGE_DAYS) -> list[Path]:
+        """Return transcript files filtered by mtime, sorted oldest-first.
+
+        Skips files older than ``max_age_days`` to bound I/O on large corpora.
+        Pass ``max_age_days=0`` to disable filtering (process all files).
+        """
+        if not self._transcripts_dir.exists():
+            return []
+
+        all_files = list(self._transcripts_dir.glob("*.jsonl"))
+        if max_age_days <= 0:
+            return sorted(all_files)
+
+        cutoff = time.time() - max_age_days * 86400
+        recent = [f for f in all_files if f.stat().st_mtime > cutoff]
+        return sorted(recent)
+
+    def mine_for_skill(
+        self, skill_name: str, max_age_days: int = MAX_AGE_DAYS
+    ) -> list[EvalExample]:
+        """Mine transcripts for a specific skill. Returns eval examples."""
         keywords = self._load_skill_keywords(skill_name)
         examples: list[EvalExample] = []
-        if self._transcripts_dir.exists():
-            for jsonl in sorted(self._transcripts_dir.glob("*.jsonl")):
-                try:
-                    records = self._parse_transcript(jsonl)
-                    examples.extend(
-                        self._extract_skill_invocations(records, skill_name, keywords)
-                    )
-                except Exception as e:
-                    logger.warning("Failed to parse %s: %s", jsonl.name, e)
+        for jsonl in self._iter_transcripts(max_age_days):
+            try:
+                records = self._parse_transcript(jsonl)
+                examples.extend(
+                    self._extract_skill_invocations(records, skill_name, keywords)
+                )
+            except Exception as e:
+                logger.warning("Failed to parse %s: %s", jsonl.name, e)
 
-        # Scrub secrets
+        self._scrub_examples(examples)
+        return examples
+
+    def mine_all(self, max_age_days: int = MAX_AGE_DAYS) -> dict[str, list[EvalExample]]:
+        """Mine for all skills in a **single pass** over transcripts.
+
+        Previous approach: O(skills × files) — each transcript read once per
+        skill (56 skills × 1135 files = 63k reads of 632 MB).
+
+        New approach: O(files) — each transcript parsed once, all skill
+        patterns matched against the parsed records.
+
+        Returns {skill_name: [examples]}.
+        """
+        # 1. Load all skill keywords upfront
+        skill_keywords: dict[str, list[str]] = {}
+        if self._skills_dir.exists():
+            for skill_dir in sorted(self._skills_dir.iterdir()):
+                if skill_dir.is_dir() and skill_dir.name.startswith("s_"):
+                    name = skill_dir.name[2:]
+                    skill_keywords[name] = self._load_skill_keywords(name)
+
+        if not skill_keywords:
+            return {}
+
+        # 2. Single pass: parse each transcript once, extract for all skills
+        results: dict[str, list[EvalExample]] = {}
+        transcripts = self._iter_transcripts(max_age_days)
+        logger.info(
+            "SessionMiner: mining %d transcripts for %d skills",
+            len(transcripts), len(skill_keywords),
+        )
+
+        for jsonl in transcripts:
+            try:
+                records = self._parse_transcript(jsonl)
+            except Exception as e:
+                logger.warning("Failed to parse %s: %s", jsonl.name, e)
+                continue
+
+            # Match every skill against the same parsed records
+            for skill_name, keywords in skill_keywords.items():
+                examples = self._extract_skill_invocations(
+                    records, skill_name, keywords
+                )
+                if examples:
+                    results.setdefault(skill_name, []).extend(examples)
+
+        # 3. Scrub secrets across all results
+        for examples in results.values():
+            self._scrub_examples(examples)
+
+        return results
+
+    def _scrub_examples(self, examples: list[EvalExample]) -> None:
+        """Scrub secrets from a list of eval examples in-place."""
         for ex in examples:
             ex.user_prompt = self._scrub_secrets(ex.user_prompt)
             ex.agent_actions = self._scrub_secrets(ex.agent_actions)
             if ex.user_correction:
                 ex.user_correction = self._scrub_secrets(ex.user_correction)
-
-        return examples
-
-    def mine_all(self) -> dict[str, list[EvalExample]]:
-        """Mine for all skills. Returns {skill_name: [examples]}."""
-        results: dict[str, list[EvalExample]] = {}
-        if self._skills_dir.exists():
-            for skill_dir in sorted(self._skills_dir.iterdir()):
-                if skill_dir.is_dir() and skill_dir.name.startswith("s_"):
-                    name = skill_dir.name[2:]  # strip s_ prefix
-                    examples = self.mine_for_skill(name)
-                    if examples:
-                        results[name] = examples
-        return results
 
     def get_eligible_skills(self, min_examples: int = 5) -> list[str]:
         """Return skill names with >= min_examples eval examples."""
