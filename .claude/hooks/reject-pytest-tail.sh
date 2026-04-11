@@ -21,14 +21,14 @@ CHANGED=false
 
 # Strip | tail (with optional flags like -20, -n 30, -f)
 if echo "$MODIFIED" | grep -qE '\|\s*tail'; then
-  MODIFIED=$(echo "$MODIFIED" | sed -E 's/\|[[:space:]]*tail[[:space:]]*[^|;]*//')
+  MODIFIED=$(echo "$MODIFIED" | sed -E 's/\|[[:space:]]*tail[[:space:]]*[^|;&]*//')
   MODIFIED=$(echo "$MODIFIED" | sed 's/[[:space:]]*$//')
   CHANGED=true
 fi
 
 # Strip | head (same buffering problem)
 if echo "$MODIFIED" | grep -qE '\|\s*head'; then
-  MODIFIED=$(echo "$MODIFIED" | sed -E 's/\|[[:space:]]*head[[:space:]]*[^|;]*//')
+  MODIFIED=$(echo "$MODIFIED" | sed -E 's/\|[[:space:]]*head[[:space:]]*[^|;&]*//')
   MODIFIED=$(echo "$MODIFIED" | sed 's/[[:space:]]*$//')
   CHANGED=true
 fi
