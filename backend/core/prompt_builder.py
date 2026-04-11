@@ -901,6 +901,9 @@ class PromptBuilder:
     # _build_thinking_config
     # ------------------------------------------------------------------
 
+    # Valid effort levels accepted by the Claude SDK / CLI.
+    _VALID_EFFORT_LEVELS = frozenset({"low", "medium", "high", "max"})
+
     def _build_thinking_config(self) -> dict | None:
         """Build thinking configuration from app config.
 
@@ -925,6 +928,30 @@ class PromptBuilder:
         else:
             # Default: adaptive — model decides when thinking is useful
             return {"type": "adaptive"}
+
+    def _build_effort(self) -> str | None:
+        """Resolve the ``effort`` level for thinking depth.
+
+        Reads ``thinking_effort`` from config.json.  Valid values:
+        ``"low"``, ``"medium"``, ``"high"`` (default), ``"max"``.
+
+        Returns the effort string, or ``None`` if thinking is disabled
+        (effort is meaningless without thinking).
+        """
+        if not self._config:
+            return "high"
+
+        # If thinking is disabled, effort is irrelevant.
+        if self._config.get("thinking_mode") == "disabled":
+            return None
+
+        effort = self._config.get("thinking_effort", "high")
+        if effort not in self._VALID_EFFORT_LEVELS:
+            logger.warning(
+                "Invalid thinking_effort %r — falling back to 'high'", effort
+            )
+            return "high"
+        return effort
 
     # ------------------------------------------------------------------
     # Knowledge Recall (Layer 6)
@@ -1226,6 +1253,7 @@ class PromptBuilder:
         # Build thinking configuration from app config.
         # Supports: "adaptive" (default), "enabled" (with budget), "disabled"
         thinking_config = self._build_thinking_config()
+        effort = self._build_effort()
 
         return ClaudeAgentOptions(
             system_prompt=system_prompt_config,
@@ -1248,4 +1276,5 @@ class PromptBuilder:
             include_partial_messages=True,
             enable_file_checkpointing=True,
             thinking=thinking_config,
+            effort=effort,
         )
