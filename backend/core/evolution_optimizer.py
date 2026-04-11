@@ -42,13 +42,49 @@ class OptimizationResult:
 
 
 CORRECTION_PATTERNS = [
-    # "don't X" -> remove X from instructions
+    # English: "don't X" -> remove X from instructions
     (re.compile(r"(?:don'?t|stop|never|avoid)\s+(.{5,60})", re.I), "remove"),
-    # "use Y instead" -> add Y
+    # English: "use Y instead" -> add Y
     (re.compile(r"(?:use|prefer|try)\s+(.{5,60})\s+instead", re.I), "add"),
-    # "should X" -> ensure X is in instructions
+    # English: "should X" -> ensure X is in instructions
     (re.compile(r"(?:should|must|always)\s+(.{5,60})", re.I), "add"),
+    # Chinese: "不要/别/停止/避免 X" -> remove X
+    (re.compile(r"(?:不要|别|停止|避免)\s*(.{3,60})"), "remove"),
+    # Chinese: "应该/必须/要/需要 X" -> add X
+    (re.compile(r"(?:应该|必须|一定要|需要)\s*(.{3,60})"), "add"),
+    # Chinese: "用X代替/换成X" -> add X
+    (re.compile(r"(?:用|换成|改成|改为)\s*(.{3,60})(?:代替|替换)?"), "add"),
+    # Imperative: "verify/check/ensure/validate X" -> add X
+    (re.compile(r"(?:verify|check|ensure|validate|confirm)\s+(.{5,60})", re.I), "add"),
+    # Imperative Chinese: "检查/确认/验证 X" -> add X
+    (re.compile(r"(?:检查|确认|验证|确保)\s*(.{3,60})"), "add"),
 ]
+
+
+def _extract_correction_summary(correction_text: str) -> str | None:
+    """Extract a concise actionable summary from an unstructured correction.
+
+    Picks the first meaningful sentence (15-120 chars, not code/agent talk).
+    Returns None if no suitable sentence found.
+    """
+    # Split by common sentence boundaries
+    sentences = re.split(r"[.!?。！？\n]+", correction_text)
+    for sentence in sentences:
+        s = sentence.strip()
+        if len(s) < 15 or len(s) > 120:
+            continue
+        lower = s.lower()
+        # Skip code/path references
+        if any(ind in lower for ind in (".py", ".ts", ".js", "def ", "class ", "import ", "self.")):
+            continue
+        # Skip agent monologue
+        if any(lower.startswith(ind) for ind in ("let me", "i'll", "i need to", "checking", "looking")):
+            continue
+        # Skip pure noise
+        if re.match(r"^(?:ok|yes|no|sure|thanks|got it)\b", lower):
+            continue
+        return s
+    return None
 
 
 class EvolutionOptimizer:
@@ -68,14 +104,30 @@ class EvolutionOptimizer:
         return content
 
     def _extract_corrections(self, examples: list) -> list[tuple[str, str]]:
-        """Extract (correction_text, pattern_type) from examples with user corrections."""
+        """Extract (correction_text, pattern_type) from examples with user corrections.
+
+        Tries structured patterns first (English + Chinese). Falls back to
+        extracting the first meaningful sentence from the correction as an
+        "add" directive — ensures no correction is silently dropped.
+        """
         corrections: list[tuple[str, str]] = []
         for ex in examples:
-            if ex.user_correction:
-                for pattern, action_type in CORRECTION_PATTERNS:
-                    match = pattern.search(ex.user_correction)
-                    if match:
-                        corrections.append((match.group(1).strip(), action_type))
+            if not ex.user_correction:
+                continue
+            matched = False
+            for pattern, action_type in CORRECTION_PATTERNS:
+                match = pattern.search(ex.user_correction)
+                if match:
+                    corrections.append((match.group(1).strip(), action_type))
+                    matched = True
+                    break  # One pattern per correction to avoid duplicates
+
+            # Fallback: if no structured pattern matched, extract a summary
+            # sentence from the correction. Prefer the first non-trivial line.
+            if not matched:
+                summary = _extract_correction_summary(ex.user_correction)
+                if summary:
+                    corrections.append((summary, "add"))
         return corrections
 
     def _apply_heuristic_changes(
