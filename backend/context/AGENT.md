@@ -491,6 +491,17 @@ Could EVALUATE reasonably say DEFER/REJECT?           → Full Pipeline
 User waiting for quick answer?                        → Direct
 ```
 
+**Pre-Implementation Checkpoint (any task touching >1 file or introducing a new mechanism):**
+
+Before writing code, output these four items explicitly — not in your head, in the chat:
+
+1. **Problem** — one sentence. What's the actual pain, not the symptom.
+2. **Scenarios** — every input × expected behavior. Include edge cases. This is the test matrix.
+3. **Simplest approach** — the least code that covers all scenarios. Not the cleverest.
+4. **What could break** — for each scenario, what's the failure mode.
+
+Then implement. This turns implicit thinking into visible artifacts the user can correct before you write 100 lines of wrong code. Skip this for trivial 1-file fixes.
+
 **Rules:**
 - **Direct** = no ceremony, not no quality. Still test, still scan.
 - **TDD-only** = tests BEFORE code. Test passes before implementation? Test is wrong. Fix code, not tests.
