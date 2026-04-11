@@ -29,6 +29,10 @@ from core.extraction_patterns import CORRECTION_PATTERNS as _CORRECTION_PATTERNS
 # 90 days balances coverage vs. performance as the corpus grows.
 MAX_AGE_DAYS = 90
 
+# Maximum chars per eval field.  Prevents binary content (e.g. embedded
+# pptx/pdf) from inflating eval files (observed: 3MB raw → 12MB JSON).
+MAX_FIELD_CHARS = 4000
+
 logger = logging.getLogger(__name__)
 
 
@@ -174,17 +178,54 @@ class SessionMiner:
         """Detect user correction/abandonment in the next real user message after ``after_idx``.
 
         Returns (correction_text | None, score).
+
+        Filters out SDK-generated noise (compaction summaries, tool result
+        preambles) that are injected as "user" messages but aren't real
+        human corrections.
         """
         next_idx = self._find_next_real_user_message(records, after_idx)
         if next_idx is None:
             return None, 1.0
 
         next_text = self._get_message_content(records[next_idx])
+
+        # Filter SDK-injected noise that looks like user messages
+        if self._is_sdk_noise(next_text):
+            return None, 1.0
+
         if _ABANDON_PATTERNS.search(next_text):
             return next_text, 0.0
         if _CORRECTION_PATTERNS.search(next_text):
             return next_text, 0.5
         return None, 1.0
+
+    @staticmethod
+    def _is_sdk_noise(text: str) -> bool:
+        """Detect SDK-injected messages that masquerade as user input.
+
+        These include compaction summaries, continuation prompts, and
+        tool-result preambles that should never be treated as corrections.
+        """
+        if not text:
+            return True
+        # Compaction / continuation preambles
+        noise_prefixes = (
+            "CRITICAL: Respond with TEXT ONLY",
+            "This session is being continued",
+            "Summary of conversation so far",
+            "[continued from previous",
+            "Here is a summary of the",
+            "The following is a summary",
+        )
+        text_start = text[:200]
+        for prefix in noise_prefixes:
+            if prefix in text_start:
+                return True
+        # Very long "user" messages (>2000 chars) are almost certainly
+        # injected context, not real human corrections
+        if len(text) > 2000:
+            return True
+        return False
 
     def _extract_skill_from_tool_use(self, block: dict) -> str | None:
         """Extract skill name from a tool_use block if it invokes the Skill tool.
@@ -315,7 +356,7 @@ class SessionMiner:
         if not self._transcripts_dir.exists():
             return []
 
-        all_files = list(self._transcripts_dir.glob("*.jsonl"))
+        all_files = list(self._transcripts_dir.rglob("*.jsonl"))
         if max_age_days <= 0:
             return sorted(all_files)
 
@@ -414,11 +455,42 @@ class SessionMiner:
         all_examples = self.mine_all()
         return [name for name, exs in all_examples.items() if len(exs) >= min_examples]
 
+    @staticmethod
+    def _cap_field(text: str, max_chars: int = MAX_FIELD_CHARS) -> str:
+        """Truncate field to max_chars, stripping binary content.
+
+        Binary indicators (NUL bytes, PK zip headers) cause the field to
+        be replaced entirely — truncation would leave garbage.
+        """
+        if not text:
+            return text
+        # Detect binary content (embedded files like pptx, pdf, zip)
+        if "\x00" in text[:500] or text[:2] == "PK" or "PK\x03\x04" in text[:100]:
+            # Extract only the human-readable prefix before binary data
+            for marker in ("\x00", "PK\x03\x04", "\x03\x04\x14"):
+                idx = text.find(marker)
+                if idx > 0:
+                    text = text[:idx].rstrip()
+                    break
+            else:
+                text = text[:200]
+        if len(text) > max_chars:
+            text = text[:max_chars] + "…[truncated]"
+        return text
+
     def save_evals(self, skill_name: str, examples: list[EvalExample]) -> Path:
-        """Save eval examples to skill_evals/{skill_name}.jsonl."""
+        """Save eval examples to skill_evals/{skill_name}.jsonl.
+
+        Fields are capped at MAX_FIELD_CHARS to prevent binary content
+        from bloating eval files.
+        """
         self._evals_dir.mkdir(parents=True, exist_ok=True)
         path = self._evals_dir / f"{skill_name}.jsonl"
         with open(path, "w") as f:
             for ex in examples:
-                f.write(json.dumps(asdict(ex)) + "\n")
+                d = asdict(ex)
+                for key in ("user_prompt", "agent_actions", "final_outcome", "user_correction"):
+                    if d.get(key):
+                        d[key] = self._cap_field(d[key])
+                f.write(json.dumps(d) + "\n")
         return path
