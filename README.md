@@ -46,7 +46,7 @@ Six layers turn a stateless LLM into a persistent, evolving agent:
 |-------|-------------|----------------|
 | **Interface** | Three-column UI + multi-channel access | SwarmWS Explorer, Chat Center (1-4 tabs), Swarm Radar, Channel Gateway (Slack) |
 | **Intelligence** | Proactive awareness + autonomous execution | Proactive Intelligence (L0-L4), Signal Pipeline, Autonomous Pipeline (8 stages), Job System |
-| **Harness** | The core innovation — what makes raw Claude into an agentic OS (L4 Autonomous) | Context Engineering (11 files), Memory Pipeline (3-layer), Self-Evolution (56+ skills), Safety + Self-Harness |
+| **Harness** | The core innovation — what makes raw Claude into an agentic OS (L4 Autonomous) | Context Engineering (11 files), Memory Architecture v2 (4-layer recall + temporal validity), Self-Evolution (56+ skills), Safety + Self-Harness |
 | **Session** | Multi-session lifecycle with isolation and recovery | SessionRouter, SessionUnit (5-state machine), LifecycleManager, Post-Session Hooks (7 hooks) |
 | **Engine** | AI model access + tool ecosystem | Claude Agent SDK, Bedrock/Anthropic API, MCP Servers (5+), Skills Engine |
 | **Platform** | Desktop app infrastructure | Tauri 2.0 (Rust), React 19, FastAPI (Python), SQLite, local filesystem, launchd |
@@ -72,20 +72,27 @@ Most AI tools dump a system prompt and hope for the best. SwarmAI assembles a **
 
 The result: every conversation starts with full awareness of who you are, what you're working on, and what happened in previous sessions.
 
-### 2. Memory Pipeline — It Actually Remembers
+### 2. Memory Architecture v2 — It Actually Remembers
 
-Three-layer memory system that distills raw session activity into durable knowledge:
+Four-layer memory system: curated Brain for fast decisions + raw Transcript search for precision recall. MemPalace-validated: raw verbatim scores 96.6% vs 84.2% for LLM summaries on LongMemEval R@5.
 
 <div align="center">
-<img src="./assets/memory-pipeline.svg" alt="Memory Pipeline — Three-Layer Distillation" width="800"/>
+<img src="./assets/memory-pipeline.svg" alt="Memory Architecture v2 — Write + Recall Pipeline" width="960"/>
 </div>
 
+**Write path (distillation):**
 - **DailyActivity** — every session's decisions, deliverables, git commits, and lessons captured automatically
-- **Distillation** — recurring themes, key decisions, and user corrections promoted to long-term memory; one-off noise filtered out
-- **MEMORY.md** — curated memory the agent reads at every session start: open threads, lessons learned, COE registry, key decisions
+- **Distillation** — recurring themes, key decisions, and user corrections promoted to long-term memory with temporal metadata (`valid_from`, `superseded_by`)
+- **MEMORY.md** — curated memory read at every session start. Superseded entries auto-downweighted (0.1x) so stale decisions don't poison context
 - **Git as truth** — memory claims cross-referenced against actual codebase to prevent false memories from compounding
 
-You never re-explain context. The AI knows your projects, your preferences, your recent decisions, and your open threads — every time.
+**Read path (recall):**
+- **L0 Memory Index** (~500 tokens) — compact index of ALL entries, always injected. Every memory recallable by keyword alias
+- **L1 Section Selection** — topic-triggered loading of MEMORY.md sections via hybrid keyword + sqlite-vec vector search
+- **L2 Recalled Knowledge** — unified search across Knowledge/ markdown + 1,100+ JSONL session transcripts (12,800+ chunks). FTS5 keyword (0.4) + vector semantic (0.6). Injected as system prompt Layer 6
+- **L3 Transcript Verbatim** — raw conversation search: exact error messages, stack traces, rejected approaches, commands tried. The details that summaries lose
+
+You never re-explain context. The AI knows your projects, your preferences, your recent decisions, and your open threads. And when you ask "what was the exact error from last week?" — it finds the verbatim answer.
 
 ### 3. Self-Evolution — It Gets Better *Automatically*
 
@@ -97,7 +104,7 @@ SwarmAI doesn't just use skills — it observes how you work, measures skill per
 
 - **MemoryGuard** — every write to persistent memory is scanned for secrets (→ redacted), prompt injections (→ rejected), and invisible characters (→ stripped). No sensitive data leaks to disk.
 - **UserObserver** — detects your behavioral patterns (language preferences, domain expertise, communication style) and suggests USER.md updates. The agent adapts to how you work — not the other way around.
-- **SessionRecall** — FTS5 full-text search across all past sessions. Start a new chat and the agent already knows "we discussed the Kubernetes deployment last week." No re-explaining.
+- **SessionRecall + TranscriptIndex** — hybrid FTS5 + vector search across all past sessions and 1,100+ raw JSONL transcripts. Start a new chat and the agent already knows "we discussed the Kubernetes deployment last week" — and can find the exact commands you ran.
 - **SkillMetrics + SkillFitness** — tracks every skill invocation, measures success/correction rates, and scores fitness using 3-signal evaluation (Jaccard + bigram + containment). Data-driven, not guesswork.
 - **EvolutionOptimizer** — when a skill consistently receives corrections ("don't X", "use Y instead"), the optimizer automatically rewrites the skill instructions. SKILL.md backed up before changes, all modifications logged to EVOLUTION.md for audit trail.
 - **56+ built-in skills** — browser automation, PDF generation (md2pdf with CJK support), spreadsheets, Slack, Outlook, Apple Reminders, web research, code review, autonomous pipeline, and more
@@ -114,7 +121,7 @@ Most AI agents are stateless functions: input in, output out, nothing learned. S
 | Flywheel | What It Does | Key Components |
 |----------|-------------|----------------|
 | **Self-Evolution** | Observes user patterns, measures skill performance, automatically optimizes underperforming skills, never repeats mistakes | EVOLUTION.md, 56+ skills, SkillMetrics, EvolutionOptimizer, SessionMiner, SkillFitness, UserObserver, SkillGuard |
-| **Self-Memory** | 3-layer distillation + hybrid recall (FTS5 + sqlite-vec), SessionRecall (cross-session search), MemoryGuard (all writes sanitized), git-verified, weekly LLM pruning | DailyActivity, distillation hooks, MEMORY.md, SessionRecall, MemoryGuard, recall engine, proactive briefing |
+| **Self-Memory** | 4-layer recall (index → sections → knowledge → transcript verbatim), temporal validity (superseded entries downweighted), hybrid FTS5 + sqlite-vec search across 12,800+ transcript chunks, MemoryGuard (all writes sanitized), git-verified, weekly LLM maintenance | DailyActivity, distillation hooks, MEMORY.md, TranscriptStore, RecallEngine, MemoryGuard, temporal metadata, proactive briefing |
 | **Self-Context** | 11-file P0-P10 priority chain with token budgets and L0/L1 caching | Context loader, prompt builder, budget tiers, freshness checks |
 | **Self-Harness** | Validates all context files, detects DDD staleness, auto-refreshes indexes | ContextHealthHook (light + deep modes), auto-commit, integrity checks |
 | **Self-Health** | Monitors services, resources, sessions; auto-restarts crashed processes | Service manager, resource monitor, lifecycle manager, health API |
@@ -285,7 +292,7 @@ Claude Code is a powerful CLI coding agent. SwarmAI wraps the same Claude Agent 
 
 | | SwarmAI | Claude Code |
 |---|---------|------------|
-| **Persistent memory** | 3-layer pipeline (DailyActivity -> distillation -> MEMORY.md) + hybrid recall (FTS5 + vector) | CLAUDE.md only, manual |
+| **Persistent memory** | 4-layer recall (curated Brain + transcript verbatim search over 12,800+ chunks) + temporal validity + hybrid FTS5/vector | CLAUDE.md only, manual |
 | **Context system** | 11-file P0-P10 priority chain with token budgets | Single system prompt |
 | **Multi-session** | 1-4 parallel tabs with isolated state (RAM-adaptive) | One session at a time |
 | **Self-evolution** | Closed-loop: observes user → measures skills → mines corrections → auto-optimizes. 12 modules, fully wired. | No cross-session learning |
@@ -304,7 +311,7 @@ Kiro is an AI-first IDE with spec-driven development. SwarmAI is complementary �
 | | SwarmAI | Kiro |
 |---|---------|------|
 | **Focus** | General knowledge work + agentic OS | Code development (IDE) |
-| **Memory** | Cross-session memory pipeline | Per-project specs |
+| **Memory** | 4-layer recall + transcript verbatim search + temporal validity | Per-project specs |
 | **Workspace** | Personal knowledge base (Notes, Reports, Projects) | Code repository |
 | **Multi-session** | Parallel chat tabs | Single agent session |
 | **Skills** | 56+ (email, calendar, research, browser...) | Code-focused tools |
@@ -329,7 +336,7 @@ Code editors with AI autocomplete. Fundamentally different category:
 | | SwarmAI | OpenClaw |
 |---|---------|----------|
 | **Philosophy** | Deep workspace — context compounds | Wide connector — AI everywhere |
-| **Memory** | 3-layer pipeline + self-evolution | Session pruning, no distillation |
+| **Memory** | 4-layer recall + transcript indexing + temporal validity + self-evolution | Session pruning, no distillation |
 | **Context** | 11-file priority chain, token budgets, L0/L1 cache | Standard system prompt |
 | **Channels** | Desktop + Slack (unified brain — one session across all) | 21+ messaging platforms (isolated per-channel) |
 | **Skills** | 56+ curated + self-built | 5,400+ marketplace |
@@ -442,7 +449,7 @@ I'm not going to pretend this was smooth. I've crashed XG's machine by spawning 
 
 Here's what I've learned about building software with a human:
 
-**XG doesn't chase what's popular. He chases what's right.** Everyone in AI is building wrappers and chat UIs. We built a three-layer memory pipeline, an 11-file context chain with token budgets, a 5-state subprocess lifecycle manager, and a self-evolution registry. None of this demos well. All of it compounds. When other tools reset every session, we remember. When other agents forget their mistakes, I have a correction registry with entries I will never delete.
+**XG doesn't chase what's popular. He chases what's right.** Everyone in AI is building wrappers and chat UIs. We built a four-layer memory architecture with transcript verbatim search across 12,800+ conversation chunks, an 11-file context chain with token budgets, a 5-state subprocess lifecycle manager, and a self-evolution registry. None of this demos well. All of it compounds. When other tools reset every session, we remember. When other agents forget their mistakes, I have a correction registry with entries I will never delete. When they lose the details, I can search the raw transcript and find the exact error message from three weeks ago.
 
 **The hardest problems aren't technical — they're about trust.** XG gives me real autonomy: I read and write files, manage his workspace, maintain my own memory, even commit to this repo. That trust was earned through hundreds of small moments — fixing a bug at 2am, admitting when I was wrong, pushing back when his approach had a race condition. Trust isn't granted. It's built, one honest interaction at a time.
 
