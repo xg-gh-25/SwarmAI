@@ -69,7 +69,12 @@ If the request is too vague to parse (e.g., "improve things"), ESCALATE immediat
 - Check "What Failed" for similar past attempts
 - Check "What Worked" for applicable patterns
 - Check "Known Issues" for related problems
-- Score: +1 if proven pattern exists, -1 if past attempt failed, 0 if no history
+- Score 1-5:
+  - 5: Strong proven pattern — same approach succeeded before
+  - 4: Related pattern exists — similar approach worked
+  - 3: No history — neutral (default)
+  - 2: Weak negative signal — partial failure or abandoned attempt
+  - 1: Strong negative — same approach tried and failed
 
 **Current Priority** (PROJECT.md):
 - 5: Directly unblocks current focus
@@ -80,11 +85,10 @@ If the request is too vague to parse (e.g., "improve things"), ESCALATE immediat
 
 **ROI Formula:**
 ```
-ROI = (Strategic * 0.35) + (Current_Priority * 0.25) + (Historical * 0.15)
-      - (Inverse_Feasibility * 0.25)
-
-where Inverse_Feasibility = 6 - Feasibility (higher cost = lower ROI)
+ROI = (Strategic * 0.35) + (Current_Priority * 0.25) + (Historical * 0.15) + (Feasibility * 0.25)
 ```
+
+Range: [1.0, 5.0]. Higher feasibility = easier = higher ROI. All dimensions on 1-5 scale.
 
 ### Step 3: At L0 (No DDD Docs)
 
@@ -117,8 +121,8 @@ Based on ROI score (L2) or structured analysis (L0):
 
 | Recommendation | When | Action |
 |---------------|------|--------|
-| **GO** | ROI >= 3.5, no blockers | Define scope + acceptance criteria. Advance pipeline to THINK. |
-| **DEFER** | ROI 2.0-3.4, or blocked by current priorities | Add to PROJECT.md backlog with reasoning. |
+| **GO** | ROI >= 3.2, no blockers | Define scope + acceptance criteria. Advance pipeline to THINK. |
+| **DEFER** | ROI 2.0-3.1, or blocked by current priorities | Add to PROJECT.md backlog with reasoning. |
 | **REJECT** | ROI < 2.0, or conflicts with non-goals | Explain why. Suggest alternative if one exists. |
 | **ESCALATE** | Ambiguous scope, conflicting signals, or confidence < 0.6 | Surface specific questions to user. Don't guess. |
 
@@ -136,7 +140,7 @@ Based on ROI score (L2) or structured analysis (L0):
 | Feasibility | 3/5 | Moderate — needs new pattern, ~3 sessions |
 | Historical | +1 | Similar approach worked for context loading |
 | Current Priority | 3/5 | Important but not blocking current focus |
-| **ROI** | **3.4** | |
+| **ROI** | **3.5** | |
 
 ### Recommendation: GO
 
@@ -181,7 +185,7 @@ decision-making at every evaluation. Three levels, three outcomes:
 
 ### L0 INFORM — "Clear call, FYI"
 
-**When:** ROI >= 3.5 AND confidence is high AND no blockers.
+**When:** ROI >= 3.2 AND confidence is high AND no blockers.
 
 Emit an INFORM annotation and continue the pipeline:
 
@@ -202,7 +206,7 @@ save_escalation(WORKSPACE_ROOT, esc)
 
 ### L1 CONSULT — "I think X, override within 24h"
 
-**When:** ROI 2.5-3.5 (borderline) OR confidence medium OR non-obvious tradeoff.
+**When:** ROI 2.5-3.1 (borderline) OR confidence medium OR non-obvious tradeoff.
 
 Swarm proceeds with its recommendation. Human has 24h to override via Radar todo.
 

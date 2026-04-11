@@ -202,10 +202,10 @@ commands. Execute the behavior directly in this session.
 
 Follow the s_evaluate workflow:
 1. Parse the requirement (what/why/who/constraints)
-2. Score against DDD docs (strategic 1-5, feasibility 1-5, historical +/-1, priority 1-5)
-3. Calculate ROI = (strategic * 0.35) + (priority * 0.25) + (historical * 0.15) - (inverse_feasibility * 0.25)
+2. Score against DDD docs (strategic 1-5, feasibility 1-5, historical 1-5, priority 1-5)
+3. Calculate ROI = (strategic * 0.35) + (priority * 0.25) + (historical * 0.15) + (feasibility * 0.25)
 4. Classify scope: trivial / standard / complex / research-only / docs-only
-5. Recommend: GO (>= 3.5) / DEFER (2.0-3.4) / REJECT (< 2.0) / ESCALATE
+5. Recommend: GO (>= 3.2) / DEFER (2.0-3.1) / REJECT (< 2.0) / ESCALATE
 6. Define acceptance criteria (3-5 items)
 
 Publish artifact:
