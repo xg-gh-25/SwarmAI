@@ -85,7 +85,7 @@ cd desktop && npm run build:all
 | **LifecycleManager** | `lifecycle_manager.py` | Background loop (60s). TTL kill (12hr), health check, orphan reaper. |
 | **SessionRegistry** | `session_registry.py` | Module singletons. Wires all components at startup. |
 
-Key invariants: MAX_CONCURRENT=2, protected states (STREAMING, WAITING_INPUT) never evicted, retry uses `--resume` for conversation continuity.
+Key invariants: dynamic concurrency via `compute_max_tabs()` (cost=1500MB/session, ceiling=4), protected states (STREAMING, WAITING_INPUT) never evicted, retry uses `--resume` for conversation continuity.
 
 ### Context System
 

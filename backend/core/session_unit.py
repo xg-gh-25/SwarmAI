@@ -1126,16 +1126,41 @@ class SessionUnit:
 
             await asyncio.sleep(backoff)
 
-            # Re-check spawn budget after backoff
+            # Re-check spawn budget AND slot availability after backoff.
+            # Retries bypass session_router._acquire_slot(), so we must
+            # enforce the concurrency limit here to prevent OOM cascades
+            # from 3+ simultaneous CLI processes (COE: 2026-04-12).
             try:
                 from .resource_monitor import resource_monitor
                 budget = resource_monitor.spawn_budget()
-                if not budget.can_spawn:
+                max_tabs = resource_monitor.compute_max_tabs()
+
+                # Count alive sessions from the registry (if available).
+                # This prevents retries from spawning beyond the slot limit.
+                alive_exceeds_limit = False
+                try:
+                    from . import session_registry
+                    router = session_registry.session_router
+                    if router and router.alive_count >= max_tabs:
+                        alive_exceeds_limit = True
+                        logger.warning(
+                            "Retry %d aborted: alive_count=%d >= max_tabs=%d "
+                            "session_id=%s — retry would exceed slot limit",
+                            self._retry_count, router.alive_count,
+                            max_tabs, self.session_id,
+                        )
+                except Exception:
+                    pass  # Registry unavailable — fall through to budget check
+
+                if not budget.can_spawn or alive_exceeds_limit:
+                    reason = (
+                        f"alive_count >= max_tabs ({max_tabs})"
+                        if alive_exceeds_limit else budget.reason
+                    )
                     logger.warning(
-                        "Retry %d aborted: spawn budget denied "
-                        "post-backoff session_id=%s reason=%s",
-                        self._retry_count, self.session_id,
-                        budget.reason,
+                        "Retry %d aborted: %s "
+                        "post-backoff session_id=%s",
+                        self._retry_count, reason, self.session_id,
                     )
                     await self._crash_to_cold_async(clear_identity=True)
                     yield _build_error_event(
@@ -2133,7 +2158,10 @@ class SessionUnit:
     # while IDLE, we compact (to generate a checkpoint), then kill
     # the subprocess.  The next send() will lazy-restart with --resume.
     # This prevents macOS jetsam from OOM-killing the entire backend.
-    PROACTIVE_RSS_THRESHOLD: int = 1_200_000_000  # 1.2GB
+    # Threshold: 1.8GB.  Normal steady-state is 1.4-1.6GB (verified from
+    # lifecycle_manager logs 2026-04-12).  Old 1.2GB was below steady-state,
+    # causing every session to be proactively killed after each response.
+    PROACTIVE_RSS_THRESHOLD: int = 1_800_000_000  # 1.8GB
     PROACTIVE_COOLDOWN: float = 180.0  # 3 minutes
 
     async def _check_rss_and_proactive_restart(self) -> None:

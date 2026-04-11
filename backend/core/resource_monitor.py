@@ -129,14 +129,25 @@ class ResourceMonitor:
     """
 
     _CACHE_TTL: float = 5.0  # seconds
-    _DEFAULT_SPAWN_COST_MB: float = 500.0  # Conservative baseline from COE data
+    # Spawn cost: actual CLI tree RSS is 1400-1600MB (verified from
+    # lifecycle_manager logs 2026-04-12).  Old value of 500MB allowed 3
+    # concurrent chat sessions → 4.5GB → macOS jetsam SIGKILL cascade.
+    _DEFAULT_SPAWN_COST_MB: float = 1500.0
     _HEADROOM_MB: float = 512.0  # Always keep this much free
     _MAX_SPAWN_SAMPLES: int = 20  # Rolling window for spawn cost estimation
+    # Adaptive estimate must never drop below this — early samples
+    # (taken ~60s after spawn, before MCPs fully load) can underestimate
+    # true steady-state RSS by 50%.  1200MB = 80% of observed 1500MB.
+    _MIN_SPAWN_COST_MB: float = 1200.0
 
     # ── Dynamic tab limit constants ─────────────────────────────
+    # Ceiling: 4 = 3 chat + 1 channel.  On 36GB machines this is safe
+    # as long as retry/proactive-restart bugs are fixed (the real OOM
+    # cause was retry storms + kill/respawn churn, not 3 sessions).
+    # On smaller machines the dynamic formula gates via cost_mb.
     _MAX_TABS_CEILING: int = 4
     _MEMORY_THRESHOLD_PCT: float = 90.0  # Never push machine past 90% used
-    _SPAWN_COST_MB: float = 500.0  # Each session costs ~500MB (CLI + MCPs)
+    _SPAWN_COST_MB: float = 1500.0  # Each session costs ~1500MB (CLI + MCPs)
 
     def __init__(self) -> None:
         self._cached_memory: Optional[SystemMemory] = None
@@ -312,12 +323,17 @@ class ResourceMonitor:
             )
 
     def _estimated_spawn_cost_mb(self) -> float:
-        """Estimate spawn cost from rolling samples or default."""
+        """Estimate spawn cost from rolling samples or default.
+
+        Returns the 75th percentile of recorded RSS samples, floored
+        at ``_MIN_SPAWN_COST_MB`` to prevent early low-RSS samples
+        from undercutting the safety margin.
+        """
         if self._spawn_cost_samples:
-            # Use 75th percentile for conservative estimate
             sorted_samples = sorted(self._spawn_cost_samples)
             idx = int(len(sorted_samples) * 0.75)
-            return sorted_samples[min(idx, len(sorted_samples) - 1)]
+            estimate = sorted_samples[min(idx, len(sorted_samples) - 1)]
+            return max(estimate, self._MIN_SPAWN_COST_MB)
         return self._DEFAULT_SPAWN_COST_MB
 
     def record_spawn_cost(self, rss_bytes: int) -> None:
@@ -338,11 +354,11 @@ class ResourceMonitor:
         """Compute dynamic tab limit: how many tabs can open without
         pushing machine memory past 90%.
 
-        Formula: ``max(2, min(floor(headroom_to_90pct / 500), 4))``
+        Formula: ``max(2, min(floor(headroom / cost), ceiling))``
 
-        Each tab costs ~500MB (CLI subprocess + MCP servers).
-        The machine should never exceed 90% memory usage from SwarmAI
-        tabs — users run other apps too.
+        Uses adaptive spawn cost from lifecycle_manager samples when
+        available (75th percentile of actual tree RSS, floored at
+        1200MB), falls back to ``_SPAWN_COST_MB`` (1500MB).
 
         Returns [2, 4]. Always allows at least 2 (1 chat + 1 channel).
         """
@@ -351,15 +367,17 @@ class ResourceMonitor:
         # Use effective_used for correct macOS memory pressure.
         used_mb = mem.effective_used / (1024 * 1024)
         headroom_mb = total_mb * (self._MEMORY_THRESHOLD_PCT / 100.0) - used_mb
-        raw = int(headroom_mb / self._SPAWN_COST_MB)
+        # Use adaptive estimate when available — learned from real RSS data.
+        cost_mb = self._estimated_spawn_cost_mb()
+        raw = int(headroom_mb / cost_mb)
         # Minimum 2: guarantees 1 chat slot + 1 dedicated channel slot.
         # Without this, channel messages could starve when memory is tight.
         result = max(2, min(raw, self._MAX_TABS_CEILING))
         logger.info(
             "compute_max_tabs: used=%.0fMB/%.0fMB (%.1f%%) headroom_to_90%%=%.0fMB "
-            "raw=%d result=%d pressure=%s",
+            "cost=%.0fMB raw=%d result=%d pressure=%s",
             used_mb, total_mb, mem.percent_used,
-            headroom_mb, raw, result, mem.pressure_level,
+            headroom_mb, cost_mb, raw, result, mem.pressure_level,
         )
         return result
 

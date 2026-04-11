@@ -36,14 +36,16 @@ def _reference_formula(available_mb: float) -> int:
 
     Mirrors ``ResourceMonitor.compute_max_tabs()``:
     headroom = total_mb * 0.90 - used_mb
-    raw = floor(headroom / 500)
-    result = max(2, min(raw, 4))
+    raw = floor(headroom / cost)
+    result = max(2, min(raw, 3))
 
+    Cost: 1500MB per session (actual CLI tree RSS from lifecycle logs).
+    Ceiling: 3 (2 chat + 1 channel — prevents jetsam OOM cascade).
     _make_system_memory sets total=16GB, so headroom = 16384*0.90 - (16384 - available_mb).
     Simplified: headroom = available_mb - 16384*0.10 = available_mb - 1638.4
     """
     headroom_mb = available_mb - 16384 * 0.10  # 16GB * 10% overhead
-    raw = int(headroom_mb / 500)
+    raw = int(headroom_mb / 1500)
     return max(2, min(raw, 4))
 
 
@@ -114,20 +116,20 @@ class TestComputeMaxTabsBoundaryValues:
         "available_mb, expected_tabs",
         [
             # headroom = available_mb - 16384 * 0.10 = available_mb - 1638.4
-            # raw = floor(headroom / 500), result = max(2, min(raw, 4))
-            (512, 2),      # headroom=-1126.4 → raw=-3 → max(2,...)=2
-            (1024, 2),     # headroom=-614.4 → raw=-2 → 2
+            # raw = floor(headroom / 1500), result = max(2, min(raw, 4))
+            (512, 2),      # headroom=-1126.4 → raw=-1 → max(2,...)=2
+            (1024, 2),     # headroom=-614.4 → raw=-1 → 2
             (1639, 2),     # headroom=0.6 → raw=0 → 2
-            (2139, 2),     # headroom=500.6 → raw=1 → 2
-            (2639, 2),     # headroom=1000.6 → raw=2 → 2
-            (3139, 3),     # headroom=1500.6 → raw=3 → 3
-            (3639, 4),     # headroom=2000.6 → raw=4 → 4
-            (8192, 4),     # headroom=6553.6 → raw=13 → 4
-            (16384, 4),    # headroom=14745.6 → raw=29 → 4
+            (3139, 2),     # headroom=1500.6 → raw=1 → 2
+            (4639, 2),     # headroom=3000.6 → raw=2 → 2
+            (6139, 3),     # headroom=4500.6 → raw=3 → 3
+            (7639, 4),     # headroom=6000.6 → raw=4 → 4
+            (8192, 4),     # headroom=6553.6 → raw=4 → 4
+            (16384, 4),    # headroom=14745.6 → raw=9 → min(...,4)=4
         ],
         ids=[
-            "512MB→2", "1024MB→2", "1639MB→2", "2139MB→2",
-            "2639MB→2", "3139MB→3", "3639MB→4", "8192MB→4", "16384MB→4",
+            "512MB→2", "1024MB→2", "1639MB→2",
+            "3139MB→2", "4639MB→2", "6139MB→3", "7639MB→4", "8192MB→4", "16384MB→4",
         ],
     )
     def test_compute_max_tabs_boundary_values(
@@ -155,7 +157,7 @@ class TestComputeMaxTabsPessimisticFallback:
 
     When system_memory() fails, it returns a pessimistic fallback with
     total=16GB, used=14.4GB. Headroom = 16384*0.90 - 14745.6 = 0.0MB.
-    raw = floor(0.0/500) = 0. Result = max(2, 0) = 2.
+    raw = floor(0.0/1500) = 0. Result = max(2, 0) = 2.
 
     Even under pessimistic fallback, min_tabs=2 guarantees 1 chat + 1 channel.
 
