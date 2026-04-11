@@ -280,7 +280,8 @@ class EvolutionOptimizer:
             logger.warning("Cannot read %s: %s", skill_path, exc)
             return False
 
-        # Backup original before applying changes — enables manual rollback
+        # Backup original before applying changes — enables manual rollback.
+        # Cleaned up after successful write (no stale .bak files left behind).
         backup_path = skill_path.with_suffix(".md.bak")
         try:
             backup_path.write_text(content, encoding="utf-8")
@@ -321,6 +322,8 @@ class EvolutionOptimizer:
                 result.original_score,
                 result.optimized_score,
             )
+            # Clean up backup after successful write — no stale .bak files
+            backup_path.unlink(missing_ok=True)
         except OSError as exc:
             logger.warning("Cannot write %s: %s", skill_path, exc)
             return False
@@ -398,18 +401,18 @@ def run_evolution_cycle(skills_dir: Path, transcripts_dir: Path, evals_dir: Path
         result = run_evolution_cycle(
             skills_dir=Path("backend/skills"),
             transcripts_dir=Path.home() / ".claude" / "projects",
-            evals_dir=workspace / "Knowledge" / "SkillEvals",
+            evals_dir=Path.home() / ".swarm-ai/SwarmWS/.context/SkillEvals",
         )
 
-    Usage (manual one-off)::
+    Usage (manual one-off from backend/)::
 
         python -c "
         from pathlib import Path
         from core.evolution_optimizer import run_evolution_cycle
         print(run_evolution_cycle(
-            Path('backend/skills'),
+            Path('skills'),
             Path.home() / '.claude/projects',
-            Path('Knowledge/SkillEvals'),
+            Path.home() / '.swarm-ai/SwarmWS/.context/SkillEvals',
         ))
         "
 
@@ -468,10 +471,12 @@ def run_evolution_cycle(skills_dir: Path, transcripts_dir: Path, evals_dir: Path
     for skill_name in eligible_skills:
         examples = all_examples[skill_name]
 
-        # Score current fitness using correction examples
+        # Score current fitness using correction examples.
+        # Filter out examples with empty/trivial agent_actions — scoring
+        # (expected, "") always yields ~0.0 which triggers false optimizations.
         score_pairs = []
         for ex in examples:
-            if ex.user_correction:
+            if ex.user_correction and len(ex.agent_actions.strip()) > 20:
                 score_pairs.append((ex.user_correction, ex.agent_actions))
         avg_score = evaluator.score_batch(score_pairs) if score_pairs else 1.0
 
