@@ -81,10 +81,27 @@ class EvolutionOptimizer:
     def _apply_heuristic_changes(
         self, skill_text: str, corrections: list[tuple[str, str]]
     ) -> tuple[str, list[TextChange]]:
-        """Apply correction patterns to skill text. Returns (new_text, changes)."""
+        """Apply correction patterns to skill text. Returns (new_text, changes).
+
+        Quality gates:
+        - Max 3 changes per optimization pass (prevent runaway appends)
+        - Dedup: skip corrections already present in skill text
+        - Completeness: reject fragments (mid-word truncation, <15 chars)
+        - Coherence: reject if it looks like code, a path, or agent monologue
+        """
         changes: list[TextChange] = []
         new_text = skill_text
+        skill_lower = skill_text.lower()
+        max_changes = 3
+
         for correction, action_type in corrections:
+            if len(changes) >= max_changes:
+                break
+
+            # Quality gate: reject garbage fragments
+            if not self._is_quality_correction(correction, skill_lower):
+                continue
+
             if action_type == "remove":
                 # Find similar phrase in skill text using re.search for
                 # safe case-insensitive matching (handles non-ASCII correctly).
@@ -107,6 +124,47 @@ class EvolutionOptimizer:
                     reason=f"User said should: '{correction}'",
                 ))
         return new_text, changes
+
+    @staticmethod
+    def _is_quality_correction(text: str, existing_skill_lower: str) -> bool:
+        """Quality gate: reject low-quality correction fragments.
+
+        Returns True only if the correction is actionable, complete, and novel.
+        """
+        # Too short — likely a garbage fragment
+        if len(text.strip()) < 15:
+            return False
+
+        # Truncated mid-word (no sentence-ending punctuation and ends abruptly)
+        stripped = text.strip()
+        if stripped and stripped[-1].isalpha() and len(stripped) > 30:
+            # Last word incomplete — check if it ends without natural boundary
+            last_word = stripped.split()[-1] if stripped.split() else ""
+            if len(last_word) < 3:
+                return False
+
+        # Already present in skill text (dedup)
+        if text.strip().lower() in existing_skill_lower:
+            return False
+
+        # Looks like code, a file path, or line number reference (not a directive)
+        code_indicators = (
+            "line ", "def ", "class ", "import ", "from ", "return ",
+            ".py", ".ts", ".js", "self.", "this.", "→", "→",
+        )
+        lower = text.lower()
+        if any(indicator in lower for indicator in code_indicators):
+            return False
+
+        # Agent monologue leaked as correction
+        agent_indicators = (
+            "let me ", "i'll ", "i need to ", "confirmed —", "verified —",
+            "checking ", "looking at ", "reading ", "found ",
+        )
+        if any(lower.startswith(ind) for ind in agent_indicators):
+            return False
+
+        return True
 
     def _validate_constraints(
         self, skill_name: str, new_text: str, original_text: str
