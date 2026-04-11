@@ -547,16 +547,23 @@ For each modified source file, assign every finding a **confidence score (1-10)*
 - **Sandbox writes** — Configure write access in `_build_sandbox_config`, not ad-hoc overrides.
 - **Sandbox process visibility** — `pgrep`, `ps`, `top` are blocked by the Claude SDK sandbox ("operation not permitted"). Never use them to check if the app is running. You ARE the app — if you’re executing, the backend is alive.
 - **Backend health endpoint** — `GET /health` (root level, NOT `/api/system/health` or `/api/health`). Returns `{"status":"healthy",...}` on 200. **Port is random each launch** (Tauri `portpicker`). Discover via psutil: find process `python-backend*` → `p.net_connections()` → LISTEN port. Dev mode uses port 8000. Never hardcode ports.
-- **pytest — run targeted tests, always use `--timeout`** — After code changes, run ONLY the related test file(s), not the full suite. Always include `--timeout=60` to prevent hangs. xdist `-n 4` is auto-injected from `pyproject.toml addopts` — don’t add it manually.
-  ```
-  cd backend && python -m pytest tests/test_<module>.py -v --timeout=60      # single file
-  cd backend && python -m pytest tests/test_a.py tests/test_b.py --timeout=60  # multiple files
-  cd backend && python -m pytest --timeout=120 -m "not pbt and not slow"     # fast suite
-  cd backend && python -m pytest --lf --timeout=60                            # last-failed
-  ```
-  Or via make: `make test`, `make test-file F=tests/test_x.py`, `make test-lf`, `make test-all`.
+- **pytest — NEVER run proactively, suggest instead** — pytest is an **external action** (same category as PRs and deploys). After code changes, **suggest** the test command but do NOT execute it. Only run pytest when the user explicitly asks.
   
-  **Key rules:** (1) Always specify test file(s) after code changes — never run full suite for a 1-file edit. (2) Always include `--timeout=60` (or 120 for full suite) — prevents infinite hangs. (3) **NEVER pipe pytest through `| tail`** — it hides xdist status, pass/fail summary, and causes re-run loops. (4) For full suite runs, set Bash tool `timeout=300000` (5 min). (5) **Anti-loop: max 2 full-suite runs per task.** After 2 runs, stop and report results as-is — never re-run the same command hoping for different results.
+  **When user asks to run tests:**
+  ```
+  cd backend && python -m pytest tests/test_<module>.py -v --timeout=60      # targeted (preferred)
+  cd backend && python -m pytest tests/test_a.py tests/test_b.py --timeout=60  # multiple files
+  cd backend && python -m pytest --lf --timeout=60                            # last-failed
+  SWARMAI_SUITE=1 python -m pytest --timeout=120 -m "not pbt and not slow"   # full suite (user must explicitly request)
+  ```
+  
+  **Key rules:**
+  (1) **NEVER run pytest proactively** — always suggest, wait for user confirmation. This applies to ALL tabs. Multiple tabs running pytest simultaneously causes OOM and session eviction.
+  (2) **Full suite requires `SWARMAI_SUITE=1` prefix** — PreToolUse hook blocks full suite without this. Only add it when user explicitly says "run full suite" / "跑完整测试" / "run all tests".
+  (3) Always include `--timeout=60` (or 120 for full suite).
+  (4) **NEVER pipe pytest through `| tail`** — causes buffering, re-run loops, and session eviction.
+  (5) xdist `-n 4` is auto-injected from `pyproject.toml addopts` — don’t add manually.
+  (6) **Anti-loop: max 2 test runs per task.** After 2 runs, stop and report as-is.
 - **Time awareness** — The system prompt shows both UTC and the user’s local time. ALWAYS use the user’s local time (check USER.md for timezone). Never reference UTC time when talking to the user. The header format is `YYYY-MM-DD HH:MM UTC / YYYY-MM-DD HH:MM <local>` — use the part AFTER the `/`. When estimating "current time" mid-session, add elapsed conversation time to the local start time.
 
 ## UX Development Rules
