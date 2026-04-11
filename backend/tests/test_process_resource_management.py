@@ -101,7 +101,10 @@ class TestC1bComputeMaxTabsAccuracy:
     """C1b: compute_max_tabs uses active+wired for used, matching Activity Monitor.
 
     With active=500K pages + wired=200K pages = ~10.7GB used on 36GB machine,
-    that's ~29% used. Headroom to 80% = ~18.5GB. max_tabs = min(4, 18500/500) = 4.
+    that's ~29% used (active+wired).  But effective_used = total - available
+    where available = free + speculative + inactive = ~9GB, so
+    effective_used ≈ 27GB.  Headroom = 36864×0.9 - 27612 = 5566MB.
+    max_tabs = min(4, 5566/1500) = min(4, 3) = 3.
 
     Validates: Requirements 1.2, 2.2
     """
@@ -109,17 +112,19 @@ class TestC1bComputeMaxTabsAccuracy:
     @patch("core.resource_monitor._HAS_PSUTIL", False)
     @patch("core.resource_monitor.subprocess.run")
     def test_max_tabs_with_accurate_memory(self, mock_run):
-        """compute_max_tabs should return 4 when machine is only 29% used."""
+        """compute_max_tabs uses effective_used (total-available), not used (active+wired)."""
         mock_run.side_effect = _make_subprocess_side_effect()
 
         from core.resource_monitor import ResourceMonitor
         monitor = ResourceMonitor()
         max_tabs = monitor.compute_max_tabs()
 
-        # active+wired = ~10.7GB used on 36GB = 29%
-        # headroom to 85% = 36*0.85 - 10.7 = ~19.9GB → 19900/500 = 39 → clamped to 4
-        assert max_tabs == 4, (
-            f"compute_max_tabs() should return 4 with ~29% used, got {max_tabs}"
+        # vm_stat: available = free+spec+inactive = ~9GB
+        # effective_used = 36GB - 9GB = 27GB → headroom = 5.6GB
+        # raw = 5566/1500 = 3 → result = 3
+        assert max_tabs == 3, (
+            f"compute_max_tabs() should return 3 with vm_stat fallback "
+            f"(effective_used ≈ 27GB, headroom ≈ 5.6GB), got {max_tabs}"
         )
 
 
@@ -337,7 +342,7 @@ class TestP3ComputeMaxTabsFormulaPreservation:
     @given(used_pct=st.floats(min_value=0, max_value=99, allow_nan=False, allow_infinity=False))
     @settings()
     def test_formula_matches_expected(self, used_pct):
-        """compute_max_tabs output matches the 85% headroom formula."""
+        """compute_max_tabs output matches the 90% headroom formula."""
         from core.resource_monitor import ResourceMonitor, SystemMemory
 
         total_bytes = 36 * 1024**3  # 36GB
@@ -345,8 +350,9 @@ class TestP3ComputeMaxTabsFormulaPreservation:
         used_mb = total_mb * (used_pct / 100.0)
         used_bytes = int(used_mb * 1024 * 1024)
         available_bytes = total_bytes - used_bytes
-        headroom_mb = total_mb * 0.85 - used_mb
-        expected = max(2, min(int(headroom_mb / 500), 4))
+        # 90% threshold, 1500MB cost, ceiling 4 (matches resource_monitor.py)
+        headroom_mb = total_mb * 0.90 - used_mb
+        expected = max(2, min(int(headroom_mb / 1500), 4))
 
         monitor = ResourceMonitor()
         monitor._cached_memory = SystemMemory(
@@ -360,7 +366,7 @@ class TestP3ComputeMaxTabsFormulaPreservation:
         result = monitor.compute_max_tabs()
         assert result == expected, (
             f"For used_pct={used_pct:.1f}%: "
-            f"headroom_to_80%={headroom_mb:.0f}MB, "
+            f"headroom_to_90%={headroom_mb:.0f}MB, "
             f"expected {expected}, got {result}"
         )
 
