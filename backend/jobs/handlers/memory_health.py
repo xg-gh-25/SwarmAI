@@ -301,31 +301,57 @@ def _apply_report(report: dict, memory_md: str, evolution_md: str) -> list[str]:
                 else:
                     actions.append(f"Flagged for archive (not found): {cap_id}")
 
-    # 4. Stale decisions: mark superseded instead of removing (P2 Temporal Validity)
+    # 4. Stale decisions: mark superseded via temporal validity (P2)
+    # LLM prompt produces {"entry_prefix": "...", "reason": "..."}.
+    # We extract the key (KD07, etc.) by fuzzy-matching entry_prefix
+    # against MEMORY.md content, then mark with superseded_by="STALE".
     stale_decisions = report.get("stale_decisions", [])
-    for dec in stale_decisions[:3]:
-        old_key = dec.get("key", "")
-        new_key = dec.get("superseded_by", "")
-        prefix = dec.get("entry_prefix", "")[:60]
-        if old_key and new_key:
-            try:
-                from core.memory_index import mark_entry_superseded
-                memory_path = CONTEXT_DIR / "MEMORY.md"
-                if memory_path.exists():
-                    content = memory_path.read_text(encoding="utf-8")
-                    updated = mark_entry_superseded(content, old_key, new_key)
-                    if updated != content:
-                        memory_path.write_text(updated, encoding="utf-8")
-                        actions.append(f"Superseded: {old_key} → {new_key} ({prefix})")
-                    else:
-                        actions.append(f"Stale decision flagged (key not found): {prefix}")
-                else:
-                    actions.append(f"Stale decision flagged: {prefix}")
-            except Exception as exc:
-                logger.warning("Failed to mark %s superseded: %s", old_key, exc)
+    if stale_decisions:
+        memory_path = CONTEXT_DIR / "MEMORY.md"
+        memory_content = ""
+        if memory_path.exists():
+            memory_content = memory_path.read_text(encoding="utf-8")
+
+        for dec in stale_decisions[:3]:
+            prefix = dec.get("entry_prefix", "")[:60]
+            if not prefix or not memory_content:
                 actions.append(f"Stale decision flagged: {prefix}")
-        else:
-            actions.append(f"Stale decision flagged: {prefix}")
+                continue
+
+            # Extract key by matching prefix against MEMORY.md entries
+            # Entry format: "- [KD07] 2026-04-01 Single-agent..."
+            # Prefix format: "2026-04-01: Single-agent..."
+            needle = _normalize_prefix(prefix)
+            if len(needle) < 10:
+                actions.append(f"Stale decision flagged: {prefix}")
+                continue
+
+            # Find the entry key by matching normalized prefix against MEMORY.md entries.
+            # Normalize: strip colons after dates, collapse whitespace for fuzzy match.
+            import re as _re
+            norm_needle = _re.sub(r"(\d{4}-\d{2}-\d{2}):?\s*", r"\1 ", needle).strip()
+            old_key = None
+            for m in _re.finditer(r"- \[([A-Z]{1,4}\d+)\] (.+?)$", memory_content, _re.MULTILINE):
+                entry_text = m.group(2)[:50]
+                if norm_needle[:20] in entry_text or entry_text[:20] in norm_needle:
+                    old_key = m.group(1)
+                    break
+
+            if old_key:
+                try:
+                    from core.memory_index import mark_entry_superseded
+                    updated = mark_entry_superseded(memory_content, old_key, "STALE")
+                    if updated != memory_content:
+                        memory_path.write_text(updated, encoding="utf-8")
+                        memory_content = updated  # Update for next iteration
+                        actions.append(f"Superseded: {old_key} (reason: {dec.get('reason', '')[:40]})")
+                    else:
+                        actions.append(f"Stale decision flagged (no metadata change): {prefix}")
+                except Exception as exc:
+                    logger.warning("Failed to mark %s superseded: %s", old_key, exc)
+                    actions.append(f"Stale decision flagged: {prefix}")
+            else:
+                actions.append(f"Stale decision flagged: {prefix}")
 
     # 5. Capability gaps (log for briefing, don't auto-act)
     gaps = report.get("capability_gaps", [])

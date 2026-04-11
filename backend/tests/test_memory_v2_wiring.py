@@ -144,6 +144,39 @@ class TestW4MemoryHealthSupersede:
         assert "mark_entry_superseded" in source, \
             "_apply_report must use mark_entry_superseded for stale decisions"
 
+    def test_apply_report_parses_key_from_prefix(self, tmp_path):
+        """_apply_report should extract entry key from entry_prefix via fuzzy match."""
+        from jobs.handlers.memory_health import _apply_report
+
+        # Create a MEMORY.md with a known entry
+        memory = tmp_path / "MEMORY.md"
+        memory.write_text(
+            "## Key Decisions\n\n"
+            "- [KD07] 2026-04-01 Single-agent with role-switching\n",
+            encoding="utf-8",
+        )
+
+        # LLM report uses entry_prefix (not key) — this is the real schema
+        report = {
+            "stale_memories": [],
+            "resolved_threads": [],
+            "archived_capabilities": [],
+            "stale_decisions": [
+                {"entry_prefix": "2026-04-01: Single-agent with role-switching",
+                 "reason": "contradicted by new multi-agent approach"}
+            ],
+            "capability_gaps": [],
+            "stale_corrections": [],
+        }
+
+        with patch("jobs.handlers.memory_health.CONTEXT_DIR", tmp_path):
+            actions = _apply_report(report, memory.read_text(), "")
+
+        # Should have found and marked KD07
+        superseded_action = [a for a in actions if "Superseded" in a or "KD07" in a]
+        assert len(superseded_action) > 0, \
+            f"Expected KD07 to be marked superseded, got actions: {actions}"
+
 
 # ── W5: prompt_builder RecallEngine gets additional_stores ───────────
 
