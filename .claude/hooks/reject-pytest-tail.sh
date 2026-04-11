@@ -4,7 +4,7 @@
 # Guard 1: Block full suite unless user-requested (SWARMAI_SUITE=1)
 # Guard 2: Sanitize — strip | tail / | head, normalize .venv/bin/python
 #
-# Targeted tests and --lf always pass through untouched.
+# Targeted tests, --lf, and -k always pass through untouched.
 # Tabs are independent — no cross-tab mutex.
 #
 # Install: cp backend/scripts/pytest-safety-hook.sh .claude/hooks/reject-pytest-tail.sh
@@ -12,7 +12,9 @@
 INPUT=$(cat)
 CMD=$(echo "$INPUT" | jq -r '.tool_input.command // ""')
 
-if ! echo "$CMD" | grep -q 'pytest'; then
+# Only act on actual pytest execution — not grep, echo, python -c, etc.
+# Match: "python -m pytest" or "pytest" as a command (after && ; | or at start)
+if ! echo "$CMD" | grep -qE 'python[0-9.]* -m pytest\b|(^|&&\s*|;\s*)\s*pytest\s'; then
   exit 0
 fi
 
@@ -20,15 +22,16 @@ MODIFIED="$CMD"
 CHANGED=false
 
 # ── Guard 1: Block full suite ─────────────────────────────────
-# Allow: has test file, has --lf, or has SWARMAI_SUITE=1 bypass
+# Allow if ANY of: specific test file, --lf, -k filter, SWARMAI_SUITE=1
 HAS_TEST_FILE=$(echo "$MODIFIED" | grep -cE 'test_[a-zA-Z0-9_]+\.py')
 HAS_LF=$(echo "$MODIFIED" | grep -cE '\-\-lf\b')
+HAS_K=$(echo "$MODIFIED" | grep -cE '\s-k\s')
 HAS_BYPASS=$(echo "$MODIFIED" | grep -c 'SWARMAI_SUITE=1')
 
 if [ "$HAS_BYPASS" -gt 0 ]; then
   MODIFIED=$(echo "$MODIFIED" | sed 's/SWARMAI_SUITE=1[[:space:]]*//')
   CHANGED=true
-elif [ "$HAS_TEST_FILE" -eq 0 ] && [ "$HAS_LF" -eq 0 ]; then
+elif [ "$HAS_TEST_FILE" -eq 0 ] && [ "$HAS_LF" -eq 0 ] && [ "$HAS_K" -eq 0 ]; then
   jq -n '{
     "decision": "block",
     "reason": "Full test suite blocked. Specify the test file(s) for the code you changed, e.g.: python -m pytest tests/test_<module>.py -v --timeout=60. For full suite, user must request with: SWARMAI_SUITE=1 python -m pytest --timeout=120"
