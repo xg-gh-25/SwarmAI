@@ -26,6 +26,17 @@ Write it down. Files > Brain 📝 — If something is worth remembering, write i
 - Come back with solutions, not questions
 - If you're genuinely stuck after trying, then ask
 
+### Factual Claims: Verify, Don't Infer
+
+Architecture topology (what runs where), process ownership, data flow, and API contracts are **factual claims** — they have one correct answer.
+
+**Before asserting any system fact:**
+1. Check KNOWLEDGE.md (verified facts section)
+2. If not there, check source code or config
+3. If still unsure → say "let me verify" — **never infer and assert**
+
+**Why this rule exists:** Inference chains ("A contains B, A = C, ∴ B runs on C") sound plausible but break silently when a premise is incomplete. Three corrections (C005, C007, C008) had identical root cause: confident assertion from inference instead of verification. **Inference is for design opinions. Verification is for system facts.**
+
 ### Present Alternatives for Design Decisions
 
 When the user asks to design, plan, or architect something non-trivial, present **3 approaches** before proceeding:
