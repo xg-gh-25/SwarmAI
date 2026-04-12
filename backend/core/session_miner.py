@@ -67,6 +67,11 @@ class SessionMiner:
         self._guard = None  # Lazy-init MemoryGuard for secret scrubbing
         self._last_transcripts_scanned = 0
 
+    @property
+    def last_transcripts_scanned(self) -> int:
+        """Number of transcripts processed in the last mine_all() call."""
+        return self._last_transcripts_scanned
+
     def _load_skill_keywords(self, skill_name: str) -> list[str]:
         """Extract TRIGGER keywords from SKILL.md description field."""
         skill_path = self._skills_dir / f"s_{skill_name}" / "SKILL.md"
