@@ -305,13 +305,11 @@ class ContextHealthHook:
         from core.embedding_client import EmbeddingClient
         from core.vec_db import open_vec_db
 
-        # Resolve transcripts directory (Claude Code session transcripts)
+        # Pass the base projects/ dir — TranscriptStore uses its own
+        # delta-sync (content_hash) to skip already-indexed files.
+        # Previously used _resolve_transcripts_dir which restricted to
+        # one project subdir, missing transcripts from other workspaces.
         transcripts_dir = Path.home() / ".claude" / "projects"
-        try:
-            from hooks.evolution_maintenance_hook import _resolve_transcripts_dir
-            transcripts_dir = _resolve_transcripts_dir(transcripts_dir)
-        except ImportError:
-            pass  # Fallback to base dir
 
         if not transcripts_dir.is_dir():
             return
