@@ -40,12 +40,26 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# Confidence thresholds — v2.1 tuning (2026-04-12)
-# Lowered from 0.7/0.3 to enable deployment with real-world correction data.
-# At 0.7 threshold, max reachable confidence was 0.2 (no skill had ≥3 corrections).
-# See KD01 and skill_health.json for evidence.
+# Confidence thresholds — defaults, overridable via config.evolution.high_confidence / med_confidence
+# v2.1 (2026-04-12): lowered from 0.7/0.3 — old thresholds were unreachable with real data.
 HIGH_CONFIDENCE = 0.35
 MED_CONFIDENCE = 0.15
+
+
+def _get_confidence_thresholds() -> tuple[float, float]:
+    """Read thresholds from app config, falling back to module defaults."""
+    try:
+        from core.app_config_manager import app_config_manager
+        if app_config_manager is not None:
+            evo = app_config_manager.get("evolution", {})
+            if isinstance(evo, dict):
+                return (
+                    float(evo.get("high_confidence", HIGH_CONFIDENCE)),
+                    float(evo.get("med_confidence", MED_CONFIDENCE)),
+                )
+    except (ImportError, Exception):
+        pass
+    return HIGH_CONFIDENCE, MED_CONFIDENCE
 
 
 @dataclass
@@ -154,14 +168,16 @@ def compute_confidence(
     """Compute confidence score for skill optimization.
 
     Three signals:
-      evidence_strength: raw correction count (are there enough examples?)
-      correction_density: correction_rate = n_corrections / n_examples
-        (high rate = consistent problem, not a one-off)
+      evidence_strength: raw correction count — step function with bands at
+        1 (0.3), 2 (0.5), 3 (0.6), 5 (0.8), 10 (1.0).
+      correction_density: correction_rate = n_corrections / n_examples.
+        Bands: >5% (0.2), >15% (0.4), >30% (0.6), >50% (0.9).
       need_signal: how low is the fitness score?
+        <0.3 → 1.0, <0.5 → 0.7, <0.7 → 0.4, else 0.1.
 
-    Final confidence = evidence × max(density_boost, need_signal)
-    where density_boost amplifies confidence when correction rate is high
-    (>30% of invocations get corrected = strong signal).
+    Final confidence = evidence × max(density_boost, need_signal).
+    Both factors must be present — pure count without need, or pure need
+    without evidence, cannot produce high confidence alone.
     """
     if n_corrections == 0:
         return 0.0
@@ -404,14 +420,15 @@ class EvolutionOptimizer:
             return parts[2].strip()
         return content
 
-    def _extract_corrections(self, examples: list) -> list[tuple[str, str]]:
-        """Extract (correction_text, pattern_type) from examples with user corrections.
+    def _extract_corrections(self, examples: list) -> list[tuple[str, str, str]]:
+        """Extract (correction_text, pattern_type, confidence) from examples.
 
-        Tries structured patterns first (English + Chinese). Falls back to
-        extracting the first meaningful sentence from the correction as an
-        "add" directive — ensures no correction is silently dropped.
+        Tries structured patterns first (English + Chinese) → "high" confidence.
+        Falls back to extracting a summary sentence → "low" confidence.
+        Only "high" confidence corrections are auto-deployed; "low" ones are
+        surfaced in recommendations but not applied to SKILL.md.
         """
-        corrections: list[tuple[str, str]] = []
+        corrections: list[tuple[str, str, str]] = []
         for ex in examples:
             if not ex.user_correction:
                 continue
@@ -419,25 +436,29 @@ class EvolutionOptimizer:
             for pattern, action_type in CORRECTION_PATTERNS:
                 match = pattern.search(ex.user_correction)
                 if match:
-                    corrections.append((match.group(1).strip(), action_type))
+                    corrections.append((match.group(1).strip(), action_type, "high"))
                     matched = True
                     break  # One pattern per correction to avoid duplicates
 
-            # Fallback: if no structured pattern matched, extract a summary
-            # sentence from the correction. Prefer the first non-trivial line.
+            # Fallback: extract a summary sentence → low confidence.
+            # These are informational (included in recommendations) but not
+            # auto-deployed — prevents raw user remarks from becoming instructions.
             if not matched:
                 summary = _extract_correction_summary(ex.user_correction)
                 if summary:
-                    corrections.append((summary, "add"))
+                    corrections.append((summary, "add", "low"))
         return corrections
 
     def _apply_heuristic_changes(
-        self, skill_text: str, corrections: list[tuple[str, str]]
+        self, skill_text: str, corrections: list[tuple[str, str, str]]
     ) -> tuple[str, list[TextChange]]:
         """Apply correction patterns to skill text. Returns (new_text, changes).
 
         Quality gates:
         - Max 3 changes per optimization pass (prevent runaway appends)
+        - Only "high" confidence corrections auto-applied (structured pattern match)
+        - "low" confidence (fallback sentences) skipped — prevents raw user
+          remarks from becoming skill instructions
         - Dedup: skip corrections already present in skill text
         - Completeness: reject fragments (mid-word truncation, <15 chars)
         - Coherence: reject if it looks like code, a path, or agent monologue
@@ -447,9 +468,15 @@ class EvolutionOptimizer:
         skill_lower = skill_text.lower()
         max_changes = 3
 
-        for correction, action_type in corrections:
+        for correction, action_type, confidence in corrections:
             if len(changes) >= max_changes:
                 break
+
+            # Only auto-apply high-confidence corrections (structured pattern match).
+            # Low-confidence (fallback sentences) are surfaced in recommendations
+            # but not deployed — they need human/GEPA judgment to become instructions.
+            if confidence == "low":
+                continue
 
             # Quality gate: reject garbage fragments
             if not self._is_quality_correction(correction, skill_lower):
@@ -506,25 +533,26 @@ class EvolutionOptimizer:
         # Looks like code, a file path, or line number reference (not a directive)
         code_indicators = (
             "line ", "def ", "class ", "import ", "from ", "return ",
-            ".py", ".ts", ".js", "self.", "this.", "→", "→",
-            # v2.1: catch code analysis fragments that leaked through correction detection
-            "cache the ", "assigned on ", "if before_id", "wiring are ",
-            "store instance", "prompt builder", "overrides,",
+            ".py", ".ts", ".js", "self.", "this.", "→",
         )
         lower = text.lower()
         if any(indicator in lower for indicator in code_indicators):
             return False
 
         # Reject fragments that look like variable/function names or code constructs
-        # (underscore-heavy, camelCase, or all-lowercase-no-space patterns)
         if re.match(r"^[a-z_]+(?:_[a-z_]+){2,}$", stripped):  # snake_case identifiers
+            return False
+
+        # Reject text containing unbalanced parens/brackets (partial code)
+        if stripped.count("(") != stripped.count(")"):
+            return False
+        if stripped.count("[") != stripped.count("]"):
             return False
 
         # Agent monologue leaked as correction
         agent_indicators = (
             "let me ", "i'll ", "i need to ", "confirmed —", "verified —",
             "checking ", "looking at ", "reading ", "found ",
-            # v2.1: catch more agent analysis patterns
             "remaining ", "correct:\n", "transcript ",
         )
         if any(lower.startswith(ind) for ind in agent_indicators):
@@ -608,7 +636,7 @@ class EvolutionOptimizer:
         from core.skill_fitness import SkillFitnessEvaluator
 
         evaluator = SkillFitnessEvaluator()
-        expected_text = " ".join(text for text, _ in corrections)
+        expected_text = " ".join(text for text, *_ in corrections)
         original_score = evaluator.score(expected_text, original_text).overall
         optimized_score = evaluator.score(expected_text, new_text).overall
 
@@ -852,6 +880,20 @@ def _run_evolution_cycle_locked(
         elif name in priority_skills and len(examples) >= 3:
             eligible_skills.append(name)
 
+    # ── Read previous health for regression detection + trend ──
+    previous_health: dict[str, dict] = {}
+    health_json_path = evals_dir.parent / "skill_health.json"
+    try:
+        if health_json_path.exists():
+            prev_data = json.loads(health_json_path.read_text(encoding="utf-8"))
+            for s in prev_data.get("skills", []):
+                previous_health[s["skill_name"]] = s
+    except (json.JSONDecodeError, OSError, KeyError):
+        pass  # No previous data — skip regression check
+
+    # ── Regression gate: revert previously-deployed skills that degraded ──
+    high_threshold, med_threshold = _get_confidence_thresholds()
+
     # ── Phase 2: ASSESS ──
     high_count = 0
     med_count = 0
@@ -875,16 +917,28 @@ def _run_evolution_cycle_locked(
         # Compute confidence
         confidence = compute_confidence(correction_count, len(examples), avg_score)
 
-        # Determine action
-        if confidence >= HIGH_CONFIDENCE:
+        # Determine action using config-read thresholds
+        if confidence >= high_threshold:
             action = "deploy"
             high_count += 1
-        elif confidence >= MED_CONFIDENCE:
+        elif confidence >= med_threshold:
             action = "recommend"
             med_count += 1
         else:
             action = "log"
             low_count += 1
+
+        # Compute trend vs previous cycle
+        trend = None
+        if skill_name in previous_health:
+            prev_fitness = previous_health[skill_name].get("fitness_score", 1.0)
+            delta = avg_score - prev_fitness
+            if delta > 0.05:
+                trend = "improving"
+            elif delta < -0.05:
+                trend = "degrading"
+            else:
+                trend = "stable"
 
         # Generate recommendation if confidence is at least LOW
         opt_result = None
@@ -916,7 +970,7 @@ def _run_evolution_cycle_locked(
             confidence=confidence,
             action=action,
             recommendation=recommendation,
-            trend=None,  # Future: compare with previous run
+            trend=trend,
         )
         health_entries.append(health_entry)
         skill_assessments.append((skill_name, confidence, avg_score, examples, opt_result))
@@ -926,8 +980,42 @@ def _run_evolution_cycle_locked(
     verified_count = 0
     rolled_back_count = 0
 
+    # 3a. Regression gate — revert previously-deployed skills that degraded
     for skill_name, confidence, avg_score, examples, opt_result in skill_assessments:
-        if confidence >= HIGH_CONFIDENCE and opt_result and opt_result.accepted and opt_result.changes:
+        if skill_name not in previous_health:
+            continue
+        prev = previous_health[skill_name]
+        if prev.get("action") != "deploy":
+            continue
+        prev_fitness = prev.get("fitness_score", 1.0)
+        # Degraded by more than 0.1 → auto-revert from backup
+        if avg_score < prev_fitness - 0.1:
+            bak_path = skills_dir / f"s_{skill_name}" / "SKILL.md.bak"
+            if bak_path.exists():
+                skill_path = skills_dir / f"s_{skill_name}" / "SKILL.md"
+                try:
+                    os.replace(str(bak_path), str(skill_path))
+                    rolled_back_count += 1
+                    deploy_results.append(DeployResult(
+                        skill_name=f"s_{skill_name}",
+                        success=False,
+                        changes_applied=0,
+                        changes_skipped=0,
+                        verified=False,
+                        rolled_back=True,
+                        error=f"Regression auto-revert: fitness {prev_fitness:.2f} → {avg_score:.2f}",
+                    ))
+                    logger.warning(
+                        "Evolution: auto-reverted %s — regression detected "
+                        "(fitness %.2f → %.2f)",
+                        skill_name, prev_fitness, avg_score,
+                    )
+                except OSError as exc:
+                    errors.append(f"Failed to revert {skill_name}: {exc}")
+
+    # 3b. Deploy new optimizations
+    for skill_name, confidence, avg_score, examples, opt_result in skill_assessments:
+        if confidence >= high_threshold and opt_result and opt_result.accepted and opt_result.changes:
             # HIGH: atomic deploy
             skill_path = skills_dir / f"s_{skill_name}" / "SKILL.md"
             if skill_path.exists():
@@ -955,7 +1043,7 @@ def _run_evolution_cycle_locked(
                     errors.append(
                         f"Deploy failed for {skill_name}: {deploy_result.error}"
                     )
-        elif confidence >= MED_CONFIDENCE:
+        elif confidence >= med_threshold:
             # MED: recommendation surfaced in skill_health.json
             logger.info(
                 "Evolution cycle: recommending changes for %s (confidence=%.2f)",
@@ -1016,16 +1104,19 @@ def _run_evolution_cycle_locked(
     )
     logger.info("Evolution cycle complete: %s", report.to_dict())
 
-    # Clean up stale .bak files from previous cycles.
-    # atomic_deploy leaves .bak files for rollback safety; once the full cycle
-    # completes successfully (no rolled-back deploys), they are no longer needed.
-    if rolled_back_count == 0:
-        for bak_file in skills_dir.rglob("*.md.bak"):
-            try:
-                bak_file.unlink()
-                logger.debug("Cleaned up stale backup: %s", bak_file)
-            except OSError as exc:
-                logger.debug("Failed to clean up %s: %s", bak_file, exc)
+    # Clean up stale .bak files from PREVIOUS cycles only.
+    # Keep .bak files for skills deployed THIS cycle — needed for regression
+    # gate in the NEXT cycle. Only clean pre-existing .bak files.
+    deployed_this_cycle = {d.skill_name for d in deploy_results if d.success}
+    for bak_file in skills_dir.rglob("*.md.bak"):
+        skill_folder = bak_file.parent.name
+        if skill_folder in deployed_this_cycle:
+            continue  # Keep for regression check next cycle
+        try:
+            bak_file.unlink()
+            logger.debug("Cleaned up stale backup: %s", bak_file)
+        except OSError as exc:
+            logger.debug("Failed to clean up %s: %s", bak_file, exc)
 
     return report
 

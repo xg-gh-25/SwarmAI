@@ -127,8 +127,30 @@ class TestExtractCorrectionPatterns:
         ]
         corrections = optimizer._extract_corrections(examples)
         assert len(corrections) >= 2  # at least "don't" and "should" match
+        # v2.1: corrections are now 3-tuples (text, action, confidence)
         types = [c[1] for c in corrections]
         assert "remove" in types or "add" in types
+        # Structured pattern matches should be "high" confidence
+        confidences = [c[2] for c in corrections]
+        assert "high" in confidences
+
+    def test_fallback_corrections_are_low_confidence(self, optimizer):
+        """Corrections not matching structured patterns get 'low' confidence."""
+        examples = [
+            _make_example(correction="Remove the test entry"),  # no structured keyword
+        ]
+        corrections = optimizer._extract_corrections(examples)
+        if corrections:
+            assert corrections[0][2] == "low"
+
+    def test_low_confidence_corrections_not_applied(self, optimizer, skills_dir):
+        """Low-confidence corrections are skipped in _apply_heuristic_changes."""
+        _make_skill(skills_dir, "test", body="Do the thing correctly.")
+        corrections = [("Remove the test entry", "add", "low")]
+        new_text, changes = optimizer._apply_heuristic_changes(
+            "Do the thing correctly.", corrections
+        )
+        assert len(changes) == 0  # Low confidence → not applied
 
 
 class TestOptimizationResultDataclass:
@@ -376,19 +398,46 @@ class TestComputeConfidence:
         assert compute_confidence(0, 10, 0.5) == 0.0
 
     def test_compute_confidence_high(self):
-        """5+ corrections + low fitness -> >= 0.7."""
+        """5+ corrections + low fitness -> high confidence."""
         result = compute_confidence(5, 20, 0.2)
         assert result >= 0.7
 
     def test_compute_confidence_medium(self):
-        """3-4 corrections with moderate need -> 0.3-0.7 range."""
+        """3 corrections with moderate need -> mid-range confidence."""
         result = compute_confidence(3, 10, 0.4)
         assert 0.3 <= result <= 0.7
 
-    def test_compute_confidence_low(self):
-        """1-2 corrections -> < 0.3."""
+    def test_compute_confidence_single_correction(self):
+        """1 correction → evidence=0.3, low end of range."""
         result = compute_confidence(1, 10, 0.5)
-        assert result < 0.3
+        assert result > 0.0
+        assert result < 0.35  # Should not reach deploy threshold
+
+    # ── v2.1 band-specific tests ──
+
+    @pytest.mark.parametrize("n_corr,n_ex,fitness,expected_range", [
+        # n=2 band: evidence=0.5
+        (2, 22, 0.5, (0.30, 0.40)),   # save-memory scenario: 0.5 × 0.7 = 0.35
+        (2, 10, 0.2, (0.45, 0.55)),   # 2 corr + very low fitness: 0.5 × 1.0 = 0.5
+        (2, 5, 0.8, (0.25, 0.35)),    # 2 corr + high fitness + high density (40%): 0.5 × max(0.6, 0.1) = 0.3
+        # n=1 band: evidence=0.3
+        (1, 14, 0.2, (0.25, 0.35)),   # radar-todo scenario: 0.3 × 1.0 = 0.3
+        (1, 50, 0.9, (0.01, 0.05)),   # 1 corr + great fitness: tiny
+        # n=3 band: evidence=0.6
+        (3, 10, 0.3, (0.55, 0.65)),   # 0.6 × max(0.6, 1.0) = 0.6
+        # density band >0.05: rate 0.09 → density=0.2
+        (2, 22, 0.8, (0.05, 0.15)),   # evidence=0.5 × max(0.2, 0.1) = 0.1
+        # density band >0.15: rate 0.3 → density=0.4
+        (3, 10, 0.8, (0.20, 0.30)),   # evidence=0.6 × max(0.4, 0.1) = 0.24
+    ])
+    def test_confidence_bands(self, n_corr, n_ex, fitness, expected_range):
+        """Parametrized tests for v2.1 evidence/density/need bands."""
+        result = compute_confidence(n_corr, n_ex, fitness)
+        lo, hi = expected_range
+        assert lo <= result <= hi, (
+            f"compute_confidence({n_corr}, {n_ex}, {fitness}) = {result}, "
+            f"expected [{lo}, {hi}]"
+        )
 
 
 class TestAtomicDeploy:
