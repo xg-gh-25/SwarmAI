@@ -64,7 +64,7 @@ class ContextHealthHook:
     # ------------------------------------------------------------------
 
     def _light_refresh(self, root: Path, ws_path: str) -> None:
-        """Refresh KNOWLEDGE.md index and MEMORY.md index if workspace changed."""
+        """Refresh KNOWLEDGE.md index, MEMORY.md index, and vector/FTS5 stores."""
         # Memory index regen runs unconditionally — it's <10ms and must
         # catch uncommitted MEMORY.md writes (Edit tool, locked_write)
         # that happen within the same git rev.
@@ -73,17 +73,22 @@ class ContextHealthHook:
         except Exception as exc:
             logger.warning("context_health: MEMORY.md index refresh failed: %s", exc)
 
-        # KNOWLEDGE.md refresh is git-gated (filesystem scan is heavier)
+        # KNOWLEDGE.md text index refresh is git-gated (only reads git-tracked files)
         current_rev = self._git_rev(ws_path)
-        if current_rev and current_rev == self._last_refresh_rev:
-            return  # Nothing changed since last refresh
+        if not (current_rev and current_rev == self._last_refresh_rev):
+            try:
+                self._refresh_knowledge_sync(root)
+            except Exception as exc:
+                logger.warning("context_health: KNOWLEDGE.md refresh failed: %s", exc)
+            self._last_refresh_rev = current_rev
 
-        try:
-            self._refresh_knowledge_sync(root)
-        except Exception as exc:
-            logger.warning("context_health: KNOWLEDGE.md refresh failed: %s", exc)
-
-        # Knowledge Library vector+FTS5 indexing (incremental, <5s)
+        # Knowledge Library + Transcript vector/FTS5 indexing runs OUTSIDE
+        # the git-rev gate.  These stores have their own delta-sync via
+        # content_hash — unchanged files are skipped cheaply (~50ms for
+        # 160 hash lookups).  Many Knowledge/ files are written by hooks
+        # and jobs WITHOUT git commits (DailyActivity, JobResults, Signals),
+        # so the git gate was blocking them from ever being indexed.
+        # Bug: previously inside git-rev gate, only 1/160 files indexed.
         try:
             self._sync_knowledge_library(root)
         except Exception as exc:
@@ -94,10 +99,6 @@ class ContextHealthHook:
             self._sync_transcript_index(root)
         except Exception as exc:
             logger.debug("context_health: transcript sync skipped: %s", exc)
-
-        self._last_refresh_rev = current_rev
-        logger.info("context_health: indexes refreshed (rev=%s)",
-                    current_rev[:8] if current_rev else "?")
 
     def _refresh_knowledge_sync(self, root: Path) -> None:
         """Synchronous KNOWLEDGE.md index refresh — filesystem scan only."""

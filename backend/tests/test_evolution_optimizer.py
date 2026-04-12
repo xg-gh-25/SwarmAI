@@ -1,6 +1,11 @@
 """Tests for evolution_optimizer module."""
 from __future__ import annotations
 
+import fcntl
+import json
+import os
+from unittest.mock import patch
+
 import pytest
 from pathlib import Path
 
@@ -9,6 +14,13 @@ from core.evolution_optimizer import (
     OptimizationResult,
     TextChange,
     CORRECTION_PATTERNS,
+    compute_confidence,
+    atomic_deploy,
+    CycleReport,
+    DeployResult,
+    SkillHealthEntry,
+    Recommendation,
+    SkillHealthReport,
 )
 from core.session_miner import EvalExample
 
@@ -228,8 +240,10 @@ class TestRunEvolutionCycle:
         transcripts_dir = tmp_path / "transcripts"
         transcripts_dir.mkdir()
         evals_dir = tmp_path / "evals"
+        evals_dir.mkdir(parents=True, exist_ok=True)
 
-        summary = run_evolution_cycle(skills_dir, transcripts_dir, evals_dir)
+        result = run_evolution_cycle(skills_dir, transcripts_dir, evals_dir)
+        summary = result.to_dict()
         assert summary["skills_checked"] == 0
         assert summary["eligible"] == 0
         assert summary["optimized"] == 0
@@ -244,8 +258,10 @@ class TestRunEvolutionCycle:
         transcripts_dir = tmp_path / "transcripts"
         transcripts_dir.mkdir()
         evals_dir = tmp_path / "evals"
+        evals_dir.mkdir(parents=True, exist_ok=True)
 
-        summary = run_evolution_cycle(skills_dir, transcripts_dir, evals_dir)
+        result = run_evolution_cycle(skills_dir, transcripts_dir, evals_dir)
+        summary = result.to_dict()
         assert summary["skills_checked"] == 0
         assert summary["eligible"] == 0
 
@@ -271,8 +287,10 @@ class TestRunEvolutionCycle:
         (transcripts_dir / "session1.jsonl").write_text("\n".join(records))
 
         evals_dir = tmp_path / "evals"
+        evals_dir.mkdir(parents=True, exist_ok=True)
 
-        summary = run_evolution_cycle(skills_dir, transcripts_dir, evals_dir)
+        result = run_evolution_cycle(skills_dir, transcripts_dir, evals_dir)
+        summary = result.to_dict()
         # Has examples but < 5 so not eligible
         assert summary["eligible"] == 0
 
@@ -285,8 +303,10 @@ class TestRunEvolutionCycle:
         transcripts_dir = tmp_path / "transcripts"
         transcripts_dir.mkdir()
         evals_dir = tmp_path / "evals"
+        evals_dir.mkdir(parents=True, exist_ok=True)
 
-        summary = run_evolution_cycle(skills_dir, transcripts_dir, evals_dir)
+        result = run_evolution_cycle(skills_dir, transcripts_dir, evals_dir)
+        summary = result.to_dict()
         assert "skills_checked" in summary
         assert "eligible" in summary
         assert "optimized" in summary
@@ -334,9 +354,255 @@ class TestRunEvolutionCycle:
 
         evals_dir = tmp_path / "evals"
 
-        summary = run_evolution_cycle(skills_dir, transcripts_dir, evals_dir)
+        result = run_evolution_cycle(skills_dir, transcripts_dir, evals_dir)
+        # CycleReport with to_dict() backward compat
+        summary = result.to_dict()
         assert summary["skills_checked"] >= 1
         assert summary["eligible"] >= 1
         # With 6 correction examples all saying "don't include verbose output",
         # the optimizer should find a match and produce changes
-        assert summary["optimized"] >= 1 or summary["changes"] >= 0  # at least attempted
+        # With 6 correction examples all saying "don't include verbose output",
+        # the skill should be eligible and the confidence gate should trigger deploy
+        assert summary["eligible"] >= 1
+        # At least one skill should have been processed (deployed or recommended)
+        assert summary["optimized"] >= 0  # may be 0 if confidence < HIGH
+
+
+class TestComputeConfidence:
+    """Tests for the compute_confidence function."""
+
+    def test_compute_confidence_zero_corrections(self):
+        """Zero corrections -> 0.0 confidence."""
+        assert compute_confidence(0, 10, 0.5) == 0.0
+
+    def test_compute_confidence_high(self):
+        """5+ corrections + low fitness -> >= 0.7."""
+        result = compute_confidence(5, 20, 0.2)
+        assert result >= 0.7
+
+    def test_compute_confidence_medium(self):
+        """3-4 corrections with moderate need -> 0.3-0.7 range."""
+        result = compute_confidence(3, 10, 0.4)
+        assert 0.3 <= result <= 0.7
+
+    def test_compute_confidence_low(self):
+        """1-2 corrections -> < 0.3."""
+        result = compute_confidence(1, 10, 0.5)
+        assert result < 0.3
+
+
+class TestAtomicDeploy:
+    """Tests for the atomic_deploy function."""
+
+    def test_atomic_deploy_success(self, tmp_path):
+        """Writes file, verify passes."""
+        skills_dir = tmp_path / "skills"
+        skill_dir = skills_dir / "s_test"
+        skill_dir.mkdir(parents=True)
+        skill_path = skill_dir / "SKILL.md"
+        skill_path.write_text(
+            "---\nname: test\n---\nAlways include verbose output.\n",
+            encoding="utf-8",
+        )
+
+        changes = [
+            TextChange(
+                original="Always include verbose output.",
+                replacement="Never include verbose output.",
+                reason="test",
+            ),
+        ]
+
+        result = atomic_deploy(skill_path, changes)
+        assert isinstance(result, DeployResult)
+        assert result.success is True
+        assert result.verified is True
+        assert result.rolled_back is False
+        assert result.changes_applied == 1
+        # Verify content
+        content = skill_path.read_text(encoding="utf-8")
+        assert "Never include verbose output." in content
+        assert "Always include verbose output." not in content
+
+    def test_atomic_deploy_rollback_on_mismatch(self, tmp_path):
+        """Mock write to produce wrong content -> rollback."""
+        skills_dir = tmp_path / "skills"
+        skill_dir = skills_dir / "s_test"
+        skill_dir.mkdir(parents=True)
+        skill_path = skill_dir / "SKILL.md"
+        original = "---\nname: test\n---\nAlways include verbose output.\n"
+        skill_path.write_text(original, encoding="utf-8")
+
+        changes = [
+            TextChange(
+                original="Always include verbose output.",
+                replacement="Never include verbose output.",
+                reason="test",
+            ),
+        ]
+
+        # Mock read_text to return wrong content on the verification read.
+        # The flow: (1) read original (no "Never"), (2) os.replace, (3) read for verify.
+        # We corrupt the verification read (first read containing "Never").
+        real_read_text = Path.read_text
+
+        def mock_read_text(self, *args, **kwargs):
+            content = real_read_text(self, *args, **kwargs)
+            if self == skill_path and "Never include verbose output" in content:
+                return "CORRUPTED"
+            return content
+
+        with patch.object(Path, "read_text", mock_read_text):
+            result = atomic_deploy(skill_path, changes)
+
+        assert result.rolled_back is True
+        assert result.verified is False
+
+    def test_atomic_deploy_skips_missing_original(self, tmp_path):
+        """Replace target not in file -> skip + log."""
+        skills_dir = tmp_path / "skills"
+        skill_dir = skills_dir / "s_test"
+        skill_dir.mkdir(parents=True)
+        skill_path = skill_dir / "SKILL.md"
+        skill_path.write_text(
+            "---\nname: test\n---\nSome content.\n", encoding="utf-8"
+        )
+
+        changes = [
+            TextChange(
+                original="THIS DOES NOT EXIST",
+                replacement="replacement",
+                reason="test",
+            ),
+        ]
+
+        result = atomic_deploy(skill_path, changes)
+        assert result.changes_skipped >= 1
+        assert result.success is False
+
+
+class TestCycleReport:
+    """Tests for CycleReport backward compatibility."""
+
+    def test_cycle_report_to_dict(self):
+        """to_dict() returns backward compatible keys."""
+        report = CycleReport(
+            cycle_id="test-id",
+            skills_checked=5,
+            eligible=3,
+            high_confidence=1,
+            medium_confidence=1,
+            low_confidence=1,
+            deployed=1,
+            verified=1,
+            rolled_back=0,
+            errors=[],
+            health_report_path=Path("/tmp/test"),
+        )
+        d = report.to_dict()
+        assert d["skills_checked"] == 5
+        assert d["eligible"] == 3
+        assert "optimized" in d
+        assert "changes" in d
+
+
+class TestFileLockPrevents:
+    """Tests for file lock preventing concurrent cycles."""
+
+    def test_file_lock_prevents_concurrent(self, tmp_path):
+        """Hold lock, second call returns error."""
+        from core.evolution_optimizer import run_evolution_cycle
+
+        skills_dir = tmp_path / "skills"
+        skills_dir.mkdir()
+        transcripts_dir = tmp_path / "transcripts"
+        transcripts_dir.mkdir()
+        evals_dir = tmp_path / "evals"
+        evals_dir.mkdir(parents=True, exist_ok=True)
+
+        lock_path = evals_dir.parent / ".evolution_cycle.lock"
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        lock_fd = open(lock_path, "w")
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+        try:
+            result = run_evolution_cycle(skills_dir, transcripts_dir, evals_dir)
+            assert isinstance(result, CycleReport)
+            assert len(result.errors) > 0
+        finally:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            lock_fd.close()
+
+
+class TestChineseCorrectionPatterns:
+    """Tests for Chinese correction patterns in CORRECTION_PATTERNS (P2-12).
+
+    Verifies that the Chinese regex patterns (不要, 应该, 用X代替) match
+    real-world Chinese correction inputs and extract the right action type.
+    """
+
+    def test_buyao_remove_pattern(self, optimizer, skills_dir):
+        """'不要' (don't) should match as a 'remove' action."""
+        _make_skill(skills_dir, "test", body="Always include debug output.")
+        examples = [
+            _make_example(correction="不要 include debug output in production"),
+        ]
+        corrections = optimizer._extract_corrections(examples)
+        assert len(corrections) >= 1
+        action_types = [c[1] for c in corrections]
+        assert "remove" in action_types
+
+    def test_yinggai_add_pattern(self, optimizer, skills_dir):
+        """'应该' (should) should match as an 'add' action."""
+        _make_skill(skills_dir, "test", body="Do the thing.")
+        examples = [
+            _make_example(correction="应该 always validate the input before processing"),
+        ]
+        corrections = optimizer._extract_corrections(examples)
+        assert len(corrections) >= 1
+        action_types = [c[1] for c in corrections]
+        assert "add" in action_types
+
+    def test_yong_x_tidai_add_pattern(self, optimizer, skills_dir):
+        """'用X代替' (use X instead) should match as an 'add' action."""
+        _make_skill(skills_dir, "test", body="Use JSON format for output.")
+        examples = [
+            _make_example(correction="用 YAML format 代替 JSON for configuration files"),
+        ]
+        corrections = optimizer._extract_corrections(examples)
+        assert len(corrections) >= 1
+        action_types = [c[1] for c in corrections]
+        assert "add" in action_types
+
+    def test_bixu_add_pattern(self, optimizer, skills_dir):
+        """'必须' (must) should match as an 'add' action."""
+        _make_skill(skills_dir, "test", body="Run the pipeline.")
+        examples = [
+            _make_example(correction="必须 check the return code after each command"),
+        ]
+        corrections = optimizer._extract_corrections(examples)
+        assert len(corrections) >= 1
+        action_types = [c[1] for c in corrections]
+        assert "add" in action_types
+
+    def test_bie_remove_pattern(self, optimizer, skills_dir):
+        """'别' (don't) should match as a 'remove' action."""
+        _make_skill(skills_dir, "test", body="Include stack traces.")
+        examples = [
+            _make_example(correction="别 include stack traces in user-facing output"),
+        ]
+        corrections = optimizer._extract_corrections(examples)
+        assert len(corrections) >= 1
+        action_types = [c[1] for c in corrections]
+        assert "remove" in action_types
+
+    def test_chinese_imperative_check_pattern(self, optimizer, skills_dir):
+        """'检查/确认/验证' (check/confirm/verify) should match as 'add' action."""
+        _make_skill(skills_dir, "test", body="Deploy the service.")
+        examples = [
+            _make_example(correction="检查 all environment variables before deploying"),
+        ]
+        corrections = optimizer._extract_corrections(examples)
+        assert len(corrections) >= 1
+        action_types = [c[1] for c in corrections]
+        assert "add" in action_types

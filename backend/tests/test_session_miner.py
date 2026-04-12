@@ -158,10 +158,40 @@ class TestSaveEvals:
         path = miner.save_evals("test", examples)
         assert path.exists()
         lines = path.read_text().strip().split("\n")
-        assert len(lines) == 1
-        data = json.loads(lines[0])
+        # Line 0 is the _meta run separator, line 1+ are eval examples
+        assert len(lines) == 2
+        meta = json.loads(lines[0])
+        assert meta["_meta"] == "run_separator"
+        assert meta["count"] == 1
+        data = json.loads(lines[1])
         assert data["skill_invoked"] == "test"
         assert data["score"] == 1.0
+
+    def test_save_evals_appends(self, miner, miner_dirs):
+        """Subsequent save_evals calls append, not overwrite (Gap 3 fix)."""
+        _, _, evals = miner_dirs
+        ex1 = EvalExample(
+            user_prompt="first",
+            skill_invoked="test",
+            agent_actions="a1",
+            user_correction=None,
+            final_outcome="ok",
+            score=1.0,
+        )
+        ex2 = EvalExample(
+            user_prompt="second",
+            skill_invoked="test",
+            agent_actions="a2",
+            user_correction="fix it",
+            final_outcome="corrected",
+            score=0.5,
+        )
+        path1 = miner.save_evals("test", [ex1])
+        path2 = miner.save_evals("test", [ex2])
+        assert path1 == path2
+        lines = path2.read_text().strip().split("\n")
+        # 2 separators + 2 examples = 4 lines
+        assert len(lines) == 4
 
 
 class TestEvalExampleDataclass:

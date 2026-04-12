@@ -227,7 +227,24 @@ def pytest_configure(config):
 # ---------------------------------------------------------------------------
 
 def pytest_collection_modifyitems(config, items):
-    """Auto-mark tests: ``pbt`` for Hypothesis, ``slow`` for heavy tests."""
+    """Auto-mark tests: ``pbt`` for Hypothesis, ``slow`` for heavy tests.
+
+    Also warns (not errors) when >300 tests are collected without a -m
+    marker filter. This nudges human developers running pytest directly
+    to use marker filters for faster feedback loops. The PreToolUse hook
+    only protects Claude Code sessions; this covers manual runs.
+    """
+    _LARGE_COLLECTION_THRESHOLD = 300
+    if len(items) > _LARGE_COLLECTION_THRESHOLD:
+        marker_expr = config.getoption("-m", default="")
+        if not marker_expr:
+            import warnings
+            warnings.warn(
+                f"Collected {len(items)} tests without a -m marker filter. "
+                f"Consider using '-m \"not slow\"' or '-m \"not pbt\"' for faster runs.",
+                stacklevel=1,
+            )
+
     pbt_marker = pytest.mark.pbt
     slow_marker = pytest.mark.slow
     _SLOW_PATTERNS = {"stress", "e2e"}

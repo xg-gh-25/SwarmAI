@@ -289,14 +289,17 @@ class KnowledgeStore:
             return []
 
         # Escape special FTS5 characters and build query
-        # Strip FTS5 operators and escape quotes/parens to prevent OperationalError
+        # Strip FTS5 operators and escape quotes/parens to prevent OperationalError.
+        # Also strip FTS5 boolean keywords (NEAR, NOT, AND, OR) which would be
+        # interpreted as operators if passed unquoted.
+        _FTS5_KEYWORDS = {"AND", "OR", "NOT", "NEAR"}
         clean_words = []
         for word in query.split():
             if not word or word.startswith(("-", "+", "*")):
                 continue
             # Strip FTS5 special chars: " ( ) { } ^
             cleaned = re.sub(r'["\(\)\{\}\^]', '', word)
-            if cleaned:
+            if cleaned and cleaned.upper() not in _FTS5_KEYWORDS:
                 clean_words.append(cleaned)
         if not clean_words:
             return []
@@ -304,7 +307,8 @@ class KnowledgeStore:
         # ANY matching term is relevant. AND is too restrictive —
         # "daemon crash SIGKILL OOM" matches zero chunks with AND but
         # 356 with OR. FTS5 rank still boosts chunks matching more terms.
-        clean_query = " OR ".join(clean_words)
+        # Quote-wrap each term to prevent any residual operator interpretation.
+        clean_query = " OR ".join(f'"{w}"' for w in clean_words)
 
         try:
             rows = self._conn.execute(

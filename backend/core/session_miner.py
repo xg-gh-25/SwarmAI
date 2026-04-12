@@ -16,6 +16,7 @@ Performance notes (v1.4.0+):
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
@@ -245,35 +246,127 @@ class SessionMiner:
             skill = skill[2:]
         return skill
 
+    @staticmethod
+    def _is_strong_keyword_signal(user_text: str, kw_pattern: re.Pattern) -> bool:
+        """Check if a keyword match is a strong intent signal (not casual mention).
+
+        Returns True if:
+        - The keyword appears as the first word or in an imperative opening, OR
+        - The message is short (<80 chars) so it's likely a direct command, OR
+        - The keyword match is at the very start of the text.
+
+        This reduces false positives from casual mid-sentence mentions of
+        generic keywords like "pdf", "slack", "weather".
+        """
+        text = user_text.strip()
+        # Short messages are almost always direct commands
+        if len(text) < 80:
+            return True
+        # Keyword at start of message (imperative)
+        match = kw_pattern.search(text)
+        if match and match.start() < 20:
+            return True
+        return False
+
     def _extract_skill_invocations(
         self, records: list[dict], skill_name: str, keywords: list[str]
     ) -> list[EvalExample]:
         """Find sequences where a skill was invoked.
 
         Detects skill invocations two ways:
-        1. **Keyword match** -- user message text matches skill keywords.
-        2. **Tool use match** -- assistant message contains a ``tool_use`` block
-           with ``name == "Skill"`` and ``input.skill`` matching ``skill_name``.
+        1. **Tool use match** (Path 2, high precision) -- assistant message
+           contains a ``tool_use`` block with ``name == "Skill"`` and
+           ``input.skill`` matching ``skill_name``.
+        2. **Keyword match** (Path 1, lower precision) -- user message text
+           matches skill keywords. Only used when the keyword match is a
+           strong intent signal (first word, short message, or imperative).
+
+        Path 2 is preferred; Path 1 is supplementary. This prevents generic
+        keywords like "pdf", "slack", "weather" from triggering false matches
+        on casual mid-sentence mentions (Gap 5 fix).
 
         For correction detection, scans for the next *real* user message
         (skipping tool_result lists which are SDK-generated).
         """
         examples: list[EvalExample] = []
         seen_indices: set[int] = set()  # avoid duplicate examples
+        # Track which user-message indices were covered by a Path 2 match
+        # so Path 1 doesn't double-count them.
+        tool_use_covered: set[int] = set()
 
         kw_pattern = re.compile(
             r"\b(?:" + "|".join(re.escape(kw) for kw in keywords) + r")\b",
             re.IGNORECASE,
         )
 
+        # --- First pass: Path 2 (tool_use, high precision) ---
         i = 0
         while i < len(records):
             record = records[i]
+            if record.get("type") == "assistant" and i not in seen_indices:
+                msg = record.get("message", {})
+                content = msg.get("content", [])
+                if isinstance(content, list):
+                    for block in content:
+                        invoked = self._extract_skill_from_tool_use(block)
+                        if invoked == skill_name:
+                            # Find the preceding user message for prompt context
+                            user_text = ""
+                            user_idx = None
+                            for k in range(i - 1, -1, -1):
+                                if records[k].get("type") == "user":
+                                    user_text = self._get_message_content(records[k])
+                                    if user_text:
+                                        user_idx = k
+                                        break
 
-            # --- Path 1: keyword match in user message ---
-            if record.get("type") == "user" and i not in seen_indices:
+                            # Collect text from this + following assistant messages
+                            agent_parts = []
+                            for j in range(i, len(records)):
+                                if records[j].get("type") == "assistant":
+                                    text = self._get_message_content(records[j])
+                                    if text:
+                                        agent_parts.append(text)
+                                elif records[j].get("type") == "user":
+                                    uc = records[j].get("message", {}).get("content", "")
+                                    if self._is_tool_result_content(uc):
+                                        continue
+                                    break
+                                else:
+                                    break
+                            agent_text = " ".join(agent_parts).strip()
+
+                            user_correction, score = self._detect_correction(records, i + 1)
+
+                            examples.append(EvalExample(
+                                user_prompt=user_text,
+                                skill_invoked=skill_name,
+                                agent_actions=agent_text[:1500],
+                                user_correction=user_correction,
+                                final_outcome="completed" if score > 0 else "abandoned",
+                                score=score,
+                            ))
+                            seen_indices.add(i)
+                            if user_idx is not None:
+                                tool_use_covered.add(user_idx)
+                            break  # one example per assistant record
+            i += 1
+
+        # --- Second pass: Path 1 (keyword match, filtered for strong signals) ---
+        i = 0
+        while i < len(records):
+            record = records[i]
+            if (
+                record.get("type") == "user"
+                and i not in seen_indices
+                and i not in tool_use_covered
+            ):
                 user_text = self._get_message_content(record)
-                if user_text and kw_pattern.search(user_text):
+                if (
+                    user_text
+                    and kw_pattern.search(user_text)
+                    and self._is_strong_keyword_signal(user_text, kw_pattern)
+                ):
                     # Collect assistant response(s) immediately following
                     agent_text = ""
                     j = i + 1
@@ -295,54 +388,6 @@ class SessionMiner:
                     seen_indices.add(i)
                     i = j + 1 if j < len(records) else i + 1
                     continue
-
-            # --- Path 2: tool_use block in assistant message ---
-            if record.get("type") == "assistant" and i not in seen_indices:
-                msg = record.get("message", {})
-                content = msg.get("content", [])
-                if isinstance(content, list):
-                    for block in content:
-                        invoked = self._extract_skill_from_tool_use(block)
-                        if invoked == skill_name:
-                            # Find the preceding user message for prompt context
-                            user_text = ""
-                            for k in range(i - 1, -1, -1):
-                                if records[k].get("type") == "user":
-                                    user_text = self._get_message_content(records[k])
-                                    if user_text:
-                                        break
-
-                            # Collect text from this + following assistant messages
-                            # (skill output often spans multiple assistant turns
-                            # separated by tool_result round-trips)
-                            agent_parts = []
-                            for j in range(i, len(records)):
-                                if records[j].get("type") == "assistant":
-                                    text = self._get_message_content(records[j])
-                                    if text:
-                                        agent_parts.append(text)
-                                elif records[j].get("type") == "user":
-                                    uc = records[j].get("message", {}).get("content", "")
-                                    if self._is_tool_result_content(uc):
-                                        continue  # skip SDK tool_result, keep scanning
-                                    break  # real user message = end of agent turn
-                                else:
-                                    break
-                            agent_text = " ".join(agent_parts).strip()
-
-                            user_correction, score = self._detect_correction(records, i + 1)
-
-                            examples.append(EvalExample(
-                                user_prompt=user_text,
-                                skill_invoked=skill_name,
-                                agent_actions=agent_text[:1500],
-                                user_correction=user_correction,
-                                final_outcome="completed" if score > 0 else "abandoned",
-                                score=score,
-                            ))
-                            seen_indices.add(i)
-                            break  # one example per assistant record
-
             i += 1
 
         return examples
@@ -388,17 +433,32 @@ class SessionMiner:
         self._scrub_examples(examples)
         return examples
 
+    @staticmethod
+    def _example_dedup_key(ex: EvalExample) -> str:
+        """Compute a content-based dedup key for an EvalExample.
+
+        Uses a hash of (user_prompt[:200], skill_invoked, user_correction[:200])
+        to detect duplicate examples across transcripts (e.g. session resume
+        creates new .jsonl files for the same conversation).
+        """
+        prompt_prefix = (ex.user_prompt or "")[:200]
+        correction_prefix = (ex.user_correction or "")[:200]
+        raw = f"{prompt_prefix}|{ex.skill_invoked}|{correction_prefix}"
+        return hashlib.md5(raw.encode("utf-8")).hexdigest()
+
     def mine_all(self, max_age_days: int = MAX_AGE_DAYS) -> dict[str, list[EvalExample]]:
         """Mine for all skills with **single-pass I/O** over transcripts.
 
-        Previous approach: O(skills × files) file reads — each transcript
-        read once per skill (56 skills × 1135 files = 63k reads of 632 MB).
-        Now: O(files) file reads — each transcript parsed once, then matched
-        against all skill keywords in memory. Matching is still O(files × skills)
+        Previous approach: O(skills x files) file reads -- each transcript
+        read once per skill (56 skills x 1135 files = 63k reads of 632 MB).
+        Now: O(files) file reads -- each transcript parsed once, then matched
+        against all skill keywords in memory. Matching is still O(files x skills)
         but the expensive I/O is eliminated.
 
-        New approach: O(files) — each transcript parsed once, all skill
-        patterns matched against the parsed records.
+        Cross-transcript dedup (Gap 4): uses content hash of
+        (user_prompt[:200], skill_invoked, user_correction[:200]) to prevent
+        the same correction from being counted twice when session resume
+        creates new .jsonl files for the same conversation.
 
         Returns {skill_name: [examples]}.
         """
@@ -415,6 +475,7 @@ class SessionMiner:
 
         # 2. Single pass: parse each transcript once, extract for all skills
         results: dict[str, list[EvalExample]] = {}
+        seen_hashes: set[str] = set()  # Cross-transcript dedup (Gap 4)
         transcripts = self._iter_transcripts(max_age_days)
         logger.info(
             "SessionMiner: mining %d transcripts for %d skills",
@@ -433,12 +494,18 @@ class SessionMiner:
                 examples = self._extract_skill_invocations(
                     records, skill_name, keywords
                 )
-                if examples:
-                    results.setdefault(skill_name, []).extend(examples)
+                for ex in examples:
+                    h = self._example_dedup_key(ex)
+                    if h not in seen_hashes:
+                        seen_hashes.add(h)
+                        results.setdefault(skill_name, []).append(ex)
 
         # 3. Scrub secrets across all results
         for examples in results.values():
             self._scrub_examples(examples)
+
+        # Stash transcript count for callers that need it (e.g. SkillHealthReport)
+        self._last_transcripts_scanned = len(transcripts)
 
         return results
 
@@ -481,12 +548,24 @@ class SessionMiner:
     def save_evals(self, skill_name: str, examples: list[EvalExample]) -> Path:
         """Save eval examples to skill_evals/{skill_name}.jsonl.
 
+        Appends to the existing file (preserving history across cycles)
+        with a timestamped separator comment so runs are distinguishable.
         Fields are capped at MAX_FIELD_CHARS to prevent binary content
         from bloating eval files.
         """
+        from datetime import datetime, timezone
+
         self._evals_dir.mkdir(parents=True, exist_ok=True)
         path = self._evals_dir / f"{skill_name}.jsonl"
-        with open(path, "w") as f:
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        with open(path, "a") as f:
+            # Write a separator comment (JSON line with _meta key) so
+            # runs are distinguishable when reading the file.
+            f.write(json.dumps({
+                "_meta": "run_separator",
+                "timestamp": ts,
+                "count": len(examples),
+            }) + "\n")
             for ex in examples:
                 d = asdict(ex)
                 for key in ("user_prompt", "agent_actions", "final_outcome", "user_correction"):

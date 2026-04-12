@@ -349,12 +349,15 @@ class TranscriptStore:
 
         results: list[dict] = []
         try:
-            # Tokenize into individual words, sanitize FTS5 metacharacters
+            # Tokenize into individual words, sanitize FTS5 metacharacters.
+            # Also strip FTS5 boolean keywords (NEAR, NOT, AND, OR) which would
+            # be interpreted as operators if passed unquoted.
+            _FTS5_KEYWORDS = {"AND", "OR", "NOT", "NEAR"}
             words = query.split()
             clean_words = []
             for w in words:
                 w = re.sub(r'["\(\)\{\}\^\*\-\+]', '', w).strip()
-                if w and len(w) > 1:
+                if w and len(w) > 1 and w.upper() not in _FTS5_KEYWORDS:
                     clean_words.append(w)
             if not clean_words:
                 return results
@@ -503,7 +506,8 @@ def sync_transcript_index(
             stats["errors"] += 1
             continue
 
-        # Parse and chunk
+        # Parse and chunk — wrapped in an explicit transaction so that either
+        # ALL chunks for a session are indexed, or NONE are (crash safety).
         try:
             turns = parse_transcript(jsonl_path)
             if not turns:
@@ -516,24 +520,39 @@ def sync_transcript_index(
                 session_id=session_id,
             )
 
-            for chunk in chunks:
-                embedding = None
-                if embed_fn:
-                    embedding = embed_fn(chunk["content"])
+            # Use a savepoint for atomic per-file indexing.  Savepoints work
+            # regardless of the connection's autocommit / isolation_level
+            # setting (unlike bare BEGIN which conflicts with Python's
+            # implicit transaction management).  If the process crashes or
+            # an exception occurs mid-file, the savepoint is rolled back,
+            # preventing partially indexed sessions.
+            _sp = f"sp_idx_{hashlib.md5(session_id.encode()).hexdigest()[:8]}"
+            store._conn.execute(f"SAVEPOINT {_sp}")
+            try:
+                for chunk in chunks:
+                    embedding = None
+                    if embed_fn:
+                        embedding = embed_fn(chunk["content"])
 
-                store.upsert_chunk(
-                    session_id=chunk["session_id"],
-                    source_file=chunk["source_file"],
-                    chunk_index=chunk["chunk_index"],
-                    role=chunk["role"],
-                    content=chunk["content"],
-                    content_hash=chunk["content_hash"],
-                    metadata=chunk.get("metadata", "{}"),
-                    embedding=embedding,
-                )
-                stats["chunks_added"] += 1
+                    store.upsert_chunk(
+                        session_id=chunk["session_id"],
+                        source_file=chunk["source_file"],
+                        chunk_index=chunk["chunk_index"],
+                        role=chunk["role"],
+                        content=chunk["content"],
+                        content_hash=chunk["content_hash"],
+                        metadata=chunk.get("metadata", "{}"),
+                        embedding=embedding,
+                    )
+                    stats["chunks_added"] += 1
 
-            store.commit()  # Batch commit per file, not per chunk
+                store._conn.execute(f"RELEASE {_sp}")
+            except Exception:
+                store._conn.execute(f"ROLLBACK TO {_sp}")
+                store._conn.execute(f"RELEASE {_sp}")
+                raise
+
+            store.commit()  # Persist after each successfully indexed file
             stats["files_indexed"] += 1
 
         except Exception as exc:

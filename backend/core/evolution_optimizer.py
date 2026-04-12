@@ -6,22 +6,43 @@ Uses heuristic-based optimization (correction-pattern matching and
 term-overlap fitness scoring). Designed with extensible interfaces for
 future ML-based optimization if needed.
 
+Evolution Pipeline v2 — Production-grade redesign with:
+- Confidence-gated actuation (HIGH=deploy, MED=recommend, LOW=log)
+- Atomic deploy with verification and rollback
+- Process-level file lock to prevent concurrent cycles
+- SkillHealthReport persisted as skill_health.json
+
 Key public symbols:
 - ``OptimizationResult``  -- Result of optimization attempt.
 - ``TextChange``          -- A single text replacement.
 - ``EvolutionOptimizer``  -- Orchestrates skill optimization.
 - ``run_evolution_cycle`` -- Convenience function for full mine-score-optimize cycle.
+- ``compute_confidence``  -- Confidence score from corrections + fitness.
+- ``atomic_deploy``       -- Atomic deploy with verify + rollback.
+- ``CycleReport``         -- Structured return from run_evolution_cycle.
+- ``DeployResult``        -- Outcome of an atomic deploy.
+- ``SkillHealthEntry``    -- Per-skill health data.
+- ``Recommendation``      -- Proposed change with evidence.
+- ``SkillHealthReport``   -- Full cycle report.
 """
 from __future__ import annotations
 
+import fcntl
 import json
 import logging
+import os
 import re
+import uuid
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+# Confidence thresholds
+HIGH_CONFIDENCE = 0.7
+MED_CONFIDENCE = 0.3
 
 
 @dataclass
@@ -39,6 +60,275 @@ class OptimizationResult:
     changes: list[TextChange]
     accepted: bool            # True if passed constraint gates
     reason: str               # Why accepted/rejected
+
+
+@dataclass
+class Recommendation:
+    """Proposed change with evidence."""
+    skill_name: str
+    changes: list[TextChange]
+    evidence_summary: list[str]       # Human-readable correction summaries (max 5)
+    original_score: float
+    estimated_score: float
+    constraint_check: str             # "passed" | reason for failure
+
+
+@dataclass
+class SkillHealthEntry:
+    """Per-skill health data."""
+    skill_name: str
+    total_examples: int
+    correction_count: int
+    correction_rate: float
+    fitness_score: float
+    confidence: float
+    action: str                       # "deploy" | "recommend" | "log" | "skip"
+    recommendation: Recommendation | None = None
+    trend: str | None = None          # "improving" | "stable" | "degrading" | None
+
+
+@dataclass
+class DeployResult:
+    """Atomic deploy outcome."""
+    skill_name: str
+    success: bool
+    changes_applied: int
+    changes_skipped: int
+    verified: bool
+    rolled_back: bool
+    error: str | None = None
+
+
+@dataclass
+class SkillHealthReport:
+    """Full cycle report."""
+    timestamp: str
+    cycle_id: str
+    duration_seconds: float
+    transcripts_scanned: int
+    skills: list[SkillHealthEntry] = field(default_factory=list)
+    deployments: list[DeployResult] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+
+
+@dataclass
+class CycleReport:
+    """Replaces the old dict return value."""
+    cycle_id: str
+    skills_checked: int
+    eligible: int
+    high_confidence: int = 0
+    medium_confidence: int = 0
+    low_confidence: int = 0
+    deployed: int = 0
+    verified: int = 0
+    rolled_back: int = 0
+    errors: list[str] = field(default_factory=list)
+    health_report_path: Path = field(default_factory=lambda: Path("."))
+
+    def to_dict(self) -> dict:
+        """Backward-compatible dict with original keys plus new ones."""
+        return {
+            "skills_checked": self.skills_checked,
+            "eligible": self.eligible,
+            "optimized": self.deployed,
+            "changes": self.deployed,  # backward compat: changes = deployed count
+            "high_confidence": self.high_confidence,
+            "medium_confidence": self.medium_confidence,
+            "low_confidence": self.low_confidence,
+            "deployed": self.deployed,
+            "verified": self.verified,
+            "rolled_back": self.rolled_back,
+            "errors": self.errors,
+        }
+
+
+def compute_confidence(
+    n_corrections: int,
+    n_examples: int,
+    avg_fitness: float,
+) -> float:
+    """Compute confidence score for skill optimization.
+
+    Three signals:
+      evidence_strength: raw correction count (are there enough examples?)
+      correction_density: correction_rate = n_corrections / n_examples
+        (high rate = consistent problem, not a one-off)
+      need_signal: how low is the fitness score?
+
+    Final confidence = evidence × max(density_boost, need_signal)
+    where density_boost amplifies confidence when correction rate is high
+    (>30% of invocations get corrected = strong signal).
+    """
+    if n_corrections == 0:
+        return 0.0
+
+    # Evidence strength (step function on raw count)
+    if n_corrections >= 10:
+        evidence = 1.0
+    elif n_corrections >= 5:
+        evidence = 0.8
+    elif n_corrections >= 3:
+        evidence = 0.5
+    else:
+        evidence = 0.2
+
+    # Correction density — high rate amplifies confidence
+    correction_rate = n_corrections / max(n_examples, 1)
+    if correction_rate > 0.5:
+        density_boost = 0.9
+    elif correction_rate > 0.3:
+        density_boost = 0.6
+    elif correction_rate > 0.15:
+        density_boost = 0.3
+    else:
+        density_boost = 0.0
+
+    # Need signal (how low is fitness?)
+    if avg_fitness > 0.7:
+        need = 0.1
+    elif avg_fitness > 0.5:
+        need = 0.4
+    elif avg_fitness > 0.3:
+        need = 0.7
+    else:
+        need = 1.0
+
+    # Combine: evidence × max(density, need)
+    # density_boost lets high correction rates push confidence up
+    # even when fitness score is moderate
+    return round(evidence * max(density_boost, need), 2)
+
+
+def _extract_body(content: str) -> tuple[str, str]:
+    """Split YAML frontmatter from body. Returns (frontmatter, body).
+
+    frontmatter includes the --- delimiters; body is everything after.
+    If no frontmatter, frontmatter is empty string.
+    """
+    parts = content.split("---", 2)
+    if len(parts) >= 3:
+        frontmatter = parts[0] + "---" + parts[1] + "---"
+        body = parts[2]
+        return frontmatter, body
+    return "", content
+
+
+def _rebuild_content(original_content: str, new_body: str) -> str:
+    """Rebuild full file content from original (for frontmatter) and new body."""
+    frontmatter, _ = _extract_body(original_content)
+    return frontmatter + new_body if frontmatter else new_body
+
+
+def atomic_deploy(
+    skill_path: Path,
+    changes: list[TextChange],
+) -> DeployResult:
+    """Atomically deploy changes to SKILL.md with verification.
+
+    Safety guarantees:
+    1. Original preserved in .bak until NEXT successful cycle
+    2. Write via tmp + os.replace (atomic on POSIX)
+    3. Post-write verification: re-read and confirm changes applied
+    4. On any failure: rollback from .bak
+    """
+    backup_path = skill_path.with_suffix(".md.bak")
+    tmp_path = skill_path.with_suffix(".md.tmp")
+
+    try:
+        # 1. Backup
+        original_content = skill_path.read_text(encoding="utf-8")
+        backup_path.write_text(original_content, encoding="utf-8")
+
+        # 2. Apply changes to body
+        _frontmatter, body = _extract_body(original_content)
+        changes_applied = 0
+        changes_skipped = 0
+
+        for change in changes:
+            if change.original:
+                if change.original not in body:
+                    logger.warning(
+                        "Skipping change: original text not found in %s: %r",
+                        skill_path.name, change.original[:80],
+                    )
+                    changes_skipped += 1
+                    continue
+                body = body.replace(change.original, change.replacement, 1)
+                changes_applied += 1
+            elif change.replacement:
+                body = body.rstrip() + "\n" + change.replacement + "\n"
+                changes_applied += 1
+
+        if changes_applied == 0:
+            # Clean up backup — it's identical to original, no rollback needed
+            backup_path.unlink(missing_ok=True)
+            return DeployResult(
+                skill_name=skill_path.parent.name,
+                success=False,
+                changes_applied=0,
+                changes_skipped=changes_skipped,
+                verified=False,
+                rolled_back=False,
+                error="No changes could be applied -- all originals not found",
+            )
+
+        new_content = _rebuild_content(original_content, body)
+
+        # 3. Write to tmp file
+        tmp_path.write_text(new_content, encoding="utf-8")
+
+        # 4. Atomic replace
+        os.replace(str(tmp_path), str(skill_path))
+
+        # 5. Verify: re-read and confirm
+        verified_content = skill_path.read_text(encoding="utf-8")
+        if verified_content != new_content:
+            logger.error(
+                "Post-write verification failed for %s -- rolling back",
+                skill_path,
+            )
+            os.replace(str(backup_path), str(skill_path))
+            return DeployResult(
+                skill_name=skill_path.parent.name,
+                success=False,
+                changes_applied=changes_applied,
+                changes_skipped=changes_skipped,
+                verified=False,
+                rolled_back=True,
+                error="Post-write content mismatch",
+            )
+
+        return DeployResult(
+            skill_name=skill_path.parent.name,
+            success=True,
+            changes_applied=changes_applied,
+            changes_skipped=changes_skipped,
+            verified=True,
+            rolled_back=False,
+            error=None,
+        )
+
+    except OSError as exc:
+        # Rollback on any I/O error
+        if backup_path.exists():
+            try:
+                os.replace(str(backup_path), str(skill_path))
+            except OSError:
+                pass
+        return DeployResult(
+            skill_name=skill_path.parent.name,
+            success=False,
+            changes_applied=0,
+            changes_skipped=0,
+            verified=False,
+            rolled_back=backup_path.exists(),
+            error=str(exc),
+        )
+    finally:
+        # Clean up tmp if it still exists
+        if tmp_path.exists():
+            tmp_path.unlink(missing_ok=True)
 
 
 CORRECTION_PATTERNS = [
@@ -64,14 +354,14 @@ CORRECTION_PATTERNS = [
 def _extract_correction_summary(correction_text: str) -> str | None:
     """Extract a concise actionable summary from an unstructured correction.
 
-    Picks the first meaningful sentence (15-120 chars, not code/agent talk).
+    Picks the first meaningful sentence (15-200 chars, not code/agent talk).
     Returns None if no suitable sentence found.
     """
     # Split by common sentence boundaries
     sentences = re.split(r"[.!?。！？\n]+", correction_text)
     for sentence in sentences:
         s = sentence.strip()
-        if len(s) < 15 or len(s) > 120:
+        if len(s) < 15 or len(s) > 200:
             continue
         lower = s.lower()
         # Skip code/path references
@@ -187,10 +477,13 @@ class EvolutionOptimizer:
         if len(text.strip()) < 15:
             return False
 
-        # Truncated mid-word (no sentence-ending punctuation and ends abruptly)
+        # Trailing fragment: if the text ends with an alphabetic char (no
+        # sentence-ending punctuation) and the final word is very short (<3
+        # chars), it likely got cut off mid-phrase by the regex capture group
+        # length limit.  This catches "should always vali" but allows
+        # "should always validate input first".
         stripped = text.strip()
         if stripped and stripped[-1].isalpha() and len(stripped) > 30:
-            # Last word incomplete — check if it ends without natural boundary
             last_word = stripped.split()[-1] if stripped.split() else ""
             if len(last_word) < 3:
                 return False
@@ -310,13 +603,13 @@ class EvolutionOptimizer:
         )
 
     def deploy_optimization(self, result: OptimizationResult) -> bool:
-        """Write accepted optimization to SKILL.md and log to EVOLUTION.md.
+        """Write accepted optimization to SKILL.md and log to EVOLUTION.md + CHANGELOG.
 
-        1. Read current SKILL.md (full content including YAML frontmatter).
-        2. Apply changes to body text (below frontmatter).
-        3. Write back to file.
-        4. Log to EVOLUTION.md K-entry (if EVOLUTION.md exists).
-        5. Return True if deployed successfully.
+        .. deprecated:: v2
+            Production path uses ``atomic_deploy()`` (module-level function) which
+            provides atomic writes, post-deploy verification, and rollback.
+            This method is retained for backward compat and unit test coverage
+            of the text manipulation logic.
         """
         if not result.accepted or not result.changes:
             return False
@@ -383,6 +676,9 @@ class EvolutionOptimizer:
         # Log to EVOLUTION.md if it exists
         self._log_to_evolution(result)
 
+        # NOTE: v2 pipeline uses _write_cycle_changelog (module-level, fcntl-locked).
+        # This deprecated method does NOT write to changelog to avoid unlocked writes.
+
         return True
 
     def _log_to_evolution(self, result: OptimizationResult) -> None:
@@ -438,51 +734,71 @@ class EvolutionOptimizer:
             logger.debug("Failed to log to EVOLUTION.md: %s", exc)
 
 
-def run_evolution_cycle(skills_dir: Path, transcripts_dir: Path, evals_dir: Path) -> dict:
-    """Run a full evolution cycle: mine -> score -> optimize for all eligible skills.
+    # _log_to_changelog removed in v2 — was an unlocked write to
+    # EVOLUTION_CHANGELOG.jsonl. The v2 pipeline uses module-level
+    # _write_cycle_changelog() which has proper fcntl locking.
 
-    This is the primary entry point for the ``s_job-manager`` scheduled job
-    system and for manual invocation from the CLI or a hook.
 
-    Returns summary dict with keys:
-        ``skills_checked``, ``eligible``, ``optimized``, ``changes``.
+def run_evolution_cycle(skills_dir: Path, transcripts_dir: Path, evals_dir: Path) -> CycleReport:
+    """Run a full evolution cycle with exclusive file lock.
 
-    Usage (scheduled job via ``s_job-manager``)::
+    Evolution Pipeline v2: MINE -> ASSESS -> ACT -> AUDIT.
 
-        from core.evolution_optimizer import run_evolution_cycle
-        result = run_evolution_cycle(
-            skills_dir=Path("backend/skills"),
-            transcripts_dir=Path.home() / ".claude" / "projects",
-            evals_dir=Path.home() / ".swarm-ai/SwarmWS/.context/SkillEvals",
+    Returns CycleReport (use .to_dict() for backward-compatible dict).
+
+    Only one cycle can run at a time across all triggers
+    (session hook, scheduled job, manual invocation).
+    """
+    cycle_id = str(uuid.uuid4())[:8]
+    lock_path = evals_dir.parent / ".evolution_cycle.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Acquire exclusive file lock (non-blocking)
+    lock_fd = None
+    try:
+        lock_fd = open(lock_path, "w")
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except (OSError, BlockingIOError):
+        logger.info("Evolution cycle already running -- skipping")
+        if lock_fd is not None:
+            lock_fd.close()
+        return CycleReport(
+            cycle_id=cycle_id,
+            skills_checked=0,
+            eligible=0,
+            errors=["Concurrent cycle in progress -- lock held"],
         )
 
-    Usage (manual one-off from backend/)::
+    try:
+        return _run_evolution_cycle_locked(skills_dir, transcripts_dir, evals_dir, cycle_id)
+    finally:
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        except OSError:
+            pass
+        lock_fd.close()
 
-        python -c "
-        from pathlib import Path
-        from core.evolution_optimizer import run_evolution_cycle
-        print(run_evolution_cycle(
-            Path('skills'),
-            Path.home() / '.claude/projects',
-            Path.home() / '.swarm-ai/SwarmWS/.context/SkillEvals',
-        ))
-        "
 
-    Steps:
-    1. Creates SessionMiner, mines all skills for eval examples.
-    2. For each eligible skill (>=5 examples), runs SkillFitnessEvaluator.
-    3. For skills scoring < 0.7, runs EvolutionOptimizer.
-    4. Returns summary.
-    """
+def _run_evolution_cycle_locked(
+    skills_dir: Path,
+    transcripts_dir: Path,
+    evals_dir: Path,
+    cycle_id: str,
+) -> CycleReport:
+    """Run evolution cycle phases under the lock."""
     from core.session_miner import SessionMiner
     from core.skill_fitness import SkillFitnessEvaluator
+
+    start_time = time.monotonic()
+    errors: list[str] = []
+    health_entries: list[SkillHealthEntry] = []
+    deploy_results: list[DeployResult] = []
 
     miner = SessionMiner(transcripts_dir, skills_dir, evals_dir)
     optimizer = EvolutionOptimizer(skills_dir)
     evaluator = SkillFitnessEvaluator()
 
-    # Consult SkillMetrics for priority candidates (skills with high
-    # correction rates or low success rates from actual usage data).
+    # Consult SkillMetrics for priority candidates
     priority_skills: set[str] = set()
     try:
         from core.skill_metrics import SkillMetricsStore
@@ -500,72 +816,298 @@ def run_evolution_cycle(skills_dir: Path, transcripts_dir: Path, evals_dir: Path
             if priority_skills:
                 logger.info("SkillMetrics priority candidates: %s", priority_skills)
     except Exception:
-        pass  # Graceful degradation if metrics not available
+        pass
 
-    # Step 1: Mine all skills
+    # ── Phase 1: MINE (unchanged) ──
     all_examples = miner.mine_all()
     skills_checked = len(all_examples)
+    transcripts_scanned = getattr(miner, "_last_transcripts_scanned", 0)
 
-    # Step 2: Filter eligible (>=5 examples), prioritize metrics candidates
+    # Filter eligible (>=5 examples, or >=3 for priority)
     eligible_skills: list[str] = []
     for name, examples in all_examples.items():
         if len(examples) >= 5:
             eligible_skills.append(name)
         elif name in priority_skills and len(examples) >= 3:
-            # Lower threshold for metrics-flagged skills
             eligible_skills.append(name)
 
-    # Step 3: Score and optimize
-    optimized_count = 0
-    total_changes = 0
-    results: list[OptimizationResult] = []
+    # ── Phase 2: ASSESS ──
+    high_count = 0
+    med_count = 0
+    low_count = 0
+
+    skill_assessments: list[tuple[str, float, float, list, OptimizationResult | None]] = []
 
     for skill_name in eligible_skills:
         examples = all_examples[skill_name]
 
-        # Score current fitness using correction examples.
-        # Filter out examples with empty/trivial agent_actions — scoring
-        # (expected, "") always yields ~0.0 which triggers false optimizations.
+        # Count corrections
+        correction_count = sum(1 for ex in examples if ex.user_correction)
+
+        # Score fitness
         score_pairs = []
         for ex in examples:
             if ex.user_correction and len(ex.agent_actions.strip()) > 20:
                 score_pairs.append((ex.user_correction, ex.agent_actions))
         avg_score = evaluator.score_batch(score_pairs) if score_pairs else 1.0
 
-        # Adaptive threshold: require more evidence (lower threshold) when
-        # example count is low to avoid noisy optimizations on sparse data.
-        # 5 examples → 0.5, 10 examples → 0.6, 20+ examples → 0.7
-        n = len(score_pairs)
-        threshold = min(0.7, 0.4 + 0.015 * n) if n > 0 else 0.7
+        # Compute confidence
+        confidence = compute_confidence(correction_count, len(examples), avg_score)
 
-        if avg_score < threshold:
-            result = optimizer.optimize_skill(skill_name, examples)
-            results.append(result)
-            if result.accepted and result.changes:
-                # Deploy the accepted changes to SKILL.md
-                deployed = optimizer.deploy_optimization(result)
-                if deployed:
-                    optimized_count += 1
-                    total_changes += len(result.changes)
+        # Determine action
+        if confidence >= HIGH_CONFIDENCE:
+            action = "deploy"
+            high_count += 1
+        elif confidence >= MED_CONFIDENCE:
+            action = "recommend"
+            med_count += 1
+        else:
+            action = "log"
+            low_count += 1
+
+        # Generate recommendation if confidence is at least LOW
+        opt_result = None
+        recommendation = None
+        if correction_count > 0:
+            opt_result = optimizer.optimize_skill(skill_name, examples)
+            if opt_result.changes:
+                evidence = []
+                for ex in examples:
+                    if ex.user_correction:
+                        evidence.append(ex.user_correction[:100])
+                        if len(evidence) >= 5:
+                            break
+                recommendation = Recommendation(
+                    skill_name=skill_name,
+                    changes=opt_result.changes,
+                    evidence_summary=evidence,
+                    original_score=opt_result.original_score,
+                    estimated_score=opt_result.optimized_score,
+                    constraint_check=opt_result.reason,
+                )
+
+        health_entry = SkillHealthEntry(
+            skill_name=skill_name,
+            total_examples=len(examples),
+            correction_count=correction_count,
+            correction_rate=correction_count / max(len(examples), 1),
+            fitness_score=avg_score,
+            confidence=confidence,
+            action=action,
+            recommendation=recommendation,
+            trend=None,  # Future: compare with previous run
+        )
+        health_entries.append(health_entry)
+        skill_assessments.append((skill_name, confidence, avg_score, examples, opt_result))
+
+    # ── Phase 3: ACT (confidence-gated) ──
+    deployed_count = 0
+    verified_count = 0
+    rolled_back_count = 0
+
+    for skill_name, confidence, avg_score, examples, opt_result in skill_assessments:
+        if confidence >= HIGH_CONFIDENCE and opt_result and opt_result.accepted and opt_result.changes:
+            # HIGH: atomic deploy
+            skill_path = skills_dir / f"s_{skill_name}" / "SKILL.md"
+            if skill_path.exists():
+                deploy_result = atomic_deploy(skill_path, opt_result.changes)
+                deploy_results.append(deploy_result)
+                if deploy_result.success:
+                    deployed_count += 1
+                    if deploy_result.verified:
+                        verified_count += 1
                     # Save eval examples for audit trail
                     miner.save_evals(skill_name, examples)
                     logger.info(
-                        "Evolution cycle: optimized and deployed %s "
-                        "(score %.2f -> %.2f, %d changes)",
-                        skill_name, result.original_score, result.optimized_score,
-                        len(result.changes),
+                        "Evolution cycle: deployed %s (confidence=%.2f, "
+                        "score %.2f -> %.2f, %d changes)",
+                        skill_name, confidence,
+                        opt_result.original_score, opt_result.optimized_score,
+                        deploy_result.changes_applied,
+                    )
+                elif deploy_result.rolled_back:
+                    rolled_back_count += 1
+                    errors.append(
+                        f"Deploy rolled back for {skill_name}: {deploy_result.error}"
                     )
                 else:
-                    logger.warning(
-                        "Evolution cycle: optimization accepted but deploy failed for %s",
-                        skill_name,
+                    errors.append(
+                        f"Deploy failed for {skill_name}: {deploy_result.error}"
                     )
+        elif confidence >= MED_CONFIDENCE:
+            # MED: recommendation surfaced in skill_health.json
+            logger.info(
+                "Evolution cycle: recommending changes for %s (confidence=%.2f)",
+                skill_name, confidence,
+            )
+        else:
+            # LOW: log only
+            logger.debug(
+                "Evolution cycle: logging %s (confidence=%.2f)",
+                skill_name, confidence,
+            )
 
-    summary = {
-        "skills_checked": skills_checked,
-        "eligible": len(eligible_skills),
-        "optimized": optimized_count,
-        "changes": total_changes,
-    }
-    logger.info("Evolution cycle complete: %s", summary)
-    return summary
+    # ── Phase 4: AUDIT ──
+    duration = time.monotonic() - start_time
+
+    health_report = SkillHealthReport(
+        timestamp=datetime.now(timezone.utc).isoformat(),
+        cycle_id=cycle_id,
+        duration_seconds=round(duration, 2),
+        transcripts_scanned=transcripts_scanned,
+        skills=health_entries,
+        deployments=deploy_results,
+        errors=errors,
+    )
+
+    # Write skill_health.json atomically — resolve relative to evals_dir
+    # evals_dir is typically .context/SkillEvals, so parent is .context/
+    health_json_path = evals_dir.parent / "skill_health.json"
+    _write_skill_health(health_json_path, health_report)
+
+    # Write changelog
+    _write_cycle_changelog(evals_dir, health_report, deployed_count, verified_count, rolled_back_count)
+
+    # Write EVOLUTION.md for successful deployments
+    if deployed_count > 0:
+        for deploy_result in deploy_results:
+            if deploy_result.success:
+                # Find the matching opt_result
+                for sn, conf, avg, exs, opt_r in skill_assessments:
+                    if sn == deploy_result.skill_name.removeprefix("s_") and opt_r:
+                        optimizer._log_to_evolution(opt_r)
+                        break
+
+    health_report_path = evals_dir.parent / "skill_health.json"
+
+    report = CycleReport(
+        cycle_id=cycle_id,
+        skills_checked=skills_checked,
+        eligible=len(eligible_skills),
+        high_confidence=high_count,
+        medium_confidence=med_count,
+        low_confidence=low_count,
+        deployed=deployed_count,
+        verified=verified_count,
+        rolled_back=rolled_back_count,
+        errors=errors,
+        health_report_path=health_report_path,
+    )
+    logger.info("Evolution cycle complete: %s", report.to_dict())
+    return report
+
+
+def _write_skill_health(path: Path, report: SkillHealthReport) -> None:
+    """Write skill_health.json atomically (tmp + os.replace)."""
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        data = {
+            "timestamp": report.timestamp,
+            "cycle_id": report.cycle_id,
+            "duration_seconds": report.duration_seconds,
+            "transcripts_scanned": report.transcripts_scanned,
+            "skills": [
+                {
+                    "skill_name": s.skill_name,
+                    "total_examples": s.total_examples,
+                    "correction_count": s.correction_count,
+                    "correction_rate": round(s.correction_rate, 4),
+                    "fitness_score": round(s.fitness_score, 4),
+                    "confidence": s.confidence,
+                    "action": s.action,
+                    "recommendation": {
+                        "evidence_summary": s.recommendation.evidence_summary,
+                        "original_score": s.recommendation.original_score,
+                        "estimated_score": s.recommendation.estimated_score,
+                        "constraint_check": s.recommendation.constraint_check,
+                    } if s.recommendation else None,
+                    "trend": s.trend,
+                }
+                for s in report.skills
+            ],
+            "deployments": [
+                {
+                    "skill_name": d.skill_name,
+                    "success": d.success,
+                    "changes_applied": d.changes_applied,
+                    "changes_skipped": d.changes_skipped,
+                    "verified": d.verified,
+                    "rolled_back": d.rolled_back,
+                    "error": d.error,
+                }
+                for d in report.deployments
+            ],
+            "errors": report.errors,
+        }
+        tmp_path = path.with_suffix(".json.tmp")
+        tmp_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        os.replace(str(tmp_path), str(path))
+    except OSError as exc:
+        logger.warning("Failed to write skill_health.json: %s", exc)
+
+
+def _write_cycle_changelog(
+    evals_dir: Path,
+    report: SkillHealthReport,
+    deployed: int,
+    verified: int,
+    rolled_back: int,
+) -> None:
+    """Append cycle summary to EVOLUTION_CHANGELOG.jsonl."""
+    try:
+        changelog_path = None
+        # Preferred: resolve via app config
+        try:
+            from core.app_config_manager import app_config_manager
+            if app_config_manager is not None:
+                ws_path = app_config_manager.get("workspace_path")
+                if ws_path:
+                    candidate = Path(ws_path) / ".context" / "EVOLUTION_CHANGELOG.jsonl"
+                    changelog_path = candidate
+        except (ImportError, Exception):
+            pass
+
+        if changelog_path is None:
+            # Fallback: relative to evals_dir
+            for parent in [
+                evals_dir.parent.parent / ".context" if evals_dir.parent else None,
+                evals_dir.parent / ".context" if evals_dir.parent else None,
+            ]:
+                if parent and parent.is_dir():
+                    changelog_path = parent / "EVOLUTION_CHANGELOG.jsonl"
+                    break
+
+        if changelog_path is None:
+            changelog_path = evals_dir.parent / "EVOLUTION_CHANGELOG.jsonl"
+
+        entry = {
+            "ts": report.timestamp,
+            "action": "evolution_cycle_v2",
+            "cycle_id": report.cycle_id,
+            "phase": "audit",
+            "skills_checked": report.transcripts_scanned,
+            "eligible": len(report.skills),
+            "recommendations": sum(1 for s in report.skills if s.action == "recommend"),
+            "deployed": deployed,
+            "verified": verified,
+            "rolled_back": rolled_back,
+            "errors": report.errors,
+            "source": "evolution_optimizer_v2",
+        }
+
+        changelog_path.parent.mkdir(parents=True, exist_ok=True)
+        lock_path = changelog_path.with_suffix(".jsonl.lock")
+        try:
+            with open(lock_path, "w") as lock_fd:
+                fcntl.flock(lock_fd, fcntl.LOCK_EX)
+                try:
+                    with open(changelog_path, "a", encoding="utf-8") as f:
+                        f.write(json.dumps(entry) + "\n")
+                finally:
+                    fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        except OSError:
+            with open(changelog_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(entry) + "\n")
+
+    except Exception as exc:
+        logger.debug("Failed to write evolution changelog: %s", exc)
