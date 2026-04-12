@@ -6,8 +6,8 @@ import requests
 import json
 import os
 
-PROXY_URL = "https://thuedsrtpc.execute-api.cn-northwest-1.amazonaws.com.cn/prod/"
-API_KEY = "zV76dHel_s61cwljvPkFnNtCh7nhFS0XhImzteuVRfw"
+PROXY_URL = os.environ.get("DATA_PROXY_URL", "https://thuedsrtpc.execute-api.cn-northwest-1.amazonaws.com.cn/prod/")
+API_KEY = os.environ.get("DATA_PROXY_KEY", "")
 SFDC_BASE = "https://aws-crm.lightning.force.com/lightning/r/Account/"
 
 
