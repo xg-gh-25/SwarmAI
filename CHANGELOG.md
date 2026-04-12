@@ -5,6 +5,14 @@ All notable changes to SwarmAI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.1] - 2026-04-13
+
+### Fixed
+
+- **Hook DB API mismatch**: `SkillMetricsHook` and `UserObserverHook` called `db.messages.list(filters={"session_id": ...})` which doesn't exist — replaced with `db.messages.list_by_session(session_id)`
+- **Orphan reaper test brittleness**: Watchdog tests mocked `ppid=1` check directly, but reaper now uses `_is_owned_orphan` (SWARMAI_OWNER_PID env check) — tests updated to mock the ownership check instead
+- **Proactive restart test thresholds**: OOM restart threshold was raised from 1.2GB to 1.8GB in production code but tests still used 1.2GB/1.3GB/1.5GB values — updated all test values to 2.0GB (above 1.8GB threshold)
+
 ## [1.5.0] - 2026-04-13
 
 ### Added — Self-Evolution Goes Live
