@@ -1149,8 +1149,8 @@ class SessionUnit:
                             self._retry_count, router.alive_count,
                             max_tabs, self.session_id,
                         )
-                except Exception:
-                    pass  # Registry unavailable — fall through to budget check
+                except Exception as exc:
+                    logger.warning("Retry slot guard unavailable: %s", exc)
 
                 if not budget.can_spawn or alive_exceeds_limit:
                     reason = (
