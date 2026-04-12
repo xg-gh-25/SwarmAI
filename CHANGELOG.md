@@ -5,6 +5,69 @@ All notable changes to SwarmAI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0] - 2026-04-13
+
+### Added — Self-Evolution Goes Live
+
+The evolution pipeline went from "observes but never acts" to **production deployment** — skills are now automatically optimized and deployed based on user correction patterns.
+
+**LLM-as-Optimizer (replaces heuristic-only)**
+- **LLM Optimizer**: New `llm_optimizer.py` — sends skill text + correction evidence to Bedrock Opus, receives semantically-aware TextChange proposals instead of blind text append/remove
+- **Pre-validation**: LLM-proposed changes are validated against actual skill text before acceptance — approximate quotes that don't match character-for-character are dropped
+- **Config-gated**: `config.evolution.optimizer` supports `"auto"` (LLM → heuristic fallback), `"llm"` (LLM only), `"heuristic"` (original v2.1 behavior)
+- **Cost controls**: `max_llm_skills_per_cycle` (default 5) caps LLM calls per evolution cycle; skills ranked by confidence — highest-value skills get LLM budget first; skills below `med_threshold` and oversized skills (>15KB) automatically use heuristic
+- **Token tracking**: Per-skill and per-cycle LLM token usage recorded in `skill_health.json` and `EVOLUTION_CHANGELOG.jsonl`
+- **Bedrock client TTL**: 1-hour TTL with `reset_bedrock_client()` called at cycle start for credential rotation safety; `read_timeout=30s`, `connect_timeout=10s`, `max_attempts=1`
+
+**Evolution Pipeline v2.1 — Confidence Tuning**
+- **Tuned thresholds**: HIGH lowered from 0.7→0.35, MED from 0.3→0.15 — calibrated to real-world correction data where max reachable confidence was 0.2 at old thresholds
+- **Config-driven thresholds**: `config.evolution.high_confidence` and `med_confidence` override defaults without code changes
+- **Confidence tiers**: Added n≥2 evidence band (0.5) and >0.05 density band (0.2) — real-world skills with 1-3 corrections now produce meaningful confidence scores
+- **Regression gate**: Post-deploy fitness check — auto-reverts if deployed skill degrades below previous score
+- **`optimizer_used` field**: `SkillHealthEntry` now tracks `"llm" | "heuristic" | "none"` — distinguishes LLM optimization from heuristic fallback from no-op
+- **First real deployment**: `save-memory` skill optimized (score 0.27 → 0.71), verified, zero rollbacks
+
+**Memory Architecture v2 — Transcript Indexing + Temporal Validity**
+- **TranscriptStore**: New `transcript_indexer.py` — indexes Claude Code JSONL session transcripts into FTS5 + sqlite-vec for verbatim recall (MemPalace benchmark: 96.6% vs 84.2% for summaries)
+- **Temporal validity**: Memory entries carry `valid_from` / `superseded_by` metadata; superseded entries auto-downweighted (0.1×) in recall scoring
+- **Knowledge Library sync**: Moved vector+FTS5 indexing outside git-rev gate — Knowledge/ files written by hooks and jobs (DailyActivity, Signals) are now indexed even without git commits
+- **Transcript dir scoping**: Derives project dirs from config (`workspace_path`, `swarmai_dir`) instead of hardcoded paths; warns on slug mismatch; falls back to full scan
+
+**SessionMiner Improvements**
+- **Single-pass mining**: 56× fewer file reads via consolidated transcript scanning
+- **Eval overwrite**: `save_evals` switched from append to overwrite mode — prevents unbounded eval file growth across cycles
+- **Public property**: `last_transcripts_scanned` exposed as `@property` (replaces fragile `getattr` access)
+
+**Pytest Safety System**
+- **PreToolUse hook**: `pytest-safety-hook.sh` blocks full test suite execution unless `SWARMAI_SUITE=1`; allows targeted tests (`test_*.py`, `--lf`, `-k`), make targets (`make test-*`)
+- **Sanitization**: Strips `| tail` / `| head` pipes and normalizes `.venv/bin/python` paths in pytest commands
+
+**OOM Prevention**
+- **Spawn cost model**: Corrected RSS estimation for subprocess spawning — prevents cascade where restart attempts consume more memory than they free
+- **Proactive restart threshold**: Triggers restart-with-resume before macOS jetsam kills the process
+
+### Fixed
+
+- **Sender retry crash**: `send_with_retry` used `attachments` before assignment in retry loop — reordered to build attachments before body
+- **Pytest hook bypass**: `make\s+test(-\w+)?` regex let bare `make test` (full suite) bypass Guard 1 — tightened to `make\s+test-\w+`
+- **Changelog `skills_checked` bug**: Was writing `transcripts_scanned` as `skills_checked` — now correctly writes both fields
+- **`.bak` file cleanup**: Stale SKILL.md.bak files from previous evolution cycles now cleaned up after successful cycle completion
+- **Correction quality gates**: Added snake_case identifier rejection, agent monologue pattern detection, and code fragment filtering to prevent garbage from leaking into skill instructions
+- **`memory_health` temporal superseding**: Stale decisions now actually trigger superseding instead of being silently skipped
+- **SessionMiner race condition**: Fixed concurrent transcript access during mining
+- **SkillMetricsHook**: Extracts skill name from summary text when tool input is absent
+- **Knowledge indexing gap**: Only 1/160 Knowledge files were being indexed due to git-rev gate — moved sync outside gate
+- **save-memory leaked code fragments**: Removed 15 lines of leaked code analysis text from SKILL.md
+- **save-memory append-only contradiction**: Test entry removal instruction now has explicit exception in the append-only rule
+- **DSPy guard**: Added `import dspy` / `from dspy` assertions to prevent accidental DSPy references in evolution_optimizer
+
+### Changed
+
+- **README rewrite**: Condensed from ~500 lines to ~280 lines — table-based layout, approximate numbers ("55+ skills", "3,000+ tests", "800+ commits"), synchronized EN/ZH versions
+- **CMHK skills gitignored**: Internal AWS skills moved to `s_cmhk-*` prefix and added to `.gitignore` — local-only, not in public repo
+- **Evolution confidence formula**: Evidence step function recalibrated with n≥2 band; density boost recalibrated with >0.05 band
+- **Heuristic scoring path**: `optimize_skill` now uses heuristic's pre-built `new_text` directly for scoring instead of reconstructing from changes (avoids regex vs exact-match divergence)
+
 ## [1.4.0] - 2026-04-10
 
 ### Added — Next-Gen Agent Intelligence
