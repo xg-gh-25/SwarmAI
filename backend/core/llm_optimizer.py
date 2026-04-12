@@ -148,9 +148,11 @@ async def _call_bedrock_opus(prompt: str, system: str = _SYSTEM_PROMPT) -> str:
     Uses the converse API for cleaner request/response handling.
     Timeout: 30 seconds. Max tokens: 2000 (changes are small).
     """
+    import os
     import boto3
 
-    client = boto3.client("bedrock-runtime", region_name="us-east-1")
+    region = os.environ.get("AWS_REGION", os.environ.get("AWS_DEFAULT_REGION", "us-east-1"))
+    client = boto3.client("bedrock-runtime", region_name=region)
 
     response = client.converse(
         modelId="us.anthropic.claude-opus-4-6-v1",
