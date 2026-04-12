@@ -1,7 +1,7 @@
 """Tests for RSS-based proactive restart-with-resume (方案 D).
 
 Covers 5 acceptance criteria:
-- AC1: IDLE session tree RSS > 1.2GB triggers compact → kill
+- AC1: IDLE session tree RSS > 1.8GB triggers compact → kill
 - AC2: _ensure_spawned injects --resume when _sdk_session_id exists in COLD state
 - AC3: 3-minute cooldown between proactive restarts per session
 - AC4: No immediate respawn — lazy restart on next send()
@@ -47,7 +47,7 @@ class TestAC1_ProactiveRestart:
 
     @pytest.mark.asyncio
     async def test_rss_above_threshold_triggers_compact_and_kill(self):
-        """AC1: RSS > 1.2GB in IDLE state → compact() then kill()."""
+        """AC1: RSS > 1.8GB in IDLE state → compact() then kill()."""
         unit = _make_unit()
         _set_idle_with_pid(unit)
         unit._sdk_session_id = "sdk-session-123"
@@ -57,7 +57,7 @@ class TestAC1_ProactiveRestart:
 
         with patch(
             "core.resource_monitor.resource_monitor.process_tree_rss",
-            return_value=1_300_000_000,  # 1.3GB > 1.2GB
+            return_value=2_000_000_000,  # 2.0GB > 1.8GB
         ):
             await unit._check_rss_and_proactive_restart()
 
@@ -66,7 +66,7 @@ class TestAC1_ProactiveRestart:
 
     @pytest.mark.asyncio
     async def test_rss_below_threshold_does_nothing(self):
-        """RSS below 1.2GB → no action."""
+        """RSS below 1.8GB → no action."""
         unit = _make_unit()
         _set_idle_with_pid(unit)
         unit._sdk_session_id = "sdk-session-123"
@@ -76,7 +76,7 @@ class TestAC1_ProactiveRestart:
 
         with patch(
             "core.resource_monitor.resource_monitor.process_tree_rss",
-            return_value=1_000_000_000,  # 1.0GB < 1.2GB
+            return_value=1_000_000_000,  # 1.0GB < 1.8GB
         ):
             await unit._check_rss_and_proactive_restart()
 
@@ -95,7 +95,7 @@ class TestAC1_ProactiveRestart:
 
         with patch(
             "core.resource_monitor.resource_monitor.process_tree_rss",
-            return_value=1_500_000_000,
+            return_value=2_000_000_000,  # 2.0GB > 1.8GB
         ):
             await unit._check_rss_and_proactive_restart()
 
@@ -208,7 +208,7 @@ class TestAC3_Cooldown:
 
         with patch(
             "core.resource_monitor.resource_monitor.process_tree_rss",
-            return_value=1_500_000_000,
+            return_value=2_000_000_000,  # 2.0GB > 1.8GB
         ):
             # First call — should trigger
             await unit._check_rss_and_proactive_restart()
@@ -237,7 +237,7 @@ class TestAC3_Cooldown:
 
         with patch(
             "core.resource_monitor.resource_monitor.process_tree_rss",
-            return_value=1_500_000_000,
+            return_value=2_000_000_000,  # 2.0GB > 1.8GB
         ):
             # First call
             await unit._check_rss_and_proactive_restart()
@@ -282,7 +282,7 @@ class TestAC4_LazyRestart:
 
         with patch(
             "core.resource_monitor.resource_monitor.process_tree_rss",
-            return_value=1_500_000_000,
+            return_value=2_000_000_000,  # 2.0GB > 1.8GB
         ):
             await unit._check_rss_and_proactive_restart()
 
@@ -315,7 +315,7 @@ class TestLifecycleProactiveRestart:
 
         with patch(
             "core.resource_monitor.resource_monitor.process_tree_rss",
-            return_value=1_400_000_000,
+            return_value=2_000_000_000,  # 2.0GB > 1.8GB
         ):
             await mgr._proactive_rss_restart()
 
@@ -362,7 +362,7 @@ class TestLifecycleProactiveRestart:
 
         with patch(
             "core.resource_monitor.resource_monitor.process_tree_rss",
-            return_value=1_500_000_000,
+            return_value=2_000_000_000,  # 2.0GB > 1.8GB
         ):
             await mgr._proactive_rss_restart()
 
