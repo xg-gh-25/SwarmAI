@@ -1,0 +1,1 @@
+../../s_industry-gtm-analysis/knowledge/agentcore.md
