@@ -388,6 +388,92 @@ class TestEnvSpawnLockScoping:
 
 
 # ---------------------------------------------------------------------------
+# Property: Retry slot guard (COE 2026-04-12)
+# ---------------------------------------------------------------------------
+
+class TestRetrySlotGuard:
+    """Retry in _retry_with_resume must abort when alive_count >= max_tabs.
+
+    Prevents retry storms from spawning processes beyond the concurrency
+    limit — the direct cause of the 2026-04-12 OOM cascade.
+
+    # Feature: multi-session-rearchitecture, COE: retry bypass
+    """
+
+    @pytest.mark.asyncio
+    async def test_retry_aborts_when_alive_exceeds_max_tabs(self):
+        """Retry yields RESOURCE_EXHAUSTED when alive_count >= max_tabs."""
+        unit = SessionUnit(session_id="test-retry-guard", agent_id="default")
+
+        mock_router = MagicMock()
+        mock_router.alive_count = 4  # At capacity
+
+        mock_budget = MagicMock()
+        mock_budget.can_spawn = True  # Budget says ok, but slot limit says no
+
+        # Patch all dependencies used inside _retry_with_resume's backoff path.
+        # session_registry is lazy-imported via `from . import session_registry`
+        # inside the function, so we patch the actual module object.
+        import core.session_registry as _sr_mod
+        with patch.object(_sr_mod, "session_router", mock_router):
+            with patch("core.resource_monitor.resource_monitor") as mock_rm:
+                mock_rm.spawn_budget.return_value = mock_budget
+                mock_rm.compute_max_tabs.return_value = 4
+                with patch("asyncio.sleep", new_callable=AsyncMock):
+                    events = []
+                    async for event in unit._retry_with_resume(
+                        query_content="test",
+                        options=MagicMock(),
+                        config=MagicMock(),
+                        initial_error_str="Command failed with exit code -9 (exit code: -9)",
+                        initial_tb_str="",
+                    ):
+                        events.append(event)
+
+        # Should have an abort event due to alive_count >= max_tabs
+        error_codes = [e.get("code") for e in events if e.get("code")]
+        assert "RESOURCE_EXHAUSTED" in error_codes, (
+            f"Retry should abort when alive_count >= max_tabs. "
+            f"Codes: {error_codes}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_retry_proceeds_when_alive_below_max_tabs(self):
+        """Retry proceeds to _spawn() when alive_count < max_tabs."""
+        unit = SessionUnit(session_id="test-retry-proceed", agent_id="default")
+
+        mock_router = MagicMock()
+        mock_router.alive_count = 2  # Below capacity
+
+        mock_budget = MagicMock()
+        mock_budget.can_spawn = True
+
+        import core.session_registry as _sr_mod
+        with patch.object(_sr_mod, "session_router", mock_router):
+            with patch("core.resource_monitor.resource_monitor") as mock_rm:
+                mock_rm.spawn_budget.return_value = mock_budget
+                mock_rm.compute_max_tabs.return_value = 4
+                with patch.object(unit, "_spawn", new_callable=AsyncMock) as mock_spawn:
+                    with patch("asyncio.sleep", new_callable=AsyncMock):
+                        mock_spawn.side_effect = Exception("spawn attempted")
+
+                        events = []
+                        async for event in unit._retry_with_resume(
+                            query_content="test",
+                            options=MagicMock(),
+                            config=MagicMock(),
+                            initial_error_str="Command failed with exit code -9 (exit code: -9)",
+                            initial_tb_str="",
+                        ):
+                            events.append(event)
+
+        # Should have attempted spawn (not aborted by slot guard)
+        assert mock_spawn.called, (
+            "Retry should attempt _spawn() when alive_count < max_tabs"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Property 20: WAITING_INPUT crash transitions to DEAD
 # ---------------------------------------------------------------------------
 

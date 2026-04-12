@@ -147,7 +147,6 @@ class ResourceMonitor:
     # On smaller machines the dynamic formula gates via cost_mb.
     _MAX_TABS_CEILING: int = 4
     _MEMORY_THRESHOLD_PCT: float = 90.0  # Never push machine past 90% used
-    _SPAWN_COST_MB: float = 1500.0  # Each session costs ~1500MB (CLI + MCPs)
 
     def __init__(self) -> None:
         self._cached_memory: Optional[SystemMemory] = None
