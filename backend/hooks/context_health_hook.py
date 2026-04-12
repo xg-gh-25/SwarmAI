@@ -309,7 +309,16 @@ class ContextHealthHook:
         # delta-sync (content_hash) to skip already-indexed files.
         # Previously used _resolve_transcripts_dir which restricted to
         # one project subdir, missing transcripts from other workspaces.
-        transcripts_dir = Path.home() / ".claude" / "projects"
+        #
+        # Scoped to SwarmAI-related project dirs to avoid indexing every
+        # Claude Code project on the machine (could be many, each adding
+        # embed cost and time).  Falls back to full scan if neither exists.
+        base = Path.home() / ".claude" / "projects"
+        candidates = [
+            base / "Users-gawan-Desktop-SwarmAI-Workspace-swarmai",
+            base / "Users-gawan-.swarm-ai-SwarmWS",
+        ]
+        transcripts_dir = next((d for d in candidates if d.is_dir()), base)
 
         if not transcripts_dir.is_dir():
             return

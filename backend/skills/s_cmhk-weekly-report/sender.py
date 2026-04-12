@@ -374,10 +374,10 @@ def send_with_retry(dry_run: bool = False) -> int:
         rcpt = next((r for r in RECIPIENTS if r["email"] == email), None)
         if not rcpt:
             continue
+        attachments = _build_attachments(rcpt["reports"], week_num)
         body = _build_body(rcpt["first_name"],
                            ceo_html=_load_ceo_html(rcpt["reports"]),
                            has_attachments=bool(attachments))
-        attachments = _build_attachments(rcpt["reports"], week_num)
         bu_names = [r[0] for r in rcpt["reports"]]
 
         print(f"📨 Retry {rcpt['alias']} ({email})...")
