@@ -1,6 +1,6 @@
 """
 Working-level Excel builder — multi-sheet customer analysis workbook.
-Sheets: AUTO 客户明细 / MFG 客户明细 (split based on category).
+Sheets: AUTO 客户明细 / MFG 客户明细 / AI场景 by 产品大类 / Bedrock 渗透分析
 """
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -12,6 +12,8 @@ HFont = Font(bold=True, color='FFFFFF', size=11)
 XXL_F = PatternFill('solid', fgColor='FFF2CC')
 XL_F = PatternFill('solid', fgColor='E2EFDA')
 L_F = PatternFill('solid', fgColor='D6E4F0')
+AUTO_BG = PatternFill('solid', fgColor='D6E4F0')  # Blue background for AUTO
+MFG_BG = PatternFill('solid', fgColor='E2EFDA')   # Green background for MFG
 C = Alignment(horizontal='center', vertical='center', wrap_text=True)
 W = Alignment(wrap_text=True, vertical='top')
 T = Border(left=Side(style='thin', color='D9D9D9'), right=Side(style='thin', color='D9D9D9'),
@@ -90,7 +92,104 @@ def _write_sheet(ws, accounts):
     return len(accounts)
 
 
-def build_excel(accounts: list[dict], output_path: str, product: str = ""):
+def _write_category_sheet(ws, categories: dict):
+    """Sheet 3: AI场景 by 产品大类 — one row per category."""
+    headers = ['行业', '产品大类', '客户数', 'TTM', 'GenAI', 'Bedrock', 'XXL客户', 'XL客户']
+    widths = [8, 18, 8, 14, 12, 12, 30, 30]
+
+    for c_idx, (h, w) in enumerate(zip(headers, widths), 1):
+        cell = ws.cell(row=1, column=c_idx, value=h)
+        cell.font = HFont
+        cell.fill = HF
+        cell.alignment = C
+        cell.border = T
+        ws.column_dimensions[get_column_letter(c_idx)].width = w
+
+    ws.freeze_panes = 'A2'
+
+    # Sort: AUTO first, then MFG; within each group sort by TTM desc
+    sorted_cats = sorted(
+        categories.items(),
+        key=lambda x: (0 if x[1].get('industry') == 'AUTO' else 1, -x[1].get('ttm', 0))
+    )
+
+    for i, (cat_name, cat_data) in enumerate(sorted_cats, 1):
+        r = i + 1
+        industry = cat_data.get('industry', 'MFG')
+        is_auto = industry == 'AUTO'
+        row_fill = AUTO_BG if is_auto else MFG_BG
+
+        ws.cell(row=r, column=1, value=industry).alignment = C
+        ws.cell(row=r, column=1).fill = row_fill
+        ws.cell(row=r, column=2, value=cat_name)
+        ws.cell(row=r, column=3, value=cat_data.get('count', 0)).alignment = C
+        ws.cell(row=r, column=4, value=round(cat_data.get('ttm', 0))).number_format = '#,##0'
+        ws.cell(row=r, column=4).alignment = C
+        ws.cell(row=r, column=5, value=round(cat_data.get('genai', 0))).number_format = '#,##0'
+        ws.cell(row=r, column=5).alignment = C
+        ws.cell(row=r, column=6, value=round(cat_data.get('bedrock', 0))).number_format = '#,##0'
+        ws.cell(row=r, column=6).alignment = C
+        ws.cell(row=r, column=7, value=', '.join(cat_data.get('xxl', []))).alignment = W
+        ws.cell(row=r, column=8, value=', '.join(cat_data.get('xl', []))).alignment = W
+
+        for c_idx in range(1, 9):
+            ws.cell(row=r, column=c_idx).border = T
+
+    ws.auto_filter.ref = f'A1:H{len(sorted_cats) + 1}'
+    return len(sorted_cats)
+
+
+def _write_bedrock_sheet(ws, accounts: list[dict]):
+    """Sheet 4: Bedrock 渗透分析 — accounts with Bedrock > 0, sorted desc."""
+    headers = ['#', '客户', 'Size', 'TTM', 'Bedrock TTM', 'Bedrock %', '产品大类']
+    widths = [4, 18, 6, 14, 14, 10, 18]
+
+    for c_idx, (h, w) in enumerate(zip(headers, widths), 1):
+        cell = ws.cell(row=1, column=c_idx, value=h)
+        cell.font = HFont
+        cell.fill = HF
+        cell.alignment = C
+        cell.border = T
+        ws.column_dimensions[get_column_letter(c_idx)].width = w
+
+    ws.freeze_panes = 'A2'
+
+    # Filter and sort by bedrock desc
+    bedrock_accts = [a for a in accounts if float(a.get('bedrock', 0) or 0) > 0]
+    bedrock_accts.sort(key=lambda x: -float(x.get('bedrock', 0) or 0))
+
+    for i, acc in enumerate(bedrock_accts, 1):
+        r = i + 1
+        ttm = float(acc.get('ttm', 0) or 0)
+        bedrock = float(acc.get('bedrock', 0) or 0)
+        bedrock_pct = bedrock / ttm if ttm > 0 else 0
+
+        ws.cell(row=r, column=1, value=i).alignment = C
+        ws.cell(row=r, column=2, value=acc.get('short', acc.get('name', '')))
+        ws.cell(row=r, column=3, value=acc.get('size', '')).alignment = C
+        ws.cell(row=r, column=4, value=round(ttm)).number_format = '#,##0'
+        ws.cell(row=r, column=4).alignment = C
+        ws.cell(row=r, column=5, value=round(bedrock)).number_format = '#,##0'
+        ws.cell(row=r, column=5).alignment = C
+        ws.cell(row=r, column=5).fill = PatternFill('solid', fgColor='E2EFDA')
+        ws.cell(row=r, column=6, value=bedrock_pct).number_format = '0.0%'
+        ws.cell(row=r, column=6).alignment = C
+        ws.cell(row=r, column=7, value=acc.get('category', ''))
+
+        # Size fill
+        sf = {'XXL': XXL_F, 'XL': XL_F, 'L': L_F}.get(acc.get('size', ''))
+        if sf:
+            ws.cell(row=r, column=3).fill = sf
+
+        for c_idx in range(1, 8):
+            ws.cell(row=r, column=c_idx).border = T
+
+    ws.auto_filter.ref = f'A1:G{len(bedrock_accts) + 1}'
+    return len(bedrock_accts)
+
+
+def build_excel(accounts: list[dict], output_path: str, product: str = "",
+                categories: dict = None, bedrock_penetration: dict = None):
     """
     Build multi-sheet Excel workbook.
 
@@ -98,6 +197,8 @@ def build_excel(accounts: list[dict], output_path: str, product: str = ""):
         accounts: list of account dicts with revenue data
         output_path: where to save the .xlsx file
         product: AWS product name (for sheet titles)
+        categories: dict of category distributions (from analyzer)
+        bedrock_penetration: dict with penetration stats (from analyzer)
     """
     wb = Workbook()
 
@@ -113,6 +214,17 @@ def build_excel(accounts: list[dict], output_path: str, product: str = ""):
     # Sheet 2: MFG
     ws_mfg = wb.create_sheet('MFG 客户明细')
     n_mfg = _write_sheet(ws_mfg, mfg)
+
+    # Sheet 3: AI场景 by 产品大类
+    if categories:
+        ws_cat = wb.create_sheet('AI场景 by 产品大类')
+        _write_category_sheet(ws_cat, categories)
+
+    # Sheet 4: Bedrock 渗透分析
+    bedrock_accts = [a for a in accounts if float(a.get('bedrock', 0) or 0) > 0]
+    if bedrock_accts:
+        ws_br = wb.create_sheet('Bedrock 渗透分析')
+        _write_bedrock_sheet(ws_br, accounts)
 
     wb.save(output_path)
     return {"auto": n_auto, "mfg": n_mfg, "total": n_auto + n_mfg}
