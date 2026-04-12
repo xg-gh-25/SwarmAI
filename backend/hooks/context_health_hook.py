@@ -331,6 +331,17 @@ class ContextHealthHook:
                     candidates.append(base / slug)
         except (ImportError, Exception):
             pass
+
+        # Warn if slug-derived paths don't match any directory — means Claude
+        # changed its project directory naming convention (internal detail,
+        # not documented). Fallback to scanning all projects still works.
+        if candidates and not any(d.is_dir() for d in candidates):
+            logger.warning(
+                "context_health: transcript slug mismatch — derived paths %s "
+                "don't exist. Claude may have changed project dir naming. "
+                "Falling back to scanning all projects under %s",
+                [str(c) for c in candidates], base,
+            )
         transcripts_dir = next((d for d in candidates if d.is_dir()), base)
 
         if not transcripts_dir.is_dir():

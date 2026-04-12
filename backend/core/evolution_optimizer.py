@@ -103,6 +103,7 @@ class SkillHealthEntry:
     recommendation: Recommendation | None = None
     trend: str | None = None          # "improving" | "stable" | "degrading" | None
     llm_tokens: int = 0               # Bedrock tokens used for this skill's LLM optimization
+    optimizer_used: str = "none"      # "llm" | "heuristic" | "none" — distinguishes LLM vs heuristic vs no-op
 
 
 @dataclass
@@ -597,13 +598,19 @@ class EvolutionOptimizer:
 
         return True, "All constraints passed"
 
-    def optimize_skill(self, skill_name: str, eval_examples: list) -> OptimizationResult:
+    def optimize_skill(
+        self, skill_name: str, eval_examples: list, *, force_heuristic: bool = False,
+    ) -> OptimizationResult:
         """Run optimization on a skill (LLM or heuristic, config-gated).
 
         Config ``evolution.optimizer``:
         - ``"auto"`` (default): try LLM → fallback to heuristic on any failure
         - ``"llm"``: LLM only (returns no-changes on failure)
         - ``"heuristic"``: heuristic only (original v2.1 behavior)
+
+        Args:
+            force_heuristic: If True, skip LLM regardless of config (used when
+                LLM budget is exhausted for this cycle).
         """
         original_text = self._read_skill_text(skill_name)
         if original_text is None:
@@ -638,6 +645,10 @@ class EvolutionOptimizer:
         except (ImportError, Exception):
             pass
 
+        # Budget cap: caller can force heuristic when LLM budget exhausted
+        if force_heuristic:
+            optimizer_mode = "heuristic"
+
         changes: list[TextChange] = []
         llm_tokens_used = 0
 
@@ -650,8 +661,9 @@ class EvolutionOptimizer:
         self.last_llm_tokens = llm_tokens_used
 
         # Fallback to heuristic if LLM produced nothing and mode allows
+        heuristic_text = None
         if not changes and optimizer_mode in ("auto", "heuristic"):
-            _, changes = self._apply_heuristic_changes(original_text, corrections)
+            heuristic_text, changes = self._apply_heuristic_changes(original_text, corrections)
 
         if not changes:
             return OptimizationResult(
@@ -670,13 +682,18 @@ class EvolutionOptimizer:
         expected_text = " ".join(text for text, *_ in corrections)
         original_score = evaluator.score(expected_text, original_text).overall
 
-        # Apply changes to get optimized text for scoring
-        optimized_text = original_text
-        for change in changes:
-            if change.original and change.original in optimized_text:
-                optimized_text = optimized_text.replace(change.original, change.replacement, 1)
-            elif not change.original and change.replacement:
-                optimized_text = optimized_text.rstrip() + "\n" + change.replacement
+        # Use heuristic's pre-built text directly when available (avoids
+        # divergence between regex-based removal and exact string replacement).
+        # For LLM changes, reconstruct by applying changes sequentially.
+        if heuristic_text is not None:
+            optimized_text = heuristic_text
+        else:
+            optimized_text = original_text
+            for change in changes:
+                if change.original and change.original in optimized_text:
+                    optimized_text = optimized_text.replace(change.original, change.replacement, 1)
+                elif not change.original and change.replacement:
+                    optimized_text = optimized_text.rstrip() + "\n" + change.replacement
 
         optimized_score = evaluator.score(expected_text, optimized_text).overall
 
@@ -946,6 +963,17 @@ def _run_evolution_cycle_locked(
         elif name in priority_skills and len(examples) >= 3:
             eligible_skills.append(name)
 
+    # ── LLM cost cap: limit how many skills get LLM optimization per cycle ──
+    max_llm_skills = 5  # default
+    try:
+        from core.app_config_manager import app_config_manager
+        if app_config_manager is not None:
+            evo = app_config_manager.get("evolution", {})
+            if isinstance(evo, dict):
+                max_llm_skills = int(evo.get("max_llm_skills_per_cycle", 5))
+    except (ImportError, Exception):
+        pass
+
     # ── Read previous health for regression detection + trend ──
     previous_health: dict[str, dict] = {}
     health_json_path = evals_dir.parent / "skill_health.json"
@@ -967,21 +995,26 @@ def _run_evolution_cycle_locked(
 
     skill_assessments: list[tuple[str, float, float, list, OptimizationResult | None]] = []
 
+    # Pre-compute confidence for all eligible skills so we can rank-order
+    # for LLM budget allocation (highest confidence gets LLM first).
+    skill_pre_assess: list[tuple[str, int, float, float]] = []
     for skill_name in eligible_skills:
         examples = all_examples[skill_name]
-
-        # Count corrections
         correction_count = sum(1 for ex in examples if ex.user_correction)
-
-        # Score fitness
         score_pairs = []
         for ex in examples:
             if ex.user_correction and len(ex.agent_actions.strip()) > 20:
                 score_pairs.append((ex.user_correction, ex.agent_actions))
         avg_score = evaluator.score_batch(score_pairs) if score_pairs else 1.0
-
-        # Compute confidence
         confidence = compute_confidence(correction_count, len(examples), avg_score)
+        skill_pre_assess.append((skill_name, correction_count, avg_score, confidence))
+
+    # Sort by confidence descending — highest-value skills get LLM budget first
+    skill_pre_assess.sort(key=lambda x: -x[3])
+    llm_budget_remaining = max_llm_skills
+
+    for skill_name, correction_count, avg_score, confidence in skill_pre_assess:
+        examples = all_examples[skill_name]
 
         # Determine action using config-read thresholds
         if confidence >= high_threshold:
@@ -1006,13 +1039,25 @@ def _run_evolution_cycle_locked(
             else:
                 trend = "stable"
 
-        # Generate recommendation if confidence is at least LOW
+        # Generate recommendation if corrections exist.
+        # LLM optimizer is budget-capped: only top N skills by confidence
+        # get LLM optimization (~$0.05/skill). The rest use heuristic only.
         opt_result = None
         recommendation = None
         skill_llm_tokens = 0
+        optimizer_used = "none"
         if correction_count > 0:
-            opt_result = optimizer.optimize_skill(skill_name, examples)
+            opt_result = optimizer.optimize_skill(
+                skill_name, examples,
+                force_heuristic=(llm_budget_remaining <= 0),
+            )
             skill_llm_tokens = optimizer.last_llm_tokens
+            if skill_llm_tokens > 0:
+                llm_budget_remaining -= 1
+                optimizer_used = "llm"
+            elif opt_result.changes:
+                optimizer_used = "heuristic"
+
             if opt_result.changes:
                 evidence = []
                 for ex in examples:
@@ -1040,6 +1085,7 @@ def _run_evolution_cycle_locked(
             recommendation=recommendation,
             trend=trend,
             llm_tokens=skill_llm_tokens,
+            optimizer_used=optimizer_used,
         )
         health_entries.append(health_entry)
         skill_assessments.append((skill_name, confidence, avg_score, examples, opt_result))
@@ -1216,6 +1262,7 @@ def _write_skill_health(path: Path, report: SkillHealthReport) -> None:
                     } if s.recommendation else None,
                     "trend": s.trend,
                     "llm_tokens": s.llm_tokens,
+                    "optimizer_used": s.optimizer_used,
                 }
                 for s in report.skills
             ],
