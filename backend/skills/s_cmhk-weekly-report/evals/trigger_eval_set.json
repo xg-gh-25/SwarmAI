@@ -1,0 +1,42 @@
+[
+  {
+    "query": "帮我生成本周的 CEO 周报",
+    "should_trigger": true
+  },
+  {
+    "query": "生成 RFHC 的 GM 周报",
+    "should_trigger": true
+  },
+  {
+    "query": "weekly revenue report for GCR",
+    "should_trigger": true
+  },
+  {
+    "query": "周报准备好了吗？发给收件人吧",
+    "should_trigger": true
+  },
+  {
+    "query": "帮我查一下上周 ISV & SUP 的 revenue 数据",
+    "should_trigger": false
+  },
+  {
+    "query": "今天天气怎么样",
+    "should_trigger": false
+  },
+  {
+    "query": "帮我写一个 pipeline 报告",
+    "should_trigger": false
+  },
+  {
+    "query": "Mid-Week RFHC 报告生成一下",
+    "should_trigger": true
+  },
+  {
+    "query": "把周报发给 arobchu",
+    "should_trigger": true
+  },
+  {
+    "query": "查一下 fact_estimated_revenue 表的字段",
+    "should_trigger": false
+  }
+]
