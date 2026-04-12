@@ -83,6 +83,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "same_type_cooldown_seconds": 60,
         "max_active_entries": 30,
         "deprecation_days": 30,
+        "optimizer": "auto",           # "auto" | "llm" | "heuristic"
+        "high_confidence": 0.35,       # Deploy threshold
+        "med_confidence": 0.15,        # Recommend threshold
     },
 }
 

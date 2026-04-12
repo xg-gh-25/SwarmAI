@@ -596,7 +596,13 @@ class EvolutionOptimizer:
         return True, "All constraints passed"
 
     def optimize_skill(self, skill_name: str, eval_examples: list) -> OptimizationResult:
-        """Run heuristic optimization on a skill."""
+        """Run optimization on a skill (LLM or heuristic, config-gated).
+
+        Config ``evolution.optimizer``:
+        - ``"auto"`` (default): try LLM → fallback to heuristic on any failure
+        - ``"llm"``: LLM only (returns no-changes on failure)
+        - ``"heuristic"``: heuristic only (original v2.1 behavior)
+        """
         original_text = self._read_skill_text(skill_name)
         if original_text is None:
             return OptimizationResult(
@@ -619,7 +625,26 @@ class EvolutionOptimizer:
                 reason="No correction patterns found",
             )
 
-        new_text, changes = self._apply_heuristic_changes(original_text, corrections)
+        # Determine optimizer mode from config
+        optimizer_mode = "auto"
+        try:
+            from core.app_config_manager import app_config_manager
+            if app_config_manager is not None:
+                evo = app_config_manager.get("evolution", {})
+                if isinstance(evo, dict):
+                    optimizer_mode = evo.get("optimizer", "auto")
+        except (ImportError, Exception):
+            pass
+
+        changes: list[TextChange] = []
+
+        # Try LLM optimizer if mode allows
+        if optimizer_mode in ("auto", "llm"):
+            changes = self._try_llm_optimization(skill_name, original_text, corrections)
+
+        # Fallback to heuristic if LLM produced nothing and mode allows
+        if not changes and optimizer_mode in ("auto", "heuristic"):
+            _, changes = self._apply_heuristic_changes(original_text, corrections)
 
         if not changes:
             return OptimizationResult(
@@ -631,16 +656,24 @@ class EvolutionOptimizer:
                 reason="No applicable changes found",
             )
 
-        # Score improvement estimate: build a natural language "expected"
-        # string from the correction texts (not Python repr).
+        # Score improvement estimate
         from core.skill_fitness import SkillFitnessEvaluator
 
         evaluator = SkillFitnessEvaluator()
         expected_text = " ".join(text for text, *_ in corrections)
         original_score = evaluator.score(expected_text, original_text).overall
-        optimized_score = evaluator.score(expected_text, new_text).overall
 
-        passed, reason = self._validate_constraints(skill_name, new_text, original_text)
+        # Apply changes to get optimized text for scoring
+        optimized_text = original_text
+        for change in changes:
+            if change.original and change.original in optimized_text:
+                optimized_text = optimized_text.replace(change.original, change.replacement, 1)
+            elif not change.original and change.replacement:
+                optimized_text = optimized_text.rstrip() + "\n" + change.replacement
+
+        optimized_score = evaluator.score(expected_text, optimized_text).overall
+
+        passed, reason = self._validate_constraints(skill_name, optimized_text, original_text)
 
         return OptimizationResult(
             skill_name=skill_name,
@@ -650,6 +683,40 @@ class EvolutionOptimizer:
             accepted=passed,
             reason=reason,
         )
+
+    @staticmethod
+    def _try_llm_optimization(
+        skill_name: str,
+        skill_text: str,
+        corrections: list[tuple[str, str, str]],
+    ) -> list[TextChange]:
+        """Try LLM-based optimization. Returns empty list on any failure."""
+        try:
+            import asyncio
+            from core.llm_optimizer import optimize_skill_with_llm
+
+            # Run async function from sync context
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = None
+
+            if loop and loop.is_running():
+                # Already in async context — create a task
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as pool:
+                    future = pool.submit(
+                        asyncio.run,
+                        optimize_skill_with_llm(skill_text, corrections, skill_name),
+                    )
+                    return future.result(timeout=60)
+            else:
+                return asyncio.run(
+                    optimize_skill_with_llm(skill_text, corrections, skill_name)
+                )
+        except Exception as exc:
+            logger.warning("LLM optimizer unavailable for %s: %s", skill_name, exc)
+            return []
 
     def deploy_optimization(self, result: OptimizationResult) -> bool:
         """Write accepted optimization to SKILL.md and log to EVOLUTION.md + CHANGELOG.
@@ -870,7 +937,7 @@ def _run_evolution_cycle_locked(
     # ── Phase 1: MINE (unchanged) ──
     all_examples = miner.mine_all()
     skills_checked = len(all_examples)
-    transcripts_scanned = getattr(miner, "_last_transcripts_scanned", 0)
+    transcripts_scanned = miner.last_transcripts_scanned
 
     # Filter eligible (>=5 examples, or >=3 for priority)
     eligible_skills: list[str] = []

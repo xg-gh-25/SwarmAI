@@ -343,11 +343,17 @@ class TestF11AgentActionsLimit:
 
 
 class TestF12DSPyReferencesReplaced:
-    """Aspirational DSPy mentions should be replaced with accurate descriptions."""
+    """Aspirational DSPy mentions should be replaced with accurate descriptions.
+
+    Updated v2.1: LLM optimizer (llm_optimizer.py) is the actual optimizer.
+    DSPy/GEPA is deferred to v1.6.0 — evolution_optimizer should not claim
+    DSPy integration exists. LLM optimizer references ARE expected.
+    """
 
     def test_no_dspy_in_evolution_optimizer(self):
-        """evolution_optimizer.py should not mention DSPy/GEPA as if integrated."""
+        """evolution_optimizer.py should not claim DSPy integration exists."""
         from core import evolution_optimizer
         source = Path(evolution_optimizer.__file__).read_text(encoding="utf-8")
-        # Should not claim DSPy integration exists
         assert "DSPy/GEPA integration" not in source
+        # LLM optimizer import IS expected (v2.1 addition)
+        assert "llm_optimizer" in source
