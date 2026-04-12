@@ -167,8 +167,8 @@ class TestSaveEvals:
         assert data["skill_invoked"] == "test"
         assert data["score"] == 1.0
 
-    def test_save_evals_appends(self, miner, miner_dirs):
-        """Subsequent save_evals calls append, not overwrite (Gap 3 fix)."""
+    def test_save_evals_overwrites(self, miner, miner_dirs):
+        """Subsequent save_evals calls overwrite to prevent unbounded growth."""
         _, _, evals = miner_dirs
         ex1 = EvalExample(
             user_prompt="first",
@@ -190,8 +190,10 @@ class TestSaveEvals:
         path2 = miner.save_evals("test", [ex2])
         assert path1 == path2
         lines = path2.read_text().strip().split("\n")
-        # 2 separators + 2 examples = 4 lines
-        assert len(lines) == 4
+        # Overwrite: only latest cycle's 1 separator + 1 example = 2 lines
+        assert len(lines) == 2
+        data = json.loads(lines[1])
+        assert data["user_prompt"] == "second"
 
 
 class TestEvalExampleDataclass:

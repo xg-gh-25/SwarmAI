@@ -994,6 +994,18 @@ def _run_evolution_cycle_locked(
         health_report_path=health_report_path,
     )
     logger.info("Evolution cycle complete: %s", report.to_dict())
+
+    # Clean up stale .bak files from previous cycles.
+    # atomic_deploy leaves .bak files for rollback safety; once the full cycle
+    # completes successfully (no rolled-back deploys), they are no longer needed.
+    if rolled_back_count == 0:
+        for bak_file in skills_dir.rglob("*.md.bak"):
+            try:
+                bak_file.unlink()
+                logger.debug("Cleaned up stale backup: %s", bak_file)
+            except OSError as exc:
+                logger.debug("Failed to clean up %s: %s", bak_file, exc)
+
     return report
 
 
@@ -1085,7 +1097,8 @@ def _write_cycle_changelog(
             "action": "evolution_cycle_v2",
             "cycle_id": report.cycle_id,
             "phase": "audit",
-            "skills_checked": report.transcripts_scanned,
+            "skills_checked": len(report.skills),
+            "transcripts_scanned": report.transcripts_scanned,
             "eligible": len(report.skills),
             "recommendations": sum(1 for s in report.skills if s.action == "recommend"),
             "deployed": deployed,

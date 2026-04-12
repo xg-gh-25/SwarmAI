@@ -65,6 +65,7 @@ class SessionMiner:
         self._skills_dir = skills_dir
         self._evals_dir = evals_dir
         self._guard = None  # Lazy-init MemoryGuard for secret scrubbing
+        self._last_transcripts_scanned = 0
 
     def _load_skill_keywords(self, skill_name: str) -> list[str]:
         """Extract TRIGGER keywords from SKILL.md description field."""
@@ -548,8 +549,7 @@ class SessionMiner:
     def save_evals(self, skill_name: str, examples: list[EvalExample]) -> Path:
         """Save eval examples to skill_evals/{skill_name}.jsonl.
 
-        Appends to the existing file (preserving history across cycles)
-        with a timestamped separator comment so runs are distinguishable.
+        Overwrites the file each cycle to prevent unbounded growth.
         Fields are capped at MAX_FIELD_CHARS to prevent binary content
         from bloating eval files.
         """
@@ -558,7 +558,7 @@ class SessionMiner:
         self._evals_dir.mkdir(parents=True, exist_ok=True)
         path = self._evals_dir / f"{skill_name}.jsonl"
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        with open(path, "a") as f:
+        with open(path, "w") as f:
             # Write a separator comment (JSON line with _meta key) so
             # runs are distinguishable when reading the file.
             f.write(json.dumps({
