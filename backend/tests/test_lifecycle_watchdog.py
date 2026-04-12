@@ -276,26 +276,28 @@ class TestPytestOrphanReaper:
 
     @pytest.mark.asyncio
     async def test_kills_orphaned_pytest(self):
-        """Pytest process with ppid=1 gets killed."""
+        """Pytest process confirmed as owned orphan gets killed.
+
+        The reaper now uses _is_owned_orphan (SWARMAI_OWNER_PID env check)
+        instead of simple ppid=1.  We mock the ownership check directly.
+        """
         mgr = _make_manager()
 
         def subprocess_side_effect(cmd, **kwargs):
             cmd_str = " ".join(cmd)
-            if "pgrep" in cmd_str and "claude" in cmd_str:
-                return SimpleNamespace(returncode=1, stdout="", stderr="")
-            if "pgrep" in cmd_str and "python main.py" in cmd_str:
-                return SimpleNamespace(returncode=1, stdout="", stderr="")
             if "pgrep" in cmd_str and "pytest" in cmd_str:
                 return SimpleNamespace(returncode=0, stdout="3877\n", stderr="")
-            if "ps" in cmd_str and "3877" in cmd_str:
-                return SimpleNamespace(returncode=0, stdout="    1", stderr="")
             return SimpleNamespace(returncode=1, stdout="", stderr="")
 
         async def fake_to_thread(fn, *a, **kw):
             return fn(*a, **kw)
 
+        async def fake_is_owned_orphan(pid):
+            return True  # Confirmed orphan
+
         with patch("core.lifecycle_manager.asyncio.to_thread", side_effect=fake_to_thread), \
              patch("core.lifecycle_manager.subprocess.run", side_effect=subprocess_side_effect), \
+             patch.object(mgr, "_is_owned_orphan", side_effect=fake_is_owned_orphan), \
              patch("core.lifecycle_manager.os.kill") as mock_kill, \
              patch("core.lifecycle_manager.os.getpid", return_value=99999):
             await mgr._reap_orphans()
@@ -304,26 +306,24 @@ class TestPytestOrphanReaper:
 
     @pytest.mark.asyncio
     async def test_skips_non_orphaned_pytest(self):
-        """Pytest process with ppid != 1 is NOT killed."""
+        """Pytest process NOT confirmed as owned orphan is left alone."""
         mgr = _make_manager()
 
         def subprocess_side_effect(cmd, **kwargs):
             cmd_str = " ".join(cmd)
-            if "pgrep" in cmd_str and "claude" in cmd_str:
-                return SimpleNamespace(returncode=1, stdout="", stderr="")
-            if "pgrep" in cmd_str and "python main.py" in cmd_str:
-                return SimpleNamespace(returncode=1, stdout="", stderr="")
             if "pgrep" in cmd_str and "pytest" in cmd_str:
                 return SimpleNamespace(returncode=0, stdout="3877\n", stderr="")
-            if "ps" in cmd_str and "3877" in cmd_str:
-                return SimpleNamespace(returncode=0, stdout="  500", stderr="")
             return SimpleNamespace(returncode=1, stdout="", stderr="")
 
         async def fake_to_thread(fn, *a, **kw):
             return fn(*a, **kw)
 
+        async def fake_is_owned_orphan(pid):
+            return False  # Not an orphan (no ownership tag or owner alive)
+
         with patch("core.lifecycle_manager.asyncio.to_thread", side_effect=fake_to_thread), \
              patch("core.lifecycle_manager.subprocess.run", side_effect=subprocess_side_effect), \
+             patch.object(mgr, "_is_owned_orphan", side_effect=fake_is_owned_orphan), \
              patch("core.lifecycle_manager.os.kill") as mock_kill, \
              patch("core.lifecycle_manager.os.getpid", return_value=99999):
             await mgr._reap_orphans()

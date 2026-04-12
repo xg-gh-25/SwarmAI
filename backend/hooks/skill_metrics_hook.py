@@ -63,9 +63,7 @@ class SkillMetricsHook:
             from config import get_app_data_dir
 
             # Load messages for this session
-            messages_raw = await db.messages.list(
-                filters={"session_id": context.session_id}
-            )
+            messages_raw = await db.messages.list_by_session(context.session_id)
             if not messages_raw:
                 logger.debug("No messages for session %s, skipping skill metrics", context.session_id)
                 return
