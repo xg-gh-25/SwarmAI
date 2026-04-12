@@ -37,10 +37,10 @@ def _reference_formula(available_mb: float) -> int:
     Mirrors ``ResourceMonitor.compute_max_tabs()``:
     headroom = total_mb * 0.90 - used_mb
     raw = floor(headroom / cost)
-    result = max(2, min(raw, 3))
+    result = max(2, min(raw, 4))
 
     Cost: 1500MB per session (actual CLI tree RSS from lifecycle logs).
-    Ceiling: 3 (2 chat + 1 channel — prevents jetsam OOM cascade).
+    Ceiling: 4 (3 chat + 1 channel). Dynamic formula auto-gates on smaller machines.
     _make_system_memory sets total=16GB, so headroom = 16384*0.90 - (16384 - available_mb).
     Simplified: headroom = available_mb - 16384*0.10 = available_mb - 1638.4
     """
