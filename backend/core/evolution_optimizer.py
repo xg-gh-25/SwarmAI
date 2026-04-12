@@ -102,6 +102,7 @@ class SkillHealthEntry:
     action: str                       # "deploy" | "recommend" | "log" | "skip"
     recommendation: Recommendation | None = None
     trend: str | None = None          # "improving" | "stable" | "degrading" | None
+    llm_tokens: int = 0               # Bedrock tokens used for this skill's LLM optimization
 
 
 @dataclass
@@ -407,6 +408,7 @@ def _extract_correction_summary(correction_text: str) -> str | None:
 class EvolutionOptimizer:
     def __init__(self, skills_dir: Path) -> None:
         self._skills_dir = skills_dir
+        self.last_llm_tokens: int = 0  # Tokens used by last optimize_skill call
 
     def _read_skill_text(self, skill_name: str) -> str | None:
         """Read SKILL.md body text (below YAML frontmatter)."""
@@ -637,10 +639,15 @@ class EvolutionOptimizer:
             pass
 
         changes: list[TextChange] = []
+        llm_tokens_used = 0
 
         # Try LLM optimizer if mode allows
         if optimizer_mode in ("auto", "llm"):
-            changes = self._try_llm_optimization(skill_name, original_text, corrections)
+            changes, llm_tokens_used = self._try_llm_optimization(
+                skill_name, original_text, corrections,
+            )
+
+        self.last_llm_tokens = llm_tokens_used
 
         # Fallback to heuristic if LLM produced nothing and mode allows
         if not changes and optimizer_mode in ("auto", "heuristic"):
@@ -689,34 +696,19 @@ class EvolutionOptimizer:
         skill_name: str,
         skill_text: str,
         corrections: list[tuple[str, str, str]],
-    ) -> list[TextChange]:
-        """Try LLM-based optimization. Returns empty list on any failure."""
+    ) -> tuple[list[TextChange], int]:
+        """Try LLM-based optimization. Returns (changes, tokens_used).
+
+        Returns ([], 0) on any failure — caller falls back to heuristic.
+        """
         try:
-            import asyncio
             from core.llm_optimizer import optimize_skill_with_llm
 
-            # Run async function from sync context
-            try:
-                loop = asyncio.get_running_loop()
-            except RuntimeError:
-                loop = None
-
-            if loop and loop.is_running():
-                # Already in async context — create a task
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor() as pool:
-                    future = pool.submit(
-                        asyncio.run,
-                        optimize_skill_with_llm(skill_text, corrections, skill_name),
-                    )
-                    return future.result(timeout=60)
-            else:
-                return asyncio.run(
-                    optimize_skill_with_llm(skill_text, corrections, skill_name)
-                )
+            changes, usage = optimize_skill_with_llm(skill_text, corrections, skill_name)
+            return changes, usage.input_tokens + usage.output_tokens
         except Exception as exc:
             logger.warning("LLM optimizer unavailable for %s: %s", skill_name, exc)
-            return []
+            return [], 0
 
     def deploy_optimization(self, result: OptimizationResult) -> bool:
         """Write accepted optimization to SKILL.md and log to EVOLUTION.md + CHANGELOG.
@@ -1010,8 +1002,10 @@ def _run_evolution_cycle_locked(
         # Generate recommendation if confidence is at least LOW
         opt_result = None
         recommendation = None
+        skill_llm_tokens = 0
         if correction_count > 0:
             opt_result = optimizer.optimize_skill(skill_name, examples)
+            skill_llm_tokens = optimizer.last_llm_tokens
             if opt_result.changes:
                 evidence = []
                 for ex in examples:
@@ -1038,6 +1032,7 @@ def _run_evolution_cycle_locked(
             action=action,
             recommendation=recommendation,
             trend=trend,
+            llm_tokens=skill_llm_tokens,
         )
         health_entries.append(health_entry)
         skill_assessments.append((skill_name, confidence, avg_score, examples, opt_result))
@@ -1213,6 +1208,7 @@ def _write_skill_health(path: Path, report: SkillHealthReport) -> None:
                         "constraint_check": s.recommendation.constraint_check,
                     } if s.recommendation else None,
                     "trend": s.trend,
+                    "llm_tokens": s.llm_tokens,
                 }
                 for s in report.skills
             ],
