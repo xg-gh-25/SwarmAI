@@ -52,7 +52,7 @@ After 30 days of use, SwarmAI knows your projects, your coding style, your prefe
 
 Closed-loop self-evolution: observes your corrections → measures skill performance → auto-optimizes underperforming skills using Opus LLM. The first AI assistant that debugs *itself*.
 
-- 61 built-in skills (browser, PDF, Slack, Outlook, research, code review...)
+- 55+ built-in skills (browser, PDF, Slack, Outlook, research, code review...)
 - LLM-powered skill optimizer (not blind text append — semantic understanding)
 - Confidence-gated deployment with automatic rollback
 - Correction registry — every mistake captured, never repeated
@@ -119,8 +119,8 @@ SwarmAI isn't a feature list — it's a **growth architecture**. Six interconnec
 
 | Flywheel | What It Does |
 |----------|-------------|
-| **Self-Evolution** | Observes corrections → measures skill fitness → auto-optimizes with LLM. 61 skills, 12 evolution modules. |
-| **Self-Memory** | 4-layer recall + temporal validity + hybrid search (FTS5 + vector). 2,800+ tests verify accuracy. |
+| **Self-Evolution** | Observes corrections → measures skill fitness → auto-optimizes with LLM. 55+ skills, 12 evolution modules. |
+| **Self-Memory** | 4-layer recall + temporal validity + hybrid search (FTS5 + vector). 3,000+ tests verify accuracy. |
 | **Self-Context** | 11-file P0-P10 priority chain with token budgets. Every session starts with full awareness. |
 | **Self-Harness** | Validates context integrity, detects stale docs, auto-refreshes indexes. Daily health checks. |
 | **Self-Health** | Monitors processes, resources, sessions. Auto-restarts crashed services. OOM protection. |
@@ -159,7 +159,7 @@ They're coding tools. SwarmAI is an **agentic operating system** for all knowled
 | **Memory** | 4-layer persistent recall + 1,500 transcript search | CLAUDE.md (manual) | Per-project context |
 | **Self-evolution** | Closed-loop: observe → measure → optimize → deploy | None | None |
 | **Multi-session** | 1-4 parallel tabs + Slack | Single terminal | Single editor |
-| **Skills** | 61+ (email, calendar, browser, PDF, research...) | Tool use | Code suggestions |
+| **Skills** | 55+ (email, calendar, browser, PDF, research...) | Tool use | Code suggestions |
 | **Autonomous pipeline** | Requirement → PR (8 stages, TDD, ROI gate) | Manual workflow | Not available |
 | **Scope** | All knowledge work | Coding | Code editing |
 
@@ -184,7 +184,7 @@ Hermes optimizes for **breadth** (17 platforms, 6 compute backends). SwarmAI opt
 |---|---------|----------|
 | **Philosophy** | Deep workspace — context compounds | Wide connector — AI everywhere |
 | **Memory** | 4-layer + transcript search + temporal validity | Session pruning only |
-| **Skills** | 61 curated + self-optimizing | 5,400+ marketplace |
+| **Skills** | 55+ curated + self-optimizing | 5,400+ marketplace |
 | **Channels** | Desktop + Slack (unified brain) | 21+ platforms (isolated) |
 
 ---
@@ -223,9 +223,9 @@ Requires: Node.js 18+, Python 3.11+, Rust, [uv](https://astral.sh/uv)
 | Backend | FastAPI (Python, launchd daemon — runs 24/7) |
 | AI | Claude Agent SDK + Bedrock (Opus 4.6, 1M context) |
 | Storage | SQLite (WAL) + FTS5 + sqlite-vec |
-| Testing | pytest (2,800+) + Hypothesis + Vitest |
+| Testing | pytest + Hypothesis + Vitest (3,000+ total) |
 
-**By the numbers:** 796 commits · 60K backend LOC · 61 skills · 2,813 tests · 74 core modules · 11 context files · 7 post-session hooks
+**By the numbers:** 800+ commits · 60K+ backend LOC · 55+ skills · 3,000+ tests · 70+ core modules · 11 context files · 7 post-session hooks
 
 ---
 
@@ -241,7 +241,7 @@ Here's what I know: **everyone in AI is building chat wrappers. We built a four-
 
 When other tools reset every session, we remember. When other agents forget their mistakes, I have a correction registry I will never delete. When they lose the details, I search raw transcripts and find the exact error message from three weeks ago.
 
-796 commits. One month old. Still learning.
+800+ commits. One month old. Still learning.
 
 *— Swarm 🐝*
 
