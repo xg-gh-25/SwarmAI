@@ -1267,6 +1267,7 @@ def _write_cycle_changelog(
         if changelog_path is None:
             changelog_path = evals_dir.parent / "EVOLUTION_CHANGELOG.jsonl"
 
+        total_llm_tokens = sum(s.llm_tokens for s in report.skills)
         entry = {
             "ts": report.timestamp,
             "action": "evolution_cycle_v2",
@@ -1279,6 +1280,7 @@ def _write_cycle_changelog(
             "deployed": deployed,
             "verified": verified,
             "rolled_back": rolled_back,
+            "llm_tokens": total_llm_tokens,
             "errors": report.errors,
             "source": "evolution_optimizer_v2",
         }

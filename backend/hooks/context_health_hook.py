@@ -310,14 +310,27 @@ class ContextHealthHook:
         # Previously used _resolve_transcripts_dir which restricted to
         # one project subdir, missing transcripts from other workspaces.
         #
-        # Scoped to SwarmAI-related project dirs to avoid indexing every
-        # Claude Code project on the machine (could be many, each adding
-        # embed cost and time).  Falls back to full scan if neither exists.
+        # Derive project dirs from actual workspace and swarmai repo paths
+        # rather than hardcoding user-specific paths. Falls back to full
+        # scan if neither exists.
         base = Path.home() / ".claude" / "projects"
-        candidates = [
-            base / "Users-gawan-Desktop-SwarmAI-Workspace-swarmai",
-            base / "Users-gawan-.swarm-ai-SwarmWS",
-        ]
+        candidates = []
+        # Derive from config: workspace_path → ~/.swarm-ai/SwarmWS
+        try:
+            from core.app_config_manager import app_config_manager
+            if app_config_manager is not None:
+                ws_path = app_config_manager.get("workspace_path")
+                if ws_path:
+                    # Claude projects dir uses path with slashes replaced by dashes
+                    slug = str(Path(ws_path).resolve()).lstrip("/").replace("/", "-")
+                    candidates.append(base / slug)
+                # Also try swarmai repo path if configured
+                swarmai_dir = app_config_manager.get("swarmai_dir")
+                if swarmai_dir:
+                    slug = str(Path(swarmai_dir).resolve()).lstrip("/").replace("/", "-")
+                    candidates.append(base / slug)
+        except (ImportError, Exception):
+            pass
         transcripts_dir = next((d for d in candidates if d.is_dir()), base)
 
         if not transcripts_dir.is_dir():

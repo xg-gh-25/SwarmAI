@@ -354,6 +354,9 @@ class TestF12DSPyReferencesReplaced:
         """evolution_optimizer.py should not claim DSPy integration exists."""
         from core import evolution_optimizer
         source = Path(evolution_optimizer.__file__).read_text(encoding="utf-8")
+        # DSPy is deferred to v1.6.0 — should not be referenced as if integrated
         assert "DSPy/GEPA integration" not in source
+        assert "import dspy" not in source
+        assert "from dspy" not in source
         # LLM optimizer import IS expected (v2.1 addition)
         assert "llm_optimizer" in source
