@@ -24,6 +24,7 @@ import re
 from dataclasses import dataclass
 
 import boto3
+from botocore.config import Config as BotoConfig
 
 from core.evolution_optimizer import TextChange
 
@@ -75,7 +76,6 @@ def _get_bedrock_client():
     """Lazy singleton with 1-hour TTL — re-creates after credential rotation."""
     global _bedrock_client, _bedrock_client_created_at
     import time
-    from botocore.config import Config
 
     now = time.monotonic()
     if _bedrock_client is None or (now - _bedrock_client_created_at) > _CLIENT_TTL_SECONDS:
@@ -86,7 +86,7 @@ def _get_bedrock_client():
         _bedrock_client = boto3.client(
             "bedrock-runtime",
             region_name=region,
-            config=Config(read_timeout=30, connect_timeout=10, retries={"max_attempts": 1}),
+            config=BotoConfig(read_timeout=30, connect_timeout=10, retries={"max_attempts": 1}),
         )
         _bedrock_client_created_at = now
     return _bedrock_client

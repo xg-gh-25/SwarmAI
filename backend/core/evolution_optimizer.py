@@ -652,6 +652,17 @@ class EvolutionOptimizer:
         changes: list[TextChange] = []
         llm_tokens_used = 0
 
+        # Pre-check: if skill already exceeds 15KB, any deploy will be
+        # rejected by _validate_constraints. Skip the LLM call entirely
+        # to avoid wasting tokens (~$0.05) on changes that can't land.
+        skill_size = len(original_text.encode("utf-8"))
+        if skill_size > 15 * 1024 and optimizer_mode in ("auto", "llm"):
+            logger.info(
+                "Skipping LLM for %s: skill text already %dKB > 15KB limit",
+                skill_name, skill_size // 1024,
+            )
+            optimizer_mode = "heuristic"
+
         # Try LLM optimizer if mode allows
         if optimizer_mode in ("auto", "llm"):
             changes, llm_tokens_used = self._try_llm_optimization(
@@ -1047,9 +1058,16 @@ def _run_evolution_cycle_locked(
         skill_llm_tokens = 0
         optimizer_used = "none"
         if correction_count > 0:
+            # LLM is only worthwhile for deploy/recommend tiers.
+            # Log-tier skills (confidence < med_threshold) won't surface
+            # changes anywhere — don't waste LLM tokens on them.
+            use_heuristic_only = (
+                llm_budget_remaining <= 0
+                or confidence < med_threshold
+            )
             opt_result = optimizer.optimize_skill(
                 skill_name, examples,
-                force_heuristic=(llm_budget_remaining <= 0),
+                force_heuristic=use_heuristic_only,
             )
             skill_llm_tokens = optimizer.last_llm_tokens
             if skill_llm_tokens > 0:
