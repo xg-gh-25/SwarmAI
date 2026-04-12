@@ -14,8 +14,6 @@ English | [中文](./README.zh-CN.md)
 [![Claude](https://img.shields.io/badge/Claude-Opus_4.6-191919?style=flat&logo=anthropic&logoColor=white)](https://github.com/anthropics/claude-code)
 [![License](https://img.shields.io/badge/License-AGPL_v3-blue.svg?style=flat)](./LICENSE-AGPL)
 
-![SwarmAI Home](./assets/swarm-1.png)
-
 </div>
 
 ---
@@ -93,6 +91,7 @@ Three-column desktop app with parallel sessions, not a single chat thread.
 ---
 
 ## See It In Action
+![SwarmAI Home](./assets/swarm-1.png)
 
 ![SwarmAI Chat Interface](./assets/swarm-2.png)
 
