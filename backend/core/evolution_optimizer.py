@@ -6,8 +6,8 @@ Uses heuristic-based optimization (correction-pattern matching and
 term-overlap fitness scoring). Designed with extensible interfaces for
 future ML-based optimization if needed.
 
-Evolution Pipeline v2 — Production-grade redesign with:
-- Confidence-gated actuation (HIGH=deploy, MED=recommend, LOW=log)
+Evolution Pipeline v2.1 — Production-grade redesign with:
+- Confidence-gated actuation (HIGH≥0.35=deploy, MED≥0.15=recommend, LOW=log)
 - Atomic deploy with verification and rollback
 - Process-level file lock to prevent concurrent cycles
 - SkillHealthReport persisted as skill_health.json
@@ -40,9 +40,12 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# Confidence thresholds
-HIGH_CONFIDENCE = 0.7
-MED_CONFIDENCE = 0.3
+# Confidence thresholds — v2.1 tuning (2026-04-12)
+# Lowered from 0.7/0.3 to enable deployment with real-world correction data.
+# At 0.7 threshold, max reachable confidence was 0.2 (no skill had ≥3 corrections).
+# See KD01 and skill_health.json for evidence.
+HIGH_CONFIDENCE = 0.35
+MED_CONFIDENCE = 0.15
 
 
 @dataclass
@@ -164,23 +167,31 @@ def compute_confidence(
         return 0.0
 
     # Evidence strength (step function on raw count)
+    # v2.1: added n>=2 band at 0.5 — real-world data shows most skills
+    # accumulate 1-3 corrections, old function was unreachable above 0.2.
     if n_corrections >= 10:
         evidence = 1.0
     elif n_corrections >= 5:
         evidence = 0.8
     elif n_corrections >= 3:
+        evidence = 0.6
+    elif n_corrections >= 2:
         evidence = 0.5
     else:
-        evidence = 0.2
+        evidence = 0.3
 
     # Correction density — high rate amplifies confidence
+    # v2.1: added >0.05 band — 9% correction rate (2/22) should contribute
+    # signal, not be indistinguishable from 0%.
     correction_rate = n_corrections / max(n_examples, 1)
     if correction_rate > 0.5:
         density_boost = 0.9
     elif correction_rate > 0.3:
         density_boost = 0.6
     elif correction_rate > 0.15:
-        density_boost = 0.3
+        density_boost = 0.4
+    elif correction_rate > 0.05:
+        density_boost = 0.2
     else:
         density_boost = 0.0
 
@@ -496,15 +507,25 @@ class EvolutionOptimizer:
         code_indicators = (
             "line ", "def ", "class ", "import ", "from ", "return ",
             ".py", ".ts", ".js", "self.", "this.", "→", "→",
+            # v2.1: catch code analysis fragments that leaked through correction detection
+            "cache the ", "assigned on ", "if before_id", "wiring are ",
+            "store instance", "prompt builder", "overrides,",
         )
         lower = text.lower()
         if any(indicator in lower for indicator in code_indicators):
+            return False
+
+        # Reject fragments that look like variable/function names or code constructs
+        # (underscore-heavy, camelCase, or all-lowercase-no-space patterns)
+        if re.match(r"^[a-z_]+(?:_[a-z_]+){2,}$", stripped):  # snake_case identifiers
             return False
 
         # Agent monologue leaked as correction
         agent_indicators = (
             "let me ", "i'll ", "i need to ", "confirmed —", "verified —",
             "checking ", "looking at ", "reading ", "found ",
+            # v2.1: catch more agent analysis patterns
+            "remaining ", "correct:\n", "transcript ",
         )
         if any(lower.startswith(ind) for ind in agent_indicators):
             return False
