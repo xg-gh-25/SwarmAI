@@ -27,12 +27,12 @@ CHANGED=false
 
 # ── Guard 1: Block full suite ─────────────────────────────────
 # Allow if ANY of: specific test file, --lf, -k filter, SWARMAI_SUITE=1,
-# or make with a specific target (make test-file, make test-lf)
+# or make with a test target (make test, make test-file, make test-grep, etc.)
 HAS_TEST_FILE=$(echo "$MODIFIED" | grep -cE 'test_[a-zA-Z0-9_]+\.py')
 HAS_LF=$(echo "$MODIFIED" | grep -cE '\-\-lf\b')
-HAS_K=$(echo "$MODIFIED" | grep -cE '\s-k[[:space:]"'"'"']')
+HAS_K=$(echo "$MODIFIED" | grep -cE '(\s-k[[:space:]"'"'"']|(^|\s)-k\S)')
 HAS_BYPASS=$(echo "$MODIFIED" | grep -c 'SWARMAI_SUITE=1')
-HAS_MAKE_TARGETED=$(echo "$MODIFIED" | grep -cE 'make\s+test-(file|lf)')
+HAS_MAKE_TARGETED=$(echo "$MODIFIED" | grep -cE 'make\s+test(-\w+)?')
 
 if [ "$HAS_BYPASS" -gt 0 ]; then
   MODIFIED=$(echo "$MODIFIED" | sed 's/SWARMAI_SUITE=1[[:space:]]*//')
