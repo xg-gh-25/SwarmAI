@@ -75,6 +75,7 @@ def _get_bedrock_client():
     """Lazy singleton with 1-hour TTL — re-creates after credential rotation."""
     global _bedrock_client, _bedrock_client_created_at
     import time
+    from botocore.config import Config
 
     now = time.monotonic()
     if _bedrock_client is None or (now - _bedrock_client_created_at) > _CLIENT_TTL_SECONDS:
@@ -82,13 +83,17 @@ def _get_bedrock_client():
             "AWS_REGION",
             os.environ.get("AWS_DEFAULT_REGION", "us-east-1"),
         )
-        _bedrock_client = boto3.client("bedrock-runtime", region_name=region)
+        _bedrock_client = boto3.client(
+            "bedrock-runtime",
+            region_name=region,
+            config=Config(read_timeout=30, connect_timeout=10, retries={"max_attempts": 1}),
+        )
         _bedrock_client_created_at = now
     return _bedrock_client
 
 
 def reset_bedrock_client():
-    """Force re-creation on next call. Used by evolution cycle start."""
+    """Force re-creation on next call. Called by _run_evolution_cycle_locked at cycle start."""
     global _bedrock_client, _bedrock_client_created_at
     _bedrock_client = None
     _bedrock_client_created_at = 0.0
@@ -153,25 +158,17 @@ def _parse_llm_response(response: str) -> list[TextChange]:
     if fence_match:
         text = fence_match.group(1).strip()
 
-    # Try to find JSON object in the response
+    # Extract the first valid JSON object using raw_decode — handles
+    # unbalanced braces inside JSON string values (code snippets, f-strings)
+    # that break naive depth-counting. See B1 fix.
     brace_start = text.find("{")
     if brace_start == -1:
         logger.warning("LLM optimizer: no JSON object found in response")
         return []
 
-    # Find the matching closing brace
-    depth = 0
-    for i in range(brace_start, len(text)):
-        if text[i] == "{":
-            depth += 1
-        elif text[i] == "}":
-            depth -= 1
-            if depth == 0:
-                text = text[brace_start : i + 1]
-                break
-
+    decoder = json.JSONDecoder()
     try:
-        data = json.loads(text)
+        data, _ = decoder.raw_decode(text, brace_start)
     except json.JSONDecodeError as exc:
         logger.warning("LLM optimizer: JSON parse failed: %s", exc)
         return []

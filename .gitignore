@@ -95,3 +95,6 @@ desktop/resources/user-mcp-servers.json
 backend/pytest-of-gawan/
 pytest-of-gawan/
 *.lock
+
+# CMHK internal skills — AWS sensitive data, local only
+backend/skills/s_cmhk-*/
