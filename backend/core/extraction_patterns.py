@@ -102,12 +102,50 @@ _EMOJI_PREFIX = re.compile(r"^(?:\u2705|\u274c|\u26a0\ufe0f|\U0001f534|\U0001f7e
 # Used by both session_miner.py (mining transcripts for eval examples) and
 # skill_metrics_hook.py (detecting corrections in post-session messages).
 
-# Tightened: require correction words at sentence start or after
-# sentence-ending punctuation, not mid-sentence casual usage.
+# Broadened correction detection: requires correction signals at sentence start,
+# after sentence-ending punctuation, or at word boundary for strong signals.
+# Covers English corrections, redirects, frustration, and Chinese corrections.
 # "actually, let me also add" should NOT match; "Actually, that's wrong" should.
 CORRECTION_PATTERNS = re.compile(
-    r"(?:^|(?<=[.!?]\s))"  # At start of string OR after sentence boundary
-    r"(?:no[,. !]|don'?t |stop |wrong|incorrect|fix |undo|revert|instead[, ]|actually[, ]|wait[,. !])",
+    r"(?:"
+    # --- Group A: sentence-start anchored (original style) ---
+    r"(?:^|(?<=[.!?]\s))"
+    r"(?:no[,. !]|don'?t |stop |wrong|incorrect|fix |undo|revert|"
+    r"instead[, ]|actually[, ]|wait[,. !]|remove |"
+    # Frustration / explicit rejection at sentence start
+    r"that'?s not (?:what|right|correct)|this is wrong|this is not|"
+    r"not what I (?:asked|wanted|meant)|you (?:got it|got that) wrong|"
+    r"that doesn'?t work|that didn'?t work|try again|"
+    # Imperative review/redo commands at sentence start
+    r"review |redo |rework |rethink |reconsider |"
+    r"address |clean.?up )"
+    r"|"
+    # --- Group B: structural redirects (can appear mid-sentence but strong signal) ---
+    r"\b(?:"
+    r"use \S+ instead of \S+|"                         # "use X instead of Y"
+    r"put (?:it|this|that|them) in (?:a )?different|"  # "put it in a different folder"
+    r"(?:the )?format should be \S+ not \S+|"          # "format should be JSON not YAML"
+    r"(?:change|move|rename|switch) (?:it|this|that) (?:to|from)|"  # "change it to..."
+    r"should (?:be|have been|go) \S+|"                 # "should be X"
+    r"(?:not|never) \S+ (?:but|instead)|"              # "not X but Y"
+    r"are you sure |"                                  # "are you sure we need this"
+    r"(?:do|does|did)n'?t (?:work|look|seem)|"         # "doesn't work"
+    r"(?:review|check) (?:again|your|the)|"            # "review again", "check your work"
+    r"too (?:slow|fast|long|short|big|small|much|many|verbose|complex)" # comparative
+    r")"
+    r"|"
+    # --- Group C: Chinese corrections (no word-boundary needed for CJK) ---
+    r"(?:"
+    r"不行|不对|搞错|错了|重新来|改一下|改过来|"
+    r"你搞错了|这个不行|这不对|不是这样|"
+    r"换一个|换成|改成|改为|重做|再来|重来|"
+    r"别这样|不要这样|不应该|不能这样|"
+    # Additional Chinese: mid-sentence negation directives
+    r"不要|差太远|不合理|有问题|"
+    r"太[多少长短大小复杂]|"                                    # "太多", "太复杂"
+    r"你看看|确认.{0,4}无回归"                                  # "你看看应该怎么弄", "确认无回归"
+    r")"
+    r")",
     re.IGNORECASE | re.MULTILINE,
 )
 

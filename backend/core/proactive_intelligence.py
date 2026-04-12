@@ -633,6 +633,38 @@ def _get_job_result_highlights(working_directory: str, max_items: int = 5) -> li
     return lines
 
 
+def _get_skill_health_highlights(ctx_dir: Path) -> list[str]:
+    """Read skill_health.json and surface medium-confidence recommendations."""
+    health_path = ctx_dir / "skill_health.json"
+    if not health_path.exists():
+        return []
+
+    try:
+        report = json.loads(health_path.read_text(encoding="utf-8"))
+        highlights = []
+        for skill in report.get("skills", []):
+            try:
+                action = skill.get("action", "")
+                if action == "recommend" and skill.get("recommendation"):
+                    rec = skill["recommendation"]
+                    evidence = rec.get("evidence_summary", [])
+                    first_evidence = evidence[0] if evidence else "multiple corrections detected"
+                    name = skill.get("skill_name", "unknown")
+                    corr = skill.get("correction_count", 0)
+                    fitness = skill.get("fitness_score", 0.0)
+                    highlights.append(
+                        f"[medium] **{name}** needs attention -- "
+                        f"{corr} corrections, "
+                        f"fitness {fitness:.1%}. "
+                        f"Suggested: {first_evidence}"
+                    )
+            except (KeyError, TypeError, ValueError):
+                continue  # Skip malformed entry, don't lose all highlights
+        return highlights[:3]  # Max 3 in briefing
+    except Exception:
+        return []
+
+
 def _get_health_highlights(working_directory: str) -> list[str]:
     """Read health_findings.json and return formatted alerts for session briefing.
 
@@ -891,6 +923,12 @@ def build_session_briefing(
         health_lines = _get_health_highlights(str(workspace))
         if health_lines:
             sections.append("**System health:**\n" + "\n".join(health_lines))
+
+        # L4: Skill health recommendations from evolution pipeline
+        ctx_dir = workspace / ".context"
+        skill_health_lines = _get_skill_health_highlights(ctx_dir)
+        if skill_health_lines:
+            sections.append("**Skill health:**\n" + "\n".join(f"  - {line}" for line in skill_health_lines))
 
         # L3: Surface learning insight
         learning_insight = learning_state.learning_summary()

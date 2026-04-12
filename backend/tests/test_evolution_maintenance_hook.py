@@ -234,16 +234,22 @@ class TestEvolutionWeeklyTrigger:
 
     def test_evolution_runs_after_7_days(self, tmp_path, monkeypatch):
         """Evolution cycle triggers when last run > 7 days ago."""
+        from core.evolution_optimizer import CycleReport
+
         ctx_dir = tmp_path / ".context"
         ctx_dir.mkdir()
         state_file = ctx_dir / ".evolution_last_run"
         state_file.write_text(_days_ago(10), encoding="utf-8")
 
-        # Mock the actual cycle to return immediately
+        # Mock the actual cycle to return CycleReport
         called = []
         def _mock_cycle(*args, **kwargs):
             called.append(True)
-            return {"skills_checked": 0, "eligible": 0, "optimized": 0, "changes": 0}
+            return CycleReport(
+                cycle_id="test",
+                skills_checked=0,
+                eligible=0,
+            )
 
         monkeypatch.setattr(
             "core.evolution_optimizer.run_evolution_cycle", _mock_cycle
@@ -272,6 +278,8 @@ class TestEvolutionWeeklyTrigger:
 
     def test_evolution_runs_if_no_state_file(self, tmp_path, monkeypatch):
         """Evolution cycle triggers when state file doesn't exist."""
+        from core.evolution_optimizer import CycleReport
+
         ctx_dir = tmp_path / ".context"
         ctx_dir.mkdir()
         state_file = ctx_dir / ".evolution_last_run"
@@ -280,7 +288,11 @@ class TestEvolutionWeeklyTrigger:
         called = []
         def _mock_cycle(*args, **kwargs):
             called.append(True)
-            return {"skills_checked": 0, "eligible": 0, "optimized": 0, "changes": 0}
+            return CycleReport(
+                cycle_id="test",
+                skills_checked=0,
+                eligible=0,
+            )
 
         monkeypatch.setattr(
             "core.evolution_optimizer.run_evolution_cycle", _mock_cycle
@@ -293,6 +305,8 @@ class TestEvolutionWeeklyTrigger:
 
     def test_evolution_with_valid_skills_dir(self, tmp_path, monkeypatch):
         """Evolution cycle runs end-to-end when skills_dir exists."""
+        from core.evolution_optimizer import CycleReport
+
         ctx_dir = tmp_path / ".context"
         ctx_dir.mkdir()
         state_file = ctx_dir / ".evolution_last_run"
@@ -301,7 +315,12 @@ class TestEvolutionWeeklyTrigger:
         called_with = []
         def _mock_cycle(skills_dir, transcripts_dir, evals_dir):
             called_with.append((skills_dir, transcripts_dir, evals_dir))
-            return {"skills_checked": 2, "eligible": 1, "optimized": 1, "changes": 3}
+            return CycleReport(
+                cycle_id="test",
+                skills_checked=2,
+                eligible=1,
+                deployed=1,
+            )
 
         monkeypatch.setattr(
             "core.evolution_optimizer.run_evolution_cycle", _mock_cycle

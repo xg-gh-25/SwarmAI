@@ -32,26 +32,10 @@ def main() -> None:
         logger.error("Skills directory not found: %s", skills_dir)
         sys.exit(1)
 
-    # Find transcripts directory (Claude Code session transcripts)
-    # Uses _resolve_transcripts_dir: picks subdir with most recent .jsonl
+    # Find transcripts directory: pass the base projects/ dir so
+    # SessionMiner._iter_transcripts uses rglob("*.jsonl") to find
+    # ALL transcripts across all project subdirectories (Gap 2 fix).
     transcripts_dir = Path.home() / ".claude" / "projects"
-    try:
-        from hooks.evolution_maintenance_hook import _resolve_transcripts_dir
-        transcripts_dir = _resolve_transcripts_dir(transcripts_dir)
-    except ImportError:
-        # Fallback: inline most-recent heuristic
-        if transcripts_dir.is_dir():
-            best, best_mtime = None, 0.0
-            for subdir in transcripts_dir.iterdir():
-                if not subdir.is_dir():
-                    continue
-                jsonls = list(subdir.glob("*.jsonl"))
-                if jsonls:
-                    latest = max(f.stat().st_mtime for f in jsonls)
-                    if latest > best_mtime:
-                        best, best_mtime = subdir, latest
-            if best:
-                transcripts_dir = best
 
     evals_dir = Path.home() / ".swarm-ai" / "SwarmWS" / ".context" / "SkillEvals"
     evals_dir.mkdir(parents=True, exist_ok=True)
@@ -61,14 +45,20 @@ def main() -> None:
 
     from core.evolution_optimizer import run_evolution_cycle
 
-    summary = run_evolution_cycle(skills_dir, transcripts_dir, evals_dir)
-    logger.info("Evolution cycle complete: %s", json.dumps(summary))
+    result = run_evolution_cycle(skills_dir, transcripts_dir, evals_dir)
+    logger.info("Evolution cycle complete: %s", json.dumps(result.to_dict()))
 
-    # Update last-run state file
-    state_file = Path.home() / ".swarm-ai" / "SwarmWS" / ".context" / ".evolution_last_run"
-    state_file.write_text(
-        datetime.now(timezone.utc).strftime("%Y-%m-%d"), encoding="utf-8"
-    )
+    if hasattr(result, "health_report_path") and result.health_report_path:
+        logger.info("Skill health report: %s", result.health_report_path)
+
+    # Update last-run state file ONLY if cycle actually ran (not lock-rejected)
+    if not result.errors:
+        state_file = Path.home() / ".swarm-ai" / "SwarmWS" / ".context" / ".evolution_last_run"
+        state_file.write_text(
+            datetime.now(timezone.utc).strftime("%Y-%m-%d"), encoding="utf-8"
+        )
+    else:
+        logger.info("Skipping state file update — cycle had errors: %s", result.errors)
 
 
 if __name__ == "__main__":

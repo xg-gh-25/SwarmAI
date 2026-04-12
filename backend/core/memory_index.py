@@ -805,7 +805,7 @@ def select_memory_sections(
         sections_to_load.add("Recent Context")
 
     # ── Temporal validity: extract superseded keys for scoring ──
-    superseded = _extract_superseded_keys(body)
+    superseded = _extract_superseded_keys(memory_content)
 
     # ── Section scoring: hybrid (vector+keyword) or keyword-only ──
     if user_message:

@@ -319,19 +319,23 @@ class EvolutionMaintenanceHook:
                 return
 
             # Transcripts directory: Claude Code session transcripts
+            # Pass the base projects/ dir so rglob("*.jsonl") in
+            # SessionMiner._iter_transcripts finds ALL transcripts
+            # across all project subdirectories (Gap 2 fix).
             transcripts_dir = Path.home() / ".claude" / "projects"
-            # Find the project-specific subdir with the most recent .jsonl
-            transcripts_dir = _resolve_transcripts_dir(transcripts_dir)
 
             evals_dir = ctx_dir / "SkillEvals"
 
-            summary = run_evolution_cycle(skills_dir, transcripts_dir, evals_dir)
-            logger.info("Evolution cycle complete: %s", summary)
+            result = run_evolution_cycle(skills_dir, transcripts_dir, evals_dir)
+            logger.info("Evolution cycle complete: %s", result.to_dict())
 
-            # Write today's date to state file
-            state_file.write_text(
-                now.strftime("%Y-%m-%d"), encoding="utf-8"
-            )
+            # Write today's date to state file ONLY if cycle actually ran
+            # (not lock-rejected or errored — prevents resetting the 7-day
+            # interval when no work was done)
+            if not result.errors:
+                state_file.write_text(
+                    now.strftime("%Y-%m-%d"), encoding="utf-8"
+                )
         except Exception as exc:
             logger.warning("Evolution cycle failed (non-blocking): %s", exc)
 
