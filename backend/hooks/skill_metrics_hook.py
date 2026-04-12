@@ -10,6 +10,7 @@ Key public symbols:
 """
 from __future__ import annotations
 
+import fcntl
 import json
 import logging
 import re
@@ -266,7 +267,11 @@ def _write_corrections_to_eval_jsonl(
             }
 
             with open(jsonl_path, "a", encoding="utf-8") as f:
-                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+                fcntl.flock(f, fcntl.LOCK_EX)
+                try:
+                    f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+                finally:
+                    fcntl.flock(f, fcntl.LOCK_UN)
 
             logger.debug(
                 "SkillMetricsHook: wrote correction eval for %s to %s",

@@ -29,7 +29,6 @@ KEYWORD_WEIGHT = 0.4
 RECALL_THRESHOLD = 0.05  # Low — power first
 DEFAULT_MAX_TOKENS = 15_000
 _CHARS_PER_TOKEN = 4  # rough estimate; code-heavy content may be ~2-3 chars/token
-_DEDUP_HASH_PREFIX = 200  # Chars used for content deduplication across stores
 
 
 # ── RecallEngine ──────────────────────────────────────────────────────
@@ -139,7 +138,7 @@ class RecallEngine:
             content = base.get("content", "")
 
             # Deduplicate: skip if identical content already seen (hash-based)
-            content_key = hashlib.md5(content[:_DEDUP_HASH_PREFIX].encode()).hexdigest()
+            content_key = hashlib.sha256(content.encode()).hexdigest()
             if content_key in seen_content:
                 continue
             seen_content.add(content_key)

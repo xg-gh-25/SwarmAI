@@ -330,10 +330,15 @@ def _apply_report(report: dict, memory_md: str, evolution_md: str) -> list[str]:
             # Normalize: strip colons after dates, collapse whitespace for fuzzy match.
             import re as _re
             norm_needle = _re.sub(r"(\d{4}-\d{2}-\d{2}):?\s*", r"\1 ", needle).strip()
+            # Strip date prefix for matching to avoid false positives on shared date prefixes
+            needle_no_date = _re.sub(r"^\d{4}-\d{2}-\d{2}\s*", "", norm_needle).strip()
             old_key = None
             for m in _re.finditer(r"- \[([A-Z]{1,4}\d+)\] (.+?)$", memory_content, _re.MULTILINE):
-                entry_text = m.group(2)[:50]
-                if norm_needle[:20] in entry_text or entry_text[:20] in norm_needle:
+                entry_text = m.group(2)
+                entry_no_date = _re.sub(r"^\d{4}-\d{2}-\d{2}\s*", "", entry_text).strip()
+                if needle_no_date and entry_no_date and (
+                    needle_no_date in entry_no_date or entry_no_date in needle_no_date
+                ):
                     old_key = m.group(1)
                     break
 
