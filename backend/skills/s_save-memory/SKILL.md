@@ -66,13 +66,16 @@ After writing, briefly confirm to the user what was saved:
 
 Keep confirmation to one line. Don't repeat the content back.
 
+**If the user asks you to save a test entry**, save it and then immediately remove it after confirming, unless the user says otherwise.
+
 ### Rules
 
 - **Always use the Edit tool** — never use `python3 locked_write.py` via Bash (crashes in PyInstaller bundles)
 - **Always date-prefix** — every entry must start with `YYYY-MM-DD:` (today's date)
 - **Newest first** — use `--prepend` so the most recent entries are at the top of each section
-- **Append only** — never remove or replace existing MEMORY.md content
+- **Append only** — never remove or replace existing MEMORY.md content (exception: test entries saved at user's request should be removed immediately after confirming)
 - **Be concise** — one line per entry, no raw conversation dumps
+- **Never optimize for token budget** — saving memories correctly and completely is the priority; do not skip steps or truncate content to save tokens
 - **Don't duplicate** — check if the content is already in MEMORY.md before adding (match by content, ignore date)
 - **MEMORY.md location** — always at `.context/MEMORY.md` (relative to workspace root)
 - **Size management** — if MEMORY.md exceeds ~5KB (~100 entries), move the oldest entries from each section to `Knowledge/Archives/MEMORY-archive-YYYY-MM.md` before adding new ones. Keep MEMORY.md focused on the most recent and relevant items

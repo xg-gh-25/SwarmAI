@@ -897,6 +897,13 @@ def _run_evolution_cycle_locked(
     from core.session_miner import SessionMiner
     from core.skill_fitness import SkillFitnessEvaluator
 
+    # Force fresh Bedrock client for each cycle (credential rotation safety)
+    try:
+        from core.llm_optimizer import reset_bedrock_client
+        reset_bedrock_client()
+    except ImportError:
+        pass
+
     start_time = time.monotonic()
     errors: list[str] = []
     health_entries: list[SkillHealthEntry] = []
