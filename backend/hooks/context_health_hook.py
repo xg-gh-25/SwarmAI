@@ -305,55 +305,44 @@ class ContextHealthHook:
         from core.embedding_client import EmbeddingClient
         from core.vec_db import open_vec_db
 
-        # Pass the base projects/ dir — TranscriptStore uses its own
-        # delta-sync (content_hash) to skip already-indexed files.
-        # Previously used _resolve_transcripts_dir which restricted to
-        # one project subdir, missing transcripts from other workspaces.
+        # Derive transcript dir from the authoritative workspace path
+        # (initialization_manager — always set at startup) rather than
+        # config.json (which may not have workspace_path yet on first run).
         #
-        # Derive project dirs from actual workspace and swarmai repo paths.
-        # NEVER fall back to scanning ~/.claude/projects/ (the base dir)
-        # because it contains dirs with "Desktop" in the path, which
-        # triggers macOS TCC "would like to access Desktop" popups.
+        # NEVER fall back to scanning ~/.claude/projects/ base dir — it
+        # contains dirs with "Desktop" in the path, triggering macOS TCC
+        # "would like to access Desktop" permission popups.
         base = Path.home() / ".claude" / "projects"
-        candidates = []
-        # Derive from config: workspace_path → ~/.swarm-ai/SwarmWS
-        try:
-            from core.app_config_manager import app_config_manager
-            if app_config_manager is not None:
-                ws_path = app_config_manager.get("workspace_path")
-                if ws_path:
-                    slug = str(Path(ws_path).resolve()).lstrip("/").replace("/", "-")
-                    candidates.append(base / slug)
-                swarmai_dir = app_config_manager.get("swarmai_dir")
-                if swarmai_dir:
-                    slug = str(Path(swarmai_dir).resolve()).lstrip("/").replace("/", "-")
-                    candidates.append(base / slug)
-        except (ImportError, Exception):
-            pass
+        transcripts_dir = None
 
-        # Also scan for SwarmWS/swarmai dirs by known patterns (covers
-        # cases where config doesn't have workspace_path set yet).
-        if not candidates or not any(d.is_dir() for d in candidates):
+        # Primary: derive from initialization_manager (always available)
+        ws_path = initialization_manager.get_cached_workspace_path()
+        if ws_path:
+            slug = str(Path(ws_path).resolve()).lstrip("/").replace("/", "-")
+            candidate = base / slug
+            if candidate.is_dir():
+                transcripts_dir = candidate
+
+        # Secondary: also check swarmai repo path from config
+        if transcripts_dir is None:
             try:
-                for child in base.iterdir():
-                    if child.is_dir() and ("swarm-ai" in child.name.lower() or "swarmai" in child.name.lower()):
-                        candidates.append(child)
-            except OSError:
+                from core.app_config_manager import app_config_manager
+                if app_config_manager is not None:
+                    swarmai_dir = app_config_manager.get("swarmai_dir")
+                    if swarmai_dir:
+                        slug = str(Path(swarmai_dir).resolve()).lstrip("/").replace("/", "-")
+                        candidate = base / slug
+                        if candidate.is_dir():
+                            transcripts_dir = candidate
+            except (ImportError, Exception):
                 pass
 
-        if candidates and not any(d.is_dir() for d in candidates):
-            logger.warning(
-                "context_health: transcript slug mismatch — derived paths %s "
-                "don't exist, skipping transcript indexing this cycle",
-                [str(c) for c in candidates],
+        if transcripts_dir is None:
+            logger.debug(
+                "context_health: no matching transcript dir found for workspace %s, "
+                "skipping transcript indexing this cycle", ws_path,
             )
-
-        matched = [d for d in candidates if d.is_dir()]
-        if not matched:
-            # No matching dirs found — skip entirely rather than scanning
-            # all projects (which triggers macOS TCC Desktop access popup).
             return
-        transcripts_dir = matched[0]
 
         if not transcripts_dir.is_dir():
             return
