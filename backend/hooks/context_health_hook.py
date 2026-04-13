@@ -315,10 +315,18 @@ class ContextHealthHook:
         base = Path.home() / ".claude" / "projects"
         transcripts_dir = None
 
+        def _path_to_slug(p: str) -> str:
+            """Convert a filesystem path to Claude SDK project slug.
+
+            SDK format: replace / with - (keeping leading -), replace . with -.
+            e.g. /Users/gawan/.swarm-ai/SwarmWS -> -Users-gawan--swarm-ai-SwarmWS
+            """
+            return str(Path(p).resolve()).replace("/", "-").replace(".", "-")
+
         # Primary: derive from initialization_manager (always available)
         ws_path = initialization_manager.get_cached_workspace_path()
         if ws_path:
-            slug = str(Path(ws_path).resolve()).lstrip("/").replace("/", "-")
+            slug = _path_to_slug(ws_path)
             candidate = base / slug
             if candidate.is_dir():
                 transcripts_dir = candidate
@@ -330,8 +338,7 @@ class ContextHealthHook:
                 if app_config_manager is not None:
                     swarmai_dir = app_config_manager.get("swarmai_dir")
                     if swarmai_dir:
-                        slug = str(Path(swarmai_dir).resolve()).lstrip("/").replace("/", "-")
-                        candidate = base / slug
+                        candidate = base / _path_to_slug(swarmai_dir)
                         if candidate.is_dir():
                             transcripts_dir = candidate
             except (ImportError, Exception):
