@@ -5,6 +5,22 @@ All notable changes to SwarmAI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.2] - 2026-04-13
+
+### Fixed
+
+- **Daemon restart timeout**: FTS5 `rebuild` ran on every startup (30-50s) — now only rebuilds when FTS5 index is empty but messages exist; startup db phase drops from ~35s to <1s
+- **macOS TCC "Desktop access" popup**: Transcript indexer fell back to scanning `~/.claude/projects/` base dir (contains Desktop-path dirs) — now uses `initialization_manager` as authoritative source, never scans base dir
+- **Transcript slug mismatch**: Old slug computation (`lstrip("/").replace("/", "-")`) produced `Users-gawan-.swarm-ai-SwarmWS` but Claude SDK uses `-Users-gawan--swarm-ai-SwarmWS` (leading `-`, `.` → `-`) — fixed `_path_to_slug` to match actual SDK format
+- **UserObserver TypeError**: `observe_session` crashed with `sequence item 0: expected str instance, list found` when message content was a list of content blocks (Claude SDK format) — new `_extract_text()` handles both str and list content
+- **workspace_path never persisted**: `initialization_manager` now writes `workspace_path` to `config.json` at startup — other modules can read it without circular imports
+- **Version strings stale**: `backend/config.py` was `1.0.0`, `package.json` and `tauri.conf.json` were `1.1.1` — all bumped to `1.5.1`
+
+### Changed
+
+- **dev.sh daemon lifecycle overhaul**: Restart uses `bootout` → `_wait_port_free` → `bootstrap` (replaces broken `kickstart -k`); 90s smart health check with phase detection; failure diagnostics (launchd state, port, binary version, stderr); binary version tracking via `.version` file with staleness warnings
+- **swarmai_backend.sh**: Logs binary version from `.version` file on startup
+
 ## [1.5.1] - 2026-04-13
 
 ### Fixed
