@@ -1,0 +1,62 @@
+{
+  "skill_name": "weekly-revenue-report",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "生成本周的 CEO 周报（GCR Overall）",
+      "expected_output": "在 output/weekly-revenue-report/latest/ 生成 gcr_detailed.html，HTML 为 CEO 简易版（ceo_lite 模板），包含 KPI 卡片和 base64 PNG sparklines，全 inline CSS，邮件正文可直接渲染",
+      "expectations": [
+        "generator.py 被调用，参数包含 --scope gcr",
+        "输出文件 output/weekly-revenue-report/latest/gcr_detailed.html 存在且大小 > 10KB",
+        "HTML 中不包含 <style> 块和 CSS class（全 inline CSS）",
+        "HTML 中不包含 <svg> 标签（所有 sparkline 均为 base64 PNG <img>）",
+        "HTML 包含至少 2 个 KPI 卡片区域，展示 Usage 和 Revenue 数据",
+        "HTML 中包含 base64 编码的 PNG 图片（data:image/png;base64）",
+        "HTML 中包含 WoW 变化指标（箭头或百分比）",
+        "没有 Python traceback 或 error 出现在执行过程中"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "生成 RFHC 的 GM 级周报",
+      "expected_output": "在 output/weekly-revenue-report/latest/ 生成 rfhc.html，HTML 为 GM 完整版（detailed 模板），包含三个 Tab（Overall/Usage/Revenue），6W Trend sparklines，Top 10 Accounts",
+      "expectations": [
+        "generator.py 被调用，参数包含 --scope RFHC 或 --scope rfhc",
+        "输出文件 output/weekly-revenue-report/latest/rfhc.html 存在且大小 > 20KB",
+        "HTML 包含三个 Tab：Overall、Usage、Revenue",
+        "HTML 中包含 SVG sparkline 图表（<svg> 标签）",
+        "HTML 包含 Top 10 Accounts 表格（by Revenue Δ）",
+        "HTML 包含 sh_l4 级别的 breakdown 行（如 CROSS、EDU 等 RFHC 下属 L4）",
+        "HTML 包含 6W Trend 数据（至少 6 个周的 sparkline 数据点）",
+        "HTML 包含 WoW Attribution 区块（Accelerators / Decelerators）"
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "用 --scope all 预生成本周所有周报（GCR + 全部 BU）",
+      "expected_output": "在 output/weekly-revenue-report/latest/ 生成 gcr_detailed.html（CEO 简易版）+ 所有 BU 的 .html（GM 完整版），总计至少 10 个 HTML 文件",
+      "expectations": [
+        "generator.py 被调用，参数包含 --scope all",
+        "gcr_detailed.html 存在（CEO 简易版）",
+        "至少生成 10 个 BU 级 HTML 文件（rfhc.html, isv_and_sup.html, strategic.html 等）",
+        "CEO 版本（gcr_detailed.html）使用 ceo_lite 模板（无 <svg>，有 base64 PNG）",
+        "GM 版本（BU html）使用 detailed 模板（有 <svg> sparklines，有 Tab 切换）",
+        "所有 HTML 文件大小 > 5KB（排除空文件或生成失败）",
+        "没有 Python traceback 或 error 出现在执行过程中"
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "生成 RFHC Mid-Week 报告（周四独立报告，自然周 Mon-Sun）",
+      "expected_output": "midweek_generator.py 执行完毕，在 output/weekly-revenue-report/midweek/ 生成 rfhc_midweek.html，使用自然周（Mon-Sun）窗口",
+      "expectations": [
+        "midweek_generator.py 被调用（不是 generator.py）",
+        "输出文件 output/weekly-revenue-report/midweek/rfhc_midweek.html 存在",
+        "HTML 包含 RFHC 的 breakdown 数据",
+        "使用自然周窗口（Mon-Sun），不是标准的 Thu-Wed 锚定窗口",
+        "HTML 包含 6W Trend sparklines",
+        "没有 Python traceback 或 error 出现在执行过程中"
+      ]
+    }
+  ]
+}
