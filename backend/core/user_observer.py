@@ -53,6 +53,26 @@ _EAST_ASIAN_PATTERN = re.compile(
 )
 
 
+def _extract_text(content) -> str:
+    """Extract plain text from a message content field.
+
+    Content can be a string (simple messages) or a list of content blocks
+    (e.g. [{"type": "text", "text": "..."}, {"type": "tool_use", ...}]).
+    Returns the concatenated text from all text blocks.
+    """
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, dict):
+                parts.append(block.get("text", ""))
+            elif isinstance(block, str):
+                parts.append(block)
+        return " ".join(parts)
+    return str(content) if content else ""
+
+
 class UserObserver:
     """Extracts behavioral observations from session messages."""
 
@@ -77,11 +97,11 @@ class UserObserver:
         observations: list[Observation] = []
         today = datetime.now().strftime("%Y-%m-%d")
         user_messages = [m for m in messages if m.get("role") == "user"]
-        all_text = " ".join(m.get("content", "") for m in messages)
+        all_text = " ".join(_extract_text(m.get("content", "")) for m in messages)
 
         # 1. Explicit corrections (user messages only)
         for msg in user_messages:
-            content = msg.get("content", "")
+            content = _extract_text(msg.get("content", ""))
             for pattern in CORRECTION_PATTERNS:
                 match = pattern.search(content)
                 if match:
@@ -114,7 +134,7 @@ class UserObserver:
 
         # 3. Language preference (user messages only)
         if user_messages:
-            cjk_count = sum(1 for m in user_messages if _EAST_ASIAN_PATTERN.search(m.get("content", "")))
+            cjk_count = sum(1 for m in user_messages if _EAST_ASIAN_PATTERN.search(_extract_text(m.get("content", ""))))
             ratio = cjk_count / len(user_messages)
             if ratio > 0.3:
                 observations.append(Observation(

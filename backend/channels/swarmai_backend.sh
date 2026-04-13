@@ -108,6 +108,10 @@ if [ -x "${DAEMON_BINARY}" ]; then
     echo "[swarmai-backend] Starting BINARY on port ${DAEMON_PORT} at $(date '+%Y-%m-%d %H:%M:%S')"
     echo "[swarmai-backend] Binary: ${DAEMON_BINARY}"
     echo "[swarmai-backend] Binary age: $(( ($(date +%s) - $(stat -f %m "${DAEMON_BINARY}")) / 60 ))min"
+    VERSION_FILE="${HOME}/.swarm-ai/daemon/.version"
+    if [ -f "${VERSION_FILE}" ]; then
+        echo "[swarmai-backend] Binary version: $(cat "${VERSION_FILE}")"
+    fi
     echo "[swarmai-backend] PATH: ${PATH}"
     echo "[swarmai-backend] ada: $(which ada 2>/dev/null || echo 'NOT FOUND')"
 
