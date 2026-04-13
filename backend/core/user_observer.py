@@ -58,15 +58,21 @@ def _extract_text(content) -> str:
 
     Content can be a string (simple messages) or a list of content blocks
     (e.g. [{"type": "text", "text": "..."}, {"type": "tool_use", ...}]).
-    Returns the concatenated text from all text blocks.
+    The ``text`` field inside a block may itself be a nested list (e.g.
+    multi-part tool results), so every value is coerced to ``str`` before
+    joining to avoid ``TypeError`` in ``str.join``.
     """
     if isinstance(content, str):
         return content
     if isinstance(content, list):
-        parts = []
+        parts: list[str] = []
         for block in content:
             if isinstance(block, dict):
-                parts.append(block.get("text", ""))
+                val = block.get("text", "")
+                if isinstance(val, list):
+                    parts.append(" ".join(str(v) for v in val))
+                else:
+                    parts.append(str(val) if val else "")
             elif isinstance(block, str):
                 parts.append(block)
         return " ".join(parts)
