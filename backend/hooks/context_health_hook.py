@@ -310,9 +310,10 @@ class ContextHealthHook:
         # Previously used _resolve_transcripts_dir which restricted to
         # one project subdir, missing transcripts from other workspaces.
         #
-        # Derive project dirs from actual workspace and swarmai repo paths
-        # rather than hardcoding user-specific paths. Falls back to full
-        # scan if neither exists.
+        # Derive project dirs from actual workspace and swarmai repo paths.
+        # NEVER fall back to scanning ~/.claude/projects/ (the base dir)
+        # because it contains dirs with "Desktop" in the path, which
+        # triggers macOS TCC "would like to access Desktop" popups.
         base = Path.home() / ".claude" / "projects"
         candidates = []
         # Derive from config: workspace_path → ~/.swarm-ai/SwarmWS
@@ -321,10 +322,8 @@ class ContextHealthHook:
             if app_config_manager is not None:
                 ws_path = app_config_manager.get("workspace_path")
                 if ws_path:
-                    # Claude projects dir uses path with slashes replaced by dashes
                     slug = str(Path(ws_path).resolve()).lstrip("/").replace("/", "-")
                     candidates.append(base / slug)
-                # Also try swarmai repo path if configured
                 swarmai_dir = app_config_manager.get("swarmai_dir")
                 if swarmai_dir:
                     slug = str(Path(swarmai_dir).resolve()).lstrip("/").replace("/", "-")
@@ -332,17 +331,29 @@ class ContextHealthHook:
         except (ImportError, Exception):
             pass
 
-        # Warn if slug-derived paths don't match any directory — means Claude
-        # changed its project directory naming convention (internal detail,
-        # not documented). Fallback to scanning all projects still works.
+        # Also scan for SwarmWS/swarmai dirs by known patterns (covers
+        # cases where config doesn't have workspace_path set yet).
+        if not candidates or not any(d.is_dir() for d in candidates):
+            try:
+                for child in base.iterdir():
+                    if child.is_dir() and ("swarm-ai" in child.name.lower() or "swarmai" in child.name.lower()):
+                        candidates.append(child)
+            except OSError:
+                pass
+
         if candidates and not any(d.is_dir() for d in candidates):
             logger.warning(
                 "context_health: transcript slug mismatch — derived paths %s "
-                "don't exist. Claude may have changed project dir naming. "
-                "Falling back to scanning all projects under %s",
-                [str(c) for c in candidates], base,
+                "don't exist, skipping transcript indexing this cycle",
+                [str(c) for c in candidates],
             )
-        transcripts_dir = next((d for d in candidates if d.is_dir()), base)
+
+        matched = [d for d in candidates if d.is_dir()]
+        if not matched:
+            # No matching dirs found — skip entirely rather than scanning
+            # all projects (which triggers macOS TCC Desktop access popup).
+            return
+        transcripts_dir = matched[0]
 
         if not transcripts_dir.is_dir():
             return
