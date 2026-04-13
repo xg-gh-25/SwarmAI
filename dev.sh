@@ -362,14 +362,16 @@ cmd_daemon() {
             _log "Restarting daemon..."
             launchctl kickstart -k "$GUI_TARGET"
             _log "Waiting for health..."
-            for i in $(seq 1 30); do
+            # PyInstaller binary needs ~10s to unpack on first launch after
+            # a fresh build, plus ~3s for DB/workspace init. 60s is safe.
+            for i in $(seq 1 60); do
                 sleep 1
                 if _daemon_health >/dev/null; then
                     _ok "Daemon healthy on port ${DAEMON_PORT} (${i}s)"
                     return
                 fi
             done
-            _err "Daemon did not become healthy within 30s"
+            _err "Daemon did not become healthy within 60s"
             _warn "Check: tail -30 ~/.swarm-ai/logs/backend-stderr.log"
             ;;
         stop)
