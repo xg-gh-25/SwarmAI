@@ -2187,12 +2187,27 @@ class SQLiteDatabase(BaseDatabase):
                 END
             """)
             await conn.commit()
-            # Rebuild index from existing data (idempotent)
+            # Rebuild index from existing data — only needed on first creation.
+            # Check if the FTS5 table has any rows; if it does, the index is
+            # already populated (triggers keep it in sync). Rebuilding a large
+            # messages table takes 30-50s and was blocking every daemon restart.
             try:
-                await conn.execute("INSERT INTO messages_fts(messages_fts) VALUES('rebuild')")
-                await conn.commit()
-            except Exception:
-                pass  # Rebuild may fail if already synced
+                cursor = await conn.execute("SELECT COUNT(*) FROM messages_fts LIMIT 1")
+                fts_count = (await cursor.fetchone())[0]
+                if fts_count == 0:
+                    msg_cursor = await conn.execute("SELECT COUNT(*) FROM messages")
+                    msg_count = (await msg_cursor.fetchone())[0]
+                    if msg_count > 0:
+                        logger.info("FTS5 index empty but %d messages exist — rebuilding (one-time)...", msg_count)
+                        await conn.execute("INSERT INTO messages_fts(messages_fts) VALUES('rebuild')")
+                        await conn.commit()
+                        logger.info("FTS5 rebuild complete")
+                    else:
+                        logger.info("FTS5 index and messages table both empty — no rebuild needed")
+                else:
+                    logger.debug("FTS5 index already populated (%d rows) — skipping rebuild", fts_count)
+            except Exception as exc:
+                logger.debug("FTS5 rebuild check skipped: %s", exc)
             logger.info("Migration complete: messages_fts FTS5 table and triggers created")
         except Exception as exc:
             logger.warning("FTS5 migration skipped (may already exist): %s", exc)
