@@ -224,7 +224,28 @@ class InitializationManager:
             self._cached_workspace_path = swarm_workspace_manager.expand_path(
                 swarm_workspace_manager.DEFAULT_WORKSPACE_CONFIG["file_path"]
             )
+            # Persist to app_config so other modules (context_health_hook,
+            # evolution_optimizer) can read it without importing us.
+            self._persist_workspace_path(self._cached_workspace_path)
         return self._cached_workspace_path
+
+    @staticmethod
+    def _persist_workspace_path(ws_path: str) -> None:
+        """Write workspace_path to app_config_manager if not already set.
+
+        This is the single place where workspace_path enters config.json.
+        Other modules read it via app_config_manager.get("workspace_path")
+        without needing to import initialization_manager.
+        """
+        try:
+            from core.app_config_manager import app_config_manager
+            if app_config_manager is not None:
+                existing = app_config_manager.get("workspace_path")
+                if existing != ws_path:
+                    app_config_manager.update({"workspace_path": ws_path})
+                    logger.info("Persisted workspace_path to config: %s", ws_path)
+        except (ImportError, Exception) as exc:
+            logger.debug("Could not persist workspace_path to config: %s", exc)
 
 
 
@@ -293,6 +314,7 @@ class InitializationManager:
             # Cache the expanded path BEFORE refresh (refresh_builtin_defaults
             # calls get_cached_workspace_path())
             self._cached_workspace_path = workspace_path
+            self._persist_workspace_path(workspace_path)
             
             # Refresh built-in skills and context files
             await self.refresh_builtin_defaults()
