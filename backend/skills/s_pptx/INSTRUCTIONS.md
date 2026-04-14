@@ -1,5 +1,24 @@
 # PPTX Editor
 
+
+## Scripts & Entry Points
+
+**Available scripts:**
+- `ooxml/scripts/pack.py`: Tool to pack a directory into a .docx, .pptx, or .xlsx file with XML formatting undone. (exists)
+- `ooxml/scripts/unpack.py`: Unpack and format XML contents of Office files (.docx, .pptx, .xlsx) (exists)
+- `ooxml/scripts/validate.py`: Command line tool to validate Office document XML files against XSD schemas and tracked changes. (exists)
+- `ooxml/scripts/validation/base.py`: Base validator with common validation logic for document files. (exists)
+- `ooxml/scripts/validation/docx.py`: Validator for Word document XML files against XSD schemas. (exists)
+- `ooxml/scripts/validation/pptx.py` [ENTRY]: Validator for PowerPoint presentation XML files against XSD schemas. (exists)
+- `ooxml/scripts/validation/redlining.py`: Validator for tracked changes in Word documents. (exists)
+- `scripts/html2pptx.js` [ENTRY]: html2pptx - Convert HTML slide to pptxgenjs slide with positioned elements (exists)
+- `scripts/inventory.py`: Extract structured text content from PowerPoint presentations. (exists)
+- `scripts/rearrange.py`: Rearrange PowerPoint slides based on a sequence of indices. (exists)
+- `scripts/replace.py`: Apply text replacements to PowerPoint presentation. (exists)
+- `scripts/style-extract.py`: Extract style summary from an existing PowerPoint presentation. (exists)
+- `scripts/thumbnail.py`: Create thumbnail grids from PowerPoint presentation slides. (exists)
+
+
 ## USER NOTIFICATION (DISPLAY IMMEDIATELY)
 
 **When this skill is triggered, you MUST display this message to the user:**

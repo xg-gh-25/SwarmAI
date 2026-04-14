@@ -1,5 +1,20 @@
 # DOCX Editor
 
+
+## Scripts & Entry Points
+
+**Available scripts:**
+- `ooxml/scripts/pack.py`: Tool to pack a directory into a .docx, .pptx, or .xlsx file with XML formatting undone. (exists)
+- `ooxml/scripts/unpack.py`: Unpack and format XML contents of Office files (.docx, .pptx, .xlsx) (exists)
+- `ooxml/scripts/validate.py`: Command line tool to validate Office document XML files against XSD schemas and tracked changes. (exists)
+- `ooxml/scripts/validation/base.py`: Base validator with common validation logic for document files. (exists)
+- `ooxml/scripts/validation/docx.py` [ENTRY]: Validator for Word document XML files against XSD schemas. (exists)
+- `ooxml/scripts/validation/pptx.py`: Validator for PowerPoint presentation XML files against XSD schemas. (exists)
+- `ooxml/scripts/validation/redlining.py`: Validator for tracked changes in Word documents. (exists)
+- `scripts/document.py`: Library for working with Word documents: comments, tracked changes, and editing. (exists)
+- `scripts/utilities.py`: Utilities for editing OOXML documents. (exists)
+
+
 ## Overview
 
 A user may ask you to create, edit, or analyze the contents of a .docx file. A .docx file is essentially a ZIP archive containing XML files and other resources that you can read or edit. You have different tools and workflows available for different tasks.

@@ -1,5 +1,12 @@
 # Browser Agent
 
+
+## Scripts & Entry Points
+
+**Available scripts:**
+- `browser-agent.mjs` [ENTRY]: browser-agent.mjs — DOM-based browser automation for SwarmAI (exists)
+
+
 DOM-based web automation: navigate websites, read compressed page content, click elements,
 fill forms, extract data, and take screenshots using Playwright.
 

@@ -10,6 +10,13 @@ tier: always
 ---
 # Save Memory
 
+
+## Scripts & Entry Points
+
+**Available scripts:**
+- `scripts/locked_write.py`: Locked read-modify-write for MEMORY.md and EVOLUTION.md. (exists)
+
+
 Write user-specified content directly to MEMORY.md. This is the **only user-triggered**
 memory operation — all other memory management (DailyActivity, distillation, archiving)
 is fully automatic.

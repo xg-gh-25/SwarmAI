@@ -1,5 +1,19 @@
 # PDF Toolkit
 
+
+## Scripts & Entry Points
+
+**Available scripts:**
+- `scripts/check_bounding_boxes.py`: Script to check that the `fields.json` file that Claude creates when analyzing PDFs (exists)
+- `scripts/check_bounding_boxes_test.py`: Currently this is not run automatically in CI; it's just for documentation and manual checking. (exists)
+- `scripts/check_fillable_fields.py`: Script for Claude to run to determine whether a PDF has fillable form fields. See forms.md. (exists)
+- `scripts/convert_pdf_to_images.py` [ENTRY]: Converts each page of a PDF to a PNG image. (exists)
+- `scripts/create_validation_image.py`: Creates validation images with rectangles for bounding box information (exists)
+- `scripts/extract_form_field_info.py`: Extracts data for the fillable form fields in a PDF and outputs JSON that (exists)
+- `scripts/fill_fillable_fields.py`: Fills fillable form fields in a PDF. See forms.md. (exists)
+- `scripts/fill_pdf_form_with_annotations.py` [ENTRY]: Fills a PDF by adding text annotations defined in `fields.json`. See forms.md. (exists)
+
+
 ## USER NOTIFICATION (DISPLAY IMMEDIATELY)
 
 **When this skill is triggered, you MUST display this message to the user:**
