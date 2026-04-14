@@ -115,9 +115,9 @@ class ManifestLoader:
                 _manifest_cache[key] = None
                 return None
             # Normalize None → empty list for optional list fields
-            for key in ("scripts", "resources"):
-                if key in data and data[key] is None:
-                    data[key] = []
+            for field in ("scripts", "resources"):
+                if field in data and data[field] is None:
+                    data[field] = []
             # Normalize resources: accept strings, dicts, or ResourceEntry
             if "resources" in data and isinstance(data["resources"], list):
                 normalized = []

@@ -111,7 +111,7 @@ class SkillRegistry:
         return result
 
     def _compute_dir_hash(self) -> str:
-        """Hash of all skill directory names + their SKILL.md mtimes."""
+        """Hash of all skill directory names + their SKILL.md/manifest.yaml mtimes."""
         if not self._skills_dir.is_dir():
             return ""
         parts: list[str] = []
@@ -121,6 +121,10 @@ class SkillRegistry:
                 if skill_md.exists():
                     mtime = os.path.getmtime(str(skill_md))
                     parts.append(f"{entry.name}:{mtime}")
+                # Include manifest.yaml mtime to bust cache on manifest changes
+                manifest = entry / "manifest.yaml"
+                if manifest.exists():
+                    parts.append(f"{entry.name}:m:{os.path.getmtime(str(manifest))}")
         return hashlib.md5("|".join(parts).encode(), usedforsecurity=False).hexdigest()
 
     def _discover_skills(self) -> list[str]:
@@ -233,29 +237,20 @@ class SkillRegistry:
     def _get_one_liner(self, name: str) -> str:
         """Extract first sentence of description for lazy skill listing.
 
-        Reads from manifest.yaml or SKILL.md frontmatter description field.
+        Always reads from SKILL.md frontmatter description field —
+        manifest.yaml doesn't carry a description.
         Returns a short string suitable for the On-Demand section.
         """
         skill_dir = self._skills_dir / f"s_{name}"
-
-        # 1. Try manifest — not typical for simple skills but check anyway
-        try:
-            from .manifest_loader import ManifestLoader
-            manifest = ManifestLoader.load(skill_dir)
-            if manifest is not None:
-                return name  # Manifest doesn't carry description; use name
-        except ImportError:
-            pass
-
-        # 2. Parse SKILL.md frontmatter description
         skill_md = skill_dir / "SKILL.md"
         if skill_md.exists():
             try:
                 content = skill_md.read_text(encoding="utf-8")
-                return self._extract_description_one_liner(content)
+                desc = self._extract_description_one_liner(content)
+                if desc:
+                    return desc
             except Exception:
                 pass
-
         return name  # Fallback to just the name
 
     @staticmethod
