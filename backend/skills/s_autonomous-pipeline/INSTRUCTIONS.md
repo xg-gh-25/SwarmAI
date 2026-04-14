@@ -439,6 +439,8 @@ python backend/scripts/artifact_cli.py advance --project <PROJECT> --state deliv
      +1 if design_doc was available (not just evaluation)
      -2 if any acceptance criterion lacks a test
      -2 if WTF gate triggered (even if resolved)
+     -2 if smoke_tests == 0 and files_changed > 1 (runtime crashes likely hidden)
+     -1 if integration_trace.checked == 0 (wiring unverified)
      -1 per unresolved warning from validator
    ```
    If confidence < 7 → flag for human review even without judgment decisions.
