@@ -937,72 +937,10 @@ class PromptBuilder:
         return effort
 
     # ------------------------------------------------------------------
-    # Knowledge Recall (Layer 6)
     # ------------------------------------------------------------------
-
-    def _recall_knowledge(
-        self,
-        working_directory: str,
-        query: str,
-        max_tokens: int = 15_000,
-    ) -> str:
-        """Recall relevant knowledge from Library via hybrid FTS5 + vector search.
-
-        Pre-session recall: uses focus keywords from proactive briefing to
-        search the indexed Knowledge/ directory. Returns formatted markdown
-        or empty string if nothing relevant found.
-
-        Args:
-            working_directory: Workspace root path.
-            query: Search query (typically focus keywords).
-            max_tokens: Token budget for recalled content.
-
-        Returns:
-            Formatted "## Recalled Knowledge" section, or "".
-        """
-        if not query or not query.strip():
-            return ""
-
-        from .knowledge_store import KnowledgeStore
-        from .recall_engine import RecallEngine
-        from .embedding_client import EmbeddingClient
-        from .vec_db import get_vec_conn
-
-        conn = get_vec_conn()
-        if conn is None:
-            return ""
-
-        try:
-            store = KnowledgeStore(conn)
-
-            # P1: Add TranscriptStore for verbatim conversation recall
-            additional_stores = []
-            try:
-                from .transcript_indexer import TranscriptStore
-                transcript_store = TranscriptStore(conn)
-                transcript_store.ensure_tables()
-                additional_stores.append(transcript_store)
-            except Exception:
-                pass  # Transcript tables may not exist yet — graceful
-
-            engine = RecallEngine(store, additional_stores=additional_stores)
-
-            client = EmbeddingClient()
-
-            def _safe_embed(text: str) -> list[float] | None:
-                return client.embed_text(text)
-
-            recalled = engine.recall_knowledge(
-                query, embed_fn=_safe_embed, max_tokens=max_tokens,
-            )
-        except Exception as exc:
-            logger.debug("Knowledge recall failed: %s", exc)
-            recalled = ""
-
-        if not recalled:
-            return ""
-
-        return f"## Recalled Knowledge\n{recalled}"
+    # Knowledge Recall (Layer 6) — moved to session_router._recall_for_query()
+    # Post-first-message injection via _maybe_inject_recall() in session_router.py
+    # ------------------------------------------------------------------
 
     # ------------------------------------------------------------------
     # L3: Active Session Digest
