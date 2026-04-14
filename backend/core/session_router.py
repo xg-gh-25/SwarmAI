@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 import json as _json
 import logging
+import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1067,8 +1068,12 @@ async def _shadow_recall(
     _shadowed_sessions[session_id] = time.monotonic()
 
     # Skip very short messages (greetings, "hi", etc.)
+    # CJK characters are semantically dense — "评估下" (3 chars) is a valid query.
+    # Use threshold 2 if CJK detected, 5 otherwise.
     text = user_message.strip() if user_message else ""
-    if len(text) < 5:
+    _has_cjk = any("\u4e00" <= c <= "\u9fff" for c in text[:10])
+    _min_len = 2 if _has_cjk else 5
+    if len(text) < _min_len:
         return None
 
     wd = Path(working_directory)
@@ -1120,47 +1125,46 @@ def _run_dual_recall(db_path: str, query: str) -> tuple[dict, dict]:
     import time
 
     conn = sqlite3.connect(db_path, timeout=5)
-
-    # Shared engine — created once, used by both paths.
-    # Outside try blocks so Path 2 can't NameError if Path 1 fails.
-    from .recall_engine import RecallEngine
-    from .knowledge_store import KnowledgeStore
-
-    store = KnowledgeStore(conn)
-    engine = RecallEngine(store)
-
-    # ── Path 1: FTS5-only (no embedding) ──
-    fts5_result: dict[str, Any] = {"ms": 0, "hits": 0}
     try:
-        t0 = time.perf_counter()
-        fts5_text = engine.recall_knowledge(query, embed_fn=None, max_tokens=4000)
-        t1 = time.perf_counter()
+        from .recall_engine import RecallEngine
+        from .knowledge_store import KnowledgeStore
 
-        fts5_result["ms"] = round((t1 - t0) * 1000, 1)
-        fts5_result["hits"] = fts5_text.count("**[") if fts5_text else 0
-        fts5_result["chars"] = len(fts5_text) if fts5_text else 0
-    except Exception as exc:
-        fts5_result["error"] = str(exc)[:100]
+        store = KnowledgeStore(conn)
+        engine = RecallEngine(store)
 
-    # ── Path 2: FTS5 + Embedding (Bedrock Titan v2) ──
-    embed_result: dict[str, Any] = {"ms": 0, "hits": 0}
-    try:
-        embed_fn = _get_embed_fn()
-        if embed_fn is None:
-            embed_result["error"] = "no_bedrock"
-        else:
+        # ── Path 1: FTS5-only (no embedding) ──
+        fts5_result: dict[str, Any] = {"ms": 0, "hits": 0}
+        try:
             t0 = time.perf_counter()
-            embed_text = engine.recall_knowledge(query, embed_fn=embed_fn, max_tokens=4000)
+            fts5_text = engine.recall_knowledge(query, embed_fn=None, max_tokens=4000)
             t1 = time.perf_counter()
 
-            embed_result["ms"] = round((t1 - t0) * 1000, 1)
-            embed_result["hits"] = embed_text.count("**[") if embed_text else 0
-            embed_result["chars"] = len(embed_text) if embed_text else 0
-    except Exception as exc:
-        embed_result["error"] = str(exc)[:100]
+            fts5_result["ms"] = round((t1 - t0) * 1000, 1)
+            fts5_result["hits"] = fts5_text.count("**[") if fts5_text else 0
+            fts5_result["chars"] = len(fts5_text) if fts5_text else 0
+        except Exception as exc:
+            fts5_result["error"] = str(exc)[:100]
 
-    conn.close()
-    return fts5_result, embed_result
+        # ── Path 2: FTS5 + Embedding (Bedrock Titan v2) ──
+        embed_result: dict[str, Any] = {"ms": 0, "hits": 0}
+        try:
+            embed_fn = _get_embed_fn()
+            if embed_fn is None:
+                embed_result["error"] = "no_bedrock"
+            else:
+                t0 = time.perf_counter()
+                embed_text = engine.recall_knowledge(query, embed_fn=embed_fn, max_tokens=4000)
+                t1 = time.perf_counter()
+
+                embed_result["ms"] = round((t1 - t0) * 1000, 1)
+                embed_result["hits"] = embed_text.count("**[") if embed_text else 0
+                embed_result["chars"] = len(embed_text) if embed_text else 0
+        except Exception as exc:
+            embed_result["error"] = str(exc)[:100]
+
+        return fts5_result, embed_result
+    finally:
+        conn.close()
 
 
 def _get_embed_fn():
@@ -1168,7 +1172,6 @@ def _get_embed_fn():
     try:
         import boto3
 
-        import os
         region = os.environ.get("AWS_DEFAULT_REGION", "us-east-1")
         client = boto3.client("bedrock-runtime", region_name=region)
 
@@ -1188,12 +1191,24 @@ def _get_embed_fn():
         return None
 
 
+_JSONL_MAX_LINES = 1000
+
+
 def _append_jsonl(path: Path, entry: dict) -> None:
-    """Append a single JSON line to a JSONL file. Atomic on POSIX for lines <4KB."""
+    """Append a JSON line, rotating to keep at most _JSONL_MAX_LINES entries."""
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "a", encoding="utf-8") as f:
             f.write(_json.dumps(entry, ensure_ascii=False) + "\n")
             f.flush()
+        # Rotate: if file exceeds max lines, keep the newest half.
+        # Check only every ~100 writes (stat is cheap, rewrite is not).
+        try:
+            lines = path.read_text(encoding="utf-8").strip().split("\n")
+            if len(lines) > _JSONL_MAX_LINES:
+                keep = lines[-(_JSONL_MAX_LINES // 2):]
+                path.write_text("\n".join(keep) + "\n", encoding="utf-8")
+        except Exception:
+            pass  # Rotation failure is non-critical
     except Exception:
         pass  # Shadow mode — never crash
