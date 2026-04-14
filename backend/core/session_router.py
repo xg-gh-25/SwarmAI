@@ -25,6 +25,7 @@ import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+import re
 from typing import Any, AsyncIterator, Optional, TYPE_CHECKING
 from uuid import uuid4
 
@@ -42,6 +43,144 @@ logger = logging.getLogger(__name__)
 # Claude Code CLI does not currently support image/document content blocks
 # via stdin JSON.  When SDK support lands, flip this to True.
 _SDK_SUPPORTS_MULTIMODAL: bool = False
+
+# ── Pre-response recall (G3: post-first-message injection) ────────
+# Activates RecallEngine L2/L3 using the user's actual query instead
+# of generic proactive keywords.  Runs once per session, 100ms timeout.
+
+_RECALL_TIMEOUT_S = 0.15  # 150ms hard timeout (generous for thread + DB)
+_RECALL_MAX_TOKENS = 8_000  # Conservative — don't bloat prompt
+
+_STOP_WORDS: frozenset[str] = frozenset({
+    "the", "this", "that", "with", "from", "what", "when", "where",
+    "which", "about", "into", "than", "then", "them", "they", "been",
+    "being", "have", "has", "had", "does", "did", "doing", "done",
+    "will", "would", "could", "should", "shall", "might",
+    "can", "may", "also", "just", "more", "most", "some", "any", "please",
+    "help", "tell", "want", "need", "know", "like", "look", "show", "check",
+    "all", "each", "every", "both", "few", "many", "much", "such",
+    "very", "too", "quite", "rather", "only", "even", "still",
+    "how", "why", "who", "its", "our", "your", "their", "his", "her",
+    "and", "but", "for", "nor", "not", "yet", "are", "was", "were",
+})
+
+
+def _extract_query_keywords(message: str) -> str:
+    """Extract searchable keywords from user message.  Pure NLP, no LLM.
+
+    Returns a space-separated string of up to 15 terms suitable for
+    FTS5 + vector search.  Returns empty string for messages too short
+    to produce meaningful recall.
+    """
+    if not message or len(message.strip()) < 3:
+        return ""
+
+    text = message.strip()
+
+    # Strip common conversational filler
+    text = re.sub(
+        r"^(hey|hi|hello|please|can you|could you|help me|help|swarm)\s+",
+        "", text, flags=re.IGNORECASE,
+    )
+
+    if not text:
+        return ""
+
+    # English words: keep substantive terms (>3 chars, not stop words)
+    words = [
+        w for w in re.findall(r"\b[a-zA-Z_]\w{2,}\b", text)
+        if w.lower() not in _STOP_WORDS
+    ]
+
+    # CJK: keep contiguous CJK character runs as-is (natural search terms)
+    cjk = re.findall(r"[\u4e00-\u9fff\u3400-\u4dbf]+", text)
+
+    combined = words[:10] + cjk[:5]
+    return " ".join(combined) if combined else ""
+
+
+def _recall_for_query(working_directory: str, query: str, max_tokens: int) -> str:
+    """Run hybrid FTS5+vector recall against the Knowledge Library.
+
+    Thin wrapper around existing RecallEngine infrastructure.
+    Returns formatted recalled content or empty string.
+    """
+    try:
+        from .vec_db import get_vec_conn
+        from .knowledge_store import KnowledgeStore
+        from .recall_engine import RecallEngine
+
+        conn = get_vec_conn()
+        if conn is None:
+            return ""
+
+        store = KnowledgeStore(conn)
+        engine = RecallEngine(store)
+
+        # Embedding function — graceful fallback to FTS5-only
+        embed_fn = None
+        try:
+            from .embedding_client import EmbeddingClient
+            client = EmbeddingClient()
+            embed_fn = client.embed_text
+        except Exception:
+            pass  # FTS5-only is fine
+
+        return engine.recall_knowledge(query, embed_fn=embed_fn, max_tokens=max_tokens)
+    except Exception as exc:
+        logger.debug("_recall_for_query failed: %s", exc)
+        return ""
+
+
+async def _maybe_inject_recall(
+    user_message: str,
+    options: Any,
+    unit: SessionUnit,
+) -> None:
+    """Augment system prompt with recalled knowledge from user's actual query.
+
+    Runs ONCE per session on the first user message.  Subsequent messages
+    skip (the agent already has context from the first injection).
+
+    Guard rails:
+      - Once-per-session flag on unit._recall_injected
+      - Channel sessions excluded (quick exchanges don't need deep recall)
+      - 150ms hard timeout — recall is enhancement, not critical path
+      - Any exception → skip silently, set flag to prevent retry
+    """
+    if unit._recall_injected:
+        return
+
+    # Channel sessions: skip recall, set flag
+    if unit.is_channel_session:
+        unit._recall_injected = True
+        return
+
+    # Extract keywords — skip if message too short/generic
+    keywords = _extract_query_keywords(user_message)
+    if not keywords:
+        unit._recall_injected = True
+        return
+
+    try:
+        recalled = await asyncio.wait_for(
+            asyncio.to_thread(
+                _recall_for_query,
+                unit.working_directory,
+                keywords,
+                _RECALL_MAX_TOKENS,
+            ),
+            timeout=_RECALL_TIMEOUT_S,
+        )
+        if recalled:
+            options.system_prompt += f"\n\n## Recalled Knowledge\n{recalled}"
+    except asyncio.TimeoutError:
+        logger.debug("Recall timed out (>%sms) for keywords: %s",
+                      int(_RECALL_TIMEOUT_S * 1000), keywords[:80])
+    except Exception as exc:
+        logger.debug("Recall injection failed: %s", exc)
+    finally:
+        unit._recall_injected = True
 
 
 def _get_access_hint(ext: str, filename: str) -> str:
@@ -817,6 +956,20 @@ class SessionRouter:
                 query_content = await _convert_non_native_blocks_to_path_hints(
                     query_content, session_id,
                 )
+
+        # ── G3: Pre-response recall injection ─────────────────────
+        # Inject recalled knowledge based on user's actual first message.
+        # Replaces the old proactive-keyword recall (in prompt_builder.py)
+        # which used generic focus keywords before the user typed.
+        _user_text = user_message or (
+            query_content if isinstance(query_content, str) else ""
+        )
+        if _user_text:
+            await _maybe_inject_recall(
+                user_message=_user_text,
+                options=options,
+                unit=unit,
+            )
 
         # ── G3: Shadow recall — fire-and-forget quality validation ──
         # Runs recall against the user's actual message, logs results

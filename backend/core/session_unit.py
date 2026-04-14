@@ -332,6 +332,11 @@ class SessionUnit:
         self._retry_count: int = 0
         self._model_name: Optional[str] = None
 
+        # ── Recall injection (G3: post-first-message) ─────────────
+        # Set True after first-message recall runs (or is skipped).
+        # Prevents re-running on subsequent messages in the same session.
+        self._recall_injected: bool = False
+
         # ── Hook tracking ─────────────────────────────────────────
         # True after hooks enqueued for current IDLE period.
         # Reset on every STREAMING transition so next IDLE fires fresh.
