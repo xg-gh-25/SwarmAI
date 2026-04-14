@@ -84,7 +84,7 @@ Persist it to a session-scoped file so it survives:
 
 ### Apply Skill Fix (User-Initiated Deploy)
 
-When the session briefing shows a recommend-tier skill improvement (e.g. `Say "apply radar-todo fix" to deploy`), the user can explicitly approve it.
+When the session briefing shows a recommend-tier skill improvement (e.g. `Say "apply radar-todo fix" to review changes`), the user can explicitly approve it.
 
 **When user says "apply <skill-name> fix":**
 
