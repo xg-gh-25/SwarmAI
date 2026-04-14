@@ -21,7 +21,6 @@ scripts:
     description: "Fills fillable form fields in a PDF. See forms.md."
   - path: scripts/fill_pdf_form_with_annotations.py
     description: "Fills a PDF by adding text annotations defined in `fields.json`. See forms.md."
-    entry: true
 
 resources:
   - scripts

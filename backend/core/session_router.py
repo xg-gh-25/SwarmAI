@@ -49,7 +49,10 @@ _SDK_SUPPORTS_MULTIMODAL: bool = False
 # of generic proactive keywords.  Runs once per session, 100ms timeout.
 
 _RECALL_TIMEOUT_S = 0.15  # 150ms hard timeout (generous for thread + DB)
-_RECALL_MAX_TOKENS = 8_000  # Conservative — don't bloat prompt
+# Recall budget is intentionally lower than the 15K default in recall_engine.py.
+# This injection is additive to an already-assembled system prompt (~30-50K),
+# so we cap at 8K to avoid pushing context over budget on large sessions.
+_RECALL_MAX_TOKENS = 8_000
 
 _STOP_WORDS: frozenset[str] = frozenset({
     "the", "this", "that", "with", "from", "what", "when", "where",

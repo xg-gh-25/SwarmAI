@@ -5,7 +5,6 @@ description: >
   TRIGGER: any request involving PowerPoint, presentations, slides, or speaker notes.
   DO NOT USE: for simple text outlines (just use markdown).
 tags: [skill, PPT, PPTX, PPT-create, PPT-edit, PPT-read, PPT-update]
-owners: gawan@, GCR-AIDLC
 tier: lazy
 ---
 # PPTX Editor

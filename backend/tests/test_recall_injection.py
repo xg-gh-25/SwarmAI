@@ -175,8 +175,8 @@ class TestMaybeInjectRecall:
             )
             elapsed = time.monotonic() - start
 
-        # Should complete in well under 2 seconds (the sleep duration)
-        assert elapsed < 1.0, f"Timeout should have fired, but took {elapsed:.1f}s"
+        # 150ms timeout + thread overhead — must complete well under 500ms
+        assert elapsed < 0.5, f"Timeout should have fired at 150ms, but took {elapsed:.1f}s"
         assert "never be injected" not in mock_options.system_prompt
         assert mock_unit._recall_injected is True
 
