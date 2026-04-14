@@ -1120,20 +1120,25 @@ def _run_dual_recall(db_path: str, query: str) -> tuple[dict, dict]:
     """Run FTS5-only and FTS5+embedding recall, return timing dicts.
 
     Runs synchronously (called from asyncio.to_thread).
+
+    Uses get_vec_conn() for the embedding path so that sqlite-vec virtual
+    tables (knowledge_vec, transcript_vec) are queryable.  FTS5 path uses
+    a plain connection since FTS5 is built into SQLite.
     """
     import sqlite3
     import time
 
+    from .recall_engine import RecallEngine
+    from .knowledge_store import KnowledgeStore
+    from .vec_db import get_vec_conn
+
+    # ── Path 1: FTS5-only (plain connection, no vec extension needed) ──
+    fts5_result: dict[str, Any] = {"ms": 0, "hits": 0}
     conn = sqlite3.connect(db_path, timeout=5)
     try:
-        from .recall_engine import RecallEngine
-        from .knowledge_store import KnowledgeStore
-
         store = KnowledgeStore(conn)
         engine = RecallEngine(store)
 
-        # ── Path 1: FTS5-only (no embedding) ──
-        fts5_result: dict[str, Any] = {"ms": 0, "hits": 0}
         try:
             t0 = time.perf_counter()
             fts5_text = engine.recall_knowledge(query, embed_fn=None, max_tokens=4000)
@@ -1144,27 +1149,36 @@ def _run_dual_recall(db_path: str, query: str) -> tuple[dict, dict]:
             fts5_result["chars"] = len(fts5_text) if fts5_text else 0
         except Exception as exc:
             fts5_result["error"] = str(exc)[:100]
-
-        # ── Path 2: FTS5 + Embedding (Bedrock Titan v2) ──
-        embed_result: dict[str, Any] = {"ms": 0, "hits": 0}
-        try:
-            embed_fn = _get_embed_fn()
-            if embed_fn is None:
-                embed_result["error"] = "no_bedrock"
-            else:
-                t0 = time.perf_counter()
-                embed_text = engine.recall_knowledge(query, embed_fn=embed_fn, max_tokens=4000)
-                t1 = time.perf_counter()
-
-                embed_result["ms"] = round((t1 - t0) * 1000, 1)
-                embed_result["hits"] = embed_text.count("**[") if embed_text else 0
-                embed_result["chars"] = len(embed_text) if embed_text else 0
-        except Exception as exc:
-            embed_result["error"] = str(exc)[:100]
-
-        return fts5_result, embed_result
     finally:
         conn.close()
+
+    # ── Path 2: FTS5 + Embedding (vec-enabled connection for vector search) ──
+    embed_result: dict[str, Any] = {"ms": 0, "hits": 0}
+    vec_conn = get_vec_conn(Path(db_path))
+    if vec_conn is None:
+        embed_result["error"] = "no_sqlite_vec"
+        return fts5_result, embed_result
+
+    # get_vec_conn returns a singleton — do NOT close it
+    store = KnowledgeStore(vec_conn)
+    engine = RecallEngine(store)
+
+    try:
+        embed_fn = _get_embed_fn()
+        if embed_fn is None:
+            embed_result["error"] = "no_bedrock"
+        else:
+            t0 = time.perf_counter()
+            embed_text = engine.recall_knowledge(query, embed_fn=embed_fn, max_tokens=4000)
+            t1 = time.perf_counter()
+
+            embed_result["ms"] = round((t1 - t0) * 1000, 1)
+            embed_result["hits"] = embed_text.count("**[") if embed_text else 0
+            embed_result["chars"] = len(embed_text) if embed_text else 0
+    except Exception as exc:
+        embed_result["error"] = str(exc)[:100]
+
+    return fts5_result, embed_result
 
 
 def _get_embed_fn():
