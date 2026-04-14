@@ -143,6 +143,21 @@ This is a **second-pass analysis**: after ruling out "Correction," ask *"Could t
 - User expressed satisfaction ("perfect", "exactly")
 - Patterns worth codifying in the skill
 
+##### 8. Skill Structure Health
+
+**Definition:** Skill packaging doesn't follow current standards (tier, manifest, progressive disclosure).
+
+| Detection Pattern | Example | Recommendation |
+|-------------------|---------|----------------|
+| No `tier` in frontmatter | Missing `tier: lazy` or `tier: always` | Add `tier` field. Default to `lazy` unless proven high-frequency. |
+| Complex skill without `manifest.yaml` | Skill has 3+ Python/JS files but no manifest | Generate manifest.yaml declaring scripts, entry point, dependencies. |
+| Manifest out of sync | manifest.yaml lists `scripts/old.py` but file was renamed/deleted | Update manifest to match actual directory contents. |
+| Always-tier skill with low usage | Skill is `tier: always` but rarely invoked | Demote to `tier: lazy` to save system prompt tokens. |
+| SKILL.md > 300 lines for lazy-tier | Full workflow in SKILL.md, no INSTRUCTIONS.md | Split: stub SKILL.md + full INSTRUCTIONS.md for progressive disclosure. |
+| Description > 1024 chars | Frontmatter description exceeds AIM spec limit | Trim description — move details to SKILL.md body. |
+
+**When to check:** Always — run this check for every skill feedback report as a standard section.
+
 #### Attribution Rules
 
 Feedback must be attributed to the correct target:
@@ -236,6 +251,13 @@ session: [Brief description of what was done]
 ### Successful Patterns
 [Patterns worth preserving or codifying]
 - [Pattern that worked well]
+
+### Structure Health
+[Skill packaging against current standards]
+- **Tier:** [current tier or "missing"] → [recommended tier with reason]
+- **Manifest:** [present/missing/stale] → [action needed]
+- **Progressive disclosure:** [SKILL.md line count, INSTRUCTIONS.md present?] → [action needed]
+- **Description length:** [char count] / 1024 max → [OK or needs trimming]
 
 ---
 

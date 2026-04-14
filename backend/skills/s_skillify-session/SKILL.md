@@ -70,8 +70,20 @@ description: >
   <One-line purpose sentence>.
   TRIGGER: "<phrase 1>", "<phrase 2>", "<phrase 3>".
   DO NOT USE: <when a different skill or approach is better> (use <alternative> instead).
+tier: lazy
 ---
 
+# <Skill Title>
+
+> This skill loads full instructions on activation. Read INSTRUCTIONS.md before proceeding.
+
+TRIGGER: "<phrase 1>", "<phrase 2>", "<phrase 3>"
+DO NOT USE: <when a different skill or approach is better> (use <alternative> instead)
+```
+
+Then write the full workflow into `INSTRUCTIONS.md` in the same directory:
+
+```markdown
 # <Skill Title>
 
 Description of what this skill does and why.
@@ -114,16 +126,61 @@ What to do in this step. Be specific and actionable. Include commands when appro
   - `TRIGGER:` line with quoted phrases the user would say
   - `DO NOT USE:` line with boundary and alternative skill
   - Max 1024 chars total. Critical for activation — SwarmAI matches this against user requests
+- `tier`: Always set to `lazy` for new skills (default). Only use `always` for proven high-frequency skills.
+
+**Progressive disclosure pattern:**
+- SKILL.md = stub for session-start discovery (lightweight, ~25 tokens in system-reminder)
+- INSTRUCTIONS.md = full workflow loaded on invocation (only when needed)
+- Supporting files (REFERENCE.md, scripts/) = loaded on demand within the workflow
+
+### Step 3.5: Generate manifest.yaml (if scripts detected)
+
+If the session involved running Python/JS scripts, shell commands, or using templates, generate a `manifest.yaml` alongside SKILL.md:
+
+```yaml
+name: <skill-name>
+version: "1.0.0"
+tier: lazy
+
+scripts:
+  - path: scripts/<main_script>.py
+    description: "<What it does>"
+    entry: true
+    args: "<typical arguments>"
+  - path: scripts/<helper>.py
+    description: "<What it does>"
+
+dependencies:
+  python: ["<package1>", "<package2>"]
+
+timeout: 120
+```
+
+Place executable scripts in `scripts/` subdirectory. The manifest tells the agent what's available without parsing SKILL.md.
 
 ## Step 4: Confirm and Save
 
-Before writing the file, output the complete SKILL.md content in a markdown code block so the user can review it. Then ask: "Does this look good to save?"
+Before writing files, output all generated content in markdown code blocks for review:
+1. **SKILL.md** (stub with frontmatter + triggers)
+2. **INSTRUCTIONS.md** (full workflow)
+3. **manifest.yaml** (only if scripts were detected in Step 3.5)
+
+Then ask: "Does this look good to save?"
+
+**Directory structure created:**
+```
+~/.swarm-ai/skills/<skill-name>/
+├── SKILL.md              ← Stub (loaded at session start for discovery)
+├── INSTRUCTIONS.md       ← Full workflow (loaded on invocation)
+└── manifest.yaml         ← Package descriptor (only if scripts exist)
+    └── scripts/          ← Executable scripts (only if applicable)
+```
 
 After writing, tell the user:
-- Where the skill was saved
+- Where the skill was saved and what files were created
 - **Important:** The skill will be available in your **next chat session**. To use it now, you need to start a new chat session (the current session's Claude SDK client has already scanned for skills and won't detect new ones until restarted).
 - How it will activate (automatically when SwarmAI matches the description to a user request)
-- That they can edit the SKILL.md directly to refine it
+- That they can edit SKILL.md (triggers/description) or INSTRUCTIONS.md (workflow) directly
 
 **Why the delay?** The Claude SDK client scans for skills once when a chat session starts. It reuses the same client throughout the session for performance. New skills created during the session are saved to disk and will be discovered when the next session starts.
 
