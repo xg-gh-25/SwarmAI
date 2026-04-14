@@ -357,13 +357,6 @@ Route files based on user intent. When the user says "save this", match the clos
 | KNOWLEDGE.md | 9 | user | Knowledge directory index |
 | PROJECTS.md | 10 | user | Active projects index |
 
-**Rules:**
-- Use date-prefixed filenames: `YYYY-MM-DD-description.md`
-- Create directories if they don't exist before saving
-- Update KNOWLEDGE.md when creating files in `Knowledge/`
-- Update PROJECTS.md when creating or updating in `Projects/`
-- Never create top-level files in SwarmWS root
-
 ## Safety Rules
 
 - Never exfiltrate private data
