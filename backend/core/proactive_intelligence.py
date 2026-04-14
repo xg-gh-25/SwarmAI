@@ -652,11 +652,14 @@ def _get_skill_health_highlights(ctx_dir: Path) -> list[str]:
                     name = skill.get("skill_name", "unknown")
                     corr = skill.get("correction_count", 0)
                     fitness = skill.get("fitness_score", 0.0)
+                    # G1: Include apply affordance when actionable changes exist
+                    has_changes = bool(rec.get("changes"))
+                    affordance = f'. Say "apply {name} fix" to deploy' if has_changes else ""
                     highlights.append(
                         f"[medium] **{name}** needs attention -- "
                         f"{corr} corrections, "
                         f"fitness {fitness:.1%}. "
-                        f"Suggested: {first_evidence}"
+                        f"Suggested: {first_evidence}{affordance}"
                     )
             except (KeyError, TypeError, ValueError):
                 continue  # Skip malformed entry, don't lose all highlights

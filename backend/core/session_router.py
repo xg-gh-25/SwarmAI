@@ -19,9 +19,11 @@ Design reference:
 from __future__ import annotations
 
 import asyncio
+import json as _json
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, AsyncIterator, Optional, TYPE_CHECKING
 from uuid import uuid4
 
@@ -815,6 +817,22 @@ class SessionRouter:
                     query_content, session_id,
                 )
 
+        # ── G3: Shadow recall — fire-and-forget quality validation ──
+        # Runs recall against the user's actual message, logs results
+        # to .context/recall_shadow.jsonl. Never blocks, never injects.
+        _user_text = user_message or (
+            query_content if isinstance(query_content, str) else ""
+        )
+        if _user_text and hasattr(unit, "working_directory"):
+            asyncio.create_task(
+                _shadow_recall(
+                    session_id=session_id,
+                    user_message=_user_text,
+                    working_directory=unit.working_directory,
+                    is_channel=unit.is_channel_session,
+                ),
+            )
+
         # Stream response — persist each assistant message IMMEDIATELY.
         #
         # Why incremental (not accumulate-then-flush):
@@ -995,3 +1013,163 @@ class SessionRouter:
                     "Failed to kill unit %s during disconnect_all: %s",
                     unit.session_id, exc,
                 )
+
+
+# ── G3: Shadow Recall — quality validation (no prompt injection) ─────
+#
+# Runs recall against the user's actual first message and logs
+# results + timing to .context/recall_shadow.jsonl.  Fire-and-forget:
+# never blocks the response stream, never injects into the prompt.
+# Data collected here drives the decision to wire recall into production.
+
+_shadowed_sessions: set[str] = set()
+
+
+async def _shadow_recall(
+    session_id: str,
+    user_message: str,
+    working_directory: str,
+    is_channel: bool,
+) -> None:
+    """Run recall in shadow mode — log results, never inject.
+
+    Called as a fire-and-forget task from run_conversation().
+    Tries FTS5-only first, then FTS5+embedding, logs both timings.
+    """
+    # AC5: Skip channel sessions (Slack = quick exchanges, no recall value)
+    if is_channel:
+        return None
+
+    # Once per session — skip if already shadowed
+    if session_id in _shadowed_sessions:
+        return None
+    _shadowed_sessions.add(session_id)
+
+    # Skip very short messages (greetings, "hi", etc.)
+    text = user_message.strip() if user_message else ""
+    if len(text) < 5:
+        return None
+
+    wd = Path(working_directory)
+    ctx_dir = wd / ".context"
+    log_path = ctx_dir / "recall_shadow.jsonl"
+
+    entry: dict[str, Any] = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "session_id": session_id,
+        "query": text[:200],  # Cap for log readability
+        "injected": False,  # Shadow mode — always False
+    }
+
+    try:
+        # Resolve DB path — check workspace-local first, then global
+        db_path = Path(working_directory) / "data.db"
+        if not db_path.exists():
+            db_path = Path.home() / ".swarm-ai" / "data.db"
+        if not db_path.exists():
+            entry["fts5"] = {"ms": 0, "hits": 0, "error": "no_db"}
+            entry["embedding"] = {"ms": 0, "hits": 0, "error": "no_db"}
+            _append_jsonl(log_path, entry)
+            return None
+
+        # Run in thread pool — sqlite3 is not async-safe
+        fts5_result, embed_result = await asyncio.to_thread(
+            _run_dual_recall, str(db_path), text,
+        )
+        entry["fts5"] = fts5_result
+        entry["embedding"] = embed_result
+
+    except Exception as exc:
+        entry["error"] = str(exc)[:200]
+        entry.setdefault("fts5", {"ms": 0, "hits": 0, "error": str(exc)[:100]})
+        entry.setdefault("embedding", {"ms": 0, "hits": 0, "error": str(exc)[:100]})
+
+    _append_jsonl(log_path, entry)
+    return None
+
+
+def _run_dual_recall(db_path: str, query: str) -> tuple[dict, dict]:
+    """Run FTS5-only and FTS5+embedding recall, return timing dicts.
+
+    Runs synchronously (called from asyncio.to_thread).
+    """
+    import sqlite3
+    import time
+
+    conn = sqlite3.connect(db_path, timeout=5)
+
+    # ── Path 1: FTS5-only (no embedding) ──
+    fts5_result: dict[str, Any] = {"ms": 0, "hits": 0}
+    try:
+        from .recall_engine import RecallEngine
+        from .knowledge_store import KnowledgeStore
+
+        store = KnowledgeStore(conn)
+        engine = RecallEngine(store)
+
+        t0 = time.perf_counter()
+        fts5_text = engine.recall_knowledge(query, embed_fn=None, max_tokens=4000)
+        t1 = time.perf_counter()
+
+        fts5_result["ms"] = round((t1 - t0) * 1000, 1)
+        fts5_result["hits"] = fts5_text.count("**[") if fts5_text else 0
+        fts5_result["chars"] = len(fts5_text) if fts5_text else 0
+    except Exception as exc:
+        fts5_result["error"] = str(exc)[:100]
+
+    # ── Path 2: FTS5 + Embedding (Bedrock Titan v2) ──
+    embed_result: dict[str, Any] = {"ms": 0, "hits": 0}
+    try:
+        embed_fn = _get_embed_fn()
+        if embed_fn is None:
+            embed_result["error"] = "no_bedrock"
+        else:
+            t0 = time.perf_counter()
+            embed_text = engine.recall_knowledge(query, embed_fn=embed_fn, max_tokens=4000)
+            t1 = time.perf_counter()
+
+            embed_result["ms"] = round((t1 - t0) * 1000, 1)
+            embed_result["hits"] = embed_text.count("**[") if embed_text else 0
+            embed_result["chars"] = len(embed_text) if embed_text else 0
+    except Exception as exc:
+        embed_result["error"] = str(exc)[:100]
+
+    conn.close()
+    return fts5_result, embed_result
+
+
+def _get_embed_fn():
+    """Try to create a Bedrock Titan v2 embedding function. Returns None on failure."""
+    try:
+        import boto3
+
+        import os
+        region = os.environ.get("AWS_DEFAULT_REGION", "us-east-1")
+        client = boto3.client("bedrock-runtime", region_name=region)
+
+        def embed(text: str) -> list[float] | None:
+            import json
+            try:
+                resp = client.invoke_model(
+                    modelId="amazon.titan-embed-text-v2:0",
+                    body=json.dumps({"inputText": text[:8000]}),
+                )
+                body = json.loads(resp["body"].read())
+                return body.get("embedding")
+            except Exception:
+                return None
+
+        return embed
+    except Exception:
+        return None
+
+
+def _append_jsonl(path: Path, entry: dict) -> None:
+    """Append a single JSON line to a JSONL file. Atomic on POSIX for lines <4KB."""
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(_json.dumps(entry, ensure_ascii=False) + "\n")
+            f.flush()
+    except Exception:
+        pass  # Shadow mode — never crash

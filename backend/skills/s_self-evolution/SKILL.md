@@ -82,6 +82,26 @@ Persist it to a session-scoped file so it survives:
   ```
 - Each session gets its own counter file. Files in `/tmp/` auto-clean on reboot.
 
+### Apply Skill Fix (User-Initiated Deploy)
+
+When the session briefing shows a recommend-tier skill improvement (e.g. `Say "apply radar-todo fix" to deploy`), the user can explicitly approve it.
+
+**When user says "apply <skill-name> fix":**
+
+1. Read `.context/skill_health.json`
+2. Find the skill entry where `action == "recommend"` and `skill_name` matches
+3. Extract the `recommendation.changes` array
+4. Read the current `SKILL.md` for that skill
+5. Apply each change (TextChange: original → replacement) using the Edit tool
+6. Verify the file is valid (YAML frontmatter intact, size < 15KB)
+7. Report what changed and ask user to confirm the result
+
+**Guard rails:**
+- Only works for `action == "recommend"` skills — never auto-deploy
+- If `skill_health.json` doesn't exist or skill not found → say so, don't guess
+- If changes don't apply cleanly (original text not found) → report which failed
+- Always show the diff before and after
+
 ### Drift Prevention (ADL Protocol)
 
 **Stability > Interpretability > Reusability > Extensibility > Novelty**
