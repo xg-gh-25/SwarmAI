@@ -518,16 +518,22 @@ class EvolutionOptimizer:
         if len(text.strip()) < 15:
             return False
 
-        # Trailing fragment: if the text ends with an alphabetic char (no
-        # sentence-ending punctuation) and the final word is very short (<3
-        # chars), it likely got cut off mid-phrase by the regex capture group
-        # length limit.  This catches "should always vali" but allows
-        # "should always validate input first".
+        # Trailing fragment detection — catches corrections truncated mid-phrase.
         stripped = text.strip()
-        if stripped and stripped[-1].isalpha() and len(stripped) > 30:
-            last_word = stripped.split()[-1] if stripped.split() else ""
-            if len(last_word) < 3:
-                return False
+        if stripped and len(stripped) > 30:
+            last_char = stripped[-1]
+            # English: ends with short word fragment (e.g. "should always vali")
+            if last_char.isascii() and last_char.isalpha():
+                last_word = stripped.split()[-1] if stripped.split() else ""
+                if len(last_word) < 3:
+                    return False
+            # CJK: ends without sentence-ending particle or punctuation.
+            # Common endings: 了的吗呢吧啊哦嘛呀。！？
+            # If the last char is CJK but NOT a natural endpoint, likely truncated.
+            elif "\u4e00" <= last_char <= "\u9fff":
+                _cjk_endings = set("了的吗呢吧啊哦嘛呀么")
+                if last_char not in _cjk_endings:
+                    return False
 
         # Already present in skill text (dedup)
         if text.strip().lower() in existing_skill_lower:
@@ -571,11 +577,14 @@ class EvolutionOptimizer:
         if len(new_text.encode("utf-8")) > 15 * 1024:
             return False, f"Exceeds 15KB limit ({len(new_text.encode('utf-8'))} bytes)"
 
-        # Growth check: 20% max
+        # Growth check: 20% max (in bytes, not chars — consistent with size check,
+        # and correct for CJK content where 1 char = 3 bytes UTF-8).
         if original_text:
-            growth = (len(new_text) - len(original_text)) / max(len(original_text), 1)
+            new_bytes = len(new_text.encode("utf-8"))
+            orig_bytes = len(original_text.encode("utf-8"))
+            growth = (new_bytes - orig_bytes) / max(orig_bytes, 1)
             if growth > 0.20:
-                return False, f"Growth {growth:.0%} exceeds 20% limit"
+                return False, f"Growth {growth:.0%} exceeds 20% limit ({new_bytes - orig_bytes} bytes)"
 
         # Injection check via SkillGuard (uses full scan with trust gate)
         try:

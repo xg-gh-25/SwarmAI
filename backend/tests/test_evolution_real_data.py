@@ -8,7 +8,7 @@ confidence distributions, and deployment roundtrips.
 Fixtures live in tests/fixtures/evolution/ — snapshot once, run forever.
 Update fixtures when the eval format changes (check EvalExample fields).
 
-Marked @pytest.mark.slow — excluded from default xdist runs.
+Marked @pytest.mark.slow — can be excluded with ``-m "not slow"``.
 """
 from __future__ import annotations
 
@@ -241,35 +241,37 @@ class TestRegressionGatePreviousCycle:
             # Action should be one of the known tiers
             assert skill["action"] in ("deploy", "recommend", "log", "skip")
 
-    def test_trend_detection_with_real_fitness_deltas(self):
-        """Trend logic: compare current vs previous fitness, verify classification."""
+    def test_trend_detection_with_real_fixture_data(self):
+        """Trend logic against ALL skills in the fixture — verify classification for each."""
         if not HEALTH_FILE.exists():
             pytest.skip("previous_health.json fixture not found")
 
         data = json.loads(HEALTH_FILE.read_text(encoding="utf-8"))
         previous = {s["skill_name"]: s for s in data["skills"]}
-        assert len(previous) > 0, "Need at least one skill in previous health"
+        assert len(previous) >= 3, "Fixture should contain multiple skills for coverage"
 
-        # Exercise the actual trend classification logic from evolution_optimizer
-        # (mirrors _run_evolution_cycle_locked lines ~1042-1051)
+        # Classify trend for every skill in the fixture using the same
+        # delta logic as _run_evolution_cycle_locked (~lines 1042-1051).
         for name, prev in previous.items():
             prev_fitness = prev["fitness_score"]
 
-            # Stable: same fitness → delta ~0
-            delta = prev_fitness - prev_fitness
-            trend = "improving" if delta > 0.05 else "degrading" if delta < -0.05 else "stable"
-            assert trend == "stable"
-
-            # Improving: current fitness significantly higher
-            delta = (prev_fitness + 0.15) - prev_fitness
-            trend = "improving" if delta > 0.05 else "degrading" if delta < -0.05 else "stable"
-            assert trend == "improving"
-
-            # Degrading: current fitness significantly lower
-            delta = (prev_fitness - 0.15) - prev_fitness
-            trend = "improving" if delta > 0.05 else "degrading" if delta < -0.05 else "stable"
-            assert trend == "degrading"
-            break  # One skill is enough to verify the logic
+            # Simulate three scenarios per skill and verify classification
+            for label, current_fitness in [
+                ("stable", prev_fitness),          # identical
+                ("stable", prev_fitness + 0.03),   # within ±0.05
+                ("improving", prev_fitness + 0.10),
+                ("degrading", max(prev_fitness - 0.10, 0.0)),
+            ]:
+                delta = current_fitness - prev_fitness
+                trend = (
+                    "improving" if delta > 0.05
+                    else "degrading" if delta < -0.05
+                    else "stable"
+                )
+                assert trend == label, (
+                    f"{name}: fitness {prev_fitness:.2f}→{current_fitness:.2f}, "
+                    f"delta={delta:.2f}, expected={label}, got={trend}"
+                )
 
 
 # ── Test 5: LLM optimizer with mocked Bedrock ──
