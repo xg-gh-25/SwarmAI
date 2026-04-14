@@ -526,3 +526,36 @@ chmod +x "$OUTPUT_BINARY"
 echo "Backend binary built successfully: $OUTPUT_BINARY"
 echo ""
 echo "File size: $(du -h "$OUTPUT_BINARY" | cut -f1)"
+
+# Auto-deploy to daemon if the daemon directory exists.
+# Without this, the daemon runs a stale binary until someone manually
+# runs `./dev.sh build`. This was a recurring issue — the sidecar binary
+# and daemon binary are separate copies that drift silently.
+DAEMON_DIR="${HOME}/.swarm-ai/daemon"
+DAEMON_BINARY="${DAEMON_DIR}/python-backend"
+if [ -d "$DAEMON_DIR" ]; then
+    echo ""
+    echo "Deploying to daemon at $DAEMON_BINARY..."
+    cp -f "$OUTPUT_BINARY" "${DAEMON_BINARY}.tmp"
+    mv -f "${DAEMON_BINARY}.tmp" "$DAEMON_BINARY"  # atomic replace
+    chmod +x "$DAEMON_BINARY"
+    # Write version file for staleness tracking
+    GIT_HASH=$(cd "$PROJECT_ROOT/.." && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+    echo "$GIT_HASH $(date '+%Y-%m-%d %H:%M:%S')" > "${DAEMON_DIR}/.version"
+    echo "Daemon binary deployed: $(du -h "$DAEMON_BINARY" | cut -f1) (${GIT_HASH})"
+    echo "  ⚠️  Restart daemon to pick up new binary: ./dev.sh daemon restart"
+
+    # Deploy resources (default-agent.json, mcp-catalog.json, etc.)
+    RES_SRC="$PROJECT_ROOT/resources"
+    RES_DST="${DAEMON_DIR}/resources"
+    if [ -d "$RES_SRC" ]; then
+        mkdir -p "$RES_DST"
+        cp -f "$RES_SRC"/*.json "$RES_DST/" 2>/dev/null || true
+        cp -f "$RES_SRC"/*.db "$RES_DST/" 2>/dev/null || true
+        echo "Daemon resources deployed: $RES_DST"
+    fi
+else
+    echo ""
+    echo "Note: No daemon directory at $DAEMON_DIR — skipping daemon deploy."
+    echo "  Install daemon first: python -m channels.install_backend_daemon"
+fi
