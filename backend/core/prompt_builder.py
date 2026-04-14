@@ -723,21 +723,10 @@ class PromptBuilder:
             # The compact registry was a duplicate index (~200 tokens).
             # SkillGuard security scanning is independent (PreToolUse hook).
 
-            # ── Layer 6: Recalled Knowledge (Library recall) ──────────
-            # Pre-session recall: use focus keywords to search the Knowledge
-            # Library (730K tokens of DailyActivity, Designs, Notes, etc.)
-            # via hybrid FTS5 + vector search. Inject relevant chunks.
-            # Skipped for channel sessions (quick exchanges, no deep recall).
-            # Wrapped in to_thread to avoid blocking the event loop (~50ms).
-            if not is_channel and memory_keyword_hint:
-                try:
-                    recalled = await asyncio.to_thread(
-                        self._recall_knowledge, working_directory, memory_keyword_hint,
-                    )
-                    if recalled:
-                        context_text += f"\n\n{recalled}"
-                except Exception as exc:
-                    logger.debug("Knowledge recall skipped: %s", exc)
+            # ── Layer 6: Recalled Knowledge — moved to session_router.py ──
+            # Pre-session recall with proactive keywords replaced by
+            # post-first-message recall (G3) that uses the user's actual
+            # query.  See _maybe_inject_recall() in session_router.py.
 
             # ── L3: Active Session Digest (sibling awareness) ──────────
             # Inject a brief summary of what other active sessions are doing
