@@ -9,7 +9,7 @@ Acceptance criteria under test:
   2. Recalled knowledge injected into system prompt
   3. Second+ messages skip recall (once-per-session)
   4. Channel sessions excluded
-  5. 100ms timeout — failure never blocks
+  5. 150ms timeout — failure never blocks
   6. Chinese queries extract CJK terms correctly
   7. Short/empty messages skip recall
 """
@@ -88,7 +88,6 @@ class TestMaybeInjectRecall:
         unit = MagicMock()
         unit._recall_injected = False
         unit.is_channel_session = False
-        unit.working_directory = "/tmp/test-ws"
         return unit
 
     @pytest.fixture
@@ -164,7 +163,7 @@ class TestMaybeInjectRecall:
         from core.session_router import _maybe_inject_recall
 
         def slow_recall(*args, **kwargs):
-            time.sleep(2)  # Way over 100ms timeout
+            time.sleep(2)  # Way over 150ms timeout
             return "This should never be injected"
 
         with patch("core.session_router._recall_for_query", side_effect=slow_recall):

@@ -60,8 +60,9 @@ _STOP_WORDS: frozenset[str] = frozenset({
     "help", "tell", "want", "need", "know", "like", "look", "show", "check",
     "all", "each", "every", "both", "few", "many", "much", "such",
     "very", "too", "quite", "rather", "only", "even", "still",
-    "how", "why", "who", "its", "our", "your", "their", "his", "her",
+    "how", "why", "who", "you", "its", "our", "your", "their", "his", "her",
     "and", "but", "for", "nor", "not", "yet", "are", "was", "were",
+    "let", "got", "get", "put", "see", "say", "said", "make", "made",
 })
 
 
@@ -86,47 +87,64 @@ def _extract_query_keywords(message: str) -> str:
     if not text:
         return ""
 
+    # Strip URLs and file paths before word extraction
+    text = re.sub(r"https?://\S+", "", text)
+    text = re.sub(r"(?:^|\s)[~/]\S+", " ", text)
+
     # English words: keep substantive terms (>3 chars, not stop words)
     words = [
         w for w in re.findall(r"\b[a-zA-Z_]\w{2,}\b", text)
         if w.lower() not in _STOP_WORDS
     ]
 
-    # CJK: keep contiguous CJK character runs as-is (natural search terms)
-    cjk = re.findall(r"[\u4e00-\u9fff\u3400-\u4dbf]+", text)
+    # CJK + Kana + Hangul: keep contiguous runs as natural search terms
+    cjk = re.findall(r"[\u3040-\u30ff\u4e00-\u9fff\u3400-\u4dbf\uac00-\ud7af]+", text)
 
     combined = words[:10] + cjk[:5]
     return " ".join(combined) if combined else ""
 
 
-def _recall_for_query(working_directory: str, query: str, max_tokens: int) -> str:
+def _recall_for_query(query: str, max_tokens: int) -> str:
     """Run hybrid FTS5+vector recall against the Knowledge Library.
 
     Thin wrapper around existing RecallEngine infrastructure.
+    Uses ``open_vec_db()`` context manager for thread-safe connection
+    (this runs in ``asyncio.to_thread``).
     Returns formatted recalled content or empty string.
     """
     try:
-        from .vec_db import get_vec_conn
+        from .vec_db import open_vec_db
         from .knowledge_store import KnowledgeStore
         from .recall_engine import RecallEngine
 
-        conn = get_vec_conn()
-        if conn is None:
-            return ""
+        with open_vec_db() as conn:
+            if conn is None:
+                return ""
 
-        store = KnowledgeStore(conn)
-        engine = RecallEngine(store)
+            store = KnowledgeStore(conn)
 
-        # Embedding function — graceful fallback to FTS5-only
-        embed_fn = None
-        try:
-            from .embedding_client import EmbeddingClient
-            client = EmbeddingClient()
-            embed_fn = client.embed_text
-        except Exception:
-            pass  # FTS5-only is fine
+            # Include TranscriptStore for verbatim conversation recall (L3)
+            additional_stores = []
+            try:
+                from .transcript_indexer import TranscriptStore
+                ts = TranscriptStore(conn)
+                ts.ensure_tables()
+                additional_stores.append(ts)
+            except Exception:
+                pass  # Transcript recall unavailable — Knowledge-only is fine
 
-        return engine.recall_knowledge(query, embed_fn=embed_fn, max_tokens=max_tokens)
+            engine = RecallEngine(store, additional_stores=additional_stores)
+
+            # Embedding function — graceful fallback to FTS5-only
+            embed_fn = None
+            try:
+                from .embedding_client import EmbeddingClient
+                client = EmbeddingClient()
+                embed_fn = client.embed_text
+            except (ImportError, RuntimeError):
+                pass  # FTS5-only is fine
+
+            return engine.recall_knowledge(query, embed_fn=embed_fn, max_tokens=max_tokens)
     except Exception as exc:
         logger.debug("_recall_for_query failed: %s", exc)
         return ""
@@ -166,7 +184,6 @@ async def _maybe_inject_recall(
         recalled = await asyncio.wait_for(
             asyncio.to_thread(
                 _recall_for_query,
-                unit.working_directory,
                 keywords,
                 _RECALL_MAX_TOKENS,
             ),
@@ -957,13 +974,15 @@ class SessionRouter:
                     query_content, session_id,
                 )
 
+        # ── Resolve user text once (used by recall injection + shadow) ──
+        _user_text = user_message or (
+            query_content if isinstance(query_content, str) else ""
+        )
+
         # ── G3: Pre-response recall injection ─────────────────────
         # Inject recalled knowledge based on user's actual first message.
         # Replaces the old proactive-keyword recall (in prompt_builder.py)
         # which used generic focus keywords before the user typed.
-        _user_text = user_message or (
-            query_content if isinstance(query_content, str) else ""
-        )
         if _user_text:
             await _maybe_inject_recall(
                 user_message=_user_text,
@@ -974,9 +993,6 @@ class SessionRouter:
         # ── G3: Shadow recall — fire-and-forget quality validation ──
         # Runs recall against the user's actual message, logs results
         # to .context/recall_shadow.jsonl. Never blocks, never injects.
-        _user_text = user_message or (
-            query_content if isinstance(query_content, str) else ""
-        )
         if _user_text:
             from core.initialization_manager import initialization_manager
             _ws = initialization_manager.get_cached_workspace_path()

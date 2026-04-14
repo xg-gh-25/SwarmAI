@@ -184,12 +184,12 @@ class TestW4MemoryHealthSupersede:
 class TestW5PromptBuilderTranscriptStore:
     """Verify prompt_builder constructs RecallEngine with TranscriptStore."""
 
-    def test_recall_knowledge_uses_additional_stores(self):
-        """_recall_knowledge must create RecallEngine with additional_stores."""
+    def test_recall_for_query_uses_additional_stores(self):
+        """_recall_for_query must create RecallEngine with additional_stores."""
         import inspect
-        from core.prompt_builder import PromptBuilder
-        source = inspect.getsource(PromptBuilder._recall_knowledge)
+        from core.session_router import _recall_for_query
+        source = inspect.getsource(_recall_for_query)
         assert "additional_stores" in source, \
-            "_recall_knowledge must pass additional_stores to RecallEngine"
+            "_recall_for_query must pass additional_stores to RecallEngine"
         assert "TranscriptStore" in source or "transcript" in source.lower(), \
-            "_recall_knowledge must reference TranscriptStore"
+            "_recall_for_query must reference TranscriptStore"
