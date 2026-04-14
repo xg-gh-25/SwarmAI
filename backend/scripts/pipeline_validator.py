@@ -24,8 +24,11 @@ The 8 invariant checks:
     7. DDD consistency — cross-document checks: non-goals vs approach,
                           failed patterns vs plan, staleness detection
                           (WARN only, evaluate stage)
-    8. Smoke executed  — build stage changeset must include smoke_tests > 0
-                          when files_changed > 1 (WARN, build stage only)
+    8. Quality gate    — stage-specific structural enforcement:
+                          8a. BUILD: smoke_tests > 0 when files_changed > 1
+                              (BLOCK — catches AttributeError hidden by mocks)
+                          8b. REVIEW: integration_trace.checked > 0
+                              (BLOCK — ensures wiring verification was done)
 
 Public symbols:
 - ``main``              — CLI entry point
@@ -71,8 +74,8 @@ STAGE_SCHEMAS: dict[str, dict[str, list[str]]] = {
         # tdd.smoke_tests must be > 0 when files_changed > 1 (Check 8)
     },
     "review": {
-        "required": ["approved"],
-        "recommended": ["findings"],
+        "required": ["approved", "integration_trace"],
+        "recommended": ["findings", "security_findings"],
     },
     "test": {
         "required": ["passed"],
@@ -572,6 +575,7 @@ def validate(project: str, run_id: str, stage: str) -> dict[str, Any]:
     # This check prevented 2 HIGH findings in the RecallEngine activation
     # where MagicMock masked a missing attribute on SessionUnit.
     if stage == "build":
+        smoke_ok = True
         artifact_id = stage_record.get("artifact_id")
         if artifact_id:
             artifact_data = _load_artifact_data(project, run_id, artifact_id)
@@ -580,14 +584,36 @@ def validate(project: str, run_id: str, stage: str) -> dict[str, Any]:
                 files_changed = artifact_data.get("files_changed", [])
                 smoke_count = tdd.get("smoke_tests", 0) if isinstance(tdd, dict) else 0
                 if len(files_changed) > 1 and smoke_count == 0:
-                    warnings.append(
+                    smoke_ok = False
+                    errors.append(
                         f"SMOKE step skipped: build touched {len(files_changed)} files "
                         f"but smoke_tests=0 — runtime crashes (AttributeError, NameError) "
-                        f"may be hidden by mocks. Run smoke tests with real objects."
+                        f"may be hidden by mocks. Run smoke tests with real objects "
+                        f"before advancing to REVIEW."
                     )
-        checks_passed += 1  # WARN only — doesn't block
+        if smoke_ok:
+            checks_passed += 1
+    elif stage == "review":
+        # Check 8b: Integration trace must be present in review artifact
+        trace_ok = True
+        artifact_id = stage_record.get("artifact_id")
+        if artifact_id:
+            artifact_data = _load_artifact_data(project, run_id, artifact_id)
+            if artifact_data:
+                trace = artifact_data.get("integration_trace", {})
+                checked = trace.get("checked", 0) if isinstance(trace, dict) else 0
+                if checked == 0:
+                    trace_ok = False
+                    errors.append(
+                        "Integration trace missing: review must include "
+                        "'integration_trace' with checked > 0. Verify every new "
+                        "public symbol has a production caller, and every removed "
+                        "call site doesn't orphan old code."
+                    )
+        if trace_ok:
+            checks_passed += 1
     else:
-        checks_passed += 1  # Auto-pass for non-build stages
+        checks_passed += 1  # Auto-pass for other stages
 
     return {
         "valid": len(errors) == 0,
