@@ -1,0 +1,146 @@
+{
+  "timestamp": "2026-04-12T15:38:39.416147+00:00",
+  "cycle_id": "bee51002",
+  "duration_seconds": 109.15,
+  "transcripts_scanned": 1501,
+  "skills": [
+    {
+      "skill_name": "autonomous-pipeline",
+      "total_examples": 38,
+      "correction_count": 2,
+      "correction_rate": 0.0526,
+      "fitness_score": 1.0,
+      "confidence": 0.1,
+      "action": "log",
+      "recommendation": {
+        "evidence_summary": [
+          "Remaining improvement areas \nTranscript directory resolution is fragile \u2014 Both run_evolution.py and ",
+          "Correct:\n\nResume injection in _ensure_spawned \u2014 \u4e00\u884c\u6838\u5fc3\u6539\u52a8\uff0c\u4f4d\u7f6e\u6b63\u786e\uff0c\u8986\u76d6\u6240\u6709 COLD + sdk_session_id \u7684\u573a\u666f\nTrigger B"
+        ],
+        "original_score": 0.5668478260869565,
+        "estimated_score": 0.6337498995135535,
+        "constraint_check": "Exceeds 15KB limit (35966 bytes)"
+      },
+      "trend": "stable",
+      "llm_tokens": 3863
+    },
+    {
+      "skill_name": "pdf",
+      "total_examples": 10,
+      "correction_count": 0,
+      "correction_rate": 0.0,
+      "fitness_score": 1.0,
+      "confidence": 0.0,
+      "action": "log",
+      "recommendation": null,
+      "trend": "stable",
+      "llm_tokens": 0
+    },
+    {
+      "skill_name": "save-memory",
+      "total_examples": 23,
+      "correction_count": 2,
+      "correction_rate": 0.087,
+      "fitness_score": 0.5,
+      "confidence": 0.35,
+      "action": "deploy",
+      "recommendation": {
+        "evidence_summary": [
+          "Remove the test entry",
+          "\u73b0\u5728\u4e0d\u8981\u628atoken budget saving \u4f5c\u4e3a\u9996\u8981\u8003\u8651\u56e0\u7d20 token budget \u5728\u6211\u4eecswarmAI \u91cc\u6c38\u8fdc\u4e0d\u662f\u9996\u8981\u8003\u8651\u7684\u56e0\u7d20 \u6211\u4eec\u9996\u8981\u8003\u8651\u7684\u662fpowerfull function"
+        ],
+        "original_score": 0.2689567430025446,
+        "estimated_score": 0.7078552482000757,
+        "constraint_check": "All constraints passed"
+      },
+      "trend": "stable",
+      "llm_tokens": 1383
+    },
+    {
+      "skill_name": "outlook-assistant",
+      "total_examples": 6,
+      "correction_count": 1,
+      "correction_rate": 0.1667,
+      "fitness_score": 1.0,
+      "confidence": 0.12,
+      "action": "log",
+      "recommendation": {
+        "evidence_summary": [
+          "\u6211\u90fd\u5df2\u7ecf\u8bd5\u4e86 \u800c\u4e14midway \u521a\u8ba4\u8bc1 \u6ca1\u95ee\u9898 \u2018Successfully authenticated using WebAuthN, session cookie saved in /Users/g"
+        ],
+        "original_score": 0.7,
+        "estimated_score": 0.7,
+        "constraint_check": "All constraints passed"
+      },
+      "trend": "stable",
+      "llm_tokens": 2579
+    },
+    {
+      "skill_name": "radar-todo",
+      "total_examples": 15,
+      "correction_count": 1,
+      "correction_rate": 0.0667,
+      "fitness_score": 0.2,
+      "confidence": 0.3,
+      "action": "recommend",
+      "recommendation": {
+        "evidence_summary": [
+          "\u4e0d\u8981\u505a GitHub push, \u90fd\u505alocal codebase commit, \u786e\u4fddlocal codebase \u4e0d\u4e22\u6389\u4efb\u4f55changes"
+        ],
+        "original_score": 0.2,
+        "estimated_score": 0.2,
+        "constraint_check": "All constraints passed"
+      },
+      "trend": "stable",
+      "llm_tokens": 3861
+    },
+    {
+      "skill_name": "system-health",
+      "total_examples": 6,
+      "correction_count": 0,
+      "correction_rate": 0.0,
+      "fitness_score": 1.0,
+      "confidence": 0.0,
+      "action": "log",
+      "recommendation": null,
+      "trend": "stable",
+      "llm_tokens": 0
+    },
+    {
+      "skill_name": "slack",
+      "total_examples": 5,
+      "correction_count": 0,
+      "correction_rate": 0.0,
+      "fitness_score": 1.0,
+      "confidence": 0.0,
+      "action": "log",
+      "recommendation": null,
+      "trend": "stable",
+      "llm_tokens": 0
+    },
+    {
+      "skill_name": "tavily-search",
+      "total_examples": 5,
+      "correction_count": 0,
+      "correction_rate": 0.0,
+      "fitness_score": 1.0,
+      "confidence": 0.0,
+      "action": "log",
+      "recommendation": null,
+      "trend": "stable",
+      "llm_tokens": 0
+    }
+  ],
+  "deployments": [
+    {
+      "skill_name": "s_save-memory",
+      "success": true,
+      "changes_applied": 2,
+      "changes_skipped": 0,
+      "verified": true,
+      "rolled_back": false,
+      "error": null
+    }
+  ],
+  "errors": []
+}

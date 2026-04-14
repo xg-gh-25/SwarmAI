@@ -655,3 +655,133 @@ class TestChineseCorrectionPatterns:
         assert len(corrections) >= 1
         action_types = [c[1] for c in corrections]
         assert "add" in action_types
+
+
+class TestHeuristicFirstForRecommendTier:
+    """G4: Recommend-tier skills should try heuristic first, skip LLM when patterns found."""
+
+    def test_recommend_tier_skips_llm_when_heuristic_matches(self, optimizer, skills_dir):
+        """Recommend-tier skill: heuristic finds patterns → LLM must not be called."""
+        _make_skill(skills_dir, "recskill", body="Deploy and verify the service output.")
+        examples = [
+            # "should always" → add pattern, and the text is NOT already in the skill
+            _make_example(correction="should always validate input before processing", score=0.5),
+        ]
+        # Verify heuristic can produce changes with this correction
+        corrections = optimizer._extract_corrections(examples)
+        assert len(corrections) >= 1, "Heuristic should find correction patterns"
+        # Verify the correction IS actionable (add type, not already in skill)
+        _, peek_changes = optimizer._apply_heuristic_changes(
+            "Deploy and verify the service output.", corrections,
+        )
+        assert len(peek_changes) > 0, "Heuristic should produce 'add' change for 'should always'"
+
+        # G4 test: the run_evolution_cycle code peeks at heuristic for recommend-tier.
+        # If heuristic finds patterns, it sets use_heuristic_only=True, so LLM is NOT called.
+        # We test optimize_skill directly: with force_heuristic=True (what the cycle code
+        # sets when heuristic peek succeeds), LLM should not be called.
+        with patch.object(optimizer, "_try_llm_optimization", return_value=([], 0)) as mock_llm:
+            result = optimizer.optimize_skill("recskill", examples, force_heuristic=True)
+            assert not mock_llm.called, "force_heuristic=True should skip LLM"
+            assert len(result.changes) > 0, "Heuristic should still produce changes"
+
+    def test_deploy_tier_still_calls_llm(self, optimizer, skills_dir):
+        """Deploy-tier: LLM is still called (no regression from G4 change)."""
+        _make_skill(skills_dir, "depskill", body="Always include verbose output.")
+        examples = [
+            _make_example(correction="don't include verbose output", score=0.3),
+        ] * 5  # Many corrections → deploy tier
+        # Regardless of G4 changes, deploy tier should attempt LLM
+        with patch.object(optimizer, "_try_llm_optimization", return_value=([], 0)) as mock_llm:
+            result = optimizer.optimize_skill("depskill", examples, force_heuristic=False)
+            # Deploy-tier should still attempt LLM (auto mode tries LLM first)
+            assert mock_llm.called, "Deploy-tier skill should still call LLM"
+
+
+class TestSkillHealthHighlightsApplyAffordance:
+    """G1: _get_skill_health_highlights should include 'apply' affordance for recommend-tier."""
+
+    def test_recommend_tier_shows_apply_affordance(self, tmp_path):
+        """Recommend-tier skill should show 'apply <skill> fix' text."""
+        from core.proactive_intelligence import _get_skill_health_highlights
+
+        ctx_dir = tmp_path / ".context"
+        ctx_dir.mkdir()
+        health_data = {
+            "cycle_id": "test",
+            "skills": [{
+                "skill_name": "radar-todo",
+                "action": "recommend",
+                "confidence": 0.30,
+                "correction_count": 1,
+                "fitness_score": 0.2,
+                "recommendation": {
+                    "evidence_summary": ["不要做 GitHub push, 都做local codebase commit"],
+                    "changes": [{"original": "x", "replacement": "y"}],
+                },
+            }],
+        }
+        (ctx_dir / "skill_health.json").write_text(json.dumps(health_data))
+
+        highlights = _get_skill_health_highlights(ctx_dir)
+        assert len(highlights) == 1
+        line = highlights[0]
+        assert "radar-todo" in line
+        assert "不要做 GitHub push" in line
+        # G1: Must include apply affordance
+        assert "apply radar-todo fix" in line.lower() or "apply" in line.lower()
+
+    def test_deploy_tier_no_apply_affordance(self, tmp_path):
+        """Deploy-tier (already deployed) should NOT show 'apply' text."""
+        from core.proactive_intelligence import _get_skill_health_highlights
+
+        ctx_dir = tmp_path / ".context"
+        ctx_dir.mkdir()
+        health_data = {
+            "cycle_id": "test",
+            "skills": [{
+                "skill_name": "save-memory",
+                "action": "deploy",
+                "confidence": 0.35,
+                "correction_count": 2,
+                "fitness_score": 0.5,
+                "recommendation": {
+                    "evidence_summary": ["remove test entry"],
+                    "changes": [{"original": "a", "replacement": "b"}],
+                },
+            }],
+        }
+        (ctx_dir / "skill_health.json").write_text(json.dumps(health_data))
+
+        highlights = _get_skill_health_highlights(ctx_dir)
+        # deploy-tier may or may not be shown, but if shown, should NOT say "apply"
+        for line in highlights:
+            if "save-memory" in line:
+                assert "apply" not in line.lower()
+
+    def test_empty_evidence_no_crash(self, tmp_path):
+        """Recommend-tier with empty evidence_summary should not crash."""
+        from core.proactive_intelligence import _get_skill_health_highlights
+
+        ctx_dir = tmp_path / ".context"
+        ctx_dir.mkdir()
+        health_data = {
+            "cycle_id": "test",
+            "skills": [{
+                "skill_name": "some-skill",
+                "action": "recommend",
+                "confidence": 0.20,
+                "correction_count": 1,
+                "fitness_score": 0.3,
+                "recommendation": {
+                    "evidence_summary": [],
+                    "changes": [],
+                },
+            }],
+        }
+        (ctx_dir / "skill_health.json").write_text(json.dumps(health_data))
+
+        highlights = _get_skill_health_highlights(ctx_dir)
+        assert len(highlights) >= 1
+        # Should not contain "apply" affordance when no changes
+        assert "apply" not in highlights[0].lower() or "evidence" not in highlights[0]

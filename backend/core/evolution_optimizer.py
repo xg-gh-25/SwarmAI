@@ -1061,10 +1061,27 @@ def _run_evolution_cycle_locked(
             # LLM is only worthwhile for deploy/recommend tiers.
             # Log-tier skills (confidence < med_threshold) won't surface
             # changes anywhere — don't waste LLM tokens on them.
+            #
+            # G4: For recommend-tier (med..high), try heuristic first.
+            # The goal of recommend-tier is ANALYSIS (evidence for user),
+            # not deployment. Heuristic produces equivalent evidence at
+            # zero token cost. Only escalate to LLM if heuristic finds
+            # nothing (corrections are semantically complex).
+            is_recommend_tier = med_threshold <= confidence < high_threshold
             use_heuristic_only = (
                 llm_budget_remaining <= 0
                 or confidence < med_threshold
             )
+            if is_recommend_tier and not use_heuristic_only:
+                # Peek: does heuristic find patterns?
+                corrections_for_peek = optimizer._extract_corrections(examples)
+                original_text = optimizer._read_skill_text(skill_name)
+                if original_text and corrections_for_peek:
+                    _, peek_changes = optimizer._apply_heuristic_changes(
+                        original_text, corrections_for_peek,
+                    )
+                    if peek_changes:
+                        use_heuristic_only = True  # Heuristic suffices, skip LLM
             opt_result = optimizer.optimize_skill(
                 skill_name, examples,
                 force_heuristic=use_heuristic_only,
