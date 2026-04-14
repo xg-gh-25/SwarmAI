@@ -60,12 +60,13 @@ The tool names below are the **short names** — always prefix with `mcp__aws-ou
 
 | Operation | Tool (short name) | Notes |
 |-----------|-------------------|-------|
-| List calendars | `get_calendars` | Returns calendar IDs and names |
-| Get events | `get_calendar_events` | Requires calendar_id, optional date range |
-| Search events | `search_calendar_events` | Supports "today", dates, or text query |
-| Create event | `create_calendar_event` | Required: subject, start_time, end_time |
-| Update event | `update_calendar_event` | Required: event_id |
-| Delete event | `delete_calendar_event` | Required: event_id |
+| View events / availability | `calendar_availability` | **Use this instead of calendar_view** — returns events with subject, busyType, times. Pass user emails + date range. |
+| Search events | `calendar_search` | Supports "today", dates, or text query |
+| Create event | `calendar_meeting` | Required: subject, start_time, end_time |
+| Book room | `calendar_room_booking` | Find and book meeting rooms |
+| Shared calendars | `calendar_shared_list` | View shared/delegated calendars |
+
+> ⚠️ **Do NOT use `calendar_view`** — it has a known bug (returns empty results due to OWA API request format issue). Always use `calendar_availability` for viewing events.
 
 ---
 
