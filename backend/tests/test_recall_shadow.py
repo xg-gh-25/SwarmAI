@@ -1,11 +1,8 @@
 """Tests for G3 shadow recall — validates recall quality logging without prompt injection."""
 from __future__ import annotations
 
-import asyncio
 import json
-import time
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 import pytest
 

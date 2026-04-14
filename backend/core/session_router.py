@@ -1052,6 +1052,8 @@ async def _shadow_recall(
 
     wd = Path(working_directory)
     ctx_dir = wd / ".context"
+    # Shadow log — temporary validation data. Delete or rotate after analysis
+    # (expected lifecycle: 2-4 weeks, ~500 bytes/entry, ~50 entries/day).
     log_path = ctx_dir / "recall_shadow.jsonl"
 
     entry: dict[str, Any] = {
@@ -1098,15 +1100,17 @@ def _run_dual_recall(db_path: str, query: str) -> tuple[dict, dict]:
 
     conn = sqlite3.connect(db_path, timeout=5)
 
+    # Shared engine — created once, used by both paths.
+    # Outside try blocks so Path 2 can't NameError if Path 1 fails.
+    from .recall_engine import RecallEngine
+    from .knowledge_store import KnowledgeStore
+
+    store = KnowledgeStore(conn)
+    engine = RecallEngine(store)
+
     # ── Path 1: FTS5-only (no embedding) ──
     fts5_result: dict[str, Any] = {"ms": 0, "hits": 0}
     try:
-        from .recall_engine import RecallEngine
-        from .knowledge_store import KnowledgeStore
-
-        store = KnowledgeStore(conn)
-        engine = RecallEngine(store)
-
         t0 = time.perf_counter()
         fts5_text = engine.recall_knowledge(query, embed_fn=None, max_tokens=4000)
         t1 = time.perf_counter()
@@ -1148,13 +1152,12 @@ def _get_embed_fn():
         client = boto3.client("bedrock-runtime", region_name=region)
 
         def embed(text: str) -> list[float] | None:
-            import json
             try:
                 resp = client.invoke_model(
                     modelId="amazon.titan-embed-text-v2:0",
-                    body=json.dumps({"inputText": text[:8000]}),
+                    body=_json.dumps({"inputText": text[:8000]}),
                 )
-                body = json.loads(resp["body"].read())
+                body = _json.loads(resp["body"].read())
                 return body.get("embedding")
             except Exception:
                 return None
