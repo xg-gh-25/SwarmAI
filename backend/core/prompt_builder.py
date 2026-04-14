@@ -656,16 +656,18 @@ class PromptBuilder:
             # ── Session-type: channel sessions skip heavy ephemeral context ──
             is_channel = channel_context is not None
 
-            # ── DailyActivity reading — last 2 files by date (ephemeral) ──
-            # Skipped for channel sessions: Slack DMs are quick exchanges
-            # that don't need yesterday's session logs (~4K tokens saved).
+            # ── DailyActivity reading — most recent file only (ephemeral) ──
+            # Only today's file is injected. Yesterday's actionable items
+            # are already covered by Proactive Briefing (L0-L4) and Memory
+            # Index. The agent can Read older files on demand.
+            # Skipped for channel sessions: quick exchanges don't need logs.
             daily_activity_dir = Path(working_directory) / "Knowledge" / "DailyActivity"
             if daily_activity_dir.is_dir() and not is_channel:
                 da_files = sorted(
                     [f for f in daily_activity_dir.glob("*.md") if f.stem[:4].isdigit()],
                     key=lambda f: f.stem,
                     reverse=True,
-                )[:2]
+                )[:1]
                 for daily_file in da_files:
                     try:
                         daily_content = daily_file.read_text(encoding="utf-8").strip()
@@ -715,19 +717,11 @@ class PromptBuilder:
                 except Exception as exc:
                     logger.debug("User suggestions injection skipped: %s", exc)
 
-            # ── Skill Registry (compact skill index) ──
-            if not is_channel:
-                try:
-                    from .skill_registry import _get_skill_registry
-                    # .claude/skills/ is the standard projection directory
-                    # managed by ProjectionLayer — see projection_layer.py.
-                    skills_dir = Path(working_directory) / ".claude" / "skills"
-                    registry = _get_skill_registry(skills_dir)
-                    compact = registry.generate_compact_registry()
-                    if compact:
-                        context_text += f"\n\n{compact}"
-                except Exception as exc:
-                    logger.warning("Skill registry injection failed: %s", exc)
+            # ── Skill Registry injection removed (2026-04-14) ──
+            # The Claude Agent SDK injects a comprehensive skill list via
+            # system-reminder (with triggers, descriptions, DO NOT USE).
+            # The compact registry was a duplicate index (~200 tokens).
+            # SkillGuard security scanning is independent (PreToolUse hook).
 
             # ── Layer 6: Recalled Knowledge (Library recall) ──────────
             # Pre-session recall: use focus keywords to search the Knowledge

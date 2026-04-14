@@ -533,6 +533,27 @@ class ContextDirectoryLoader:
 
         return content
 
+    @staticmethod
+    def _is_empty_section_stubs(content: str) -> bool:
+        """Return True if content is only markdown headers and whitespace.
+
+        Detects user-owned template files that have section structure
+        (``## Device Names``, ``## SSH Hosts``, etc.) but no actual
+        content filled in.  These consume tokens for zero information.
+
+        Only checks after ``_clean_content()`` has already stripped
+        HTML comments, so template examples in comments are gone.
+        """
+        for line in content.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if stripped.startswith("#"):
+                continue
+            # Found a non-header, non-blank line → real content exists
+            return False
+        return True
+
     def _assemble_from_sources(
         self,
         model_context_window: int = 200_000,
@@ -605,6 +626,13 @@ class ContextDirectoryLoader:
 
             content = self._clean_content(content, spec.section_name)
             if not content:
+                continue
+
+            # Skip user-owned templates that are structurally non-empty
+            # (have markdown headers) but contain no actual user content.
+            # Example: unfilled TOOLS.md with only "## Device Names" stubs.
+            if spec.user_customized and self._is_empty_section_stubs(content):
+                logger.debug("Skipping empty template: %s", spec.filename)
                 continue
 
             # Smart Memory Injection: auto-selects full injection (<30K)
