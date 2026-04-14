@@ -1,14 +1,19 @@
-"""Skill Registry — compact skill index for system prompt injection.
+"""Skill Registry — skill discovery, SkillGuard scanning, and tier classification.
 
-Scans the skills directory, categorizes skills by known prefixes, and
-generates a tiered (always/lazy) markdown registry suitable for system
-prompt injection. Reads tier from manifest.yaml (if present) or SKILL.md
-frontmatter. Results are cached and only regenerated when directory content
-changes.
+The Claude Agent SDK handles skill listing via system-reminder injection
+(reads each SKILL.md and injects name+description+triggers). This module
+provides:
+
+1. SkillGuard trust scanning on discovery (security).
+2. Tier classification utility (``_read_tier``) for any code that needs
+   to know if a skill is always or lazy (e.g., future manifest-aware
+   invocation in Phase 4).
+3. ``generate_compact_registry()`` for test/debug use only — NOT injected
+   into production prompts (removed in 1dc2a7b, SDK handles it).
 
 Key public symbols:
 
-- ``SkillRegistry``    — Scanner, categorizer, tier partitioner, cache manager.
+- ``SkillRegistry``    — Scanner, categorizer, SkillGuard scanner, tier classifier.
 - ``SKILL_CATEGORIES`` — Known category mapping for skill names.
 """
 from __future__ import annotations
@@ -69,10 +74,12 @@ class SkillRegistry:
         self._trust_cache: dict[str, str] = {}
 
     def generate_compact_registry(self) -> str:
-        """Scan skills directory and return tiered compact markdown registry.
+        """Scan skills directory and return compact markdown registry.
 
-        Always-tier skills: categorized names (current format).
-        Lazy-tier skills: flat list with one-line descriptions.
+        NOTE: Not injected into production prompts. The Claude Agent SDK's
+        system-reminder handles skill discovery directly by reading each
+        SKILL.md. This method exists for test/debug use and SkillGuard
+        scanning (triggered as side-effect of _discover_skills).
 
         Caches result. Regenerates only when directory content changes
         (mtime-based hash).
@@ -87,23 +94,13 @@ class SkillRegistry:
             self._cache_hash = current_hash
             return ""
 
-        always_skills, lazy_skills = self._partition_by_tier(skill_names)
+        categories = self._categorize(skill_names)
 
         lines: list[str] = [f"## Available Skills ({len(skill_names)})"]
-
-        # Always tier: categorized names (existing format)
-        always_cats = self._categorize(always_skills)
         for cat_name in list(SKILL_CATEGORIES.keys()) + ["Other"]:
-            skills = always_cats.get(cat_name, [])
+            skills = categories.get(cat_name, [])
             if skills:
                 lines.append(f"### {cat_name}: {', '.join(sorted(skills))}")
-
-        # Lazy tier: flat list with one-line descriptions
-        if lazy_skills:
-            lines.append(f"\n### On-Demand ({len(lazy_skills)} more skills)")
-            for name in sorted(lazy_skills):
-                desc = self._get_one_liner(name)
-                lines.append(f"- **{name}**: {desc}")
 
         result = "\n".join(lines)
         self._cache = result
@@ -179,17 +176,6 @@ class SkillRegistry:
     # Tier support (lazy / always)
     # ------------------------------------------------------------------
 
-    def _partition_by_tier(
-        self, names: list[str]
-    ) -> tuple[list[str], list[str]]:
-        """Split skills into (always, lazy) lists based on tier metadata."""
-        always: list[str] = []
-        lazy: list[str] = []
-        for name in names:
-            tier = self._read_tier(name)
-            (always if tier == "always" else lazy).append(name)
-        return always, lazy
-
     def _read_tier(self, name: str) -> str:
         """Read tier for a skill: manifest.yaml > SKILL.md frontmatter > 'lazy'.
 
@@ -234,55 +220,3 @@ class SkillRegistry:
                 return tier
         return "lazy"
 
-    def _get_one_liner(self, name: str) -> str:
-        """Extract first sentence of description for lazy skill listing.
-
-        Always reads from SKILL.md frontmatter description field —
-        manifest.yaml doesn't carry a description.
-        Returns a short string suitable for the On-Demand section.
-        """
-        skill_dir = self._skills_dir / f"s_{name}"
-        skill_md = skill_dir / "SKILL.md"
-        if skill_md.exists():
-            try:
-                content = skill_md.read_text(encoding="utf-8")
-                desc = self._extract_description_one_liner(content)
-                if desc:
-                    return desc
-            except Exception:
-                pass
-        return name  # Fallback to just the name
-
-    @staticmethod
-    def _extract_description_one_liner(content: str) -> str:
-        """Extract first sentence from SKILL.md frontmatter description."""
-        match = re.match(r"^---\s*\n(.*?)\n---", content, re.DOTALL)
-        if not match:
-            return ""
-        frontmatter = match.group(1)
-        # Multi-line description after 'description:' or 'description: >'
-        desc_match = re.search(
-            r"^description:\s*>?\s*\n((?:\s+.*\n)*)",
-            frontmatter,
-            re.MULTILINE,
-        )
-        if desc_match:
-            lines = desc_match.group(1).strip().split("\n")
-            if lines:
-                first = lines[0].strip()
-                # Take up to first period or the whole first line
-                dot = first.find(".")
-                if dot > 0:
-                    return first[: dot + 1]
-                return first
-        # Single-line description
-        desc_match = re.search(
-            r"^description:\s*(.+)$", frontmatter, re.MULTILINE
-        )
-        if desc_match:
-            desc = desc_match.group(1).strip().strip("\"'")
-            dot = desc.find(".")
-            if dot > 0:
-                return desc[: dot + 1]
-            return desc
-        return ""
