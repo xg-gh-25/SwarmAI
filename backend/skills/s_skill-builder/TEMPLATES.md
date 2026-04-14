@@ -24,6 +24,7 @@ description: >
   TRIGGER: "[phrase 1]", "[phrase 2]", "[phrase 3]".
   DO NOT USE: [when a different skill or approach is better] (use [alternative] instead).
   VERIFY_WITH: [validator-skill-name] (optional — which skill validates output).
+tier: lazy
 ---
 
 # [Skill Title]
@@ -94,6 +95,7 @@ description: >
   TRIGGER: "[phrase 1]", "[phrase 2]", "[phrase 3]".
   DO NOT USE: [when condition] (use [alternative] instead).
   VERIFY_WITH: [validator-skill-name] (optional — which skill validates output).
+tier: lazy
 ---
 
 # [Workflow Name]
@@ -286,20 +288,47 @@ Real-world examples demonstrating proper usage.
 
 ---
 
-## Template 3: Complex Skill with Scripts
+## Template 3: Complex Skill with Scripts + Manifest
 
-Use for skills that include helper scripts.
+Use for skills that include helper scripts. Requires `manifest.yaml` to declare scripts, dependencies, and entry points.
 
 **Structure:**
 ```
 skill-name/
-├── SKILL.md
-├── REFERENCE.md
-├── EXAMPLES.md
-├── TESTING.md
+├── SKILL.md              ← Instructions (what to do)
+├── manifest.yaml          ← Package descriptor (what's available, how to run)
+├── REFERENCE.md           ← Domain knowledge (optional)
+├── TESTING.md             ← Eval scenarios (optional)
 └── scripts/
-    ├── main_script.py
-    └── helper.py
+    ├── main_script.py     ← Entry point (declared in manifest)
+    └── helper.py          ← Supporting scripts
+```
+
+**manifest.yaml:**
+
+```yaml
+name: skill-folder-name
+version: "1.0.0"
+tier: lazy
+
+scripts:
+  - path: scripts/main_script.py
+    description: "[What the main script does]"
+    entry: true
+    args: "--input {input_path} --output {output_path}"
+  - path: scripts/helper.py
+    description: "[What the helper does]"
+
+resources:
+  - path: templates/
+    description: "[What the templates are for]"
+
+dependencies:
+  python: ["package1", "package2"]
+  env:
+    - SOME_VAR=value
+
+timeout: 120
 ```
 
 **scripts/main_script.py:**
@@ -474,6 +503,7 @@ description: >
   TRIGGER: "[phrase 1]", "[phrase 2]", "[phrase 3]".
   DO NOT USE: [when condition] (use [alternative] instead).
   VERIFY_WITH: [validator-skill-name] (recommended for all generator skills).
+tier: lazy
 ---
 
 # [Artifact Type] Generator

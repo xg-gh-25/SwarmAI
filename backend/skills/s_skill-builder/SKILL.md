@@ -120,17 +120,35 @@ Ask: "What are the 2-3 hardest judgment calls in this domain?"
 > [!IMPORTANT]
 > **Skills share the context window.** Claude is already very smart -- only add information it doesn't already possess. Every token in a skill costs context budget.
 
-**Three-tier context loading model:**
+**Three-tier context loading model (aligned with AIM progressive disclosure):**
 
 | Tier | What | Budget | When Loaded |
 |------|------|--------|-------------|
 | **Metadata** | Frontmatter `name` + `description` | ~100 words | Always (skill discovery) |
 | **SKILL.md body** | Core workflow, steps, rules | <5,000 words | When skill is triggered |
-| **Bundled resources** | references/, scripts/, REFERENCE.md | Unlimited on disk | Conditionally, on demand |
+| **Bundled resources** | references/, scripts/, manifest.yaml | Unlimited on disk | Conditionally, on demand |
+
+**Skill loading tier (`tier` in frontmatter):**
+
+| Tier | System-Reminder | When to Use |
+|------|-----------------|-------------|
+| **always** | Full description injected at session start | High-frequency skills used in >10% of sessions (save-memory, slack, radar-todo, etc.) |
+| **lazy** (default) | Stub only — name + trigger + "call to activate" | Everything else. Full instructions in INSTRUCTIONS.md, loaded on invocation |
+
+**Lazy skill pattern (default for all new skills):**
+- SKILL.md = minimal stub (frontmatter + triggers + one-line purpose)
+- INSTRUCTIONS.md = full workflow (what would otherwise be the SKILL.md body)
+- At session start: agent sees one-liner for routing
+- On invocation: agent reads INSTRUCTIONS.md for full instructions, then reference files as needed
+
+> [!TIP]
+> Only promote a skill to `tier: always` after it's proven high-frequency. Start lazy, promote based on usage data from SkillMetrics.
 
 **Design rules:**
 - Metadata must be ruthlessly concise -- it's loaded in every session for routing
-- SKILL.md body should contain the complete workflow for the common case
+- Description MUST be under 1024 characters (AIM spec limit, enforced for routing accuracy)
+- For always-tier skills: SKILL.md contains the complete workflow
+- For lazy-tier skills: SKILL.md is a stub, INSTRUCTIONS.md has the workflow
 - Move variant-specific details, lookup tables, and large reference data into separate files
 - Use "Read REFERENCE.md for..." links instead of inlining everything
 - If SKILL.md exceeds 300 lines, refactor: extract reference material to supporting files
@@ -156,7 +174,11 @@ Ask: "What are the 2-3 hardest judgment calls in this domain?"
 |------------|-----------|
 | Simple | `SKILL.md` only |
 | Standard | `SKILL.md` + `REFERENCE.md` or `EXAMPLES.md` |
-| Complex | Above + `TESTING.md` + `scripts/` |
+| Complex | Above + `manifest.yaml` + `scripts/` + optional `TESTING.md` |
+
+**manifest.yaml (required for Complex skills with scripts):**
+
+A machine-readable declaration of what scripts the skill contains, what it needs, and how to run it. See Step 4.7 for details.
 
 > [!TIP]
 > **Signs you're over-engineering:**
@@ -178,22 +200,44 @@ This is the standard location for user-created skills in the three-tier model (B
 ### Step 4: Write the SKILL.md
 
 Use templates from TEMPLATES.md. Ensure:
-1. **Frontmatter** — valid YAML with `name` (must match folder name) and `description`
-2. **Description schema** — MUST follow this exact pattern:
+1. **Frontmatter** — valid YAML with `name` (must match folder name), `description`, and `tier`
+2. **Description schema** — MUST follow this exact pattern (max 1024 chars total):
    ```yaml
+   name: skill-name
    description: >
      One-line purpose sentence.
      TRIGGER: "phrase1", "phrase2", "phrase3".
      DO NOT USE: when condition (use alternative-skill instead).
      VERIFY_WITH: skill-name (optional — which skill independently validates this skill's output).
+   tier: lazy
    ```
-   - First line: what the skill does (one sentence)
+   - `name`: lowercase, hyphens, numbers only. Max 64 chars. Must match folder name.
+   - `description`: max 1024 characters. First line = purpose. Then TRIGGER, DO NOT USE, VERIFY_WITH.
+   - `tier`: `lazy` (default — stub + INSTRUCTIONS.md) or `always` (full SKILL.md in every session)
    - `TRIGGER:` — quoted phrases the user would say to invoke this skill
    - `DO NOT USE:` — when a similar skill should be used instead, with explicit boundary
-   - `VERIFY_WITH:` — (optional) names a skill that can independently validate output quality. After this skill completes, the agent should suggest running the verifier. Defeats self-assessment bias (generators grading their own output are generous).
+   - `VERIFY_WITH:` — (optional) names a skill that can independently validate output quality
 3. **"Why?" line** — one sentence after title explaining the problem this solves
 4. **Workflow** — clear, numbered steps
 5. **Progressive disclosure** — link to supporting files (only if needed)
+
+**For lazy-tier skills (default):** Write the full workflow into `INSTRUCTIONS.md`. SKILL.md should be a minimal stub:
+```markdown
+---
+name: my-skill
+description: >
+  One-line purpose.
+  TRIGGER: "phrase1", "phrase2".
+  DO NOT USE: when X (use Y instead).
+tier: lazy
+---
+# My Skill
+
+> This skill loads full instructions on activation. Read INSTRUCTIONS.md before proceeding.
+
+TRIGGER: "phrase1", "phrase2"
+DO NOT USE: for X (use Y instead)
+```
 
 > [!TIP]
 > The `TRIGGER:` and `DO NOT USE:` lines are critical for skill discovery and disambiguation.
@@ -232,6 +276,63 @@ Add a `## Guardrails` section with 3-5 "DO NOT" rules specific to this skill's f
 
 > [!TIP]
 > **"DO NOT" is more reliable than "please verify"** for controlling LLM behavior. Positive instructions ("verify the output") are treated as suggestions. Negative constraints ("DO NOT skip verification") create hard boundaries. This is empirically validated across multi-agent systems.
+
+### Step 4.7: Generate manifest.yaml (Complex skills only)
+
+> [!IMPORTANT]
+> **Required when the skill has scripts/ or multiple executable files.** manifest.yaml is a machine-readable package descriptor that tells the agent what scripts exist, what they do, and how to run them — without parsing SKILL.md.
+
+**When to generate:** Skill has 2+ executable files (Python, JS, shell) or a `scripts/` directory.
+
+**Schema:**
+
+```yaml
+# manifest.yaml — Skill Package Descriptor
+name: skill-name                        # Must match folder name and SKILL.md name
+version: "1.0.0"                        # Semantic version
+tier: lazy                              # "always" or "lazy"
+
+scripts:
+  - path: scripts/generate.py           # Relative to skill directory
+    description: "Main report generator"
+    entry: true                         # Primary entry point (at most one)
+    args: "--scope {scope} --output {output_dir}"
+  - path: scripts/fetch_data.py
+    description: "Fetch data from API"
+  - path: scripts/helpers.py
+    description: "Shared utility functions"
+
+resources:
+  - path: templates/                    # Directories or files
+    description: "HTML report templates"
+  - path: knowledge/domain.md
+    description: "Domain reference data"
+
+dependencies:
+  python: ["cairosvg", "openpyxl"]      # pip packages
+  system: ["cairo"]                     # Homebrew/system packages
+  env:                                  # Required environment variables
+    - DYLD_LIBRARY_PATH=/opt/homebrew/lib
+
+timeout: 300                            # Max seconds for skill execution
+```
+
+**Rules:**
+- `scripts[].path` must be relative to the skill directory
+- At most one script should have `entry: true` (the primary entry point)
+- `description` for each script should be a single sentence — the agent reads these to decide which script to run
+- `dependencies` are declared, not auto-installed (safety). Agent warns if missing.
+- `resources` lists static files the agent may need to read during execution
+
+**On skill activation,** the manifest is loaded and a script index is injected:
+```
+Available scripts:
+- scripts/generate.py [ENTRY]: Main report generator (args: --scope --output)
+- scripts/fetch_data.py: Fetch data from API
+- scripts/helpers.py: Shared utility functions
+```
+
+The agent runs scripts directly: `python .claude/skills/s_skill-name/scripts/generate.py --scope gcr`
 
 ### Step 5: Save and Notify User
 
@@ -301,12 +402,16 @@ Work systematically:
 ## Validation Checklist (Quick)
 
 Before declaring complete:
-- [ ] `name` in frontmatter matches folder name
-- [ ] `description` has: purpose sentence + `TRIGGER:` phrases + `DO NOT USE:` boundary
+- [ ] `name` in frontmatter matches folder name (lowercase, hyphens, numbers, max 64 chars)
+- [ ] `description` has: purpose sentence + `TRIGGER:` phrases + `DO NOT USE:` boundary (max 1024 chars)
+- [ ] `tier` is set: `lazy` (default) or `always` (only for proven high-frequency skills)
 - [ ] **"Why?" line** present after title
 - [ ] **Guardrails section** present with 3-5 "DO NOT" rules
 - [ ] `VERIFY_WITH:` considered (required for generator/code/document skills)
-- [ ] SKILL.md under 500 lines
+- [ ] For lazy-tier: SKILL.md is stub, full workflow in INSTRUCTIONS.md
+- [ ] For always-tier: SKILL.md contains full workflow, under 500 lines
+- [ ] For complex skills with scripts: `manifest.yaml` present with all scripts declared
+- [ ] manifest.yaml scripts match actual files in directory (no stale entries)
 - [ ] Structure matches complexity (not over-engineered)
 - [ ] Examples show concrete input/output
 - [ ] Consistent terminology throughout
