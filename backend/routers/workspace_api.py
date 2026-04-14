@@ -1275,14 +1275,14 @@ async def trash_item(request: FolderDeleteRequest):
     project folders (e.g., ``Projects/SwarmAI → ~/real/repo``).
 
     Returns HTTP 403 if the target is a system-managed directory.
-    Returns HTTP 500 if trashing fails (osascript error, permissions, etc.).
+    Returns HTTP 500 if trashing fails (filesystem error, permissions, etc.).
     """
     expanded_path = await _get_workspace_path()
     workspace_root = Path(expanded_path)
 
     # Build the unresolved path BEFORE _validate_relative_path (which resolves
     # symlinks).  We need the unresolved path to detect symlinks and to pass
-    # the correct filesystem entry to osascript / unlink.
+    # the correct filesystem entry to shutil.move / unlink.
     stripped = request.path.replace("\\", "/").strip("/")
     unresolved_path = workspace_root / stripped
 
@@ -1314,54 +1314,28 @@ async def trash_item(request: FolderDeleteRequest):
         logger.info("Removed symlink (target preserved): %s", request.path)
         return {"path": request.path, "trashed": True, "was_symlink": True}
 
-    # macOS Trash via osascript (recoverable).
-    # For directories, "POSIX file" must be coerced to alias — Finder's
-    # "delete POSIX file" only reliably handles files on all macOS versions.
-    #
-    # Escape backslashes and double-quotes for the AppleScript string literal
-    # to prevent injection via crafted filenames.
-    target_str = str(target).replace("\\", "\\\\").replace('"', '\\"').replace("\n", "").replace("\r", "")
+    # Move to macOS Trash via direct filesystem operation (recoverable).
+    # Uses shutil.move to ~/.Trash/ — no osascript, no Apple Events, no TCC
+    # popup. Handles name conflicts by appending a counter suffix.
+    trash_dir = Path.home() / ".Trash"
+    dest = trash_dir / target.name
 
-    if target.is_dir():
-        applescript = (
-            'tell application "Finder"\n'
-            f'  delete (POSIX file "{target_str}" as alias)\n'
-            'end tell'
-        )
-    else:
-        applescript = (
-            'tell application "Finder"\n'
-            f'  delete POSIX file "{target_str}"\n'
-            'end tell'
-        )
+    # Resolve name conflicts (Finder appends " 2", " 3", etc.)
+    if dest.exists():
+        stem = target.stem
+        suffix = target.suffix
+        counter = 2
+        while dest.exists():
+            dest = trash_dir / f"{stem} {counter}{suffix}"
+            counter += 1
 
     try:
-        # Run in thread to avoid blocking the async event loop (osascript
-        # talks to Finder via Apple Events and can take seconds).
-        result = await asyncio.to_thread(
-            subprocess.run,
-            ["osascript", "-e", applescript],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-    except FileNotFoundError:
+        await asyncio.to_thread(shutil.move, str(target), str(dest))
+    except OSError as exc:
+        logger.error("Trash failed for %s: %s", request.path, exc)
         raise HTTPException(
             status_code=500,
-            detail="osascript not found — macOS Trash requires osascript",
-        )
-    except subprocess.TimeoutExpired:
-        raise HTTPException(
-            status_code=500,
-            detail="Trash operation timed out (Finder not responding?)",
-        )
-
-    if result.returncode != 0:
-        error_msg = result.stderr.strip() or "Unknown osascript error"
-        logger.error("Trash failed for %s: %s", request.path, error_msg)
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to trash: {error_msg}",
+            detail=f"Failed to trash: {exc}",
         )
 
     _invalidate_tree_cache()
