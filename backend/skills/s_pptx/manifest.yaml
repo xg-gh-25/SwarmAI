@@ -1,0 +1,38 @@
+# Auto-generated manifest for pptx
+name: pptx
+version: "1.0.0"
+tier: lazy
+
+scripts:
+  - path: ooxml/scripts/pack.py
+    description: "Tool to pack a directory into a .docx, .pptx, or .xlsx file with XML formatting undone."
+  - path: ooxml/scripts/unpack.py
+    description: "Unpack and format XML contents of Office files (.docx, .pptx, .xlsx)"
+  - path: ooxml/scripts/validate.py
+    description: "Command line tool to validate Office document XML files against XSD schemas and tracked changes."
+  - path: ooxml/scripts/validation/base.py
+    description: "Base validator with common validation logic for document files."
+  - path: ooxml/scripts/validation/docx.py
+    description: "Validator for Word document XML files against XSD schemas."
+  - path: ooxml/scripts/validation/pptx.py
+    description: "Validator for PowerPoint presentation XML files against XSD schemas."
+    entry: true
+  - path: ooxml/scripts/validation/redlining.py
+    description: "Validator for tracked changes in Word documents."
+  - path: scripts/html2pptx.js
+    description: "html2pptx - Convert HTML slide to pptxgenjs slide with positioned elements"
+    entry: true
+  - path: scripts/inventory.py
+    description: "Extract structured text content from PowerPoint presentations."
+  - path: scripts/rearrange.py
+    description: "Rearrange PowerPoint slides based on a sequence of indices."
+  - path: scripts/replace.py
+    description: "Apply text replacements to PowerPoint presentation."
+  - path: scripts/style-extract.py
+    description: "Extract style summary from an existing PowerPoint presentation."
+  - path: scripts/thumbnail.py
+    description: "Create thumbnail grids from PowerPoint presentation slides."
+
+resources:
+  - ooxml
+  - scripts

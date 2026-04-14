@@ -4,8 +4,8 @@ description: >
   Send, read, search, and manage Slack messages, channels, and reactions via Slack MCP server or API.
   TRIGGER: "slack", "send slack message", "check slack", "slack channel", "slack DM", "post to slack".
   DO NOT USE: for email (use Outlook Assistant), Discord, or Teams messages.
+tier: always
 ---
-
 # Slack
 
 **Why?** Stay on top of Slack without context-switching. Send messages, check channels, search conversations, and manage reactions -- all from your working session.

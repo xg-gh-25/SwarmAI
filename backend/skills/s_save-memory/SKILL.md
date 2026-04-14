@@ -6,8 +6,8 @@ description: >
   DO NOT USE: for session handoffs (use save-context) or daily logs (use save-activity).
   Uses locked_write.py for concurrent write protection.
   SIBLINGS: save-memory = permanent facts/decisions -> MEMORY.md | save-activity = session log -> DailyActivity/ | save-context = handoff doc for next session.
+tier: always
 ---
-
 # Save Memory
 
 Write user-specified content directly to MEMORY.md. This is the **only user-triggered**

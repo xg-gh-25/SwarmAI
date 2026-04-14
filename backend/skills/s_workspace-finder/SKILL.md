@@ -7,8 +7,8 @@ description: >
   "files modified today", "large files", "find duplicates".
   DO NOT USE: for web search (use tavily-search), GitHub repo research (use github-research), or reading a known file (use Read tool).
   SIBLINGS: deep-research = web research | tavily-search = web search | workspace-git = git-specific operations.
+tier: always
 ---
-
 # Workspace Finder
 
 Find anything in SwarmWS using natural language. Translates user intent into efficient CLI commands.

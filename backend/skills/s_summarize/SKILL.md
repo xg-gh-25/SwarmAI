@@ -5,8 +5,8 @@ description: >
   TRIGGER: "summarize", "summary", "tl;dr", "key points", "what's this about", "give me the gist", "condense".
   DO NOT USE: for deep multi-source research (use deep-research), consulting-grade analysis (use consulting-report), or full document writing (use narrative-writing).
   SIBLINGS: deep-research = multi-source investigation with citations | consulting-report = strategic analysis with frameworks | summarize = fast single/multi-source condensation.
+tier: always
 ---
-
 # Summarize
 
 **Why?** Get the essence of any content in seconds -- no need to read a 30-page doc, sit through a 2-hour transcript, or scroll through 200 Slack messages. Fast, structured, actionable summaries.

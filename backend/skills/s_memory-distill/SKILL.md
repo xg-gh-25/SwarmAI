@@ -4,8 +4,8 @@ description: >
   Distill unprocessed DailyActivity files into curated MEMORY.md entries.
   TRIGGER: auto-triggers when >3 unprocessed DailyActivity files detected at session start.
   DO NOT USE: manually — this runs silently and automatically.
+tier: always
 ---
-
 # Memory Distill
 
 Distill raw DailyActivity logs into curated MEMORY.md entries. This skill runs

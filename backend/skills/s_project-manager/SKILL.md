@@ -8,8 +8,8 @@ description: >
   "delete project", "list projects", "my projects", "update project".
   DO NOT USE: for task/todo management within a project (use radar-todo).
   SIBLINGS: save-memory = permanent facts -> MEMORY.md | save-context = handoff docs.
+tier: always
 ---
-
 # Project Manager
 
 Manage projects in the SwarmWS workspace. Each project uses **DDD (Domain-Driven

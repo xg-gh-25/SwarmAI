@@ -13,8 +13,8 @@ description: >
   outlook-assistant = Outlook calendar + email | save-memory = persistent memory.
 input_type: text
 output_type: text
+tier: always
 ---
-
 # Radar ToDo Skill
 
 Manage ToDo items in the SwarmAI Radar sidebar. ToDos are stored in SQLite

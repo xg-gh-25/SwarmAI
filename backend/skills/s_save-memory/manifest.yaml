@@ -1,0 +1,11 @@
+# Auto-generated manifest for save-memory
+name: save-memory
+version: "1.0.0"
+tier: always
+
+scripts:
+  - path: scripts/locked_write.py
+    description: "Locked read-modify-write for MEMORY.md and EVOLUTION.md."
+
+resources:
+  - scripts

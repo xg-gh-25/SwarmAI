@@ -1,0 +1,9 @@
+# Auto-generated manifest for outlook-assistant
+name: outlook-assistant
+version: "1.0.0"
+tier: always
+
+scripts:
+
+resources:
+  - scripts

@@ -5,8 +5,8 @@ description: >
   TRIGGER: "search the web", "web search", "tavily", "find online", "search for", "latest news about", "what's happening with".
   DO NOT USE: for fetching a single known URL (use WebFetch), GitHub repo research (use github-research), or deep multi-round investigation (use deep-research).
   SIBLINGS: deep-research = multi-round investigation with synthesis | summarize = condense known content | tavily-search = fast web search + extraction as a building block.
+tier: always
 ---
-
 # Tavily Search
 
 **Why?** WebFetch can only grab a single known URL. Tavily searches the entire web, returns ranked results with relevance scores, and can generate AI-powered answers -- all in one API call. Essential for answering "what's the latest on X?" or powering research workflows.

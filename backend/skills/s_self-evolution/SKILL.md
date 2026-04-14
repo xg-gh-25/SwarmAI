@@ -7,8 +7,8 @@ description: >
   Captures corrections and competence. Auto-promotes recurring patterns.
   TRIGGER: always-active — auto-detects capability gaps, stuck states, and user corrections. Not user-invoked.
   DO NOT USE: manually — this skill runs automatically in the background.
+tier: always
 ---
-
 # Self-Evolution Engine
 
 Always-active self-improvement. Detect triggers proactively — don't wait for user.

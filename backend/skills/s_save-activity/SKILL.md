@@ -6,8 +6,8 @@ description: >
   DO NOT USE: for persistent facts (use save-memory) or session handoffs (use save-context).
   On-demand counterpart to the automatic post-session extraction hook.
   SIBLINGS: save-memory = permanent facts/decisions -> MEMORY.md | save-activity = session log -> DailyActivity/ | save-context = handoff doc for next session.
+tier: always
 ---
-
 # Save Activity
 
 Extract key points from the current conversation and append them to today's

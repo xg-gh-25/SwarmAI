@@ -1,0 +1,29 @@
+# Auto-generated manifest for docx
+name: docx
+version: "1.0.0"
+tier: lazy
+
+scripts:
+  - path: ooxml/scripts/pack.py
+    description: "Tool to pack a directory into a .docx, .pptx, or .xlsx file with XML formatting undone."
+  - path: ooxml/scripts/unpack.py
+    description: "Unpack and format XML contents of Office files (.docx, .pptx, .xlsx)"
+  - path: ooxml/scripts/validate.py
+    description: "Command line tool to validate Office document XML files against XSD schemas and tracked changes."
+  - path: ooxml/scripts/validation/base.py
+    description: "Base validator with common validation logic for document files."
+  - path: ooxml/scripts/validation/docx.py
+    description: "Validator for Word document XML files against XSD schemas."
+    entry: true
+  - path: ooxml/scripts/validation/pptx.py
+    description: "Validator for PowerPoint presentation XML files against XSD schemas."
+  - path: ooxml/scripts/validation/redlining.py
+    description: "Validator for tracked changes in Word documents."
+  - path: scripts/document.py
+    description: "Library for working with Word documents: comments, tracked changes, and editing."
+  - path: scripts/utilities.py
+    description: "Utilities for editing OOXML documents."
+
+resources:
+  - ooxml
+  - scripts

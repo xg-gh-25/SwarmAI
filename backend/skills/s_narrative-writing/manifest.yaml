@@ -1,0 +1,10 @@
+# Auto-generated manifest for narrative-writing
+name: narrative-writing
+version: "1.0.0"
+tier: lazy
+
+scripts:
+
+resources:
+  - reference
+  - scripts

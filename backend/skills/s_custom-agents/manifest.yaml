@@ -1,0 +1,6 @@
+# Auto-generated manifest for custom-agents
+name: custom-agents
+version: "1.0.0"
+tier: lazy
+
+scripts:

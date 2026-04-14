@@ -12,8 +12,8 @@ description: >
   deliver = package everything for handoff.
 consumes_artifacts: [evaluation, research, alternatives, design_doc, changeset, review, test_report]
 produces_artifact: delivery
+tier: always
 ---
-
 # Delivery Packaging
 
 The terminal stage of the lifecycle pipeline. Assembles all artifacts from a

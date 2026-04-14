@@ -12,8 +12,8 @@ description: >
   evaluate = judge whether to proceed at all.
 consumes_artifacts: [research]
 produces_artifact: evaluation
+tier: always
 ---
-
 # Requirement Evaluation
 
 The "should we?" gate for the lifecycle pipeline. Evaluates any incoming

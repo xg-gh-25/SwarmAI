@@ -7,8 +7,8 @@ description: >
   "show me the diff", "commit today's work", "git history", "revert".
   DO NOT USE: for GitHub PR/issue operations (use github-research or gh CLI directly), or non-SwarmWS repos.
   SIBLINGS: workspace-finder = file search | workspace-organizer = batch file ops | code-review = PR review.
+tier: always
 ---
-
 # Workspace Git
 
 Git operations for SwarmWS. All commands run in the SwarmWS workspace root (`~/.swarm-ai/SwarmWS/`).
