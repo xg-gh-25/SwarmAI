@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Pipeline stage validator — structural enforcement for the pipeline orchestrator.
 
-Enforces 7 invariants after each pipeline stage to prevent behavioral drift
+Enforces 8 invariants after each pipeline stage to prevent behavioral drift
 in the prompt-driven orchestrator. Called via bash after every stage:
 
     python pipeline_validator.py check \\
@@ -9,12 +9,12 @@ in the prompt-driven orchestrator. Called via bash after every stage:
 
 Returns JSON:
     {"valid": true, "stage": "evaluate", "errors": [], "warnings": [],
-     "checks_passed": 7, "checks_total": 7}
+     "checks_passed": 8, "checks_total": 8}
 
 Errors (BLOCK) prevent stage advancement. Warnings are informational —
 they surface in the delivery report but don't block progress.
 
-The 7 invariant checks:
+The 8 invariant checks:
     1. Stage order     — current stage follows the last completed stage per profile
     2. Artifact exists — stage published an artifact (except reflect)
     3. Artifact schema — required fields present in artifact JSON
@@ -24,6 +24,8 @@ The 7 invariant checks:
     7. DDD consistency — cross-document checks: non-goals vs approach,
                           failed patterns vs plan, staleness detection
                           (WARN only, evaluate stage)
+    8. Smoke executed  — build stage changeset must include smoke_tests > 0
+                          when files_changed > 1 (WARN, build stage only)
 
 Public symbols:
 - ``main``              — CLI entry point
@@ -66,6 +68,7 @@ STAGE_SCHEMAS: dict[str, dict[str, list[str]]] = {
     "build": {
         "required": ["files_changed"],
         "recommended": ["commits", "diff_summary", "tdd"],
+        # tdd.smoke_tests must be > 0 when files_changed > 1 (Check 8)
     },
     "review": {
         "required": ["approved"],
@@ -428,7 +431,7 @@ def validate(project: str, run_id: str, stage: str) -> dict[str, Any]:
     """
     errors: list[str] = []
     warnings: list[str] = []
-    checks_total = 7
+    checks_total = 8
     checks_passed = 0
 
     # Load run state
@@ -562,6 +565,29 @@ def validate(project: str, run_id: str, stage: str) -> dict[str, Any]:
         checks_passed += 1  # WARN only — never blocks
     else:
         checks_passed += 1  # Auto-pass for non-evaluate stages
+
+    # --- Check 8: Smoke tests executed (WARN, build stage only) ---
+    # When build touches >1 file, smoke tests must exercise new code paths
+    # with real objects (not mocks) to catch AttributeError/NameError.
+    # This check prevented 2 HIGH findings in the RecallEngine activation
+    # where MagicMock masked a missing attribute on SessionUnit.
+    if stage == "build":
+        artifact_id = stage_record.get("artifact_id")
+        if artifact_id:
+            artifact_data = _load_artifact_data(project, run_id, artifact_id)
+            if artifact_data:
+                tdd = artifact_data.get("tdd", {})
+                files_changed = artifact_data.get("files_changed", [])
+                smoke_count = tdd.get("smoke_tests", 0) if isinstance(tdd, dict) else 0
+                if len(files_changed) > 1 and smoke_count == 0:
+                    warnings.append(
+                        f"SMOKE step skipped: build touched {len(files_changed)} files "
+                        f"but smoke_tests=0 — runtime crashes (AttributeError, NameError) "
+                        f"may be hidden by mocks. Run smoke tests with real objects."
+                    )
+        checks_passed += 1  # WARN only — doesn't block
+    else:
+        checks_passed += 1  # Auto-pass for non-build stages
 
     return {
         "valid": len(errors) == 0,
