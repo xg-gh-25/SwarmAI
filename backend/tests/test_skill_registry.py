@@ -18,12 +18,25 @@ from core.skill_registry import SkillRegistry, SKILL_CATEGORIES
 
 @pytest.fixture
 def skills_dir(tmp_path: Path) -> Path:
-    """Create a fake skills directory with some SKILL.md files."""
-    for name in ["s_save-memory", "s_code-review", "s_deep-research",
-                  "s_slack", "s_browser-agent", "s_unknown-cool-skill"]:
+    """Create a fake skills directory with some SKILL.md files.
+
+    Includes both always-tier and lazy-tier (default) skills for tiered
+    registry testing.
+    """
+    always_skills = {
+        "s_save-memory": "---\nname: save-memory\ndescription: >\n  Save to memory.\n  TRIGGER: remember.\ntier: always\n---\n# save-memory\nA test skill.",
+        "s_slack": "---\nname: slack\ndescription: >\n  Slack integration.\n  TRIGGER: slack.\ntier: always\n---\n# slack\nA test skill.",
+    }
+    lazy_skills = {
+        "s_code-review": "---\nname: code-review\ndescription: >\n  Review code quality.\n  TRIGGER: review code.\ntier: lazy\n---\n# code-review\nA test skill.",
+        "s_deep-research": "---\nname: deep-research\ndescription: >\n  Deep research.\n  TRIGGER: research.\n---\n# deep-research\nA test skill.",
+        "s_browser-agent": "---\nname: browser-agent\ndescription: >\n  Browser automation.\n  TRIGGER: browse.\n---\n# browser-agent\nA test skill.",
+        "s_unknown-cool-skill": "# unknown-cool-skill\nA test skill.",
+    }
+    for name, content in {**always_skills, **lazy_skills}.items():
         skill_path = tmp_path / name
         skill_path.mkdir()
-        (skill_path / "SKILL.md").write_text(f"# {name}\nA test skill.")
+        (skill_path / "SKILL.md").write_text(content)
     return tmp_path
 
 
@@ -79,13 +92,41 @@ def test_uncategorized_in_other(registry: SkillRegistry):
 # ---------------------------------------------------------------------------
 
 def test_compact_format(registry: SkillRegistry):
-    """Output matches expected markdown format."""
+    """Output matches expected tiered markdown format."""
     output = registry.generate_compact_registry()
     assert "## Available Skills" in output
-    assert "### Memory" in output or "### Development" in output
-    # Should contain some skill names
+    # Always-tier skills get categorized headers
+    assert "### Memory" in output  # save-memory is always
     assert "save-memory" in output
+    # Lazy-tier skills go to On-Demand section
+    assert "On-Demand" in output
     assert "code-review" in output
+
+
+def test_tiered_partition(registry: SkillRegistry):
+    """Always and lazy skills are partitioned correctly."""
+    skills = registry._discover_skills()
+    always, lazy = registry._partition_by_tier(skills)
+    assert "save-memory" in always
+    assert "slack" in always
+    assert "code-review" in lazy
+    assert "browser-agent" in lazy
+    # Skills with no tier field default to lazy
+    assert "unknown-cool-skill" in lazy
+
+
+def test_tier_from_frontmatter(registry: SkillRegistry):
+    """Reads tier field from SKILL.md frontmatter."""
+    assert registry._read_tier("save-memory") == "always"
+    assert registry._read_tier("slack") == "always"
+    assert registry._read_tier("code-review") == "lazy"
+    assert registry._read_tier("unknown-cool-skill") == "lazy"
+
+
+def test_one_liner_extraction(registry: SkillRegistry):
+    """Extracts first sentence from description."""
+    desc = registry._get_one_liner("code-review")
+    assert "Review code quality" in desc or "code-review" in desc
 
 
 # ---------------------------------------------------------------------------
