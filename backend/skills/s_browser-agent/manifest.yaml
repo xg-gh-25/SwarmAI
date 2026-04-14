@@ -1,0 +1,11 @@
+# Auto-generated manifest for browser-agent
+name: browser-agent
+version: "1.0.0"
+tier: lazy
+
+scripts:
+  - path: browser-agent.mjs
+    description: "browser-agent.mjs — DOM-based browser automation for SwarmAI"
+    entry: true
+
+# Note: package.json found — npm dependencies may apply

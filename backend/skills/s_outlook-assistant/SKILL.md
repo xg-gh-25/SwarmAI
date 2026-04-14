@@ -6,8 +6,8 @@ description: >
   "send email", "reply email", "forward email".
   DO NOT USE: for non-Outlook email (use google-workspace), Apple Reminders, or general scheduling.
   SIBLINGS: google-workspace = Gmail + Google Calendar | outlook-assistant = Outlook email + calendar.
+tier: always
 ---
-
 # Outlook Assistant
 
 Outlook inbox management via the `aws-outlook-mcp` MCP server. Triage, send, cleanup, and organize emails.

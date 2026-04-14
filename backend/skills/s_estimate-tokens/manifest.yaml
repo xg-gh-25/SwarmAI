@@ -1,0 +1,9 @@
+# Auto-generated manifest for estimate-tokens
+name: estimate-tokens
+version: "1.0.0"
+tier: lazy
+
+scripts:
+
+resources:
+  - scripts

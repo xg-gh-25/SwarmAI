@@ -1,0 +1,27 @@
+# Auto-generated manifest for pdf
+name: pdf
+version: "1.0.0"
+tier: lazy
+
+scripts:
+  - path: scripts/check_bounding_boxes.py
+    description: "Script to check that the `fields.json` file that Claude creates when analyzing PDFs"
+  - path: scripts/check_bounding_boxes_test.py
+    description: "Currently this is not run automatically in CI; it's just for documentation and manual checking."
+  - path: scripts/check_fillable_fields.py
+    description: "Script for Claude to run to determine whether a PDF has fillable form fields. See forms.md."
+  - path: scripts/convert_pdf_to_images.py
+    description: "Converts each page of a PDF to a PNG image."
+    entry: true
+  - path: scripts/create_validation_image.py
+    description: "Creates validation images with rectangles for bounding box information"
+  - path: scripts/extract_form_field_info.py
+    description: "Extracts data for the fillable form fields in a PDF and outputs JSON that"
+  - path: scripts/fill_fillable_fields.py
+    description: "Fills fillable form fields in a PDF. See forms.md."
+  - path: scripts/fill_pdf_form_with_annotations.py
+    description: "Fills a PDF by adding text annotations defined in `fields.json`. See forms.md."
+    entry: true
+
+resources:
+  - scripts

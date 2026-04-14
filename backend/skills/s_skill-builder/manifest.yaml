@@ -1,0 +1,9 @@
+# Auto-generated manifest for skill-builder
+name: skill-builder
+version: "1.0.0"
+tier: lazy
+
+scripts:
+
+resources:
+  - specs-skill-template

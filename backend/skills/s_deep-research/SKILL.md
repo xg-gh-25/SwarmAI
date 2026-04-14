@@ -8,8 +8,8 @@ description: >
   Saves output to Knowledge/Notes/ by default.
 version: "2.0.0"
 produces_artifact: research
+tier: always
 ---
-
 # Deep Research
 
 Conduct systematic, multi-source research that produces well-cited, comprehensive analysis. Never generate content based solely on general knowledge -- the quality of output depends directly on the quality and quantity of research conducted beforehand.
