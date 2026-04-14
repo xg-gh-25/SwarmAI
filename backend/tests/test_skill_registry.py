@@ -92,41 +92,26 @@ def test_uncategorized_in_other(registry: SkillRegistry):
 # ---------------------------------------------------------------------------
 
 def test_compact_format(registry: SkillRegistry):
-    """Output matches expected tiered markdown format."""
+    """Output matches expected categorized markdown format."""
     output = registry.generate_compact_registry()
     assert "## Available Skills" in output
-    # Always-tier skills get categorized headers
-    assert "### Memory" in output  # save-memory is always
+    # Skills categorized by known categories
+    assert "### Memory" in output  # save-memory
     assert "save-memory" in output
-    # Lazy-tier skills go to On-Demand section
-    assert "On-Demand" in output
     assert "code-review" in output
 
 
-def test_tiered_partition(registry: SkillRegistry):
-    """Always and lazy skills are partitioned correctly."""
-    skills = registry._discover_skills()
-    always, lazy = registry._partition_by_tier(skills)
-    assert "save-memory" in always
-    assert "slack" in always
-    assert "code-review" in lazy
-    assert "browser-agent" in lazy
-    # Skills with no tier field default to lazy
-    assert "unknown-cool-skill" in lazy
-
-
 def test_tier_from_frontmatter(registry: SkillRegistry):
-    """Reads tier field from SKILL.md frontmatter."""
+    """_read_tier reads tier field from SKILL.md frontmatter."""
     assert registry._read_tier("save-memory") == "always"
     assert registry._read_tier("slack") == "always"
     assert registry._read_tier("code-review") == "lazy"
     assert registry._read_tier("unknown-cool-skill") == "lazy"
 
 
-def test_one_liner_extraction(registry: SkillRegistry):
-    """Extracts first sentence from description."""
-    desc = registry._get_one_liner("code-review")
-    assert "Review code quality" in desc or "code-review" in desc
+def test_tier_missing_skill(registry: SkillRegistry):
+    """_read_tier returns lazy for nonexistent skill."""
+    assert registry._read_tier("nonexistent-skill") == "lazy"
 
 
 # ---------------------------------------------------------------------------

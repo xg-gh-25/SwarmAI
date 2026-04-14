@@ -1,8 +1,8 @@
-"""Skill manifest loader — reads manifest.yaml and prepares skill environment.
+"""Skill manifest loader — reads manifest.yaml for skill package metadata.
 
 Parses skill package descriptors, validates dependencies, and generates
-script index for agent context injection. Used by skill_registry.py
-for tier classification and by the Skill tool handler for script discovery.
+script index strings. Used by skill_registry.py for tier classification.
+Script index injection at invocation time is planned for Phase 4.
 
 Key public symbols:
 
