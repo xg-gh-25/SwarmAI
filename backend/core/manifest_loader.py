@@ -62,11 +62,18 @@ class SkillManifest(BaseModel):
     def get_entry_script(self) -> Optional[ScriptEntry]:
         """Return the primary entry point script, if declared.
 
-        Falls back to the first script if none is marked ``entry: true``.
+        At most one script should be marked ``entry: true``. If multiple
+        are marked, the first one wins and a warning is logged.
+        Falls back to the first script if none is marked.
         """
-        for s in self.scripts:
-            if s.entry:
-                return s
+        entry_scripts = [s for s in self.scripts if s.entry]
+        if len(entry_scripts) > 1:
+            logger.warning(
+                "Manifest '%s' has %d scripts marked entry:true — using first (%s)",
+                self.name, len(entry_scripts), entry_scripts[0].path,
+            )
+        if entry_scripts:
+            return entry_scripts[0]
         return self.scripts[0] if self.scripts else None
 
     def generate_script_index(self, skill_dir: Path) -> str:

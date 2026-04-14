@@ -25,6 +25,8 @@ import re
 from pathlib import Path
 from typing import Optional
 
+from .manifest_loader import ManifestLoader
+
 logger = logging.getLogger(__name__)
 
 # Category mapping for known skill prefixes/names
@@ -185,13 +187,9 @@ class SkillRegistry:
         skill_dir = self._skills_dir / f"s_{name}"
 
         # 1. Try manifest.yaml (authoritative)
-        try:
-            from .manifest_loader import ManifestLoader
-            manifest = ManifestLoader.load(skill_dir)
-            if manifest is not None:
-                return manifest.tier
-        except ImportError:
-            pass
+        manifest = ManifestLoader.load(skill_dir)
+        if manifest is not None:
+            return manifest.tier
 
         # 2. Fallback: parse SKILL.md frontmatter for tier field
         skill_md = skill_dir / "SKILL.md"
