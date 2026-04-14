@@ -823,15 +823,19 @@ class SessionRouter:
         _user_text = user_message or (
             query_content if isinstance(query_content, str) else ""
         )
-        if _user_text and hasattr(unit, "working_directory"):
-            asyncio.create_task(
-                _shadow_recall(
-                    session_id=session_id,
-                    user_message=_user_text,
-                    working_directory=unit.working_directory,
-                    is_channel=unit.is_channel_session,
-                ),
-            )
+        if _user_text:
+            from core.initialization_manager import initialization_manager
+            _ws = initialization_manager.get_cached_workspace_path()
+            if _ws:
+                _task = asyncio.create_task(
+                    _shadow_recall(
+                        session_id=session_id,
+                        user_message=_user_text,
+                        working_directory=_ws,
+                        is_channel=unit.is_channel_session,
+                    ),
+                )
+                _task.add_done_callback(_shadow_task_done)
 
         # Stream response — persist each assistant message IMMEDIATELY.
         #
@@ -1022,7 +1026,20 @@ class SessionRouter:
 # never blocks the response stream, never injects into the prompt.
 # Data collected here drives the decision to wire recall into production.
 
-_shadowed_sessions: set[str] = set()
+# Bounded dedup: track which sessions have been shadowed.
+# Dict[session_id → timestamp] with max 500 entries; oldest evicted on overflow.
+# Prevents unbounded memory growth in long-running backends.
+_shadowed_sessions: dict[str, float] = {}
+_SHADOW_MAX_ENTRIES = 500
+
+
+def _shadow_task_done(task: asyncio.Task) -> None:
+    """Log unhandled exceptions from fire-and-forget shadow tasks."""
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc:
+        logger.debug("Shadow recall task failed (non-blocking): %s", exc)
 
 
 async def _shadow_recall(
@@ -1040,10 +1057,14 @@ async def _shadow_recall(
     if is_channel:
         return None
 
-    # Once per session — skip if already shadowed
+    # Once per session — bounded dedup with LRU eviction
     if session_id in _shadowed_sessions:
         return None
-    _shadowed_sessions.add(session_id)
+    if len(_shadowed_sessions) >= _SHADOW_MAX_ENTRIES:
+        # Evict oldest entry
+        oldest = min(_shadowed_sessions, key=_shadowed_sessions.get)  # type: ignore[arg-type]
+        del _shadowed_sessions[oldest]
+    _shadowed_sessions[session_id] = time.monotonic()
 
     # Skip very short messages (greetings, "hi", etc.)
     text = user_message.strip() if user_message else ""
