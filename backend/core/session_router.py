@@ -91,9 +91,11 @@ def _extract_query_keywords(message: str) -> str:
     text = re.sub(r"https?://\S+", "", text)
     text = re.sub(r"(?:^|\s)[~/]\S+", " ", text)
 
-    # English words: keep substantive terms (>3 chars, not stop words)
+    # English words: keep substantive terms (>3 chars, not stop words).
+    # Use [a-zA-Z_] anchor instead of \b — \b doesn't fire at CJK/ASCII
+    # boundaries (e.g. "的Memory" misses "Memory" with \b).
     words = [
-        w for w in re.findall(r"\b[a-zA-Z_]\w{2,}\b", text)
+        w for w in re.findall(r"(?<![a-zA-Z_])([a-zA-Z_]\w{2,})(?!\w)", text)
         if w.lower() not in _STOP_WORDS
     ]
 
