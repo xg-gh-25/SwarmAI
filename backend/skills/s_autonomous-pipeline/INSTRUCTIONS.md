@@ -320,6 +320,18 @@ The BUILD stage follows TDD methodology: tests before code, code until tests pas
 **The TDD constraint:** Fix code, not tests. Tests are derived from the accepted
 design. Changing a test = changing the spec = go back to PLAN.
 
+**Mock discipline:** When mocking objects in tests, use `spec=RealClass` or only
+set attributes that exist on the real class. Bare `MagicMock()` silently accepts
+ANY attribute access — this hides `AttributeError` bugs that crash in production.
+For integration-facing tests (anything that touches cross-module boundaries),
+prefer real objects over mocks. If you must mock, mock the leaf dependency
+(DB, network), not the intermediate object.
+
+**Adversarial inputs in RED phase:** For NLP/parsing code, the RED phase must
+include adversarial inputs: URLs, file paths, code snippets, empty/minimal
+strings, Unicode edge cases (CJK, Kana, Hangul, emoji), and multi-language mix.
+These are the inputs that break keyword extractors, parsers, and formatters.
+
 Publish artifact:
 ```bash
 python backend/scripts/artifact_cli.py publish --project <PROJECT> \
@@ -363,6 +375,18 @@ python backend/scripts/artifact_cli.py advance --project <PROJECT> --state revie
    But the agent must make an explicit decision, not silently ship dead code.
 
    Include integration trace results in the review artifact under `"integration_trace"`.
+
+5. **Replace/Move Parity Check** — when code is **moved or replaced** (not just added):
+
+   | Check | What to verify | Example |
+   |-------|---------------|---------|
+   | Feature parity | Every capability of old code exists in new code | Old `_recall_knowledge` had TranscriptStore; new `_recall_for_query` must too |
+   | Dead orphan detection | After removing a call site, grep old function — if 0 callers remain, flag as dead code | `_recall_knowledge` still defined after its only caller was removed |
+   | Argument validity | Mock attributes must exist on the real class | `unit.working_directory` doesn't exist on SessionUnit |
+
+   This check exists because PE review of the RecallEngine activation found 2 HIGH
+   bugs: (1) replaced function dropped a capability (TranscriptStore), (2) test mock
+   hid a missing attribute. Both would have been caught by feature parity diff.
 
 Publish artifact:
 ```bash

@@ -386,8 +386,8 @@ class TestValidateIntegration:
 
         result = validate("TestProject", "run_test1", "evaluate")
         assert result["valid"] is True
-        assert result["checks_passed"] == 7
-        assert result["checks_total"] == 7
+        assert result["checks_passed"] == 8
+        assert result["checks_total"] == 8
         assert len(result["errors"]) == 0
         assert len(result["warnings"]) == 0
 
@@ -402,7 +402,7 @@ class TestValidateIntegration:
 
         result = validate("TestProject", "run_test1", "reflect")
         assert result["valid"] is True
-        assert result["checks_passed"] == 7
+        assert result["checks_passed"] == 8
 
     def test_warnings_dont_block(self, workspace):
         """Warnings don't make valid=false, and checks_passed stays at 7."""
@@ -417,7 +417,7 @@ class TestValidateIntegration:
 
         result = validate("TestProject", "run_test1", "evaluate")
         assert result["valid"] is True  # No BLOCK errors
-        assert result["checks_passed"] == 7  # Warnings don't reduce count
+        assert result["checks_passed"] == 8  # Warnings don't reduce count
         assert len(result["warnings"]) >= 2  # Missing decisions + zero budget
 
     def test_multiple_errors_accumulate(self, workspace):
@@ -728,8 +728,8 @@ Cloud SaaS deployment with Kubernetes.
         ])
 
         result = validate("TestProject", "run_test1", "evaluate")
-        assert result["checks_total"] == 7
-        assert result["checks_passed"] == 7
+        assert result["checks_total"] == 8
+        assert result["checks_passed"] == 8
 
 
 # ---------------------------------------------------------------------------
