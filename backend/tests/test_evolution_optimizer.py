@@ -697,6 +697,56 @@ class TestHeuristicFirstForRecommendTier:
             # Deploy-tier should still attempt LLM (auto mode tries LLM first)
             assert mock_llm.called, "Deploy-tier skill should still call LLM"
 
+    def test_cycle_peek_skips_llm_for_recommend_tier(self, tmp_path):
+        """Integration: run_evolution_cycle with recommend-tier skill, heuristic match → LLM skipped.
+
+        Tests the actual peek logic in _run_evolution_cycle_locked, not just
+        optimize_skill with force_heuristic. Catches regressions if the peek
+        condition is refactored.
+        """
+        from core.evolution_optimizer import run_evolution_cycle
+
+        skills_dir = tmp_path / "skills"
+        skill_dir = skills_dir / "s_peektest"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
+            "---\nname: peektest\ndescription: >\n  Test\n  TRIGGER: peek, peektest\n---\n"
+            "Deploy and verify the service output.\n"
+        )
+
+        # Create eval file: 10 examples, 1 correction with heuristic-matchable pattern.
+        # 1 correction in 10 → confidence ~0.25 = recommend tier (0.15-0.35).
+        evals_dir = tmp_path / "evals"
+        evals_dir.mkdir(parents=True)
+        eval_records = []
+        for i in range(9):
+            eval_records.append(json.dumps({
+                "user_prompt": f"peek {i}", "skill_invoked": "peektest",
+                "agent_actions": "did peek", "user_correction": None,
+                "final_outcome": "done", "score": 1.0,
+            }))
+        eval_records.append(json.dumps({
+            "user_prompt": "peek 9", "skill_invoked": "peektest",
+            "agent_actions": "did peek",
+            "user_correction": "should always validate input before processing",
+            "final_outcome": "done", "score": 0.5,
+        }))
+        (evals_dir / "peektest.jsonl").write_text("\n".join(eval_records))
+
+        transcripts_dir = tmp_path / "transcripts"
+        transcripts_dir.mkdir()
+
+        # Patch LLM at the EvolutionOptimizer class level to track calls
+        with patch.object(
+            EvolutionOptimizer, "_try_llm_optimization", return_value=([], 0),
+        ) as mock_llm:
+            result = run_evolution_cycle(skills_dir, transcripts_dir, evals_dir)
+            # The cycle should have run the peek, found heuristic matches,
+            # and set force_heuristic=True → LLM never called for this skill.
+            assert not mock_llm.called, (
+                "Recommend-tier skill with heuristic match: cycle peek should skip LLM"
+            )
+
 
 class TestSkillHealthHighlightsApplyAffordance:
     """G1: _get_skill_health_highlights should include 'apply' affordance for recommend-tier."""
@@ -728,8 +778,9 @@ class TestSkillHealthHighlightsApplyAffordance:
         line = highlights[0]
         assert "radar-todo" in line
         assert "不要做 GitHub push" in line
-        # G1: Must include apply affordance
-        assert "apply radar-todo fix" in line.lower() or "apply" in line.lower()
+        # G1: Must include apply affordance (wording: "review changes", not "deploy")
+        assert "apply radar-todo fix" in line.lower()
+        assert "review changes" in line.lower()
 
     def test_deploy_tier_no_apply_affordance(self, tmp_path):
         """Deploy-tier (already deployed) should NOT show 'apply' text."""

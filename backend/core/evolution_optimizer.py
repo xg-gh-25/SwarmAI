@@ -599,7 +599,12 @@ class EvolutionOptimizer:
         return True, "All constraints passed"
 
     def optimize_skill(
-        self, skill_name: str, eval_examples: list, *, force_heuristic: bool = False,
+        self,
+        skill_name: str,
+        eval_examples: list,
+        *,
+        force_heuristic: bool = False,
+        _precomputed_corrections: list | None = None,
     ) -> OptimizationResult:
         """Run optimization on a skill (LLM or heuristic, config-gated).
 
@@ -611,6 +616,8 @@ class EvolutionOptimizer:
         Args:
             force_heuristic: If True, skip LLM regardless of config (used when
                 LLM budget is exhausted for this cycle).
+            _precomputed_corrections: Pre-extracted corrections from caller (avoids
+                double extraction when cycle code peeks at heuristic before calling).
         """
         original_text = self._read_skill_text(skill_name)
         if original_text is None:
@@ -623,7 +630,7 @@ class EvolutionOptimizer:
                 reason=f"Skill {skill_name} not found",
             )
 
-        corrections = self._extract_corrections(eval_examples)
+        corrections = _precomputed_corrections if _precomputed_corrections is not None else self._extract_corrections(eval_examples)
         if not corrections:
             return OptimizationResult(
                 skill_name=skill_name,
@@ -1072,19 +1079,21 @@ def _run_evolution_cycle_locked(
                 llm_budget_remaining <= 0
                 or confidence < med_threshold
             )
-            if is_recommend_tier and not use_heuristic_only:
-                # Peek: does heuristic find patterns?
-                corrections_for_peek = optimizer._extract_corrections(examples)
+            # Pre-extract corrections once — reused by peek and optimize_skill.
+            precomputed_corrections = optimizer._extract_corrections(examples)
+            if is_recommend_tier and not use_heuristic_only and precomputed_corrections:
+                # Peek: does heuristic find patterns? If so, skip LLM.
                 original_text = optimizer._read_skill_text(skill_name)
-                if original_text and corrections_for_peek:
+                if original_text:
                     _, peek_changes = optimizer._apply_heuristic_changes(
-                        original_text, corrections_for_peek,
+                        original_text, precomputed_corrections,
                     )
                     if peek_changes:
                         use_heuristic_only = True  # Heuristic suffices, skip LLM
             opt_result = optimizer.optimize_skill(
                 skill_name, examples,
                 force_heuristic=use_heuristic_only,
+                _precomputed_corrections=precomputed_corrections,
             )
             skill_llm_tokens = optimizer.last_llm_tokens
             if skill_llm_tokens > 0:

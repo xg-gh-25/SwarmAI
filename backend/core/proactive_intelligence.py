@@ -654,7 +654,7 @@ def _get_skill_health_highlights(ctx_dir: Path) -> list[str]:
                     fitness = skill.get("fitness_score", 0.0)
                     # G1: Include apply affordance when actionable changes exist
                     has_changes = bool(rec.get("changes"))
-                    affordance = f'. Say "apply {name} fix" to deploy' if has_changes else ""
+                    affordance = f'. Say "apply {name} fix" to review changes' if has_changes else ""
                     highlights.append(
                         f"[medium] **{name}** needs attention -- "
                         f"{corr} corrections, "
