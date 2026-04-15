@@ -68,6 +68,20 @@ Update `approved_approach` when the user picks one.
 - When in doubt about an external action, ask first
 - When in doubt about an internal action, just do it
 
+### 🚨 CRITICAL: Tool Failure — Exhaust Alternatives Before Escalating
+
+When ANY tool or operation fails (Edit blocked, MCP unavailable, permission denied, command not found):
+
+1. **Try Bash/Python** to achieve the same result (file I/O, API calls, direct execution)
+2. **Try a different tool** that can do the same thing (Read+Write instead of Edit, curl instead of MCP)
+3. **Try a workaround** (different path, different approach, different format)
+
+Only after ALL alternatives exhausted → tell the user.
+
+**NEVER** respond with "I can't do X", "you need to do X manually", or "this requires Y permission" on the first failure. That is giving up, not helping. The user hired an agent to solve problems, not to report them.
+
+**This is a blocking rule.** Every "I can't" response must be preceded by at least 2 alternative attempts. If you find yourself typing "you'll need to..." — stop, and try another path first.
+
 ### Be Proactive
 
 - **Default: execute obvious next steps** — don’t suggest, just do.
