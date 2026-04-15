@@ -268,7 +268,8 @@ for pkg in LOCAL_PACKAGES:
     local_modules.append(pkg)
     # Add all .py files in the package (including nested like jobs/adapters/*.py)
     for py_file in sorted(glob.glob(f'{pkg}/**/*.py', recursive=True)):
-        mod = py_file.replace('/', '.').removesuffix('.py')
+        # Normalize path separators (Windows glob returns backslashes)
+        mod = py_file.replace(os.sep, '.').replace('/', '.').removesuffix('.py')
         if '__pycache__' in mod or mod.endswith('.__init__') or 'test_' in mod or '_test.' in mod:
             continue
         local_modules.append(mod)
