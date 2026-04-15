@@ -328,7 +328,15 @@ def create_file_access_permission_handler(allowed_directories: list[str]) -> Cal
 _TCC_PROTECTED_NAMES = frozenset({"Music", "Pictures", "Movies"})
 
 # Commands that recurse into subdirectories by default.
-_RECURSIVE_CMD_RE = re.compile(r"\b(find|tree|du)\b")
+# Covers: find, tree, du, ls -R, grep -r/-R (all would traverse TCC dirs).
+# Group 1 always captures the command name for error messages.
+_RECURSIVE_CMD_RE = re.compile(
+    r"\b(find|tree|du)\b"
+    r"|"
+    r"\b(ls)\b.*\s-[a-zA-Z]*R"     # ls -R, ls -lR, ls -alR
+    r"|"
+    r"\b(grep)\b.*\s-[a-zA-Z]*[rR]"  # grep -r, grep -R, grep -rn
+)
 
 
 def create_tcc_protection_hook() -> Callable[..., Any]:
@@ -404,13 +412,15 @@ def create_tcc_protection_hook() -> Callable[..., Any]:
                 return _deny(
                     f"Blocked: command references macOS-protected directory "
                     f"({tcc_path}). Accessing it triggers a system permission "
-                    f"popup. Use a more specific path instead."
+                    f"popup. If you need files from this directory, ask the "
+                    f"user to copy them to ~/Desktop or ~/.swarm-ai/ first."
                 )
 
         # ── Check 2: Recursive command from an ancestor of ~/  ─────────
         m = _RECURSIVE_CMD_RE.search(command)
         if m:
-            cmd_name = m.group(1)
+            # With alternation, exactly one group is non-None
+            cmd_name = next(g for g in m.groups() if g is not None)
             for path_tok in _extract_paths(command):
                 if _is_tcc_ancestor(path_tok):
                     logger.warning(
@@ -421,7 +431,7 @@ def create_tcc_protection_hook() -> Callable[..., Any]:
                         f"Blocked: '{cmd_name} ... {path_tok}' would traverse "
                         f"into macOS TCC-protected directories (~/Music, "
                         f"~/Pictures, ~/Movies), triggering permission popups. "
-                        f"Scope the search to a specific directory like "
+                        f"Scope the command to a specific directory like "
                         f"~/.swarm-ai/ or ~/Desktop instead."
                     )
 

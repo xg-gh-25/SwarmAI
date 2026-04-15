@@ -1319,6 +1319,7 @@ async def trash_item(request: FolderDeleteRequest):
     # popup. Uses a UUID suffix to guarantee uniqueness (avoids TOCTOU race
     # between exists() check and shutil.move in the old counter approach).
     trash_dir = Path.home() / ".Trash"
+    trash_dir.mkdir(exist_ok=True)  # May not exist on network home dirs
     dest = trash_dir / target.name
 
     if dest.exists():
