@@ -910,7 +910,13 @@ async def health_check():
 
 @app.get("/api/system/verify-import")
 async def verify_import(module: str):
-    """Check if a module is importable in this binary. Used by verify_build.py."""
+    """Check if a module is importable in this binary. Used by verify_build.py.
+
+    Gated behind SWARMAI_VERIFY_BUILD=1 to prevent arbitrary import in
+    normal operation.
+    """
+    if os.environ.get("SWARMAI_VERIFY_BUILD") != "1":
+        return {"available": False, "error": "verify endpoints require SWARMAI_VERIFY_BUILD=1"}
     try:
         __import__(module)
         return {"available": True, "module": module}
@@ -920,7 +926,15 @@ async def verify_import(module: str):
 
 @app.get("/api/system/verify-data")
 async def verify_data(path: str):
-    """Check if a bundled data file/dir exists. Used by verify_build.py."""
+    """Check if a bundled data file/dir exists. Used by verify_build.py.
+
+    Gated behind SWARMAI_VERIFY_BUILD=1. Path traversal blocked.
+    """
+    if os.environ.get("SWARMAI_VERIFY_BUILD") != "1":
+        return {"exists": False, "detail": "verify endpoints require SWARMAI_VERIFY_BUILD=1"}
+    if ".." in path or path.startswith("/"):
+        return {"exists": False, "detail": "invalid path"}
+
     import sys as _sys
     # Check in _MEIPASS (PyInstaller) or relative to backend dir
     bases = []
@@ -938,7 +952,13 @@ async def verify_data(path: str):
 
 @app.get("/api/system/verify-native")
 async def verify_native(path: str):
-    """Check if a native extension is loadable. Used by verify_build.py."""
+    """Check if a native extension is loadable. Used by verify_build.py.
+
+    Gated behind SWARMAI_VERIFY_BUILD=1.
+    """
+    if os.environ.get("SWARMAI_VERIFY_BUILD") != "1":
+        return {"loadable": False, "detail": "verify endpoints require SWARMAI_VERIFY_BUILD=1"}
+
     import sqlite3
     # path format: "sqlite_vec/vec0" (without .dylib suffix)
     parts = path.split("/", 1)
