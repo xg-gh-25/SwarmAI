@@ -138,13 +138,56 @@ function LineGutter({ lineCount, scrollTop, activeLineNumber }: {
 /*  DiffView                                                            */
 /* ------------------------------------------------------------------ */
 
-function DiffView({ lines }: { lines: DiffLine[] }) {
+import type { DiffContext } from '../../hooks/useReviewMode';
+import type { ReviewComment } from '../../hooks/useReviewMode';
+import CommentPopover from './CommentPopover';
+
+/** LINE_HEIGHT must match the editor textarea (leading-6 = 24px). */
+const DIFF_LINE_HEIGHT = 24;
+
+interface DiffViewProps {
+  lines: DiffLine[];
+  /** Currently active popover diff-line index (0-based). */
+  activePopoverIndex?: number | null;
+  /** Called when a diff line is clicked. Index is 0-based into `lines`. */
+  onLineClick?: (index: number) => void;
+  /** Called to add a new comment on a diff line. */
+  onAddComment?: (lineStart: number, lineEnd: number, text: string, diffContext?: DiffContext) => void;
+  /** Called to update an existing comment. */
+  onUpdateComment?: (id: string, text: string) => void;
+  /** Called to remove an existing comment. */
+  onRemoveComment?: (id: string) => void;
+  /** Called to close the popover. */
+  onCancelPopover?: () => void;
+  /** Get comment for a specific diff-line index (0-based). */
+  getCommentForDiffIndex?: (index: number) => ReviewComment | undefined;
+  /** Comment being edited (for existing comment editing). */
+  editingComment?: ReviewComment | null;
+}
+
+function DiffView({
+  lines,
+  activePopoverIndex,
+  onLineClick,
+  onAddComment,
+  onUpdateComment,
+  onRemoveComment,
+  onCancelPopover,
+  getCommentForDiffIndex,
+  editingComment,
+}: DiffViewProps) {
   const maxOld = lines.reduce((m, l) => Math.max(m, l.oldLineNumber ?? 0), 0);
   const maxNew = lines.reduce((m, l) => Math.max(m, l.newLineNumber ?? 0), 0);
   const gutterW = `${Math.max(3, String(Math.max(maxOld, maxNew)).length)}ch`;
+  const scrollRef = useRef<HTMLPreElement>(null);
+  const isInteractive = !!onLineClick;
+
+  // Active line for popover
+  const activeLine = activePopoverIndex != null ? lines[activePopoverIndex] : null;
 
   return (
     <pre
+      ref={scrollRef}
       className="absolute inset-0 m-0 overflow-auto font-mono text-sm leading-6 bg-[var(--color-background)]"
       data-testid="diff-view"
     >
@@ -152,8 +195,24 @@ function DiffView({ lines }: { lines: DiffLine[] }) {
         let bgClass = '';
         if (line.type === 'added') bgClass = 'bg-[var(--color-git-added)]/15';
         if (line.type === 'removed') bgClass = 'bg-[var(--color-git-deleted)]/15';
+        const hasComment = getCommentForDiffIndex ? !!getCommentForDiffIndex(i) : false;
+        const isPopoverTarget = activePopoverIndex === i;
+
         return (
-          <div key={i} className={`flex ${bgClass}`}>
+          <div
+            key={i}
+            className={clsx(
+              'flex',
+              bgClass,
+              isInteractive && 'cursor-pointer',
+              isInteractive && !hasComment && !isPopoverTarget && 'hover:brightness-95 dark:hover:brightness-110',
+              isPopoverTarget && 'ring-1 ring-[var(--color-primary)]/40',
+              hasComment && !isPopoverTarget && 'ring-1 ring-amber-500/30',
+            )}
+            onClick={isInteractive ? () => onLineClick!(i) : undefined}
+            role={isInteractive ? 'button' : undefined}
+            aria-label={isInteractive ? `Comment on diff line ${i + 1}` : undefined}
+          >
             <span
               className="shrink-0 text-right pr-1 text-[var(--color-text-muted)] select-none border-r border-[var(--color-border)]"
               style={{ width: gutterW }}
@@ -172,9 +231,42 @@ function DiffView({ lines }: { lines: DiffLine[] }) {
             <span className="flex-1 whitespace-pre-wrap break-words px-2">
               {line.content}
             </span>
+            {hasComment && (
+              <span className="shrink-0 pr-2 text-[10px] self-center" title="Has comment">💬</span>
+            )}
           </div>
         );
       })}
+
+      {/* CommentPopover for diff lines */}
+      {activePopoverIndex != null && activeLine && onAddComment && onCancelPopover && scrollRef.current && (
+        <CommentPopover
+          lineNumber={activePopoverIndex + 1}
+          initialText={editingComment?.text ?? ''}
+          onSubmit={(text) => {
+            if (editingComment && onUpdateComment) {
+              onUpdateComment(editingComment.id, text);
+            } else {
+              // Use the real line number from the diff line for the comment model
+              const lineNum = activeLine.newLineNumber ?? activeLine.oldLineNumber ?? activePopoverIndex + 1;
+              onAddComment(lineNum, lineNum, text, {
+                type: activeLine.type,
+                oldLineNumber: activeLine.oldLineNumber,
+                newLineNumber: activeLine.newLineNumber,
+                content: activeLine.content,
+              });
+            }
+          }}
+          onCancel={onCancelPopover}
+          onDelete={
+            editingComment && onRemoveComment
+              ? () => onRemoveComment(editingComment.id)
+              : undefined
+          }
+          topOffset={activePopoverIndex * DIFF_LINE_HEIGHT - (scrollRef.current?.scrollTop ?? 0)}
+          anchorRef={scrollRef as unknown as React.RefObject<HTMLDivElement>}
+        />
+      )}
     </pre>
   );
 }
@@ -339,9 +431,15 @@ export default function FileEditorCore({
   const isMarkdown = /\.md$/i.test(fileName);
   const isSvg = /\.svg$/i.test(fileName);
 
-  // L3: Review mode — inline comments
+  // L3: Review mode — inline comments (used for both normal review and diff review)
   const review = useReviewMode(content);
   const feedbackText = review.formatFeedback(fileName);
+
+  // Diff-line comment tracking: maps diff-line index → comment id
+  // This lets us find comments by their position in the diff view
+  const [diffCommentMap, setDiffCommentMap] = useState<Map<number, string>>(new Map());
+  const [activeDiffPopoverIndex, setActiveDiffPopoverIndex] = useState<number | null>(null);
+  const [editingDiffComment, setEditingDiffComment] = useState<ReviewComment | null>(null);
 
   // When a line is clicked in review mode gutter
   const handleReviewLineClick = useCallback(
@@ -360,9 +458,84 @@ export default function FileEditorCore({
     [review],
   );
 
+  // When a diff line is clicked
+  const handleDiffLineClick = useCallback(
+    (diffIndex: number) => {
+      const existingCommentId = diffCommentMap.get(diffIndex);
+      if (existingCommentId) {
+        const comment = review.comments.find((c) => c.id === existingCommentId);
+        setEditingDiffComment(comment ?? null);
+      } else {
+        setEditingDiffComment(null);
+      }
+      setActiveDiffPopoverIndex(diffIndex);
+    },
+    [diffCommentMap, review.comments],
+  );
+
+  // Get comment for a specific diff-line index
+  const getCommentForDiffIndex = useCallback(
+    (diffIndex: number): ReviewComment | undefined => {
+      const commentId = diffCommentMap.get(diffIndex);
+      if (!commentId) return undefined;
+      return review.comments.find((c) => c.id === commentId);
+    },
+    [diffCommentMap, review.comments],
+  );
+
+  // Wrap addComment to also track in diffCommentMap
+  const handleDiffAddComment = useCallback(
+    (lineStart: number, lineEnd: number, text: string, diffContext?: import('../../hooks/useReviewMode').DiffContext) => {
+      review.addComment(lineStart, lineEnd, text, diffContext);
+      // After adding, the newest comment is the last one
+      // We need to defer this to after the state update
+      if (activeDiffPopoverIndex != null) {
+        // We'll update the map in an effect that watches comments
+        setActiveDiffPopoverIndex(null);
+      }
+    },
+    [review, activeDiffPopoverIndex],
+  );
+
+  // Compute diff lines (must be before effects that reference it)
+  const diffLines = useMemo(() => {
+    if (!showDiff) return [];
+    return computeLineDiff(originalContent, content);
+  }, [showDiff, originalContent, content]);
+
+  // Sync diffCommentMap when comments change (track which diff index → comment id)
+  useEffect(() => {
+    if (!showDiff || diffLines.length === 0) return;
+    const newMap = new Map<number, string>();
+    for (const comment of review.comments) {
+      if (!comment.diffContext) continue;
+      // Find the diff line that matches this comment's context
+      const idx = diffLines.findIndex((dl) =>
+        dl.type === comment.diffContext!.type &&
+        dl.content === comment.diffContext!.content &&
+        dl.oldLineNumber === comment.diffContext!.oldLineNumber &&
+        dl.newLineNumber === comment.diffContext!.newLineNumber
+      );
+      if (idx !== -1) {
+        newMap.set(idx, comment.id);
+      }
+    }
+    setDiffCommentMap(newMap);
+  }, [review.comments, showDiff, diffLines]);
+
+  const handleDiffCancelPopover = useCallback(() => {
+    setActiveDiffPopoverIndex(null);
+    setEditingDiffComment(null);
+  }, []);
+
   const handleReviewFeedbackSent = useCallback(() => {
     review.clearComments();
-    review.toggleReviewMode();
+    setDiffCommentMap(new Map());
+    setActiveDiffPopoverIndex(null);
+    setEditingDiffComment(null);
+    if (review.isReviewMode) {
+      review.toggleReviewMode();
+    }
   }, [review]);
 
   // --- Handlers ---
@@ -442,6 +615,10 @@ export default function FileEditorCore({
     setAttachFeedback(false);
     // L3: Hard-reset review mode on file switch (no dependency on isReviewMode)
     review.resetReviewMode();
+    // Clear diff comment state
+    setDiffCommentMap(new Map());
+    setActiveDiffPopoverIndex(null);
+    setEditingDiffComment(null);
   }, [initialContent, committedContent, filePath, review.resetReviewMode]);
 
   // Syntax highlighting
@@ -538,11 +715,6 @@ export default function FileEditorCore({
   // --- Computed ---
 
   const lineCount = content.split('\n').length;
-
-  const diffLines = useMemo(() => {
-    if (!showDiff) return [];
-    return computeLineDiff(originalContent, content);
-  }, [showDiff, originalContent, content]);
 
   const searchMatches = useMemo(() => {
     if (!searchQuery) return [];
@@ -853,7 +1025,17 @@ export default function FileEditorCore({
 
           {showDiff ? (
             <div className="flex-1 relative overflow-hidden">
-              <DiffView lines={diffLines} />
+              <DiffView
+                lines={diffLines}
+                activePopoverIndex={activeDiffPopoverIndex}
+                onLineClick={handleDiffLineClick}
+                onAddComment={handleDiffAddComment}
+                onUpdateComment={review.updateComment}
+                onRemoveComment={review.removeComment}
+                onCancelPopover={handleDiffCancelPopover}
+                getCommentForDiffIndex={getCommentForDiffIndex}
+                editingComment={editingDiffComment}
+              />
             </div>
           ) : showMarkdownPreview ? (
             <div className="flex-1 relative overflow-auto p-6 bg-[var(--color-background)]">
@@ -982,13 +1164,18 @@ export default function FileEditorCore({
           )}
         </div>
 
-        {/* Review Feedback Bar (L3) — shown above footer when review mode active */}
-        {review.isReviewMode && (
+        {/* Review Feedback Bar (L3) — shown in review mode OR diff mode with comments */}
+        {(review.isReviewMode || (showDiff && review.comments.length > 0)) && (
           <ReviewFeedbackBar
             commentCount={review.comments.length}
             feedbackText={feedbackText}
             onFeedbackSent={handleReviewFeedbackSent}
-            onClearComments={review.clearComments}
+            onClearComments={() => {
+              review.clearComments();
+              setDiffCommentMap(new Map());
+              setActiveDiffPopoverIndex(null);
+              setEditingDiffComment(null);
+            }}
           />
         )}
 
