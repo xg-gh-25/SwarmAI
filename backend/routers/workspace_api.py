@@ -1316,18 +1316,18 @@ async def trash_item(request: FolderDeleteRequest):
 
     # Move to macOS Trash via direct filesystem operation (recoverable).
     # Uses shutil.move to ~/.Trash/ — no osascript, no Apple Events, no TCC
-    # popup. Handles name conflicts by appending a counter suffix.
+    # popup. Uses a UUID suffix to guarantee uniqueness (avoids TOCTOU race
+    # between exists() check and shutil.move in the old counter approach).
     trash_dir = Path.home() / ".Trash"
     dest = trash_dir / target.name
 
-    # Resolve name conflicts (Finder appends " 2", " 3", etc.)
     if dest.exists():
+        # UUID suffix guarantees no collision without a TOCTOU window
+        import uuid
+        unique_id = uuid.uuid4().hex[:8]
         stem = target.stem
         suffix = target.suffix
-        counter = 2
-        while dest.exists():
-            dest = trash_dir / f"{stem} {counter}{suffix}"
-            counter += 1
+        dest = trash_dir / f"{stem} {unique_id}{suffix}"
 
     try:
         await asyncio.to_thread(shutil.move, str(target), str(dest))

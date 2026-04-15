@@ -23,6 +23,7 @@ import json as _json
 import logging
 import os
 import time
+from collections import OrderedDict
 from datetime import datetime, timezone
 from pathlib import Path
 import re
@@ -46,7 +47,7 @@ _SDK_SUPPORTS_MULTIMODAL: bool = False
 
 # ── Pre-response recall (G3: post-first-message injection) ────────
 # Activates RecallEngine L2/L3 using the user's actual query instead
-# of generic proactive keywords.  Runs once per session, 100ms timeout.
+# of generic proactive keywords.  Runs once per session, 150ms timeout.
 
 _RECALL_TIMEOUT_S = 0.15  # 150ms hard timeout (generous for thread + DB)
 # Recall budget is intentionally lower than the 15K default in recall_engine.py.
@@ -94,19 +95,48 @@ def _extract_query_keywords(message: str) -> str:
     text = re.sub(r"https?://\S+", "", text)
     text = re.sub(r"(?:^|\s)[~/]\S+", " ", text)
 
-    # English words: keep substantive terms (>3 chars, not stop words).
+    # Hyphenated compounds first — preserve "session-router", "pre-tool-use"
+    # as single terms for better FTS5/vector recall on technical queries.
+    compounds = re.findall(r"(?<![a-zA-Z_])([a-zA-Z_]\w+(?:-[a-zA-Z]\w+)+)", text)
+    # Strip matched compounds from text to avoid double-counting
+    text_stripped = text
+    for c in compounds:
+        text_stripped = text_stripped.replace(c, " ")
+
+    # English words: keep substantive terms (>2 chars, not stop words).
     # Use [a-zA-Z_] anchor instead of \b — \b doesn't fire at CJK/ASCII
     # boundaries (e.g. "的Memory" misses "Memory" with \b).
     words = [
-        w for w in re.findall(r"(?<![a-zA-Z_])([a-zA-Z_]\w{2,})(?!\w)", text)
+        w for w in re.findall(r"(?<![a-zA-Z_])([a-zA-Z_]\w{2,})(?!\w)", text_stripped)
         if w.lower() not in _STOP_WORDS
     ]
 
     # CJK + Kana + Hangul: keep contiguous runs as natural search terms
     cjk = re.findall(r"[\u3040-\u30ff\u4e00-\u9fff\u3400-\u4dbf\uac00-\ud7af]+", text)
 
-    combined = words[:10] + cjk[:5]
+    combined = compounds[:3] + words[:10] + cjk[:5]
     return " ".join(combined) if combined else ""
+
+
+# Module-level cached embedding function — EmbeddingClient init involves
+# boto3 client setup (~50ms).  Cache it across calls since it's stateless.
+_cached_embed_fn: Any = None  # None = not yet probed, False = unavailable
+_cached_embed_fn_probed: bool = False
+
+
+def _get_cached_embed_fn():
+    """Return cached EmbeddingClient.embed_text or None."""
+    global _cached_embed_fn, _cached_embed_fn_probed
+    if _cached_embed_fn_probed:
+        return _cached_embed_fn if _cached_embed_fn else None
+    try:
+        from .embedding_client import EmbeddingClient
+        client = EmbeddingClient()
+        _cached_embed_fn = client.embed_text
+    except (ImportError, RuntimeError):
+        _cached_embed_fn = False  # Permanently unavailable
+    _cached_embed_fn_probed = True
+    return _cached_embed_fn if _cached_embed_fn else None
 
 
 def _recall_for_query(query: str, max_tokens: int) -> str:
@@ -140,14 +170,7 @@ def _recall_for_query(query: str, max_tokens: int) -> str:
 
             engine = RecallEngine(store, additional_stores=additional_stores)
 
-            # Embedding function — graceful fallback to FTS5-only
-            embed_fn = None
-            try:
-                from .embedding_client import EmbeddingClient
-                client = EmbeddingClient()
-                embed_fn = client.embed_text
-            except (ImportError, RuntimeError):
-                pass  # FTS5-only is fine
+            embed_fn = _get_cached_embed_fn()
 
             return engine.recall_knowledge(query, embed_fn=embed_fn, max_tokens=max_tokens)
     except Exception as exc:
@@ -195,7 +218,12 @@ async def _maybe_inject_recall(
             timeout=_RECALL_TIMEOUT_S,
         )
         if recalled:
-            options.system_prompt += f"\n\n## Recalled Knowledge\n{recalled}"
+            # Append to this options instance only — safe even if options
+            # object is rebuilt on retry (system_prompt is a plain str,
+            # so += creates a new str object rather than mutating in place).
+            options.system_prompt = (
+                options.system_prompt + f"\n\n## Recalled Knowledge\n{recalled}"
+            )
     except asyncio.TimeoutError:
         logger.debug("Recall timed out (>%sms) for keywords: %s",
                       int(_RECALL_TIMEOUT_S * 1000), keywords[:80])
@@ -1202,9 +1230,9 @@ class SessionRouter:
 # Data collected here drives the decision to wire recall into production.
 
 # Bounded dedup: track which sessions have been shadowed.
-# Dict[session_id → timestamp] with max 500 entries; oldest evicted on overflow.
-# Prevents unbounded memory growth in long-running backends.
-_shadowed_sessions: dict[str, float] = {}
+# OrderedDict[session_id → timestamp] with max 500 entries; FIFO eviction.
+# O(1) insertion and eviction (vs O(n) min-scan with plain dict).
+_shadowed_sessions: OrderedDict[str, float] = OrderedDict()
 _SHADOW_MAX_ENTRIES = 500
 
 
@@ -1232,13 +1260,11 @@ async def _shadow_recall(
     if is_channel:
         return None
 
-    # Once per session — bounded dedup with LRU eviction
+    # Once per session — bounded dedup with FIFO eviction (O(1))
     if session_id in _shadowed_sessions:
         return None
     if len(_shadowed_sessions) >= _SHADOW_MAX_ENTRIES:
-        # Evict oldest entry
-        oldest = min(_shadowed_sessions, key=_shadowed_sessions.get)  # type: ignore[arg-type]
-        del _shadowed_sessions[oldest]
+        _shadowed_sessions.popitem(last=False)  # O(1) FIFO eviction
     _shadowed_sessions[session_id] = time.monotonic()
 
     # Skip very short messages (greetings, "hi", etc.)
@@ -1293,18 +1319,19 @@ async def _shadow_recall(
 def _run_dual_recall(db_path: str, query: str) -> tuple[dict, dict]:
     """Run FTS5-only and FTS5+embedding recall, return timing dicts.
 
-    Runs synchronously (called from asyncio.to_thread).
+    Runs synchronously on a thread-pool worker (called from asyncio.to_thread).
 
-    Uses get_vec_conn() for the embedding path so that sqlite-vec virtual
-    tables (knowledge_vec, transcript_vec) are queryable.  FTS5 path uses
-    a plain connection since FTS5 is built into SQLite.
+    Both paths create their own connections — the singleton ``get_vec_conn()``
+    is designed for main-thread use and is NOT safe to call from arbitrary
+    thread-pool workers.  ``open_vec_db()`` context manager creates and closes
+    a fresh vec-enabled connection per call, which is thread-safe.
     """
     import sqlite3
     import time
 
     from .recall_engine import RecallEngine
     from .knowledge_store import KnowledgeStore
-    from .vec_db import get_vec_conn
+    from .vec_db import open_vec_db
 
     # ── Path 1: FTS5-only (plain connection, no vec extension needed) ──
     fts5_result: dict[str, Any] = {"ms": 0, "hits": 0}
@@ -1326,31 +1353,30 @@ def _run_dual_recall(db_path: str, query: str) -> tuple[dict, dict]:
     finally:
         conn.close()
 
-    # ── Path 2: FTS5 + Embedding (vec-enabled connection for vector search) ──
+    # ── Path 2: FTS5 + Embedding (fresh vec-enabled connection per call) ──
     embed_result: dict[str, Any] = {"ms": 0, "hits": 0}
-    vec_conn = get_vec_conn(Path(db_path))
-    if vec_conn is None:
-        embed_result["error"] = "no_sqlite_vec"
-        return fts5_result, embed_result
+    with open_vec_db(Path(db_path)) as vec_conn:
+        if vec_conn is None:
+            embed_result["error"] = "no_sqlite_vec"
+            return fts5_result, embed_result
 
-    # get_vec_conn returns a singleton — do NOT close it
-    store = KnowledgeStore(vec_conn)
-    engine = RecallEngine(store)
+        store = KnowledgeStore(vec_conn)
+        engine = RecallEngine(store)
 
-    try:
-        embed_fn = _get_embed_fn()
-        if embed_fn is None:
-            embed_result["error"] = "no_bedrock"
-        else:
-            t0 = time.perf_counter()
-            embed_text = engine.recall_knowledge(query, embed_fn=embed_fn, max_tokens=4000)
-            t1 = time.perf_counter()
+        try:
+            embed_fn = _get_embed_fn()
+            if embed_fn is None:
+                embed_result["error"] = "no_bedrock"
+            else:
+                t0 = time.perf_counter()
+                embed_text = engine.recall_knowledge(query, embed_fn=embed_fn, max_tokens=4000)
+                t1 = time.perf_counter()
 
-            embed_result["ms"] = round((t1 - t0) * 1000, 1)
-            embed_result["hits"] = embed_text.count("**[") if embed_text else 0
-            embed_result["chars"] = len(embed_text) if embed_text else 0
-    except Exception as exc:
-        embed_result["error"] = str(exc)[:100]
+                embed_result["ms"] = round((t1 - t0) * 1000, 1)
+                embed_result["hits"] = embed_text.count("**[") if embed_text else 0
+                embed_result["chars"] = len(embed_text) if embed_text else 0
+        except Exception as exc:
+            embed_result["error"] = str(exc)[:100]
 
     return fts5_result, embed_result
 

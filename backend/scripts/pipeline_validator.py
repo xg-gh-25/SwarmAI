@@ -582,11 +582,15 @@ def validate(project: str, run_id: str, stage: str) -> dict[str, Any]:
             if artifact_data:
                 tdd = artifact_data.get("tdd", {})
                 files_changed = artifact_data.get("files_changed", [])
+                # Only count actual code files — docs/config don't need smoke tests
+                _CODE_EXTS = {".py", ".ts", ".tsx", ".js", ".jsx", ".rs", ".go", ".java", ".sh"}
+                code_files = [f for f in files_changed
+                              if any(f.endswith(ext) for ext in _CODE_EXTS)]
                 smoke_count = tdd.get("smoke_tests", 0) if isinstance(tdd, dict) else 0
-                if len(files_changed) > 1 and smoke_count == 0:
+                if len(code_files) > 1 and smoke_count == 0:
                     smoke_ok = False
                     errors.append(
-                        f"SMOKE step skipped: build touched {len(files_changed)} files "
+                        f"SMOKE step skipped: build touched {len(code_files)} code files "
                         f"but smoke_tests=0 — runtime crashes (AttributeError, NameError) "
                         f"may be hidden by mocks. Run smoke tests with real objects "
                         f"before advancing to REVIEW."
