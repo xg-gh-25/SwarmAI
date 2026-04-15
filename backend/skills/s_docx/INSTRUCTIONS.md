@@ -64,6 +64,10 @@ You need raw XML access for: comments, complex formatting, document structure, e
 
 When creating a new Word document from scratch, use **docx-js**, which allows you to create Word documents using JavaScript/TypeScript.
 
+### User Style Standard
+
+**READ FIRST**: Before creating any document, read [`xg-doc-style-standard.md`](xg-doc-style-standard.md) for the user's preferred formatting: Calibri 10.5pt body, 0.7" margins, 1.15 line spacing, KaiTi for Chinese text, compact tables (8-9pt), bold+underline inline labels, and specific heading/color conventions. Apply these defaults unless the user specifies otherwise.
+
 ### Design Principles
 
 **CRITICAL**: Before creating any document, analyze the content and choose appropriate design elements:
