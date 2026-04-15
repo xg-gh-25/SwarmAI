@@ -309,10 +309,13 @@ def generate_memory_index(content: str) -> str:
     today = date.today()
 
     # ── Count entries per section ──
+    # For Open Threads, only count active entries (exclude ✅ resolved).
     counts: dict[str, int] = {}
     for sec_name in SECTION_KEY_PREFIX:
         sec_content = sections.get(sec_name, "")
         entries = _parse_entries(sec_content)
+        if sec_name == "Open Threads":
+            entries = [e for e in entries if "\u2705" not in e["full_text"]]
         counts[sec_name] = len(entries)
 
     # ── Build Permanent tier (COEs + Key Decisions) ──
@@ -358,9 +361,13 @@ def generate_memory_index(content: str) -> str:
             active_lines.append(line)
 
     # ── Build Open Threads entries ──
+    # Only index active entries — ✅ resolved entries excluded from index.
+    # They remain in the body under "### Resolved (archive)" for reference,
+    # but indexing them causes stale counts and misleading suggestions.
     ot_lines: list[str] = []
     ot_entries = _parse_entries(sections.get("Open Threads", ""))
-    for i, entry in enumerate(ot_entries, 1):
+    active_ot = [e for e in ot_entries if "\u2705" not in e["full_text"]]
+    for i, entry in enumerate(active_ot, 1):
         key = f"OT{i:02d}"
         title = entry["title"]
         ot_lines.append(f"- [{key}] {title}")

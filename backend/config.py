@@ -10,6 +10,21 @@ _BACKEND_DIR = Path(__file__).resolve().parent
 _PROJECT_ROOT = _BACKEND_DIR.parent
 
 
+def _read_version(fallback: str) -> str:
+    """Read version from VERSION file (single source of truth).
+
+    In dev: reads from VERSION file at project root.
+    In prod (PyInstaller): VERSION file absent, uses fallback
+    (which sync-version.sh keeps in sync with VERSION at build time).
+    """
+    version_file = _PROJECT_ROOT / "VERSION"
+    if version_file.exists():
+        v = version_file.read_text().strip()
+        if v:
+            return v
+    return fallback
+
+
 def get_app_data_dir() -> Path:
     """Get the application data directory.
 
@@ -55,7 +70,7 @@ class Settings(BaseSettings):
 
     # Application
     app_name: str = "SwarmAI"
-    app_version: str = "1.6.1"
+    app_version: str = _read_version("1.6.1")  # fallback synced by scripts/sync-version.sh
     debug: bool = False
 
     # Server

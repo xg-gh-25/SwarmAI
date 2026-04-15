@@ -58,7 +58,9 @@
         "depends": []
       }
     },
-    "externalBin": ["binaries/python-backend"]
+    "externalBin": [
+      "binaries/python-backend"
+    ]
   },
   "plugins": {
     "shell": {
