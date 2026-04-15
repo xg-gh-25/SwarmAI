@@ -28,6 +28,7 @@ import logging
 import shutil
 from pathlib import Path
 
+from core.manifest_loader import ManifestLoader
 from core.skill_manager import SkillManager
 
 logger = logging.getLogger(__name__)
@@ -147,6 +148,23 @@ class ProjectionLayer:
                     skill_path,
                     exc,
                 )
+                continue
+
+            # Provision npm dependencies declared in manifest.yaml
+            manifest = ManifestLoader.load(skill_path)
+            if manifest and manifest.dependencies.get("npm"):
+                try:
+                    installed = ManifestLoader.ensure_dependencies(manifest)
+                    if installed:
+                        logger.info(
+                            "Provisioned npm deps for '%s': %s",
+                            folder_name, installed,
+                        )
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to provision deps for '%s': %s",
+                        folder_name, exc,
+                    )
 
         # Clean up stale entries (both legacy symlinks and real directories)
         self._cleanup_stale_entries(skills_dir, set(target_skills.keys()))

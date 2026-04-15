@@ -636,7 +636,11 @@ async def lifespan(app: FastAPI):
 
     summarization_pipeline = SummarizationPipeline()
     compliance_tracker = ComplianceTracker()
-    hook_manager = SessionLifecycleHookManager(timeout_seconds=30.0)
+    # 180s accommodates evolution_maintenance_hook which mines 1000+
+    # transcripts + calls Bedrock LLM (~90s).  All other hooks finish <5s.
+    # The evolution hook now runs in a thread pool (run_in_executor) so
+    # the timeout actually fires instead of being bypassed by blocking code.
+    hook_manager = SessionLifecycleHookManager(timeout_seconds=180.0)
 
     # Create fire-and-forget executor — hooks never block the chat path
     hook_executor = BackgroundHookExecutor(hook_manager)

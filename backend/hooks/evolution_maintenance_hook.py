@@ -14,6 +14,7 @@ library) rather than shelling out, for atomicity and testability.
 
 from __future__ import annotations
 
+import asyncio
 import fcntl
 import json
 import logging
@@ -252,7 +253,7 @@ class EvolutionMaintenanceHook:
             )
 
         # Run evolution cycle weekly (check last run date)
-        self._maybe_run_evolution(ctx_dir)
+        await self._maybe_run_evolution(ctx_dir)
 
     def _deprecate_entry(
         self, evo_path: Path, section: str, entry_id: str, changelog_path: Path
@@ -271,12 +272,15 @@ class EvolutionMaintenanceHook:
         except (ValueError, LockedWriteError) as exc:
             logger.warning("Failed to deprecate %s: %s", entry_id, exc)
 
-    def _maybe_run_evolution(self, ctx_dir: Path) -> None:
+    async def _maybe_run_evolution(self, ctx_dir: Path) -> None:
         """Run the evolution cycle if >7 days since last run.
 
         Checks ``.context/.evolution_last_run`` for the last run date.
         If >7 days ago (or file doesn't exist), runs ``run_evolution_cycle()``.
         Writes today's date to the state file after a successful run.
+
+        The heavy work (mining transcripts + LLM calls) runs in a thread
+        pool to avoid blocking the asyncio event loop.
 
         Evolution failure never blocks session close -- all errors are caught.
         """
@@ -326,7 +330,15 @@ class EvolutionMaintenanceHook:
 
             evals_dir = ctx_dir / "SkillEvals"
 
-            result = run_evolution_cycle(skills_dir, transcripts_dir, evals_dir)
+            # CRITICAL: run_evolution_cycle is CPU+I/O heavy (mines 1000+
+            # transcripts, calls Bedrock LLM). Running it synchronously
+            # inside this async hook blocks the event loop for minutes,
+            # freezing FastAPI, SSE streams, and health checks — causing
+            # "Backend crash" on the frontend. Offload to thread pool.
+            loop = asyncio.get_running_loop()
+            result = await loop.run_in_executor(
+                None, run_evolution_cycle, skills_dir, transcripts_dir, evals_dir
+            )
             logger.info("Evolution cycle complete: %s", result.to_dict())
 
             # Write today's date to state file ONLY if cycle actually ran

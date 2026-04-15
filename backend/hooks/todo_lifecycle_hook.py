@@ -19,6 +19,7 @@ Key public symbols:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import subprocess
@@ -236,10 +237,16 @@ class TodoLifecycleHook:
         codebase_path: Optional[Path],
     ) -> None:
         """Handle a session explicitly bound to a todo via drag-to-chat."""
-        # Check if commits were made during the session
-        commit_count = _get_session_commit_count(workspace_path, since)
+        # Git subprocess calls are blocking (10s timeout each).
+        # Run in thread pool to keep event loop responsive.
+        loop = asyncio.get_running_loop()
+        commit_count = await loop.run_in_executor(
+            None, _get_session_commit_count, workspace_path, since
+        )
         if codebase_path:
-            commit_count += _get_session_commit_count(codebase_path, since)
+            commit_count += await loop.run_in_executor(
+                None, _get_session_commit_count, codebase_path, since
+            )
 
         if commit_count > 0:
             # Work was done — mark as handled
@@ -259,9 +266,14 @@ class TodoLifecycleHook:
         codebase_path: Optional[Path],
     ) -> None:
         """Match session file changes against pending todos' linked files."""
-        changed_files = _get_session_changed_files(workspace_path, since)
+        loop = asyncio.get_running_loop()
+        changed_files = await loop.run_in_executor(
+            None, _get_session_changed_files, workspace_path, since
+        )
         if codebase_path:
-            changed_files += _get_session_changed_files(codebase_path, since)
+            changed_files += await loop.run_in_executor(
+                None, _get_session_changed_files, codebase_path, since
+            )
 
         if not changed_files:
             return

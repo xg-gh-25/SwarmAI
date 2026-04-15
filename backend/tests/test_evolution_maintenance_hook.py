@@ -12,6 +12,7 @@ Key invariants:
 - File locking is used for prune operations
 """
 
+import asyncio
 import json
 import tempfile
 from datetime import datetime, timedelta, timezone
@@ -256,7 +257,7 @@ class TestEvolutionWeeklyTrigger:
         )
 
         hook = EvolutionMaintenanceHook(context_dir=ctx_dir)
-        hook._maybe_run_evolution(ctx_dir)
+        asyncio.run(hook._maybe_run_evolution(ctx_dir))
 
         assert len(called) == 1, "Evolution cycle should have been triggered"
         # State file should be updated to today
@@ -271,7 +272,7 @@ class TestEvolutionWeeklyTrigger:
         state_file.write_text(_days_ago(2), encoding="utf-8")
 
         hook = EvolutionMaintenanceHook(context_dir=ctx_dir)
-        hook._maybe_run_evolution(ctx_dir)
+        asyncio.run(hook._maybe_run_evolution(ctx_dir))
 
         # State file should NOT be updated
         assert state_file.read_text(encoding="utf-8") == _days_ago(2)
@@ -299,7 +300,7 @@ class TestEvolutionWeeklyTrigger:
         )
 
         hook = EvolutionMaintenanceHook(context_dir=ctx_dir)
-        hook._maybe_run_evolution(ctx_dir)
+        asyncio.run(hook._maybe_run_evolution(ctx_dir))
 
         assert len(called) == 1, "Should trigger when no state file exists"
 
@@ -327,7 +328,7 @@ class TestEvolutionWeeklyTrigger:
         )
 
         hook = EvolutionMaintenanceHook(context_dir=ctx_dir)
-        hook._maybe_run_evolution(ctx_dir)
+        asyncio.run(hook._maybe_run_evolution(ctx_dir))
 
         assert len(called_with) == 1
         # State file should be updated to today
