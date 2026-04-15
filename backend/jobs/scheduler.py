@@ -148,6 +148,19 @@ def is_job_due(job: Job, state: SchedulerState) -> bool:
     if not job.enabled:
         return False
 
+    # Retry auth_failed jobs on next scheduler tick (same calendar day UTC).
+    # When MCP auth expires (SSO, token revocation), all tool-dependent jobs
+    # fail but the agent itself ran fine.  After the user restores auth, the
+    # next hourly scheduler tick automatically retries these jobs.
+    job_state = state.jobs.get(job.id)
+    if (
+        job_state
+        and job_state.last_status == "auth_failed"
+        and job_state.last_run
+        and job_state.last_run.date() == datetime.now(timezone.utc).date()
+    ):
+        return True
+
     # Handle dependency-based scheduling (after:job-id)
     if job.schedule.startswith("after:"):
         dep_id = job.schedule[6:]
@@ -257,7 +270,11 @@ def run_scheduler(dry_run: bool = False, force_job: str | None = None) -> None:
     # Summary
     ok = sum(1 for r in results if r.status in ("success", "skipped"))
     err = sum(1 for r in results if r.status == "failed")
-    logger.info(f"Scheduler complete: {ok} ok, {err} errors")
+    auth = sum(1 for r in results if r.status == "auth_failed")
+    summary = f"Scheduler complete: {ok} ok, {err} errors"
+    if auth:
+        summary += f", {auth} auth_failed (will retry)"
+    logger.info(summary)
 
 
 def show_status() -> None:

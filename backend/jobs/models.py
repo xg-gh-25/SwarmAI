@@ -128,7 +128,7 @@ class JobResult(BaseModel):
     """Outcome of a single job execution."""
     job_id: str
     timestamp: datetime = Field(default_factory=datetime.now)
-    status: Literal["success", "partial", "failed", "skipped"]
+    status: Literal["success", "partial", "failed", "skipped", "auth_failed"]
     summary: str = ""
     output_path: str | None = None
     tokens_used: int = 0

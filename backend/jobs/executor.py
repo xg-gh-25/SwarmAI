@@ -67,6 +67,30 @@ _fix_path_from_login_shell()
 _SONNET_INPUT_PRICE = 3.0 / 1_000_000   # $3 per 1M input tokens
 _SONNET_OUTPUT_PRICE = 15.0 / 1_000_000  # $15 per 1M output tokens
 
+# ── MCP Auth Failure Detection ──────────────────────────────────────
+# Generic patterns — catches any MCP auth failure (SSO expiry, token
+# revocation, OAuth redirect, etc.) without being provider-specific.
+_AUTH_FAIL_PATTERNS = [
+    re.compile(r"(?:authentication|auth)\s+(?:error|failed|required)", re.I),
+    re.compile(r"(?:token|oauth)\s+(?:expired|revoked|invalid)", re.I),
+    re.compile(r"(?:failed to refresh|refresh\s+failed)", re.I),
+    re.compile(r"re-?authenticate", re.I),
+    re.compile(r"\b(?:401|403)\b.*(?:error|unauth)", re.I),
+    re.compile(r"\b302\b.*(?:redirect|token|auth)", re.I),
+]
+
+
+def _detect_auth_failure(result_text: str) -> bool:
+    """Return True if agent output indicates MCP auth failure.
+
+    Requires 2+ distinct pattern hits to avoid false positives (e.g. an
+    agent discussing auth topics without actually failing).
+    """
+    if not result_text:
+        return False
+    hits = sum(1 for p in _AUTH_FAIL_PATTERNS if p.search(result_text))
+    return hits >= 2
+
 
 # ── Estimation Learner (lazy singleton) ──────────────────────────────
 _estimation_learner = None
@@ -543,6 +567,12 @@ def _handle_agent_task(job: Job, state: SchedulerState) -> JobResult:
             )
             if result_text:
                 summary += f"\nPartial result: {result_text[:150]}"
+        elif _detect_auth_failure(result_text):
+            status = "auth_failed"
+            summary = (
+                f"MCP auth failure — agent ran but tools couldn't authenticate. "
+                f"Will retry on next scheduler tick after auth is restored."
+            )
         else:
             status = "success"
             summary = result_text[:200] if result_text else f"Completed in {duration:.0f}s"
@@ -1498,5 +1528,7 @@ def _update_job_state(state: SchedulerState, job_id: str, result: JobResult) -> 
 
     if result.status == "failed":
         js.consecutive_failures += 1
-    else:
+    elif result.status != "auth_failed":
+        # auth_failed is transient — don't reset streak (would hide real
+        # failures) but don't increment either (not a job bug).
         js.consecutive_failures = 0
