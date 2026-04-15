@@ -5,6 +5,24 @@ All notable changes to SwarmAI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.1] - 2026-04-15
+
+### Fixed
+
+- **sqlite_vec + 18 missing modules in PyInstaller build**: Vector search (recall_engine, embedding_client, knowledge_store, memory_embeddings, transcript_indexer, etc.) was silently disabled in production for 5 days — try/except ImportError masked the failure. Hybrid memory recall now works: 0.6×vector + 0.4×keyword scoring
+- **Spawn cost model 5× overestimate**: `record_spawn_cost` recorded tree RSS (CLI + 7 MCPs = 979MB) instead of main process RSS (300-400MB). Combined with 1200MB floor, `compute_max_tabs()` returned 2 instead of 4 — blocked 3rd chat tab on 36GB machines
+- **Stale PyInstaller hiddenimports**: Removed passlib (4 entries), jose (2), pyyaml (1) — all produced build ERRORs every run, packages were not used
+- **MCP auth failure detection**: Jobs now detect auth errors in agent output, mark as `auth_failed`, and retry on next scheduler tick instead of incrementing failure count
+
+### Added
+
+- **Post-build capability verification** (`verify_build.py`): Launches the built binary, checks 38 capabilities (imports, data files, native extensions) against a manifest. Critical failures block release. Runs automatically at end of `build-backend.sh`
+- **Verification endpoints**: `/api/system/verify-import`, `/api/system/verify-data`, `/api/system/verify-native` (gated behind `SWARMAI_VERIFY_BUILD=1`), `/api/system/capabilities` (always-on for runtime diagnostics)
+
+### Changed
+
+- **Auto-discovered local modules**: Replaced 200-line hardcoded module list in `build-backend.sh` with `glob.glob` auto-discovery. New .py files are automatically included in builds — the class of bug where modules are forgotten is now structurally impossible
+
 ## [1.5.2] - 2026-04-13
 
 ### Fixed
