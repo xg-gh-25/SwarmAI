@@ -690,7 +690,7 @@ export default function FileEditorCore({
     };
     document.addEventListener('keydown', handleKeyDown, true); // capture phase
     return () => document.removeEventListener('keydown', handleKeyDown, true);
-  }, [showDiff, showMarkdownPreview]);
+  }, [showDiff, showMarkdownPreview, showSvgPreview]);
 
   const handleCancel = useCallback(() => {
     if (hasUnsavedEdits) {
@@ -1045,9 +1045,10 @@ export default function FileEditorCore({
             </div>
           ) : showSvgPreview ? (
             <div className="flex-1 relative overflow-auto p-6 bg-[var(--color-background)] flex items-center justify-center">
-              <div
-                className="max-w-full max-h-full [&>svg]:max-w-full [&>svg]:max-h-full [&>svg]:w-auto [&>svg]:h-auto"
-                dangerouslySetInnerHTML={{ __html: content }}
+              <img
+                className="max-w-full max-h-full w-auto h-auto"
+                src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(content)}`}
+                alt="SVG preview"
                 data-testid="svg-preview"
               />
             </div>

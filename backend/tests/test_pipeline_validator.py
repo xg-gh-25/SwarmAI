@@ -717,8 +717,8 @@ Cloud SaaS deployment with Kubernetes.
         ddd_warnings = [w for w in result["warnings"] if "DDD" in w]
         assert len(ddd_warnings) == 0
 
-    def test_checks_total_is_7(self, workspace):
-        """Verify checks_total is now 7."""
+    def test_checks_total_is_8(self, workspace):
+        """Verify checks_total is 8 (7 original + smoke/integration gate)."""
         artifacts_dir = workspace / "Projects" / "TestProject" / ".artifacts"
         runs_dir = artifacts_dir / "runs" / "run_test1"
         _make_artifact(artifacts_dir, "run_test1", "art_eval", "evaluation",

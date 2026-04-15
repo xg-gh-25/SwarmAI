@@ -365,6 +365,7 @@ def create_tcc_protection_hook() -> Callable[..., Any]:
     home = os.path.expanduser("~")
     tcc_abs_paths = {os.path.join(home, d) for d in _TCC_PROTECTED_NAMES}
     tcc_tilde_paths = {f"~/{d}" for d in _TCC_PROTECTED_NAMES}
+    all_tcc_paths = tcc_abs_paths | tcc_tilde_paths  # Pre-compute once
 
     def _deny(reason: str) -> dict[str, Any]:
         return {
@@ -403,7 +404,7 @@ def create_tcc_protection_hook() -> Callable[..., Any]:
             return {}
 
         # ── Check 1: Direct reference to a TCC-protected path ──────────
-        for tcc_path in tcc_abs_paths | tcc_tilde_paths:
+        for tcc_path in all_tcc_paths:
             if tcc_path in command:
                 logger.warning(
                     "[TCC BLOCKED] Direct reference to %s: %s",
