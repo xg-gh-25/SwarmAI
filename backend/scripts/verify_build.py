@@ -24,7 +24,6 @@ The principle: if two modes can diverge, verify both before shipping.
 from __future__ import annotations
 
 import json
-import json
 import os
 import signal
 import socket
@@ -175,8 +174,6 @@ def _wait_for_health(port: int, timeout: int = 30) -> bool:
 
 def _verify_capabilities(port: int) -> tuple[list[str], list[str], list[str]]:
     """Check each capability against the running binary."""
-
-
     passed = []
     failed_critical = []
     failed_important = []
@@ -208,9 +205,6 @@ def _verify_capabilities(port: int) -> tuple[list[str], list[str], list[str]]:
 
 def _check_module_via_endpoint(port: int, module_path: str) -> tuple[bool, str]:
     """Ask the running binary to import a module."""
-
-
-
     try:
         # Use the verify endpoint to check imports
         url = f"http://127.0.0.1:{port}/api/system/verify-import?module={module_path}"
@@ -231,8 +225,6 @@ def _check_module_via_endpoint(port: int, module_path: str) -> tuple[bool, str]:
 
 def _check_data_via_health(port: int, data_path: str) -> tuple[bool, str]:
     """Check if a data file/directory exists in the binary's bundle."""
-
-
     try:
         url = f"http://127.0.0.1:{port}/api/system/verify-data?path={data_path}"
         req = urllib.request.Request(url, method="GET")
@@ -245,8 +237,6 @@ def _check_data_via_health(port: int, data_path: str) -> tuple[bool, str]:
 
 def _check_native_via_import(port: int, native_path: str) -> tuple[bool, str]:
     """Check if a native extension is loadable."""
-
-
     try:
         url = f"http://127.0.0.1:{port}/api/system/verify-native?path={native_path}"
         req = urllib.request.Request(url, method="GET")
