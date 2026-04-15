@@ -23,6 +23,69 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Auto-discovered local modules**: Replaced 200-line hardcoded module list in `build-backend.sh` with `glob.glob` auto-discovery. New .py files are automatically included in builds — the class of bug where modules are forgotten is now structurally impossible
 
+## [1.6.0] - 2026-04-15
+
+### Added — Lazy Skills, Inline Review, RecallEngine, TCC Protection
+
+**Lazy Skill Loading + Manifest System**
+- **Tiered skill loading**: 15 `always` skills inject full SKILL.md (~100 tok each), 46 `lazy` skills inject minimal stubs (~25 tok each) with "Read INSTRUCTIONS.md" directive. ~3,650 tokens/session saved (49% reduction in skill listing)
+- **manifest.yaml**: 16 skills with complex scripts now declare entry points in YAML manifests; `manifest_loader.py` provides Pydantic models + cached YAML parser
+- **Migration**: `migrate_skills.py` (idempotent, `--dry-run`) splits SKILL.md → SKILL.md stub + INSTRUCTIONS.md for lazy skills, adds `tier:` frontmatter
+- **Skill Registry**: `generate_compact_registry()` + `_read_tier()` utility; SDK handles discovery via `.claude/skills/` projection
+
+**RecallEngine L2/L3 Activation**
+- **Post-first-message recall injection**: After the user's first message in a session, RecallEngine queries vec+FTS5 indexes and injects top-N relevant memories into the next system prompt refresh
+- **Hybrid scoring**: 0.6×vector + 0.4×keyword; temporal decay; superseded-entry downweighting
+
+**Inline Comments on Diff View**
+- **CommentPopover**: Click line numbers in DiffView to leave review comments; comments persist to sessionStorage across tab switches
+- **ReviewModeGutter**: Responsive scroll tracking, Escape key propagation, discoverability hints
+
+**Pipeline Quality Gates**
+- **SMOKE and integration trace**: Now BLOCK (not WARN) — pipeline fails if smoke check or replace-parity trace detects regressions
+- **Conditional UX Review**: Pipeline REVIEW stage includes UX review when frontend files are changed
+
+**macOS TCC Protection**
+- **PreToolUse hook**: Blocks Claude Code tool calls that would trigger macOS TCC "Desktop access" permission popups
+- **Trash safety**: Replaced `osascript` trash with `shutil.move` — eliminates Finder access TCC popup
+
+### Fixed
+
+- **Shadow recall used plain sqlite3**: Vector search was silently broken — recall queries bypassed vec0 extension. Fixed: all recall paths use the shared `get_db_connection()` with sqlite_vec loaded
+- **Keyword extraction**: Missed English words adjacent to CJK characters (e.g., "AWS用量" → only "用量", missing "AWS")
+- **Context window noise**: Skip empty templates, single DailyActivity file, remove duplicate skill registry from system prompt
+- **Review comments lost on tab switch**: Comments persisted to sessionStorage with session-scoped keys
+- **Cache key shadow**: Manifest mtime hash collision with skill name — added path component to cache key
+- **PE review rounds 1-3**: 25+ findings across recall injection, manifest loader, pipeline, dead code, conn leaks, CJK handling, growth checks, JSONL rotation
+
+### Changed
+
+- **Dead code removal**: TokenPayload, decode_token, frontmatter module, artifact injection — all unused after prior refactors
+- **Slack auth error detection**: Circuit-breaking on persistent auth failures in channel adapter
+
+## [1.5.4] - 2026-04-14
+
+### Fixed
+
+- **Shadow recall sqlite3 connection**: vec0 extension not loaded on shadow recall path — vector search returned empty results silently. Fixed: uses shared connection factory
+
+### Changed
+
+- **Auto-deploy built binary**: `dev.sh build` now copies binary to daemon directory and restarts daemon automatically
+
+## [1.5.3] - 2026-04-14
+
+### Added
+
+- **Memory & Evolution E2E gaps**: 4 structural fixes — G1 recommend visibility (proactive intelligence surfaces medium-confidence evolution recommendations in session briefing), G2 real-data tests, G3 shadow recall (recall engine tested against actual indexed data), G4 heuristic-first optimizer (falls back from LLM when evidence is thin)
+
+### Fixed
+
+- **PE review findings**: Engine scope leak, unused imports, tautology test, embed json alias
+- **PE review round 2**: 6 findings across G1/G3/G4 modules
+- **PE review round 3**: Connection leak, CJK handling, growth check, JSONL rotation
+- **SKILL.md stale wording**: "deploy" → "review changes" across evolution pipeline skill docs
+
 ## [1.5.2] - 2026-04-13
 
 ### Fixed

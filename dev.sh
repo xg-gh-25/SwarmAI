@@ -277,6 +277,11 @@ cmd_frontend() {
 cmd_build() {
     local start=$(date +%s)
     _log "Full production build..."
+
+    # Step 0: Sync versions from VERSION file
+    _log "Syncing version from VERSION file..."
+    bash "$PROJECT_ROOT/scripts/sync-version.sh"
+
     cd "$DESKTOP_DIR"
 
     _log "Step 1/3: PyInstaller backend build..."
@@ -469,6 +474,30 @@ _daemon_wait_healthy() {
     return 1
 }
 
+_bootstrap_daemon() {
+    # Bootstrap with retry — macOS launchctl sometimes fails with
+    # "Bootstrap failed: 5: Input/output error" when bootout hasn't
+    # fully cleaned up. A short wait + retry fixes it reliably.
+    local plist="$HOME/Library/LaunchAgents/${DAEMON_LABEL}.plist"
+    local max_attempts=3
+
+    for attempt in $(seq 1 "$max_attempts"); do
+        if launchctl bootstrap "gui/$(id -u)" "$plist" 2>/dev/null; then
+            return 0
+        fi
+        if [ "$attempt" -lt "$max_attempts" ]; then
+            _log "Bootstrap attempt $attempt failed — retrying in 2s..."
+            sleep 2
+            launchctl bootout "$GUI_TARGET" 2>/dev/null || true
+            sleep 1
+        fi
+    done
+
+    _err "Bootstrap failed after $max_attempts attempts"
+    _warn "Try manually: launchctl bootstrap gui/$(id -u) $plist"
+    return 1
+}
+
 cmd_daemon() {
     local sub="${1:-status}"
     case "$sub" in
@@ -495,8 +524,7 @@ cmd_daemon() {
 
             # Start fresh via bootstrap (creates new process)
             _log "Starting daemon..."
-            launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/${DAEMON_LABEL}.plist"
-
+            _bootstrap_daemon
             _daemon_wait_healthy 90
             ;;
         stop)
@@ -519,7 +547,7 @@ cmd_daemon() {
             _check_daemon_version || true
 
             _log "Starting daemon..."
-            launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/${DAEMON_LABEL}.plist"
+            _bootstrap_daemon
             _daemon_wait_healthy 90
             ;;
         status)

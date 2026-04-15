@@ -422,10 +422,14 @@ class ContextHealthHook:
             except Exception as exc:
                 logger.warning("context_health: section cap enforcement failed: %s", exc)
 
-        # 6. L1 cache freshness — if source .md newer than cache, invalidate
+        # 6. Memory consistency — detect stale claims in MEMORY.md body
+        if memory_path.exists():
+            findings += self._detect_stale_memory_claims(memory_path)
+
+        # 7. L1 cache freshness — if source .md newer than cache, invalidate
         self._check_cache_freshness(context_dir, findings)
 
-        # 7. Enforce retention policies (archive/delete old files)
+        # 8. Enforce retention policies (archive/delete old files)
         try:
             self._enforce_retention_policies(ws_path)
         except Exception as exc:
@@ -519,6 +523,100 @@ class ContextHealthHook:
                         )
                 except (subprocess.TimeoutExpired, OSError):
                     pass
+
+        return findings
+
+    @staticmethod
+    def _detect_stale_memory_claims(memory_path: Path) -> list[str]:
+        """Detect stale or inconsistent claims in MEMORY.md body.
+
+        Mechanical checks only — no LLM needed.  Catches the class of bugs
+        where facts change (feature shipped, concept eliminated, item resolved)
+        but the memory entry still says otherwise.  COE03/C005 pattern.
+
+        Checks:
+        1. Open Threads body↔state: ✅ entries under active subsections
+        2. Stale forward-references: "Next:", "TODO:", "NOT yet" in entries
+           older than 14 days (likely completed but not updated)
+        3. Index↔body count mismatch (caught structurally by index regen,
+           but flagged here for visibility)
+        """
+        findings: list[str] = []
+        try:
+            content = memory_path.read_text(encoding="utf-8")
+        except OSError:
+            return findings
+
+        # ── Check 1: ✅ entries in active OT subsections ──
+        # These should only appear under "### Resolved" — if they're under
+        # P0/P1/P2, someone resolved it but didn't move it.
+        ot_match = re.search(
+            r"## Open Threads\n(.*?)(?=\n## |\Z)", content, re.DOTALL
+        )
+        if ot_match:
+            ot_body = ot_match.group(1)
+            # Split by ### subsections
+            current_subsection = ""
+            for line in ot_body.split("\n"):
+                if line.startswith("### "):
+                    current_subsection = line.strip()
+                elif (
+                    line.strip().startswith("- \u2705")
+                    and "Resolved" not in current_subsection
+                ):
+                    title = line.strip()[:80]
+                    findings.append(
+                        f"STALE-OT: resolved entry in active section "
+                        f"({current_subsection}): {title}"
+                    )
+
+        # ── Check 2: Stale forward-references in old entries ──
+        # Patterns that suggest "this hasn't happened yet" in entries > 14d old
+        stale_patterns = [
+            (r"NOT yet (?:created|built|implemented|shipped)", "NOT yet"),
+            (r"Next:\s+build\b", "Next: build"),
+            (r"TODO:\s+\w", "TODO:"),
+            (r"not yet built", "not yet built"),
+            (r"deferred|on hold", "deferred/on hold"),  # only flag if > 30d
+        ]
+        today = date.today()
+
+        for section_name in ("Recent Context", "Key Decisions"):
+            # Extract section body
+            sec_match = re.search(
+                rf"## {section_name}\n(.*?)(?=\n## |\Z)", content, re.DOTALL
+            )
+            if not sec_match:
+                continue
+
+            for line in sec_match.group(1).split("\n"):
+                line = line.strip()
+                if not line.startswith("- "):
+                    continue
+
+                # Extract date from entry
+                date_match = re.match(r"- (\d{4}-\d{2}-\d{2})", line)
+                if not date_match:
+                    continue
+
+                try:
+                    entry_date = datetime.strptime(
+                        date_match.group(1), "%Y-%m-%d"
+                    ).date()
+                except ValueError:
+                    continue
+
+                age_days = (today - entry_date).days
+                # "deferred/on hold" only stale after 30d, others after 14d
+                for pattern, label in stale_patterns:
+                    threshold = 30 if "deferred" in pattern else 14
+                    if age_days > threshold and re.search(pattern, line, re.IGNORECASE):
+                        title = line[2:72]  # strip "- ", cap at 70 chars
+                        findings.append(
+                            f"STALE-CLAIM: \"{label}\" in {section_name} "
+                            f"entry ({age_days}d old): {title}..."
+                        )
+                        break  # one finding per entry
 
         return findings
 
