@@ -450,10 +450,27 @@ class ResourceMonitor:
         except Exception:
             return None
 
+    def process_rss(self, pid: int) -> int:
+        """Get RSS of the main process only (bytes), excluding children.
+
+        Used for spawn cost estimation — the incremental cost of one more
+        session is the CLI process itself, not the entire tree (which
+        includes MCP children that inflate the estimate 5×).
+        Returns 0 on failure.
+        """
+        if not _HAS_PSUTIL:
+            return 0
+        try:
+            return psutil.Process(pid).memory_info().rss
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            return 0
+        except Exception:
+            return 0
+
     def process_tree_rss(self, pid: int) -> int:
         """Get total RSS of a process and all its children (bytes).
 
-        Useful for measuring actual spawn cost (CLI + MCP subprocesses).
+        Useful for measuring actual memory footprint (CLI + MCP subprocesses).
         Returns 0 on failure.
         """
         if not _HAS_PSUTIL:
