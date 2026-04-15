@@ -132,7 +132,10 @@ class ResourceMonitor:
     # Spawn cost: actual CLI tree RSS is 1400-1600MB (verified from
     # lifecycle_manager logs 2026-04-12).  Old value of 500MB allowed 3
     # concurrent chat sessions → 4.5GB → macOS jetsam SIGKILL cascade.
-    _DEFAULT_SPAWN_COST_MB: float = 800.0  # Conservative first-boot estimate; adaptive samples take over quickly
+    # No-data default (fresh boot): conservative because we have zero
+    # evidence.  Adaptive samples take over after first lifecycle tick.
+    # On 16GB machine: headroom ~2GB / 1200 = 1 → max_tabs=2 (safe).
+    _DEFAULT_SPAWN_COST_MB: float = 1200.0
     _HEADROOM_MB: float = 512.0  # Always keep this much free
     _MAX_SPAWN_SAMPLES: int = 20  # Rolling window for spawn cost estimation
     # Adaptive estimate must never drop below this — early samples

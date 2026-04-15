@@ -24,12 +24,15 @@ The principle: if two modes can diverge, verify both before shipping.
 from __future__ import annotations
 
 import json
+import json
 import os
 import signal
 import socket
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 # ── Capability Manifest ──────────────────────────────────────────────
@@ -106,7 +109,7 @@ def verify_binary(binary_path: str) -> tuple[list[str], list[str], list[str]]:
         "PORT": str(port),
         "SWARMAI_MODE": "sidecar",
         "DATABASE_TYPE": "sqlite",
-        # Verification mode — skip heavy initialization
+        # Gates verify-import/verify-data/verify-native endpoints
         "SWARMAI_VERIFY_BUILD": "1",
     }
 
@@ -122,6 +125,7 @@ def verify_binary(binary_path: str) -> tuple[list[str], list[str], list[str]]:
         env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
+        start_new_session=True,  # Own process group for clean killpg
     )
 
     try:
@@ -136,18 +140,23 @@ def verify_binary(binary_path: str) -> tuple[list[str], list[str], list[str]]:
         return passed, failed_critical, failed_important
 
     finally:
-        proc.send_signal(signal.SIGTERM)
+        # Kill the entire process group (catches MCP child processes)
+        try:
+            pgid = os.getpgid(proc.pid)
+            os.killpg(pgid, signal.SIGTERM)
+        except (OSError, ProcessLookupError):
+            proc.send_signal(signal.SIGTERM)
         try:
             proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
-            proc.kill()
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except (OSError, ProcessLookupError):
+                proc.kill()
 
 
 def _wait_for_health(port: int, timeout: int = 30) -> bool:
     """Poll health endpoint until ready."""
-    import urllib.request
-    import urllib.error
-
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
@@ -166,7 +175,7 @@ def _wait_for_health(port: int, timeout: int = 30) -> bool:
 
 def _verify_capabilities(port: int) -> tuple[list[str], list[str], list[str]]:
     """Check each capability against the running binary."""
-    import urllib.request
+
 
     passed = []
     failed_critical = []
@@ -199,8 +208,8 @@ def _verify_capabilities(port: int) -> tuple[list[str], list[str], list[str]]:
 
 def _check_module_via_endpoint(port: int, module_path: str) -> tuple[bool, str]:
     """Ask the running binary to import a module."""
-    import urllib.request
-    import urllib.error
+
+
 
     try:
         # Use the verify endpoint to check imports
@@ -222,7 +231,7 @@ def _check_module_via_endpoint(port: int, module_path: str) -> tuple[bool, str]:
 
 def _check_data_via_health(port: int, data_path: str) -> tuple[bool, str]:
     """Check if a data file/directory exists in the binary's bundle."""
-    import urllib.request
+
 
     try:
         url = f"http://127.0.0.1:{port}/api/system/verify-data?path={data_path}"
@@ -236,7 +245,7 @@ def _check_data_via_health(port: int, data_path: str) -> tuple[bool, str]:
 
 def _check_native_via_import(port: int, native_path: str) -> tuple[bool, str]:
     """Check if a native extension is loadable."""
-    import urllib.request
+
 
     try:
         url = f"http://127.0.0.1:{port}/api/system/verify-native?path={native_path}"
