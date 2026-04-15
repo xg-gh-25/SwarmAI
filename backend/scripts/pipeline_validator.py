@@ -621,7 +621,10 @@ def validate(project: str, run_id: str, stage: str) -> dict[str, Any]:
         _FRONTEND_EXTS = (".tsx", ".jsx", ".css", ".html", ".svelte", ".vue")
         has_frontend = False
         # Look for frontend files in the build stage's changeset artifact
-        build_stage = next((s for s in stages_list if s.get("name") == "build"), None)
+        build_stage = next(
+            (s for s in stages_list if s.get("stage", s.get("name")) == "build"),
+            None,
+        )
         if build_stage and build_stage.get("artifact_id"):
             build_data = _load_artifact_data(project, run_id, build_stage["artifact_id"])
             if build_data:
@@ -629,7 +632,7 @@ def validate(project: str, run_id: str, stage: str) -> dict[str, Any]:
                     any(f.endswith(ext) for ext in _FRONTEND_EXTS)
                     for f in build_data.get("files_changed", [])
                 )
-        if has_frontend and artifact_data:
+        if has_frontend and artifact_id and artifact_data:
             ux = artifact_data.get("ux_review", {})
             triggered = ux.get("triggered", False) if isinstance(ux, dict) else False
             if not triggered:
