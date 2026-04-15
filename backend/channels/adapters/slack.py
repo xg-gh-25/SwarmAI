@@ -21,6 +21,7 @@ import logging
 import os
 import subprocess
 import threading
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -50,6 +51,45 @@ _MAX_BLOCKS_PER_MSG = 50       # max blocks array length per message
 
 # Errors that indicate corp proxy / network blocking (trigger MCP fallback)
 _PROXY_ERRORS = (ConnectionError, OSError, TimeoutError)
+
+# Slack API error strings that indicate auth failure (permanent, not transient)
+_AUTH_ERROR_CODES = frozenset({
+    "invalid_auth", "token_revoked", "not_authed", "account_inactive",
+    "token_expired", "org_login_required", "ekm_access_denied",
+    "missing_scope",  # permanent — scope can't self-fix
+})
+
+
+class SlackAuthError(Exception):
+    """Raised when a Slack API call fails due to authentication.
+
+    Distinguishes auth failures (permanent until re-auth) from transient
+    network errors.  The gateway uses this to skip retries and circuit-break.
+    """
+
+    def __init__(self, message: str, error_code: str = ""):
+        super().__init__(message)
+        self.error_code = error_code
+
+
+def _is_auth_error(exc: Exception) -> bool:
+    """Return True if *exc* is a Slack auth failure (not transient).
+
+    Checks both slack_sdk.errors.SlackApiError.response["error"] and
+    generic HTTP status codes (401, 403).
+    """
+    # SlackApiError from the SDK
+    if hasattr(exc, "response"):
+        resp = exc.response
+        # Check error code string
+        error_code = resp.get("error", "") if isinstance(resp, dict) else getattr(resp, "data", {}).get("error", "")
+        if error_code in _AUTH_ERROR_CODES:
+            return True
+        # Check HTTP status code
+        status = getattr(resp, "status_code", None)
+        if status in (401, 403):
+            return True
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -293,6 +333,9 @@ class SlackChannelAdapter(ChannelAdapter):
         self._user_cache: dict[str, str] = {}
         # MCP fallback bridge (lazy — spawned on first proxy error)
         self._mcp_bridge: Optional[SlackMcpBridge] = None
+        # Auth health tracking
+        self._last_auth_check: float = 0.0
+        self._consecutive_auth_failures: int = 0
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -311,10 +354,37 @@ class SlackChannelAdapter(ChannelAdapter):
             loop = asyncio.get_running_loop()
             result = await loop.run_in_executor(None, client.auth_test)
             if not result.get("ok"):
-                return False, f"Bot token auth failed: {result.get('error')}"
+                error = result.get("error", "unknown")
+                if error in _AUTH_ERROR_CODES:
+                    return False, f"AUTH_ERROR: {error}"
+                return False, f"Bot token auth failed: {error}"
+            self._last_auth_check = time.time()
             return True, None
         except Exception as exc:
+            if _is_auth_error(exc):
+                return False, f"AUTH_ERROR: {exc}"
             return False, f"Slack credential check error: {exc}"
+
+    async def revalidate_auth(self) -> bool:
+        """Re-check token validity (called on suspected auth failures).
+
+        Returns True if auth is still good, False if expired/revoked.
+        Lightweight — single API call, no restart.
+        """
+        if not self._slack_client:
+            return False
+        try:
+            loop = asyncio.get_running_loop()
+            result = await loop.run_in_executor(
+                None, self._slack_client.auth_test,
+            )
+            ok = result.get("ok", False)
+            if ok:
+                self._last_auth_check = time.time()
+            return ok
+        except Exception as exc:
+            logger.warning("Auth revalidation failed: %s", exc)
+            return False
 
     async def start(self) -> None:
         """Start the Socket Mode WebSocket in a background thread."""
@@ -339,11 +409,20 @@ class SlackChannelAdapter(ChannelAdapter):
                 self._handler.start()  # Blocking
             except Exception as exc:
                 if not self._stopped:
-                    logger.exception(
-                        "Slack Socket Mode crashed for channel %s",
-                        self.channel_id,
-                    )
-                    error_msg = f"Socket Mode connection failed: {exc}"
+                    is_auth = _is_auth_error(exc)
+                    if is_auth:
+                        self._consecutive_auth_failures += 1
+                        logger.error(
+                            "Slack Socket Mode AUTH_ERROR for channel %s (consecutive=%d): %s",
+                            self.channel_id, self._consecutive_auth_failures, exc,
+                        )
+                    else:
+                        logger.exception(
+                            "Slack Socket Mode crashed for channel %s",
+                            self.channel_id,
+                        )
+                    prefix = "AUTH_ERROR: " if is_auth else ""
+                    error_msg = f"{prefix}Socket Mode connection failed: {exc}"
                     main_loop = self._loop
                     if (
                         self._on_error is not None
@@ -775,7 +854,19 @@ class SlackChannelAdapter(ChannelAdapter):
                 ":bee: _Thinking..._",
                 external_thread_id,
             )
-        except Exception:
+        except Exception as exc:
+            if _is_auth_error(exc):
+                self._consecutive_auth_failures += 1
+                logger.error(
+                    "Slack AUTH_ERROR in typing indicator (consecutive=%d): %s",
+                    self._consecutive_auth_failures, exc,
+                )
+                # Try MCP fallback — different auth path
+                return await self._mcp_post_message(
+                    external_chat_id,
+                    ":bee: _Thinking..._",
+                    external_thread_id,
+                )
             logger.exception("Error sending Slack typing indicator")
             return None
 
@@ -852,7 +943,15 @@ class SlackChannelAdapter(ChannelAdapter):
                 "Slack WebClient blocked (proxy?) — falling back to MCP for update_message"
             )
             await self._mcp_update_message(external_chat_id, message_id, text)
-        except Exception:
+        except Exception as exc:
+            if _is_auth_error(exc):
+                self._consecutive_auth_failures += 1
+                logger.error(
+                    "Slack AUTH_ERROR in update_message (consecutive=%d): %s",
+                    self._consecutive_auth_failures, exc,
+                )
+                await self._mcp_update_message(external_chat_id, message_id, text)
+                return
             logger.exception("Error updating Slack message")
 
     # ------------------------------------------------------------------
@@ -1035,7 +1134,19 @@ class SlackChannelAdapter(ChannelAdapter):
                 message.text,
                 message.external_thread_id,
             )
-        except Exception:
+        except Exception as exc:
+            if _is_auth_error(exc):
+                self._consecutive_auth_failures += 1
+                logger.error(
+                    "Slack AUTH_ERROR in send_message (consecutive=%d): %s",
+                    self._consecutive_auth_failures, exc,
+                )
+                # Try MCP fallback — different auth path
+                return await self._mcp_post_message(
+                    message.external_chat_id,
+                    message.text,
+                    message.external_thread_id,
+                )
             logger.exception("Error sending Slack message")
             return None
 
