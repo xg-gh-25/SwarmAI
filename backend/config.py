@@ -55,7 +55,7 @@ class Settings(BaseSettings):
 
     # Application
     app_name: str = "SwarmAI"
-    app_version: str = "1.5.1"
+    app_version: str = "1.6.1"
     debug: bool = False
 
     # Server
