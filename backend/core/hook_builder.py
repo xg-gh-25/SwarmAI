@@ -21,6 +21,7 @@ from .security_hooks import (
     pre_tool_logger,
     create_dangerous_command_gate,
     create_skill_access_checker,
+    create_tcc_protection_hook,
 )
 from .agent_defaults import expand_allowed_skills_with_plugins
 
@@ -79,6 +80,13 @@ async def build_hooks(
         HookMatcher(matcher="Bash", hooks=[gate])
     )
     logger.info(f"Dangerous command gate attached for session_key: {session_key}")
+
+    # macOS TCC protection — prevent system permission popup dialogs
+    tcc_hook = create_tcc_protection_hook()
+    hooks["PreToolUse"].append(
+        HookMatcher(matcher="Bash", hooks=[tcc_hook])
+    )
+    logger.info("TCC protection hook attached")
 
     # Skill access control
     allowed_skills = agent_config.get("allowed_skills", [])
