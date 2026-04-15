@@ -89,7 +89,10 @@ export function useReviewMode(content: string, filePath?: string) {
         setIsReviewMode(true);  // Re-enter review mode if comments exist
       }
     }
-  }, [filePath]);  // eslint-disable-line react-hooks/exhaustive-deps
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- `comments` intentionally
+  // excluded: we read current comments at file-switch time only. Including it would
+  // cause infinite loop (comment mutation → save → re-render → effect → save → ...).
+  }, [filePath]);
 
   // Sync to sessionStorage on every comment mutation
   useEffect(() => {
