@@ -290,9 +290,18 @@ class LifecycleManager:
                 # Update peak watermark; warn on first 1.5GB crossing.
                 # On first sample (peak was 0), record the spawn cost
                 # for adaptive spawn budget estimation (G4 fix).
+                # Record MAIN PROCESS RSS only (not tree) — the tree includes
+                # MCP children (~1050MB) which inflates the estimate 5× vs
+                # incremental cost of one more session (~300-500MB).
                 prev_peak = unit._peak_tree_rss_bytes
                 if prev_peak == 0 and tree_rss > 0:
-                    resource_monitor.record_spawn_cost(tree_rss)
+                    main_rss = await asyncio.to_thread(
+                        resource_monitor.process_rss, unit.pid,
+                    )
+                    if main_rss > 0:
+                        resource_monitor.record_spawn_cost(main_rss)
+                    else:
+                        resource_monitor.record_spawn_cost(tree_rss)
                 if tree_rss > prev_peak:
                     unit._peak_tree_rss_bytes = tree_rss
                     if tree_rss > 1_500_000_000 and prev_peak <= 1_500_000_000:
