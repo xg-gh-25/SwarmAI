@@ -979,7 +979,14 @@ async def verify_native(path: str):
 
 @app.get("/api/system/capabilities")
 async def get_capabilities():
-    """Report all capability flags for this binary. Shows dev/prod divergence at a glance."""
+    """Report all capability flags for this binary. Shows dev/prod divergence at a glance.
+
+    Intentionally NOT gated behind SWARMAI_VERIFY_BUILD — this endpoint
+    is always available for runtime diagnostics (e.g., Titus reports a
+    broken feature → curl capabilities to see what's degraded). The
+    verify-import/verify-data/verify-native endpoints are gated because
+    they accept arbitrary input; this one has no parameters.
+    """
     caps = {}
 
     # sqlite_vec
