@@ -83,6 +83,9 @@ class ChannelGateway:
     _RETRY_MAX_DELAY = 300.0      # 5 minutes cap
     _RETRY_BACKOFF_FACTOR = 2.0
     _RETRY_MAX_ATTEMPTS = 20      # ~1.5 hours at max backoff
+    # Auth failure circuit breaker: stop retrying after N consecutive auth
+    # failures — these won't self-heal, require human re-auth.
+    _AUTH_FAILURE_CIRCUIT_BREAK = 3
 
     def __init__(self) -> None:
         # channel_id -> running ChannelAdapter instance
@@ -97,6 +100,8 @@ class ChannelGateway:
         self._channel_cache: dict[str, dict] = {}
         # Flag to prevent retries during shutdown
         self._shutting_down = False
+        # Per-channel consecutive auth failure counter (circuit breaker)
+        self._auth_failure_counts: dict[str, int] = {}
         # Startup lifecycle state for the system status endpoint.
         # Valid values: "not_started", "starting", "started", "failed"
         self._startup_state: str = "not_started"
@@ -371,23 +376,29 @@ class ChannelGateway:
                 await adp.start()
             except asyncio.CancelledError:
                 logger.info(f"Adapter task for channel {cid} cancelled")
-            except Exception:
+            except Exception as exc:
                 # If the adapter was already removed by stop_channel() or
                 # shutdown, this crash is a side-effect of cancellation —
                 # do not update DB or schedule retry.
                 if cid not in self._adapters or self._shutting_down:
                     return
-                logger.exception(f"Adapter for channel {cid} crashed")
-                await db.channels.update(cid, {
-                    "status": "failed",
-                    "error_message": "Adapter crashed unexpectedly",
-                })
-                # Clean up references
-                self._adapters.pop(cid, None)
-                self._tasks.pop(cid, None)
-                self._channel_cache.pop(cid, None)
-                # Schedule automatic retry
-                self._schedule_retry(cid)
+                error_msg = str(exc)
+                # Route through _handle_adapter_error for unified auth
+                # detection and circuit-breaker logic
+                if "AUTH_ERROR" in error_msg:
+                    await self._handle_adapter_error(cid, error_msg)
+                else:
+                    logger.exception(f"Adapter for channel {cid} crashed")
+                    await db.channels.update(cid, {
+                        "status": "failed",
+                        "error_message": "Adapter crashed unexpectedly",
+                    })
+                    # Clean up references
+                    self._adapters.pop(cid, None)
+                    self._tasks.pop(cid, None)
+                    self._channel_cache.pop(cid, None)
+                    # Schedule automatic retry
+                    self._schedule_retry(cid)
 
         task = asyncio.create_task(_run_adapter(channel_id, adapter))
         self._adapters[channel_id] = adapter
@@ -430,7 +441,12 @@ class ChannelGateway:
         logger.info(f"Channel {channel_id} stopped")
 
     async def restart_channel(self, channel_id: str) -> None:
-        """Stop and re-start a channel."""
+        """Stop and re-start a channel.
+
+        Also resets the auth circuit breaker — an explicit restart means
+        the user has likely re-authenticated.
+        """
+        self._auth_failure_counts.pop(channel_id, None)
         await self.stop_channel(channel_id)
         await self.start_channel(channel_id)
 
@@ -443,11 +459,26 @@ class ChannelGateway:
 
         Called from the adapter's error callback.  Cleans up references,
         updates DB status to ``'failed'``, and schedules an automatic retry.
+
+        Auth errors (prefixed with ``AUTH_ERROR:``) are tracked separately
+        and circuit-break after ``_AUTH_FAILURE_CIRCUIT_BREAK`` consecutive
+        failures — these require human re-authentication, retrying is futile.
         """
         if self._shutting_down or channel_id not in self._adapters:
             return
 
-        logger.error(f"Adapter error callback for channel {channel_id}: {error_message}")
+        is_auth = error_message.startswith("AUTH_ERROR:")
+
+        if is_auth:
+            count = self._auth_failure_counts.get(channel_id, 0) + 1
+            self._auth_failure_counts[channel_id] = count
+            logger.error(
+                f"AUTH failure #{count} for channel {channel_id}: {error_message}"
+            )
+        else:
+            # Non-auth error resets the auth failure counter
+            self._auth_failure_counts.pop(channel_id, None)
+            logger.error(f"Adapter error callback for channel {channel_id}: {error_message}")
 
         adapter = self._adapters.pop(channel_id, None)
         self._tasks.pop(channel_id, None)
@@ -461,6 +492,22 @@ class ChannelGateway:
                 await adapter.stop()
             except Exception:
                 logger.exception(f"Error stopping adapter during error handling for channel {channel_id}")
+
+        # Circuit breaker: stop retrying after N consecutive auth failures
+        if is_auth and self._auth_failure_counts.get(channel_id, 0) >= self._AUTH_FAILURE_CIRCUIT_BREAK:
+            logger.error(
+                f"Channel {channel_id}: AUTH circuit breaker tripped after "
+                f"{self._AUTH_FAILURE_CIRCUIT_BREAK} consecutive auth failures — "
+                f"stopping retries. Re-authenticate tokens to resume."
+            )
+            await db.channels.update(channel_id, {
+                "status": "auth_error",
+                "error_message": (
+                    f"Authentication failed {self._AUTH_FAILURE_CIRCUIT_BREAK} times. "
+                    f"Re-authenticate Slack tokens to resume. Last error: {error_message}"
+                ),
+            })
+            return  # Do NOT schedule retry
 
         await db.channels.update(channel_id, {
             "status": "failed",
@@ -486,6 +533,7 @@ class ChannelGateway:
         """Retry starting a channel with exponential backoff.
 
         Stops on: success, permanent config error (``ValueError``),
+        auth error (``validate_config`` returns AUTH_ERROR),
         max attempts reached, shutdown, or explicit stop/start by user.
         """
         delay = self._RETRY_BASE_DELAY
@@ -516,17 +564,53 @@ class ChannelGateway:
                     logger.info(f"Channel {channel_id} is already running, stopping retry")
                     break
 
+                # Check auth failure circuit breaker before attempting
+                auth_count = self._auth_failure_counts.get(channel_id, 0)
+                if auth_count >= self._AUTH_FAILURE_CIRCUIT_BREAK:
+                    logger.error(
+                        f"Channel {channel_id}: auth circuit breaker active "
+                        f"({auth_count} failures) — stopping retries"
+                    )
+                    await db.channels.update(channel_id, {
+                        "status": "auth_error",
+                        "error_message": (
+                            f"Authentication failed {auth_count} times. "
+                            f"Re-authenticate Slack tokens to resume."
+                        ),
+                    })
+                    break
+
                 try:
                     await self.start_channel(channel_id)
+                    # Success — reset auth failure counter
+                    self._auth_failure_counts.pop(channel_id, None)
                     logger.info(f"Channel {channel_id} reconnected on retry #{attempt}")
                     break  # success
-                except ValueError:
-                    # Permanent config / adapter error — no point retrying
-                    logger.error(
-                        f"Channel {channel_id}: permanent error on retry "
-                        f"#{attempt} — stopping retries"
-                    )
-                    break
+                except ValueError as ve:
+                    error_str = str(ve)
+                    if "AUTH_ERROR" in error_str:
+                        # Auth failure during validate_config — circuit-break
+                        count = self._auth_failure_counts.get(channel_id, 0) + 1
+                        self._auth_failure_counts[channel_id] = count
+                        logger.error(
+                            f"Channel {channel_id}: auth error on retry #{attempt} "
+                            f"(consecutive={count}): {error_str}"
+                        )
+                        if count >= self._AUTH_FAILURE_CIRCUIT_BREAK:
+                            await db.channels.update(channel_id, {
+                                "status": "auth_error",
+                                "error_message": error_str,
+                            })
+                            break
+                        # Shorter delay for auth retries (token might refresh)
+                        delay = min(60.0, delay * self._RETRY_BACKOFF_FACTOR)
+                    else:
+                        # Permanent config / adapter error — no point retrying
+                        logger.error(
+                            f"Channel {channel_id}: permanent error on retry "
+                            f"#{attempt} — stopping retries"
+                        )
+                        break
                 except Exception:
                     logger.warning(
                         f"Retry #{attempt} failed for channel {channel_id}, "
