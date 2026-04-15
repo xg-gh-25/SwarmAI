@@ -388,12 +388,33 @@ python backend/scripts/artifact_cli.py advance --project <PROJECT> --state revie
    bugs: (1) replaced function dropped a capability (TranscriptStore), (2) test mock
    hid a missing attribute. Both would have been caught by feature parity diff.
 
+6. **UX Review** — **only when changeset includes frontend files** (`.tsx`, `.jsx`, `.css`,
+   `.html`, `.svelte`, `.vue`). Skip entirely for backend-only changesets.
+
+   Walk through every new/changed user-facing interaction and check:
+
+   | # | Check | What to verify | Example failure |
+   |---|-------|---------------|-----------------|
+   | UX1 | **Discoverability** | How does the user discover this feature? Is there a hint, tooltip, or visual affordance? | Diff lines became clickable but no visual cue existed |
+   | UX2 | **Feedback** | New interactive elements have hover, active, and disabled states? | Clickable rows missing hover highlight |
+   | UX3 | **Behavioral contracts** | Reused components — are reactive props actually reactive? (values that must update on scroll/resize/state change) | CommentPopover `topOffset` passed as DOM snapshot instead of React state |
+   | UX4 | **Escape / click-outside** | Escape and click-outside behave correctly in all contexts: modal, panel, portal? Does Escape propagate unexpectedly? | Escape in portal CommentPopover also closed the parent editor |
+   | UX5 | **Scroll tracking** | Positioned elements (popover, tooltip, dropdown) — do they follow when the container scrolls? | Popover stays in place while diff content scrolls away |
+
+   **Action on findings:**
+   - Each finding → **auto-fix** (these are always bugs, not taste decisions)
+   - Include UX review results in the review artifact under `"ux_review"`
+
+   **Why this exists:** Pipeline run_6455a707 shipped with 10/10 confidence and 44/44
+   tests, but E2E user walkthrough found 3 bugs in 5 minutes (scroll tracking, no
+   discoverability hint, Escape propagation). Engineering-complete ≠ user-complete.
+
 Publish artifact:
 ```bash
 python backend/scripts/artifact_cli.py publish --project <PROJECT> \
   --type review --producer s_autonomous-pipeline \
-  --summary "Review: <N findings>, <M auto-fixed>, <K integration warnings>" \
-  --data '{"findings":[...],"approved":true/false,"security_findings":[],"integration_trace":{"checked":N,"connected":M,"warnings":[...]}}'
+  --summary "Review: <N findings>, <M auto-fixed>, <K integration warnings>, <J ux findings>" \
+  --data '{"findings":[...],"approved":true/false,"security_findings":[],"integration_trace":{"checked":N,"connected":M,"warnings":[...]},"ux_review":{"triggered":true/false,"checks":5,"findings":[...]}}'
 python backend/scripts/artifact_cli.py advance --project <PROJECT> --state test
 ```
 
@@ -441,6 +462,7 @@ python backend/scripts/artifact_cli.py advance --project <PROJECT> --state deliv
      -2 if WTF gate triggered (even if resolved)
      -2 if smoke_tests == 0 and files_changed > 1 (runtime crashes likely hidden)
      -1 if integration_trace.checked == 0 (wiring unverified)
+     -1 if frontend files changed but ux_review.triggered == false (UX unverified)
      -1 per unresolved warning from validator
    ```
    If confidence < 7 → flag for human review even without judgment decisions.

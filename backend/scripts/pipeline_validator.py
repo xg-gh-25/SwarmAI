@@ -75,7 +75,7 @@ STAGE_SCHEMAS: dict[str, dict[str, list[str]]] = {
     },
     "review": {
         "required": ["approved", "integration_trace"],
-        "recommended": ["findings", "security_findings"],
+        "recommended": ["findings", "security_findings", "ux_review"],
     },
     "test": {
         "required": ["passed"],
@@ -616,6 +616,29 @@ def validate(project: str, run_id: str, stage: str) -> dict[str, Any]:
                     )
         if trace_ok:
             checks_passed += 1
+
+        # Check 8c: UX review when frontend files are in the changeset (WARN only)
+        _FRONTEND_EXTS = (".tsx", ".jsx", ".css", ".html", ".svelte", ".vue")
+        has_frontend = False
+        # Look for frontend files in the build stage's changeset artifact
+        build_stage = next((s for s in stages_list if s.get("name") == "build"), None)
+        if build_stage and build_stage.get("artifact_id"):
+            build_data = _load_artifact_data(project, run_id, build_stage["artifact_id"])
+            if build_data:
+                has_frontend = any(
+                    any(f.endswith(ext) for ext in _FRONTEND_EXTS)
+                    for f in build_data.get("files_changed", [])
+                )
+        if has_frontend and artifact_data:
+            ux = artifact_data.get("ux_review", {})
+            triggered = ux.get("triggered", False) if isinstance(ux, dict) else False
+            if not triggered:
+                warnings.append(
+                    "UX review not triggered: changeset includes frontend files "
+                    "but review artifact has no 'ux_review' section. Run the 5-point "
+                    "UX checklist (discoverability, feedback, behavioral contracts, "
+                    "escape/click-outside, scroll tracking)."
+                )
     else:
         checks_passed += 1  # Auto-pass for other stages
 
