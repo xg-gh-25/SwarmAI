@@ -140,6 +140,107 @@ describe('useReviewMode', () => {
   });
 
 
+  describe('diff context support', () => {
+    it('AC1: addComment accepts optional diffContext', () => {
+      const { result } = renderHook(() => useReviewMode(SAMPLE_CONTENT));
+      const diffCtx = {
+        type: 'added' as const,
+        newLineNumber: 42,
+        content: 'const x = 1;',
+      };
+      act(() => result.current.addComment(4, 4, 'wrong name', diffCtx));
+      expect(result.current.comments).toHaveLength(1);
+      expect(result.current.comments[0].diffContext).toEqual(diffCtx);
+    });
+
+    it('AC1: addComment without diffContext keeps it undefined', () => {
+      const { result } = renderHook(() => useReviewMode(SAMPLE_CONTENT));
+      act(() => result.current.addComment(4, 4, 'no diff'));
+      expect(result.current.comments[0].diffContext).toBeUndefined();
+    });
+
+    it('AC2: formatFeedback includes diff context when present', () => {
+      const { result } = renderHook(() => useReviewMode(SAMPLE_CONTENT));
+      act(() => result.current.addComment(4, 4, 'fix this variable', {
+        type: 'added',
+        newLineNumber: 42,
+        content: 'const badName = getData();',
+      }));
+      const feedback = result.current.formatFeedback('code.ts');
+      // Should contain the diff indicator
+      expect(feedback).toContain('added');
+      // Should contain the actual code line
+      expect(feedback).toContain('const badName = getData()');
+    });
+
+    it('AC2: formatFeedback for removed line includes old line number', () => {
+      const { result } = renderHook(() => useReviewMode(SAMPLE_CONTENT));
+      act(() => result.current.addComment(4, 4, 'why removed?', {
+        type: 'removed',
+        oldLineNumber: 15,
+        content: 'const oldVar = legacy();',
+      }));
+      const feedback = result.current.formatFeedback('code.ts');
+      expect(feedback).toContain('removed');
+      expect(feedback).toContain('const oldVar = legacy()');
+    });
+
+    it('AC2: formatFeedback mixes diff and non-diff comments correctly', () => {
+      const { result } = renderHook(() => useReviewMode(SAMPLE_CONTENT));
+      // Non-diff comment
+      act(() => result.current.addComment(4, 4, 'regular comment'));
+      // Diff comment
+      act(() => result.current.addComment(8, 8, 'diff comment', {
+        type: 'added',
+        newLineNumber: 50,
+        content: 'new code here',
+      }));
+      const feedback = result.current.formatFeedback('mixed.ts');
+      expect(feedback).toContain('regular comment');
+      expect(feedback).toContain('diff comment');
+      expect(feedback).toContain('new code here');
+    });
+
+    it('AC4: comments survive — stored in state regardless of view mode', () => {
+      const { result } = renderHook(() => useReviewMode(SAMPLE_CONTENT));
+      act(() => result.current.addComment(4, 4, 'persists', {
+        type: 'unchanged',
+        oldLineNumber: 4,
+        newLineNumber: 4,
+        content: 'same line',
+      }));
+      // Toggle review mode off and on — comments should persist
+      act(() => result.current.toggleReviewMode());
+      act(() => result.current.toggleReviewMode());
+      expect(result.current.comments).toHaveLength(1);
+      expect(result.current.comments[0].text).toBe('persists');
+      expect(result.current.comments[0].diffContext?.type).toBe('unchanged');
+    });
+
+    it('AC5: resetReviewMode clears diffContext comments too', () => {
+      const { result } = renderHook(() => useReviewMode(SAMPLE_CONTENT));
+      act(() => result.current.addComment(4, 4, 'diff comment', {
+        type: 'added',
+        newLineNumber: 10,
+        content: 'code',
+      }));
+      act(() => result.current.resetReviewMode());
+      expect(result.current.comments).toHaveLength(0);
+    });
+
+    it('AC2: formatFeedback diff comment uses diff prefix notation', () => {
+      const { result } = renderHook(() => useReviewMode(SAMPLE_CONTENT));
+      act(() => result.current.addComment(4, 4, 'check this', {
+        type: 'added',
+        newLineNumber: 22,
+        content: 'const result = compute();',
+      }));
+      const feedback = result.current.formatFeedback('file.ts');
+      // Should use + prefix for added lines
+      expect(feedback).toMatch(/\+\s*const result = compute\(\)/);
+    });
+  });
+
   describe('formatFeedback', () => {
     it('returns empty string when no comments', () => {
       const { result } = renderHook(() => useReviewMode(SAMPLE_CONTENT));

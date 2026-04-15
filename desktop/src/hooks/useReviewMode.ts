@@ -12,6 +12,15 @@
 import { useState, useCallback, useMemo } from 'react';
 import { findNearestHeading } from '../utils/sectionDetect';
 
+/** Diff context captured when a comment is made on a diff line. */
+export interface DiffContext {
+  type: 'added' | 'removed' | 'unchanged';
+  oldLineNumber?: number;
+  newLineNumber?: number;
+  /** The actual line content from the diff. */
+  content: string;
+}
+
 export interface ReviewComment {
   id: string;
   /** 1-based line number where the comment starts. */
@@ -24,6 +33,8 @@ export interface ReviewComment {
   sectionHeading: string | null;
   /** Timestamp when the comment was created. */
   timestamp: number;
+  /** When comment was made on a diff line, captures the diff context. */
+  diffContext?: DiffContext;
 }
 
 function generateId(): string {
@@ -39,7 +50,7 @@ export function useReviewMode(content: string) {
   const contentLines = useMemo(() => content.split('\n'), [content]);
 
   const addComment = useCallback(
-    (lineStart: number, lineEnd: number, text: string) => {
+    (lineStart: number, lineEnd: number, text: string, diffContext?: DiffContext) => {
       const heading = findNearestHeading(contentLines, lineStart);
       const comment: ReviewComment = {
         id: generateId(),
@@ -48,6 +59,7 @@ export function useReviewMode(content: string) {
         text,
         sectionHeading: heading,
         timestamp: Date.now(),
+        diffContext,
       };
       setComments((prev) => [...prev, comment]);
       setActivePopoverLine(null);
@@ -93,6 +105,8 @@ export function useReviewMode(content: string) {
     (fileName: string): string => {
       if (comments.length === 0) return '';
 
+      const hasDiffComments = comments.some((c) => c.diffContext);
+
       const lines = comments
         .sort((a, b) => a.lineStart - b.lineStart)
         .map((c, i) => {
@@ -101,10 +115,31 @@ export function useReviewMode(content: string) {
             c.lineStart === c.lineEnd
               ? `Line ${c.lineStart}`
               : `Lines ${c.lineStart}-${c.lineEnd}`;
-          return `${i + 1}. [§${section}, ${lineRef}] ${c.text}`;
+
+          // Base comment line
+          let entry = `${i + 1}. [§${section}, ${lineRef}`;
+
+          // Add diff type indicator when diff context is present
+          if (c.diffContext) {
+            entry += `, ${c.diffContext.type}`;
+          }
+
+          entry += `] ${c.text}`;
+
+          // Add code context line for diff comments
+          if (c.diffContext) {
+            const prefix = c.diffContext.type === 'added' ? '+' : c.diffContext.type === 'removed' ? '-' : ' ';
+            entry += `\n   \`${prefix} ${c.diffContext.content}\``;
+          }
+
+          return entry;
         });
 
-      return `📋 Review feedback on \`${fileName}\`:\n\n${lines.join('\n')}\n\nPlease address each point and update the doc.`;
+      const header = hasDiffComments
+        ? `📋 Review feedback on \`${fileName}\` (from diff view)`
+        : `📋 Review feedback on \`${fileName}\``;
+
+      return `${header}:\n\n${lines.join('\n')}\n\nPlease address each point and update the ${hasDiffComments ? 'code' : 'doc'}.`;
     },
     [comments],
   );
