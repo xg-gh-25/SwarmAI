@@ -235,11 +235,13 @@ hiddenimports += collect_submodules('botocore')
 hiddenimports += ['psutil']
 hiddenimports += collect_submodules('slack_bolt')
 hiddenimports += collect_submodules('slack_sdk')
+hiddenimports += ['sqlite_vec']  # Vector search extension (try/except import in vec_db.py)
 
 # Collect data files (including bundled CLI binary from claude_agent_sdk)
 datas = []
 datas += collect_data_files('claude_agent_sdk')
 datas += collect_data_files('certifi')
+datas += collect_data_files('sqlite_vec')  # vec0.dylib native extension for vector search
 # Include built-in context files and skills for agent workspace initialization
 datas += [('context', 'context')]
 datas += [('skills', 'skills')]
@@ -319,7 +321,6 @@ local_modules = [
     'core.daily_activity_writer',
     'core.exceptions',
     'core.extraction_patterns',
-    'core.frontmatter',
     'core.hook_builder',
     'core.initialization_manager',
     'core.lifecycle_manager',
@@ -368,7 +369,18 @@ local_modules = [
     'core.session_miner',
     'core.skill_fitness',
     'core.evolution_optimizer',
-    'core.skill_creator_tool',
+    # Vector search & hybrid memory retrieval
+    'core.vec_db',
+    'core.embedding_client',
+    'core.recall_engine',
+    'core.knowledge_store',
+    'core.memory_embeddings',
+    'core.transcript_indexer',
+    'core.memory_index',
+    'core.memory_validation',
+    # Manifest & evolution
+    'core.manifest_loader',
+    'core.llm_optimizer',
     # Hooks
     'hooks',
     'hooks.auto_commit_hook',
@@ -380,6 +392,7 @@ local_modules = [
     'hooks.improvement_writeback_hook',
     'hooks.user_observer_hook',
     'hooks.skill_metrics_hook',
+    'hooks.todo_lifecycle_hook',
     # Middleware
     'middleware',
     'middleware.auth',
@@ -391,6 +404,7 @@ local_modules = [
     'channels.gateway',
     'channels.registry',
     'channels.adapters.slack',
+    'channels.install_backend_daemon',
     # MCP servers (channel tool injection)
     'mcp_servers',
     'mcp_servers.channel_file_sender',
@@ -419,6 +433,9 @@ local_modules = [
     'jobs.adapters.http_client',
     'jobs.adapters.rss',
     'jobs.adapters.web_search',
+    'jobs.bedrock',
+    'jobs.estimation_learner',
+    'jobs.run_evolution',
     'jobs.handlers',
     'jobs.handlers.ddd_refresh',
     'jobs.handlers.memory_health',
@@ -430,6 +447,13 @@ local_modules = [
     'utils.bundle_paths',
     'utils.diff_parser',
     'utils.mcp_validation',
+    # Scripts (runtime-imported by hooks/core)
+    'scripts',
+    'scripts.locked_write',
+    'scripts.pipeline_validator',
+    'scripts.artifact_cli',
+    'scripts.generate_mock_data',
+    'scripts.migrate_skills',
 ]
 
 a = Analysis(
@@ -440,11 +464,7 @@ a = Analysis(
     hiddenimports=hiddenimports + local_modules + [
         # Claude Agent SDK
         'claude_agent_sdk',
-        # passlib handlers for auth module
-        'passlib.handlers.bcrypt',
-        'passlib.handlers.pbkdf2_sha256',
-        'passlib.handlers.sha2_crypt',
-        'passlib.handlers.argon2',
+        # Auth
         'bcrypt',
         # Database
         'aiosqlite',
@@ -455,6 +475,7 @@ a = Analysis(
         # HTTP/SSL
         'ssl',
         'certifi',
+        'requests',  # Dynamic import in Slack adapter file download
         # Backend local modules - CRITICAL for bundling
         'main',
         'config',
@@ -467,9 +488,6 @@ a = Analysis(
         'httpcore',
         'httpx',
         'yaml',
-        'pyyaml',
-        'jose',
-        'python_jose',
         'cryptography',
     ],
     hookspath=[],
