@@ -180,12 +180,21 @@ function DiffView({
   const scrollRef = useRef<HTMLPreElement>(null);
   const isInteractive = !!onLineClick;
 
+  // Track scroll position as state so CommentPopover re-renders on scroll
+  const [diffScrollTop, setDiffScrollTop] = useState(0);
+  const handleDiffScroll = useCallback(() => {
+    if (scrollRef.current) {
+      setDiffScrollTop(scrollRef.current.scrollTop);
+    }
+  }, []);
+
   // Active line for popover
   const activeLine = activePopoverIndex != null ? lines[activePopoverIndex] : null;
 
   return (
     <pre
       ref={scrollRef}
+      onScroll={handleDiffScroll}
       className="absolute inset-0 m-0 overflow-auto font-mono text-sm leading-6 bg-[var(--color-background)]"
       data-testid="diff-view"
     >
@@ -261,7 +270,7 @@ function DiffView({
               ? () => onRemoveComment(editingComment.id)
               : undefined
           }
-          topOffset={activePopoverIndex * DIFF_LINE_HEIGHT - (scrollRef.current?.scrollTop ?? 0)}
+          topOffset={activePopoverIndex * DIFF_LINE_HEIGHT - diffScrollTop}
           anchorRef={scrollRef as unknown as React.RefObject<HTMLDivElement>}
         />
       )}
@@ -1151,6 +1160,16 @@ export default function FileEditorCore({
             </>
           )}
         </div>
+
+        {/* Diff review hint — shown when in diff mode with no comments yet */}
+        {showDiff && review.comments.length === 0 && (
+          <div className="flex items-center gap-2 px-4 py-1.5 border-t border-[var(--color-border)] bg-[var(--color-hover)]/50 shrink-0">
+            <span className="material-symbols-outlined text-sm text-[var(--color-text-muted)]">touch_app</span>
+            <span className="text-xs text-[var(--color-text-muted)]">
+              Click any line to add review comments
+            </span>
+          </div>
+        )}
 
         {/* Review Feedback Bar (L3) — shown in review mode OR diff mode with comments */}
         {(review.isReviewMode || (showDiff && review.comments.length > 0)) && (

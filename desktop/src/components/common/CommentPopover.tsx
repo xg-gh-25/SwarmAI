@@ -96,6 +96,7 @@ export default function CommentPopover({
         handleSubmit();
       } else if (e.key === 'Escape') {
         e.preventDefault();
+        e.stopPropagation(); // Prevent editor's global Escape handler from closing editor
         onCancel();
       }
     },
