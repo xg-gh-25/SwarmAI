@@ -20,22 +20,6 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     return bcrypt.checkpw(plain_password.encode("utf-8"), hashed_password.encode("utf-8"))
 
 
-class TokenPayload:
-    """Token payload data."""
-
-    def __init__(
-        self,
-        sub: str,
-        exp: datetime,
-        token_type: str = "access",
-        iat: Optional[datetime] = None,
-    ):
-        self.sub = sub  # Subject (user_id)
-        self.exp = exp  # Expiration time
-        self.token_type = token_type  # "access" or "refresh"
-        self.iat = iat or datetime.now(timezone.utc)
-
-
 def create_access_token(user_id: str, expires_delta: Optional[timedelta] = None) -> str:
     """Create a JWT access token.
 
@@ -122,28 +106,6 @@ def verify_token(token: str, token_type: str = "access") -> Optional[str]:
 
         return payload.get("sub")
 
-    except JWTError:
-        return None
-
-
-def decode_token(token: str) -> Optional[dict]:
-    """Decode a JWT token without verification.
-
-    Useful for extracting payload info before full verification.
-
-    Args:
-        token: The JWT token to decode
-
-    Returns:
-        Token payload dict or None if invalid
-    """
-    try:
-        return jwt.decode(
-            token,
-            settings.jwt_secret_key,
-            algorithms=[settings.jwt_algorithm],
-            options={"verify_exp": False},
-        )
     except JWTError:
         return None
 
