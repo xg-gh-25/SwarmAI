@@ -50,14 +50,15 @@ describe('useReviewMode', () => {
       expect(result.current.activePopoverLine).toBeNull();
     });
 
-    it('resetReviewMode clears all state', () => {
+    it('resetReviewMode clears UI state but preserves comments for sessionStorage', () => {
       const { result } = renderHook(() => useReviewMode(SAMPLE_CONTENT));
       act(() => result.current.toggleReviewMode());
       act(() => result.current.addComment(4, 4, 'test'));
       act(() => result.current.setActivePopoverLine(4));
       act(() => result.current.resetReviewMode());
       expect(result.current.isReviewMode).toBe(false);
-      expect(result.current.comments).toHaveLength(0);
+      // Comments preserved — sessionStorage handles lifecycle on file switch
+      expect(result.current.comments).toHaveLength(1);
       expect(result.current.activePopoverLine).toBeNull();
       expect(result.current.editingCommentId).toBeNull();
     });
@@ -217,14 +218,14 @@ describe('useReviewMode', () => {
       expect(result.current.comments[0].diffContext?.type).toBe('unchanged');
     });
 
-    it('AC5: resetReviewMode clears diffContext comments too', () => {
+    it('AC5: clearComments clears diffContext comments', () => {
       const { result } = renderHook(() => useReviewMode(SAMPLE_CONTENT));
       act(() => result.current.addComment(4, 4, 'diff comment', {
         type: 'added',
         newLineNumber: 10,
         content: 'code',
       }));
-      act(() => result.current.resetReviewMode());
+      act(() => result.current.clearComments());
       expect(result.current.comments).toHaveLength(0);
     });
 
