@@ -132,13 +132,19 @@ class ResourceMonitor:
     # Spawn cost: actual CLI tree RSS is 1400-1600MB (verified from
     # lifecycle_manager logs 2026-04-12).  Old value of 500MB allowed 3
     # concurrent chat sessions → 4.5GB → macOS jetsam SIGKILL cascade.
-    _DEFAULT_SPAWN_COST_MB: float = 1500.0
+    _DEFAULT_SPAWN_COST_MB: float = 800.0  # Conservative first-boot estimate; adaptive samples take over quickly
     _HEADROOM_MB: float = 512.0  # Always keep this much free
     _MAX_SPAWN_SAMPLES: int = 20  # Rolling window for spawn cost estimation
     # Adaptive estimate must never drop below this — early samples
     # (taken ~60s after spawn, before MCPs fully load) can underestimate
-    # true steady-state RSS by 50%.  1200MB = 80% of observed 1500MB.
-    _MIN_SPAWN_COST_MB: float = 1200.0
+    # Floor for adaptive estimate.  600MB accounts for CLI+MCP launch
+    # spike (~500MB) with 20% margin.  Previous value (1200MB) was set
+    # during OOM cascade fix (RC03) but overestimated 5× vs actual
+    # steady-state (~300MB), blocking 3rd chat tab on 36GB machines.
+    # The OOM root causes (retry storms, kill/respawn churn, cost model
+    # 3× undercount) are all fixed — this floor just needs to cover the
+    # transient launch spike, not the worst-case scenario.
+    _MIN_SPAWN_COST_MB: float = 600.0
 
     # ── Dynamic tab limit constants ─────────────────────────────
     # Ceiling: 4 = 3 chat + 1 channel.  On 36GB machines this is safe
