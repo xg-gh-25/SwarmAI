@@ -73,7 +73,7 @@ _STOP_WORDS: frozenset[str] = frozenset({
 def _extract_query_keywords(message: str) -> str:
     """Extract searchable keywords from user message.  Pure NLP, no LLM.
 
-    Returns a space-separated string of up to 15 terms suitable for
+    Returns a space-separated string of up to 18 terms suitable for
     FTS5 + vector search.  Returns empty string for messages too short
     to produce meaningful recall.
     """
@@ -1364,7 +1364,7 @@ def _run_dual_recall(db_path: str, query: str) -> tuple[dict, dict]:
         engine = RecallEngine(store)
 
         try:
-            embed_fn = _get_embed_fn()
+            embed_fn = _get_cached_embed_fn()
             if embed_fn is None:
                 embed_result["error"] = "no_bedrock"
             else:
@@ -1379,30 +1379,6 @@ def _run_dual_recall(db_path: str, query: str) -> tuple[dict, dict]:
             embed_result["error"] = str(exc)[:100]
 
     return fts5_result, embed_result
-
-
-def _get_embed_fn():
-    """Try to create a Bedrock Titan v2 embedding function. Returns None on failure."""
-    try:
-        import boto3
-
-        region = os.environ.get("AWS_DEFAULT_REGION", "us-east-1")
-        client = boto3.client("bedrock-runtime", region_name=region)
-
-        def embed(text: str) -> list[float] | None:
-            try:
-                resp = client.invoke_model(
-                    modelId="amazon.titan-embed-text-v2:0",
-                    body=_json.dumps({"inputText": text[:8000]}),
-                )
-                body = _json.loads(resp["body"].read())
-                return body.get("embedding")
-            except Exception:
-                return None
-
-        return embed
-    except Exception:
-        return None
 
 
 _JSONL_MAX_LINES = 1000
