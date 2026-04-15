@@ -396,3 +396,17 @@ else
     echo "Note: No daemon directory at $DAEMON_DIR — skipping daemon deploy."
     echo "  Install daemon first: python -m channels.install_backend_daemon"
 fi
+
+# ── Post-build verification ──────────────────────────────────────
+# Ensures the binary has all capabilities that can silently degrade.
+# This catches the class of bug where features work in dev (venv) but
+# are missing from the PyInstaller binary (see: sqlite_vec incident).
+echo ""
+echo "Running post-build verification..."
+if python scripts/verify_build.py "$OUTPUT_BINARY"; then
+    echo "✅ Build verification passed"
+else
+    echo ""
+    echo "⚠️  Build verification found issues (see above)"
+    echo "  Fix before releasing to users."
+fi

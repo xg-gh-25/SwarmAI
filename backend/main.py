@@ -908,6 +908,98 @@ async def health_check():
     }
 
 
+@app.get("/api/system/verify-import")
+async def verify_import(module: str):
+    """Check if a module is importable in this binary. Used by verify_build.py."""
+    try:
+        __import__(module)
+        return {"available": True, "module": module}
+    except ImportError as e:
+        return {"available": False, "module": module, "error": str(e)}
+
+
+@app.get("/api/system/verify-data")
+async def verify_data(path: str):
+    """Check if a bundled data file/dir exists. Used by verify_build.py."""
+    import sys as _sys
+    # Check in _MEIPASS (PyInstaller) or relative to backend dir
+    bases = []
+    if getattr(_sys, "frozen", False):
+        bases.append(Path(_sys._MEIPASS))
+    bases.append(Path(__file__).resolve().parent)
+
+    for base in bases:
+        target = base / path
+        if target.exists():
+            kind = "directory" if target.is_dir() else "file"
+            return {"exists": True, "path": str(target), "detail": kind}
+    return {"exists": False, "path": path, "detail": f"not found in {[str(b) for b in bases]}"}
+
+
+@app.get("/api/system/verify-native")
+async def verify_native(path: str):
+    """Check if a native extension is loadable. Used by verify_build.py."""
+    import sqlite3
+    # path format: "sqlite_vec/vec0" (without .dylib suffix)
+    parts = path.split("/", 1)
+    if len(parts) == 2 and parts[0] == "sqlite_vec":
+        try:
+            import sqlite_vec
+            conn = sqlite3.connect(":memory:")
+            conn.enable_load_extension(True)
+            sqlite_vec.load(conn)
+            conn.enable_load_extension(False)
+            version = conn.execute("select vec_version()").fetchone()[0]
+            conn.close()
+            return {"loadable": True, "detail": f"sqlite-vec {version}"}
+        except Exception as e:
+            return {"loadable": False, "detail": str(e)}
+    return {"loadable": False, "detail": f"unknown native extension: {path}"}
+
+
+@app.get("/api/system/capabilities")
+async def get_capabilities():
+    """Report all capability flags for this binary. Shows dev/prod divergence at a glance."""
+    caps = {}
+
+    # sqlite_vec
+    try:
+        from core.vec_db import VEC_AVAILABLE
+        caps["sqlite_vec"] = VEC_AVAILABLE
+    except ImportError:
+        caps["sqlite_vec"] = False
+
+    # psutil
+    try:
+        import psutil  # noqa: F401
+        caps["psutil"] = True
+    except ImportError:
+        caps["psutil"] = False
+
+    # Slack
+    try:
+        import slack_bolt  # noqa: F401
+        caps["slack_bolt"] = True
+    except ImportError:
+        caps["slack_bolt"] = False
+
+    # Key local modules
+    for mod in ["core.recall_engine", "core.manifest_loader", "core.llm_optimizer",
+                "scripts.locked_write", "hooks.distillation_hook"]:
+        try:
+            __import__(mod)
+            caps[mod.split(".")[-1]] = True
+        except ImportError:
+            caps[mod.split(".")[-1]] = False
+
+    # Frozen mode
+    import sys as _sys
+    caps["frozen"] = getattr(_sys, "frozen", False)
+    caps["mode"] = os.environ.get("SWARMAI_MODE", "unknown")
+
+    return {"capabilities": caps}
+
+
 @app.get("/api/system/mode")
 async def get_system_mode():
     """Return the backend's running mode (daemon vs sidecar)."""
