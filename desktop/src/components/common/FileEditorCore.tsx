@@ -439,7 +439,8 @@ export default function FileEditorCore({
   const isSvg = /\.svg$/i.test(fileName);
 
   // L3: Review mode — inline comments (used for both normal review and diff review)
-  const review = useReviewMode(content);
+  // filePath key enables sessionStorage persistence across tab switches (U10).
+  const review = useReviewMode(content, filePath);
   const feedbackText = review.formatFeedback(fileName);
 
   // Diff-line comment tracking
