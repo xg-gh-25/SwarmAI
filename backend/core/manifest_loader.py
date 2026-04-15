@@ -13,6 +13,7 @@ Key public symbols:
 from __future__ import annotations
 
 import logging
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -58,7 +59,7 @@ class SkillManifest(BaseModel):
     tier: str = "lazy"
     scripts: list[ScriptEntry] = []
     resources: list[ResourceEntry] = []
-    dependencies: dict = {}
+    dependencies: dict[str, list[str]] = {}
     timeout: int = 120
 
     def get_entry_script(self) -> Optional[ScriptEntry]:
@@ -93,8 +94,13 @@ class SkillManifest(BaseModel):
         return "\n".join(lines)
 
 
-# Module-level cache: str(skill_dir) → Optional[SkillManifest]
+# Module-level cache: str(skill_dir.resolve()) → Optional[SkillManifest]
 _manifest_cache: dict[str, Optional[SkillManifest]] = {}
+
+# Strict regex for npm package names — blocks git URLs, file:// paths,
+# and other npm-interpretable specs that could install arbitrary code.
+# Matches: lodash, @scope/pkg, @types/node
+_NPM_PKG_RE = re.compile(r"^(@[a-z0-9][\w.-]*/)?[a-z0-9][\w.-]*$", re.IGNORECASE)
 
 
 class ManifestLoader:
@@ -107,7 +113,7 @@ class ManifestLoader:
     @classmethod
     def load(cls, skill_dir: Path) -> Optional[SkillManifest]:
         """Load manifest.yaml from skill directory. Returns None if not found."""
-        key = str(skill_dir)
+        key = str(skill_dir.resolve())  # Normalize symlinks to avoid cache aliasing
         if key in _manifest_cache:
             return _manifest_cache[key]
 
@@ -156,11 +162,28 @@ class ManifestLoader:
         Python deps are handled via pyproject.toml at build time.
         npm deps need runtime provisioning since they're global installs.
 
+        Package names are validated against a strict regex to block git URLs,
+        ``file://`` paths, and other npm-interpretable specs that could
+        install arbitrary code from a malicious manifest.yaml.
+
         Returns list of newly installed package names. Empty if all present.
         """
         npm_deps = manifest.dependencies.get("npm", [])
         if not npm_deps:
             return []
+
+        # Validate all package names before touching npm (H2 security gate).
+        # Reject anything that isn't a standard npm package identifier.
+        invalid = [pkg for pkg in npm_deps if not _NPM_PKG_RE.match(pkg)]
+        if invalid:
+            logger.warning(
+                "Rejected invalid npm package names in skill %s: %s "
+                "(only standard npm identifiers are allowed)",
+                manifest.name, invalid,
+            )
+            npm_deps = [pkg for pkg in npm_deps if _NPM_PKG_RE.match(pkg)]
+            if not npm_deps:
+                return []
 
         cache_key = f"_deps_checked_{manifest.name}"
         if cache_key in _manifest_cache:
@@ -195,14 +218,14 @@ class ManifestLoader:
 
         # Install missing packages
         logger.info("Installing npm deps for skill %s: %s", manifest.name, missing)
-        installed = []
+        installed_pkgs = []
         try:
             result = subprocess.run(
                 [npm_bin, "install", "-g", *missing],
                 capture_output=True, text=True, timeout=120,
             )
             if result.returncode == 0:
-                installed = missing
+                installed_pkgs = missing
                 logger.info("Installed npm deps for %s: %s", manifest.name, missing)
             else:
                 logger.warning(
@@ -215,12 +238,12 @@ class ManifestLoader:
             logger.warning("npm install error for %s: %s", manifest.name, e)
 
         _manifest_cache[cache_key] = True
-        return installed
+        return installed_pkgs
 
     @classmethod
     def invalidate(cls, skill_dir: Optional[Path] = None) -> None:
         """Clear cache for a specific skill or all skills."""
         if skill_dir:
-            _manifest_cache.pop(str(skill_dir), None)
+            _manifest_cache.pop(str(skill_dir.resolve()), None)
         else:
             _manifest_cache.clear()

@@ -160,11 +160,12 @@ class SkillRegistry:
                 status = "trusted" if result.allowed else "flagged"
             except ImportError:
                 status = "unscanned"
-            except Exception:
+            except Exception as exc:
+                logger.debug("SkillGuard scan failed for %s: %s", name, exc)
                 status = "unscanned"
             self._trust_cache[content_hash] = status
-        except Exception:
-            pass  # Don't break discovery on scan failure
+        except Exception as exc:
+            logger.debug("Skill trust scan skipped for %s: %s", name, exc)
 
     def _categorize(self, skill_names: list[str]) -> dict[str, list[str]]:
         """Map skills to categories. Uncategorized go to 'Other'."""
