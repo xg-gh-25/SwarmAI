@@ -32,8 +32,10 @@ import MarkdownRenderer from './MarkdownRenderer';
 import { detectLanguage, isDirtyState, findAllMatches } from './FileEditorModal';
 import type { SearchMatch } from './FileEditorModal';
 import { useReviewMode } from '../../hooks/useReviewMode';
+import type { DiffContext, ReviewComment } from '../../hooks/useReviewMode';
 import ReviewModeGutter from './ReviewModeGutter';
 import ReviewFeedbackBar from './ReviewFeedbackBar';
+import CommentPopover from './CommentPopover';
 
 export interface FileEditorCoreProps {
   filePath: string;
@@ -137,10 +139,6 @@ function LineGutter({ lineCount, scrollTop, activeLineNumber }: {
 /* ------------------------------------------------------------------ */
 /*  DiffView                                                            */
 /* ------------------------------------------------------------------ */
-
-import type { DiffContext } from '../../hooks/useReviewMode';
-import type { ReviewComment } from '../../hooks/useReviewMode';
-import CommentPopover from './CommentPopover';
 
 /** LINE_HEIGHT must match the editor textarea (leading-6 = 24px). */
 const DIFF_LINE_HEIGHT = 24;
@@ -435,9 +433,7 @@ export default function FileEditorCore({
   const review = useReviewMode(content);
   const feedbackText = review.formatFeedback(fileName);
 
-  // Diff-line comment tracking: maps diff-line index → comment id
-  // This lets us find comments by their position in the diff view
-  const [diffCommentMap, setDiffCommentMap] = useState<Map<number, string>>(new Map());
+  // Diff-line comment tracking
   const [activeDiffPopoverIndex, setActiveDiffPopoverIndex] = useState<number | null>(null);
   const [editingDiffComment, setEditingDiffComment] = useState<ReviewComment | null>(null);
 
@@ -457,6 +453,31 @@ export default function FileEditorCore({
     },
     [review],
   );
+
+  // Compute diff lines — declared early because callbacks and memos below depend on it
+  const diffLines = useMemo(() => {
+    if (!showDiff) return [];
+    return computeLineDiff(originalContent, content);
+  }, [showDiff, originalContent, content]);
+
+  // Derived: maps diff-line index → comment id
+  const diffCommentMap = useMemo(() => {
+    if (!showDiff || diffLines.length === 0) return new Map<number, string>();
+    const map = new Map<number, string>();
+    for (const comment of review.comments) {
+      if (!comment.diffContext) continue;
+      const idx = diffLines.findIndex((dl) =>
+        dl.type === comment.diffContext!.type &&
+        dl.content === comment.diffContext!.content &&
+        dl.oldLineNumber === comment.diffContext!.oldLineNumber &&
+        dl.newLineNumber === comment.diffContext!.newLineNumber
+      );
+      if (idx !== -1) {
+        map.set(idx, comment.id);
+      }
+    }
+    return map;
+  }, [review.comments, showDiff, diffLines]);
 
   // When a diff line is clicked
   const handleDiffLineClick = useCallback(
@@ -483,45 +504,14 @@ export default function FileEditorCore({
     [diffCommentMap, review.comments],
   );
 
-  // Wrap addComment to also track in diffCommentMap
+  // Add comment on a diff line — wraps review.addComment with diff context
   const handleDiffAddComment = useCallback(
-    (lineStart: number, lineEnd: number, text: string, diffContext?: import('../../hooks/useReviewMode').DiffContext) => {
+    (lineStart: number, lineEnd: number, text: string, diffContext?: DiffContext) => {
       review.addComment(lineStart, lineEnd, text, diffContext);
-      // After adding, the newest comment is the last one
-      // We need to defer this to after the state update
-      if (activeDiffPopoverIndex != null) {
-        // We'll update the map in an effect that watches comments
-        setActiveDiffPopoverIndex(null);
-      }
+      setActiveDiffPopoverIndex(null);
     },
-    [review, activeDiffPopoverIndex],
+    [review],
   );
-
-  // Compute diff lines (must be before effects that reference it)
-  const diffLines = useMemo(() => {
-    if (!showDiff) return [];
-    return computeLineDiff(originalContent, content);
-  }, [showDiff, originalContent, content]);
-
-  // Sync diffCommentMap when comments change (track which diff index → comment id)
-  useEffect(() => {
-    if (!showDiff || diffLines.length === 0) return;
-    const newMap = new Map<number, string>();
-    for (const comment of review.comments) {
-      if (!comment.diffContext) continue;
-      // Find the diff line that matches this comment's context
-      const idx = diffLines.findIndex((dl) =>
-        dl.type === comment.diffContext!.type &&
-        dl.content === comment.diffContext!.content &&
-        dl.oldLineNumber === comment.diffContext!.oldLineNumber &&
-        dl.newLineNumber === comment.diffContext!.newLineNumber
-      );
-      if (idx !== -1) {
-        newMap.set(idx, comment.id);
-      }
-    }
-    setDiffCommentMap(newMap);
-  }, [review.comments, showDiff, diffLines]);
 
   const handleDiffCancelPopover = useCallback(() => {
     setActiveDiffPopoverIndex(null);
@@ -530,7 +520,6 @@ export default function FileEditorCore({
 
   const handleReviewFeedbackSent = useCallback(() => {
     review.clearComments();
-    setDiffCommentMap(new Map());
     setActiveDiffPopoverIndex(null);
     setEditingDiffComment(null);
     if (review.isReviewMode) {
@@ -616,7 +605,6 @@ export default function FileEditorCore({
     // L3: Hard-reset review mode on file switch (no dependency on isReviewMode)
     review.resetReviewMode();
     // Clear diff comment state
-    setDiffCommentMap(new Map());
     setActiveDiffPopoverIndex(null);
     setEditingDiffComment(null);
   }, [initialContent, committedContent, filePath, review.resetReviewMode]);
@@ -1172,7 +1160,6 @@ export default function FileEditorCore({
             onFeedbackSent={handleReviewFeedbackSent}
             onClearComments={() => {
               review.clearComments();
-              setDiffCommentMap(new Map());
               setActiveDiffPopoverIndex(null);
               setEditingDiffComment(null);
             }}
