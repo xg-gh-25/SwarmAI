@@ -12,12 +12,14 @@ Public symbols
 - ``create_dangerous_command_gate``          — single PreToolUse gate for Bash commands
 - ``create_file_access_permission_handler``  — workspace file-path sandbox
 - ``create_skill_access_checker``            — skill allow-list enforcement
+- ``create_tcc_protection_hook``             — macOS TCC popup prevention
 """
 
 import fnmatch
 import json
 import logging
 import os
+import platform
 import re
 from datetime import datetime
 from pathlib import Path
@@ -315,6 +317,117 @@ def create_file_access_permission_handler(allowed_directories: list[str]) -> Cal
         return {"behavior": "allow"}
 
     return file_access_permission_handler
+
+
+# ---------------------------------------------------------------------------
+# macOS TCC protection — prevent permission popup dialogs
+# ---------------------------------------------------------------------------
+
+# Directories under ~ that trigger macOS TCC (Transparency, Consent, and
+# Control) permission popups when accessed by a non-entitled process.
+_TCC_PROTECTED_NAMES = frozenset({"Music", "Pictures", "Movies"})
+
+# Commands that recurse into subdirectories by default.
+_RECURSIVE_CMD_RE = re.compile(r"\b(find|tree|du)\b")
+
+
+def create_tcc_protection_hook() -> Callable[..., Any]:
+    """PreToolUse hook that blocks Bash commands traversing macOS TCC dirs.
+
+    macOS shows intrusive system-level permission dialogs ("python-backend
+    would like to access Apple Music / your Photo Library") whenever ANY
+    process touches ``~/Music``, ``~/Pictures``, or ``~/Movies``.
+
+    This hook structurally prevents the agent from triggering those popups by:
+    1. Blocking commands that directly reference a TCC-protected path.
+    2. Blocking recursive commands (``find``, ``tree``, ``du``) whose starting
+       path is an ancestor of ``~/`` (i.e., they *would* descend into TCC dirs).
+
+    Returns a no-op hook on non-macOS platforms.
+    """
+    if platform.system() != "Darwin":
+        async def _noop(
+            input_data: dict[str, Any],
+            tool_use_id: str | None,
+            context: Any,
+        ) -> dict[str, Any]:
+            return {}
+        return _noop
+
+    home = os.path.expanduser("~")
+    tcc_abs_paths = {os.path.join(home, d) for d in _TCC_PROTECTED_NAMES}
+    tcc_tilde_paths = {f"~/{d}" for d in _TCC_PROTECTED_NAMES}
+
+    def _deny(reason: str) -> dict[str, Any]:
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": reason,
+            }
+        }
+
+    def _extract_paths(command: str) -> list[str]:
+        """Extract path-like tokens (start with / or ~) from a command."""
+        return [t for t in command.split() if t.startswith("/") or t.startswith("~")]
+
+    def _is_tcc_ancestor(path_str: str) -> bool:
+        """Return True if *path_str* is an ancestor of (or equal to) home."""
+        expanded = os.path.expanduser(path_str)
+        # Preserve root "/" — rstrip would turn it into ""
+        if expanded == "/":
+            return True
+        expanded = expanded.rstrip("/")
+        if not expanded:
+            return False
+        # Exact home or a parent directory of home
+        return expanded == home or home.startswith(expanded + "/")
+
+    async def tcc_guard(
+        input_data: dict[str, Any],
+        tool_use_id: str | None,
+        context: Any,
+    ) -> dict[str, Any]:
+        if input_data.get("tool_name") != "Bash":
+            return {}
+        command = input_data.get("tool_input", {}).get("command", "")
+        if not command:
+            return {}
+
+        # ── Check 1: Direct reference to a TCC-protected path ──────────
+        for tcc_path in tcc_abs_paths | tcc_tilde_paths:
+            if tcc_path in command:
+                logger.warning(
+                    "[TCC BLOCKED] Direct reference to %s: %s",
+                    tcc_path, command[:120],
+                )
+                return _deny(
+                    f"Blocked: command references macOS-protected directory "
+                    f"({tcc_path}). Accessing it triggers a system permission "
+                    f"popup. Use a more specific path instead."
+                )
+
+        # ── Check 2: Recursive command from an ancestor of ~/  ─────────
+        m = _RECURSIVE_CMD_RE.search(command)
+        if m:
+            cmd_name = m.group(1)
+            for path_tok in _extract_paths(command):
+                if _is_tcc_ancestor(path_tok):
+                    logger.warning(
+                        "[TCC BLOCKED] '%s' with path '%s' would traverse TCC dirs: %s",
+                        cmd_name, path_tok, command[:120],
+                    )
+                    return _deny(
+                        f"Blocked: '{cmd_name} ... {path_tok}' would traverse "
+                        f"into macOS TCC-protected directories (~/Music, "
+                        f"~/Pictures, ~/Movies), triggering permission popups. "
+                        f"Scope the search to a specific directory like "
+                        f"~/.swarm-ai/ or ~/Desktop instead."
+                    )
+
+        return {}
+
+    return tcc_guard
 
 
 def create_skill_access_checker(
