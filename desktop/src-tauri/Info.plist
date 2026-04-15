@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- TCC usage descriptions — shown in the one-time macOS permission dialog.
+         Without these, macOS shows a generic scary message.
+         With these, the user sees a friendly explanation and clicks Allow once. -->
+    <key>NSDesktopFolderUsageDescription</key>
+    <string>SwarmAI needs access to your Desktop folder to read and manage files you ask it to work with.</string>
+
+    <key>NSDocumentsFolderUsageDescription</key>
+    <string>SwarmAI needs access to your Documents folder to read and manage files you ask it to work with.</string>
+
+    <key>NSDownloadsFolderUsageDescription</key>
+    <string>SwarmAI needs access to your Downloads folder to read and manage files you ask it to work with.</string>
+</dict>
+</plist>
