@@ -3,9 +3,13 @@ name: browser-agent
 version: "1.0.0"
 tier: lazy
 
+# playwright self-installs into skill-local node_modules on first run
+# (browser-agent.mjs lines 58-60). Declared here for visibility only.
+dependencies:
+  npm_local:
+    - playwright
+
 scripts:
   - path: browser-agent.mjs
     description: "browser-agent.mjs — DOM-based browser automation for SwarmAI"
     entry: true
-
-# Note: package.json found — npm dependencies may apply

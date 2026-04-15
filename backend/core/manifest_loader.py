@@ -1,8 +1,8 @@
 """Skill manifest loader — reads manifest.yaml for skill package metadata.
 
-Parses skill package descriptors, validates dependencies, and generates
-script index strings. Used by skill_registry.py for tier classification.
-Script index injection at invocation time is planned for Phase 4.
+Parses skill package descriptors, validates and provisions dependencies,
+and generates script index strings. Used by skill_registry.py for tier
+classification. Dependency provisioning runs on first use per skill.
 
 Key public symbols:
 
@@ -13,6 +13,8 @@ Key public symbols:
 from __future__ import annotations
 
 import logging
+import shutil
+import subprocess
 from pathlib import Path
 from typing import Optional
 
@@ -146,6 +148,74 @@ class ManifestLoader:
             logger.warning("Failed to parse manifest for %s: %s", skill_dir.name, e)
             _manifest_cache[key] = None
             return None
+
+    @classmethod
+    def ensure_dependencies(cls, manifest: SkillManifest) -> list[str]:
+        """Check and install missing npm dependencies declared in manifest.
+
+        Python deps are handled via pyproject.toml at build time.
+        npm deps need runtime provisioning since they're global installs.
+
+        Returns list of newly installed package names. Empty if all present.
+        """
+        npm_deps = manifest.dependencies.get("npm", [])
+        if not npm_deps:
+            return []
+
+        cache_key = f"_deps_checked_{manifest.name}"
+        if cache_key in _manifest_cache:
+            return []
+
+        npm_bin = shutil.which("npm")
+        if not npm_bin:
+            logger.warning("npm not found — cannot provision deps for %s", manifest.name)
+            _manifest_cache[cache_key] = True
+            return []
+
+        # Check which packages are missing
+        missing = []
+        try:
+            result = subprocess.run(
+                [npm_bin, "list", "-g", "--depth=0", "--json"],
+                capture_output=True, text=True, timeout=15,
+            )
+            installed = set()
+            if result.returncode == 0:
+                import json
+                data = json.loads(result.stdout)
+                installed = set(data.get("dependencies", {}).keys())
+            missing = [pkg for pkg in npm_deps if pkg not in installed]
+        except (subprocess.TimeoutExpired, Exception) as e:
+            logger.warning("Failed to check npm deps for %s: %s", manifest.name, e)
+            missing = npm_deps  # Assume all missing, try install
+
+        if not missing:
+            _manifest_cache[cache_key] = True
+            return []
+
+        # Install missing packages
+        logger.info("Installing npm deps for skill %s: %s", manifest.name, missing)
+        installed = []
+        try:
+            result = subprocess.run(
+                [npm_bin, "install", "-g", *missing],
+                capture_output=True, text=True, timeout=120,
+            )
+            if result.returncode == 0:
+                installed = missing
+                logger.info("Installed npm deps for %s: %s", manifest.name, missing)
+            else:
+                logger.warning(
+                    "npm install failed for %s (exit %d): %s",
+                    manifest.name, result.returncode, result.stderr[:200],
+                )
+        except subprocess.TimeoutExpired:
+            logger.warning("npm install timed out for skill %s", manifest.name)
+        except Exception as e:
+            logger.warning("npm install error for %s: %s", manifest.name, e)
+
+        _manifest_cache[cache_key] = True
+        return installed
 
     @classmethod
     def invalidate(cls, skill_dir: Optional[Path] = None) -> None:

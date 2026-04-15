@@ -37,6 +37,13 @@ dependencies = [
     "setuptools>=80.9.0",
     # Slack Socket Mode adapter
     "slack-bolt>=1.27.0",
+    # Skill dependencies — used by s_pptx, s_docx, s_xlsx scripts
+    "python-pptx>=1.0.0",
+    "openpyxl>=3.1.0",
+    "defusedxml>=0.7.0",
+    "Pillow>=10.0.0",
+    "markitdown[pptx]>=0.1.0",
+    "six>=1.16.0",
     # MCP server (for channel file sending tool)
     # "mcp>=1.0.0,<2.0.0",
 ]

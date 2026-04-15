@@ -6,10 +6,12 @@ Single hook, two modes:
 - **Deep** (once per day): validate all 11 context files, check MEMORY.md
   accuracy vs git, detect DDD staleness, verify git health.
 
-All checks are filesystem-only (no LLM, no network).  Auto-fixes what
-it can, logs what it can't.  Total budget: <3s light, <10s deep.
+All checks are filesystem + Bedrock embedding (delta-sync).  Auto-fixes
+what it can, logs what it can't.  Heavy work runs in a thread pool to
+avoid blocking the asyncio event loop.  Budget: <3s light, <10s deep.
 """
 
+import asyncio
 import logging
 import os
 import re
@@ -50,13 +52,19 @@ class ContextHealthHook:
         if not root.is_dir():
             return
 
+        # Both _light_refresh and _deep_check are sync-heavy: git
+        # subprocesses (5-10s timeouts each), Bedrock embedding calls
+        # (3s timeout per chunk), file I/O.  Run in thread pool so the
+        # asyncio event loop stays responsive for FastAPI/SSE.
+        loop = asyncio.get_running_loop()
+
         # ── Light: refresh indexes if workspace changed ──────────────
-        self._light_refresh(root, ws_path)
+        await loop.run_in_executor(None, self._light_refresh, root, ws_path)
 
         # ── Deep: once per calendar day ──────────────────────────────
         today = date.today().isoformat()
         if self._last_deep_date != today:
-            self._deep_check(root, ws_path)
+            await loop.run_in_executor(None, self._deep_check, root, ws_path)
             self._last_deep_date = today
 
     # ------------------------------------------------------------------

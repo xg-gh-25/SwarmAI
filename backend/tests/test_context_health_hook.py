@@ -84,7 +84,10 @@ class TestLightRefresh:
 
         # Should skip — verify by checking no write to KNOWLEDGE.md
         original = (workspace / ".context" / "KNOWLEDGE.md").read_text()
-        hook._light_refresh(workspace, str(workspace))
+        # Stub out Bedrock-dependent methods — they hang in sandbox (no network)
+        with patch.object(hook, "_sync_knowledge_library"), \
+             patch.object(hook, "_sync_transcript_index"):
+            hook._light_refresh(workspace, str(workspace))
         assert (workspace / ".context" / "KNOWLEDGE.md").read_text() == original
 
     def test_refreshes_knowledge_index(self, hook, workspace):
@@ -93,7 +96,10 @@ class TestLightRefresh:
         km = workspace / ".context" / "KNOWLEDGE.md"
         km.write_text("# Knowledge\n\nDomain knowledge.\n\n## Knowledge Index\n\nOld index.\n")
 
-        hook._light_refresh(workspace, str(workspace))
+        # Stub out Bedrock-dependent methods — they hang in sandbox (no network)
+        with patch.object(hook, "_sync_knowledge_library"), \
+             patch.object(hook, "_sync_transcript_index"):
+            hook._light_refresh(workspace, str(workspace))
 
         content = km.read_text()
         assert "test-note" in content.lower() or "Test Note" in content

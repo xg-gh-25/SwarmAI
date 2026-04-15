@@ -3,6 +3,12 @@ name: pptx
 version: "1.0.0"
 tier: lazy
 
+dependencies:
+  npm:
+    - pptxgenjs
+    - playwright
+    - sharp
+
 scripts:
   - path: ooxml/scripts/pack.py
     description: "Tool to pack a directory into a .docx, .pptx, or .xlsx file with XML formatting undone."
