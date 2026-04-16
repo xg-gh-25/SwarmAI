@@ -515,6 +515,21 @@ Then implement. This turns implicit thinking into visible artifacts the user can
 - **Full Pipeline** = validator auto-enforced by `advance` command. Skip nothing. Generate REPORT.md.
 - **User override is absolute.** No exceptions, no "are you sure?".
 - **Pipeline's real value = EVALUATE + THINK.** If both answers are obvious, pipeline is overhead. If either needs judgment, pipeline earns its cost.
+- **Surgical changes only.** Touch only what the task requires. Match the existing style (quotes, formatting, naming) even if you'd do it differently. Remove imports/variables/functions that YOUR changes made unused — but don't remove pre-existing dead code unless asked; mention it instead. Every changed line must trace directly to the user's request. No drive-by refactoring, no style drift, no speculative "while I'm here" improvements.
+
+**Imperative→Declarative reframing (especially TDD-only):**
+
+LLMs are strongest when looping toward a concrete exit condition. Reframe vague tasks into verifiable goals:
+
+| User says | Reframe to |
+|-----------|------------|
+| "Add validation" | Write tests for invalid inputs, then make them pass |
+| "Fix the bug" | Write a test that reproduces it, then make it pass |
+| "Refactor X" | Ensure tests pass before and after; diff should simplify |
+| "Add logging" | Define what the log output should look like, then implement |
+| "Improve error handling" | List every error path, write a test for each, then make them pass |
+
+Strong success criteria → independent looping. Weak criteria → constant clarification. When the task is vague, define the exit condition first.
 
 ## 🚨 CRITICAL: Post-Task Code Quality & Security Scans
 
