@@ -78,11 +78,8 @@ _get_version() {
         Cargo.toml)
             grep '^version = ' "$file" | head -1 | sed 's/version = "\(.*\)"/\1/'
             ;;
-        package.json)
-            python3 -c "import json; print(json.load(open('$file'))['version'])"
-            ;;
-        tauri.conf.json)
-            python3 -c "import json; print(json.load(open('$file'))['version'])"
+        package.json|tauri.conf.json)
+            python3 -c "import json, sys; print(json.load(open(sys.argv[1]))['version'])" "$file"
             ;;
     esac
 }
@@ -99,33 +96,22 @@ _set_version() {
         pyproject.toml|Cargo.toml)
             # BSD sed (macOS) doesn't support 0,/pat/ — use python for reliable first-match replace
             python3 -c "
-import re, pathlib
-p = pathlib.Path('$file')
+import re, pathlib, sys
+p = pathlib.Path(sys.argv[1])
 txt = p.read_text()
-p.write_text(re.sub(r'^version = \"[^\"]*\"', 'version = \"$ver\"', txt, count=1, flags=re.MULTILINE))
-"
+p.write_text(re.sub(r'^version = \"[^\"]*\"', 'version = \"' + sys.argv[2] + '\"', txt, count=1, flags=re.MULTILINE))
+" "$file" "$ver"
             ;;
-        package.json)
+        package.json|tauri.conf.json)
             python3 -c "
-import json
-with open('$file') as f:
+import json, sys
+with open(sys.argv[1]) as f:
     d = json.load(f)
-d['version'] = '$ver'
-with open('$file', 'w') as f:
+d['version'] = sys.argv[2]
+with open(sys.argv[1], 'w') as f:
     json.dump(d, f, indent=2)
     f.write('\n')
-"
-            ;;
-        tauri.conf.json)
-            python3 -c "
-import json
-with open('$file') as f:
-    d = json.load(f)
-d['version'] = '$ver'
-with open('$file', 'w') as f:
-    json.dump(d, f, indent=2)
-    f.write('\n')
-"
+" "$file" "$ver"
             ;;
     esac
 }

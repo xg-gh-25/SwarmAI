@@ -577,7 +577,7 @@ class ContextHealthHook:
             (r"Next:\s+build\b", "Next: build"),
             (r"TODO:\s+\w", "TODO:"),
             (r"not yet built", "not yet built"),
-            (r"deferred|on hold", "deferred/on hold"),  # only flag if > 30d
+            (r"\bdeferred\b|\bon hold\b", "deferred/on hold"),  # only flag if > 30d
         ]
         today = date.today()
 
