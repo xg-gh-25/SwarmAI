@@ -28,12 +28,6 @@ BACKEND_PORT=8000
 BACKEND_PID_FILE="/tmp/swarmai-backend.pid"
 LOG_DIR="$HOME/.swarm-ai/logs"
 
-# Daemon constants
-DAEMON_LABEL="com.swarmai.backend"
-DAEMON_PORT=18321
-DAEMON_API="http://127.0.0.1:${DAEMON_PORT}"
-GUI_TARGET="gui/$(id -u)/${DAEMON_LABEL}"
-
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
@@ -48,6 +42,11 @@ _log()  { echo -e "${CYAN}[swarm]${NC} $*"; }
 _ok()   { echo -e "${GREEN}✅${NC} $*"; }
 _warn() { echo -e "${YELLOW}⚠️${NC}  $*"; }
 _err()  { echo -e "${RED}❌${NC} $*"; }
+
+# ── Daemon (shared library) ────────────────────────────────
+_DAEMON_CMD="dev.sh"
+_DAEMON_VERBOSE=1
+source "$PROJECT_ROOT/scripts/daemon-lib.sh"
 
 _is_backend_running() {
     if [ -f "$BACKEND_PID_FILE" ]; then
@@ -133,101 +132,6 @@ _build_time() {
     local min=$((elapsed / 60))
     local sec=$((elapsed % 60))
     echo "${min}m ${sec}s"
-}
-
-DAEMON_BINARY_DIR="${HOME}/.swarm-ai/daemon"
-DAEMON_BINARY_PATH="${DAEMON_BINARY_DIR}/python-backend"
-DAEMON_VERSION_FILE="${DAEMON_BINARY_DIR}/.version"
-
-_deploy_daemon_binary() {
-    # Copy the PyInstaller binary from the build output to the daemon directory.
-    # The daemon wrapper script (swarmai_backend.sh) runs this binary instead
-    # of the dev source directory, so untested code never crashes production.
-    local src="$DESKTOP_DIR/src-tauri/binaries/python-backend-aarch64-apple-darwin"
-    if [ ! -f "$src" ]; then
-        _warn "No sidecar binary found at $src — daemon will use venv fallback"
-        return
-    fi
-    mkdir -p "$DAEMON_BINARY_DIR"
-    cp -f "$src" "${DAEMON_BINARY_PATH}.tmp"
-    mv -f "${DAEMON_BINARY_PATH}.tmp" "$DAEMON_BINARY_PATH"  # atomic replace
-    chmod +x "$DAEMON_BINARY_PATH"
-    _ok "Daemon binary deployed: $DAEMON_BINARY_PATH ($(du -h "$DAEMON_BINARY_PATH" | cut -f1))"
-
-    # Write version file — tracks which commit the binary was built from.
-    # This enables staleness detection on daemon restart.
-    local git_hash
-    git_hash=$(cd "$PROJECT_ROOT" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
-    echo "$git_hash $(date '+%Y-%m-%d %H:%M:%S')" > "$DAEMON_VERSION_FILE"
-    _ok "Binary version: $git_hash"
-
-    # Deploy resources alongside the binary so the frozen executable can
-    # find default-agent.json, mcp-catalog.json, etc. via bundle_paths.
-    local res_src="$DESKTOP_DIR/resources"
-    local res_dst="$DAEMON_BINARY_DIR/resources"
-    if [ -d "$res_src" ]; then
-        mkdir -p "$res_dst"
-        cp -f "$res_src"/*.json "$res_dst/" 2>/dev/null || true
-        cp -f "$res_src"/*.db "$res_dst/" 2>/dev/null || true
-        _ok "Daemon resources deployed: $res_dst"
-    fi
-}
-
-_check_daemon_version() {
-    # Compare the deployed daemon binary version against the current git HEAD.
-    # Warns if the binary is stale (built from an older commit).
-    # Returns: 0=current, 1=stale, 2=no version info
-    if [ ! -f "$DAEMON_VERSION_FILE" ]; then
-        return 2  # no version info — binary predates version tracking
-    fi
-    local binary_hash
-    binary_hash=$(awk '{print $1}' "$DAEMON_VERSION_FILE")
-    local head_hash
-    head_hash=$(cd "$PROJECT_ROOT" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
-    if [ "$binary_hash" = "$head_hash" ]; then
-        return 0  # current
-    fi
-
-    # Count how many commits behind
-    local behind
-    behind=$(cd "$PROJECT_ROOT" && git rev-list --count "${binary_hash}..HEAD" 2>/dev/null || echo "?")
-    _warn "Daemon binary is ${behind} commits behind HEAD"
-    _warn "  Binary: ${binary_hash} ($(awk '{$1=""; print substr($0,2)}' "$DAEMON_VERSION_FILE"))"
-    _warn "  HEAD:   ${head_hash}"
-
-    # Check if any backend/ files changed (the only ones that matter)
-    local backend_changes
-    backend_changes=$(cd "$PROJECT_ROOT" && git diff --name-only "${binary_hash}..HEAD" -- backend/ 2>/dev/null | wc -l | tr -d ' ')
-    if [ "$backend_changes" -gt 0 ]; then
-        _err "  ${backend_changes} backend file(s) changed — rebuild recommended: ./dev.sh build"
-        return 1
-    else
-        _log "  No backend changes — binary is functionally current"
-        return 0
-    fi
-}
-
-_wait_port_free() {
-    # Wait for a port to be free (no process listening).
-    # Used after stopping the daemon to ensure clean restart.
-    local port="$1" max_wait="${2:-10}"
-    for i in $(seq 1 "$max_wait"); do
-        if ! lsof -i :"${port}" -sTCP:LISTEN >/dev/null 2>&1; then
-            return 0
-        fi
-        sleep 0.5
-    done
-    return 1  # port still in use
-}
-
-_daemon_health_status() {
-    # Returns the daemon health status string: "healthy", "initializing", or "unreachable".
-    # Unlike _daemon_health (which just checks HTTP 200), this parses the response body.
-    local resp
-    resp=$(curl -sf --max-time 2 "${DAEMON_API}/health" 2>/dev/null) || { echo "unreachable"; return; }
-    local status
-    status=$(echo "$resp" | python3 -c "import sys,json; print(json.load(sys.stdin).get('status','unknown'))" 2>/dev/null)
-    echo "${status:-unknown}"
 }
 
 # ── Commands ────────────────────────────────────────────────
@@ -401,179 +305,6 @@ cmd_status() {
     cd "$PROJECT_ROOT"
     git diff --stat HEAD 2>/dev/null | tail -5
     echo ""
-}
-
-# ── Daemon management ───────────────────────────────────────
-
-_daemon_is_running() {
-    launchctl print "$GUI_TARGET" &>/dev/null
-}
-
-_daemon_health() {
-    curl -sf "${DAEMON_API}/health" 2>/dev/null
-}
-
-_daemon_wait_healthy() {
-    # Smart health check with progress reporting and phase detection.
-    # Shows what's happening instead of silent polling.
-    # Phases: port-binding → initializing → healthy
-    local timeout="${1:-90}"
-    local saw_initializing=false
-
-    for i in $(seq 1 "$timeout"); do
-        local status
-        status=$(_daemon_health_status)
-
-        case "$status" in
-            healthy)
-                _ok "Daemon healthy on port ${DAEMON_PORT} (${i}s)"
-                return 0
-                ;;
-            initializing)
-                if ! $saw_initializing; then
-                    _log "Server responding (initializing)..."
-                    saw_initializing=true
-                fi
-                ;;
-            unreachable)
-                # Show progress every 10s so user knows it's working
-                if (( i % 10 == 0 )); then
-                    _log "Still waiting for port ${DAEMON_PORT}... (${i}s)"
-                fi
-                ;;
-        esac
-        sleep 1
-    done
-
-    # Failure — provide actionable diagnostics
-    _err "Daemon did not become healthy within ${timeout}s"
-    echo ""
-    _log "Diagnostics:"
-
-    # Check if process is running at all
-    if _daemon_is_running; then
-        _warn "  launchd service is running"
-    else
-        _err "  launchd service is NOT running — check plist"
-    fi
-
-    # Check if port is bound
-    if lsof -i :"${DAEMON_PORT}" -sTCP:LISTEN >/dev/null 2>&1; then
-        _warn "  Port ${DAEMON_PORT} is bound — server started but not healthy"
-    else
-        _err "  Port ${DAEMON_PORT} is NOT bound — server failed to start"
-    fi
-
-    # Check binary version
-    _check_daemon_version 2>/dev/null
-
-    # Show last few stderr lines
-    echo ""
-    _log "Last 10 lines of stderr:"
-    tail -10 "$LOG_DIR/backend-stderr.log" 2>/dev/null
-    return 1
-}
-
-_bootstrap_daemon() {
-    # Bootstrap with retry — macOS launchctl sometimes fails with
-    # "Bootstrap failed: 5: Input/output error" when bootout hasn't
-    # fully cleaned up. A short wait + retry fixes it reliably.
-    local plist="$HOME/Library/LaunchAgents/${DAEMON_LABEL}.plist"
-    local max_attempts=3
-
-    for attempt in $(seq 1 "$max_attempts"); do
-        if launchctl bootstrap "gui/$(id -u)" "$plist" 2>/dev/null; then
-            return 0
-        fi
-        if [ "$attempt" -lt "$max_attempts" ]; then
-            _log "Bootstrap attempt $attempt failed — retrying in 2s..."
-            sleep 2
-            launchctl bootout "$GUI_TARGET" 2>/dev/null || true
-            sleep 1
-        fi
-    done
-
-    _err "Bootstrap failed after $max_attempts attempts"
-    _warn "Try manually: launchctl bootstrap gui/$(id -u) $plist"
-    return 1
-}
-
-cmd_daemon() {
-    local sub="${1:-status}"
-    case "$sub" in
-        restart)
-            # Pre-check: warn if binary is stale
-            _check_daemon_version || true
-
-            _log "Stopping daemon..."
-            # Graceful stop: bootout sends SIGTERM (allows drain), then waits.
-            # This is safer than kickstart -k which sends SIGKILL immediately.
-            launchctl bootout "$GUI_TARGET" 2>/dev/null || true
-
-            # Wait for port release — avoids "port in use" on restart
-            _log "Waiting for port ${DAEMON_PORT} to release..."
-            if ! _wait_port_free "$DAEMON_PORT" 15; then
-                _warn "Port still in use after 7.5s — force-killing..."
-                local stale_pids
-                stale_pids=$(lsof -i :"${DAEMON_PORT}" -t 2>/dev/null)
-                if [ -n "$stale_pids" ]; then
-                    echo "$stale_pids" | xargs kill -9 2>/dev/null || true
-                    sleep 1
-                fi
-            fi
-
-            # Start fresh via bootstrap (creates new process)
-            _log "Starting daemon..."
-            _bootstrap_daemon
-            _daemon_wait_healthy 90
-            ;;
-        stop)
-            _log "Stopping daemon..."
-            launchctl bootout "$GUI_TARGET" 2>/dev/null || true
-            # Wait for port release to confirm clean shutdown
-            if _wait_port_free "$DAEMON_PORT" 10; then
-                _ok "Daemon stopped (port ${DAEMON_PORT} released)"
-            else
-                _warn "Daemon stopped but port ${DAEMON_PORT} may still be lingering"
-            fi
-            ;;
-        start)
-            if _daemon_is_running; then
-                _warn "Daemon already running"
-                _daemon_health && _ok "Healthy on port ${DAEMON_PORT}"
-                return
-            fi
-            # Pre-check: warn if binary is stale
-            _check_daemon_version || true
-
-            _log "Starting daemon..."
-            _bootstrap_daemon
-            _daemon_wait_healthy 90
-            ;;
-        status)
-            if _daemon_is_running; then
-                _ok "Daemon: running (launchd)"
-            else
-                _err "Daemon: not running"
-                return 1
-            fi
-            local health
-            if health=$(_daemon_health); then
-                echo "$health" | python3 -m json.tool 2>/dev/null || echo "$health"
-            else
-                _warn "API not responding on port ${DAEMON_PORT}"
-            fi
-            # Show binary version
-            _check_daemon_version 2>/dev/null || true
-            ;;
-        logs)
-            _log "Tailing daemon logs (Ctrl-C to stop)..."
-            tail -f "$LOG_DIR/backend-stderr.log"
-            ;;
-        *)
-            echo "Usage: ./dev.sh daemon [restart|stop|start|status|logs]"
-            ;;
-    esac
 }
 
 # ── Channel management ──────────────────────────────────────
