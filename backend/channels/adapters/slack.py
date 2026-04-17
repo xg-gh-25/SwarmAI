@@ -337,6 +337,21 @@ class SlackChannelAdapter(ChannelAdapter):
         self._last_auth_check: float = 0.0
         self._consecutive_auth_failures: int = 0
 
+        # -- HTTP polling fallback (方案B) --
+        # Connection mode: "websocket" (default) | "polling" | "switching"
+        self._connection_mode: str = "websocket"
+        # Polling interval in seconds (configurable, minimum 2s)
+        raw_interval = config.get("polling_interval", 5)
+        self._polling_interval: float = max(2.0, float(raw_interval))
+        # Polling thread handle
+        self._polling_thread: Optional[threading.Thread] = None
+        # Last seen message timestamp — for dedup during polling
+        self._last_seen_ts: str = ""
+        # DM channel IDs to poll (discovered from inbound messages)
+        self._poll_channels: set[str] = set()
+        # How often to attempt WebSocket recovery while in polling mode (seconds)
+        self._ws_recovery_interval: float = float(config.get("ws_recovery_interval", 60))
+
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
@@ -423,6 +438,11 @@ class SlackChannelAdapter(ChannelAdapter):
                         )
                     prefix = "AUTH_ERROR: " if is_auth else ""
                     error_msg = f"{prefix}Socket Mode connection failed: {exc}"
+
+                    # Trigger HTTP polling fallback (non-auth errors only)
+                    if not is_auth:
+                        self._on_ws_failure(error_msg)
+
                     main_loop = self._loop
                     if (
                         self._on_error is not None
@@ -474,12 +494,224 @@ class SlackChannelAdapter(ChannelAdapter):
         self._ws_thread = None
         self._loop = None
 
+        # Clean up polling thread
+        polling_thread = self._polling_thread
+        if polling_thread is not None and polling_thread.is_alive():
+            polling_thread.join(timeout=3.0)
+        self._polling_thread = None
+        self._connection_mode = "websocket"
+
         # Clean up MCP bridge subprocess
         if self._mcp_bridge:
             self._mcp_bridge.close()
             self._mcp_bridge = None
 
         logger.info("Slack adapter stopped for channel %s", self.channel_id)
+
+    # ------------------------------------------------------------------
+    # HTTP polling fallback (方案B)
+    # ------------------------------------------------------------------
+
+    def _on_ws_failure(self, error_msg: str) -> None:
+        """Called when WebSocket connection fails — switch to polling mode.
+
+        This is invoked from the WS thread's error handler when a
+        BrokenPipeError loop or persistent connection failure is detected.
+        """
+        if self._stopped or self._connection_mode == "polling":
+            return
+
+        logger.warning(
+            "Slack WebSocket failed for channel %s — switching to HTTP polling: %s",
+            self.channel_id, error_msg,
+        )
+        self._connection_mode = "polling"
+        self._start_polling_thread()
+
+    def _on_ws_recovered(self) -> None:
+        """Called when WebSocket reconnects — switch back from polling."""
+        if self._connection_mode != "polling":
+            return
+
+        logger.info(
+            "Slack WebSocket recovered for channel %s — switching back from polling",
+            self.channel_id,
+        )
+        self._connection_mode = "websocket"
+
+        # Stop polling thread (it checks _connection_mode each loop)
+        polling_thread = self._polling_thread
+        if polling_thread is not None and polling_thread.is_alive():
+            polling_thread.join(timeout=3.0)
+        self._polling_thread = None
+
+    def _start_polling_thread(self) -> None:
+        """Start the HTTP polling loop in a background thread."""
+        if self._polling_thread is not None and self._polling_thread.is_alive():
+            return
+
+        def _poll_loop():
+            logger.info(
+                "Polling thread started for channel %s (interval=%.1fs)",
+                self.channel_id, self._polling_interval,
+            )
+            last_ws_check = time.monotonic()
+
+            while not self._stopped and self._connection_mode == "polling":
+                # Poll each known DM channel
+                for chat_id in list(self._poll_channels):
+                    if self._stopped or self._connection_mode != "polling":
+                        break
+                    try:
+                        new_msgs = self._poll_once(chat_id)
+                        for msg in new_msgs:
+                            self._process_polled_message(msg)
+                    except Exception:
+                        logger.debug(
+                            "Polling error for %s", chat_id, exc_info=True,
+                        )
+
+                # Periodic WebSocket recovery check
+                now = time.monotonic()
+                if now - last_ws_check >= self._ws_recovery_interval:
+                    last_ws_check = now
+                    if self._try_ws_reconnect():
+                        self._on_ws_recovered()
+                        break
+
+                # Sleep in small increments so we can stop quickly
+                for _ in range(int(self._polling_interval * 10)):
+                    if self._stopped or self._connection_mode != "polling":
+                        break
+                    time.sleep(0.1)
+
+            logger.info("Polling thread exiting for channel %s", self.channel_id)
+
+        self._polling_thread = threading.Thread(
+            target=_poll_loop,
+            daemon=True,
+            name=f"slack-poll-{self.channel_id}",
+        )
+        self._polling_thread.start()
+
+    def _poll_once(self, external_chat_id: str) -> list[dict]:
+        """Fetch new messages from a Slack channel via MCP bridge.
+
+        Returns a list of new message dicts (newer than _last_seen_ts).
+        """
+        if self._mcp_bridge is None:
+            self._mcp_bridge = SlackMcpBridge()
+
+        result = self._mcp_bridge.call_tool("get_messages", {
+            "channel": external_chat_id,
+            "limit": 10,
+            "includeThreadReplies": False,
+        })
+
+        if not result:
+            return []
+
+        # Parse messages from MCP response
+        messages = []
+        try:
+            content_list = result.get("content", [])
+            for item in content_list:
+                if item.get("type") == "text":
+                    data = json.loads(item["text"])
+                    messages = data.get("messages", [])
+                    break
+        except (json.JSONDecodeError, KeyError, TypeError):
+            logger.debug("Failed to parse MCP get_messages response")
+            return []
+
+        # Filter to only new messages (ts > _last_seen_ts)
+        new_msgs = []
+        max_ts = self._last_seen_ts
+        for msg in messages:
+            ts = msg.get("ts", "")
+            if ts and ts > self._last_seen_ts:
+                new_msgs.append(msg)
+                if ts > max_ts:
+                    max_ts = ts
+
+        if max_ts > self._last_seen_ts:
+            self._last_seen_ts = max_ts
+
+        return new_msgs
+
+    def _process_polled_message(self, event: dict) -> None:
+        """Process a single polled message through the standard pipeline.
+
+        Mirrors _handle_message_event() but for HTTP-polled messages.
+        """
+        if self._stopped:
+            return
+
+        # Skip bot messages
+        if event.get("bot_id"):
+            return
+
+        # Skip message subtypes (edited, deleted, etc.) except file_share
+        subtype = event.get("subtype")
+        if subtype and subtype not in ("file_share",):
+            return
+
+        user_id = event.get("user", "")
+        if not user_id:
+            # Some message types (bot, system) don't have user field
+            return
+
+        text = event.get("text", "").strip()
+        channel_id = event.get("channel", "")
+        ts = event.get("ts", "")
+        thread_ts = event.get("thread_ts")
+        channel_type = event.get("channel_type", "im")
+
+        if not text:
+            return
+
+        # Track this DM channel for future polling
+        if channel_id:
+            self._poll_channels.add(channel_id)
+
+        msg = InboundMessage(
+            channel_id=self.channel_id,
+            external_chat_id=channel_id,
+            external_sender_id=user_id,
+            external_thread_id=thread_ts,
+            external_message_id=ts,
+            text=text,
+            sender_display_name=self._get_user_name(user_id) if self._slack_client else user_id,
+            attachments=[],  # file download requires bot token HTTP — skip in polling mode
+            metadata={
+                "chat_type": self._normalize_chat_type(channel_type),
+                "message_type": "text",
+                "ts": ts,
+                "source": "http_polling",
+            },
+        )
+
+        # Bridge to main asyncio loop
+        main_loop = self._loop
+        if main_loop is not None and not main_loop.is_closed() and not self._stopped:
+            main_loop.call_soon_threadsafe(
+                asyncio.ensure_future,
+                self._on_message(msg),
+            )
+
+    def _try_ws_reconnect(self) -> bool:
+        """Attempt to re-establish WebSocket connection.
+
+        Returns True if connection appears viable (auth_test succeeds),
+        False otherwise.  Actual reconnect happens via adapter restart.
+        """
+        if not self._slack_client:
+            return False
+        try:
+            result = self._slack_client.auth_test()
+            return result.get("ok", False)
+        except Exception:
+            return False
 
     # ------------------------------------------------------------------
     # Incoming messages (called from Socket Mode thread)
@@ -505,6 +737,13 @@ class SlackChannelAdapter(ChannelAdapter):
         ts = event.get("ts", "")
         thread_ts = event.get("thread_ts")
         channel_type = event.get("channel_type", "im")
+
+        # Track DM channels for HTTP polling fallback
+        if channel_id:
+            self._poll_channels.add(channel_id)
+            # Update last seen ts for dedup if we switch to polling
+            if ts and ts > self._last_seen_ts:
+                self._last_seen_ts = ts
 
         # Download any attached files
         attachments = []
