@@ -401,6 +401,39 @@ async def sse_with_heartbeat(
                 pass
 
 
+@router.post("/transcribe")
+async def transcribe_voice(request: Request):
+    """Transcribe uploaded audio to text via Amazon Transcribe Streaming.
+
+    Accepts multipart form data with an ``audio`` file field.
+    Returns JSON: ``{"transcript": str, "language": str, "duration_ms": int}``
+    """
+    from fastapi import UploadFile
+    form = await request.form()
+    audio_field = form.get("audio")
+    if audio_field is None or not hasattr(audio_field, "read"):
+        raise HTTPException(status_code=400, detail="No audio file uploaded")
+
+    audio_data = await audio_field.read()
+    if not audio_data:
+        raise HTTPException(status_code=400, detail="Empty audio file")
+
+    language = form.get("language")  # optional, string or None
+
+    try:
+        from core.voice_transcribe import transcribe_audio
+        result = await transcribe_audio(
+            audio_data,
+            language=language if isinstance(language, str) else None,
+        )
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        _logging.getLogger(__name__).error("Voice transcription failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"Transcription failed: {e}")
+
+
 @router.post("/stream")
 async def chat_stream(request: Request):
     """Stream chat responses via SSE."""

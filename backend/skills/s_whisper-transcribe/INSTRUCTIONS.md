@@ -19,23 +19,32 @@ This skill adapts to available transcription tools:
 
 | Priority | Tool | Detection | Quality | Cost |
 |----------|------|-----------|---------|------|
-| 1 | OpenAI Whisper API | `OPENAI_API_KEY` env var | Best, fast | ~$0.006/min |
+| 1 | **Amazon Transcribe** (Streaming) | AWS SSO credentials (existing) | Best, fast (~2s) | ~$0.024/min |
 | 2 | Local Whisper CLI | `which whisper` | Great, slower | Free (local GPU/CPU) |
-| 3 | None available | Neither found | -- | -- |
+| 3 | OpenAI Whisper API | `OPENAI_API_KEY` env var | Good, fast | ~$0.006/min |
+| 4 | None available | Nothing found | -- | -- |
 
-At skill start, detect which is available:
+**Amazon Transcribe is the default backend.** It uses existing AWS SSO credentials — no extra API keys needed. The backend module `core/voice_transcribe.py` handles audio format conversion (ffmpeg) and streaming to Transcribe.
+
+**For interactive voice input:** The chat UI has a built-in mic button that records audio and calls the backend `/api/chat/transcribe` endpoint. This is separate from this skill (which handles file-based transcription).
+
+At skill start, detect which tools are available:
 
 ```bash
-# Check for API key
-[ -n "$OPENAI_API_KEY" ] && echo "API available" || echo "No API key"
+# Check for AWS credentials (Transcribe — preferred)
+aws sts get-caller-identity 2>/dev/null && echo "AWS Transcribe available" || echo "No AWS credentials"
 
-# Check for local whisper
+# Check for local whisper (fallback)
 which whisper 2>/dev/null && echo "Local whisper available" || echo "No local whisper"
+
+# Check for OpenAI API key (legacy fallback)
+[ -n "$OPENAI_API_KEY" ] && echo "OpenAI API available" || echo "No OpenAI key"
 ```
 
-If neither is available, guide the user:
-- **Fastest setup:** Set `OPENAI_API_KEY` environment variable
-- **Free setup:** `brew install openai-whisper` (requires Python, downloads models on first run)
+If no tool is available, guide the user:
+- **Recommended:** Configure AWS SSO credentials (`aws sso login`)
+- **Free local:** `brew install openai-whisper` (downloads models on first run)
+- **Legacy:** Set `OPENAI_API_KEY` environment variable
 
 ---
 

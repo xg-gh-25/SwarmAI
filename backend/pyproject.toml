@@ -37,6 +37,8 @@ dependencies = [
     "setuptools>=80.9.0",
     # Slack Socket Mode adapter
     "slack-bolt>=1.27.0",
+    # Voice transcription (Amazon Transcribe Streaming)
+    "amazon-transcribe>=0.6.0",
     # Skill dependencies — used by s_pptx, s_docx, s_xlsx scripts
     "python-pptx>=1.0.0",
     "openpyxl>=3.1.0",

@@ -15,6 +15,38 @@ import { getBackendPort } from './tauri';
  */
 export const STALL_TIMEOUT_MS = 45_000;
 
+// ---------------------------------------------------------------------------
+// Voice transcription
+// ---------------------------------------------------------------------------
+
+export interface TranscribeResult {
+  transcript: string;
+  language: string;
+  duration_ms: number;
+}
+
+/**
+ * Send recorded audio to backend for transcription via Amazon Transcribe.
+ *
+ * @param audioBlob - Recorded audio blob from MediaRecorder
+ * @param language - Optional BCP-47 language code (default: server decides)
+ * @returns Transcribed text, language, and duration
+ */
+export async function transcribeAudio(
+  audioBlob: Blob,
+  language?: string,
+): Promise<TranscribeResult> {
+  const form = new FormData();
+  form.append('audio', audioBlob, 'recording.webm');
+  if (language) form.append('language', language);
+
+  const res = await api.post<TranscribeResult>('/chat/transcribe', form, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    timeout: 30_000, // 30s timeout for transcription
+  });
+  return res.data;
+}
+
 // Convert content blocks from camelCase to snake_case for API
 // The input is a generic array that may contain image/document blocks
 const toSnakeCaseContent = (content: unknown[]): unknown[] => {

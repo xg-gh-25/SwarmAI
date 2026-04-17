@@ -8,6 +8,7 @@ import { ContextUsageRing } from './ContextUsageRing';
 import { SLASH_COMMANDS } from '../constants';
 import type { DropPayload } from './RightSidebar/types';
 import { todosService } from '../../../services/todos';
+import { useVoiceRecorder } from '../../../hooks/useVoiceRecorder';
 
 interface ChatInputProps {
   inputValue: string;
@@ -79,6 +80,21 @@ export function ChatInput({
   const [isDragging, setIsDragging] = useState(false);
   const [lineCount, setLineCount] = useState(1);
   const [modeAnnouncement, setModeAnnouncement] = useState('');
+  const [voiceError, setVoiceError] = useState<string | null>(null);
+
+  // Voice recording — append transcribed text to current input
+  const { voiceState, toggleRecording, isSupported: voiceSupported } = useVoiceRecorder({
+    onTranscript: (text) => {
+      const separator = inputValue && !inputValue.endsWith(' ') ? ' ' : '';
+      onInputChange(inputValue + separator + text);
+      setVoiceError(null);
+    },
+    onError: (err) => {
+      setVoiceError(err);
+      // Auto-clear error after 4 seconds
+      setTimeout(() => setVoiceError(null), 4000);
+    },
+  });
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const maxHeightRef = useRef<number>(400); // fallback: 20 * 20px
@@ -572,9 +588,40 @@ export function ChatInput({
 
           {/* Bottom Row - attachment left, context/TSCC right */}
           <div className="flex items-center justify-between mt-3 pt-3 border-t border-[var(--color-border)]/50">
-            {/* Left: Attachment button */}
+            {/* Left: Attachment + Voice buttons */}
             <div className="flex items-center gap-2">
               <FileAttachmentButton onFilesSelected={onAddFiles} disabled={isProcessingFiles || disabled} canAddMore={canAddMore} />
+              {voiceSupported && (
+                <button
+                  onClick={toggleRecording}
+                  disabled={voiceState === 'processing' || disabled}
+                  className={clsx(
+                    'w-6 h-6 rounded-md flex items-center justify-center transition-all',
+                    voiceState === 'recording'
+                      ? 'text-red-500 bg-red-500/10 animate-pulse'
+                      : voiceState === 'processing'
+                        ? 'text-[var(--color-text-muted)] opacity-60 cursor-wait'
+                        : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]',
+                    disabled && 'opacity-50 cursor-not-allowed',
+                  )}
+                  title={
+                    voiceState === 'recording'
+                      ? 'Stop recording'
+                      : voiceState === 'processing'
+                        ? 'Transcribing...'
+                        : 'Start voice input'
+                  }
+                >
+                  <span className="material-symbols-outlined text-[16px]">
+                    {voiceState === 'processing' ? 'hourglass_top' : 'mic'}
+                  </span>
+                </button>
+              )}
+              {voiceError && (
+                <span className="text-xs text-red-400 max-w-[200px] truncate" title={voiceError}>
+                  {voiceError}
+                </span>
+              )}
               {lineCount > 5 && (
                 <span className="text-xs text-[var(--color-text-muted)]">
                   {lineCount} lines
