@@ -538,12 +538,13 @@ async def get_system_resources() -> SystemResourcesResponse:
     from core import session_registry
 
     mem = resource_monitor.system_memory()
-    budget = resource_monitor.spawn_budget()
+    router_inst = session_registry.session_router
+    _alive = router_inst.alive_count if router_inst else 0
+    budget = resource_monitor.spawn_budget(alive_count=_alive)
 
     # Collect per-process metrics from alive SessionUnits
     processes: list[ProcessMetricsResponse] = []
     total_rss = 0.0
-    router_inst = session_registry.session_router
     if router_inst:
         for unit in router_inst.list_units():
             metrics = getattr(unit, "_last_metrics", None)

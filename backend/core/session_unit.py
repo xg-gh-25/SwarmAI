@@ -1137,16 +1137,18 @@ class SessionUnit:
             # from 3+ simultaneous CLI processes (COE: 2026-04-12).
             try:
                 from .resource_monitor import resource_monitor
-                budget = resource_monitor.spawn_budget()
                 max_tabs = resource_monitor.compute_max_tabs()
 
                 # Count alive sessions from the registry (if available).
                 # This prevents retries from spawning beyond the slot limit.
                 alive_exceeds_limit = False
+                _alive = 0
                 try:
                     from . import session_registry
                     router = session_registry.session_router
-                    if router and router.alive_count >= max_tabs:
+                    if router:
+                        _alive = router.alive_count
+                    if router and _alive >= max_tabs:
                         alive_exceeds_limit = True
                         logger.warning(
                             "Retry %d aborted: alive_count=%d >= max_tabs=%d "
@@ -1157,6 +1159,7 @@ class SessionUnit:
                 except Exception as exc:
                     logger.warning("Retry slot guard unavailable: %s", exc)
 
+                budget = resource_monitor.spawn_budget(alive_count=_alive)
                 if not budget.can_spawn or alive_exceeds_limit:
                     reason = (
                         f"alive_count >= max_tabs ({max_tabs})"
@@ -1371,7 +1374,15 @@ class SessionUnit:
         # Pre-spawn memory gate — check BEFORE acquiring locks
         # to avoid holding locks while waiting or failing.
         from .resource_monitor import resource_monitor
-        budget = resource_monitor.spawn_budget()
+        _alive = 0
+        try:
+            from . import session_registry
+            router = session_registry.session_router
+            if router:
+                _alive = router.alive_count
+        except Exception:
+            pass  # Best-effort — penalty is 0 if registry unavailable
+        budget = resource_monitor.spawn_budget(alive_count=_alive)
         if not budget.can_spawn:
             from .exceptions import ResourceExhaustedException
             logger.warning(

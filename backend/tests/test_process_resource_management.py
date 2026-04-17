@@ -104,7 +104,7 @@ class TestC1bComputeMaxTabsAccuracy:
     that's ~29% used (active+wired).  But effective_used = total - available
     where available = free + speculative + inactive = ~9GB, so
     effective_used ≈ 27GB.  Headroom = 36864×0.9 - 27612 = 5566MB.
-    max_tabs = min(4, 5566/1500) = min(4, 3) = 3.
+    max_tabs = min(4, 5566/1200) = min(4, 4) = 4.
 
     Validates: Requirements 1.2, 2.2
     """
@@ -121,9 +121,9 @@ class TestC1bComputeMaxTabsAccuracy:
 
         # vm_stat: available = free+spec+inactive = ~9GB
         # effective_used = 36GB - 9GB = 27GB → headroom = 5.6GB
-        # raw = 5566/1500 = 3 → result = 3
-        assert max_tabs == 3, (
-            f"compute_max_tabs() should return 3 with vm_stat fallback "
+        # raw = 5566/1200 = 4 → result = min(4, 4) = 4
+        assert max_tabs == 4, (
+            f"compute_max_tabs() should return 4 with vm_stat fallback "
             f"(effective_used ≈ 27GB, headroom ≈ 5.6GB), got {max_tabs}"
         )
 
@@ -350,9 +350,9 @@ class TestP3ComputeMaxTabsFormulaPreservation:
         used_mb = total_mb * (used_pct / 100.0)
         used_bytes = int(used_mb * 1024 * 1024)
         available_bytes = total_bytes - used_bytes
-        # 90% threshold, 1500MB cost, ceiling 4 (matches resource_monitor.py)
+        # 90% threshold, 1200MB cost, ceiling 4 (matches resource_monitor.py)
         headroom_mb = total_mb * 0.90 - used_mb
-        expected = max(2, min(int(headroom_mb / 1500), 4))
+        expected = max(2, min(int(headroom_mb / 1200), 4))
 
         monitor = ResourceMonitor()
         monitor._cached_memory = SystemMemory(

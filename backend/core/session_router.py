@@ -585,7 +585,7 @@ class SessionRouter:
         async with self._slot_lock:
             if self._channel_alive_count == 0:
                 # Channel slot is free
-                budget = resource_monitor.spawn_budget()
+                budget = resource_monitor.spawn_budget(alive_count=self.alive_count)
                 if not budget.can_spawn and self.alive_count > 0:
                     # Try evicting an idle channel first
                     if await self._evict_idle(exclude=requesting_unit, channel_only=True):
@@ -642,7 +642,7 @@ class SessionRouter:
             if self._chat_alive_count < chat_max:
                 # First tab is sacred — always allow at least one session
                 if self.alive_count > 0:
-                    budget = resource_monitor.spawn_budget()
+                    budget = resource_monitor.spawn_budget(alive_count=self.alive_count)
                     if not budget.can_spawn:
                         logger.warning(
                             "session_router: slot available but spawn budget denied "
@@ -651,7 +651,7 @@ class SessionRouter:
                         )
                         if await self._evict_idle(exclude=requesting_unit):
                             resource_monitor.invalidate_cache()
-                            budget = resource_monitor.spawn_budget()
+                            budget = resource_monitor.spawn_budget(alive_count=self.alive_count)
                             if budget.can_spawn:
                                 return "ready"
                         from .exceptions import ResourceExhaustedException
@@ -694,7 +694,7 @@ class SessionRouter:
                 max_tabs = resource_monitor.compute_max_tabs()
                 chat_max = max_tabs - 1
                 if self._chat_alive_count < chat_max:
-                    budget = resource_monitor.spawn_budget()
+                    budget = resource_monitor.spawn_budget(alive_count=self.alive_count)
                     if budget.can_spawn:
                         return "queued"
                 if await self._evict_idle(exclude=requesting_unit):
