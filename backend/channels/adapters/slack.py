@@ -1166,8 +1166,12 @@ class SlackChannelAdapter(ChannelAdapter):
             if not messages:
                 return
 
-            # API returns newest-first; process oldest-first
+            # API returns newest-first; process oldest-first.
+            # conversations.history messages don't include 'channel' or
+            # 'channel_type' — inject them so _normalize_event works.
             for msg_data in reversed(messages):
+                msg_data.setdefault("channel", channel_id)
+                msg_data.setdefault("channel_type", "im")
                 msg = self._normalize_event(msg_data)
                 if msg is not None:
                     await self._on_message(msg)
@@ -1348,6 +1352,7 @@ class SlackChannelAdapter(ChannelAdapter):
                 if not self._stopped:
                     is_auth = _is_auth_error(exc)
                     if is_auth:
+                        # Auth errors → escalate to gateway (circuit breaker)
                         self._consecutive_auth_failures += 1
                         logger.error(
                             "Slack Socket Mode AUTH_ERROR for channel %s "
@@ -1356,28 +1361,38 @@ class SlackChannelAdapter(ChannelAdapter):
                             self._consecutive_auth_failures,
                             exc,
                         )
-                    else:
-                        logger.exception(
-                            "Slack Socket Mode crashed for channel %s",
-                            self.channel_id,
+                        error_msg = (
+                            f"AUTH_ERROR: Socket Mode connection failed: {exc}"
                         )
-                    prefix = "AUTH_ERROR: " if is_auth else ""
-                    error_msg = (
-                        f"{prefix}Socket Mode connection failed: {exc}"
-                    )
-                    main_loop = self._loop
-                    if (
-                        self._on_error is not None
-                        and main_loop is not None
-                        and not main_loop.is_closed()
-                    ):
-                        try:
-                            main_loop.call_soon_threadsafe(
-                                asyncio.ensure_future,
-                                self._on_error(self.channel_id, error_msg),
-                            )
-                        except RuntimeError:
-                            pass  # loop already closed
+                        main_loop = self._loop
+                        if (
+                            self._on_error is not None
+                            and main_loop is not None
+                            and not main_loop.is_closed()
+                        ):
+                            try:
+                                main_loop.call_soon_threadsafe(
+                                    asyncio.ensure_future,
+                                    self._on_error(
+                                        self.channel_id, error_msg
+                                    ),
+                                )
+                            except RuntimeError:
+                                pass  # loop already closed
+                    else:
+                        # Transport errors → DON'T escalate to gateway.
+                        # The _ws_health_monitor detects the dead thread,
+                        # counts failures, and switches to polling after
+                        # _WS_FAIL_THRESHOLD deaths.  If we escalated here,
+                        # the gateway would destroy this adapter and create
+                        # a fresh one with _ws_fail_count=0 — polling would
+                        # never activate.
+                        logger.warning(
+                            "Slack Socket Mode transport error for channel "
+                            "%s (health monitor will handle): %s",
+                            self.channel_id,
+                            exc,
+                        )
 
         self._ws_thread = threading.Thread(
             target=_run_socket_mode,
