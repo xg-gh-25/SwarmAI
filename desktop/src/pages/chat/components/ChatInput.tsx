@@ -81,18 +81,30 @@ export function ChatInput({
   const [lineCount, setLineCount] = useState(1);
   const [modeAnnouncement, setModeAnnouncement] = useState('');
   const [voiceError, setVoiceError] = useState<string | null>(null);
+  const voiceErrorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Ref to always have the latest inputValue inside callbacks (avoids stale closure)
+  const inputValueRef = useRef(inputValue);
+  inputValueRef.current = inputValue;
+
+  // Cleanup voice error timer on unmount
+  useEffect(() => {
+    return () => {
+      if (voiceErrorTimerRef.current) clearTimeout(voiceErrorTimerRef.current);
+    };
+  }, []);
 
   // Voice recording — append transcribed text to current input
   const { voiceState, toggleRecording, isSupported: voiceSupported } = useVoiceRecorder({
     onTranscript: (text) => {
-      const separator = inputValue && !inputValue.endsWith(' ') ? ' ' : '';
-      onInputChange(inputValue + separator + text);
+      const current = inputValueRef.current;
+      const separator = current && !current.endsWith(' ') ? ' ' : '';
+      onInputChange(current + separator + text);
       setVoiceError(null);
     },
     onError: (err) => {
       setVoiceError(err);
-      // Auto-clear error after 4 seconds
-      setTimeout(() => setVoiceError(null), 4000);
+      if (voiceErrorTimerRef.current) clearTimeout(voiceErrorTimerRef.current);
+      voiceErrorTimerRef.current = setTimeout(() => setVoiceError(null), 4000);
     },
   });
 
@@ -595,6 +607,8 @@ export function ChatInput({
                 <button
                   onClick={toggleRecording}
                   disabled={voiceState === 'processing' || disabled}
+                  aria-pressed={voiceState === 'recording'}
+                  aria-label={voiceState === 'recording' ? 'Stop recording' : 'Start voice input'}
                   className={clsx(
                     'w-6 h-6 rounded-md flex items-center justify-center transition-all',
                     voiceState === 'recording'

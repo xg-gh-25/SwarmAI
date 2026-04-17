@@ -10,6 +10,7 @@ Public API:
 
 import asyncio
 import logging
+import os
 import tempfile
 import time
 from pathlib import Path
@@ -28,6 +29,9 @@ CHUNK_SIZE = 16 * 1024  # 16KB chunks for streaming
 
 # Minimum audio size (~1s at 16kHz mono 16-bit = 32000 bytes)
 MIN_AUDIO_BYTES = SAMPLE_RATE * (BITS_PER_SAMPLE // 8) * CHANNELS
+
+# Default AWS region — override via TRANSCRIBE_REGION env var or parameter
+DEFAULT_REGION = os.environ.get("TRANSCRIBE_REGION", "us-east-1")
 
 
 class _TranscriptHandler(TranscriptResultStreamHandler):
@@ -55,7 +59,7 @@ async def convert_audio_to_pcm(audio_data: bytes) -> bytes:
 
     Raises:
         ValueError: If audio_data is empty
-        RuntimeError: If ffmpeg conversion fails
+        RuntimeError: If ffmpeg is missing, conversion fails, or times out
     """
     if not audio_data:
         raise ValueError("Empty audio data")
@@ -65,20 +69,33 @@ async def convert_audio_to_pcm(audio_data: bytes) -> bytes:
         tmp_in_path = Path(tmp_in.name)
 
     tmp_out_path = tmp_in_path.with_suffix(".pcm")
+    proc = None
 
     try:
-        proc = await asyncio.create_subprocess_exec(
-            "ffmpeg", "-y",
-            "-i", str(tmp_in_path),
-            "-f", "s16le",       # signed 16-bit little-endian
-            "-acodec", "pcm_s16le",
-            "-ar", str(SAMPLE_RATE),
-            "-ac", str(CHANNELS),
-            str(tmp_out_path),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        _, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "ffmpeg", "-y",
+                "-i", str(tmp_in_path),
+                "-f", "s16le",
+                "-acodec", "pcm_s16le",
+                "-ar", str(SAMPLE_RATE),
+                "-ac", str(CHANNELS),
+                str(tmp_out_path),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+        except FileNotFoundError:
+            raise RuntimeError(
+                "ffmpeg not found — install via: brew install ffmpeg (macOS) "
+                "or apt-get install ffmpeg (Linux)"
+            )
+
+        try:
+            _, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            raise RuntimeError("ffmpeg conversion timed out (>30s)")
 
         if proc.returncode != 0:
             err_msg = stderr.decode(errors="replace")[-500:]
@@ -91,6 +108,13 @@ async def convert_audio_to_pcm(audio_data: bytes) -> bytes:
         return pcm_data
 
     finally:
+        # Always kill orphaned subprocess
+        if proc is not None and proc.returncode is None:
+            try:
+                proc.kill()
+                await proc.wait()
+            except Exception:
+                pass
         tmp_in_path.unlink(missing_ok=True)
         tmp_out_path.unlink(missing_ok=True)
 
@@ -98,19 +122,19 @@ async def convert_audio_to_pcm(audio_data: bytes) -> bytes:
 async def _transcribe_with_streaming(
     pcm_data: bytes,
     language: str = "en-US",
-    region: str = "us-east-1",
+    region: str | None = None,
 ) -> str:
     """Stream PCM audio to Amazon Transcribe and return transcript text.
 
     Args:
         pcm_data: 16-bit signed LE PCM at 16kHz mono
         language: BCP-47 language code (default en-US)
-        region: AWS region for Transcribe service
+        region: AWS region (defaults to TRANSCRIBE_REGION env var or us-east-1)
 
     Returns:
         Transcribed text string
     """
-    client = TranscribeStreamingClient(region=region)
+    client = TranscribeStreamingClient(region=region or DEFAULT_REGION)
 
     stream = await client.start_stream_transcription(
         language_code=language,
@@ -136,20 +160,20 @@ async def _transcribe_with_streaming(
 async def transcribe_audio(
     audio_data: bytes,
     language: str | None = None,
-    region: str = "us-east-1",
+    region: str | None = None,
 ) -> dict:
     """Transcribe audio bytes to text using Amazon Transcribe Streaming.
 
     Args:
         audio_data: Raw audio bytes in any format supported by ffmpeg
         language: BCP-47 language code (default "en-US"). Pass "zh-CN" for Chinese.
-        region: AWS region for Transcribe service
+        region: AWS region (defaults to TRANSCRIBE_REGION env var or us-east-1)
 
     Returns:
         {"transcript": str, "language": str, "duration_ms": int}
 
     Raises:
-        ValueError: If audio_data is empty
+        ValueError: If audio_data is empty or too short
         RuntimeError: If conversion or transcription fails
     """
     if not audio_data:
@@ -162,7 +186,7 @@ async def transcribe_audio(
     pcm_data = await convert_audio_to_pcm(audio_data)
 
     if len(pcm_data) < MIN_AUDIO_BYTES:
-        raise ValueError("Audio too short — need at least 0.5 seconds")
+        raise ValueError("Audio too short — need at least 1 second")
 
     # Calculate duration from PCM size
     bytes_per_sample = BITS_PER_SAMPLE // 8
