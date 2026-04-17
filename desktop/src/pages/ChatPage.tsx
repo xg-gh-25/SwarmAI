@@ -38,6 +38,7 @@ import { useHealth } from '../contexts/HealthContext';
 import { useSessionMeta } from '../contexts/LayoutContext';
 import { EvolutionMessage, ChatErrorMessage } from '../components/chat';
 import { ChatDropZone } from '../components/chat/ChatDropZone';
+import { CLIPanel } from '../components/chat/CLIPanel';
 import type { EvolutionEventType } from '../services/evolution';
 import { FilePreviewModal } from '../components/workspace/FilePreviewModal';
 import { useRateLimiter, useRateLimitCountdown } from '../hooks';
@@ -111,6 +112,9 @@ export default function ChatPage() {
 
   // File preview state
   const [previewFile, setPreviewFile] = useState<{ path: string; name: string } | null>(null);
+
+  // Embedded CLI terminal state (Cmd+` to toggle)
+  const [cliOpen, setCLIOpen] = useState(false);
 
   // LayoutContext — attachment state removed (now in useUnifiedAttachments)
 
@@ -850,6 +854,25 @@ export default function ChatPage() {
     doRestore();
     return () => { mounted = false; };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps — mount-only
+
+  // ── CLI terminal toggle: Cmd+` keyboard shortcut ───────────────────
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === '`') {
+        e.preventDefault();
+        setCLIOpen(prev => !prev);
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, []);
+
+  // ── CLI auto-open via custom event (agent can trigger) ────────────
+  useEffect(() => {
+    const handler = () => setCLIOpen(true);
+    document.addEventListener('swarm:open-cli', handler);
+    return () => document.removeEventListener('swarm:open-cli', handler);
+  }, []);
 
   // ── Dynamic tab limit polling (Req 5.1, 6.4) ────────────────────────
   // Fetch max tabs on mount and poll every 30 seconds for memory pressure.
@@ -2031,8 +2054,8 @@ export default function ChatPage() {
                 ref={messagesContainerRef}
                 onScroll={handleMessagesScroll}
                 className={messages.length === 0
-                  ? 'flex-1 overflow-hidden flex flex-col'
-                  : 'flex-1 overflow-y-auto pl-2 pr-4 py-3.5 space-y-2.5 min-w-0'
+                  ? `${cliOpen ? 'flex-[2]' : 'flex-1'} overflow-hidden flex flex-col`
+                  : `${cliOpen ? 'flex-[2]' : 'flex-1'} overflow-y-auto pl-2 pr-4 py-3.5 space-y-2.5 min-w-0`
                 }
               >
                 {isLoadingOlderMessages && (
@@ -2163,6 +2186,11 @@ export default function ChatPage() {
                 )}
                 <div ref={messagesEndRef} />
               </div>
+
+              {/* Embedded CLI Terminal (Cmd+` to toggle) */}
+              {cliOpen && (
+                <CLIPanel onClose={() => setCLIOpen(false)} />
+              )}
 
               {/* Rate limit countdown indicator */}
               {isLimited('/chat') && chatRateLimitCountdown > 0 && (
