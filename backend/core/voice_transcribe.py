@@ -30,6 +30,12 @@ CHUNK_SIZE = 16 * 1024  # 16KB chunks for streaming
 # Minimum audio size (~1s at 16kHz mono 16-bit = 32000 bytes)
 MIN_AUDIO_BYTES = SAMPLE_RATE * (BITS_PER_SAMPLE // 8) * CHANNELS
 
+# Maximum upload size before ffmpeg conversion (25MB ≈ ~10 min WebM/Opus)
+MAX_AUDIO_BYTES = 25 * 1024 * 1024
+
+# Transcribe streaming timeout — matches frontend's 60s Axios timeout
+TRANSCRIBE_TIMEOUT = 60
+
 # Default AWS region — override via TRANSCRIBE_REGION env var or parameter
 DEFAULT_REGION = os.environ.get("TRANSCRIBE_REGION", "us-east-1")
 
@@ -151,8 +157,19 @@ async def _transcribe_with_streaming(
             await stream.input_stream.send_audio_event(audio_chunk=chunk)
         await stream.input_stream.end_stream()
 
-    # Run sender and handler concurrently
-    await asyncio.gather(_send_audio(), handler.handle_events())
+    # Run sender and handler concurrently with timeout.
+    # Without this, a Transcribe network partition hangs the coroutine
+    # indefinitely — the 60s frontend timeout fires but the backend
+    # coroutine leaks, holding the stream open for hours.
+    try:
+        await asyncio.wait_for(
+            asyncio.gather(_send_audio(), handler.handle_events()),
+            timeout=TRANSCRIBE_TIMEOUT,
+        )
+    except asyncio.TimeoutError:
+        raise RuntimeError(
+            f"Amazon Transcribe did not respond within {TRANSCRIBE_TIMEOUT}s"
+        )
 
     return " ".join(handler.segments).strip()
 
@@ -178,6 +195,13 @@ async def transcribe_audio(
     """
     if not audio_data:
         raise ValueError("Empty audio data — nothing to transcribe")
+
+    if len(audio_data) > MAX_AUDIO_BYTES:
+        mb = len(audio_data) / (1024 * 1024)
+        raise ValueError(
+            f"Audio file too large ({mb:.1f} MB). Maximum is "
+            f"{MAX_AUDIO_BYTES // (1024 * 1024)} MB (~10 minutes)."
+        )
 
     lang = language or "en-US"
     start = time.monotonic()
