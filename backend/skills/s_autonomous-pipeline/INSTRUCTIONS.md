@@ -317,6 +317,30 @@ The BUILD stage follows TDD methodology: tests before code, code until tests pas
     (wrong attribute name) passed 8 pipeline stages undetected because
     it was inside try/except and no test exercised the actual runtime path.
 
+    **Resource lifecycle verification** (added after run_c2881d2f: 3
+    CRITICAL subprocess bugs survived 14 green unit tests + 4 smoke tests):
+
+    For each new resource acquisition in the changeset, verify BOTH the
+    success path AND the failure/timeout path release the resource:
+
+    | Resource Type | Success Check | Failure Check |
+    |---------------|--------------|---------------|
+    | subprocess (`create_subprocess_exec`) | exits with returncode | `proc.kill()` + `await proc.wait()` in finally. `wait_for` timeout → kill before re-raise. `FileNotFoundError` caught. |
+    | temp files | deleted after use | deleted in finally (`unlink(missing_ok=True)`) |
+    | MediaStream / hardware | tracks stopped | stopped in useEffect cleanup |
+    | network / sockets | closed / consumed | timeout set + cleanup on error |
+    | file handles | closed | context manager or finally |
+
+    For each applicable row, write a smoke test that:
+    1. Triggers the failure path (mock timeout, FileNotFoundError, etc.)
+    2. Asserts the resource was released (mock.kill.assert_called, etc.)
+
+    Don't skip this for "simple" subprocess calls. Voice Input had 14
+    green tests yet 3 CRITICAL subprocess bugs because mocks replaced
+    the entire subprocess lifecycle. The mock proved "if transcription
+    returns X, endpoint returns X" — but not "subprocess is killed on
+    timeout." Test the resource, not the happy path around it.
+
 **Step 5: USER-PATH TRACE — walk real scenarios through real code**
 
 15. For each acceptance criterion, pick **one concrete user action** and
@@ -448,12 +472,78 @@ python backend/scripts/artifact_cli.py advance --project <PROJECT> --state revie
    tests, but E2E user walkthrough found 3 bugs in 5 minutes (scroll tracking, no
    discoverability hint, Escape propagation). Engineering-complete ≠ user-complete.
 
+7. **Runtime Pattern Checklist** — scan the changeset for known bug patterns.
+
+   These are recurring production bugs that code review and unit tests
+   consistently miss. For each pattern that applies to the changeset,
+   explicitly verify the fix is in place. Do NOT skip patterns — a "no"
+   answer is fine, but silence means unchecked.
+
+   | # | Pattern | Trigger (when to check) | What to verify | Example bug |
+   |---|---------|------------------------|----------------|-------------|
+   | RP1 | **subprocess timeout orphan** | `create_subprocess_exec` or `subprocess.Popen` | `asyncio.wait_for` timeout path has `proc.kill()` + `await proc.wait()` BEFORE re-raise | ffmpeg runs forever after 30s timeout (run_c2881d2f) |
+   | RP2 | **subprocess missing binary** | `create_subprocess_exec("some_binary", ...)` | `FileNotFoundError` caught → user-friendly error message | ffmpeg not installed → raw 500 instead of "install ffmpeg" (run_c2881d2f) |
+   | RP3 | **React hook cleanup** | new `use*` hook with refs or subscriptions | `useEffect` return releases all resources (streams, timers, listeners) | Mic never released on tab close (run_c2881d2f) |
+   | RP4 | **stale closure** | callback passed to hook/async uses component state | use `useRef` to hold latest value, read `.current` in callback | transcribed text overwrites user's typing (run_c2881d2f) |
+   | RP5 | **FormData Content-Type** | `new FormData()` sent via axios/fetch | NO explicit `Content-Type` header — browser must add boundary | Multipart broken, backend gets 400 (run_c2881d2f) |
+   | RP6 | **setTimeout leak** | `setTimeout` in component/hook | timer ID stored in ref, cleared in cleanup effect | setState on unmounted component (run_c2881d2f) |
+   | RP7 | **error msg ↔ constant mismatch** | error messages containing numeric values | message matches the actual threshold/constant in code | "need 0.5s" but constant is 1.0s (run_c2881d2f) |
+   | RP8 | **hardcoded env assumption** | region, URL, port, path as string literal | configurable via env var or parameter with sensible default | us-east-1 hardcoded, user in us-west-2 (run_c2881d2f) |
+
+   **Output format:** For each applicable pattern, one line:
+   ```
+   RP1: ✅ proc.kill() in timeout handler + finally (voice_transcribe.py:92,112)
+   RP3: ✅ useEffect cleanup releases stream + recorder (useVoiceRecorder.ts:58-68)
+   RP5: N/A — no FormData in this changeset
+   ```
+
+   Include checklist results in the review artifact under `"runtime_patterns"`.
+
+   **Why this exists:** Voice Input (run_c2881d2f) passed 8 pipeline stages
+   with 10/10 confidence and 14 green tests. E2E review found 12 issues.
+   8 of 12 were instances of these 8 patterns. The patterns are NOT novel
+   — they're the same bugs every project hits. A 30-second checklist
+   catches what unit tests structurally cannot.
+
+8. **Cross-Boundary Wire Test** — **only when changeset includes BOTH
+   frontend API calls AND backend endpoints** (e.g., new `.ts` service
+   function + new `@router.post`). Skip for single-layer changes.
+
+   For each frontend→backend boundary in the changeset, explicitly answer:
+
+   | # | Question | How to verify | Example failure |
+   |---|----------|--------------|-----------------|
+   | WR1 | **Content-Type match?** | Frontend sends X → backend parser expects X | Axios sends `application/json` default, backend expects `multipart/form-data` |
+   | WR2 | **Field names match?** | Frontend `form.append('audio', ...)` → backend `form.get("audio")` | Frontend sends `audioFile`, backend reads `audio` → None |
+   | WR3 | **Response shape match?** | Backend returns `{"transcript": ...}` → frontend types `TranscribeResult` has `transcript` | Backend returns `text`, frontend reads `transcript` → undefined |
+   | WR4 | **Error shape match?** | Backend raises `HTTPException(400, detail=...)` → frontend error handler expects `response.data.detail` | Backend returns `{"message": ...}`, frontend reads `detail` |
+
+   **Output format:**
+   ```
+   Wire: POST /api/chat/transcribe
+     WR1: ✅ FormData (auto Content-Type) → request.form() (multipart parser)
+     WR2: ✅ "audio" field name matches both sides
+     WR3: ✅ {transcript, language, duration_ms} matches TranscribeResult
+     WR4: ✅ HTTPException detail → axios error.response.data.detail
+   ```
+
+   This is code-level trace only — no live requests needed. Read the
+   frontend service function and the backend endpoint side by side.
+
+   Include wire test results in the review artifact under `"wire_test"`.
+
+   **Why this exists:** Voice Input (run_c2881d2f) had an explicit
+   `Content-Type: multipart/form-data` header that broke the Axios
+   boundary string — voice input would have been completely non-functional.
+   Integration trace verified "symbols are connected" but not "the data
+   format crossing the wire is correct." This check fills that gap.
+
 Publish artifact:
 ```bash
 python backend/scripts/artifact_cli.py publish --project <PROJECT> \
   --type review --producer s_autonomous-pipeline \
-  --summary "Review: <N findings>, <M auto-fixed>, <K integration warnings>, <J ux findings>" \
-  --data '{"findings":[...],"approved":true/false,"security_findings":[],"integration_trace":{"checked":N,"connected":M,"warnings":[...]},"ux_review":{"triggered":true/false,"checks":5,"findings":[...]}}'
+  --summary "Review: <N findings>, <M auto-fixed>, <K integration warnings>, <J ux findings>, <P runtime patterns>, <W wire tests>" \
+  --data '{"findings":[...],"approved":true/false,"security_findings":[],"integration_trace":{"checked":N,"connected":M,"warnings":[...]},"ux_review":{"triggered":true/false,"checks":5,"findings":[...]},"runtime_patterns":{"checked":N,"passed":M,"findings":[...]},"wire_test":{"boundaries":N,"verified":M,"findings":[...]}}'
 python backend/scripts/artifact_cli.py advance --project <PROJECT> --state test
 ```
 
@@ -503,6 +593,8 @@ python backend/scripts/artifact_cli.py advance --project <PROJECT> --state deliv
      -2 if user_path_traces == 0 and files_changed > 1 (real data flow unverified)
      -1 if integration_trace.checked == 0 (wiring unverified)
      -1 if frontend files changed but ux_review.triggered == false (UX unverified)
+     -1 if runtime_patterns.checked == 0 and applicable patterns exist (known bugs unchecked)
+     -2 if frontend+backend changed but wire_test.boundaries == 0 (cross-layer contract unverified)
      -1 per unresolved warning from validator
    ```
    If confidence < 7 → flag for human review even without judgment decisions.
