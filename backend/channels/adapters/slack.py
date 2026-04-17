@@ -1270,6 +1270,13 @@ class SlackChannelAdapter(ChannelAdapter):
                 # Socket Mode works — switch back
                 handler.close()  # close the test connection
 
+                # Close old handler to release resources (sockets, threads)
+                if self._handler is not None:
+                    try:
+                        self._handler.close()
+                    except Exception:
+                        pass
+
                 self._bolt_app = bolt_app
                 self._handler = SocketModeHandler(bolt_app, self._app_token)
                 self._connection_mode = "socket"
@@ -1328,6 +1335,15 @@ class SlackChannelAdapter(ChannelAdapter):
                         self._ws_fail_count,
                         _WS_FAIL_THRESHOLD,
                     )
+                    # Reset handler so _start_socket_mode_thread creates
+                    # a fresh one — reusing a crashed handler's start()
+                    # may fail due to corrupted internal state.
+                    if self._handler is not None:
+                        try:
+                            self._handler.close()
+                        except Exception:
+                            pass
+                        self._handler = None
                     self._start_socket_mode_thread()
             await asyncio.sleep(10)
 

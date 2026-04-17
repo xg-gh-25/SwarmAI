@@ -93,19 +93,24 @@ export function ChatInput({
     };
   }, []);
 
+  // Stable callbacks for voice recorder (avoids unnecessary hook re-creation)
+  const handleVoiceTranscript = useCallback((text: string) => {
+    const current = inputValueRef.current;
+    const separator = current && !current.endsWith(' ') ? ' ' : '';
+    onInputChange(current + separator + text);
+    setVoiceError(null);
+  }, [onInputChange]);
+
+  const handleVoiceError = useCallback((err: string) => {
+    setVoiceError(err);
+    if (voiceErrorTimerRef.current) clearTimeout(voiceErrorTimerRef.current);
+    voiceErrorTimerRef.current = setTimeout(() => setVoiceError(null), 4000);
+  }, []);
+
   // Voice recording — append transcribed text to current input
   const { voiceState, toggleRecording, isSupported: voiceSupported } = useVoiceRecorder({
-    onTranscript: (text) => {
-      const current = inputValueRef.current;
-      const separator = current && !current.endsWith(' ') ? ' ' : '';
-      onInputChange(current + separator + text);
-      setVoiceError(null);
-    },
-    onError: (err) => {
-      setVoiceError(err);
-      if (voiceErrorTimerRef.current) clearTimeout(voiceErrorTimerRef.current);
-      voiceErrorTimerRef.current = setTimeout(() => setVoiceError(null), 4000);
-    },
+    onTranscript: handleVoiceTranscript,
+    onError: handleVoiceError,
   });
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);

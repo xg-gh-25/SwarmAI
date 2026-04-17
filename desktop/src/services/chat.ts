@@ -22,6 +22,13 @@ export const STALL_TIMEOUT_MS = 45_000;
 export interface TranscribeResult {
   transcript: string;
   language: string;
+  durationMs: number;
+}
+
+// snake_case → camelCase for transcribe response (backend returns duration_ms)
+interface TranscribeRawResponse {
+  transcript: string;
+  language: string;
   duration_ms: number;
 }
 
@@ -30,7 +37,7 @@ export interface TranscribeResult {
  *
  * @param audioBlob - Recorded audio blob from MediaRecorder
  * @param language - Optional BCP-47 language code (default: server decides)
- * @returns Transcribed text, language, and duration
+ * @returns Transcribed text, language, and duration (camelCase)
  */
 export async function transcribeAudio(
   audioBlob: Blob,
@@ -43,10 +50,16 @@ export async function transcribeAudio(
   // Do NOT set Content-Type manually — Axios detects FormData and sets
   // the correct multipart/form-data header with boundary automatically.
   // Explicit Content-Type breaks the boundary string.
-  const res = await api.post<TranscribeResult>('/chat/transcribe', form, {
+  const res = await api.post<TranscribeRawResponse>('/chat/transcribe', form, {
     timeout: 60_000, // 60s for long recordings + Transcribe processing
   });
-  return res.data;
+
+  // Convert snake_case → camelCase per project convention
+  return {
+    transcript: res.data.transcript,
+    language: res.data.language,
+    durationMs: res.data.duration_ms,
+  };
 }
 
 // Convert content blocks from camelCase to snake_case for API

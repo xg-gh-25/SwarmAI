@@ -411,33 +411,36 @@ async def transcribe_voice(request: Request):
     from starlette.datastructures import UploadFile as StarletteUploadFile
 
     form = await request.form()
-    audio_field = form.get("audio")
-
-    # Validate: must be a file upload, not a text field or missing
-    if not isinstance(audio_field, StarletteUploadFile):
-        raise HTTPException(status_code=400, detail="audio field must be a file upload")
-
-    audio_data = await audio_field.read()
-    if not audio_data:
-        raise HTTPException(status_code=400, detail="Empty audio file")
-
-    language = form.get("language")  # optional string or None
-
     try:
+        audio_field = form.get("audio")
+
+        # Validate: must be a file upload, not a text field or missing
+        if not isinstance(audio_field, StarletteUploadFile):
+            raise HTTPException(status_code=400, detail="audio field must be a file upload")
+
+        audio_data = await audio_field.read()
+        if not audio_data:
+            raise HTTPException(status_code=400, detail="Empty audio file")
+
+        language = form.get("language")  # optional string or None
+
         from core.voice_transcribe import transcribe_audio
         result = await transcribe_audio(
             audio_data,
             language=language if isinstance(language, str) else None,
         )
         return result
+    except HTTPException:
+        raise
     except (ValueError, RuntimeError) as e:
-        # Client errors: empty audio, too short, ffmpeg missing
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         _logging.getLogger(__name__).error(
             "Voice transcription failed: %s", e, exc_info=True,
         )
         raise HTTPException(status_code=500, detail="Transcription service error")
+    finally:
+        await form.close()  # Release SpooledTemporaryFile backing the upload
 
 
 @router.post("/stream")
