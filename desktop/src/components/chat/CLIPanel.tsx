@@ -17,7 +17,6 @@ import { getBackendPort } from '../../services/tauri';
 
 // xterm.js types -- dynamic import to handle missing package gracefully
 type Terminal = import('@xterm/xterm').Terminal;
-type FitAddon = import('@xterm/addon-fit').FitAddon;
 
 interface CLIPanelProps {
   onClose: () => void;
