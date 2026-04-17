@@ -330,6 +330,8 @@ The BUILD stage follows TDD methodology: tests before code, code until tests pas
     | MediaStream / hardware | tracks stopped | stopped in useEffect cleanup |
     | network / sockets | closed / consumed | timeout set + cleanup on error |
     | file handles | closed | context manager or finally |
+    | SDK handler/client (SocketModeHandler, WebClient, etc.) | `.close()` after use | `.close()` before reassignment AND in error path. Old instance closed before `self._handler = new_handler`. |
+    | upload form (multipart) | `await form.close()` | in finally block — releases SpooledTemporaryFile |
 
     For each applicable row, write a smoke test that:
     1. Triggers the failure path (mock timeout, FileNotFoundError, etc.)
@@ -395,12 +397,55 @@ include adversarial inputs: URLs, file paths, code snippets, empty/minimal
 strings, Unicode edge cases (CJK, Kana, Hangul, emoji), and multi-language mix.
 These are the inputs that break keyword extractors, parsers, and formatters.
 
+**Step 6: PROBE — send a real request through the wire (catch format bugs)**
+
+16. **Only when the changeset adds a new API endpoint consumed by frontend.**
+    Skip for backend-only or frontend-only changes.
+
+    Write ONE integration test per new endpoint that constructs the request
+    **the same way the real client would** — not using TestClient shortcuts
+    that bypass serialization.
+
+    ```python
+    # BAD — TestClient auto-serializes, hides Content-Type bugs:
+    client.post("/api/chat/transcribe", files={"audio": ...})
+
+    # GOOD — Construct request the way Axios/fetch would:
+    import httpx
+    async with httpx.AsyncClient(app=app, base_url="http://test") as client:
+        # FormData without explicit Content-Type (browser auto-adds boundary)
+        files = {"audio": ("test.wav", wav_bytes, "audio/wav")}
+        resp = await client.post("/api/chat/transcribe", files=files)
+        assert resp.status_code == 200
+        data = resp.json()
+        # Verify response shape matches frontend expectations
+        assert "transcript" in data
+        assert "duration_ms" in data  # backend snake_case
+    ```
+
+    Rules:
+    - Use `httpx.AsyncClient(app=app)` — it exercises the real ASGI stack
+      including Starlette's multipart parser, unlike TestClient which
+      uses `requests` (different HTTP library, different serialization).
+    - Do NOT set `Content-Type` manually — let the HTTP library handle it.
+      This is the exact bug pattern (RP5) we're testing against.
+    - Verify the response JSON keys match what the frontend expects (after
+      any snake→camel conversion).
+    - If the endpoint requires auth or external services, mock only the
+      leaf (e.g., Amazon Transcribe API), NOT the HTTP layer.
+
+    **Why this exists:** Voice Input's Content-Type bug (explicit header
+    broke Axios boundary string) would have been caught by ANY real HTTP
+    request. 14 unit tests + 4 smoke tests + integration trace missed it
+    because none actually sent a multipart request through the ASGI stack.
+    The most fatal bug was the cheapest to catch.
+
 Publish artifact:
 ```bash
 python backend/scripts/artifact_cli.py publish --project <PROJECT> \
   --type changeset --producer s_autonomous-pipeline \
   --summary "<N> files changed, <M> commits, TDD: <red>/<green>/<verify>" \
-  --data '{"branch":"...","commits":[...],"files_changed":[...],"diff_summary":"...","tdd":{"acceptance_criteria_count":N,"tests_generated":M,"red_failures":K,"green_pass":true,"regressions":0,"smoke_tests":S,"smoke_crashes_caught":C,"user_path_traces":T,"user_path_bugs_found":B}}'
+  --data '{"branch":"...","commits":[...],"files_changed":[...],"diff_summary":"...","tdd":{"acceptance_criteria_count":N,"tests_generated":M,"red_failures":K,"green_pass":true,"regressions":0,"smoke_tests":S,"smoke_crashes_caught":C,"user_path_traces":T,"user_path_bugs_found":B,"probes":P,"probe_bugs_found":Q}}'
 python backend/scripts/artifact_cli.py advance --project <PROJECT> --state review
 ```
 
@@ -489,6 +534,10 @@ python backend/scripts/artifact_cli.py advance --project <PROJECT> --state revie
    | RP6 | **setTimeout leak** | `setTimeout` in component/hook | timer ID stored in ref, cleared in cleanup effect | setState on unmounted component (run_c2881d2f) |
    | RP7 | **error msg ↔ constant mismatch** | error messages containing numeric values | message matches the actual threshold/constant in code | "need 0.5s" but constant is 1.0s (run_c2881d2f) |
    | RP8 | **hardcoded env assumption** | region, URL, port, path as string literal | configurable via env var or parameter with sensible default | us-east-1 hardcoded, user in us-west-2 (run_c2881d2f) |
+   | RP9 | **API boundary naming** | new endpoint returns JSON consumed by frontend | backend snake_case fields have camelCase frontend interface + conversion function | `duration_ms` passed raw to TS instead of `durationMs` (Kiro review) |
+   | RP10 | **barrel export** | new hook, component, or service file created | exported from the directory's `index.ts` | `useVoiceRecorder` missing from `hooks/index.ts` (Kiro review) |
+   | RP11 | **SDK handler reassignment** | `self._handler = new_handler` or similar | old handler `.close()` called BEFORE reassignment; reset to `None` before restart after crash | Old SocketModeHandler leaked on reconnect (Kiro review) |
+   | RP12 | **unstable callback refs** | inline arrow functions passed as props to hooks | wrap in `useCallback` with correct deps; use ref for values that change every render | `onTranscript`/`onError` recreated every render (Kiro review) |
 
    **Output format:** For each applicable pattern, one line:
    ```
@@ -595,6 +644,7 @@ python backend/scripts/artifact_cli.py advance --project <PROJECT> --state deliv
      -1 if frontend files changed but ux_review.triggered == false (UX unverified)
      -1 if runtime_patterns.checked == 0 and applicable patterns exist (known bugs unchecked)
      -2 if frontend+backend changed but wire_test.boundaries == 0 (cross-layer contract unverified)
+     -2 if new endpoint + frontend consumer but probes == 0 (real HTTP path untested)
      -1 per unresolved warning from validator
    ```
    If confidence < 7 → flag for human review even without judgment decisions.
@@ -697,7 +747,19 @@ python backend/scripts/artifact_cli.py advance --project <PROJECT> --state refle
 1. Extract lessons from this pipeline run
 2. Write to IMPROVEMENT.md: what worked, what failed, patterns discovered
 3. Update MEMORY.md if the lesson is cross-project
-4. Record outcome for learning:
+4. **Checklist maintenance** — if any post-pipeline review (E2E, external,
+   or user feedback) found bugs that the pipeline missed:
+   a. Classify each missed bug: does it fit an existing RP pattern?
+   b. If yes → the checklist was applied but missed (investigate why)
+   c. If no → **add a new RP pattern** to the Runtime Pattern Checklist
+      in this INSTRUCTIONS.md (REVIEW check #7). Include: trigger
+      condition, what to verify, and the real bug as the example.
+   d. If the bug is a resource type missing from the lifecycle table →
+      **add the row** to the Resource Lifecycle table (BUILD Step 4).
+   This ensures the pipeline learns from every review cycle. Without
+   this step, lessons live in IMPROVEMENT.md but never reach the
+   checklist that would prevent recurrence.
+5. Record outcome for learning:
 ```bash
 python backend/scripts/artifact_cli.py learn --project <PROJECT> \
   --evaluation-id <eval_artifact_id> --outcome success \
