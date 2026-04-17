@@ -236,12 +236,15 @@ hiddenimports += ['psutil']
 hiddenimports += collect_submodules('slack_bolt')
 hiddenimports += collect_submodules('slack_sdk')
 hiddenimports += ['sqlite_vec']  # Vector search extension (try/except import in vec_db.py)
+hiddenimports += collect_submodules('amazon_transcribe')  # Voice transcription (Transcribe Streaming)
+hiddenimports += collect_submodules('awscrt')  # AWS Common Runtime (native C extensions)
 
 # Collect data files (including bundled CLI binary from claude_agent_sdk)
 datas = []
 datas += collect_data_files('claude_agent_sdk')
 datas += collect_data_files('certifi')
 datas += collect_data_files('sqlite_vec')  # vec0.dylib native extension for vector search
+datas += collect_data_files('awscrt')  # AWS CRT native libraries (.dylib/.so)
 # Include built-in context files and skills for agent workspace initialization
 datas += [('context', 'context')]
 datas += [('skills', 'skills')]
