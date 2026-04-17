@@ -10,7 +10,6 @@ Public API:
 
 import asyncio
 import logging
-import struct
 import tempfile
 import time
 from pathlib import Path
@@ -27,8 +26,8 @@ CHANNELS = 1
 BITS_PER_SAMPLE = 16
 CHUNK_SIZE = 16 * 1024  # 16KB chunks for streaming
 
-# Minimum audio duration to avoid empty transcriptions
-MIN_AUDIO_BYTES = SAMPLE_RATE * (BITS_PER_SAMPLE // 8) * CHANNELS  # ~0.5s at 16kHz
+# Minimum audio size (~1s at 16kHz mono 16-bit = 32000 bytes)
+MIN_AUDIO_BYTES = SAMPLE_RATE * (BITS_PER_SAMPLE // 8) * CHANNELS
 
 
 class _TranscriptHandler(TranscriptResultStreamHandler):
