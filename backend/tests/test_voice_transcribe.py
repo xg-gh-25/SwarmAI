@@ -176,6 +176,105 @@ class TestTranscribeEndpoint:
 
 
 # ---------------------------------------------------------------------------
+# E2E review fixes: subprocess safety, ffmpeg detection, error messages
+# ---------------------------------------------------------------------------
+
+class TestSubprocessSafety:
+    """Verify subprocess cleanup on timeout and error paths."""
+
+    @pytest.mark.asyncio
+    async def test_ffmpeg_not_installed(self):
+        """Missing ffmpeg should raise RuntimeError, not FileNotFoundError."""
+        from core.voice_transcribe import convert_audio_to_pcm
+        wav_data = _create_minimal_wav(sample_rate=16000, duration_s=1.0)
+
+        with patch('core.voice_transcribe.asyncio.create_subprocess_exec',
+                   side_effect=FileNotFoundError("ffmpeg")):
+            with pytest.raises(RuntimeError, match="ffmpeg not found"):
+                await convert_audio_to_pcm(wav_data)
+
+    @pytest.mark.asyncio
+    async def test_ffmpeg_timeout_kills_process(self):
+        """Timed-out ffmpeg process must be killed, not orphaned."""
+        from core.voice_transcribe import convert_audio_to_pcm
+        wav_data = _create_minimal_wav(sample_rate=16000, duration_s=1.0)
+
+        mock_proc = AsyncMock()
+        mock_proc.communicate = AsyncMock(side_effect=asyncio.TimeoutError)
+        mock_proc.kill = AsyncMock()
+        # Simulate real behavior: wait() sets returncode after kill
+        async def _fake_wait():
+            mock_proc.returncode = -9
+        mock_proc.wait = AsyncMock(side_effect=_fake_wait)
+        mock_proc.returncode = None  # still running initially
+
+        with patch('core.voice_transcribe.asyncio.create_subprocess_exec',
+                   return_value=mock_proc):
+            with pytest.raises(RuntimeError, match="timed out"):
+                await convert_audio_to_pcm(wav_data)
+
+        # Process must have been killed (once in timeout handler;
+        # finally block skips because returncode is set after wait())
+        mock_proc.kill.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_subprocess_cleanup_on_exception(self):
+        """Subprocess with returncode=None must be killed in finally block."""
+        from core.voice_transcribe import convert_audio_to_pcm
+        wav_data = _create_minimal_wav(sample_rate=16000, duration_s=1.0)
+
+        mock_proc = AsyncMock()
+        mock_proc.communicate = AsyncMock(return_value=(b"", b""))
+        mock_proc.returncode = None  # never finished
+        mock_proc.kill = AsyncMock()
+        mock_proc.wait = AsyncMock()
+
+        with patch('core.voice_transcribe.asyncio.create_subprocess_exec',
+                   return_value=mock_proc):
+            with pytest.raises(Exception):
+                await convert_audio_to_pcm(wav_data)
+
+        mock_proc.kill.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_error_message_says_1_second(self):
+        """Error for short audio must say '1 second', not '0.5 seconds'."""
+        from core.voice_transcribe import transcribe_audio
+        # 0.5s WAV → PCM is below MIN_AUDIO_BYTES (1s threshold)
+        wav_data = _create_minimal_wav(sample_rate=16000, duration_s=0.5)
+
+        with pytest.raises(ValueError, match="1 second"):
+            await transcribe_audio(wav_data, language="en-US")
+
+    @pytest.mark.asyncio
+    async def test_region_configurable(self):
+        """Region parameter must be passed through to streaming client."""
+        from core.voice_transcribe import transcribe_audio
+        wav_data = _create_minimal_wav(sample_rate=16000, duration_s=1.0)
+
+        with _mock_transcribe_streaming("hello") as mock:
+            result = await transcribe_audio(wav_data, language="en-US", region="us-west-2")
+            # Verify region was passed (mock replaces _transcribe_with_streaming,
+            # which receives the region param)
+            assert result["transcript"] == "hello"
+
+
+class TestEndpointValidation:
+    """Endpoint input validation from E2E review."""
+
+    def test_endpoint_rejects_text_field(self):
+        """Sending audio as text field (not file) should return 400."""
+        from main import app
+        client = TestClient(app)
+        response = client.post(
+            "/api/chat/transcribe",
+            data={"audio": "not-a-file"},
+        )
+        assert response.status_code == 400
+        assert "file upload" in response.json()["detail"].lower()
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 

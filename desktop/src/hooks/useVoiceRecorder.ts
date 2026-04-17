@@ -5,10 +5,10 @@
  *                                    ↓ error
  *                                   idle
  *
- * Returns PCM-compatible audio blob for backend transcription.
+ * Returns audio blob for backend transcription via Amazon Transcribe.
  */
 
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 import { transcribeAudio } from '../services/chat';
 
 export type VoiceState = 'idle' | 'recording' | 'processing';
@@ -41,11 +41,29 @@ export function useVoiceRecorder({
   const chunksRef = useRef<Blob[]>([]);
   const startTimeRef = useRef<number>(0);
   const streamRef = useRef<MediaStream | null>(null);
+  // Track whether the hook is still mounted to prevent stale setState calls
+  const mountedRef = useRef(true);
 
   const isSupported =
     typeof navigator !== 'undefined' &&
     typeof navigator.mediaDevices !== 'undefined' &&
     typeof MediaRecorder !== 'undefined';
+
+  // Cleanup on unmount: release mic + kill recording
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+        mediaRecorderRef.current.stop();
+      }
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((t) => t.stop());
+        streamRef.current = null;
+      }
+      mediaRecorderRef.current = null;
+    };
+  }, []);
 
   const startRecording = useCallback(async () => {
     if (!isSupported) {
@@ -62,14 +80,23 @@ export function useVoiceRecorder({
           noiseSuppression: true,
         },
       });
+
+      // Component may have unmounted while waiting for permission dialog
+      if (!mountedRef.current) {
+        stream.getTracks().forEach((t) => t.stop());
+        return;
+      }
+
       streamRef.current = stream;
 
-      // Prefer formats Transcribe can handle; fall back to default
-      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-        ? 'audio/webm;codecs=opus'
-        : MediaRecorder.isTypeSupported('audio/mp4')
-          ? 'audio/mp4'
-          : '';
+      // Prefer formats that backend ffmpeg can handle; fall back to default
+      let mimeType = '';
+      if (MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
+        mimeType = 'audio/webm;codecs=opus';
+      } else if (MediaRecorder.isTypeSupported('audio/mp4')) {
+        mimeType = 'audio/mp4';
+      }
+      // Empty string → platform default (Safari often uses mp4/aac)
 
       const recorder = mimeType
         ? new MediaRecorder(stream, { mimeType })
@@ -85,6 +112,7 @@ export function useVoiceRecorder({
       mediaRecorderRef.current = recorder;
       setVoiceState('recording');
     } catch (err: unknown) {
+      if (!mountedRef.current) return;
       const message =
         err instanceof DOMException && err.name === 'NotAllowedError'
           ? 'Microphone permission denied. Please allow access in System Settings.'
@@ -97,21 +125,34 @@ export function useVoiceRecorder({
   const stopRecording = useCallback(async () => {
     const recorder = mediaRecorderRef.current;
     if (!recorder || recorder.state === 'inactive') {
-      setVoiceState('idle');
+      if (mountedRef.current) setVoiceState('idle');
       return;
     }
 
-    // Wait for final data
-    await new Promise<void>((resolve) => {
-      recorder.onstop = () => resolve();
-      recorder.stop();
-    });
+    // Wait for final data with timeout guard
+    try {
+      await Promise.race([
+        new Promise<void>((resolve) => {
+          recorder.onstop = () => resolve();
+          recorder.stop();
+        }),
+        new Promise<void>((_, reject) =>
+          setTimeout(() => reject(new Error('Stop timeout')), 5000),
+        ),
+      ]);
+    } catch {
+      // If stop times out, force-kill the recorder
+      try { recorder.stop(); } catch { /* already stopped */ }
+    }
 
-    // Release mic
+    // Always release mic
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
     }
+    mediaRecorderRef.current = null;
+
+    if (!mountedRef.current) return;
 
     const duration = Date.now() - startTimeRef.current;
     if (duration < minDurationMs) {
@@ -134,17 +175,19 @@ export function useVoiceRecorder({
     setVoiceState('processing');
     try {
       const result = await transcribeAudio(blob);
+      if (!mountedRef.current) return;
       if (result.transcript) {
         onTranscript(result.transcript);
       } else {
         onError?.('No speech detected — try again');
       }
     } catch (err: unknown) {
+      if (!mountedRef.current) return;
       onError?.(
         `Transcription failed: ${err instanceof Error ? err.message : String(err)}`,
       );
     } finally {
-      setVoiceState('idle');
+      if (mountedRef.current) setVoiceState('idle');
     }
   }, [minDurationMs, onTranscript, onError]);
 

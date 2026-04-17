@@ -408,17 +408,20 @@ async def transcribe_voice(request: Request):
     Accepts multipart form data with an ``audio`` file field.
     Returns JSON: ``{"transcript": str, "language": str, "duration_ms": int}``
     """
-    from fastapi import UploadFile
+    from starlette.datastructures import UploadFile as StarletteUploadFile
+
     form = await request.form()
     audio_field = form.get("audio")
-    if audio_field is None or not hasattr(audio_field, "read"):
-        raise HTTPException(status_code=400, detail="No audio file uploaded")
+
+    # Validate: must be a file upload, not a text field or missing
+    if not isinstance(audio_field, StarletteUploadFile):
+        raise HTTPException(status_code=400, detail="audio field must be a file upload")
 
     audio_data = await audio_field.read()
     if not audio_data:
         raise HTTPException(status_code=400, detail="Empty audio file")
 
-    language = form.get("language")  # optional, string or None
+    language = form.get("language")  # optional string or None
 
     try:
         from core.voice_transcribe import transcribe_audio
@@ -427,11 +430,14 @@ async def transcribe_voice(request: Request):
             language=language if isinstance(language, str) else None,
         )
         return result
-    except ValueError as e:
+    except (ValueError, RuntimeError) as e:
+        # Client errors: empty audio, too short, ffmpeg missing
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        _logging.getLogger(__name__).error("Voice transcription failed: %s", e)
-        raise HTTPException(status_code=500, detail=f"Transcription failed: {e}")
+        _logging.getLogger(__name__).error(
+            "Voice transcription failed: %s", e, exc_info=True,
+        )
+        raise HTTPException(status_code=500, detail="Transcription service error")
 
 
 @router.post("/stream")

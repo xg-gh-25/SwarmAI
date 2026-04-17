@@ -40,9 +40,11 @@ export async function transcribeAudio(
   form.append('audio', audioBlob, 'recording.webm');
   if (language) form.append('language', language);
 
+  // Do NOT set Content-Type manually — Axios detects FormData and sets
+  // the correct multipart/form-data header with boundary automatically.
+  // Explicit Content-Type breaks the boundary string.
   const res = await api.post<TranscribeResult>('/chat/transcribe', form, {
-    headers: { 'Content-Type': 'multipart/form-data' },
-    timeout: 30_000, // 30s timeout for transcription
+    timeout: 60_000, // 60s for long recordings + Transcribe processing
   });
   return res.data;
 }
