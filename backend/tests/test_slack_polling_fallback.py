@@ -284,6 +284,61 @@ class TestSocketModeRecovery:
 # AC6: Existing behavior unchanged
 # ---------------------------------------------------------------------------
 
+class TestTransportErrorHandling:
+    """Bug #1 fix: transport errors stay internal, only auth errors escalate."""
+
+    def test_transport_error_does_not_fire_on_error(self, adapter):
+        """Non-auth WS crash should NOT call _on_error (gateway would destroy adapter)."""
+        adapter._loop = asyncio.new_event_loop()
+        adapter._stopped = False
+        adapter._on_error = AsyncMock()
+        adapter._slack_client = MagicMock()
+
+        # Simulate: SocketModeHandler.start() throws a transport error
+        mock_handler = MagicMock()
+        mock_handler.start.side_effect = ConnectionError("VPN blocked WebSocket")
+
+        with patch("channels.adapters.slack.App"):
+            with patch("channels.adapters.slack.SocketModeHandler", return_value=mock_handler):
+                adapter._start_socket_mode_thread()
+                # Wait for thread to finish
+                adapter._ws_thread.join(timeout=5.0)
+
+        # Give event loop a chance to process any call_soon_threadsafe
+        import time
+        time.sleep(0.2)
+        adapter._loop.run_until_complete(asyncio.sleep(0.1))
+
+        # _on_error should NOT have been called for transport errors
+        adapter._on_error.assert_not_called()
+        adapter._loop.close()
+
+    def test_auth_error_still_fires_on_error(self, adapter):
+        """Auth errors SHOULD call _on_error (gateway needs circuit breaker)."""
+        adapter._loop = asyncio.new_event_loop()
+        adapter._stopped = False
+        adapter._on_error = AsyncMock()
+        adapter._slack_client = MagicMock()
+
+        # Simulate: SocketModeHandler.start() throws an auth error
+        mock_handler = MagicMock()
+        auth_exc = Exception("token_revoked")
+        auth_exc.response = {"error": "token_revoked"}
+        mock_handler.start.side_effect = auth_exc
+
+        with patch("channels.adapters.slack.App"):
+            with patch("channels.adapters.slack.SocketModeHandler", return_value=mock_handler):
+                adapter._start_socket_mode_thread()
+                adapter._ws_thread.join(timeout=5.0)
+
+        # Process pending callbacks
+        adapter._loop.run_until_complete(asyncio.sleep(0.2))
+
+        # _on_error SHOULD have been called for auth errors
+        assert adapter._on_error.call_count >= 1
+        adapter._loop.close()
+
+
 class TestExistingBehaviorPreserved:
     """AC6: all existing adapter behavior unchanged."""
 
@@ -380,11 +435,10 @@ class TestPollChannelMessages:
         adapter._slack_client.conversations_history.return_value = {
             "ok": True,
             "messages": [
-                # API returns newest-first
-                {"user": "U2", "text": "Second", "channel": "D456",
-                 "ts": "1002.0", "channel_type": "im"},
-                {"user": "U1", "text": "First", "channel": "D456",
-                 "ts": "1001.0", "channel_type": "im"},
+                # API returns newest-first — NO channel/channel_type fields
+                # (conversations.history doesn't include them)
+                {"user": "U2", "text": "Second", "ts": "1002.0"},
+                {"user": "U1", "text": "First", "ts": "1001.0"},
             ],
         }
 
@@ -397,6 +451,33 @@ class TestPollChannelMessages:
             assert first_call.args[0].text == "First"
             second_call = on_message.call_args_list[1]
             assert second_call.args[0].text == "Second"
+        finally:
+            loop.close()
+
+    def test_injects_channel_id_into_polled_messages(self, adapter, on_message):
+        """conversations.history messages lack 'channel' — polling injects it."""
+        adapter._slack_client = MagicMock()
+        adapter._user_cache = {"U1": "User One"}
+        adapter._on_message = on_message
+        adapter._poll_channels = {"D456": "1000.0"}
+
+        # Real conversations.history response: no channel, no channel_type
+        adapter._slack_client.conversations_history.return_value = {
+            "ok": True,
+            "messages": [
+                {"user": "U1", "text": "Hello", "ts": "1001.0"},
+            ],
+        }
+
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(adapter._poll_channel_messages("D456"))
+            assert on_message.call_count == 1
+            msg = on_message.call_args_list[0].args[0]
+            # channel should be injected from the API call parameter
+            assert msg.external_chat_id == "D456"
+            # channel_type should default to "im" for DM polling
+            assert msg.metadata["chat_type"] == "im"
         finally:
             loop.close()
 
