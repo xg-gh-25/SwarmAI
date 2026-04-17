@@ -1,17 +1,21 @@
-"""Slack channel adapter using Socket Mode (WebSocket, no public URL needed).
+"""Slack channel adapter with Socket Mode primary + HTTP polling fallback.
 
-Connects to Slack via the official slack-bolt SDK's Socket Mode handler,
-so no public URL or webhook endpoint is needed. Messages are received
-through the persistent WS connection and sent back via the Web API.
+**Primary path (Socket Mode):** Connects via the official slack-bolt SDK's
+persistent WebSocket — no public URL or webhook endpoint needed.
 
-When the Web API is unreachable (e.g. Amazon corp proxy blocking direct
-HTTPS to slack.com), outgoing messages fall back to the ``slack-mcp``
-binary via stdio JSON-RPC 2.0 — the MCP binary routes through Slack
-desktop's local IPC, bypassing corp proxy.
+**Fallback path (HTTP polling):** When Socket Mode is blocked by corporate
+VPN (SSLEOFError, DNS failure, proxy 403), the adapter automatically
+switches to polling ``conversations.history()`` via the Slack Web API.
+After 3 consecutive WebSocket thread deaths the adapter activates polling
+mode and periodically re-attempts Socket Mode reconnection.
 
-This follows the Architectural pattern:
-background thread with its own event loop, bridging events to the
-main FastAPI asyncio loop via ``call_soon_threadsafe``.
+**Outgoing messages:** Always via Web API; when that is blocked by corp
+proxy, falls back to the ``slack-mcp`` binary via stdio JSON-RPC 2.0
+(routes through Slack desktop's local IPC).
+
+Threading model: Socket Mode runs in a background thread; polling runs
+as an asyncio task on the main FastAPI event loop.  Both paths converge
+on ``_normalize_event()`` → ``_on_message()`` for gateway delivery.
 """
 from __future__ import annotations
 
@@ -51,6 +55,15 @@ _MAX_BLOCKS_PER_MSG = 50       # max blocks array length per message
 
 # Errors that indicate corp proxy / network blocking (trigger MCP fallback)
 _PROXY_ERRORS = (ConnectionError, OSError, TimeoutError)
+
+# ---------------------------------------------------------------------------
+# Polling fallback constants
+# ---------------------------------------------------------------------------
+_WS_FAIL_THRESHOLD = 3       # consecutive WS thread deaths before switching to polling
+_POLL_INTERVAL = 5.0          # seconds between polling cycles
+_POLL_DM_REFRESH = 300.0      # seconds between DM channel list refresh
+_WS_RETRY_INTERVAL = 300.0    # seconds between Socket Mode reconnect attempts during polling
+_POLL_MSG_LIMIT = 10          # max messages per conversations.history call
 
 # Slack API error strings that indicate auth failure (permanent, not transient)
 _AUTH_ERROR_CODES = frozenset({
@@ -336,6 +349,13 @@ class SlackChannelAdapter(ChannelAdapter):
         # Auth health tracking
         self._last_auth_check: float = 0.0
         self._consecutive_auth_failures: int = 0
+        # Polling fallback state
+        self._connection_mode: str = "socket"  # "socket" or "polling"
+        self._ws_fail_count: int = 0
+        self._poll_channels: dict[str, str] = {}  # channel_id -> last_ts
+        self._poll_task: Optional[asyncio.Task] = None
+        self._monitor_task: Optional[asyncio.Task] = None
+        self._bot_user_id: str = ""
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -387,62 +407,24 @@ class SlackChannelAdapter(ChannelAdapter):
             return False
 
     async def start(self) -> None:
-        """Start the Socket Mode WebSocket in a background thread."""
+        """Start the adapter — Socket Mode primary, polling fallback.
+
+        Launches Socket Mode in a background thread and starts a health
+        monitor that switches to HTTP polling if the WS thread dies
+        repeatedly (see ``_ws_health_monitor``).
+        """
         if self._stopped:
             self._stopped = False
 
         self._loop = asyncio.get_running_loop()
         self._slack_client = WebClient(token=self._bot_token)
 
-        # Build the Bolt app (sync mode — runs in background thread)
-        self._bolt_app = App(token=self._bot_token)
-
-        # Register event handlers
-        self._bolt_app.event("message")(self._handle_message_event)
-        self._bolt_app.event("app_mention")(self._handle_app_mention)
-
         # Start Socket Mode in background thread
-        self._handler = SocketModeHandler(self._bolt_app, self._app_token)
+        self._start_socket_mode_thread()
 
-        def _run_socket_mode():
-            try:
-                self._handler.start()  # Blocking
-            except Exception as exc:
-                if not self._stopped:
-                    is_auth = _is_auth_error(exc)
-                    if is_auth:
-                        self._consecutive_auth_failures += 1
-                        logger.error(
-                            "Slack Socket Mode AUTH_ERROR for channel %s (consecutive=%d): %s",
-                            self.channel_id, self._consecutive_auth_failures, exc,
-                        )
-                    else:
-                        logger.exception(
-                            "Slack Socket Mode crashed for channel %s",
-                            self.channel_id,
-                        )
-                    prefix = "AUTH_ERROR: " if is_auth else ""
-                    error_msg = f"{prefix}Socket Mode connection failed: {exc}"
-                    main_loop = self._loop
-                    if (
-                        self._on_error is not None
-                        and main_loop is not None
-                        and not main_loop.is_closed()
-                    ):
-                        try:
-                            main_loop.call_soon_threadsafe(
-                                asyncio.ensure_future,
-                                self._on_error(self.channel_id, error_msg),
-                            )
-                        except RuntimeError:
-                            pass  # loop already closed
+        # Start health monitor (switches to polling on persistent failure)
+        self._monitor_task = asyncio.create_task(self._ws_health_monitor())
 
-        self._ws_thread = threading.Thread(
-            target=_run_socket_mode,
-            daemon=True,
-            name=f"slack-ws-{self.channel_id}",
-        )
-        self._ws_thread.start()
         logger.info(
             "Slack adapter started for channel %s (bot_token=xoxb-...%s)",
             self.channel_id,
@@ -452,6 +434,16 @@ class SlackChannelAdapter(ChannelAdapter):
     async def stop(self) -> None:
         """Stop the adapter and release resources."""
         self._stopped = True
+
+        # Cancel polling task
+        if self._poll_task and not self._poll_task.done():
+            self._poll_task.cancel()
+            self._poll_task = None
+
+        # Cancel health monitor
+        if self._monitor_task and not self._monitor_task.done():
+            self._monitor_task.cancel()
+            self._monitor_task = None
 
         if self._handler is not None:
             try:
@@ -473,6 +465,7 @@ class SlackChannelAdapter(ChannelAdapter):
         self._slack_client = None
         self._ws_thread = None
         self._loop = None
+        self._poll_channels = {}
 
         # Clean up MCP bridge subprocess
         if self._mcp_bridge:
@@ -482,24 +475,31 @@ class SlackChannelAdapter(ChannelAdapter):
         logger.info("Slack adapter stopped for channel %s", self.channel_id)
 
     # ------------------------------------------------------------------
-    # Incoming messages (called from Socket Mode thread)
+    # Incoming messages — shared normalization + mode-specific delivery
     # ------------------------------------------------------------------
 
-    def _handle_message_event(self, event: dict, say=None) -> None:
-        """Handle an incoming message event from Slack Socket Mode."""
-        if self._stopped:
-            return
+    def _normalize_event(self, event: dict) -> Optional[InboundMessage]:
+        """Normalize a Slack event dict to an InboundMessage.
 
+        Shared by both Socket Mode (background thread) and HTTP polling
+        (asyncio task).  Returns None for events that should be skipped
+        (bot messages, subtypes, empty text).
+        """
         # Skip message subtypes (edited, deleted, etc.) except file_share
         subtype = event.get("subtype")
         if subtype and subtype not in ("file_share",):
-            return
+            return None
 
         # Skip messages from bots (including ourselves)
         if event.get("bot_id"):
-            return
+            return None
 
         user_id = event.get("user", "")
+
+        # In polling mode, also filter by bot_user_id (no bot_id in history)
+        if self._bot_user_id and user_id == self._bot_user_id:
+            return None
+
         text = event.get("text", "").strip()
         channel_id = event.get("channel", "")
         ts = event.get("ts", "")
@@ -514,9 +514,9 @@ class SlackChannelAdapter(ChannelAdapter):
                 attachments.append(attachment)
 
         if not text and not attachments:
-            return
+            return None
 
-        msg = InboundMessage(
+        return InboundMessage(
             channel_id=self.channel_id,
             external_chat_id=channel_id,
             external_sender_id=user_id,
@@ -532,7 +532,20 @@ class SlackChannelAdapter(ChannelAdapter):
             },
         )
 
-        # Bridge to main asyncio loop (same pattern)
+    def _handle_message_event(self, event: dict, say=None) -> None:
+        """Handle an incoming message event from Slack Socket Mode.
+
+        Called from the Socket Mode background thread.  Normalizes the
+        event and bridges the result to the main asyncio loop.
+        """
+        if self._stopped:
+            return
+
+        msg = self._normalize_event(event)
+        if msg is None:
+            return
+
+        # Bridge to main asyncio loop (called from background thread)
         main_loop = self._loop
         if main_loop is not None and not main_loop.is_closed() and not self._stopped:
             main_loop.call_soon_threadsafe(
@@ -1075,6 +1088,303 @@ class SlackChannelAdapter(ChannelAdapter):
             None, lambda: bridge.call_tool("edit_message", args),
         )
         return result is not None
+
+    # ------------------------------------------------------------------
+    # HTTP polling fallback — activates when Socket Mode is blocked
+    # ------------------------------------------------------------------
+
+    async def _switch_to_polling(self) -> None:
+        """Switch from Socket Mode to HTTP polling fallback.
+
+        Called when the WS thread has died ``_WS_FAIL_THRESHOLD`` times.
+        Discovers DM channels and starts a polling asyncio task.
+        """
+        self._connection_mode = "polling"
+        logger.warning(
+            "Channel %s: switching to HTTP polling mode after %d "
+            "consecutive Socket Mode failures",
+            self.channel_id,
+            self._ws_fail_count,
+        )
+        # Resolve bot identity (needed for filtering own messages)
+        await self._ensure_identity()
+        # Discover which channels to poll
+        await self._discover_poll_channels()
+        # Start the polling loop
+        if self._poll_task is None or self._poll_task.done():
+            self._poll_task = asyncio.create_task(self._run_polling())
+
+    async def _discover_poll_channels(self) -> None:
+        """Discover DM channels to poll via ``conversations.list``."""
+        if not self._slack_client:
+            return
+        loop = asyncio.get_running_loop()
+        try:
+            result = await loop.run_in_executor(
+                None,
+                lambda: self._slack_client.conversations_list(
+                    types="im", limit=100, exclude_archived=True,
+                ),
+            )
+            for ch in result.get("channels", []):
+                ch_id = ch.get("id", "")
+                if ch_id and ch_id not in self._poll_channels:
+                    # New channel — start polling from now
+                    self._poll_channels[ch_id] = str(time.time())
+            logger.info(
+                "Channel %s: discovered %d DM channels for polling",
+                self.channel_id,
+                len(self._poll_channels),
+            )
+        except _PROXY_ERRORS:
+            logger.warning(
+                "WebClient blocked during channel discovery — "
+                "polling will use previously known channels"
+            )
+        except Exception:
+            logger.exception("Failed to discover DM channels for polling")
+
+    async def _poll_channel_messages(self, channel_id: str) -> None:
+        """Poll a single channel for new messages via ``conversations.history``.
+
+        Fetches messages newer than the last-seen timestamp, processes
+        them oldest-first, and updates the timestamp watermark.
+        """
+        oldest = self._poll_channels.get(channel_id, str(time.time()))
+        loop = asyncio.get_running_loop()
+        try:
+            result = await loop.run_in_executor(
+                None,
+                lambda: self._slack_client.conversations_history(
+                    channel=channel_id,
+                    oldest=oldest,
+                    limit=_POLL_MSG_LIMIT,
+                    inclusive=False,
+                ),
+            )
+            messages = result.get("messages", [])
+            if not messages:
+                return
+
+            # API returns newest-first; process oldest-first
+            for msg_data in reversed(messages):
+                msg = self._normalize_event(msg_data)
+                if msg is not None:
+                    await self._on_message(msg)
+                # Always advance watermark (even for skipped bot messages)
+                self._poll_channels[channel_id] = msg_data["ts"]
+        except _PROXY_ERRORS:
+            logger.debug(
+                "WebClient blocked polling channel %s — skipping cycle",
+                channel_id,
+            )
+        except Exception:
+            logger.debug(
+                "Failed to poll channel %s",
+                channel_id,
+                exc_info=True,
+            )
+
+    async def _run_polling(self) -> None:
+        """Main polling loop — runs as an asyncio task.
+
+        Polls all known DM channels, periodically refreshes the channel
+        list, and attempts Socket Mode reconnection.
+        """
+        ws_retry_time = time.time() + _WS_RETRY_INTERVAL
+        dm_refresh_time = time.time() + _POLL_DM_REFRESH
+
+        logger.info(
+            "Channel %s: HTTP polling started (%d channels, %.0fs interval)",
+            self.channel_id,
+            len(self._poll_channels),
+            _POLL_INTERVAL,
+        )
+
+        while not self._stopped and self._connection_mode == "polling":
+            # Poll each known channel
+            for ch_id in list(self._poll_channels.keys()):
+                if self._stopped or self._connection_mode != "polling":
+                    return
+                await self._poll_channel_messages(ch_id)
+
+            # Periodically refresh DM channel list
+            now = time.time()
+            if now > dm_refresh_time:
+                await self._discover_poll_channels()
+                dm_refresh_time = now + _POLL_DM_REFRESH
+
+            # Periodically attempt Socket Mode reconnection
+            if now > ws_retry_time:
+                if await self._try_socket_mode_reconnect():
+                    logger.info(
+                        "Channel %s: Socket Mode recovered — "
+                        "switching back from polling",
+                        self.channel_id,
+                    )
+                    return  # polling loop ends; Socket Mode takes over
+                ws_retry_time = now + _WS_RETRY_INTERVAL
+
+            await asyncio.sleep(_POLL_INTERVAL)
+
+        logger.info("Channel %s: HTTP polling stopped", self.channel_id)
+
+    async def _try_socket_mode_reconnect(self) -> bool:
+        """Attempt to reconnect Socket Mode during polling.
+
+        Returns True if reconnection succeeds (switches back to socket
+        mode), False otherwise.
+        """
+        if self._stopped or not self._app_token:
+            return False
+
+        logger.info(
+            "Channel %s: attempting Socket Mode reconnect...",
+            self.channel_id,
+        )
+        try:
+            bolt_app = App(token=self._bot_token)
+            bolt_app.event("message")(self._handle_message_event)
+            bolt_app.event("app_mention")(self._handle_app_mention)
+            handler = SocketModeHandler(bolt_app, self._app_token)
+
+            # Try connecting in a thread with a timeout
+            connected = [False]
+
+            def _try_connect():
+                try:
+                    handler.connect()  # non-blocking connect
+                    connected[0] = True
+                except Exception:
+                    pass
+
+            t = threading.Thread(target=_try_connect, daemon=True)
+            t.start()
+            t.join(timeout=10.0)
+
+            if connected[0]:
+                # Socket Mode works — switch back
+                handler.close()  # close the test connection
+
+                self._bolt_app = bolt_app
+                self._handler = SocketModeHandler(bolt_app, self._app_token)
+                self._connection_mode = "socket"
+                self._ws_fail_count = 0
+
+                # Cancel polling task
+                if self._poll_task and not self._poll_task.done():
+                    self._poll_task.cancel()
+                    self._poll_task = None
+
+                # Start Socket Mode in background thread
+                self._start_socket_mode_thread()
+                # Restart health monitor
+                if self._monitor_task and not self._monitor_task.done():
+                    self._monitor_task.cancel()
+                self._monitor_task = asyncio.create_task(
+                    self._ws_health_monitor()
+                )
+                return True
+            else:
+                try:
+                    handler.close()
+                except Exception:
+                    pass
+                return False
+        except Exception:
+            logger.debug(
+                "Socket Mode reconnect failed for channel %s",
+                self.channel_id,
+                exc_info=True,
+            )
+            return False
+
+    async def _ws_health_monitor(self) -> None:
+        """Monitor WebSocket thread health; switch to polling on failure.
+
+        Runs as an asyncio task alongside Socket Mode.  Checks the WS
+        thread every 10 seconds.  When the thread dies repeatedly,
+        activates the polling fallback.
+        """
+        # Grace period for initial Socket Mode connection
+        await asyncio.sleep(15)
+
+        while not self._stopped and self._connection_mode == "socket":
+            ws = self._ws_thread
+            if ws is not None and not ws.is_alive() and not self._stopped:
+                self._ws_fail_count += 1
+                if self._ws_fail_count >= _WS_FAIL_THRESHOLD:
+                    await self._switch_to_polling()
+                    return  # monitor done — polling takes over
+                else:
+                    logger.info(
+                        "Channel %s: Socket Mode thread died (%d/%d), "
+                        "restarting...",
+                        self.channel_id,
+                        self._ws_fail_count,
+                        _WS_FAIL_THRESHOLD,
+                    )
+                    self._start_socket_mode_thread()
+            await asyncio.sleep(10)
+
+    def _start_socket_mode_thread(self) -> None:
+        """Start (or restart) the Socket Mode background thread.
+
+        Extracted from ``start()`` so both initial startup and internal
+        reconnection share the same logic.
+        """
+        if self._bolt_app is None:
+            self._bolt_app = App(token=self._bot_token)
+            self._bolt_app.event("message")(self._handle_message_event)
+            self._bolt_app.event("app_mention")(self._handle_app_mention)
+
+        if self._handler is None:
+            self._handler = SocketModeHandler(self._bolt_app, self._app_token)
+
+        def _run_socket_mode():
+            try:
+                self._handler.start()  # Blocking
+            except Exception as exc:
+                if not self._stopped:
+                    is_auth = _is_auth_error(exc)
+                    if is_auth:
+                        self._consecutive_auth_failures += 1
+                        logger.error(
+                            "Slack Socket Mode AUTH_ERROR for channel %s "
+                            "(consecutive=%d): %s",
+                            self.channel_id,
+                            self._consecutive_auth_failures,
+                            exc,
+                        )
+                    else:
+                        logger.exception(
+                            "Slack Socket Mode crashed for channel %s",
+                            self.channel_id,
+                        )
+                    prefix = "AUTH_ERROR: " if is_auth else ""
+                    error_msg = (
+                        f"{prefix}Socket Mode connection failed: {exc}"
+                    )
+                    main_loop = self._loop
+                    if (
+                        self._on_error is not None
+                        and main_loop is not None
+                        and not main_loop.is_closed()
+                    ):
+                        try:
+                            main_loop.call_soon_threadsafe(
+                                asyncio.ensure_future,
+                                self._on_error(self.channel_id, error_msg),
+                            )
+                        except RuntimeError:
+                            pass  # loop already closed
+
+        self._ws_thread = threading.Thread(
+            target=_run_socket_mode,
+            daemon=True,
+            name=f"slack-ws-{self.channel_id}",
+        )
+        self._ws_thread.start()
 
     # ------------------------------------------------------------------
     # Outgoing messages
