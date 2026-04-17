@@ -317,6 +317,45 @@ The BUILD stage follows TDD methodology: tests before code, code until tests pas
     (wrong attribute name) passed 8 pipeline stages undetected because
     it was inside try/except and no test exercised the actual runtime path.
 
+**Step 5: USER-PATH TRACE — walk real scenarios through real code**
+
+15. For each acceptance criterion, pick **one concrete user action** and
+    trace it through the actual production code path — not tests, not
+    mocks, the real call chain.
+
+    For each trace:
+    a. **Start from the user action** — "Titus sends a Slack DM", not
+       "\_poll\_channel\_messages is called"
+    b. **Follow every function call** — read the real source, not from
+       memory. Note the actual input each function receives.
+    c. **Check external data shapes** — when the code consumes data from
+       an external API (Slack, DB, filesystem), verify your test mocks
+       match the real response schema. `conversations.history` messages
+       lack `channel`; Socket Mode events have it. These differences
+       are invisible in unit tests that supply hand-crafted dicts.
+    d. **Check cross-component boundaries** — when one component calls
+       another (adapter → gateway, hook → registry), trace what happens
+       on the OTHER side. Error callbacks, state resets, object
+       destruction — these are where bugs hide.
+    e. **Check competing paths** — if two mechanisms handle the same
+       event (e.g., `_on_error` callback AND health monitor both react
+       to thread death), which fires first? Does the first one prevent
+       the second from ever running?
+
+    **Action on findings:**
+    - Each finding → **fix immediately** (these are always real bugs)
+    - Update tests to cover the discovered path
+
+    **Why this exists:** run\_ec4a73ff shipped with 26 TDD tests, 10/10
+    confidence, and 8 pipeline stages passed. User-path trace found 2
+    CRITICAL bugs in 5 minutes: (1) `_on_error` fired before health
+    monitor → gateway destroyed adapter → `_ws_fail_count` reset →
+    polling never activated, (2) `conversations.history` messages lack
+    `channel` field → `external_chat_id=""` → routing broken. Both
+    invisible to unit tests because mocks didn't match real API data
+    and no test crossed the adapter↔gateway boundary. This is LL04's
+    third recurrence: engineering-complete ≠ user-complete.
+
 **The TDD constraint:** Fix code, not tests. Tests are derived from the accepted
 design. Changing a test = changing the spec = go back to PLAN.
 
@@ -337,7 +376,7 @@ Publish artifact:
 python backend/scripts/artifact_cli.py publish --project <PROJECT> \
   --type changeset --producer s_autonomous-pipeline \
   --summary "<N> files changed, <M> commits, TDD: <red>/<green>/<verify>" \
-  --data '{"branch":"...","commits":[...],"files_changed":[...],"diff_summary":"...","tdd":{"acceptance_criteria_count":N,"tests_generated":M,"red_failures":K,"green_pass":true,"regressions":0,"smoke_tests":S,"smoke_crashes_caught":C}}'
+  --data '{"branch":"...","commits":[...],"files_changed":[...],"diff_summary":"...","tdd":{"acceptance_criteria_count":N,"tests_generated":M,"red_failures":K,"green_pass":true,"regressions":0,"smoke_tests":S,"smoke_crashes_caught":C,"user_path_traces":T,"user_path_bugs_found":B}}'
 python backend/scripts/artifact_cli.py advance --project <PROJECT> --state review
 ```
 
@@ -461,6 +500,7 @@ python backend/scripts/artifact_cli.py advance --project <PROJECT> --state deliv
      -2 if any acceptance criterion lacks a test
      -2 if WTF gate triggered (even if resolved)
      -2 if smoke_tests == 0 and files_changed > 1 (runtime crashes likely hidden)
+     -2 if user_path_traces == 0 and files_changed > 1 (real data flow unverified)
      -1 if integration_trace.checked == 0 (wiring unverified)
      -1 if frontend files changed but ux_review.triggered == false (UX unverified)
      -1 per unresolved warning from validator
@@ -511,6 +551,8 @@ python backend/scripts/artifact_cli.py advance --project <PROJECT> --state deliv
    | Bugs caught (RED phase) | K |
    | Smoke tests (new paths) | S |
    | Runtime crashes caught by smoke | C |
+   | User-path traces | T |
+   | Bugs found by user-path trace | B |
    | Regressions | 0 |
    | Total test suite | N tests, all passing |
 
@@ -525,6 +567,7 @@ python backend/scripts/artifact_cli.py advance --project <PROJECT> --state deliv
    | REVIEW (code quality) | N findings, M auto-fixed |
    | REVIEW (security) | clean / N findings |
    | REVIEW (integration) | N symbols checked, M connected, K warnings |
+   | BUILD (user-path) | T traces, B bugs found and fixed |
    | TEST (TDD) | pass |
    | VALIDATOR | 6/6 checks |
    | Confidence | X/10 |
