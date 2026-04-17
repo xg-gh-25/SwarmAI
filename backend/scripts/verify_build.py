@@ -51,6 +51,8 @@ CAPABILITY_MANIFEST = [
     ("yaml",                "yaml",                          "critical"),
     ("httpx",               "httpx",                         "critical"),
     ("numpy",               "numpy",                         "important"),
+    ("amazon_transcribe",   "amazon_transcribe",             "critical"),
+    ("awscrt",              "awscrt",                        "critical"),
 
     # ── Local modules (must be bundled) ──
     ("vec_db",              "core.vec_db",                   "critical"),
@@ -72,6 +74,7 @@ CAPABILITY_MANIFEST = [
     ("skill_fitness",       "core.skill_fitness",            "critical"),
     ("session_miner",       "core.session_miner",            "critical"),
     ("skill_registry",      "core.skill_registry",           "critical"),
+    ("voice_transcribe",    "core.voice_transcribe",         "critical"),
     ("distillation_hook",   "hooks.distillation_hook",       "critical"),
     ("evolution_hook",      "hooks.evolution_maintenance_hook", "critical"),
     ("install_daemon",      "channels.install_backend_daemon", "important"),
