@@ -15,6 +15,8 @@ from schemas.channel import (
     ChannelResponse,
     ChannelStatusResponse,
     ChannelSessionResponse,
+    ChannelSendRequest,
+    ChannelSendResponse,
 )
 from core.exceptions import NotFoundException, ValidationException
 
@@ -358,6 +360,38 @@ async def test_channel(channel_id: str):
         "valid": is_valid,
         "error": error_message,
     }
+
+
+
+# ============== Proactive Messaging ==============
+
+@router.post("/{channel_id}/send", response_model=ChannelSendResponse)
+async def send_message(channel_id: str, request: ChannelSendRequest):
+    """Send a proactive message through a running channel (bot identity).
+
+    This lets the agent send messages via the channel's bot token
+    without needing an inbound message trigger. Messages appear as
+    the bot user, not the workspace owner.
+    """
+    channel = await db.channels.get(channel_id)
+    if not channel:
+        raise NotFoundException(
+            detail=f"Channel with ID '{channel_id}' not found"
+        )
+
+    try:
+        ts = await channel_gateway.send_proactive_message(
+            channel_id=channel_id,
+            external_chat_id=request.channel,
+            text=request.text,
+            thread_ts=request.thread_ts,
+        )
+        return ChannelSendResponse(ok=True, ts=ts)
+    except ValueError as e:
+        return ChannelSendResponse(ok=False, error=str(e))
+    except Exception as e:
+        logger.exception(f"Failed to send proactive message on channel {channel_id}")
+        return ChannelSendResponse(ok=False, error=str(e))
 
 
 # ============== Session Endpoints ==============

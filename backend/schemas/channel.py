@@ -59,6 +59,21 @@ class ChannelStatusResponse(BaseModel):
     error_message: Optional[str] = None
 
 
+
+class ChannelSendRequest(BaseModel):
+    """Request to send a proactive message through a channel."""
+    channel: str = Field(..., description="Slack channel/DM ID (e.g. C12345 or D12345)")
+    text: str = Field(..., min_length=1, description="Message text (markdown)")
+    thread_ts: Optional[str] = Field(default=None, description="Thread timestamp to reply in")
+
+
+class ChannelSendResponse(BaseModel):
+    """Response for a proactive message send."""
+    ok: bool
+    ts: Optional[str] = None
+    error: Optional[str] = None
+
+
 class ChannelSessionResponse(BaseModel):
     """Response for a channel session."""
     id: str

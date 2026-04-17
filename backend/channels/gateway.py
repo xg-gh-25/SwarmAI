@@ -1696,6 +1696,64 @@ class ChannelGateway:
         return False
 
 
+
+    # ------------------------------------------------------------------
+    # Proactive messaging
+    # ------------------------------------------------------------------
+
+    async def send_proactive_message(
+        self,
+        channel_id: str,
+        external_chat_id: str,
+        text: str,
+        thread_ts: str | None = None,
+    ) -> str | None:
+        """Send a proactive message through a running channel adapter.
+
+        This lets the agent send messages via the channel's bot token
+        (bot identity) without requiring an inbound message trigger.
+
+        Args:
+            channel_id: Internal channel ID (must be running).
+            external_chat_id: Slack channel/DM ID to send to.
+            text: Message text (markdown).
+            thread_ts: Optional thread timestamp to reply in thread.
+
+        Returns:
+            Message timestamp (ts) on success, None on failure.
+
+        Raises:
+            ValueError: If channel is not running.
+        """
+        adapter = self._adapters.get(channel_id)
+        if not adapter:
+            raise ValueError(
+                f"Channel '{channel_id}' is not running. "
+                "Start it first via /channels/{id}/start"
+            )
+
+        outbound = OutboundMessage(
+            channel_id=channel_id,
+            external_chat_id=external_chat_id,
+            external_thread_id=thread_ts,
+            text=text,
+        )
+
+        try:
+            ts = await adapter.send_message(outbound)
+            logger.info(
+                "Proactive message sent: channel=%s chat=%s ts=%s",
+                channel_id, external_chat_id, ts,
+            )
+            return ts
+        except Exception:
+            logger.exception(
+                "Failed to send proactive message on channel %s",
+                channel_id,
+            )
+            return None
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
