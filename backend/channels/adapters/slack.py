@@ -1122,6 +1122,7 @@ class SlackChannelAdapter(ChannelAdapter):
         try:
             result = await loop.run_in_executor(
                 None,
+                # TODO: paginate if >100 DMs (response_metadata.next_cursor)
                 lambda: self._slack_client.conversations_list(
                     types="im", limit=100, exclude_archived=True,
                 ),
