@@ -156,6 +156,14 @@ class ResourceMonitor:
     # On smaller machines the dynamic formula gates via cost_mb.
     _MAX_TABS_CEILING: int = 4
     _MEMORY_THRESHOLD_PCT: float = 90.0  # Never push machine past 90% used
+    # Concurrent penalty: each alive session inflates the estimated spawn
+    # cost to account for simultaneous peak memory spikes.  On a 16GB
+    # machine with 2 sessions alive, cost becomes 1200*(1+2*0.5)=2400MB,
+    # which pushes projected usage past 90% and blocks the 3rd spawn.
+    # On 36GB machines the extra headroom absorbs the penalty easily.
+    # Tuning: 0.3 only blocks at 12.8GB+ used on 16GB; 0.5 blocks at
+    # 12.4GB+ — one Chrome tab difference.  0.5 is the safe choice.
+    _CONCURRENT_PENALTY_FACTOR: float = 0.5
 
     def __init__(self) -> None:
         self._cached_memory: Optional[SystemMemory] = None
@@ -271,16 +279,20 @@ class ResourceMonitor:
 
     # ── Spawn budget ────────────────────────────────────────────
 
-    def spawn_budget(self) -> SpawnBudget:
+    def spawn_budget(self, alive_count: int = 0) -> SpawnBudget:
         """Check whether a new subprocess can be safely spawned.
 
         Uses the same 90% rule as compute_max_tabs: if spawning one
-        more session (~500MB) would push the machine past 90% memory
-        usage, deny the spawn.
+        more session would push the machine past 90% memory usage,
+        deny the spawn.
 
-        Also denies spawns during the OOM cooldown period (Fix 4) —
-        after a recent OOM kill, the system needs time to reclaim
-        memory before we try spawning another heavy process.
+        Args:
+            alive_count: Number of currently alive sessions.  Used to
+                apply a concurrent penalty — each alive session inflates
+                the estimated spawn cost by ``_CONCURRENT_PENALTY_FACTOR``
+                to account for simultaneous peak memory spikes.  Without
+                this, 3 sessions on a 16GB machine pass the budget check
+                at spawn time but trigger macOS jetsam when they all peak.
 
         Never raises.
         """
@@ -294,7 +306,11 @@ class ResourceMonitor:
             # On macOS, mem.used underestimates real pressure by ~30%.
             # See SystemMemory.effective_used docstring for details.
             used_mb = mem.effective_used / (1024 * 1024)
-            estimated_mb = self._estimated_spawn_cost_mb()
+            base_cost_mb = self._estimated_spawn_cost_mb()
+            # Concurrent penalty: more alive sessions → higher chance of
+            # simultaneous memory peaks → inflate the cost estimate.
+            penalty_multiplier = 1.0 + alive_count * self._CONCURRENT_PENALTY_FACTOR
+            estimated_mb = base_cost_mb * penalty_multiplier
             projected_pct = (used_mb + estimated_mb) / total_mb * 100
 
             if projected_pct <= self._MEMORY_THRESHOLD_PCT:
@@ -366,7 +382,7 @@ class ResourceMonitor:
 
         Uses adaptive spawn cost from lifecycle_manager samples when
         available (75th percentile of actual tree RSS, floored at
-        1200MB), falls back to ``_SPAWN_COST_MB`` (1500MB).
+        ``_MIN_SPAWN_COST_MB``), falls back to ``_DEFAULT_SPAWN_COST_MB``.
 
         Returns [2, 4]. Always allows at least 2 (1 chat + 1 channel).
         """
