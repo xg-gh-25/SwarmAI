@@ -201,7 +201,7 @@ class TestSubprocessSafety:
 
         mock_proc = AsyncMock()
         mock_proc.communicate = AsyncMock(side_effect=asyncio.TimeoutError)
-        mock_proc.kill = AsyncMock()
+        mock_proc.kill = MagicMock()  # kill() is synchronous (os.kill)
         # Simulate real behavior: wait() sets returncode after kill
         async def _fake_wait():
             mock_proc.returncode = -9
@@ -226,7 +226,7 @@ class TestSubprocessSafety:
         mock_proc = AsyncMock()
         mock_proc.communicate = AsyncMock(return_value=(b"", b""))
         mock_proc.returncode = None  # never finished
-        mock_proc.kill = AsyncMock()
+        mock_proc.kill = MagicMock()  # kill() is synchronous (os.kill)
         mock_proc.wait = AsyncMock()
 
         with patch('core.voice_transcribe.asyncio.create_subprocess_exec',

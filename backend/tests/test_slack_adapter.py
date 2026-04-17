@@ -475,9 +475,21 @@ class TestSlackLifecycle:
             assert adapter._ws_thread.daemon is True
             assert adapter._ws_thread.name.startswith("slack-ws-")
 
-            # Clean up
+            # Clean up — cancel pending tasks to avoid "Task was destroyed" warning
             adapter._stopped = True
-            if adapter._ws_thread.is_alive():
+            if adapter._monitor_task and not adapter._monitor_task.done():
+                adapter._monitor_task.cancel()
+                try:
+                    await adapter._monitor_task
+                except asyncio.CancelledError:
+                    pass
+            if adapter._poll_task and not adapter._poll_task.done():
+                adapter._poll_task.cancel()
+                try:
+                    await adapter._poll_task
+                except asyncio.CancelledError:
+                    pass
+            if adapter._ws_thread and adapter._ws_thread.is_alive():
                 adapter._ws_thread.join(timeout=1)
 
 
