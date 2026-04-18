@@ -1468,16 +1468,25 @@ pub fn run() {
                 }
             }
 
-            // Set up window close handler for cleanup (especially important on Windows)
+            // Set up window close handler: hide on close (minimize to dock), Cmd+Q to actually quit
             if let Some(window) = app.get_webview_window("main") {
                 let app_handle = app.handle().clone();
+                let window_clone = window.clone();
                 window.on_window_event(move |event| {
-                    if let tauri::WindowEvent::Destroyed = event {
-                        // Best-effort: emit before block_on freezes event loop
-                        let _ = app_handle.emit("shutdown-started", ());
-                        // Graceful shutdown: send POST /shutdown, wait, then force-kill
-                        let state = app_handle.state::<SharedBackendState>();
-                        graceful_shutdown_and_kill(state.inner().clone(), "window_destroy");
+                    match event {
+                        tauri::WindowEvent::CloseRequested { api, .. } => {
+                            // Hide window instead of closing — minimize to dock
+                            api.prevent_close();
+                            let _ = window_clone.hide();
+                        }
+                        tauri::WindowEvent::Destroyed => {
+                            // Best-effort: emit before block_on freezes event loop
+                            let _ = app_handle.emit("shutdown-started", ());
+                            // Graceful shutdown: send POST /shutdown, wait, then force-kill
+                            let state = app_handle.state::<SharedBackendState>();
+                            graceful_shutdown_and_kill(state.inner().clone(), "window_destroy");
+                        }
+                        _ => {}
                     }
                 });
             }
@@ -1504,6 +1513,13 @@ pub fn run() {
                     // Graceful shutdown: send POST /shutdown, wait, then force-kill
                     let state = app_handle.state::<SharedBackendState>();
                     graceful_shutdown_and_kill(state.inner().clone(), "exit_requested");
+                }
+                tauri::RunEvent::Reopen { .. } => {
+                    // macOS: dock icon clicked — show the hidden window
+                    if let Some(window) = app_handle.get_webview_window("main") {
+                        let _ = window.show();
+                        let _ = window.set_focus();
+                    }
                 }
                 _ => {}
             }

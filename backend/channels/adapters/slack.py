@@ -336,6 +336,11 @@ class SlackChannelAdapter(ChannelAdapter):
         # Auth health tracking
         self._last_auth_check: float = 0.0
         self._consecutive_auth_failures: int = 0
+        # Reconnect circuit breaker
+        self._consecutive_ws_failures: int = 0
+        self._max_ws_failures: int = int(config.get("max_ws_failures", 5))
+        self._reconnect_backoff: float = 2.0  # initial backoff seconds
+        self._reconnect_backoff_max: float = 120.0  # max backoff seconds
 
         # -- HTTP polling fallback (方案B) --
         # Connection mode: "websocket" (default) | "polling" | "switching"
@@ -402,7 +407,13 @@ class SlackChannelAdapter(ChannelAdapter):
             return False
 
     async def start(self) -> None:
-        """Start the Socket Mode WebSocket in a background thread."""
+        """Start the Socket Mode WebSocket in a background thread.
+
+        Uses connect() instead of start() to control the reconnect loop
+        ourselves.  SDK auto-reconnect is DISABLED — we implement
+        exponential backoff + circuit breaker that falls back to HTTP
+        polling after ``max_ws_failures`` consecutive failures.
+        """
         if self._stopped:
             self._stopped = False
 
@@ -416,46 +427,90 @@ class SlackChannelAdapter(ChannelAdapter):
         self._bolt_app.event("message")(self._handle_message_event)
         self._bolt_app.event("app_mention")(self._handle_app_mention)
 
-        # Start Socket Mode in background thread
-        self._handler = SocketModeHandler(self._bolt_app, self._app_token)
+        # Disable SDK auto-reconnect — we handle it ourselves with backoff
+        self._handler = SocketModeHandler(
+            self._bolt_app,
+            self._app_token,
+            auto_reconnect_enabled=False,
+        )
 
         def _run_socket_mode():
-            try:
-                self._handler.start()  # Blocking
-            except Exception as exc:
-                if not self._stopped:
+            backoff = self._reconnect_backoff
+
+            while not self._stopped:
+                try:
+                    self._handler.connect()
+                    # Connection succeeded — reset counters
+                    self._consecutive_ws_failures = 0
+                    backoff = self._reconnect_backoff
+                    logger.info(
+                        "Slack Socket Mode connected for channel %s",
+                        self.channel_id,
+                    )
+                    # Block until disconnected (check every 5s)
+                    while not self._stopped:
+                        time.sleep(5)
+                        client = self._handler.client
+                        if client and not client.is_connected():
+                            logger.warning(
+                                "Slack Socket Mode disconnected for channel %s — will reconnect",
+                                self.channel_id,
+                            )
+                            break
+
+                except Exception as exc:
+                    if self._stopped:
+                        break
+
                     is_auth = _is_auth_error(exc)
+                    self._consecutive_ws_failures += 1
+
                     if is_auth:
                         self._consecutive_auth_failures += 1
                         logger.error(
-                            "Slack Socket Mode AUTH_ERROR for channel %s (consecutive=%d): %s",
-                            self.channel_id, self._consecutive_auth_failures, exc,
-                        )
-                    else:
-                        logger.exception(
-                            "Slack Socket Mode crashed for channel %s",
+                            "Slack Socket Mode AUTH_ERROR for channel %s "
+                            "(consecutive=%d): %s",
                             self.channel_id,
+                            self._consecutive_auth_failures, exc,
                         )
-                    prefix = "AUTH_ERROR: " if is_auth else ""
-                    error_msg = f"{prefix}Socket Mode connection failed: {exc}"
+                        # Auth errors are permanent — don't retry
+                        error_msg = f"AUTH_ERROR: Socket Mode connection failed: {exc}"
+                        self._report_error(error_msg)
+                        break
+                    else:
+                        logger.warning(
+                            "Slack Socket Mode connect failed for channel %s "
+                            "(attempt %d/%d, backoff %.0fs): %s",
+                            self.channel_id,
+                            self._consecutive_ws_failures,
+                            self._max_ws_failures,
+                            backoff, exc,
+                        )
 
-                    # Trigger HTTP polling fallback (non-auth errors only)
-                    if not is_auth:
+                    # Circuit breaker: too many failures → fall back to polling
+                    if self._consecutive_ws_failures >= self._max_ws_failures:
+                        error_msg = (
+                            f"Socket Mode circuit breaker tripped after "
+                            f"{self._consecutive_ws_failures} failures — "
+                            f"switching to HTTP polling"
+                        )
+                        logger.warning(error_msg)
                         self._on_ws_failure(error_msg)
+                        self._report_error(error_msg)
+                        break
 
-                    main_loop = self._loop
-                    if (
-                        self._on_error is not None
-                        and main_loop is not None
-                        and not main_loop.is_closed()
-                    ):
-                        try:
-                            main_loop.call_soon_threadsafe(
-                                asyncio.ensure_future,
-                                self._on_error(self.channel_id, error_msg),
-                            )
-                        except RuntimeError:
-                            pass  # loop already closed
+                    # Exponential backoff (interruptible)
+                    sleep_end = time.monotonic() + backoff
+                    while not self._stopped and time.monotonic() < sleep_end:
+                        time.sleep(0.5)
+                    backoff = min(backoff * 2, self._reconnect_backoff_max)
+
+            logger.info(
+                "Slack Socket Mode thread exiting for channel %s "
+                "(stopped=%s, ws_failures=%d)",
+                self.channel_id, self._stopped,
+                self._consecutive_ws_failures,
+            )
 
         self._ws_thread = threading.Thread(
             target=_run_socket_mode,
@@ -464,10 +519,28 @@ class SlackChannelAdapter(ChannelAdapter):
         )
         self._ws_thread.start()
         logger.info(
-            "Slack adapter started for channel %s (bot_token=xoxb-...%s)",
+            "Slack adapter started for channel %s (bot_token=xoxb-...%s, "
+            "auto_reconnect=off, max_failures=%d)",
             self.channel_id,
             self._bot_token[-4:] if len(self._bot_token) > 4 else "****",
+            self._max_ws_failures,
         )
+
+    def _report_error(self, error_msg: str) -> None:
+        """Report an error to the gateway via the main event loop."""
+        main_loop = self._loop
+        if (
+            self._on_error is not None
+            and main_loop is not None
+            and not main_loop.is_closed()
+        ):
+            try:
+                main_loop.call_soon_threadsafe(
+                    asyncio.ensure_future,
+                    self._on_error(self.channel_id, error_msg),
+                )
+            except RuntimeError:
+                pass  # loop already closed
 
     async def stop(self) -> None:
         """Stop the adapter and release resources."""

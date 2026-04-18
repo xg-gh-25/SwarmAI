@@ -66,6 +66,44 @@ export { MAX_OPEN_TABS, MAX_TABS_HARD_CEILING, MAX_OPEN_TABS_FALLBACK } from '..
  *  The infinite-scroll page size in loadOlderMessages is a separate concern. */
 const INITIAL_MESSAGE_LOAD_LIMIT = 200;
 
+/**
+ * COE-001 Fix: Force WebView GPU layer repaint.
+ *
+ * Tauri WebView (WebKit) may not repaint after programmatic DOM updates
+ * from React state changes. Messages load correctly (DOM nodes exist)
+ * but the screen stays blank until a user interaction triggers repaint.
+ *
+ * This function uses 3 strategies to force a visible repaint:
+ * 1. display:none reflow — most reliable, forces layout recalc
+ * 2. GPU translateZ compositing — forces new compositor frame
+ * 3. window resize dispatch — triggers WebKit's layout engine
+ */
+function forceWebViewRepaint(containerRef: React.RefObject<HTMLDivElement | null>) {
+  const el = containerRef.current;
+  if (!el) return;
+
+  // Strategy 1: display:none reflow trick
+  const prev = el.style.display;
+  el.style.display = 'none';
+  // eslint-disable-next-line @typescript-eslint/no-unused-expressions
+  el.offsetHeight; // force synchronous reflow
+  el.style.display = prev;
+
+  // Strategy 2: GPU layer invalidation via translateZ
+  requestAnimationFrame(() => {
+    if (!containerRef.current) return;
+    containerRef.current.style.transform = 'translateZ(0)';
+    requestAnimationFrame(() => {
+      if (containerRef.current) {
+        containerRef.current.style.transform = '';
+      }
+    });
+  });
+
+  // Strategy 3: Synthetic resize event — triggers WebKit layout
+  window.dispatchEvent(new Event('resize'));
+}
+
 /** Convert a backend ChatMessage to the frontend Message shape. */
 function toDisplayMessage(msg: { id: string; role: string; content: ContentBlock[]; createdAt: string; model?: string }): Message {
   return {
@@ -725,6 +763,11 @@ export default function ChatPage() {
   // reliable scroll-to-bottom once the DOM is fully laid out after restore.
   useEffect(() => {
     if (messagesReady && messages.length > 0) {
+      // COE-001: Force WebView repaint BEFORE scrolling.
+      // Without this, WebKit may have stale GPU compositing layer and
+      // messages stay invisible until user interaction.
+      forceWebViewRepaint(messagesContainerRef);
+
       // Double-rAF: first rAF runs after React commit, second runs after
       // the browser has painted the new DOM, guaranteeing scroll targets exist.
       requestAnimationFrame(() => {
@@ -786,11 +829,14 @@ export default function ChatPage() {
         if (activeState?.sessionId) {
           try {
             await loadSessionMessages(activeState.sessionId);
-            // Task 3 fix: force a visible repaint after messages load.
-            // React 18 batching may hold the render until interaction;
-            // breaking out via setTimeout ensures the paint fires immediately.
+            // COE-001 + Task 3 fix: force a visible repaint after messages load.
+            // bumpStreamingDerivation triggers React re-render, but WebView GPU
+            // layer may not repaint. forceWebViewRepaint forces the compositor.
             if (mounted) {
-              setTimeout(() => bumpStreamingDerivation(), 0);
+              setTimeout(() => {
+                bumpStreamingDerivation();
+                forceWebViewRepaint(messagesContainerRef);
+              }, 0);
             }
           } catch {
             // Session may no longer exist — reset to fresh tab

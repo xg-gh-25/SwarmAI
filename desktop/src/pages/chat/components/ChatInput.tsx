@@ -83,6 +83,8 @@ export function ChatInput({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const maxHeightRef = useRef<number>(400); // fallback: 20 * 20px
   const transitionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // IME composition tracking — more reliable than e.nativeEvent.isComposing in Tauri WKWebView
+  const isComposingRef = useRef(false);
 
   // Compute maxHeight once from actual computed line-height at mount
   useEffect(() => {
@@ -383,8 +385,9 @@ export function ChatInput({
       return;
     }
 
-    // Normal enter to send
-    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+    // Normal enter to send — guard with both ref-based tracking AND nativeEvent.isComposing
+    // to handle Tauri WKWebView where isComposing can be unreliable for Chinese IME
+    if (e.key === 'Enter' && !e.shiftKey && !isComposingRef.current && !e.nativeEvent.isComposing) {
       e.preventDefault();
       handleSend();
     }
@@ -499,6 +502,12 @@ export function ChatInput({
               onChange={handleInputChange}
               onKeyDown={handleKeyDown}
               onPaste={handlePaste}
+              onCompositionStart={() => { isComposingRef.current = true; }}
+              onCompositionEnd={() => {
+                // Delay clearing — in WebKit, compositionEnd fires BEFORE the final keyDown,
+                // so we need the ref to still be true when handleKeyDown runs for the Enter key
+                setTimeout(() => { isComposingRef.current = false; }, 0);
+              }}
               placeholder={
                 disabled
                   ? t('chat.disconnectedPlaceholder', 'Backend offline...')
