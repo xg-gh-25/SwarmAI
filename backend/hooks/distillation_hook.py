@@ -22,6 +22,7 @@ Key public symbols:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 import subprocess
@@ -376,6 +377,27 @@ class DistillationTriggerHook:
         all_decisions = self._supersede_by_topic(all_decisions)
         all_lessons = self._supersede_by_topic(all_lessons)
 
+        # Frequency gate: only promote entries that appear in >=2 DA files.
+        # One-off observations stay in DailyActivity; recurring themes graduate.
+        # This creates the compound loop: repeated patterns → MEMORY.md → better agent.
+        da_files_data = [
+            {"path": str(f), "date": f.stem, "body": f.read_text(encoding="utf-8")}
+            for f in sorted(
+                (ws_path / "Knowledge" / "DailyActivity").glob("*.md"),
+                reverse=True,
+            )[:SCAN_DAYS]
+        ] if (ws_path / "Knowledge" / "DailyActivity").is_dir() else []
+
+        if da_files_data:
+            all_decisions = [
+                e for e in all_decisions
+                if self._passes_frequency_gate(e, da_files_data)
+            ]
+            all_lessons = [
+                e for e in all_lessons
+                if self._passes_frequency_gate(e, da_files_data)
+            ]
+
         # Batched writes to MEMORY.md — one lock acquisition per section
         if all_decisions:
             self._run_locked_write(
@@ -728,6 +750,69 @@ class DistillationTriggerHook:
                 keep_indices.add(best)
 
         return [e for i, e in enumerate(entries) if i in keep_indices]
+
+    @staticmethod
+    def _passes_frequency_gate(
+        entry: str,
+        da_files: list[dict],
+        min_mentions: int = 2,
+    ) -> bool:
+        """Check whether an entry topic appears in enough DailyActivity files.
+
+        An entry must be mentioned in ``min_mentions`` (default 2) distinct
+        DailyActivity files before it qualifies for promotion to MEMORY.md.
+        One-off observations stay in DailyActivity; recurring themes graduate.
+
+        Uses the same fingerprinting approach as ``_supersede_by_topic``:
+        extract significant words, check overlap with each DA body.
+
+        Match threshold: ``max(2, min(4, len(fp) * 0.3))`` — at least 2
+        words must match, capped at 4 so rich entries (10+ words) don't
+        need unreasonably many matches.
+
+        Cold-start safety: when only 1 DA file exists (first sessions),
+        the gate passes unconditionally — don't block onboarding.
+
+        Returns ``True`` when the gate passes (entry may be promoted).
+        """
+        if not da_files or len(da_files) < min_mentions:
+            return True  # Not enough history → let through (cold start)
+
+        # Build fingerprint — reuses _supersede_by_topic stop words / logic
+        _STOP = frozenset({
+            "a", "an", "the", "is", "was", "are", "were", "be", "been",
+            "to", "of", "in", "for", "on", "at", "by", "with", "from",
+            "and", "or", "not", "no", "but", "that", "this", "it",
+            "all", "now", "have", "has", "had", "do", "does", "did",
+            "will", "would", "should", "could", "can", "may", "might",
+            "our", "we", "i", "my", "me", "us", "its", "their",
+            "also", "just", "still", "only", "very", "too", "so",
+        })
+        cleaned = re.sub(r"^-?\s*\d{4}-\d{2}-\d{2}[:\s]*", "", entry)
+        cleaned = cleaned.replace("**", "")
+        fp = {
+            w
+            for w in re.findall(r"[a-zA-Z][a-zA-Z0-9_.-]+", cleaned.lower())
+            if w not in _STOP and len(w) > 2
+        }
+        if len(fp) < 2:
+            return True  # Too short to fingerprint → let through
+
+        # Capped threshold: at least 2 words, at most 4.
+        # Without the cap, a 14-word fingerprint needs 4.2 matches — too
+        # strict for entries where DA files describe the same topic with
+        # different wording.
+        threshold = max(2, min(4, len(fp) * 0.3))
+
+        mention_count = 0
+        for df in da_files:
+            body_lower = df["body"].lower()
+            matches = sum(1 for term in fp if term in body_lower)
+            if matches >= threshold:
+                mention_count += 1
+                if mention_count >= min_mentions:
+                    return True
+        return False
 
     @staticmethod
     def _get_source_repo_path() -> Path | None:
@@ -1445,6 +1530,18 @@ class DistillationTriggerHook:
         if not memory_path.exists():
             return
 
+        # Load usage data for smart eviction (lowest-usage first).
+        # Falls back to oldest-first if no usage data exists.
+        _KEY_RE = re.compile(r"\[([A-Z]{2,3}\d{2,3})\]")
+        usage: dict[str, int] = {}
+        if ws_path is not None:
+            usage_path = ws_path / ".context" / ".memory-usage.json"
+            if usage_path.exists():
+                try:
+                    usage = json.loads(usage_path.read_text(encoding="utf-8"))
+                except (json.JSONDecodeError, OSError):
+                    pass
+
         lock_path = memory_path.with_suffix(memory_path.suffix + ".lock")
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         fd = None
@@ -1474,10 +1571,25 @@ class DistillationTriggerHook:
                     if len(entry_indices) <= cap:
                         continue
 
-                    # Collect overflow entries for archival
-                    overflow_indices = set(entry_indices[cap:])
+                    # Smart eviction: sort entries by usage (lowest first),
+                    # then by position (bottom = oldest = lower priority).
+                    # Entries with 0 usage get evicted before used entries.
+                    def _entry_usage(idx: int) -> int:
+                        m = _KEY_RE.search(lines[idx])
+                        return usage.get(m.group(1), 0) if m else 0
+
+                    if usage:
+                        # Sort by usage ascending — lowest usage evicted first
+                        eviction_order = sorted(entry_indices, key=_entry_usage)
+                    else:
+                        # No usage data: fall back to oldest-first (bottom of section)
+                        eviction_order = list(reversed(entry_indices))
+                    overflow_count = len(entry_indices) - cap
+                    evict_set = set(eviction_order[:overflow_count])
+
+                    overflow_indices = evict_set
                     overflow_lines = [
-                        lines[i] for i in entry_indices[cap:]
+                        lines[i] for i in entry_indices if i in evict_set
                     ]
                     if overflow_lines:
                         archived_sections[section_name] = overflow_lines
