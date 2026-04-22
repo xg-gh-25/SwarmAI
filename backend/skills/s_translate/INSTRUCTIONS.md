@@ -227,3 +227,4 @@ Files written:
 - Flag cultural adaptations needed (date formats, units, address formats)
 - For ambiguous terms, offer alternatives with context
 - Zero dependencies: uses only Claude's multilingual capability + optional free API verification
+

@@ -348,3 +348,4 @@ node BA screenshot /tmp/page.png
 | Multi-tab | `newtab url` → `tabs` → `tab 0` | Tab switching works |
 | Scroll + read | `scroll down` → auto DOM refresh | New content visible |
 | Cleanup | `close` | Browser process killed |
+

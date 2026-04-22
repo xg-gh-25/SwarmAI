@@ -703,3 +703,4 @@ flowchart LR
 ## The Bottom Line
 
 Custom agents in SwarmAI provide powerful workflow optimization by pre-configuring tool access, permissions, resources, and context. They eliminate permission prompts, reduce complexity, and enable team collaboration through shared configurations. Start simple, test thoroughly, and expand capabilities as needed.
+

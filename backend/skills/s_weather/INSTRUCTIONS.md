@@ -139,3 +139,4 @@ Present as a side-by-side comparison table.
 - If request is ambiguous (e.g., "Melbourne" = Australia or Florida?), ask
 - Rate limits: wttr.in allows ~100 requests/day per IP. Space out bulk requests
 - Timezone: mention local time at the location if relevant to the query
+

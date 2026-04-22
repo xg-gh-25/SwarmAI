@@ -26,3 +26,13 @@ tier: lazy
 
 TRIGGER: "run pipeline", "autonomous pipeline", "pipeline for", "full pipeline",
 DO NOT USE: for a single stage (use the specific skill: evaluate, deep-research,
+
+## Verification
+
+Before marking the pipeline complete, show evidence for each:
+
+- [ ] **REPORT.md generated** — saved to `.artifacts/runs/<RUN_ID>/REPORT.md`
+- [ ] **All stage artifacts published** — every completed stage has a published artifact
+- [ ] **Confidence score calculated** — score breakdown shown, not just a number
+- [ ] **Decision log complete** — every non-trivial decision classified (mechanical/taste/judgment)
+- [ ] **TDD cycle verified** — RED (tests fail) → GREEN (tests pass) → VERIFY (no regressions)

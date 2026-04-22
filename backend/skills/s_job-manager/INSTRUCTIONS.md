@@ -174,3 +174,4 @@ Common errors:
 - Invalid cron expression → show the validation error, help user fix
 - System job modification → explain it's read-only, suggest editing jobs.yaml directly
 - Duplicate job ID → auto-resolved with timestamp suffix
+

@@ -259,3 +259,4 @@ tmux kill-session -t "devserver"
 - Clean up sessions when tasks complete (`kill-session`)
 - For parallel tasks, report status of all workers together
 - Never leave orphaned sessions running -- track what was created
+

@@ -351,3 +351,13 @@ Active todos (pending, overdue, in_discussion) are **NEVER purged** regardless o
   Agent calls `get <id>` to load the full work packet, then executes.
 - **Job producer protocol**: Job agents output `<!-- RADAR_TODOS [...] -->` JSON
   blocks with source-specific context. Falls back to legacy regex for old agents.
+
+## Verification
+
+Before marking this task complete, show evidence for each:
+
+- [ ] **Todo ID shown** — the created/updated todo's short ID (8-char prefix) is displayed in the output
+- [ ] **Linked context included** — `next_step` is concrete and actionable; source-specific required fields (files, email_subject, channel_name, etc.) are populated
+- [ ] **Appears in list output** — `todo_db.py list` shows the todo with correct priority, status, and next-step hint
+- [ ] **Announcement in chat** — proactive todos are explicitly announced to the user (never created silently)
+- [ ] **Regret test passed** — for proactive todos, the "would the user regret NOT seeing this tomorrow?" bar is met

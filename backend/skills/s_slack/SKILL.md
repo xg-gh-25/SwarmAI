@@ -343,3 +343,13 @@ If rate-limited (HTTP 429), the response includes `Retry-After` header. Wait and
 - Never auto-send messages -- always confirm content with user first
 - Cache channel and user ID lookups within session
 - Use Slack mrkdwn formatting, not standard Markdown, in message content
+
+## Verification
+
+Before marking this task complete, show evidence for each:
+
+- [ ] **Message sent/read confirmed** — API response shows `"ok": true` or MCP tool returns success for the operation
+- [ ] **Channel/thread ID shown** — the resolved channel ID (C...) and thread timestamp (if threaded) are included in the output
+- [ ] **Reaction added** — if a reaction was requested, the emoji name and target message timestamp are confirmed in the response
+- [ ] **Content previewed** — for outgoing messages, the exact text was shown to the user and confirmed before sending
+- [ ] **Display names used** — read output shows human-readable display names and relative timestamps, not raw user IDs

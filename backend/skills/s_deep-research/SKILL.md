@@ -168,3 +168,13 @@ Only after Phase 4 is complete:
 | Conflicting information | Note both sides, assess source credibility, present honestly |
 | Very recent topic (<1 week) | Include exact dates in searches, check social media (Tier 5), note limited sourcing |
 | User wants speed over depth | Do Phase 1 + abbreviated Phase 2, skip Phase 3, note reduced confidence |
+
+## Verification
+
+Before marking this task complete, show evidence for each:
+
+- [ ] **Sources cited with URLs** — every factual claim links to a specific source, with access date noted
+- [ ] **Multi-source validation** — key findings backed by 2+ independent sources; single-source claims flagged
+- [ ] **Findings synthesized** — research document follows the template (Summary, Key Findings, Open Questions, Sources)
+- [ ] **Output saved to Knowledge/** — research file exists at `Knowledge/Notes/YYYY-MM-DD-<topic>.md` (or `Knowledge/Library/` if finalized)
+- [ ] **Phase 4 checklist passed** — all six synthesis-check questions answered affirmatively before writing

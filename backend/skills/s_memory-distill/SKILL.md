@@ -139,3 +139,13 @@ Cross-reference recent DailyActivity files for thread completions:
 | Append to DailyActivity | `>>` shell append | No |
 | Move files to Archives | `mv` | No |
 | Delete old archives | `rm` | No |
+
+## Verification
+
+Before marking this task complete, show evidence for each:
+
+- [ ] **Files processed listed** — log shows which DailyActivity files were scanned and how many were unprocessed
+- [ ] **Entries promoted/skipped with reasons** — each extracted item either written to a MEMORY.md section or skipped (with dedup or relevance reason)
+- [ ] **MEMORY.md updated** — new entries visible in the correct sections, date-prefixed, no duplicates introduced
+- [ ] **Processed files marked** — each distilled file now has `distilled: true` and `distilled_date` in its YAML frontmatter
+- [ ] **Archives maintained** — files older than 30 days moved to Archives/, files older than 90 days deleted from Archives/

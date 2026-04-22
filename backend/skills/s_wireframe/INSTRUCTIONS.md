@@ -310,3 +310,4 @@ This closes the loop: **Chat -> Wireframe -> Edit -> Implement**.
 - **Use real-ish content** — "John Doe" not "Name", "$29/mo" not "Price", "Dashboard" not "Page Title".
 - **Annotate decisions** — Use note elements to explain non-obvious choices.
 - **Consistent spacing** — Use 20px grid. 20px padding inside containers, 20px gap between elements.
+

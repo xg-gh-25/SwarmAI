@@ -373,3 +373,4 @@ grep -o '—' FILE | wc -l      # Em-dashes (target: 0)
 
 **Cross-Article Consistency:**
 When editing multiple articles, vary replacements across articles; don't use "The key insight:" in every one.
+

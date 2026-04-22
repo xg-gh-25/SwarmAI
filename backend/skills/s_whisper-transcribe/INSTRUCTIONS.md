@@ -244,3 +244,4 @@ Mention cost estimate to user before transcribing long files (> 30 minutes).
 - Never assume language -- let Whisper detect or ask the user
 - For meetings, always offer to extract action items
 - Include source filename and date in the saved transcript
+

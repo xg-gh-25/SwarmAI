@@ -320,3 +320,4 @@ atq 2>/dev/null
 - Always tag entries with `# SwarmAI:` comment for identification
 - Test the command manually before scheduling
 - Zero dependencies: uses only crontab, launchctl, at, osascript (all built into macOS)
+

@@ -154,3 +154,13 @@ For large result sets (>20 files), summarize by directory first, then offer to d
 | `Attachments/` | User uploads and exports |
 
 Always exclude `.git/`, `node_modules/`, `__pycache__/`, `.venv/` from searches unless explicitly asked.
+
+## Verification
+
+Before marking this task complete, show evidence for each:
+
+- [ ] **Search criteria stated** — the translated search command (find/grep/git) is shown so the user knows exactly what was searched
+- [ ] **Matching files listed** — results presented in a structured table with file path, size, modification time, and context (if content search)
+- [ ] **Results sorted** — output is ordered by relevance (content match) or modification time (file search), not random
+- [ ] **Noise excluded** — `.git/`, `node_modules/`, `__pycache__/`, `.venv/` directories are excluded unless explicitly requested
+- [ ] **Large results summarized** — if more than 20 matches, results are grouped by directory first with an offer to drill down

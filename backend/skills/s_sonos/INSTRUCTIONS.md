@@ -88,3 +88,4 @@ After executing, verify with `sonos status --name "Speaker"` if the action was p
 | "unknown speaker" | Run `sonos discover` to list available speakers |
 | Volume not changing | Speaker may be grouped; try `sonos group volume set --name "Room" N` |
 | Stream won't play | Use `sonos play-uri <url> --radio --title "Name"` for HTTP streams |
+

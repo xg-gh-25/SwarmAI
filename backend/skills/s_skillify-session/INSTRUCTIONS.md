@@ -178,3 +178,4 @@ After writing, tell the user:
 ## References
 
 For the SKILL.md format specification, see the Agent Skills standard at https://agentskills.io/specification
+

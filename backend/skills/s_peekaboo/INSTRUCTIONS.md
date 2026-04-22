@@ -389,3 +389,4 @@ peekaboo see --annotate --app "Safari" --path /tmp/after-click.png
 | Permission not granted | Guides user to System Settings |
 | Element not found after see | Retries with different query or coordinates |
 | Multi-step automation | See -> act -> verify at each step |
+

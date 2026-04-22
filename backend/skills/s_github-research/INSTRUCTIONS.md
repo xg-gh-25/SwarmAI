@@ -214,3 +214,4 @@ Before delivering, verify:
 | API rate limited | Space out requests, prioritize highest-value endpoints |
 | Repo is private | Note limitation, research only public signals |
 | Very new repo (<6 months) | Reduce weight on trajectory analysis, note limited history |
+

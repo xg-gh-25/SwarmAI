@@ -437,3 +437,4 @@ Structured narrative writing transforms complex ideas into clear, actionable doc
 6. **Enable decisions** - Clear recommendations with next steps
 
 Write documents that drive decisions, enable implementation, and align teams around customer needs.
+
