@@ -72,10 +72,13 @@ export function useVoiceRecorder({
     }
 
     try {
+      // Don't constrain sampleRate — WKWebView (Tauri/Safari engine) can't
+      // reconfigure hardware capture away from 44.1/48kHz and throws a
+      // "MediaStreamTrack ended due to a capture failure". Backend ffmpeg
+      // resamples to 16kHz anyway, so native rate is fine.
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           channelCount: 1,
-          sampleRate: 16000,
           echoCancellation: true,
           noiseSuppression: true,
         },
@@ -88,6 +91,27 @@ export function useVoiceRecorder({
       }
 
       streamRef.current = stream;
+
+      // Detect if the capture track dies (hardware failure, permission revoke,
+      // device disconnect). Without this, a dead track produces a corrupt blob
+      // that gets sent to the backend → 400.
+      const track = stream.getAudioTracks()[0];
+      if (track) {
+        track.onended = () => {
+          if (mountedRef.current && mediaRecorderRef.current?.state === 'recording') {
+            onError?.('Microphone disconnected — recording stopped');
+            // Force stop without sending
+            try { mediaRecorderRef.current.stop(); } catch { /* already stopped */ }
+            chunksRef.current = [];
+            if (streamRef.current) {
+              streamRef.current.getTracks().forEach((t) => t.stop());
+              streamRef.current = null;
+            }
+            mediaRecorderRef.current = null;
+            setVoiceState('idle');
+          }
+        };
+      }
 
       // Prefer formats that backend ffmpeg can handle; fall back to default
       let mimeType = '';
@@ -105,6 +129,19 @@ export function useVoiceRecorder({
       chunksRef.current = [];
       recorder.ondataavailable = (e) => {
         if (e.data.size > 0) chunksRef.current.push(e.data);
+      };
+
+      // Handle recorder-level errors (e.g. codec failure, resource exhaustion)
+      recorder.onerror = () => {
+        if (!mountedRef.current) return;
+        onError?.('Recording failed — please try again');
+        chunksRef.current = [];
+        if (streamRef.current) {
+          streamRef.current.getTracks().forEach((t) => t.stop());
+          streamRef.current = null;
+        }
+        mediaRecorderRef.current = null;
+        setVoiceState('idle');
       };
 
       recorder.start(100); // collect data every 100ms

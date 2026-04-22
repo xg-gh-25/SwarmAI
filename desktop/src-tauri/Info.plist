@@ -13,5 +13,8 @@
 
     <key>NSDownloadsFolderUsageDescription</key>
     <string>SwarmAI needs access to your Downloads folder to read and manage files you ask it to work with.</string>
+
+    <key>NSMicrophoneUsageDescription</key>
+    <string>SwarmAI uses your microphone for voice input — speak instead of type.</string>
 </dict>
 </plist>
