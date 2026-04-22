@@ -5,6 +5,41 @@ All notable changes to SwarmAI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.3] - 2026-04-22
+
+### Added
+
+- **Voice Input E2E**: Mic button in chat input records audio via MediaRecorder API, sends to backend, transcribes via Amazon Transcribe Streaming SDK using existing AWS SSO credentials. Backend `POST /api/chat/transcribe` with ffmpeg PCM conversion, 25MB upload cap, 30s ffmpeg timeout, 60s Transcribe timeout. Frontend `useVoiceRecorder` hook with idle→recording→processing state machine, track death detection, recorder error handler, unmount cleanup, and accessibility support (`aria-pressed`, `aria-label`)
+- **Slack HTTP Polling Fallback**: Automatic fallback from Socket Mode WebSocket to HTTP polling via `conversations.history()` when WS thread dies 3+ times consecutively. 5s polling interval, DM-first channel discovery, periodic WS reconnection attempts every 5 minutes. Solves VPN-blocked environments (SSLEOFError, DNS failure, proxy 403)
+- **Memory Frequency Gate**: Entries must appear in ≥2 DailyActivity files before promotion to MEMORY.md. One-off observations stay in DailyActivity; recurring themes graduate. Cold-start safe (single DA file passes unconditionally)
+- **Memory Usage-Based Eviction**: `context_health_hook` tracks memory key references (`[RC04]`, `[KD05]`, etc.) in recent DailyActivity files, writes counts to `.context/.memory-usage.json`. Distillation evicts lowest-usage entries first when section caps are exceeded, replacing oldest-first ordering
+- **Pipeline User-Path Trace**: Mandatory BUILD step traces each acceptance criterion through real production code paths — catches bugs that TDD + unit tests miss (mock data mismatches, cross-component competing paths, state reset on object recreation)
+- **Pipeline PROBE Step**: For new API endpoints consumed by frontend, writes integration test via `httpx.AsyncClient` through real ASGI stack — catches Content-Type and serialization bugs that TestClient misses
+- **Pipeline Runtime Pattern Checklist**: Expanded to 12 patterns (RP1-RP12) covering subprocess orphans, missing binaries, React hook cleanup, stale closures, FormData Content-Type, setTimeout leaks, API boundary naming, barrel exports, SDK handler reassignment, and unstable callback refs
+- **Pipeline Cross-Boundary Wire Test**: Verifies Content-Type match, field name match, response shape match, and error shape match when changeset spans frontend + backend
+- **Pipeline REFLECT Auto-Maintenance**: Post-pipeline review findings auto-classified as existing pattern missed or new pattern — pipeline learns from every review cycle
+
+### Fixed
+
+- **OOM on 16GB Machines**: `spawn_budget()` now takes `alive_count` with concurrent penalty factor (0.5× per alive session). Cost inflates: 0 alive = 1200MB, 1 alive = 1800MB, 2 alive = 2400MB — blocks 3rd session on 16GB at 12.4GB+ used. 36GB machines unaffected
+- **Slack Polling Never Activates**: Transport errors in WS thread fired `_on_error` → gateway destroyed adapter → fresh `_ws_fail_count=0` → counter never reached threshold. Fix: only escalate auth errors to gateway; transport errors stay internal for health monitor
+- **Slack Polled Messages Missing Channel**: `conversations.history` messages lack `channel` field → empty `external_chat_id` → routing broken. Fix: inject `channel_id` into polled message data before normalizing
+- **Slack Handler Leak on Reconnect**: `_try_socket_mode_reconnect` now closes old `self._handler` before reassigning; `_ws_health_monitor` resets `self._handler = None` before restart to prevent reusing crashed handler state
+- **Voice Recorder WKWebView Crash**: Removed `sampleRate: 16000` constraint — WKWebView (Tauri/Safari engine) can't reconfigure hardware capture away from 44.1/48kHz. Backend ffmpeg resamples to 16kHz anyway
+- **Global Content-Type Breaking FormData**: Removed default `Content-Type: application/json` from axios instance — was overriding Axios auto-detection and breaking multipart uploads for voice transcription
+- **TranscribeResult Naming Convention**: `duration_ms` → `durationMs` with proper `TranscribeRawResponse` → `TranscribeResult` snake→camel conversion in `chat.ts`
+- **Voice Recorder Barrel Export**: Added `useVoiceRecorder` + `VoiceState` to `hooks/index.ts`
+- **Upload Form Resource Leak**: Added `await form.close()` in `/transcribe` endpoint finally block — releases `SpooledTemporaryFile` promptly
+- **Unstable Voice Callbacks**: Wrapped `onTranscript`/`onError` in `useCallback` — stable references avoid unnecessary hook re-creation
+- **Test Warnings**: Sync mock for `kill()` (os.kill is synchronous), cancel monitor/poll tasks on teardown
+
+### Changed
+
+- **Cargo.lock Dependencies**: Bumped rand 0.8.6, tokio 1.52.1, uuid 1.23.1, webpki-roots 1.0.7
+- **Info.plist**: Added `NSMicrophoneUsageDescription` for macOS microphone permission dialog
+- **PyInstaller Bundle**: Added `amazon-transcribe` + `awscrt` with 3 new capability checks (41 total)
+- **save-memory Skill**: Strengthened verification and token-budget directives
+
 ## [1.6.1] - 2026-04-15
 
 ### Fixed
