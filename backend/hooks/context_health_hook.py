@@ -12,6 +12,7 @@ avoid blocking the asyncio event loop.  Budget: <3s light, <10s deep.
 """
 
 import asyncio
+import json
 import logging
 import os
 import re
@@ -73,6 +74,15 @@ class ContextHealthHook:
 
     def _light_refresh(self, root: Path, ws_path: str) -> None:
         """Refresh KNOWLEDGE.md index, MEMORY.md index, and vector/FTS5 stores."""
+        # Memory usage tracking — scan recent DailyActivity for memory key
+        # references ([RC04], [KD05], etc.) and write counts to
+        # .context/.memory-usage.json.  Used by distillation for smart
+        # eviction (lowest-usage entries evicted first instead of oldest).
+        try:
+            self._track_memory_usage(root)
+        except Exception as exc:
+            logger.debug("context_health: memory usage tracking skipped: %s", exc)
+
         # Memory index regen runs unconditionally — it's <10ms and must
         # catch uncommitted MEMORY.md writes (Edit tool, locked_write)
         # that happen within the same git rev.
@@ -166,6 +176,39 @@ class ContextHealthHook:
             context_file.write_text(new_content, encoding="utf-8")
         except Exception as exc:
             logger.warning("context_health: KNOWLEDGE.md refresh failed: %s", exc)
+
+    def _track_memory_usage(self, root: Path) -> None:
+        """Scan recent DailyActivity for memory key references.
+
+        Finds patterns like ``[RC04]``, ``[KD05]``, ``[LL07]``, ``[COE02]``
+        in DailyActivity files from the last 7 days and writes cumulative
+        counts to ``.context/.memory-usage.json``.
+
+        Distillation reads this file to decide eviction order: entries with
+        zero usage are evicted first when section caps are exceeded, forming
+        the compound loop: use → track → evict unused → memory improves.
+        """
+        daily_dir = root / "Knowledge" / "DailyActivity"
+        if not daily_dir.is_dir():
+            return
+
+        cutoff = (date.today() - timedelta(days=7)).isoformat()
+        usage: dict[str, int] = {}
+        _KEY_RE = re.compile(r"\[([A-Z]{2,3}\d{2,3})\]")
+
+        for f in sorted(daily_dir.glob("*.md"), reverse=True):
+            if f.stem < cutoff:
+                break
+            try:
+                body = f.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
+            for key in _KEY_RE.findall(body):
+                usage[key] = usage.get(key, 0) + 1
+
+        usage_path = root / ".context" / ".memory-usage.json"
+        usage_path.parent.mkdir(parents=True, exist_ok=True)
+        usage_path.write_text(json.dumps(usage, indent=2), encoding="utf-8")
 
     def _refresh_memory_index(self, root: Path) -> None:
         """Regenerate the compact index block in MEMORY.md.
