@@ -293,3 +293,13 @@ For quick TL;DR or standard summaries, just present inline -- don't save unless 
 | Chinese article, user asks in Chinese | Summary in Chinese |
 | Content fetch fails | Graceful fallback, ask user to paste |
 | Very long document (>100 pages) | Section-by-section approach, synthesized output |
+
+## Verification
+
+Before marking this task complete, show evidence for each:
+
+- [ ] **Source material identified** — the input source (URL, file path, or pasted text) is stated and was successfully fetched/read
+- [ ] **Key points extracted** — summary contains 3-7 substantive bullet points (standard) or 1-2 sentences (TL;DR) that capture the essence
+- [ ] **Summary length appropriate** — output matches the requested depth (ultra-short / standard / detailed / comparison) and stays within word limits
+- [ ] **No fabrication** — every point in the summary traces back to content in the source material; nothing invented
+- [ ] **Action items surfaced** — if the source contains decisions or next steps, they appear in the summary (or confirmed none exist)

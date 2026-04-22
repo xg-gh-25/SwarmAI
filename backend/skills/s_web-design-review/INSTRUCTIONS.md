@@ -162,3 +162,4 @@ If the Vercel Web Interface Guidelines are unavailable, use these core principle
 | User just wants a quick check | Run only categories A (Accessibility) + C (Responsive) |
 | Review scope too broad | Ask user to narrow to specific components or pages |
 | Framework-specific patterns | Adapt checks for React/Vue/Svelte idioms (e.g., JSX alt text) |
+

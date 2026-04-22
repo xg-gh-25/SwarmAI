@@ -234,6 +234,31 @@ Also BLOCK when review scope exceeds expectation:
 > 3. Split into module-by-module reviews
 ```
 
+## Anti-Rationalization
+
+The agent will rationalize skipping steps. These rebuttals are non-negotiable:
+
+| Agent Shortcut | Required Response |
+|---|---|
+| "The changes are too small to review thoroughly" | Every change gets the full checklist. Small changes hide big bugs. |
+| "This is just a refactor, no functional changes" | Refactors are where regressions hide. Run the full correctness check. |
+| "I'll skip security review — it's an internal module" | Internal modules get compromised through dependency chains. Check it. |
+| "No tests changed so test coverage review isn't needed" | That's exactly when coverage gaps appear. Flag missing test updates. |
+| "The author is senior, this is probably fine" | Code review is about the code, not the author. Same standards apply. |
+| "Too many files to review thoroughly" | Escalate scope concern (L2 BLOCK). Never rubber-stamp a large changeset. |
+
+## Verification
+
+Before marking the review complete, show evidence for each:
+
+- [ ] **Scope stated** — list files reviewed with line counts
+- [ ] **All categories checked** — Correctness, Security, Design, Readability, Testing, Performance — state "no findings" explicitly per category if clean
+- [ ] **Every finding has file:line** — no vague "the code has issues"
+- [ ] **Severity assigned** — every finding is CRITICAL, WARNING, NIT, or QUESTION
+- [ ] **"What's Good" included** — at least 2 specific positive observations
+- [ ] **Verdict stated** — APPROVE, REQUEST CHANGES, or NEEDS DISCUSSION with rationale
+- [ ] **Automated checks ran** — linter output shown or "no linter configured" stated
+
 ## Quality Rules
 
 - Never rubber-stamp: always find at least one actionable insight

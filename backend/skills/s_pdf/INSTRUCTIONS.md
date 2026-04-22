@@ -568,3 +568,4 @@ Required dependencies (install as needed):
 - For advanced pypdfium2, pdf-lib (JS), pdfjs-dist, and CLI usage, see reference.md
 - For filling PDF forms, read forms.md and follow its instructions
 - For troubleshooting, see the Troubleshooting section in reference.md
+

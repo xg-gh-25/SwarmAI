@@ -196,3 +196,13 @@ When presenting git information, use tables:
 - `.context/` files are managed by the context system — changes here affect agent behavior
 - The workspace is always a git repo (initialized on first run)
 - Large files in `Attachments/` should be gitignored if >10MB
+
+## Verification
+
+Before marking this task complete, show evidence for each:
+
+- [ ] **Git command output shown** — the raw git output (status, diff, log, etc.) is displayed so the user sees the actual result
+- [ ] **Operation confirmed** — for write operations (commit, stash, reset), the resulting state is verified with a follow-up `git status` or `git log`
+- [ ] **Working tree clean** — after commits, `git status` confirms no unexpected unstaged or untracked files remain
+- [ ] **Commit message descriptive** — commit messages describe what changed and why, with `Co-Authored-By` included when agent-written
+- [ ] **No destructive surprises** — destructive operations (reset --hard, restore, clean) were confirmed with the user before execution

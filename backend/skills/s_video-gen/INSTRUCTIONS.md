@@ -206,3 +206,4 @@ ffmpeg -i video.mp4 -i audio.mp3 -c:v copy -c:a aac -shortest output_with_audio.
 | Audio sync issues | Use ffmpeg `-shortest` flag, trim audio to match video length |
 | Vertical video looks wrong | Ensure reference images are generated in correct aspect ratio (9:16) |
 | Social platform compression | Export at slightly higher quality than needed, platforms will re-encode |
+

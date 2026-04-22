@@ -306,3 +306,13 @@ python backend/scripts/artifact_cli.py publish \
 ```bash
 python backend/scripts/artifact_cli.py advance --project <PROJECT> --state think
 ```
+
+## Verification
+
+Before marking this task complete, show evidence for each:
+
+- [ ] **ROI score calculated** — numeric ROI shown (or T-shirt sizing at L0) with per-dimension scores and rationale
+- [ ] **Recommendation stated** — explicit GO / DEFER / REJECT / ESCALATE with reasoning tied to scores
+- [ ] **Acceptance criteria defined** — numbered, testable criteria for what "done" looks like (GO) or clear rationale for deferral/rejection
+- [ ] **Scope boundaries set** — what is included and what is explicitly excluded from the scope
+- [ ] **Evaluation artifact published** — JSON artifact saved via artifact_cli (L1+) or structured output shown in chat (L0)

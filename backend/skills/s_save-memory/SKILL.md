@@ -86,3 +86,12 @@ Keep confirmation to one line. Don't repeat the content back.
 - **Don't duplicate** — check if the content is already in MEMORY.md before adding (match by content, ignore date)
 - **MEMORY.md location** — always at `.context/MEMORY.md` (relative to workspace root)
 - **Size management** — if MEMORY.md exceeds ~5KB (~100 entries), move the oldest entries from each section to `Knowledge/Archives/MEMORY-archive-YYYY-MM.md` before adding new ones. Keep MEMORY.md focused on the most recent and relevant items
+
+## Verification
+
+Before marking this task complete, show evidence for each:
+
+- [ ] **Entry saved to MEMORY.md** — show the new line added to `.context/MEMORY.md` with today's date prefix
+- [ ] **Correct section targeted** — confirm the entry was placed under the appropriate `##` heading (e.g. Key Decisions, Lessons Learned)
+- [ ] **No duplicates** — verify the same content does not already exist elsewhere in MEMORY.md
+- [ ] **Newest first** — confirm the new entry appears at the top of its section, above older entries

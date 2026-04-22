@@ -353,3 +353,4 @@ No cloud sync, no external services, no API keys.
 - Sensitive financial data stays local (no external API sends your data)
 - Invoice numbers are sequential and never reused
 - Zero dependencies: uses only Python3 stdlib, CSV, and sibling skills (xlsx, pdf)
+

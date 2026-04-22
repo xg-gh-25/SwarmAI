@@ -376,3 +376,4 @@ Every call site. Update this table when adding new sites.
 | Major refactor (session, streaming, SSE) | Full Audit |
 
 **Chat files:** session_unit.py, session_router.py, chat.py, useChatStreamingLifecycle.ts, ChatPage.tsx, chat.ts, context_injector.py, prompt_builder.py
+

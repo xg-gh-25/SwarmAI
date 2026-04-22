@@ -368,3 +368,4 @@ df = result.fetchdf()
 - Add comments to cells with complex formulas or important assumptions
 - Document data sources for hardcoded values
 - Include notes for key calculations and model sections
+

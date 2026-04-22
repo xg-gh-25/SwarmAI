@@ -165,3 +165,11 @@ If no preferences file exists on first use, offer brief onboarding:
 | Deleting without proposal | Use batch deletion protocol |
 | Auto-marking as read | User uses unread as to-do marker — confirm |
 | Not logging deletions | Log before every delete |
+
+## Verification
+
+Before marking this task complete, show evidence for each:
+
+- [ ] **Action executed** — show the MCP tool call and its response confirming the operation succeeded (e.g. email sent, emails deleted, event created)
+- [ ] **User confirmation obtained** — for state-changing operations (delete, send, move, mark-read batch), show that explicit user approval was obtained before execution
+- [ ] **Deletion logged** — if emails were deleted, show the `deletion-log.sh add` command output confirming entries were recorded before deletion

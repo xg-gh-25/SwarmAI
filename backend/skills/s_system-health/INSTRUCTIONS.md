@@ -627,3 +627,4 @@ Before presenting the report, verify:
 | Suggest killing system processes | Only suggest for user apps and orphans |
 | Skip spawn budget status | Always report if backend is reachable |
 | Run network speed test by default | Only if user specifically asks about network |
+

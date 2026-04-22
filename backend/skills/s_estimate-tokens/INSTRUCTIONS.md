@@ -106,3 +106,4 @@ Context usage: 1.11% of 200,000 tokens
 ### Guessing Token Counts
 **Problem:** Providing estimates without running the script
 **Fix:** Execute the script for accurate, formatted results
+

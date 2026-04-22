@@ -275,3 +275,12 @@ Score: 9/10 — 1 issue needs attention
 ```
 
 Replace OK/FAIL/WARN/SKIP with emoji in final output. Report FAIL items with actionable fix suggestions.
+
+## Verification
+
+Before marking this task complete, show evidence for each:
+
+- [ ] **All 10 check categories ran** — every check (Backend Health, Context Files, MCP Config, MCP Connected, DailyActivity, Streaming Config, Sandbox & Config, Skills, MEMORY+EVOLUTION, Dev Tools) was executed with command output captured
+- [ ] **Pass/fail stated per check** — each check has an explicit OK, FAIL, WARN, or SKIP status in the summary table
+- [ ] **Failing checks have diagnosis** — any FAIL or WARN result includes the specific error output and an actionable fix suggestion (e.g., "run `./dev.sh build`", "fix permissions with `chmod 444`")
+- [ ] **Summary score reported** — final line shows the score (e.g., "9/10") and count of issues needing attention

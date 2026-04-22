@@ -187,3 +187,4 @@ When generating a series (e.g., weekly social posts):
 | Style inconsistent across series | Use same seed (if supported) + reference image from first generation |
 | Image too busy for text overlay | Specify negative space in composition, use simpler backgrounds |
 | Wrong aspect ratio | Double-check platform table, specify both ratio and pixel dimensions |
+

@@ -177,6 +177,32 @@ Summarize results:
 }
 ```
 
+## Anti-Rationalization
+
+The agent will rationalize cutting corners. These rebuttals are non-negotiable:
+
+| Agent Shortcut | Required Response |
+|---|---|
+| "Tests pass, so the code works" | Tests prove what they test. Walk the real user path to catch what they miss. |
+| "This is a minor fix, visual testing isn't needed" | Minor CSS changes cause major layout breaks. If UI files changed, test visually. |
+| "The WTF gate score is close but not quite 5" | Score of 4 means one decision away from risky. Slow down and assess. |
+| "I'll fix this test failure by adjusting the test" | Fix the CODE, not the test. Changing a test = changing the spec. |
+| "Running the full suite would take too long" | Run scoped tests for changed files. Never skip testing to save time. |
+| "This regression is pre-existing, not from our changes" | Document it in IMPROVEMENT.md as known issue. Never silently ignore a failure. |
+| "I've already fixed 19 things, one more won't hurt" | 20 is the hard cap. Checkpoint and report. Quality > completion. |
+
+## Verification
+
+Before marking QA complete, show evidence for each:
+
+- [ ] **Test output pasted** — actual pytest/vitest output showing pass/fail counts
+- [ ] **Zero silent skips** — every skipped test has an explicit reason
+- [ ] **Fix commits listed** — each fix has atomic commit hash + one-line description
+- [ ] **WTF score calculated** — show the score breakdown, even if 0
+- [ ] **Visual test evidence** — screenshots shown or "no UI files in changeset" stated
+- [ ] **Remaining issues documented** — every unfixed issue has diagnosis + file:line
+- [ ] **QA Report generated** — all subsections filled (Summary, Fixes, Remaining, Visual)
+
 ## Rules
 
 - **Never modify test files to make tests pass.** Fix the code, not the tests.

@@ -374,3 +374,4 @@ When `docx` is installed globally (`npm install -g docx`), Node.js may not resol
 ```bash
 NODE_PATH=$(npm root -g) node your-script.js
 ```
+

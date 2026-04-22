@@ -328,3 +328,13 @@ Tavily is a building block for other skills:
 - Never expose the API key in output or messages
 - Offer to go deeper (extract, advanced search) after initial results
 - For Chinese queries, consider adding `country: "tw"` or `"cn"` for better regional results
+
+## Verification
+
+Before marking this task complete, show evidence for each:
+
+- [ ] **Search query shown** — the exact query string sent to Tavily API is displayed (not just the user's natural-language request)
+- [ ] **Results returned with URLs** — each result includes a title, URL, relevance score, and content snippet
+- [ ] **Relevance confirmed** — results are on-topic for the user's intent; off-topic or low-score results are filtered or flagged
+- [ ] **API key validated** — `TAVILY_API_KEY` was confirmed set before the call was made (no auth errors)
+- [ ] **Credit-efficient** — search used appropriate depth (basic vs advanced) and minimal `max_results` for the task

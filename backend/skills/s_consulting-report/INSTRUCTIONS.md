@@ -210,3 +210,4 @@ Before delivering:
 | Conflicting sources | Present both, note the conflict, state which is more credible and why |
 | User wants quick analysis | Skip Phase 1 blueprint, go direct to Phase 2 with a single framework |
 | Report too long | Cut P3 data points, reduce to 2 frameworks, tighten So What paragraphs |
+

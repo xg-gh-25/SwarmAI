@@ -211,3 +211,4 @@ Before delivering:
 | Fonts not loading | Check CDN URL, add `font-display: swap` |
 | Performance issues | Lazy-load images, minimize DOM nodes, use CSS `contain` |
 | User wants React/Vue | Scaffold with Vite: `npm create vite@latest` |
+

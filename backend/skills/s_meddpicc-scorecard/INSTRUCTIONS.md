@@ -286,3 +286,4 @@ When scoring all open opptys for an account:
 
 **Portfolio Health:** X/Y opptys pass stage gates | Avg score: X | Total pipeline ARR: $X
 ```
+

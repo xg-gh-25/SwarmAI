@@ -429,3 +429,14 @@ Full checklist: **CHECKLIST.md**
 - **TEMPLATES.md** — Starter templates and common patterns
 - **EXAMPLES.md** — Before/after improvement examples
 - **CHECKLIST.md** — 64-point validation checklist
+
+## Verification
+
+Before marking this task complete, show evidence for each:
+
+- [ ] **SKILL.md created with valid frontmatter** — show the YAML frontmatter block and confirm `name` matches the folder name, `description` is under 1024 characters with TRIGGER and DO NOT USE lines, and `tier` is set
+- [ ] **INSTRUCTIONS.md has all required sections** — for lazy-tier skills, list the section headings in INSTRUCTIONS.md and confirm workflow steps, guardrails, troubleshooting, and examples are present
+- [ ] **Tier assigned** — state whether the skill is `lazy` or `always` and justify the choice based on expected usage frequency
+- [ ] **Test invocation worked** — describe a test invocation of the skill (trigger phrase used, output produced) confirming the skill activates and produces expected results
+- [ ] **Guardrails section present** — show the 3-5 "DO NOT" rules in the Guardrails section
+- [ ] **manifest.yaml validated (if applicable)** — for complex skills with scripts, confirm all script paths in the manifest exist on disk and the entry point is marked

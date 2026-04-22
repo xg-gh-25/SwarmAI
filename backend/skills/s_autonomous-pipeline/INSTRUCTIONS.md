@@ -587,6 +587,24 @@ python backend/scripts/artifact_cli.py advance --project <PROJECT> --state revie
    Integration trace verified "symbols are connected" but not "the data
    format crossing the wire is correct." This check fills that gap.
 
+9. **Anti-Rationalization Gate** — before concluding REVIEW, reject these shortcuts:
+
+   | Agent Shortcut | Required Response |
+   |---|---|
+   | "Changeset is small, skip integration trace" | Small changes with unwired symbols are the #1 silent failure. Trace every new symbol. |
+   | "Security scan isn't needed for internal code" | Internal code with injection paths gets exploited via MCP tools and API calls. Scan it. |
+   | "Runtime pattern checklist doesn't apply here" | Check every pattern. Write N/A explicitly. Silence = unchecked. |
+   | "Wire test is overkill — the types match" | Types matching ≠ serialization matching. Content-Type bugs are invisible to type checkers. |
+   | "UX review isn't needed — the UI change is trivial" | Trivial UI changes cause scroll breaks and accessibility regressions. If UI files changed, check UX. |
+   | "Review is clean, marking confidence 10/10" | Confidence without evidence is fiction. Score against the checklist, not gut feel. |
+
+   **REVIEW Exit Evidence** — confirm each before publishing:
+   - [ ] Integration trace output present (`N symbols checked, M connected, K warnings`)
+   - [ ] Runtime pattern checklist complete (every applicable RP has ✅ or N/A)
+   - [ ] Security scan ran with confidence scores (or "no security-relevant changes" stated)
+   - [ ] Wire test results shown (or "single-layer change, N/A" stated)
+   - [ ] UX review completed (or "no frontend files, N/A" stated)
+
 Publish artifact:
 ```bash
 python backend/scripts/artifact_cli.py publish --project <PROJECT> \
@@ -597,6 +615,23 @@ python backend/scripts/artifact_cli.py advance --project <PROJECT> --state test
 ```
 
 #### TEST
+
+**Anti-Rationalization Gate** — reject these shortcuts before starting:
+
+| Agent Shortcut | Required Response |
+|---|---|
+| "Tests pass, no need for scoped re-run" | Run changed + related test files. Pass in isolation ≠ pass together. |
+| "This fix is simple, skip the WTF score" | Score every fix. Simple fixes that touch 4 files are not simple. |
+| "I'll adjust the test expectation to match the new behavior" | Fix the CODE. Changing tests = changing the spec = go back to PLAN. |
+| "Pre-existing failure, not our problem" | Log it in IMPROVEMENT.md. Never silently pass over a red test. |
+| "19 fixes done, just one more to clean up" | 20 is the hard cap. Checkpoint. Report. Quality > completion. |
+
+**TEST Exit Evidence** — confirm each before publishing:
+- [ ] Test output pasted (actual framework output, not summary)
+- [ ] WTF score calculated and shown (even if 0)
+- [ ] Each fix has atomic commit listed
+- [ ] Remaining unfixed issues documented with diagnosis
+- [ ] No test modifications (only code fixes)
 
 1. Detect test framework (or read from TECH.md)
 2. Run tests scoped to changed files

@@ -397,3 +397,13 @@ After significant evolution events, append to `Knowledge/DailyActivity/YYYY-MM-D
 12. **Promotion requires VFM ≥50**
 13. **ADL drift prevention** — stability over everything
 14. **Always write JSONL changelog** — no silent mutations
+
+## Verification
+
+Before marking this task complete, show evidence for each:
+
+- [ ] **Gap detected and logged** — trigger type (reactive/proactive/stuck/correction) identified with specific description of what fired
+- [ ] **Evolution entry created** — new E/O/C/K/F-entry written to EVOLUTION.md with all required fields and a valid incremented ID
+- [ ] **EVOLUTION_CHANGELOG.jsonl updated** — corresponding JSONL line appended immediately after the EVOLUTION.md edit (action, type, id, summary)
+- [ ] **Original task verified** — the triggering task was re-attempted after the evolution, and pass/fail result recorded
+- [ ] **Dedup check passed** — no duplicate entry was created (name match, description overlap > 0.6, or same location for E-entries)

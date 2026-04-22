@@ -256,3 +256,13 @@ mv "Projects/ProjectName" ~/.Trash/ 2>/dev/null || rm -rf "Projects/ProjectName"
 - **Each document owns its domain** — PRODUCT.md never estimates technical cost. TECH.md never judges business priority.
 - **.artifacts/ is auto-managed** — don't manually create artifact files. The lifecycle pipeline handles this.
 - **Project names** — PascalCase preferred, no spaces (use hyphens if needed).
+
+## Verification
+
+Before marking this task complete, show evidence for each:
+
+- [ ] **Project directory created/updated** — `Projects/<Name>/` exists with the expected structure shown via `ls`
+- [ ] **DDD docs present** — all four files (PRODUCT.md, TECH.md, IMPROVEMENT.md, PROJECT.md) exist and contain valid content or templates
+- [ ] **Artifacts directory initialized** — `.artifacts/manifest.json` exists with correct project name and pipeline state
+- [ ] **TECH.md populated** — if a codebase path was provided, stack auto-detection results are written to TECH.md
+- [ ] **Confirmation shown** — user received the creation/update/deletion confirmation message with next-step guidance

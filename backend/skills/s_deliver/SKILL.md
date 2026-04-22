@@ -228,3 +228,13 @@ python backend/scripts/artifact_cli.py publish \
 ```bash
 python backend/scripts/artifact_cli.py advance --project <PROJECT> --state reflect
 ```
+
+## Verification
+
+Before marking this task complete, show evidence for each:
+
+- [ ] **Delivery report generated** — structured report shown in chat with Summary, What Was Built, Key Decisions, and Quality Summary sections
+- [ ] **Artifacts bundled** — all upstream artifacts (evaluation, design_doc, changeset, review, test_report) collected and referenced in the report
+- [ ] **PR description created** — if a changeset exists, a formatted PR description with Changes, Test Results, and Design Decisions is produced
+- [ ] **Attention flags surfaced** — unresolved findings from review/QA stages appear as explicit attention flags (or confirmed none exist)
+- [ ] **PROJECT.md updated** — delivery decision appended to Recent Decisions with date and follow-ups noted

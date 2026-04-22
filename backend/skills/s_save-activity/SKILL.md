@@ -81,3 +81,12 @@ Keep confirmation to one line.
 - **Use consistent format** — always include all 4 subsections
 - **Deduplicate** — don't repeat topics or files already in today's entry
 - **Read before write** — always read the existing file first, then append using the Write tool with the full content (read + new entry). This prevents race conditions with the backend's automatic DailyActivity extraction hook which may write simultaneously at session close
+
+## Verification
+
+Before marking this task complete, show evidence for each:
+
+- [ ] **DailyActivity file written** — show the path `Knowledge/DailyActivity/YYYY-MM-DD.md` confirming the file exists with today's date
+- [ ] **All 4 subsections present** — confirm the entry includes: What Happened, Key Decisions, Files Modified, and Open Questions
+- [ ] **No overwrite** — if the file already existed, confirm new content was appended (not replacing prior sessions)
+- [ ] **Frontmatter updated** — show `sessions_count` in YAML frontmatter matches the actual number of session entries in the file

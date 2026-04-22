@@ -28,3 +28,4 @@ Bootstraps a workspace context file so SwarmAI agents can be productive in this 
 ## Output
 
 Write the context to the workspace's ContextFiles directory or as a project README enhancement, depending on what exists.
+
