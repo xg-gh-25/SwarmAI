@@ -20,11 +20,12 @@ export function setRateLimitCallback(cb: RateLimitCallback | null): void {
 
 // Create axios instance with base configuration
 // For desktop app, we connect directly to the local backend
-const api = axios.create({
-  headers: {
-    'Content-Type': 'application/json',
-  },
-});
+// NOTE: Do NOT set a default Content-Type header here. Axios auto-detects
+// the correct Content-Type per request: 'application/json' for objects,
+// 'multipart/form-data' with boundary for FormData. Setting a global default
+// overrides the auto-detection and breaks multipart uploads (e.g. voice
+// transcription sends FormData but the server receives 'application/json').
+const api = axios.create();
 
 // Dynamic base URL based on backend port
 api.interceptors.request.use((config) => {
