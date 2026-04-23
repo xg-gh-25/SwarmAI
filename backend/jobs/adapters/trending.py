@@ -24,6 +24,15 @@ logger = logging.getLogger(__name__)
 
 NEWSNOW_API = "https://newsnow.busiyi.world/api/s"
 
+# Browser-like headers required by newsnow API (403 without them)
+NEWSNOW_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                  "(KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+    "Accept": "application/json, text/plain, */*",
+    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+    "Referer": "https://newsnow.busiyi.world/",
+}
+
 
 def fetch_trending(feed: Feed, max_age_hours: int = 48) -> list[RawSignal]:
     """
@@ -46,7 +55,7 @@ def fetch_trending(feed: Feed, max_age_hours: int = 48) -> list[RawSignal]:
 
     signals: list[RawSignal] = []
 
-    with safe_client(timeout=15) as client:
+    with safe_client(timeout=15, headers=NEWSNOW_HEADERS) as client:
         for i, platform in enumerate(platforms):
             platform_id = platform.get("id", "")
             platform_name = platform.get("name", platform_id)
@@ -55,7 +64,8 @@ def fetch_trending(feed: Feed, max_age_hours: int = 48) -> list[RawSignal]:
                 continue
 
             try:
-                resp = client.get(NEWSNOW_API, params={"id": platform_id, "latest": ""})
+                url = f"{NEWSNOW_API}?id={platform_id}&latest"
+                resp = client.get(url)
                 resp.raise_for_status()
                 data = resp.json()
 
