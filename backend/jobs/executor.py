@@ -801,8 +801,10 @@ def _handle_notify(job: Job, state: SchedulerState) -> JobResult:
 
     Config:
       channel: "slack" (only supported channel for now)
-      message: text to send
+      message: text to send (static message)
       job_ref: optional job_id whose last result to include
+      source: "signal_digest" to auto-format from signal_digest.json
+      max_items: max items from signal_digest (default 10)
     """
     start = datetime.now(timezone.utc)
     channel = job.config.get("channel", "slack")
@@ -813,6 +815,13 @@ def _handle_notify(job: Job, state: SchedulerState) -> JobResult:
             job_id=job.id, timestamp=start, status="failed",
             summary=f"Unsupported notify channel: {channel}",
             duration_seconds=0,
+        )
+
+    # Source: auto-format from signal_digest.json
+    source = job.config.get("source", "")
+    if source == "signal_digest" and not message:
+        message = _format_signal_digest_message(
+            max_items=job.config.get("max_items", 10),
         )
 
     # If job_ref is set, include that job's last result
@@ -844,6 +853,49 @@ def _handle_notify(job: Job, state: SchedulerState) -> JobResult:
             summary="Failed to send Slack DM", duration_seconds=duration,
             error="slack_send_failed",
         )
+
+
+def _format_signal_digest_message(max_items: int = 10) -> str:
+    """Format signal_digest.json into a readable Slack message.
+
+    Reads the L4 digest JSON, groups by urgency, formats as compact markdown.
+    Returns empty string if no digest or no items.
+    """
+    digest_path = SWARMWS / "Services" / "signals" / "signal_digest.json"
+    if not digest_path.exists():
+        return ""
+
+    try:
+        data = json.loads(digest_path.read_text())
+    except Exception:
+        return ""
+
+    items = data.get("items", [])
+    if not items:
+        return ""
+
+    # Take top N by relevance score
+    items = sorted(items, key=lambda x: x.get("relevance_score", 0), reverse=True)
+    items = items[:max_items]
+
+    # Group by urgency
+    urgency_emoji = {"high": "🔴", "medium": "🟡", "low": "🟢"}
+    lines = [f"📡 *Signal Digest* — {data.get('signals_count', len(items))} signals\n"]
+
+    for item in items:
+        emoji = urgency_emoji.get(item.get("urgency", "low"), "🔵")
+        title = item.get("title", "Untitled")
+        source = item.get("source", "")
+        summary = item.get("summary", "")[:80]
+        url = item.get("url", "")
+
+        source_tag = f" ({source})" if source else ""
+        link = f"<{url}|→>" if url else ""
+        lines.append(f"{emoji} *{title}*{source_tag} {link}")
+        if summary:
+            lines.append(f"   {summary}")
+
+    return "\n".join(lines)
 
 
 def _get_slack_dm_channel() -> str | None:

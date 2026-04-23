@@ -100,6 +100,22 @@ SYSTEM_JOBS: list[Job] = [
         config={},
     ),
 
+    # --- Signal Digest → Slack Notification ---
+    # Fires after each digest, reads signal_digest.json, sends top items as Slack DM.
+    Job(
+        id="signal-notify-slack",
+        name="Signal Digest → Slack",
+        type="notify",
+        schedule="after:signal-digest",
+        enabled=True,
+        category="system",
+        config={
+            "channel": "slack",
+            "source": "signal_digest",  # read from signal_digest.json
+            "max_items": 10,
+        },
+    ),
+
     # --- Weekly Rollup ---
     Job(
         id="weekly-rollup",
