@@ -201,9 +201,9 @@ class TestTrendingAdapterBasic:
 
             signals = fetch_trending(feed)
 
-        # First item should have rank #1
-        assert "#1" in signals[0].summary
-        assert "#2" in signals[1].summary
+        # First item should have rank Top 1
+        assert "Top 1" in signals[0].summary
+        assert "Top 2" in signals[1].summary
 
 
 # ── AC6: FeedType.TRENDING registered ─────────────────────────────────
