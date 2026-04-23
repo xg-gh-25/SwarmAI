@@ -35,6 +35,7 @@ class FeedType(str, Enum):
     RSS = "rss"
     GITHUB_RELEASES = "github-releases"
     HACKER_NEWS = "hacker-news"
+    TRENDING = "trending"
 
 
 class TierType(str, Enum):
