@@ -16,6 +16,7 @@ import { BackendStartupOverlay, UpdateNotification, ShutdownOverlay, DaemonNudge
 import { getBackendPort } from './services/tauri';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { ToastStack } from './components/common/ToastStack';
+import { AudioKeepAlive } from './components/AudioKeepAlive';
 import ThreeColumnLayout from './components/layout/ThreeColumnLayout';
 import ChatPage from './pages/ChatPage';
 import OnboardingPage from './pages/OnboardingPage';
@@ -91,6 +92,7 @@ export default function App() {
           <HealthProvider>
           <ErrorBoundary variant="app">
           <ToastStack />
+          <AudioKeepAlive />
           <ShutdownOverlay />
           {/* Backend startup overlay - only shown in production mode */}
           {/* onReady callback sets isBackendReady to true, allowing routes to mount */}

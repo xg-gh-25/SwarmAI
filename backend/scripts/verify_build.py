@@ -75,6 +75,7 @@ CAPABILITY_MANIFEST = [
     ("session_miner",       "core.session_miner",            "critical"),
     ("skill_registry",      "core.skill_registry",           "critical"),
     ("voice_transcribe",    "core.voice_transcribe",         "critical"),
+    ("voice_synthesize",    "core.voice_synthesize",         "critical"),
     ("distillation_hook",   "hooks.distillation_hook",       "critical"),
     ("evolution_hook",      "hooks.evolution_maintenance_hook", "critical"),
     ("install_daemon",      "channels.install_backend_daemon", "important"),

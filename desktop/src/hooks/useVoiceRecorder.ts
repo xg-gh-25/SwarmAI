@@ -27,6 +27,10 @@ interface UseVoiceRecorderReturn {
   voiceState: VoiceState;
   /** Toggle recording: idle→recording or recording→stop+process */
   toggleRecording: () => void;
+  /** Start recording programmatically (for voice conversation mode) */
+  startRecording: () => void;
+  /** Stop recording programmatically (for voice conversation mode) */
+  stopRecording: () => void;
   /** Whether the browser supports MediaRecorder */
   isSupported: boolean;
 }
@@ -237,5 +241,5 @@ export function useVoiceRecorder({
     // If processing, do nothing (wait for result)
   }, [voiceState, startRecording, stopRecording]);
 
-  return { voiceState, toggleRecording, isSupported };
+  return { voiceState, toggleRecording, startRecording, stopRecording, isSupported };
 }
