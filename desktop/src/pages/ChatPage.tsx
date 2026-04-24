@@ -45,6 +45,7 @@ import { useUnifiedAttachments } from '../hooks/useUnifiedAttachments';
 import { useTSCCState } from '../hooks/useTSCCState';
 import { useUnifiedTabState } from '../hooks/useUnifiedTabState';
 import { useChatStreamingLifecycle, formatElapsed, ELAPSED_DISPLAY_THRESHOLD_MS } from '../hooks/useChatStreamingLifecycle';
+import { useVoiceConversation } from '../hooks/useVoiceConversation';
 import { ChatHeader, ChatInput, MessageBubble, WelcomeScreen } from './chat/components';
 import { RadarSidebar } from './chat/components/RightSidebar';
 
@@ -267,6 +268,38 @@ export default function ChatPage() {
   // TSCC state management — lifecycle state and UI preferences only.
   // System prompt metadata is now delivered via SSE and managed by useChatStreamingLifecycle.
   useTSCCState(sessionId ?? null);
+
+  // ─── Voice Conversation Mode ──────────────────────────────────────
+  // Derive streaming text content from the last assistant message for TTS.
+  const latestTextContent = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (m.role === 'assistant' && m.content) {
+        for (const block of m.content) {
+          if (block.type === 'text' && block.text) return block.text;
+        }
+      }
+    }
+    return '';
+  }, [messages]);
+
+  // Ref for handleSendMessage to avoid circular dependency
+  const handleSendMessageRef = useRef<() => void>(() => {});
+
+  // Voice conversation orchestrator
+  const voiceConversation = useVoiceConversation({
+    sessionId: sessionId ?? null,
+    onSendMessage: useCallback((text: string) => {
+      // Write to inputValueRef (the ref that handleSendMessage reads)
+      setInputValue(text);
+      inputValueRef.current = text;
+      // Trigger send on next tick (after React state settles)
+      setTimeout(() => handleSendMessageRef.current(), 0);
+    }, [setInputValue]),
+    isStreaming,
+    latestTextContent,
+    isResponseComplete: !isStreaming,
+  });
 
   // Last assistant message index — memoized for Save-to-Memory button placement
   const lastAssistantIdx = useMemo(
@@ -1517,6 +1550,9 @@ export default function ChatPage() {
     }
   }, [selectedAgentId, enableSkills, enableMCP, handlePluginCommand, buildContentArray, clearAttachments, resetUserScroll, incrementStreamGen, setIsStreaming, setMessages, setInputValue, updateTabStatus, updateTabTitle, setTabIsNew, initTabState, wrappedCreateStreamHandler, createErrorHandler, createCompleteHandler, createDisconnectHandler, activeTabIdRef, tabMapRef, pendingStreamTabs, queryClient, t]);
 
+  // Wire handleSendMessage ref for voice conversation mode (avoids circular dep)
+  handleSendMessageRef.current = handleSendMessage;
+
   // Handle WelcomeScreen focus item click — injects title as input and sends immediately
   const handleFocusClick = useCallback((title: string) => {
     if (!title.trim()) return;
@@ -2198,6 +2234,8 @@ export default function ChatPage() {
                   inputValueMapRef.current.set(tabId, value);
                 }}
                 isLikelyStalled={isLikelyStalled}
+                voiceConversationState={voiceConversation.state}
+                onVoiceConversationToggle={voiceConversation.toggle}
               />
             </>
           )}
