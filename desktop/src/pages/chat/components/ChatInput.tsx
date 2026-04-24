@@ -9,6 +9,8 @@ import { SLASH_COMMANDS } from '../constants';
 import type { DropPayload } from './RightSidebar/types';
 import { todosService } from '../../../services/todos';
 import { useVoiceRecorder } from '../../../hooks/useVoiceRecorder';
+import { VoiceConversationIndicator } from '../../../components/chat/VoiceConversationIndicator';
+import type { VoiceConversationState } from '../../../hooks/useVoiceConversation';
 
 interface ChatInputProps {
   inputValue: string;
@@ -43,6 +45,10 @@ interface ChatInputProps {
   onInputValueChange?: (tabId: string, value: string) => void;
   /** True when streaming but no real SDK events received for >60s (session likely stalled). */
   isLikelyStalled?: boolean;
+  /** Voice conversation mode state (off = normal text mode) */
+  voiceConversationState?: VoiceConversationState;
+  /** Toggle voice conversation mode on/off */
+  onVoiceConversationToggle?: () => void;
 }
 
 const MAX_ROWS = 20;
@@ -73,6 +79,8 @@ export function ChatInput({
   inputValueMapRef,
   onInputValueChange,
   isLikelyStalled = false,
+  voiceConversationState = 'off',
+  onVoiceConversationToggle,
 }: ChatInputProps) {
   const { t } = useTranslation();
   const [showCommandSuggestions, setShowCommandSuggestions] = useState(false);
@@ -608,7 +616,29 @@ export function ChatInput({
             {/* Left: Attachment + Voice buttons */}
             <div className="flex items-center gap-2">
               <FileAttachmentButton onFilesSelected={onAddFiles} disabled={isProcessingFiles || disabled} canAddMore={canAddMore} />
-              {voiceSupported && (
+              {/* Voice mode toggle: conversation mode (if handler provided) or fallback to single-shot mic */}
+              {voiceSupported && onVoiceConversationToggle && (
+                <button
+                  onClick={onVoiceConversationToggle}
+                  disabled={disabled}
+                  aria-pressed={voiceConversationState !== 'off'}
+                  aria-label={voiceConversationState !== 'off' ? 'Exit voice conversation' : 'Start voice conversation'}
+                  className={clsx(
+                    'w-6 h-6 rounded-md flex items-center justify-center transition-all',
+                    voiceConversationState !== 'off'
+                      ? 'text-green-500 bg-green-500/10'
+                      : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)]',
+                    disabled && 'opacity-50 cursor-not-allowed',
+                  )}
+                  title={voiceConversationState !== 'off' ? 'Exit voice conversation' : 'Start voice conversation'}
+                >
+                  <span className="material-symbols-outlined text-[16px]">
+                    {voiceConversationState !== 'off' ? 'hearing' : 'headset_mic'}
+                  </span>
+                </button>
+              )}
+              {/* Fallback: single-shot mic when no conversation handler */}
+              {voiceSupported && !onVoiceConversationToggle && (
                 <button
                   onClick={toggleRecording}
                   disabled={voiceState === 'processing' || disabled}
@@ -640,6 +670,13 @@ export function ChatInput({
                 <span className="text-xs text-red-400 max-w-[200px] truncate" title={voiceError}>
                   {voiceError}
                 </span>
+              )}
+              {/* Voice conversation indicator */}
+              {voiceConversationState !== 'off' && (
+                <VoiceConversationIndicator
+                  state={voiceConversationState}
+                  onInterrupt={onVoiceConversationToggle}
+                />
               )}
               {lineCount > 5 && (
                 <span className="text-xs text-[var(--color-text-muted)]">
