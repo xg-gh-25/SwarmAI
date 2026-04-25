@@ -856,19 +856,10 @@ def _create_health_todo(message: str, severity: str = "warning") -> None:
 # Internal bridge functions (delegate to sub-modules with _DATE_REF_RE)
 # ---------------------------------------------------------------------------
 
-def _estimate_thread_age(thread: dict) -> int:
-    """Estimate thread age using module-level _DATE_REF_RE."""
-    return _estimate_thread_age.__wrapped__(thread, _DATE_REF_RE)
-
-# Store original for delegation
-_estimate_thread_age.__wrapped__ = _estimate_thread_age  # type: ignore[attr-defined]
-
-# Actually fix the delegation properly — can't use __wrapped__ trick on ourselves.
-# Instead, import the raw function under a different name.
 from core.proactive_scoring import estimate_thread_age as _raw_estimate_thread_age  # noqa: E402
 
 
-def _estimate_thread_age(thread: dict) -> int:  # noqa: F811 — intentional redefinition
+def _estimate_thread_age(thread: dict) -> int:
     """Estimate thread age using module-level _DATE_REF_RE."""
     return _raw_estimate_thread_age(thread, _DATE_REF_RE)
 
