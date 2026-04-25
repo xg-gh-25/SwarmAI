@@ -228,6 +228,37 @@ def get_model_id(model_key: str = "claude-sonnet-4-6") -> str:
     return model_map.get(model_key, f"us.anthropic.{model_key}")
 
 
+def _record_usage_sync(
+    *,
+    input_tokens: int,
+    output_tokens: int,
+    model: str | None = None,
+) -> None:
+    """Record token usage from sync context. Fire-and-forget."""
+    try:
+        import asyncio
+        import database
+
+        async def _do_record():
+            await database.db.record_token_usage(
+                session_id=None,
+                source="background_job",
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                model=model,
+            )
+
+        # If there's a running loop (e.g. FastAPI), schedule task.
+        # Otherwise (standalone job), use asyncio.run().
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(_do_record())
+        except RuntimeError:
+            asyncio.run(_do_record())
+    except Exception:
+        logger.debug("Failed to record background job token usage", exc_info=True)
+
+
 def invoke(
     prompt: str,
     *,
@@ -270,24 +301,17 @@ def invoke(
                 model_id, input_tok, output_tok,
             )
 
-            # Fire-and-forget token recording for background jobs
+            # Fire-and-forget token recording for background jobs.
+            # bedrock.invoke() is sync, so we record via a sync helper
+            # (spawns a short-lived asyncio.run). Never breaks the job.
             try:
-                import asyncio
-                import database
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    loop.create_task(
-                        database.db.record_token_usage(
-                            session_id=None,
-                            source="background_job",
-                            input_tokens=input_tok,
-                            output_tokens=output_tok,
-                            cost_usd=None,
-                            model=model_id,
-                        )
-                    )
+                _record_usage_sync(
+                    input_tokens=input_tok,
+                    output_tokens=output_tok,
+                    model=model_id,
+                )
             except Exception:
-                pass  # fire-and-forget — never break the job
+                pass  # fire-and-forget
 
             return text, input_tok, output_tok
 
