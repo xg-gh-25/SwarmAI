@@ -210,6 +210,13 @@ def _format_session_entry(summary: StructuredSummary, context: HookContext) -> s
             lines.append(f"- {c}")
         lines.append("")
 
+    # --- Signal-driven actions (external signal → session decision causal link) ---
+    if summary.signal_driven_actions:
+        lines.append("**Signal-Driven:**")
+        for action in summary.signal_driven_actions:
+            lines.append(f"- {action}")
+        lines.append("")
+
     # --- Process reflection (LLM meta-analysis of how the session went) ---
     if summary.process_reflection:
         lines.append(f"**Process Reflection:** {summary.process_reflection}")
@@ -302,6 +309,7 @@ def _summary_to_jsonl_record(summary: StructuredSummary, context: HookContext) -
         "rejected_approaches": summary.rejected_approaches,
         "corrections": summary.corrections,
         "process_reflection": summary.process_reflection,
+        "signal_driven_actions": summary.signal_driven_actions,
         "continue_from": summary.continue_from,
         "validation_status": summary.validation_status,
         # COE fields
