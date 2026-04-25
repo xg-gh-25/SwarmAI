@@ -1,5 +1,6 @@
 import { ReactNode, useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { useQuery } from '@tanstack/react-query';
 import { LayoutProvider, useLayout, LAYOUT_CONSTANTS } from '../../contexts/LayoutContext';
 import { ExplorerProvider, useTreeData } from '../../contexts/ExplorerContext';
 import { WorkspaceExplorer } from '../workspace-explorer';
@@ -31,7 +32,31 @@ interface ThreeColumnLayoutProps {
 // TopBar -- App-level intelligence bar.
 // Shows: context ring (left), token usage metrics (right).
 // Remains draggable for Tauri window move (macOS).
+interface TokenUsageData {
+  today_tokens_m: number;
+  total_tokens_m: number;
+  today_cost_usd: number;
+  total_cost_usd: number;
+}
+
+function formatTokens(m: number): string {
+  if (m >= 1000) return `${(m / 1000).toFixed(1)}B`;
+  if (m >= 1) return `${m.toFixed(1)}M`;
+  if (m >= 0.01) return `${(m * 1000).toFixed(0)}K`;
+  return '0';
+}
+
 function TopBar() {
+  const { data: tokenUsage } = useQuery<TokenUsageData>({
+    queryKey: ['token-usage'],
+    queryFn: async () => {
+      const resp = await api.get<TokenUsageData>('/system/tokens/usage');
+      return resp.data;
+    },
+    refetchInterval: 30_000, // refresh every 30s
+    staleTime: 10_000,
+  });
+
   const handleMouseDown = async (e: React.MouseEvent) => {
     if (e.button === 0 && e.clientX > 80) {
       try {
@@ -41,6 +66,9 @@ function TopBar() {
       }
     }
   };
+
+  const todayDisplay = tokenUsage ? formatTokens(tokenUsage.today_tokens_m) : '--';
+  const totalDisplay = tokenUsage ? formatTokens(tokenUsage.total_tokens_m) : '--';
 
   return (
     <div
@@ -55,12 +83,19 @@ function TopBar() {
       {/* Center: drag region (flexible spacer) */}
       <div className="flex-1" />
 
-      {/* Right: token usage metrics — TODO: wire to backend token tracking API (placeholder only) */}
-      <div className="flex items-center gap-2 mr-8 text-[11px] text-[var(--color-text-muted)]" role="status" aria-label="Token usage">
+      {/* Right: token usage metrics */}
+      <div
+        className="flex items-center gap-2 mr-8 text-[11px] text-[var(--color-text-muted)]"
+        role="status"
+        aria-label="Token usage"
+        title={tokenUsage
+          ? `Today: $${tokenUsage.today_cost_usd.toFixed(2)} | Total: $${tokenUsage.total_cost_usd.toFixed(2)}`
+          : 'Loading...'}
+      >
         <span className="text-[13px]">&#x1FA99;</span>
-        <span>Today <strong className="text-[var(--color-text-secondary)]">--</strong></span>
+        <span>Today <strong className="text-[var(--color-text-secondary)]">{todayDisplay}</strong></span>
         <span className="text-[var(--color-border)]">|</span>
-        <span>MTD <strong className="text-[var(--color-text-secondary)]">--</strong></span>
+        <span>Total <strong className="text-[var(--color-text-secondary)]">{totalDisplay}</strong></span>
       </div>
     </div>
   );

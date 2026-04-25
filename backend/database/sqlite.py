@@ -2150,6 +2150,28 @@ class SQLiteDatabase(BaseDatabase):
         """)
         await conn.commit()
 
+        # Migration: Create token_usage table (added 2026-04-25)
+        # Tracks token consumption per CLI result event and background job invoke.
+        # Enables TopBar display of Today/Total token usage.
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS token_usage (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+                session_id TEXT,
+                source TEXT NOT NULL DEFAULT 'cli',
+                input_tokens INTEGER NOT NULL DEFAULT 0,
+                output_tokens INTEGER NOT NULL DEFAULT 0,
+                cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+                cache_create_tokens INTEGER NOT NULL DEFAULT 0,
+                cost_usd REAL,
+                model TEXT
+            )
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_token_usage_timestamp ON token_usage(timestamp)
+        """)
+        await conn.commit()
+
         # ============================================================================
         # FTS5 Full-Text Search on messages (Session Recall — Phase 2)
         # Creates a content-synced FTS5 virtual table for fast full-text search
@@ -2456,3 +2478,75 @@ class SQLiteDatabase(BaseDatabase):
     async def cleanup_expired_messages(self) -> int:
         """Clean up expired messages. Returns count of deleted messages."""
         return await self._messages.cleanup_expired()
+
+    # ── Token Usage Tracking ─────────────────────────────────────────────
+    async def record_token_usage(
+        self,
+        *,
+        session_id: str | None,
+        source: str = "cli",
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        cache_read_tokens: int = 0,
+        cache_create_tokens: int = 0,
+        cost_usd: float | None = None,
+        model: str | None = None,
+    ) -> None:
+        """Record a token usage event. Fire-and-forget safe — never raises."""
+        try:
+            async with aiosqlite.connect(str(self.db_path)) as conn:
+                await conn.execute(
+                    """
+                    INSERT INTO token_usage
+                        (session_id, source, input_tokens, output_tokens,
+                         cache_read_tokens, cache_create_tokens, cost_usd, model)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (session_id, source, input_tokens, output_tokens,
+                     cache_read_tokens, cache_create_tokens, cost_usd, model),
+                )
+                await conn.commit()
+        except Exception:
+            logger.warning("Failed to record token usage", exc_info=True)
+
+    async def get_token_usage_summary(self) -> dict:
+        """Return aggregated token usage: today + total (tokens and cost).
+
+        Returns dict with keys:
+            today_tokens, total_tokens, today_cost_usd, total_cost_usd
+        """
+        try:
+            async with aiosqlite.connect(str(self.db_path)) as conn:
+                # Total across all time
+                cursor = await conn.execute("""
+                    SELECT
+                        COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_create_tokens), 0),
+                        COALESCE(SUM(cost_usd), 0.0)
+                    FROM token_usage
+                """)
+                total_row = await cursor.fetchone()
+
+                # Today only (UTC date comparison)
+                cursor = await conn.execute("""
+                    SELECT
+                        COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_create_tokens), 0),
+                        COALESCE(SUM(cost_usd), 0.0)
+                    FROM token_usage
+                    WHERE date(timestamp) = date('now')
+                """)
+                today_row = await cursor.fetchone()
+
+                return {
+                    "total_tokens": total_row[0] if total_row else 0,
+                    "total_cost_usd": total_row[1] if total_row else 0.0,
+                    "today_tokens": today_row[0] if today_row else 0,
+                    "today_cost_usd": today_row[1] if today_row else 0.0,
+                }
+        except Exception:
+            logger.warning("Failed to get token usage summary", exc_info=True)
+            return {
+                "total_tokens": 0,
+                "total_cost_usd": 0.0,
+                "today_tokens": 0,
+                "today_cost_usd": 0.0,
+            }
