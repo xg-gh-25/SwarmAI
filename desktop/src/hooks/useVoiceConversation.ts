@@ -174,7 +174,20 @@ export function useVoiceConversation({
       return;
     }
 
-    if (!latestTextContent || latestTextContent.length <= lastProcessedLenRef.current) {
+    if (!latestTextContent) return;
+
+    // Turn-change detection: when latestTextContent shrinks, it's now reading
+    // a different (newer) assistant message. Reset tracking to process the new
+    // response from the start. Without this, lastProcessedLenRef carries over
+    // from the previous turn and the new response is silently skipped until it
+    // exceeds the old response's length.
+    if (latestTextContent.length < lastProcessedLenRef.current) {
+      lastProcessedLenRef.current = 0;
+      sentenceBufferRef.current = '';
+      ttsQueueRef.current = Promise.resolve();
+    }
+
+    if (latestTextContent.length <= lastProcessedLenRef.current) {
       return;
     }
 
