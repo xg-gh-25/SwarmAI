@@ -2352,7 +2352,10 @@ class SessionUnit:
 
         State: any → DEAD → COLD.
 
-        Safe to call multiple times or from any state.
+        Safe to call multiple times or from any state.  Tolerates
+        concurrent kills — if another coroutine transitions the state
+        during ``await _force_kill()``, we skip the redundant transition
+        instead of raising RuntimeError.
         """
         if self.state in (SessionState.COLD, SessionState.DEAD):
             # Already dead or never started — just ensure COLD
@@ -2364,7 +2367,11 @@ class SessionUnit:
         self._transition(SessionState.DEAD)
         await self._force_kill()
         self._cleanup_internal()
-        self._transition(SessionState.COLD)
+        # After the await, another coroutine (lifecycle manager reap)
+        # may have already transitioned DEAD→COLD.  Only transition if
+        # we're still in DEAD — prevents cold→cold RuntimeError.
+        if self.state == SessionState.DEAD:
+            self._transition(SessionState.COLD)
 
     async def _force_kill(self) -> None:
         """Best-effort force-kill of the owned subprocess and its children.
