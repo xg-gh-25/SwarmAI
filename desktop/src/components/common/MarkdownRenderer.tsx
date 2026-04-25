@@ -714,13 +714,17 @@ const baseMarkdownComponents: Record<string, React.ComponentType<any>> = {
   // Paragraphs
   p: ({ children }) => <p className="text-[var(--color-text)] mb-2 leading-normal">{children}</p>,
 
-  // Links
+  // Links — use plugin-opener instead of target="_blank" (Tauri webview ignores it)
   a: ({ href, children }) => (
     <a
       href={href}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="text-primary hover:text-primary-hover underline decoration-primary/50 hover:decoration-primary transition-colors"
+      onClick={(e) => {
+        if (href) {
+          e.preventDefault();
+          import('@tauri-apps/plugin-opener').then(({ openUrl }) => openUrl(href)).catch(() => window.open(href, '_blank', 'noopener,noreferrer'));
+        }
+      }}
+      className="text-primary hover:text-primary-hover underline decoration-primary/50 hover:decoration-primary transition-colors cursor-pointer"
     >
       {children}
     </a>
