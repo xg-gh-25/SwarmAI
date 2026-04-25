@@ -45,11 +45,19 @@ class SkillMetricsHook:
     def __init__(self) -> None:
         self._store: "SkillMetricsStore | None" = None
 
-    def _get_store(self, db_path: "Path") -> "SkillMetricsStore":
-        """Return a cached SkillMetricsStore instance, creating on first call."""
+    def _get_store(self, db_path: "Path") -> "SkillMetricsStore | None":
+        """Return a cached SkillMetricsStore instance, creating on first call.
+
+        Returns None if import fails (e.g. zlib decompression error in
+        PyInstaller bundle — stale .pyc).  Caller must handle None.
+        """
         if self._store is None:
-            from core.skill_metrics import SkillMetricsStore
-            self._store = SkillMetricsStore(db_path)
+            try:
+                from core.skill_metrics import SkillMetricsStore
+                self._store = SkillMetricsStore(db_path)
+            except Exception as exc:
+                logger.warning("SkillMetricsStore import failed (non-blocking): %s", exc)
+                return None
         return self._store
 
     @property
@@ -76,6 +84,8 @@ class SkillMetricsHook:
             # Record each invocation (cached store avoids re-creation per session)
             db_path = get_app_data_dir() / "data.db"
             store = self._get_store(db_path)
+            if store is None:
+                return  # Import failed (stale bundle) — skip silently
             for inv in invocations:
                 store.record(
                     skill_name=inv["skill_name"],
