@@ -97,6 +97,11 @@ class StructuredSummary:
     # Populated by DailyActivityExtractionHook from `git log --since=<session_start>`.
     # Gives distillation a verifiable signal for implementation claims.
     git_commits: list[str] = field(default_factory=list)
+    # Process reflection: LLM-generated meta-analysis of HOW the session went,
+    # not just WHAT was discussed. Captures iteration patterns, blind spots,
+    # perspective gaps, and work-process lessons that the agent might not
+    # explicitly acknowledge. Fed into DailyActivity for downstream evolution.
+    process_reflection: str = ""
     # Legacy fields (kept for backward compat, will be empty for new sessions)
     actions_taken: list[str] = field(default_factory=list)
     reasoning: list[str] = field(default_factory=list)
@@ -148,6 +153,19 @@ Also assess:
 after agent misunderstood, user expressing frustration with agent approach. Each correction \
 should capture: what the agent did wrong + what the user wanted instead.
 
+4. **Process reflection** — Step back from WHAT was discussed and analyze HOW the session went. \
+Look for these meta-patterns:
+- **Iteration churn**: Was the same file/component modified multiple rounds? Was each round fixing \
+a fundamentally different class of issue (sign of insufficient upfront thinking) or normal refinement?
+- **Perspective gap**: Did the agent operate from only one viewpoint (e.g., code correctness) \
+while missing another (e.g., user experience, error handling, edge cases)?
+- **Late discovery**: Were the most important findings/bugs discovered in the last round? \
+What question, asked earlier, would have surfaced them sooner?
+- **User pushback signal**: Did the user challenge quality, ask "are you sure?", \
+or redirect the approach? What assumption was wrong?
+- If no process issues: set to "" (most sessions are fine — only flag real patterns).
+- Keep it to 1-2 sentences. Focus on the reusable lesson, not the specific instance.
+
 ## Output (valid JSON only, no markdown fences):
 {{
   "deliverables": ["Built X feature", "Fixed Y bug — root cause was Z", "Diagnosed P issue"],
@@ -155,6 +173,7 @@ should capture: what the agent did wrong + what the user wanted instead.
   "lessons": ["SDK has include_partial_messages flag (default False)", "Never trust char-count estimation for tokens"],
   "rejected_approaches": ["Tried X but rejected because Y"],
   "corrections": ["Agent asked for confirmation on internal action — user said just do it", "Agent repeated user's words back — user said stop repeating"],
+  "process_reflection": "Same file edited 4 rounds — each round found a different class of bug (layout, then error handling, then UX). Upfront user-scenario walkthrough would have caught all in round 1.",
   "continue_from": "specific next step for the next session (one sentence)",
   "validation_status": "what was tested vs untested (one sentence)",
   "coe_signal": "",
@@ -604,6 +623,7 @@ class SummarizationPipeline:
         summary.lessons = enriched.get("lessons", [])
         summary.rejected_approaches = enriched.get("rejected_approaches", [])
         summary.corrections = enriched.get("corrections", [])
+        summary.process_reflection = enriched.get("process_reflection", "")
         summary.continue_from = enriched.get("continue_from", "")
         summary.validation_status = enriched.get("validation_status", "")
         summary.coe_signal = enriched.get("coe_signal", "")
