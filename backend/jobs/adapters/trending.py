@@ -14,6 +14,7 @@ Response: {"status": "success"|"cache", "items": [{"title": "...", "url": "...",
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from datetime import datetime, timezone
 
@@ -32,6 +33,16 @@ NEWSNOW_HEADERS = {
     "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
     "Referer": "https://newsnow.busiyi.world/",
 }
+
+# Module-level cancellation event — set during graceful shutdown to
+# interrupt rate-limiting sleeps. Without this, 11 platforms × 500ms
+# = 5.5s blocking that delays SIGTERM shutdown.
+_cancel = threading.Event()
+
+
+def cancel_trending() -> None:
+    """Signal the trending adapter to abort — call from shutdown handler."""
+    _cancel.set()
 
 
 def fetch_trending(feed: Feed, max_age_hours: int = 48) -> list[RawSignal]:
@@ -54,9 +65,14 @@ def fetch_trending(feed: Feed, max_age_hours: int = 48) -> list[RawSignal]:
         return []
 
     signals: list[RawSignal] = []
+    _cancel.clear()  # Reset from previous run
 
     with safe_client(timeout=15, headers=NEWSNOW_HEADERS) as client:
         for i, platform in enumerate(platforms):
+            if _cancel.is_set():
+                logger.info("Trending fetch cancelled before platform iteration")
+                break
+
             platform_id = platform.get("id", "")
             platform_name = platform.get("name", platform_id)
 
@@ -106,10 +122,12 @@ def fetch_trending(feed: Feed, max_age_hours: int = 48) -> list[RawSignal]:
                 continue
 
             # Rate limiting between platforms (skip after last).
-            # This runs in a thread pool worker (job executor), not the event loop,
-            # so time.sleep is safe — it only blocks the worker thread.
+            # Uses _cancel event for interruptible sleep — graceful shutdown
+            # calls cancel_trending() so we don't block for 5.5s total.
             if i < len(platforms) - 1 and interval_ms > 0:
-                time.sleep(interval_ms / 1000)
+                if _cancel.wait(interval_ms / 1000):
+                    logger.info("Trending fetch cancelled during rate-limit sleep")
+                    break
 
     logger.info(f"Trending feed '{feed.id}': {len(signals)} total signals")
     return signals
