@@ -73,7 +73,26 @@ node .claude/skills/s_browser-agent/browser-agent.mjs screenshot /tmp/page.png  
 - For video pages: gets title + description + comments (NOT the video stream itself)
 - Screenshot provides visual context for understanding page layout
 
-**After all 3 tiers:** If still no usable content (login-gated, expired, region-blocked):
+**Tier 4: Platform-specific public APIs** (when Tiers 1-3 all fail on short links / sandbox blocks)
+
+Some platforms have public APIs that return structured metadata without auth. Use when the URL itself is unreachable (DNS blocked, sandbox restriction, 412 Precondition Failed):
+
+```bash
+# B站 — search API (no auth, returns video metadata + full description)
+curl -s 'https://api.bilibili.com/x/web-interface/search/type?search_type=video&keyword=<URL-encoded-title>&page=1' \
+  -H 'User-Agent: Mozilla/5.0' -H 'Referer: https://www.bilibili.com/'
+
+# B站 — video detail API (no auth, returns full stats + description)
+curl -s "https://api.bilibili.com/x/web-interface/view?bvid=<BVID>" \
+  -H 'User-Agent: Mozilla/5.0' -H 'Referer: https://www.bilibili.com/'
+```
+
+**Battle-tested results (2026-04-25):**
+- `b23.tv` short links: DNS blocked in sandbox, curl timeout, yt-dlp 412. **API worked.**
+- B站 video detail API returns: title, author, duration, full description (up to ~5000 chars), view/like/coin/favorite/share/comment/danmaku counts, publish timestamp. For interview videos, the description alone often contains the full outline + key quotes.
+- WeChat 视频号 `channels.weixin.qq.com`: browser-agent renders JS → gets title + author + tags + engagement. Video stream requires scan login (unreachable).
+
+**After all tiers:** If still no usable content (login-gated, expired, region-blocked):
 1. State what was tried and why each tier failed
 2. Ask: "Can you paste the key content or share the video file directly?"
 
@@ -81,21 +100,29 @@ node .claude/skills/s_browser-agent/browser-agent.mjs screenshot /tmp/page.png  
 
 When the URL points to a video/audio (detected from URL pattern or page metadata):
 
-| Platform | What browser-agent extracts | What needs user help |
-|----------|---------------------------|---------------------|
-| WeChat 视频号 (`weixin.qq.com/sph/`) | Title, author, description, tags, engagement stats | Video file (for full transcript) |
-| 抖音 share page | Title, author, description, hashtags | Video file |
-| B站 / YouTube | Title, author, description, comments (public) | Usually nothing — yt-dlp can download |
-| TikTok | Title, author, hashtags | Video file |
-| Podcast / audio URL | Direct download if public | Nothing |
+| Platform | Best path | Fallback | What needs user help |
+|----------|-----------|----------|---------------------|
+| **B站** (`bilibili.com`, `b23.tv`) | B站 public API → full metadata + description | browser-agent or yt-dlp (often 412) | Video file (if full transcript needed) |
+| **WeChat 视频号** (`weixin.qq.com/sph/`) | browser-agent → title/author/tags/engagement | curl with mobile UA | Video file (scan login required) |
+| **YouTube** (`youtube.com`, `youtu.be`) | yt-dlp download audio → whisper-transcribe | WebFetch for page metadata | Usually nothing |
+| **抖音** (`douyin.com`) | browser-agent → metadata | curl with mobile UA | Video file |
+| **TikTok** (`tiktok.com`) | browser-agent → metadata | — | Video file |
+| **Podcast / audio URL** | Direct download if public | — | Nothing |
 
-**For B站 and YouTube:** Try `yt-dlp` to download audio before asking user:
-```bash
-yt-dlp -x --audio-format mp3 -o /tmp/video_audio.mp3 "<URL>" 2>&1
-```
-If download succeeds → whisper-transcribe → full transcript.
+**B站 strategy (proven 2026-04-25):**
+1. Resolve `b23.tv` short link → extract title from user's message or search API
+2. Search: `api.bilibili.com/x/web-interface/search/type` with title keywords → get BV号
+3. Detail: `api.bilibili.com/x/web-interface/view?bvid=<BV号>` → full metadata
+4. If description has high info density (interview videos often do), create card from description alone
+5. Only attempt yt-dlp audio download if transcript is needed AND B站 isn't blocking (412 = skip)
 
 **For WeChat/抖音/TikTok:** These block download tools. Create the card from metadata (title, description, tags, engagement) and note in the card that full transcript requires the video file.
+
+**For YouTube:** yt-dlp usually works. Try audio download first:
+```bash
+yt-dlp -x --audio-format mp3 --audio-quality 5 -o /tmp/video_audio.mp3 "<URL>" 2>&1
+```
+If download succeeds → whisper-transcribe → full transcript card.
 
 ### Source Type Detection
 
@@ -110,6 +137,20 @@ If download succeeds → whisper-transcribe → full transcript.
 | `twitter.com`, `x.com` | `tweet` |
 | `github.com` | `repo` |
 | Everything else | `article` |
+
+### High-Density Video Descriptions (Skip Transcript When Description Is Enough)
+
+Interview and talk videos often have descriptions that contain:
+- Full outline with timestamps
+- Speaker's key technical judgments (verbatim or paraphrased)
+- Frameworks and mental models
+- Key quotes
+
+**Decision rule:** If the video description is >500 chars AND contains structured content (outline, numbered points, quotes), create the knowledge card from the description. Don't burn time downloading/transcribing a 3.5-hour video when the description already gives you 80% of the value.
+
+Note in the card: "Created from video description. Full transcript available via video file." This keeps the door open for deeper extraction later without blocking the initial learn.
+
+**Real example (2026-04-25):** 罗福莉 3.5h interview — B站 API returned 3,500 chars of description containing 6 key technical judgments, compute allocation formula, org restructuring insights, and full timeline outline. Card created in 30s vs hours for full transcript.
 
 ### Step 2: Extract & Classify
 
