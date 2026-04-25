@@ -51,8 +51,14 @@ def dedup_signals(
     return unique, updated_urls
 
 
-def trim_dedup_cache(urls: list[str], max_size: int = 500) -> list[str]:
-    """Keep dedup cache bounded. Oldest entries dropped first."""
+def trim_dedup_cache(urls: list[str], max_size: int = 2000) -> list[str]:
+    """Keep dedup cache bounded. Oldest entries dropped first.
+
+    max_size raised from 500 to 2000 because Chinese trending feeds
+    (11 platforms × ~20 URLs each = ~220/fetch) would fill a 500
+    cache in a single fetch cycle, evicting RSS/GitHub URLs and
+    causing them to be re-fetched as "new" on the next cycle.
+    """
     if len(urls) > max_size:
         return urls[-max_size:]
     return urls
