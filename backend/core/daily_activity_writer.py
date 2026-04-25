@@ -1,16 +1,22 @@
-"""DailyActivity file writer with YAML frontmatter and atomic writes.
+"""DailyActivity file writer with YAML frontmatter, JSONL sidecar, and atomic writes.
 
-Handles the file format, frontmatter management, and concurrent-safe
-writes for DailyActivity files at
-``Knowledge/DailyActivity/YYYY-MM-DD.md``.
+Handles two output formats per day:
 
-Uses its own atomic read-modify-write with ``fcntl.flock`` for
-concurrency safety (separate from ``locked_write.py`` which is
-MEMORY.md-specific).
+1. **Markdown** (``YYYY-MM-DD.md``) — Human-readable session log with
+   YAML frontmatter.  This is the "for humans" view.
+2. **JSONL sidecar** (``YYYY-MM-DD.jsonl``) — One JSON line per session
+   with all structured fields from ``StructuredSummary``.  This is the
+   "for pipeline" view — consumed directly by ``DistillationTriggerHook``
+   without regex re-parsing.
+
+Both files are written atomically with ``fcntl.flock``.  The sidecar is
+best-effort — if it fails, the markdown is still written and the legacy
+regex extraction path in distillation still works.
 
 Key public symbols:
 
-- ``write_daily_activity``  — Append a session entry to today's file.
+- ``write_daily_activity``  — Append a session entry to today's file + sidecar.
+- ``read_jsonl_sidecar``    — Read structured session data from JSONL sidecar.
 - ``parse_frontmatter``     — Parse YAML frontmatter from file content.
 - ``write_frontmatter``     — Serialize frontmatter dict + body to string.
 """
@@ -19,6 +25,7 @@ from __future__ import annotations
 
 import asyncio
 import fcntl
+import json
 import logging
 from datetime import date, datetime
 from pathlib import Path
@@ -203,6 +210,11 @@ def _format_session_entry(summary: StructuredSummary, context: HookContext) -> s
             lines.append(f"- {c}")
         lines.append("")
 
+    # --- Process reflection (LLM meta-analysis of how the session went) ---
+    if summary.process_reflection:
+        lines.append(f"**Process Reflection:** {summary.process_reflection}")
+        lines.append("")
+
     # --- Git ground truth (actual commits during session) ---
     if summary.git_commits:
         lines.append("**Git activity:**")
@@ -264,17 +276,104 @@ def _atomic_read_modify_write(file_path: Path, summary: StructuredSummary, conte
             fcntl.flock(fh, fcntl.LOCK_UN)
 
 
+def _summary_to_jsonl_record(summary: StructuredSummary, context: HookContext) -> dict[str, Any]:
+    """Convert a StructuredSummary + HookContext into a flat JSON-serializable dict.
+
+    This is the structured sidecar format consumed by DistillationTriggerHook.
+    Every field from StructuredSummary is preserved as-is — no markdown rendering,
+    no information loss.  The distillation hook reads these directly instead of
+    regex-parsing the markdown.
+    """
+    return {
+        "session_id": context.session_id,
+        "timestamp": summary.timestamp or datetime.now().strftime("%H:%M"),
+        "session_start": context.session_start_time,
+        "message_count": context.message_count,
+        "title": summary.session_title,
+        # Core fields (rule-based)
+        "topics": summary.topics,
+        "decisions": summary.decisions,
+        "files_modified": summary.files_modified,
+        "open_questions": summary.open_questions,
+        # Enriched fields (LLM-powered)
+        "deliverables": summary.deliverables,
+        "key_outputs": summary.key_outputs,
+        "lessons": summary.lessons,
+        "rejected_approaches": summary.rejected_approaches,
+        "corrections": summary.corrections,
+        "process_reflection": summary.process_reflection,
+        "continue_from": summary.continue_from,
+        "validation_status": summary.validation_status,
+        # COE fields
+        "coe_signal": summary.coe_signal,
+        "coe_topic": summary.coe_topic,
+        # Git ground truth
+        "git_commits": summary.git_commits,
+    }
+
+
+def _write_jsonl_sidecar(jsonl_path: Path, record: dict[str, Any]) -> None:
+    """Append one JSON line to the JSONL sidecar file.
+
+    Uses fcntl.flock for concurrency safety (multiple sessions can close
+    on the same day).  The file is created if it doesn't exist.
+    """
+    jsonl_path.parent.mkdir(parents=True, exist_ok=True)
+    line = json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n"
+
+    with open(jsonl_path, "a") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        try:
+            fh.write(line)
+            fh.flush()
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
+
+
+def read_jsonl_sidecar(jsonl_path: Path) -> list[dict[str, Any]]:
+    """Read all session records from a JSONL sidecar file.
+
+    Returns a list of dicts, one per session.  Skips malformed lines
+    gracefully (logs warning, continues).  Returns empty list if the
+    file doesn't exist.
+
+    Used by DistillationTriggerHook to consume structured data directly
+    instead of regex-parsing the markdown DailyActivity file.
+    """
+    if not jsonl_path.is_file():
+        return []
+
+    records: list[dict[str, Any]] = []
+    try:
+        with open(jsonl_path, "r", encoding="utf-8") as fh:
+            for lineno, line in enumerate(fh, 1):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    records.append(json.loads(line))
+                except json.JSONDecodeError as exc:
+                    logger.warning("Malformed JSONL line %d in %s: %s", lineno, jsonl_path, exc)
+    except (OSError, UnicodeDecodeError) as exc:
+        logger.warning("Failed to read JSONL sidecar %s: %s", jsonl_path, exc)
+    return records
+
+
 async def write_daily_activity(
     summary: StructuredSummary,
     context: HookContext,
     workspace_path: Path | None = None,
 ) -> Path:
-    """Append a session entry to today's DailyActivity file.
+    """Append a session entry to today's DailyActivity file + JSONL sidecar.
 
-    Creates the file with YAML frontmatter if it doesn't exist.
+    Writes two files:
+    1. ``YYYY-MM-DD.md`` — human-readable markdown (always written)
+    2. ``YYYY-MM-DD.jsonl`` — structured sidecar (best-effort, non-blocking)
+
+    Creates files with YAML frontmatter if they don't exist.
     Uses atomic read-modify-write with ``fcntl.flock``.
 
-    Returns the path to the written file.
+    Returns the path to the written markdown file.
     """
     if workspace_path is None:
         from .initialization_manager import initialization_manager
@@ -283,7 +382,18 @@ async def write_daily_activity(
     today = date.today().isoformat()
     da_dir = workspace_path / "Knowledge" / "DailyActivity"
     file_path = da_dir / f"{today}.md"
+    jsonl_path = da_dir / f"{today}.jsonl"
 
+    # Write markdown (primary — must succeed)
     await asyncio.to_thread(_atomic_read_modify_write, file_path, summary, context)
     logger.info("Wrote DailyActivity entry to %s", file_path)
+
+    # Write JSONL sidecar (best-effort — failure doesn't block)
+    try:
+        record = _summary_to_jsonl_record(summary, context)
+        await asyncio.to_thread(_write_jsonl_sidecar, jsonl_path, record)
+        logger.debug("Wrote JSONL sidecar to %s", jsonl_path)
+    except Exception as exc:
+        logger.warning("JSONL sidecar write failed (non-blocking): %s", exc)
+
     return file_path

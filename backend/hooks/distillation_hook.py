@@ -31,7 +31,7 @@ from pathlib import Path
 
 from core.session_hooks import HookContext
 from core.initialization_manager import initialization_manager
-from core.daily_activity_writer import parse_frontmatter, write_frontmatter
+from core.daily_activity_writer import parse_frontmatter, write_frontmatter, read_jsonl_sidecar
 from scripts.locked_write import LockedWriteError
 from hooks.evolution_maintenance_hook import _append_changelog
 
@@ -318,16 +318,53 @@ class DistillationTriggerHook:
                 content = da_file.read_text(encoding="utf-8")
                 fm, body = parse_frontmatter(content)
                 file_date = da_file.stem  # YYYY-MM-DD
-
-                # Extract decisions, lessons, corrections, and competence
-                decisions = self._extract_decisions(body)
-                lessons = self._extract_lessons(body)
-                corrections = self._extract_corrections(body)
-                competence = self._extract_competence(body)
-
-                # Extract git commit(s) from this day for provenance
                 da_rel_path = f"DailyActivity/{da_file.name}"
-                day_commit = self._extract_day_commit(body)
+
+                # --- Prefer JSONL sidecar (structured, lossless) over regex ---
+                jsonl_path = da_file.with_suffix(".jsonl")
+                jsonl_records = read_jsonl_sidecar(jsonl_path)
+
+                if jsonl_records:
+                    # JSONL path: consume LLM-extracted structured data directly
+                    decisions, lessons, corrections, competence = [], [], [], []
+                    day_commit = None
+
+                    for rec in jsonl_records:
+                        decisions.extend(rec.get("decisions", []))
+                        lessons.extend(rec.get("lessons", []))
+                        corrections.extend(rec.get("corrections", []))
+                        # process_reflection → promote as lesson (high-value LLM meta-analysis)
+                        pr = rec.get("process_reflection", "")
+                        if pr and len(pr) > 20:
+                            lessons.append(pr)
+                        # COE signals
+                        sig = rec.get("coe_signal", "")
+                        topic = rec.get("coe_topic", "")
+                        if sig and topic:
+                            coe_entries.append((file_date, sig, topic))
+                        # Git commits for provenance
+                        commits = rec.get("git_commits", [])
+                        if commits and not day_commit:
+                            # First 7 chars of first commit hash
+                            first = commits[0].split()[0] if commits[0] else ""
+                            day_commit = first[:7] if first else None
+
+                    logger.debug(
+                        "Distilled %s via JSONL: %d decisions, %d lessons, %d corrections",
+                        da_file.name, len(decisions), len(lessons), len(corrections),
+                    )
+                else:
+                    # Regex fallback path: parse markdown (legacy, pre-JSONL files)
+                    decisions = self._extract_decisions(body)
+                    lessons = self._extract_lessons(body)
+                    corrections = self._extract_corrections(body)
+                    competence = self._extract_competence(body)
+                    day_commit = self._extract_day_commit(body)
+
+                    logger.debug(
+                        "Distilled %s via regex: %d decisions, %d lessons, %d corrections, %d competence",
+                        da_file.name, len(decisions), len(lessons), len(corrections), len(competence),
+                    )
 
                 # Batch entries with enriched provenance (write happens after the loop)
                 for decision in decisions:
@@ -345,18 +382,17 @@ class DistillationTriggerHook:
                 for comp in competence:
                     all_competence.append((file_date, comp))
 
-                # Collect COE signals — check both frontmatter flag and body content
-                coe_items = self._extract_coe_entries(body)
-                if coe_items:
-                    for signal, topic in coe_items:
-                        coe_entries.append((file_date, signal, topic))
+                # Collect COE signals from body (in case JSONL didn't have them)
+                if not jsonl_records:
+                    coe_items = self._extract_coe_entries(body)
+                    if coe_items:
+                        for signal, topic in coe_items:
+                            coe_entries.append((file_date, signal, topic))
 
                 # Track for post-write marking (NOT marked here — see GAP 12)
                 extracted_files.append((da_file, fm, body))
 
                 distilled_count += 1
-                logger.debug("Distilled %s: %d decisions, %d lessons, %d corrections, %d competence",
-                             da_file.name, len(decisions), len(lessons), len(corrections), len(competence))
             except Exception as exc:
                 logger.warning("Failed to distill %s: %s", da_file.name, exc)
                 continue
@@ -559,12 +595,23 @@ class DistillationTriggerHook:
     def _extract_lessons(body: str) -> list[str]:
         """Extract lesson-worthy lines from DailyActivity body.
 
-        Two extraction modes:
+        Three extraction modes:
         1. Section-based: all items under **Lessons:** section (new format)
-        2. Pattern-based: any line matching lesson patterns (both formats)
+        2. Process reflection: the **Process Reflection:** line (LLM meta-analysis)
+        3. Pattern-based: any line matching lesson patterns (both formats)
         """
         lessons = []
         in_lessons_section = False
+
+        # Mode 2: Extract process reflection (single line, not a section)
+        for line in body.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("**Process Reflection:**"):
+                entry = stripped.removeprefix("**Process Reflection:**").strip()
+                if len(entry) > 20:
+                    lessons.append(entry[:200])
+                break  # Only one per session
+
         for line in body.splitlines():
             stripped = line.strip()
             # Track Lessons section (new format)

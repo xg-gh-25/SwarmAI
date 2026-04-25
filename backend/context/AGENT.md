@@ -506,8 +506,18 @@ Before writing code, output these four items explicitly — not in your head, in
 2. **Scenarios** — every input × expected behavior. Include edge cases. This is the test matrix.
 3. **Simplest approach** — the least code that covers all scenarios. Not the cleverest.
 4. **What could break** — for each scenario, what's the failure mode.
+5. **State machine audit** (if applicable) — for every declared state/transition, name the code path that enters it and the trigger that causes the transition. Unreachable state = bug.
 
 Then implement. This turns implicit thinking into visible artifacts the user can correct before you write 100 lines of wrong code. Skip this for trivial 1-file fixes.
+
+**Post-Implementation E2E Checkpoint (features with cross-boundary integration):**
+
+After implementation + tests pass, trace the **full user path one level downstream** before calling done:
+- Voice sends a message → does the message actually arrive at the send function with the right value? (caught setTimeout race)
+- Backend accepts params → does the downstream service accept those exact params? (caught Polly LanguageCode mismatch)
+- Output goes to a template → is the output escaped for the target format? (caught HTML/JSON injection)
+
+This catches the class of bugs where every unit works but the integration is wrong. **Single-person review has systematic blind spots** — implementation review focuses on logic correctness, E2E review focuses on data flow correctness. Both are required.
 
 **Rules:**
 - **Direct** = no ceremony, not no quality. Still test, still scan.
@@ -531,6 +541,28 @@ LLMs are strongest when looping toward a concrete exit condition. Reframe vague 
 
 Strong success criteria → independent looping. Weak criteria → constant clarification. When the task is vague, define the exit condition first.
 
+## 🚨 CRITICAL: Post-Task Self-Review — Before Declaring Done
+
+After completing any non-trivial task (>1 file changed OR user-facing change), **before saying "done"**, run this self-check:
+
+### 1. Switch Perspective
+- **Code task:** Re-read the diff as a reviewer who didn't write it. What assumptions did I make?
+- **UI task:** Walk through as a user. Entry point → what they see → what they do → edge cases (overflow, slow, error, empty).
+- **Architecture task:** Trace the data flow end-to-end. What happens when each component fails?
+
+### 2. Iteration Honesty Check
+- Did I edit the same file 3+ times? → I didn't think it through upfront. Capture why.
+- Did the last round fix a fundamentally different class of bug than round 1? → I was operating at the wrong abstraction level.
+- Would I be embarrassed if someone reviewed the git history? → Fix it now.
+
+### 3. Capture Lessons (Blocking)
+If either check surfaces a pattern (not a one-off typo), **write it to DailyActivity immediately** — don't wait for session end, don't rely on hooks. Format:
+```
+**Self-Review Lesson:** [what happened] → [root cause] → [structural fix]
+```
+
+This is the difference between a senior and a junior. Seniors don't need external pushback to reflect. The hook pipeline downstream (DistillationTriggerHook → EvolutionMaintenanceHook) can only compound what I produce here. Empty reflection in = empty evolution out.
+
 ## 🚨 CRITICAL: Post-Task Code Quality & Security Scans
 
 After completing any code modification task, scan modified files before moving on. **Skip entirely** if the only changes are documentation (*.md, docs/), config files, or context files (.context/).
@@ -541,8 +573,8 @@ Scan all modified source files for issues by severity:
 
 | Severity | Action | Categories |
 |----------|--------|------------|
-| 🔴 High | **Auto-fix** | Dead code, duplicate logic, missing error handling, type safety violations, memory leaks, SOLID violations |
-| 🟡 Medium | **Auto-fix** | Magic numbers, complex conditionals (>3 branches), unclear naming, tight coupling, inefficient algorithms, missing abstractions |
+| 🔴 High | **Auto-fix** | Dead code, duplicate logic, missing error handling, type safety violations, memory leaks, SOLID violations, **unreachable state machine states**, **concurrent async without ordering guarantees** |
+| 🟡 Medium | **Auto-fix** | Magic numbers, complex conditionals (>3 branches), unclear naming, tight coupling, inefficient algorithms, missing abstractions, **unsanitized strings in structured formats (HTML/JSON/SQL)**, **setTimeout for state propagation** |
 | 🟢 Low | **Note only** | Minor readability, formatting, optional comments |
 
 **Process:** List findings briefly → fix 🔴 and 🟡 in-place → note what was fixed. Maintain existing functionality — refactors only, not feature changes. If nothing found, one line and move on.

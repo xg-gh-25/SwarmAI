@@ -42,55 +42,131 @@ function openWorkspaceFile(relativePath: string) {
   );
 }
 
+const PRIORITY_BORDER: Record<string, string> = {
+  P0: 'border-l-red-400',
+  P1: 'border-l-yellow-400',
+  P2: 'border-l-blue-400',
+};
+
 function FocusItem({ item, onClick }: { item: BriefingFocusItem; onClick?: (title: string) => void }) {
   const badge = PRIORITY_BADGES[item.priority] ?? PRIORITY_BADGES.P2;
+  const borderCls = PRIORITY_BORDER[item.priority] ?? PRIORITY_BORDER.P2;
   return (
     <button
       type="button"
       onClick={() => onClick?.(item.title)}
-      className="flex items-center gap-2 py-1 w-full text-left rounded px-1 -mx-1 transition-colors hover:bg-[var(--color-bg-hover)] cursor-pointer"
+      className={`border-l-2 ${borderCls} pl-2.5 py-1.5 group w-full text-left rounded-r px-2 -mx-1 transition-colors hover:bg-[var(--color-bg-hover)] cursor-pointer`}
     >
-      <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded border shrink-0 ${badge.cls}`}>
-        {badge.label}
-      </span>
-      <span className="text-sm text-[var(--color-text)] truncate">{item.title}</span>
-      {item.momentum && (
-        <span className="text-[10px] text-green-400 whitespace-nowrap shrink-0" title="Has momentum from last session">
-          &#x26A1;
-        </span>
-      )}
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded border shrink-0 ${badge.cls}`}>
+            {badge.label}
+          </span>
+          <span className="text-sm text-[var(--color-text)] truncate">{item.title}</span>
+        </div>
+        <div className="flex items-center gap-1.5 shrink-0">
+          {item.momentum && (
+            <span className="text-[10px] bg-green-500/15 text-green-400 px-1.5 py-0.5 rounded font-mono" title="Momentum from last session">
+              &#x26A1; active
+            </span>
+          )}
+          <svg
+            width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+            className="text-[var(--color-text-secondary)] opacity-0 group-hover:opacity-100 transition-opacity"
+            aria-hidden="true"
+          >
+            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+          </svg>
+        </div>
+      </div>
     </button>
   );
 }
 
-function SignalItem({ signal }: { signal: BriefingSignal }) {
+const URGENCY_BORDER: Record<string, string> = {
+  high: 'border-l-red-400',
+  medium: 'border-l-yellow-400',
+  low: 'border-l-[var(--color-text-secondary)]',
+};
+
+function SignalItem({ signal, onAsk }: { signal: BriefingSignal; onAsk?: (text: string) => void }) {
+  const borderCls = URGENCY_BORDER[signal.urgency] ?? URGENCY_BORDER.medium;
   const colorCls = URGENCY_COLORS[signal.urgency] ?? URGENCY_COLORS.medium;
+
+  const handleAsk = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    onAsk?.(`Tell me more about: ${signal.title}`);
+  };
+
   return (
-    <a
-      href={signal.url}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="flex items-start gap-2 py-1 group hover:bg-[var(--color-bg-hover)] rounded px-1 -mx-1 transition-colors"
-    >
-      <span className={`text-[10px] font-mono mt-0.5 uppercase ${colorCls}`}>
-        {signal.urgency}
-      </span>
-      <div className="min-w-0">
-        <span className="text-sm text-[var(--color-text)] group-hover:underline truncate block">
-          {signal.title}
-        </span>
-        {signal.source && (
-          <span className="text-[11px] text-[var(--color-text-secondary)]">{signal.source}</span>
+    <div className={`border-l-2 ${borderCls} pl-2.5 py-1.5 group hover:bg-[var(--color-bg-hover)] rounded-r px-2 -mx-1 transition-colors`}>
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0 flex-1">
+          <button
+            type="button"
+            onClick={handleAsk}
+            className="text-sm text-[var(--color-text)] hover:underline text-left leading-snug cursor-pointer"
+            title="Ask Swarm about this"
+          >
+            {signal.title}
+          </button>
+          {signal.summary && (
+            <p className="text-[11px] text-[var(--color-text-secondary)] mt-0.5 line-clamp-2 leading-relaxed">
+              {signal.summary}
+            </p>
+          )}
+          <div className="flex items-center gap-2 mt-0.5">
+            {signal.source && (
+              <span className="text-[10px] text-[var(--color-text-secondary)] bg-[var(--color-bg-hover)] px-1.5 py-0.5 rounded">
+                {signal.source}
+              </span>
+            )}
+            <span className={`text-[10px] font-mono uppercase ${colorCls}`}>
+              {signal.urgency}
+            </span>
+          </div>
+        </div>
+        {signal.url && (
+          <a
+            href={signal.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="shrink-0 mt-0.5 text-[var(--color-text-secondary)] hover:text-[var(--color-text)] opacity-0 group-hover:opacity-100 transition-opacity"
+            title="Open in browser"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+              <polyline points="15 3 21 3 21 9" />
+              <line x1="10" y1="14" x2="21" y2="3" />
+            </svg>
+          </a>
         )}
       </div>
-    </a>
+    </div>
   );
 }
+
+function formatDuration(seconds: number): string {
+  if (seconds < 1) return '<1s';
+  if (seconds < 60) return `${Math.round(seconds)}s`;
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.round(seconds % 60);
+  return secs > 0 ? `${mins}m ${secs}s` : `${mins}m`;
+}
+
+const JOB_STATUS_BORDER: Record<string, string> = {
+  success: 'border-l-green-400',
+  failed: 'border-l-red-400',
+  error: 'border-l-red-400',
+};
 
 function JobItem({ job }: { job: BriefingJob }) {
   const isSuccess = job.status === 'success';
   const hasFile = !!job.resultFile;
   const hasSummary = !!job.summary;
+  const borderCls = JOB_STATUS_BORDER[job.status] ?? 'border-l-[var(--color-text-secondary)]';
 
   const handleClick = () => {
     if (hasFile) openWorkspaceFile(job.resultFile!);
@@ -102,18 +178,43 @@ function JobItem({ job }: { job: BriefingJob }) {
       tabIndex={hasFile ? 0 : undefined}
       onClick={hasFile ? handleClick : undefined}
       onKeyDown={hasFile ? (e) => { if (e.key === 'Enter') handleClick(); } : undefined}
-      className={`py-1.5 rounded px-1 -mx-1 transition-colors ${hasFile ? 'hover:bg-[var(--color-bg-hover)] cursor-pointer' : ''}`}
+      className={`border-l-2 ${borderCls} pl-2.5 py-1.5 group rounded-r px-2 -mx-1 transition-colors ${hasFile ? 'hover:bg-[var(--color-bg-hover)] cursor-pointer' : ''}`}
     >
-      <div className="flex items-center gap-2 text-sm">
-        <span className={isSuccess ? 'text-green-400 shrink-0' : 'text-red-400 shrink-0'}>
-          {isSuccess ? '\u2713' : '\u2717'}
-        </span>
-        <span className={`truncate ${hasFile ? 'text-[var(--color-text)] hover:underline' : 'text-[var(--color-text-secondary)]'}`}>
-          {job.name}
-        </span>
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="text-sm text-[var(--color-text)] truncate">
+            {job.name}
+          </span>
+          <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded shrink-0 ${
+            isSuccess
+              ? 'bg-green-500/15 text-green-400'
+              : 'bg-red-500/15 text-red-400'
+          }`}>
+            {isSuccess ? 'OK' : 'FAIL'}
+          </span>
+        </div>
+        <div className="flex items-center gap-1.5 shrink-0">
+          {job.duration > 0 && (
+            <span className="text-[10px] text-[var(--color-text-secondary)] font-mono">
+              {formatDuration(job.duration)}
+            </span>
+          )}
+          {hasFile && (
+            <svg
+              width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+              className="text-[var(--color-text-secondary)] opacity-0 group-hover:opacity-100 transition-opacity"
+              aria-label="Open result"
+            >
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+              <polyline points="14 2 14 8 20 8" />
+              <line x1="16" y1="13" x2="8" y2="13" />
+              <line x1="16" y1="17" x2="8" y2="17" />
+            </svg>
+          )}
+        </div>
       </div>
       {hasSummary && (
-        <p className="text-[11px] text-[var(--color-text-secondary)] mt-0.5 ml-5 line-clamp-2 leading-relaxed">
+        <p className="text-[11px] text-[var(--color-text-secondary)] mt-0.5 line-clamp-2 leading-relaxed">
           {job.summary}
         </p>
       )}
@@ -121,16 +222,37 @@ function JobItem({ job }: { job: BriefingJob }) {
   );
 }
 
+const SECTION_ICONS: Record<string, React.ReactNode> = {
+  'Suggested Focus': (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="10" /><circle cx="12" cy="12" r="6" /><circle cx="12" cy="12" r="2" />
+    </svg>
+  ),
+  'External Signals': (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" /><path d="M13.73 21a2 2 0 0 1-3.46 0" />
+    </svg>
+  ),
+  'Recent Jobs': (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+    </svg>
+  ),
+};
+
 function BriefingSection({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div className="text-left w-full">
-      <h3 className="text-xs font-semibold uppercase tracking-wider text-[var(--color-text-secondary)] mb-1.5">
+      <h3 className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-[var(--color-text-secondary)] mb-2">
+        <span className="opacity-60">{SECTION_ICONS[title]}</span>
         {title}
       </h3>
       {children}
     </div>
   );
 }
+
+const SIGNALS_COLLAPSED_COUNT = 3;
 
 export interface WelcomeScreenProps {
   onFocusClick?: (title: string) => void;
@@ -139,15 +261,14 @@ export interface WelcomeScreenProps {
 export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onFocusClick }) => {
   const [briefing, setBriefing] = useState<SessionBriefing | null>(null);
   const [loaded, setLoaded] = useState(false);
+  const [signalsExpanded, setSignalsExpanded] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
-    systemService.getBriefing().then((data) => {
-      if (!cancelled) {
-        setBriefing(data);
-        setLoaded(true);
-      }
-    });
+    systemService.getBriefing()
+      .then((data) => { if (!cancelled) setBriefing(data); })
+      .catch(() => {})  // graceful — show fallback taglines on error
+      .finally(() => { if (!cancelled) setLoaded(true); });
     return () => { cancelled = true; };
   }, []);
 
@@ -157,9 +278,12 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onFocusClick }) =>
   const hasAnyBriefing = hasFocus || hasSignals || hasJobs || briefing?.learning;
 
   return (
-    <div className="flex flex-col items-center justify-center h-full text-center select-none px-4">
+    <div className="flex flex-col items-center h-full text-center px-4 overflow-y-auto">
+      {/* Top spacer — pushes content to center when short, collapses when overflowing */}
+      <div className="flex-1 min-h-6" />
+
       {/* Icon with gradient glow */}
-      <div className="relative mb-4">
+      <div className="relative mb-4 select-none">
         <div
           className="absolute top-1/2 left-1/2 w-[120px] h-[120px] -translate-x-1/2 -translate-y-1/2 rounded-full pointer-events-none"
           style={{
@@ -178,7 +302,7 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onFocusClick }) =>
 
       {/* Heading with gradient text */}
       <h1
-        className="text-2xl font-bold mb-2"
+        className="text-2xl font-bold mb-2 select-none"
         style={{
           background: 'linear-gradient(135deg, #00d4ff 0%, #a855f7 100%)',
           WebkitBackgroundClip: 'text',
@@ -188,54 +312,116 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onFocusClick }) =>
         Welcome to SwarmAI
       </h1>
 
-      {/* Briefing panel or fallback taglines */}
-      {loaded && hasAnyBriefing ? (
-        <div className="w-full max-w-md mt-4 space-y-4">
+      {/* Briefing panel, fallback, or nothing while loading */}
+      {!loaded ? null : hasAnyBriefing ? (
+        <div className="w-full max-w-lg mt-5 divide-y divide-[var(--color-border)] [&>*]:py-4 [&>*:first-child]:pt-0 [&>*:last-child]:pb-0">
           {/* Focus suggestions */}
           {hasFocus && (
-            <BriefingSection title="Suggested Focus">
-              {briefing!.focus.map((item, i) => (
-                <FocusItem key={i} item={item} onClick={onFocusClick} />
-              ))}
-            </BriefingSection>
+            <div>
+              <BriefingSection title="Suggested Focus">
+                <div className="space-y-0.5">
+                  {briefing!.focus.map((item, i) => (
+                    <FocusItem key={i} item={item} onClick={onFocusClick} />
+                  ))}
+                </div>
+              </BriefingSection>
+            </div>
           )}
 
           {/* External signals */}
           {hasSignals && (
-            <BriefingSection title="External Signals">
-              {briefing!.signals.slice(0, 3).map((sig, i) => (
-                <SignalItem key={i} signal={sig} />
-              ))}
-            </BriefingSection>
+            <div>
+              <BriefingSection title="External Signals">
+                <div className="space-y-1">
+                  {(signalsExpanded
+                    ? briefing!.signals
+                    : briefing!.signals.slice(0, SIGNALS_COLLAPSED_COUNT)
+                  ).map((sig, i) => (
+                    <SignalItem key={i} signal={sig} onAsk={onFocusClick} />
+                  ))}
+                </div>
+                {briefing!.signals.length > SIGNALS_COLLAPSED_COUNT && (
+                  <button
+                    type="button"
+                    onClick={() => setSignalsExpanded((prev) => !prev)}
+                    className="text-[11px] text-[var(--color-text-secondary)] hover:text-[var(--color-text)] mt-1.5 cursor-pointer transition-colors"
+                  >
+                    {signalsExpanded
+                      ? '▴ Show less'
+                      : `▾ ${briefing!.signals.length - SIGNALS_COLLAPSED_COUNT} more signals`}
+                  </button>
+                )}
+              </BriefingSection>
+            </div>
           )}
 
           {/* Job results */}
           {hasJobs && (
-            <BriefingSection title="Recent Jobs">
-              {briefing!.jobs.map((job, i) => (
-                <JobItem key={i} job={job} />
-              ))}
-            </BriefingSection>
+            <div>
+              <BriefingSection title="Recent Jobs">
+                <div className="space-y-0.5">
+                  {briefing!.jobs.map((job, i) => (
+                    <JobItem key={i} job={job} />
+                  ))}
+                </div>
+              </BriefingSection>
+            </div>
           )}
 
           {/* Learning insight */}
           {briefing?.learning && (
-            <div className="text-left text-[11px] text-[var(--color-text-secondary)] italic">
-              {briefing.learning}
+            <div className="text-left">
+              <div className="flex items-start gap-2 bg-[var(--color-bg-hover)] rounded-md px-3 py-2">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-purple-400 shrink-0 mt-0.5">
+                  <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z" />
+                  <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z" />
+                </svg>
+                <p className="text-[11px] text-[var(--color-text-secondary)] leading-relaxed">
+                  {briefing.learning}
+                </p>
+              </div>
             </div>
           )}
         </div>
       ) : (
-        <>
-          {/* Fallback taglines when no briefing data */}
-          <p className="text-base text-[var(--color-text)] mb-1">
+        <div className="mt-4 space-y-3">
+          <p className="text-base text-[var(--color-text)]">
             Work smarter. Move faster. Stress less.
           </p>
-          <p className="text-sm text-[var(--color-text-secondary)]">
+          <p className="text-sm text-[var(--color-text-secondary)] max-w-sm">
             Remembers everything. Learns every session. Gets better every time.
           </p>
-        </>
+          <div className="flex items-center gap-4 mt-4 text-[var(--color-text-secondary)]">
+            <div className="flex items-center gap-1.5 text-[11px]">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="opacity-60">
+                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+              </svg>
+              Chat
+            </div>
+            <div className="flex items-center gap-1.5 text-[11px]">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="opacity-60">
+                <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" />
+              </svg>
+              Research
+            </div>
+            <div className="flex items-center gap-1.5 text-[11px]">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="opacity-60">
+                <polyline points="16 18 22 12 16 6" /><polyline points="8 6 2 12 8 18" />
+              </svg>
+              Code
+            </div>
+            <div className="flex items-center gap-1.5 text-[11px]">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="opacity-60">
+                <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z" /><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z" />
+              </svg>
+              Remember
+            </div>
+          </div>
+        </div>
       )}
+
+      {/* Bottom spacer — mirrors top spacer for vertical centering */}
+      <div className="flex-1 min-h-6" />
     </div>
   );
 };
