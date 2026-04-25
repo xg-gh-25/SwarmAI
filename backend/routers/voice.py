@@ -4,7 +4,7 @@ Endpoints:
     POST /api/voice/synthesize — Text to speech via Amazon Polly (returns MP3)
     GET  /api/voice/voices     — List available TTS voices per language
 
-Rate limited: synthesize is capped at 60 requests/minute to prevent Polly cost runaway.
+Rate limited: synthesize is capped at 120 requests/minute to prevent Polly cost runaway.
 """
 
 import logging
@@ -48,7 +48,7 @@ async def synthesize(request: SynthesizeRequest):
     Accepts JSON body with text, optional language and voice_id.
     Returns raw MP3 bytes with audio/mpeg content type.
 
-    Rate limited to 60 requests/minute to cap Polly costs.
+    Rate limited to 120 requests/minute to cap Polly costs.
     """
     # Sliding window rate limit
     now = time.monotonic()
