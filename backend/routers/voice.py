@@ -82,7 +82,11 @@ async def list_voices():
     """Return available TTS voices per language.
 
     Returns a mapping of BCP-47 language codes to [voice_id, engine] pairs.
+    (polly_language_code is internal — not exposed to frontend.)
     """
     return {
-        "voices": {lang: list(voice_info) for lang, voice_info in VOICE_MAP.items()}
+        "voices": {
+            lang: [vid, engine]
+            for lang, (vid, engine, _plc) in VOICE_MAP.items()
+        }
     }

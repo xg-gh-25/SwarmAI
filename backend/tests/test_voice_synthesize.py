@@ -33,9 +33,9 @@ class TestVoiceSynthesizeModule:
         assert isinstance(VOICE_MAP, dict)
         assert "en-US" in VOICE_MAP
         assert "zh-CN" in VOICE_MAP
-        # Each entry is (voice_id, engine)
+        # Each entry is (voice_id, engine, polly_language_code)
         for lang, info in VOICE_MAP.items():
-            assert isinstance(info, tuple) and len(info) == 2
+            assert isinstance(info, tuple) and len(info) == 3
 
     def test_does_not_import_openai(self):
         """Module must NOT depend on OpenAI."""
@@ -59,37 +59,41 @@ class TestGetVoiceForLanguage:
 
     def test_exact_match(self):
         from core.voice_synthesize import get_voice_for_language
-        vid, engine = get_voice_for_language("en-US")
-        assert vid == "Matthew"
-        assert engine == "neural"
+        vid, engine, plc = get_voice_for_language("en-US")
+        assert vid == "Ruth"
+        assert engine == "generative"
+        assert plc == "en-US"
 
     def test_chinese_voice(self):
         from core.voice_synthesize import get_voice_for_language
-        vid, engine = get_voice_for_language("zh-CN")
+        vid, engine, plc = get_voice_for_language("zh-CN")
         assert vid == "Zhiyu"
-        assert engine == "neural"
+        assert engine == "neural"  # generative not available for zh-CN
+        assert plc == "cmn-CN"     # Polly uses cmn-CN, not zh-CN
 
     def test_prefix_match(self):
         """Prefix 'en' should match 'en-US'."""
         from core.voice_synthesize import get_voice_for_language
-        vid, _engine = get_voice_for_language("en")
+        vid, _engine, _plc = get_voice_for_language("en")
         # Should match one of the en-* entries
-        assert vid in ("Matthew", "Arthur")
+        assert vid in ("Ruth", "Amy")
 
     def test_unknown_language_falls_back(self):
         from core.voice_synthesize import get_voice_for_language, DEFAULT_VOICE
-        vid, engine = get_voice_for_language("xx-XX")
-        assert (vid, engine) == DEFAULT_VOICE
+        result = get_voice_for_language("xx-XX")
+        assert result == DEFAULT_VOICE
 
     def test_japanese_voice(self):
         from core.voice_synthesize import get_voice_for_language
-        vid, engine = get_voice_for_language("ja-JP")
+        vid, engine, plc = get_voice_for_language("ja-JP")
         assert vid == "Kazuha"
+        assert engine == "neural"  # generative not available for ja-JP
 
     def test_korean_voice(self):
         from core.voice_synthesize import get_voice_for_language
-        vid, engine = get_voice_for_language("ko-KR")
+        vid, engine, plc = get_voice_for_language("ko-KR")
         assert vid == "Seoyeon"
+        assert engine == "generative"
 
 
 # ---------------------------------------------------------------------------
@@ -127,13 +131,13 @@ class TestSynthesizeSpeech:
         call_kwargs = mock_client.synthesize_speech.call_args[1]
         assert call_kwargs["Text"] == "Hello world"
         assert call_kwargs["OutputFormat"] == "mp3"
-        assert call_kwargs["VoiceId"] == "Matthew"
-        assert call_kwargs["Engine"] == "neural"
+        assert call_kwargs["VoiceId"] == "Ruth"
+        assert call_kwargs["Engine"] == "generative"
         assert call_kwargs["LanguageCode"] == "en-US"
 
     @pytest.mark.asyncio
     async def test_synthesize_chinese(self):
-        """Chinese text should use Zhiyu voice."""
+        """Chinese text should use Zhiyu voice with cmn-CN LanguageCode."""
         from core.voice_synthesize import synthesize_speech, _get_polly_client
 
         _get_polly_client.cache_clear()
@@ -146,7 +150,7 @@ class TestSynthesizeSpeech:
 
         call_kwargs = mock_client.synthesize_speech.call_args[1]
         assert call_kwargs["VoiceId"] == "Zhiyu"
-        assert call_kwargs["LanguageCode"] == "zh-CN"
+        assert call_kwargs["LanguageCode"] == "cmn-CN"  # Polly uses cmn-CN, not zh-CN
 
     @pytest.mark.asyncio
     async def test_synthesize_with_voice_override(self):
@@ -185,8 +189,8 @@ class TestSynthesizeSpeech:
 
         call_kwargs = mock_client.synthesize_speech.call_args[1]
         assert call_kwargs["VoiceId"] == "Zhiyu"
-        # LanguageCode should be zh-CN (from VOICE_MAP), NOT en-US (from caller)
-        assert call_kwargs["LanguageCode"] == "zh-CN"
+        # LanguageCode should be cmn-CN (Polly's code for Zhiyu), NOT en-US (from caller)
+        assert call_kwargs["LanguageCode"] == "cmn-CN"
 
     @pytest.mark.asyncio
     async def test_synthesize_unknown_voice_override_keeps_caller_language(self):

@@ -1,12 +1,13 @@
 """Text-to-speech via Amazon Polly.
 
-Converts text to MP3 audio using Polly Neural voices.
+Converts text to MP3 audio using Polly Generative voices (female persona).
+Falls back to Neural where Generative is unavailable (zh-CN, ja-JP).
 Reuses existing AWS SSO credentials (same as Transcribe).
 
 Public API:
     synthesize_speech(text, voice_id, language, region) → bytes (MP3)
     get_voice_for_language(language) → tuple[str, str] (voice_id, engine)
-    VOICE_MAP — language → (voice_id, engine) mapping
+    VOICE_MAP — language → (voice_id, engine, polly_language_code) mapping
 """
 
 import asyncio
@@ -16,19 +17,21 @@ from functools import lru_cache
 
 logger = logging.getLogger(__name__)
 
-# Voice mapping: BCP-47 language_code → (voice_id, engine)
-VOICE_MAP: dict[str, tuple[str, str]] = {
-    "en-US": ("Matthew", "neural"),
-    "en-GB": ("Arthur", "neural"),
-    "zh-CN": ("Zhiyu", "neural"),
-    "ja-JP": ("Kazuha", "neural"),
-    "ko-KR": ("Seoyeon", "neural"),
-    "de-DE": ("Daniel", "neural"),
-    "fr-FR": ("Lea", "neural"),
-    "es-ES": ("Sergio", "neural"),
+# Voice mapping: BCP-47 language_code → (voice_id, engine, polly_language_code)
+# Persona: female voice, generative engine where available for natural speech.
+# Polly uses cmn-CN (not zh-CN) and requires matching LanguageCode per voice.
+VOICE_MAP: dict[str, tuple[str, str, str]] = {
+    "en-US": ("Ruth", "generative", "en-US"),
+    "en-GB": ("Amy", "generative", "en-GB"),
+    "zh-CN": ("Zhiyu", "neural", "cmn-CN"),       # generative not available
+    "ja-JP": ("Kazuha", "neural", "ja-JP"),        # generative not available
+    "ko-KR": ("Seoyeon", "generative", "ko-KR"),
+    "de-DE": ("Vicki", "generative", "de-DE"),
+    "fr-FR": ("Lea", "generative", "fr-FR"),
+    "es-ES": ("Lucia", "generative", "es-ES"),
 }
 
-DEFAULT_VOICE = ("Matthew", "neural")
+DEFAULT_VOICE = ("Ruth", "generative", "en-US")
 
 # Polly neural engine limit
 MAX_TEXT_LENGTH = 3000
@@ -50,8 +53,8 @@ def _get_polly_client():
     return boto3.client("polly", region_name=DEFAULT_REGION)
 
 
-def get_voice_for_language(language: str) -> tuple[str, str]:
-    """Return (voice_id, engine) for a BCP-47 language code.
+def get_voice_for_language(language: str) -> tuple[str, str, str]:
+    """Return (voice_id, engine, polly_language_code) for a BCP-47 language code.
 
     Tries exact match first, then prefix match (e.g., "en" matches "en-US").
     Falls back to DEFAULT_VOICE if no match found.
@@ -60,7 +63,7 @@ def get_voice_for_language(language: str) -> tuple[str, str]:
         language: BCP-47 language code (e.g., "en-US", "zh-CN", "ja-JP")
 
     Returns:
-        Tuple of (voice_id, engine) for Amazon Polly
+        Tuple of (voice_id, engine, polly_language_code) for Amazon Polly
     """
     # Exact match
     if language in VOICE_MAP:
@@ -102,20 +105,20 @@ async def synthesize_speech(
     if len(clean_text) > MAX_TEXT_LENGTH:
         clean_text = clean_text[:MAX_TEXT_LENGTH]
 
-    # Resolve voice + matching LanguageCode
-    # When voice_id is overridden, we must send the correct LanguageCode
-    # or Polly rejects the request (e.g., Zhiyu requires zh-CN, not en-US).
+    # Resolve voice + engine + Polly LanguageCode.
+    # Polly requires exact LanguageCode per voice (e.g., Zhiyu = cmn-CN, not zh-CN).
     if voice_id:
-        vid, engine = voice_id, "neural"
-        # Reverse-lookup: find the language for this voice
-        lang_code = language  # default to caller's language
-        for lc, (v, _e) in VOICE_MAP.items():
+        # Reverse-lookup: find the engine + polly_language_code for this voice
+        vid = voice_id
+        engine = "generative"  # default
+        lang_code = language
+        for _lc, (v, e, plc) in VOICE_MAP.items():
             if v == voice_id:
-                lang_code = lc
+                engine = e
+                lang_code = plc
                 break
     else:
-        vid, engine = get_voice_for_language(language)
-        lang_code = language
+        vid, engine, lang_code = get_voice_for_language(language)
 
     client = _get_polly_client()
 
