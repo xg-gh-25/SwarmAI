@@ -978,21 +978,82 @@ def _send_slack_dm_webhook(message: str) -> bool:
         return False
 
 
+def _send_slack_dm_bot_api(message: str) -> bool:
+    """Send a Slack DM via Slack Web API using the channel adapter's bot token.
+
+    Reads bot_token from the channels DB table.  Direct HTTP POST to
+    chat.postMessage — ~200ms, $0, no subprocess, works regardless of
+    Slack Desktop state.
+    """
+    try:
+        import sqlite3
+        import httpx
+
+        dm_channel = _get_slack_dm_channel()
+        if not dm_channel:
+            return False
+
+        # Read bot_token from channels table (same source as channel adapter)
+        db_path = DB_PATH
+        if not db_path.exists():
+            return False
+        conn = sqlite3.connect(str(db_path), timeout=5)
+        conn.row_factory = sqlite3.Row
+        try:
+            row = conn.execute(
+                "SELECT config FROM channels WHERE name LIKE '%Slack%' LIMIT 1"
+            ).fetchone()
+        finally:
+            conn.close()
+
+        if not row:
+            return False
+        config = json.loads(row["config"] or "{}")
+        bot_token = config.get("bot_token", "")
+        if not bot_token or not bot_token.startswith("xoxb-"):
+            return False
+
+        # Convert markdown bold to Slack mrkdwn
+        mrkdwn_msg = message.replace("**", "*")
+
+        with httpx.Client(timeout=10, trust_env=False) as client:
+            resp = client.post(
+                "https://slack.com/api/chat.postMessage",
+                headers={"Authorization": f"Bearer {bot_token}"},
+                json={"channel": dm_channel, "text": mrkdwn_msg},
+            )
+            data = resp.json()
+            if data.get("ok"):
+                logger.info("Slack DM sent via bot API (~200ms, $0)")
+                return True
+            logger.warning(f"Slack bot API failed: {data.get('error', 'unknown')}")
+            return False
+
+    except Exception as e:
+        logger.debug(f"Slack bot API unavailable: {e}")
+        return False
+
+
 def _send_slack_dm(message: str) -> bool:
     """Send a Slack DM to the user.
 
-    Strategy: try cheap webhook first, fall back to Claude CLI + slack-mcp.
-    The webhook is a simple HTTP POST (~50ms). The CLI path spawns a full
-    Claude subprocess (~5-10s, $0.01+). Use CLI only when webhook isn't configured.
+    Strategy (fastest to slowest):
+      1. Webhook — HTTP POST (~50ms, $0). Needs webhook_url in config.
+      2. MCP stdio — JSON-RPC to slack-mcp binary (~2s, $0). Needs Slack Desktop.
+      3. Claude CLI — full agent subprocess (~10-30s, ~$0.01). Last resort.
     """
-    # Fast path: direct webhook (no subprocess, no model inference)
+    # Tier 1: direct webhook (no subprocess, no model inference)
     if _send_slack_dm_webhook(message):
         return True
 
-    # Slow path: Claude CLI with slack-mcp
+    # Tier 2: Slack Web API with bot token from channels DB (~200ms, $0)
+    if _send_slack_dm_bot_api(message):
+        return True
+
+    # Tier 3: Claude CLI with slack-mcp (heavy, last resort)
     claude_path = _resolve_claude_cli()
     if not claude_path:
-        logger.warning("Slack DM: Claude CLI not found, cannot send")
+        logger.warning("Slack DM: all paths exhausted (no webhook, no MCP, no CLI)")
         return False
 
     mcp_config = _load_mcp_config()
