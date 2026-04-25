@@ -105,7 +105,9 @@ def fetch_trending(feed: Feed, max_age_hours: int = 48) -> list[RawSignal]:
                 logger.error(f"Trending '{platform_id}' failed: {e}")
                 continue
 
-            # Rate limiting between platforms (skip after last)
+            # Rate limiting between platforms (skip after last).
+            # This runs in a thread pool worker (job executor), not the event loop,
+            # so time.sleep is safe — it only blocks the worker thread.
             if i < len(platforms) - 1 and interval_ms > 0:
                 time.sleep(interval_ms / 1000)
 

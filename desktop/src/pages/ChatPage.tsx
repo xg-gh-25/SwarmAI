@@ -290,11 +290,12 @@ export default function ChatPage() {
   const voiceConversation = useVoiceConversation({
     sessionId: sessionId ?? null,
     onSendMessage: useCallback((text: string) => {
-      // Write to inputValueRef (the ref that handleSendMessage reads)
-      setInputValue(text);
+      // Direct ref mutation + synchronous call — same pattern as handleFocusClick.
+      // Avoids the setTimeout race condition where React state updates
+      // could interleave before the send reads inputValueRef.
       inputValueRef.current = text;
-      // Trigger send on next tick (after React state settles)
-      setTimeout(() => handleSendMessageRef.current(), 0);
+      setInputValue(text);
+      handleSendMessageRef.current();
     }, [setInputValue]),
     isStreaming,
     latestTextContent,
@@ -2236,6 +2237,7 @@ export default function ChatPage() {
                 isLikelyStalled={isLikelyStalled}
                 voiceConversationState={voiceConversation.state}
                 onVoiceConversationToggle={voiceConversation.toggle}
+                onVoiceConversationInterrupt={voiceConversation.interrupt}
               />
             </>
           )}

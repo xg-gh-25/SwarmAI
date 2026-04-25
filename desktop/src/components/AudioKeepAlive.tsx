@@ -78,7 +78,7 @@ export function AudioKeepAlive() {
     const wavUrl = buildSilentWavDataUrl(1, 8000);
     const el = new Audio(wavUrl);
     el.loop = true;
-    el.volume = 1; // NOT 0 — browser may optimize silent-muted away
+    el.volume = 0.01; // Near-zero but non-zero — prevents browser optimization while avoiding audible noise on sensitive hardware
     audioRef.current = el;
 
     // Play — may fail silently if user hasn't interacted yet (autoplay policy).

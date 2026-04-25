@@ -74,6 +74,10 @@ export function useAudioPlayer(): UseAudioPlayerReturn {
       // Ensure gain is at full volume
       gain.gain.setValueAtTime(1, ctx.currentTime);
 
+      // Crossfade: short linear ramp-up to prevent pops at chunk boundaries
+      gain.gain.setValueAtTime(0, ctx.currentTime);
+      gain.gain.linearRampToValueAtTime(1, ctx.currentTime + 0.005);
+
       source.onended = () => {
         sourceRef.current = null;
         resolve();

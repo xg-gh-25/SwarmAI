@@ -914,13 +914,55 @@ def _get_slack_dm_channel() -> str | None:
     return None
 
 
-def _send_slack_dm(message: str) -> bool:
-    """Send a Slack DM to the user via the slack-mcp CLI tool.
+def _send_slack_dm_webhook(message: str) -> bool:
+    """Send a Slack DM via incoming webhook — cheap, no subprocess.
 
-    Uses the same MCP config as chat sessions. Falls back to a simple
-    webhook if MCP isn't available.
+    Reads the Slack webhook URL from notify-channels.yaml.
+    Returns True on success, False if webhook not configured or fails.
     """
-    # Try slack-mcp via Claude CLI (short budget, single tool)
+    try:
+        from skills.s_notify.notify import load_notify_config
+
+        config = load_notify_config()
+        slack_cfg = config.get("channels", {}).get("slack", {})
+        webhook_url = slack_cfg.get("webhook_url", "")
+
+        if not webhook_url or not slack_cfg.get("enabled", False):
+            return False
+
+        import httpx
+        payload = {
+            "blocks": [
+                {
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": message.replace("**", "*")},
+                },
+            ],
+        }
+        with httpx.Client(timeout=10, trust_env=False) as client:
+            resp = client.post(webhook_url, json=payload)
+            if resp.status_code == 200:
+                logger.info("Slack DM sent via webhook")
+                return True
+            logger.warning(f"Slack webhook failed: {resp.status_code}")
+            return False
+    except Exception as e:
+        logger.debug(f"Slack webhook path unavailable: {e}")
+        return False
+
+
+def _send_slack_dm(message: str) -> bool:
+    """Send a Slack DM to the user.
+
+    Strategy: try cheap webhook first, fall back to Claude CLI + slack-mcp.
+    The webhook is a simple HTTP POST (~50ms). The CLI path spawns a full
+    Claude subprocess (~5-10s, $0.01+). Use CLI only when webhook isn't configured.
+    """
+    # Fast path: direct webhook (no subprocess, no model inference)
+    if _send_slack_dm_webhook(message):
+        return True
+
+    # Slow path: Claude CLI with slack-mcp
     claude_path = _resolve_claude_cli()
     if not claude_path:
         logger.warning("Slack DM: Claude CLI not found, cannot send")
@@ -970,7 +1012,7 @@ def _send_slack_dm(message: str) -> bool:
         )
 
         if proc.returncode == 0:
-            logger.info("Slack DM sent successfully")
+            logger.info("Slack DM sent via CLI")
             return True
         else:
             logger.warning(f"Slack DM failed: exit {proc.returncode}: {proc.stderr[:200]}")

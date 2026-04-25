@@ -33,7 +33,11 @@ export type VoiceConversationState =
 export interface UseVoiceConversationOptions {
   /** Session ID for the current chat tab */
   sessionId: string | null;
-  /** Callback to send a message (reuse existing ChatPage send logic) */
+  /**
+   * Callback to send a voice transcript as a chat message.
+   * Must accept the text directly (not read from React state) to avoid
+   * race conditions with setTimeout-based state propagation.
+   */
   onSendMessage: (text: string) => void;
   /** Whether streaming is currently in progress */
   isStreaming: boolean;
@@ -48,6 +52,8 @@ export interface UseVoiceConversationReturn {
   state: VoiceConversationState;
   /** Toggle voice conversation mode on/off */
   toggle: () => void;
+  /** Interrupt TTS playback and return to listening (speaking → listening) */
+  interrupt: () => void;
   /** Whether voice conversation is supported (mic + audio) */
   isSupported: boolean;
 }
@@ -116,11 +122,14 @@ export function useVoiceConversation({
     [],
   );
 
-  // Voice recorder
+  // Voice recorder — VAD enabled for hands-free auto-stop on silence
   const { voiceState, startRecording, stopRecording, isSupported } =
     useVoiceRecorder({
       onTranscript: handleTranscript,
       onError: handleVoiceError,
+      enableVAD: true,
+      silenceThresholdMs: 1500,
+      silenceLevel: 0.01,
     });
 
   // Sync recorder state → conversation state
@@ -135,6 +144,10 @@ export function useVoiceConversation({
   }, [voiceState]);
 
   // ─── Sentence streaming → TTS ─────────────────────────────────────
+
+  // TTS synthesis queue — ensures sentences play in order regardless of
+  // Polly response times. Each batch of sentences is chained sequentially.
+  const ttsQueueRef = useRef<Promise<void>>(Promise.resolve());
 
   // Process new text deltas into sentences for TTS
   useEffect(() => {
@@ -157,27 +170,55 @@ export function useVoiceConversation({
     const { sentences, remaining } = extractSentences(sentenceBufferRef.current);
     sentenceBufferRef.current = remaining;
 
-    // Queue sentences for TTS (we're already in thinking|speaking from the guard above)
+    // Queue sentences for TTS — sequential chain preserves order
     if (sentences.length > 0) {
       if (stateRef.current === 'thinking') {
         setState('speaking');
       }
 
-      const lang = detectLanguage(sentences[0]);
+      // Chain each sentence sequentially onto the TTS queue
       for (const sentence of sentences) {
-        synthesizeSpeech(sentence, lang)
-          .then((audio) => {
+        ttsQueueRef.current = ttsQueueRef.current.then(async () => {
+          if (!mountedRef.current || stateRef.current === 'off') return;
+          try {
+            // Per-sentence language detection (supports mixed en/zh responses)
+            const lang = detectLanguage(sentence);
+            const audio = await synthesizeSpeech(sentence, lang);
             if (mountedRef.current && stateRef.current === 'speaking') {
               audioPlayer.enqueue(audio);
             }
-          })
-          .catch((err) => {
+          } catch (err) {
             console.warn('TTS synthesis failed for sentence:', err);
             // Skip failed sentence, continue with next
-          });
+          }
+        });
       }
     }
   }, [latestTextContent, audioPlayer]);
+
+  // ─── Interrupt: stop TTS + return to listening ─────────────────────
+
+  const interrupt = useCallback(() => {
+    if (stateRef.current !== 'speaking') return;
+
+    // Stop all audio playback
+    audioPlayer.stop();
+    // Reset TTS queue to prevent pending sentences from playing
+    ttsQueueRef.current = Promise.resolve();
+    // Clear sentence buffer
+    sentenceBufferRef.current = '';
+    lastProcessedLenRef.current = 0;
+
+    // Transition through interrupted → listening (barge-in flow)
+    setState('interrupted');
+    // Brief transient state for UI feedback, then re-open mic
+    setTimeout(() => {
+      if (mountedRef.current && stateRef.current === 'interrupted') {
+        setState('listening');
+        startRecording();
+      }
+    }, 150);
+  }, [audioPlayer, startRecording]);
 
   // ─── Stream complete → flush remaining + re-open mic ──────────────
 
@@ -185,22 +226,30 @@ export function useVoiceConversation({
     if (!isResponseComplete) return;
     if (stateRef.current !== 'speaking' && stateRef.current !== 'thinking') return;
 
-    // Flush remaining sentence buffer
+    // Guard: don't flush if no content has been streamed yet (race with
+    // isResponseComplete starting as true before streaming begins)
+    if (!latestTextContent || latestTextContent.length === 0) return;
+
+    // Flush remaining sentence buffer via the sequential TTS queue
     const remaining = flushRemaining(sentenceBufferRef.current);
     sentenceBufferRef.current = '';
     lastProcessedLenRef.current = 0;
 
     if (remaining) {
-      const lang = detectLanguage(remaining);
-      synthesizeSpeech(remaining, lang)
-        .then((audio) => {
+      ttsQueueRef.current = ttsQueueRef.current.then(async () => {
+        if (!mountedRef.current || stateRef.current === 'off') return;
+        try {
+          const lang = detectLanguage(remaining);
+          const audio = await synthesizeSpeech(remaining, lang);
           if (mountedRef.current && stateRef.current === 'speaking') {
             audioPlayer.enqueue(audio);
           }
-        })
-        .catch(console.warn);
+        } catch (err) {
+          console.warn('TTS flush failed:', err);
+        }
+      });
     }
-  }, [isResponseComplete, audioPlayer]);
+  }, [isResponseComplete, audioPlayer, latestTextContent]);
 
   // ─── Audio playback complete → re-open mic ────────────────────────
 
@@ -231,6 +280,7 @@ export function useVoiceConversation({
         stopRecording();
         sentenceBufferRef.current = '';
         lastProcessedLenRef.current = 0;
+        ttsQueueRef.current = Promise.resolve();
       }
     };
 
@@ -249,6 +299,7 @@ export function useVoiceConversation({
       audioPlayer.reset();
       sentenceBufferRef.current = '';
       lastProcessedLenRef.current = 0;
+      ttsQueueRef.current = Promise.resolve();
     };
   }, [audioPlayer]);
 
@@ -260,6 +311,7 @@ export function useVoiceConversation({
       setState('listening');
       sentenceBufferRef.current = '';
       lastProcessedLenRef.current = 0;
+      ttsQueueRef.current = Promise.resolve();
       startRecording();
     } else {
       // Turn off → clean up
@@ -268,12 +320,14 @@ export function useVoiceConversation({
       stopRecording();
       sentenceBufferRef.current = '';
       lastProcessedLenRef.current = 0;
+      ttsQueueRef.current = Promise.resolve();
     }
   }, [startRecording, stopRecording, audioPlayer]);
 
   return {
     state,
     toggle,
+    interrupt,
     isSupported,
   };
 }

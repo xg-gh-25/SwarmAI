@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from ..models import JobResult, RawSignal, SchedulerState, TIER_WEIGHTS
@@ -272,7 +272,7 @@ def _write_l4_json(signals: list[RawSignal], scored_items: list[dict]) -> None:
     """
     L4_DIGEST_PATH.parent.mkdir(parents=True, exist_ok=True)
 
-    # Merge with any existing items (keep last 48h worth, dedup by title)
+    # Merge with existing items: evict stale (>48h), dedup by title, cap 50
     existing_items: list[dict] = []
     if L4_DIGEST_PATH.exists():
         try:
@@ -280,6 +280,13 @@ def _write_l4_json(signals: list[RawSignal], scored_items: list[dict]) -> None:
             existing_items = existing.get("items", [])
         except (json.JSONDecodeError, OSError):
             pass
+
+    # Evict items older than 48h — matches the consumer's freshness cutoff
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat()
+    existing_items = [
+        it for it in existing_items
+        if it.get("fetched_at", "") >= cutoff
+    ]
 
     # Dedup: keep existing items whose titles don't overlap with new ones
     new_titles = {item["title"] for item in scored_items}
@@ -349,8 +356,6 @@ def _handle_rollup(
     signal entries, and runs them through the LLM to produce a consolidated
     weekly summary highlighting the most important trends.
     """
-    from datetime import timedelta
-
     now = datetime.now(timezone.utc)
     collected_content = []
 
