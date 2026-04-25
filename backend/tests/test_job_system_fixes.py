@@ -174,15 +174,32 @@ class TestCircuitBreakerAutoReset:
 # ── AC4: signal-notify-slack disabled when config missing ───────────
 
 class TestNotifyJobPreFlight:
-    """signal-notify-slack should be disabled by default."""
+    """signal-notify-slack has pre-flight config check — skips gracefully."""
 
-    def test_signal_notify_slack_disabled_by_default(self):
-        """The system job definition should have enabled=False."""
+    def test_signal_notify_slack_exists_and_enabled(self):
+        """The system job should exist and be enabled (pre-flight handles missing config)."""
         from jobs.system_jobs import SYSTEM_JOBS
 
         notify_job = next((j for j in SYSTEM_JOBS if j.id == "signal-notify-slack"), None)
         assert notify_job is not None, "signal-notify-slack should exist"
-        assert notify_job.enabled is False, "signal-notify-slack should be disabled by default"
+        assert notify_job.enabled is True, "signal-notify-slack should be enabled"
+
+    def test_notify_handler_skips_when_slack_disabled(self, tmp_path):
+        """Handler returns status=skipped when slack is not enabled in config."""
+        from jobs.models import Job, SchedulerState
+        from jobs.executor import _handle_notify
+
+        job = Job(id="test-notify", name="Test Notify", type="notify",
+                  schedule="0 * * * *", config={"channel": "slack", "message": "test"})
+        state = SchedulerState()
+
+        # Mock load_notify_config at the source module (lazy import inside handler)
+        with patch("skills.s_notify.notify.load_notify_config",
+                   return_value={"channels": {"slack": {"enabled": False}}}):
+            result = _handle_notify(job, state)
+
+        assert result.status == "skipped"
+        assert "not enabled" in result.summary
 
 
 # ── AC5-6: Briefing endpoint async + cache ──────────────────────────
