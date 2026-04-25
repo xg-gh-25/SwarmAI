@@ -10,6 +10,7 @@ import FileEditorPanel from '../common/FileEditorPanel';
 import BinaryPreviewModal from '../common/BinaryPreviewModal';
 import SwarmWorkspaceWarningDialog from '../common/SwarmWorkspaceWarningDialog';
 import { classifyFileForPreview } from '../../utils/fileUtils';
+import { openExternal } from '../../utils/openExternal';
 import type { FilePreviewType } from '../../utils/fileUtils';
 import SettingsModal from '../modals/SettingsModal';
 import WorkspaceSettingsModal from '../modals/WorkspaceSettingsModal';
@@ -165,7 +166,7 @@ function LeftSidebar() {
           data-testid="github-link"
           onClick={(e) => {
             e.preventDefault();
-            import('@tauri-apps/plugin-opener').then(({ openUrl }) => openUrl('https://github.com/xg-gh-25/SwarmAI.git')).catch(() => window.open('https://github.com/xg-gh-25/SwarmAI.git', '_blank', 'noopener,noreferrer'));
+            openExternal('https://github.com/xg-gh-25/SwarmAI.git');
           }}
         >
           <GitHubIcon className="w-4 h-4" />

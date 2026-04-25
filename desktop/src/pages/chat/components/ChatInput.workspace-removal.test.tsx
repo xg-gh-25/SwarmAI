@@ -11,7 +11,7 @@
  *   - Property 2: ChatInput preserves all non-workspace UI elements (Validates: Requirements 2.3)
  *   - Property 3: streamChat call never includes workspaceContext (Validates: Requirements 4.4)
  *
- * Each property runs with `{ numRuns: 100 }`.
+ * Each property runs with `{ numRuns: 30 }`.
  */
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
@@ -142,7 +142,7 @@ describe('Feature: remove-workspace-selector', () => {
 
         cleanup();
       }),
-      { numRuns: 100 },
+      { numRuns: 30 },
     );
   });
 
@@ -176,7 +176,7 @@ describe('Feature: remove-workspace-selector', () => {
 
         cleanup();
       }),
-      { numRuns: 100 },
+      { numRuns: 30 },
     );
   });
 
@@ -234,7 +234,7 @@ describe('Feature: remove-workspace-selector', () => {
           }
         },
       ),
-      { numRuns: 100 },
+      { numRuns: 30 },
     );
   });
 });

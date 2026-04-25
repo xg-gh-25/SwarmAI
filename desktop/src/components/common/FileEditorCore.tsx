@@ -28,6 +28,7 @@ import { computeLineDiff } from '../../utils/lineDiff';
 import type { DiffLine } from '../../utils/lineDiff';
 import api from '../../services/api';
 import { copyToClipboard } from '../../utils/clipboard';
+import { openExternal, openInSystemApp } from '../../utils/openExternal';
 import MarkdownRenderer from './MarkdownRenderer';
 import { detectLanguage, isDirtyState, findAllMatches } from './FileEditorModal';
 import type { SearchMatch } from './FileEditorModal';
@@ -906,11 +907,9 @@ export default function FileEditorCore({
                     const absolutePath = getAbsolutePath();
                     try {
                       if (useBrowser) {
-                        const { openUrl } = await import('@tauri-apps/plugin-opener');
-                        await openUrl(`file://${absolutePath}`);
+                        await openExternal(`file://${absolutePath}`);
                       } else {
-                        const { openPath } = await import('@tauri-apps/plugin-opener');
-                        await openPath(absolutePath);
+                        await openInSystemApp(absolutePath);
                       }
                     } catch {
                       // Fallback: copy path to clipboard so user can paste in browser

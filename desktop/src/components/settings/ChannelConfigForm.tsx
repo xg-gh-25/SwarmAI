@@ -6,6 +6,7 @@
  */
 import { useState } from 'react';
 import { channelsService } from '../../services/channels';
+import { openExternal } from '../../utils/openExternal';
 import type { Channel } from '../../types';
 
 interface ChannelConfigFormProps {
@@ -89,7 +90,7 @@ export default function ChannelConfigForm({
         className="text-xs text-[var(--color-primary)] hover:underline cursor-pointer"
         onClick={(e) => {
           e.preventDefault();
-          import('@tauri-apps/plugin-opener').then(({ openUrl }) => openUrl('https://api.slack.com/apps')).catch(() => window.open('https://api.slack.com/apps', '_blank', 'noopener,noreferrer'));
+          openExternal('https://api.slack.com/apps');
         }}
       >
         How to create a Slack bot app

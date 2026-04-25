@@ -24,6 +24,20 @@ import {
 import type { UnifiedTab, TabStatus, SerializableTab } from '../useUnifiedTabState';
 
 // ---------------------------------------------------------------------------
+// API mock — provide a default /system/max-tabs response so the hook's
+// fallback chatMax (=1) doesn't block tab creation in tests.
+// ---------------------------------------------------------------------------
+vi.mock('../../services/api', () => ({
+  default: {
+    get: vi.fn().mockResolvedValue({
+      data: { max_tabs: 4, chat_max: 3, memory_pressure: 'ok' },
+    }),
+  },
+}));
+
+import api from '../../services/api';
+
+// ---------------------------------------------------------------------------
 // localStorage mock
 // ---------------------------------------------------------------------------
 
@@ -63,9 +77,20 @@ beforeEach(() => {
 
 const DEFAULT_AGENT = 'test-agent';
 
-/** Render the hook with a fresh localStorage. */
+/** Render the hook with a fresh localStorage and fetch dynamic tab limits. */
 function renderUnifiedHook(agentId = DEFAULT_AGENT) {
   return renderHook(() => useUnifiedTabState(agentId));
+}
+
+/**
+ * Render the hook AND call fetchMaxTabs so chatMax is populated from the
+ * mocked API (chatMax=3) instead of the conservative fallback (chatMax=1).
+ * Without this, addTab is blocked after the initial default tab.
+ */
+async function renderWithMaxTabs(agentId = DEFAULT_AGENT) {
+  const hook = renderHook(() => useUnifiedTabState(agentId));
+  await act(async () => { await hook.result.current.fetchMaxTabs(); });
+  return hook;
 }
 
 /** Assert the four core invariants on the hook result. */
@@ -190,14 +215,14 @@ describe('Property-Based Tests', () => {
 
   // Feature: unified-tab-state, Property 2: Per-Tab State Isolation
   // Validates: Requirements 8.1, 8.2, 8.3
-  it('Property 2: Per-Tab State Isolation — patching tab A leaves tab B unchanged', () => {
-    fc.assert(
-      fc.property(
+  it('Property 2: Per-Tab State Isolation — patching tab A leaves tab B unchanged', async () => {
+    await fc.assert(
+      fc.asyncProperty(
         fc.string({ minLength: 1, maxLength: 10 }),
         tabStatusArb,
         fc.boolean(),
-        (patchTitle, patchStatus, useStatusUpdate) => {
-          const { result } = renderHook(() => useUnifiedTabState(DEFAULT_AGENT));
+        async (patchTitle, patchStatus, useStatusUpdate) => {
+          const { result } = await renderWithMaxTabs();
 
           // Add a second tab so we have at least 2
           act(() => { result.current.addTab('agent-b'); });
@@ -243,14 +268,14 @@ describe('Property-Based Tests', () => {
 
   // Feature: unified-tab-state, Property 3: addTab Produces Correct Defaults
   // Validates: Requirements 2.1, 2.2
-  it('Property 3: addTab Produces Correct Defaults — new tab has all expected defaults', () => {
-    fc.assert(
-      fc.property(
+  it('Property 3: addTab Produces Correct Defaults — new tab has all expected defaults', async () => {
+    await fc.assert(
+      fc.asyncProperty(
         fc.string({ minLength: 1, maxLength: 30 }),
-        (agentId) => {
+        async (agentId) => {
           // Clear localStorage so each iteration starts fresh with 1 default tab
           mockStorage.clear();
-          const { result } = renderHook(() => useUnifiedTabState(DEFAULT_AGENT));
+          const { result } = await renderWithMaxTabs();
 
           expect(result.current.openTabs.length).toBe(1);
           act(() => { result.current.addTab(agentId); });
@@ -287,13 +312,13 @@ describe('Property-Based Tests', () => {
 
   // Feature: unified-tab-state, Property 4: closeTab Removes and Reselects
   // Validates: Requirements 2.4, 2.5, 2.6
-  it('Property 4: closeTab Removes and Reselects — removal, reselection, and abort', () => {
-    fc.assert(
-      fc.property(
+  it('Property 4: closeTab Removes and Reselects — removal, reselection, and abort', async () => {
+    await fc.assert(
+      fc.asyncProperty(
         fc.nat({ max: 4 }),
         fc.boolean(),
-        (extraTabs, closeActive) => {
-          const { result } = renderHook(() => useUnifiedTabState(DEFAULT_AGENT));
+        async (extraTabs, closeActive) => {
+          const { result } = await renderWithMaxTabs();
 
           // Add extra tabs so we have 2+
           act(() => { result.current.addTab('agent-extra'); });
@@ -337,14 +362,14 @@ describe('Property-Based Tests', () => {
 
   // Feature: unified-tab-state, Property 5: Metadata Updates Apply to Correct Tab
   // Validates: Requirements 3.1, 3.2, 3.3, 3.4
-  it('Property 5: Metadata Updates — only target tab is changed, non-existent id is no-op', () => {
-    fc.assert(
-      fc.property(
+  it('Property 5: Metadata Updates — only target tab is changed, non-existent id is no-op', async () => {
+    await fc.assert(
+      fc.asyncProperty(
         fc.string({ minLength: 1, maxLength: 20 }),
         fc.uuid(),
         fc.boolean(),
-        (title, sessionId, isNew) => {
-          const { result } = renderHook(() => useUnifiedTabState(DEFAULT_AGENT));
+        async (title, sessionId, isNew) => {
+          const { result } = await renderWithMaxTabs();
 
           // Add a second tab
           act(() => { result.current.addTab('agent-2'); });
@@ -511,22 +536,23 @@ describe('Property-Based Tests', () => {
 
 describe('Unit Tests — Edge Cases', () => {
   // Validates: Requirement 2.3
-  // Note: addTab() uses the cached dynamic limit (MAX_OPEN_TABS_FALLBACK before
-  // any API fetch), not the static MAX_OPEN_TABS constant.
-  it('addTab at dynamic limit returns undefined', () => {
-    const { result } = renderHook(() => useUnifiedTabState(DEFAULT_AGENT));
+  // addTab() uses the dynamic chatMax limit from fetchMaxTabs().
+  // The mock returns chatMax=3, so we can add up to 3 chat tabs.
+  it('addTab at dynamic limit returns undefined', async () => {
+    const MOCK_CHAT_MAX = 3;
+    const { result } = await renderWithMaxTabs();
 
-    // Fill to MAX_OPEN_TABS_FALLBACK (starts with 1)
-    for (let i = 1; i < MAX_OPEN_TABS_FALLBACK; i++) {
+    // Fill to chatMax (starts with 1 default tab)
+    for (let i = 1; i < MOCK_CHAT_MAX; i++) {
       act(() => { result.current.addTab(`agent-${i}`); });
     }
-    expect(result.current.openTabs.length).toBe(MAX_OPEN_TABS_FALLBACK);
+    expect(result.current.openTabs.length).toBe(MOCK_CHAT_MAX);
 
     // Next addTab should return undefined
     let overflow: ReturnType<typeof result.current.addTab>;
     act(() => { overflow = result.current.addTab('overflow'); });
     expect(overflow!).toBeUndefined();
-    expect(result.current.openTabs.length).toBe(MAX_OPEN_TABS_FALLBACK);
+    expect(result.current.openTabs.length).toBe(MOCK_CHAT_MAX);
   });
 
   // Validates: Requirement 2.7
@@ -621,8 +647,8 @@ describe('Unit Tests — Edge Cases', () => {
   });
 
   // Validates: Requirement 2.8
-  it('selectTab updates activeTabId and derived activeTab', () => {
-    const { result } = renderHook(() => useUnifiedTabState(DEFAULT_AGENT));
+  it('selectTab updates activeTabId and derived activeTab', async () => {
+    const { result } = await renderWithMaxTabs();
 
     act(() => { result.current.addTab('agent-2'); });
 

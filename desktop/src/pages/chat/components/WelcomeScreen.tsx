@@ -24,6 +24,7 @@ import {
   type BriefingJob,
   type BriefingTodo,
 } from '../../../services/system';
+import { openExternal } from '../../../utils/openExternal';
 
 const URGENCY_COLORS: Record<string, string> = {
   high: 'text-red-400',
@@ -163,7 +164,7 @@ function SignalItem({ signal, onAsk }: { signal: BriefingSignal; onAsk?: (text: 
             onClick={(e) => {
               e.preventDefault();
               e.stopPropagation();
-              import('@tauri-apps/plugin-opener').then(({ openUrl }) => openUrl(signal.url!)).catch(() => window.open(signal.url!, '_blank', 'noopener,noreferrer'));
+              openExternal(signal.url!);
             }}
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -424,8 +425,8 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onFocusClick }) =>
             <div>
               <BriefingSection title="Suggested Focus">
                 <div className="space-y-0.5">
-                  {briefing!.focus.map((item, i) => (
-                    <FocusItem key={i} item={item} onClick={onFocusClick} onDismiss={handleDismissFocus} />
+                  {briefing!.focus.map((item) => (
+                    <FocusItem key={item.title} item={item} onClick={onFocusClick} onDismiss={handleDismissFocus} />
                   ))}
                 </div>
               </BriefingSection>
@@ -441,7 +442,7 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onFocusClick }) =>
                     ? briefing!.signals
                     : briefing!.signals.slice(0, SIGNALS_COLLAPSED_COUNT)
                   ).map((sig, i) => (
-                    <SignalItem key={i} signal={sig} onAsk={onFocusClick} />
+                    <SignalItem key={sig.title || i} signal={sig} onAsk={onFocusClick} />
                   ))}
                 </div>
                 {briefing!.signals.length > SIGNALS_COLLAPSED_COUNT && (
@@ -465,7 +466,7 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onFocusClick }) =>
               <BriefingSection title="Recent Jobs">
                 <div className="space-y-0.5">
                   {briefing!.jobs.map((job, i) => (
-                    <JobItem key={i} job={job} />
+                    <JobItem key={job.name || i} job={job} />
                   ))}
                 </div>
               </BriefingSection>
@@ -477,8 +478,8 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onFocusClick }) =>
             <div>
               <BriefingSection title="Radar">
                 <div className="space-y-0.5">
-                  {briefing!.todos.map((todo, i) => (
-                    <TodoItem key={i} todo={todo} onClick={onFocusClick} />
+                  {briefing!.todos.map((todo) => (
+                    <TodoItem key={todo.id} todo={todo} onClick={onFocusClick} />
                   ))}
                 </div>
               </BriefingSection>
