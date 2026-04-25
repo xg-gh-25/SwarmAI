@@ -22,6 +22,7 @@ import {
   type BriefingFocusItem,
   type BriefingSignal,
   type BriefingJob,
+  type BriefingTodo,
 } from '../../../services/system';
 
 const URGENCY_COLORS: Record<string, string> = {
@@ -222,6 +223,62 @@ function JobItem({ job }: { job: BriefingJob }) {
   );
 }
 
+const TODO_PRIORITY_BORDER: Record<string, string> = {
+  high: 'border-l-red-400',
+  medium: 'border-l-yellow-400',
+  low: 'border-l-blue-400',
+  none: 'border-l-[var(--color-text-secondary)]',
+};
+
+const TODO_PRIORITY_BADGE: Record<string, { label: string; cls: string }> = {
+  high: { label: 'HIGH', cls: 'bg-red-500/15 text-red-400' },
+  medium: { label: 'MED', cls: 'bg-yellow-500/15 text-yellow-400' },
+  low: { label: 'LOW', cls: 'bg-blue-500/15 text-blue-400' },
+  none: { label: '', cls: '' },
+};
+
+function TodoItem({ todo, onClick }: { todo: BriefingTodo; onClick?: (text: string) => void }) {
+  const borderCls = TODO_PRIORITY_BORDER[todo.priority] ?? TODO_PRIORITY_BORDER.none;
+  const badge = TODO_PRIORITY_BADGE[todo.priority] ?? TODO_PRIORITY_BADGE.none;
+  const isOverdue = todo.status === 'overdue';
+
+  return (
+    <button
+      type="button"
+      onClick={() => onClick?.(`[ToDo:${todo.id}] ${todo.title}`)}
+      className={`border-l-2 ${borderCls} pl-2.5 py-1.5 group w-full text-left rounded-r px-2 -mx-1 transition-colors hover:bg-[var(--color-bg-hover)] cursor-pointer`}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="text-sm text-[var(--color-text)] truncate">{todo.title}</span>
+          {badge.label && (
+            <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded shrink-0 ${badge.cls}`}>
+              {badge.label}
+            </span>
+          )}
+          {isOverdue && (
+            <span className="text-[10px] bg-red-500/15 text-red-400 px-1.5 py-0.5 rounded font-mono shrink-0">
+              OVERDUE
+            </span>
+          )}
+        </div>
+        <svg
+          width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+          className="text-[var(--color-text-secondary)] opacity-0 group-hover:opacity-100 transition-opacity shrink-0"
+          aria-hidden="true"
+        >
+          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+        </svg>
+      </div>
+      {todo.nextStep && (
+        <p className="text-[11px] text-[var(--color-text-secondary)] mt-0.5 line-clamp-1 leading-relaxed">
+          Next: {todo.nextStep}
+        </p>
+      )}
+    </button>
+  );
+}
+
 const SECTION_ICONS: Record<string, React.ReactNode> = {
   'Suggested Focus': (
     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -236,6 +293,11 @@ const SECTION_ICONS: Record<string, React.ReactNode> = {
   'Recent Jobs': (
     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+    </svg>
+  ),
+  'Radar': (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="3" width="18" height="18" rx="2" ry="2" /><line x1="9" y1="9" x2="15" y2="9" /><line x1="9" y1="13" x2="15" y2="13" /><line x1="9" y1="17" x2="12" y2="17" />
     </svg>
   ),
 };
@@ -275,7 +337,8 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onFocusClick }) =>
   const hasFocus = briefing && briefing.focus.length > 0;
   const hasSignals = briefing && briefing.signals.length > 0;
   const hasJobs = briefing && briefing.jobs.length > 0;
-  const hasAnyBriefing = hasFocus || hasSignals || hasJobs || briefing?.learning;
+  const hasTodos = briefing && briefing.todos && briefing.todos.length > 0;
+  const hasAnyBriefing = hasFocus || hasSignals || hasJobs || hasTodos || briefing?.learning;
 
   return (
     <div className="flex flex-col items-center h-full text-center px-4 overflow-y-auto">
@@ -362,6 +425,19 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({ onFocusClick }) =>
                 <div className="space-y-0.5">
                   {briefing!.jobs.map((job, i) => (
                     <JobItem key={i} job={job} />
+                  ))}
+                </div>
+              </BriefingSection>
+            </div>
+          )}
+
+          {/* Radar todos */}
+          {hasTodos && (
+            <div>
+              <BriefingSection title="Radar">
+                <div className="space-y-0.5">
+                  {briefing!.todos.map((todo, i) => (
+                    <TodoItem key={i} todo={todo} onClick={onFocusClick} />
                   ))}
                 </div>
               </BriefingSection>

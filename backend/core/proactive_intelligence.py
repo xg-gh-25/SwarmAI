@@ -633,6 +633,51 @@ def _get_job_result_highlights(working_directory: str, max_items: int = 5) -> li
     return lines
 
 
+def _get_todo_highlights(max_items: int = 5) -> list[str]:
+    """Read pending/overdue Radar todos from SQLite for system prompt injection.
+
+    Direct SQLite read (sync, WAL mode safe). Returns formatted lines
+    like ``  - [HIGH] Fix streaming bug — Next: reproduce in dev``.
+    Graceful no-op if DB unavailable.
+    """
+    import sqlite3
+    db_path = Path.home() / ".swarm-ai" / "data.db"
+    if not db_path.exists():
+        return []
+    try:
+        conn = sqlite3.connect(str(db_path), timeout=5)
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT title, priority, status, linked_context "
+            "FROM todos WHERE status IN ('pending', 'overdue') "
+            "ORDER BY CASE priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 "
+            "WHEN 'low' THEN 2 ELSE 3 END, created_at DESC LIMIT ?",
+            (max_items,),
+        ).fetchall()
+        conn.close()
+    except (sqlite3.Error, OSError) as exc:
+        logger.debug("Todo highlights read failed: %s", exc)
+        return []
+
+    lines: list[str] = []
+    priority_labels = {"high": "HIGH", "medium": "MED", "low": "LOW"}
+    for row in rows:
+        label = priority_labels.get(row["priority"], "")
+        prefix = f"[{label}] " if label else ""
+        overdue = " ⚠️ OVERDUE" if row["status"] == "overdue" else ""
+        next_step = ""
+        if row["linked_context"]:
+            try:
+                ctx = json.loads(row["linked_context"])
+                ns = ctx.get("next_step", "")
+                if ns:
+                    next_step = f" — Next: {ns[:80]}"
+            except (json.JSONDecodeError, TypeError):
+                pass
+        lines.append(f"  - {prefix}{row['title']}{overdue}{next_step}")
+    return lines
+
+
 def _get_skill_health_highlights(ctx_dir: Path) -> list[str]:
     """Read skill_health.json and surface medium-confidence recommendations."""
     health_path = ctx_dir / "skill_health.json"
@@ -922,6 +967,11 @@ def build_session_briefing(
         if job_lines:
             sections.append("**Recent job results (last 24h):**\n" + "\n".join(job_lines))
 
+        # L4: Pending Radar todos — surface so agent proactively addresses them
+        todo_lines = _get_todo_highlights()
+        if todo_lines:
+            sections.append("**Pending Radar todos:**\n" + "\n".join(todo_lines))
+
         # L4: System health alerts from health_findings.json
         health_lines = _get_health_highlights(str(workspace))
         if health_lines:
@@ -986,6 +1036,7 @@ def build_session_briefing_data(
         "focus": [],
         "signals": [],
         "jobs": [],
+        "todos": [],
         "learning": None,
         "generated_at": datetime.now().isoformat(),
     }
@@ -1109,6 +1160,58 @@ def build_session_briefing_data(
             except OSError:
                 pass
 
+        # Pending Radar todos — surface in briefing so agent is aware at session start
+        todos: list[dict[str, Any]] = []
+        try:
+            from database import db
+            import asyncio
+
+            async def _fetch_todos() -> list[dict]:
+                return await db.todos.list_active()
+
+            # Run async DB query synchronously (briefing is sync context)
+            try:
+                loop = asyncio.get_running_loop()
+                # Already in async context — schedule as task
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as pool:
+                    active = loop.run_in_executor(pool, lambda: asyncio.run(_fetch_todos()))
+                    # Can't await here in sync function — use direct DB access
+                    raise RuntimeError("fallback to direct")
+            except RuntimeError:
+                # Direct SQLite read (sync, safe — DB is WAL mode)
+                import sqlite3
+                db_path = Path.home() / ".swarm-ai" / "data.db"
+                if db_path.exists():
+                    conn = sqlite3.connect(str(db_path), timeout=5)
+                    conn.row_factory = sqlite3.Row
+                    try:
+                        rows = conn.execute(
+                            "SELECT id, title, priority, status, due_date, linked_context "
+                            "FROM todos WHERE status IN ('pending', 'overdue') "
+                            "ORDER BY CASE priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 "
+                            "WHEN 'low' THEN 2 ELSE 3 END, created_at DESC LIMIT 5"
+                        ).fetchall()
+                        for row in rows:
+                            ctx = {}
+                            if row["linked_context"]:
+                                try:
+                                    ctx = json.loads(row["linked_context"])
+                                except (json.JSONDecodeError, TypeError):
+                                    pass
+                            todos.append({
+                                "id": row["id"][:8],
+                                "title": row["title"],
+                                "priority": row["priority"],
+                                "status": row["status"],
+                                "due_date": row["due_date"],
+                                "next_step": ctx.get("next_step", ""),
+                            })
+                    finally:
+                        conn.close()
+        except Exception as exc:
+            logger.debug("Todo briefing fetch failed (non-blocking): %s", exc)
+
         # Learning insight
         learning = learning_state.learning_summary()
 
@@ -1116,6 +1219,7 @@ def build_session_briefing_data(
             "focus": focus,
             "signals": ext_signals,
             "jobs": jobs,
+            "todos": todos,
             "learning": learning,
             "generated_at": datetime.now().isoformat(),
         }

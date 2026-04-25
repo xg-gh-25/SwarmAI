@@ -136,10 +136,20 @@ export interface BriefingJob {
   resultFile?: string;   // Workspace-relative path to result markdown
 }
 
+export interface BriefingTodo {
+  id: string;        // 8-char prefix
+  title: string;
+  priority: string;  // "high", "medium", "low", "none"
+  status: string;    // "pending", "overdue"
+  dueDate?: string;
+  nextStep?: string;
+}
+
 export interface SessionBriefing {
   focus: BriefingFocusItem[];
   signals: BriefingSignal[];
   jobs: BriefingJob[];
+  todos: BriefingTodo[];
   learning: string | null;
   generatedAt: string | null;
 }
@@ -244,11 +254,19 @@ export const systemService = {
           summary: (j.summary as string) || undefined,
           resultFile: (j.result_file as string) || undefined,
         })),
+        todos: ((d.todos as Record<string, unknown>[]) ?? []).map((t) => ({
+          id: t.id as string,
+          title: t.title as string,
+          priority: t.priority as string,
+          status: t.status as string,
+          dueDate: (t.due_date as string) || undefined,
+          nextStep: (t.next_step as string) || undefined,
+        })),
         learning: (d.learning as string) ?? null,
         generatedAt: (d.generated_at as string) ?? null,
       };
     } catch {
-      return { focus: [], signals: [], jobs: [], learning: null, generatedAt: null };
+      return { focus: [], signals: [], jobs: [], todos: [], learning: null, generatedAt: null };
     }
   },
 
