@@ -79,8 +79,8 @@ export function useVoiceConversation({
   latestTextContent,
   isResponseComplete,
 }: UseVoiceConversationOptions): UseVoiceConversationReturn {
-  // sessionId and isStreaming reserved for future use (silence detection, per-tab isolation)
-  void sessionId;
+  // isStreaming is passed but unused directly — isResponseComplete (derived from
+  // !isStreaming in ChatPage) drives the flush + re-listen effects instead.
   void isStreaming;
 
   const [state, setState] = useState<VoiceConversationState>('off');
@@ -94,7 +94,13 @@ export function useVoiceConversation({
     stateRef.current = state;
   }, [state]);
 
-  // Audio player for TTS output
+  // ─── Internal tab switch → exit voice mode ──────────────────────
+  // visibilitychange only fires when the browser tab/window loses focus.
+  // SwarmAI's internal tab switching (chat tab 1 → tab 2) doesn't fire it.
+  // Track sessionId changes to detect internal tab switches.
+  const prevSessionIdRef = useRef<string | null>(sessionId);
+
+  // Audio player for TTS output — declared early so tab-switch cleanup can use it
   const audioPlayer = useAudioPlayer();
 
   // Transcript handler — auto-send message
@@ -142,6 +148,19 @@ export function useVoiceConversation({
       setState('processing');
     }
   }, [voiceState]);
+
+  // ─── Internal tab switch → exit voice mode ──────────────────────
+  useEffect(() => {
+    if (prevSessionIdRef.current !== sessionId && stateRef.current !== 'off') {
+      setState('off');
+      audioPlayer.stop();
+      stopRecording();
+      sentenceBufferRef.current = '';
+      lastProcessedLenRef.current = latestTextContent.length;
+      ttsQueueRef.current = Promise.resolve();
+    }
+    prevSessionIdRef.current = sessionId;
+  }, [sessionId, audioPlayer, stopRecording, latestTextContent]);
 
   // ─── Sentence streaming → TTS ─────────────────────────────────────
 
@@ -205,9 +224,9 @@ export function useVoiceConversation({
     audioPlayer.stop();
     // Reset TTS queue to prevent pending sentences from playing
     ttsQueueRef.current = Promise.resolve();
-    // Clear sentence buffer
+    // Clear sentence buffer — snap to current content length to avoid replay
     sentenceBufferRef.current = '';
-    lastProcessedLenRef.current = 0;
+    lastProcessedLenRef.current = latestTextContent.length;
 
     // Transition through interrupted → listening (barge-in flow)
     setState('interrupted');
@@ -230,10 +249,11 @@ export function useVoiceConversation({
     // isResponseComplete starting as true before streaming begins)
     if (!latestTextContent || latestTextContent.length === 0) return;
 
-    // Flush remaining sentence buffer via the sequential TTS queue
+    // Flush remaining sentence buffer via the sequential TTS queue.
+    // Snap lastProcessedLen to current content length — prevents replay on next turn.
     const remaining = flushRemaining(sentenceBufferRef.current);
     sentenceBufferRef.current = '';
-    lastProcessedLenRef.current = 0;
+    lastProcessedLenRef.current = latestTextContent.length;
 
     if (remaining) {
       ttsQueueRef.current = ttsQueueRef.current.then(async () => {
@@ -260,14 +280,18 @@ export function useVoiceConversation({
       isResponseComplete &&
       stateRef.current === 'speaking'
     ) {
-      // Transition back to listening for next turn
+      // Transition back to listening for next turn.
+      // CRITICAL: reset lastProcessedLen to current content length (not 0)
+      // to avoid re-processing the previous response through TTS when the
+      // next turn starts. latestTextContent still holds the old message
+      // until Claude's new response begins streaming.
       setState('listening');
       sentenceBufferRef.current = '';
-      lastProcessedLenRef.current = 0;
+      lastProcessedLenRef.current = latestTextContent.length;
       // Re-open mic
       startRecording();
     }
-  }, [audioPlayer.isPlaying, isResponseComplete, startRecording]);
+  }, [audioPlayer.isPlaying, isResponseComplete, startRecording, latestTextContent]);
 
   // ─── Tab visibility handling ──────────────────────────────────────
 
@@ -279,7 +303,7 @@ export function useVoiceConversation({
         audioPlayer.stop();
         stopRecording();
         sentenceBufferRef.current = '';
-        lastProcessedLenRef.current = 0;
+        lastProcessedLenRef.current = latestTextContent.length;
         ttsQueueRef.current = Promise.resolve();
       }
     };
@@ -288,7 +312,7 @@ export function useVoiceConversation({
     return () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [audioPlayer, stopRecording]);
+  }, [audioPlayer, stopRecording, latestTextContent]);
 
   // ─── Cleanup on unmount ───────────────────────────────────────────
 
@@ -307,10 +331,11 @@ export function useVoiceConversation({
 
   const toggle = useCallback(() => {
     if (stateRef.current === 'off') {
-      // Turn on → start listening
+      // Turn on → start listening. Snap to current content length to avoid
+      // replaying the previous assistant response through TTS.
       setState('listening');
       sentenceBufferRef.current = '';
-      lastProcessedLenRef.current = 0;
+      lastProcessedLenRef.current = latestTextContent.length;
       ttsQueueRef.current = Promise.resolve();
       startRecording();
     } else {
@@ -319,10 +344,10 @@ export function useVoiceConversation({
       audioPlayer.stop();
       stopRecording();
       sentenceBufferRef.current = '';
-      lastProcessedLenRef.current = 0;
+      lastProcessedLenRef.current = latestTextContent.length;
       ttsQueueRef.current = Promise.resolve();
     }
-  }, [startRecording, stopRecording, audioPlayer]);
+  }, [startRecording, stopRecording, audioPlayer, latestTextContent]);
 
   return {
     state,
