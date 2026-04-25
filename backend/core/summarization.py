@@ -102,6 +102,10 @@ class StructuredSummary:
     # perspective gaps, and work-process lessons that the agent might not
     # explicitly acknowledge. Fed into DailyActivity for downstream evolution.
     process_reflection: str = ""
+    # Signal-driven actions: when an external signal (news, release, announcement)
+    # directly influenced a session decision. Tracks the causal link from
+    # signal input → action output. Format: ["Signal: X → Action: Y", ...]
+    signal_driven_actions: list[str] = field(default_factory=list)
     # Legacy fields (kept for backward compat, will be empty for new sessions)
     actions_taken: list[str] = field(default_factory=list)
     reasoning: list[str] = field(default_factory=list)
@@ -166,6 +170,13 @@ or redirect the approach? What assumption was wrong?
 - If no process issues: set to "" (most sessions are fine — only flag real patterns).
 - Keep it to 1-2 sentences. Focus on the reusable lesson, not the specific instance.
 
+5. **Signal-driven actions** — Did any external signal (news article, product release, \
+announcement, competitive move) directly trigger or influence a decision or action in this session? \
+Look for references to news, announcements, releases, competitors, or external events that \
+led to a concrete action (code change, architecture decision, feature addition, priority shift). \
+Format each as "Signal: <what was the external event> → Action: <what was decided/done>". \
+Empty array if no external signals influenced this session (most sessions are purely internal).
+
 ## Output (valid JSON only, no markdown fences):
 {{
   "deliverables": ["Built X feature", "Fixed Y bug — root cause was Z", "Diagnosed P issue"],
@@ -174,6 +185,7 @@ or redirect the approach? What assumption was wrong?
   "rejected_approaches": ["Tried X but rejected because Y"],
   "corrections": ["Agent asked for confirmation on internal action — user said just do it", "Agent repeated user's words back — user said stop repeating"],
   "process_reflection": "Same file edited 4 rounds — each round found a different class of bug (layout, then error handling, then UX). Upfront user-scenario walkthrough would have caught all in round 1.",
+  "signal_driven_actions": ["Signal: Bedrock 1M context GA → Action: updated context window configs to 1M for Claude 4.6 models"],
   "continue_from": "specific next step for the next session (one sentence)",
   "validation_status": "what was tested vs untested (one sentence)",
   "coe_signal": "",
@@ -624,6 +636,7 @@ class SummarizationPipeline:
         summary.rejected_approaches = enriched.get("rejected_approaches", [])
         summary.corrections = enriched.get("corrections", [])
         summary.process_reflection = enriched.get("process_reflection", "")
+        summary.signal_driven_actions = enriched.get("signal_driven_actions", [])
         summary.continue_from = enriched.get("continue_from", "")
         summary.validation_status = enriched.get("validation_status", "")
         summary.coe_signal = enriched.get("coe_signal", "")

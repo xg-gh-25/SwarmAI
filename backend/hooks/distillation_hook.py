@@ -337,6 +337,10 @@ class DistillationTriggerHook:
                         pr = rec.get("process_reflection", "")
                         if pr and len(pr) > 20:
                             lessons.append(pr)
+                        # signal_driven_actions → promote as decisions (causal link)
+                        for sda in rec.get("signal_driven_actions", []):
+                            if sda and len(sda) > 15:
+                                decisions.append(sda)
                         # COE signals
                         sig = rec.get("coe_signal", "")
                         topic = rec.get("coe_topic", "")
@@ -396,6 +400,43 @@ class DistillationTriggerHook:
             except Exception as exc:
                 logger.warning("Failed to distill %s: %s", da_file.name, exc)
                 continue
+
+        # --- Also scan job result JSONL sidecars for agent-task insights ---
+        # Agent-task jobs (morning-inbox, team-checkin, etc.) produce analysis
+        # worth distilling. Only JSONL sidecars (tokens_used>0) contain real insights.
+        job_results_dir = ws_path / "Knowledge" / "JobResults"
+        if job_results_dir.is_dir():
+            cutoff_date = (date.today() - timedelta(days=SCAN_DAYS)).isoformat()
+            for jsonl_file in sorted(job_results_dir.glob("*.jsonl")):
+                # Only process recent files (same SCAN_DAYS window as DA)
+                if jsonl_file.stem < cutoff_date:
+                    continue
+                try:
+                    records = read_jsonl_sidecar(jsonl_file)
+                    for rec in records:
+                        # Only agent tasks produce real insights
+                        if rec.get("tokens_used", 0) == 0:
+                            continue
+                        result_text = rec.get("result_text", "")
+                        if not result_text or len(result_text) < 50:
+                            continue
+                        file_date = jsonl_file.stem[:10]  # YYYY-MM-DD from filename
+                        job_name = rec.get("job_name", rec.get("job_id", "unknown"))
+                        # Extract decisions and lessons from job output using existing regex
+                        decisions = self._extract_decisions(result_text)
+                        lessons = self._extract_lessons(result_text)
+                        da_rel_path = f"JobResults/{jsonl_file.name}"
+                        for d in decisions:
+                            all_decisions.append(self._format_enriched_entry(d, file_date, da_rel_path, None))
+                        for l in lessons:
+                            all_lessons.append(self._format_enriched_entry(l, file_date, da_rel_path, None))
+                        if decisions or lessons:
+                            logger.debug(
+                                "Distilled job %s (%s): %d decisions, %d lessons",
+                                job_name, jsonl_file.name, len(decisions), len(lessons),
+                            )
+                except Exception as exc:
+                    logger.debug("Job JSONL distill failed for %s: %s", jsonl_file.name, exc)
 
         # Git-verify implementation claims before promotion (COE C005 fix).
         # Claims with implementation keywords that don't match any git commit

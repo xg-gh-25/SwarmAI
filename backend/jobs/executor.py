@@ -1554,7 +1554,7 @@ duration: {duration:.1f}s
 """
     md_path.write_text(md_content)
 
-    # JSONL for L4 machine reading
+    # JSONL for L4 machine reading (briefing endpoint)
     jsonl_entry = {
         "job_id": job.id,
         "job_name": job.name,
@@ -1566,6 +1566,31 @@ duration: {duration:.1f}s
     }
     with open(JOB_RESULTS_JSONL, "a") as f:
         f.write(json.dumps(jsonl_entry) + "\n")
+
+    # JSONL sidecar for distillation (agent-task jobs only — they produce real insights)
+    # Script jobs (tokens_used=0) are just logs, not worth distilling.
+    if tokens > 0:
+        try:
+            import fcntl
+            sidecar_path = JOB_RESULTS_DIR / f"{date_str}-{slug}.jsonl"
+            sidecar_record = {
+                "job_id": job.id,
+                "job_name": job.name,
+                "run_at": run_at.isoformat(),
+                "tokens_used": tokens,
+                "duration_seconds": duration,
+                "result_text": result_text[:5000],  # Cap for sanity
+            }
+            line = json.dumps(sidecar_record, ensure_ascii=False, separators=(",", ":")) + "\n"
+            with open(sidecar_path, "a") as sf:
+                fcntl.flock(sf, fcntl.LOCK_EX)
+                try:
+                    sf.write(line)
+                    sf.flush()
+                finally:
+                    fcntl.flock(sf, fcntl.LOCK_UN)
+        except Exception as exc:
+            logger.warning("Job JSONL sidecar write failed (non-blocking): %s", exc)
 
     return md_path
 

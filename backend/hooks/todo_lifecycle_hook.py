@@ -249,7 +249,10 @@ class TodoLifecycleHook:
             )
 
         if commit_count > 0:
-            # Work was done — mark as handled
+            # Work was done — write outcome back, then mark as handled
+            await self._write_outcome_notes(
+                todo_id, since, workspace_path, codebase_path,
+            )
             await todo_manager.transition_status(
                 todo_id, "handled", source="hook_explicit",
             )
@@ -258,6 +261,91 @@ class TodoLifecycleHook:
             await todo_manager.transition_status(
                 todo_id, "in_discussion", source="hook_explicit",
             )
+
+    async def _write_outcome_notes(
+        self,
+        todo_id: str,
+        since: datetime,
+        workspace_path: Path,
+        codebase_path: Optional[Path],
+    ) -> None:
+        """Write session outcome (commits + files) back to todo's linked_context.notes.
+
+        This closes the feedback loop: when a todo is marked 'handled',
+        the outcome is recorded so anyone reviewing the todo later knows
+        what was done.  Non-fatal — failure doesn't block status transition.
+        """
+        try:
+            import sqlite3
+            db_path = Path.home() / ".swarm-ai" / "data.db"
+            if not db_path.exists():
+                return
+
+            # Gather commits from both repos
+            loop = asyncio.get_running_loop()
+            commits: list[str] = []
+            for repo in [workspace_path, codebase_path]:
+                if repo and repo.is_dir():
+                    repo_commits = await loop.run_in_executor(
+                        None, self._get_oneline_commits, repo, since,
+                    )
+                    commits.extend(repo_commits)
+
+            if not commits:
+                return
+
+            # Format outcome note
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+            note = f"[{timestamp}] Session outcome: {len(commits)} commit(s)\n"
+            for c in commits[:10]:  # Cap to avoid bloat
+                note += f"  - {c}\n"
+
+            # Atomic update: read linked_context → append to notes → write back
+            conn = sqlite3.connect(str(db_path), timeout=5)
+            try:
+                row = conn.execute(
+                    "SELECT linked_context FROM todos WHERE id = ?", (todo_id,)
+                ).fetchone()
+                if not row:
+                    return
+
+                ctx = {}
+                if row[0]:
+                    try:
+                        ctx = json.loads(row[0])
+                    except (json.JSONDecodeError, TypeError):
+                        ctx = {}
+
+                existing_notes = ctx.get("notes", "")
+                ctx["notes"] = (existing_notes + "\n" + note).strip() if existing_notes else note.strip()
+
+                conn.execute(
+                    "UPDATE todos SET linked_context = ?, updated_at = ? WHERE id = ?",
+                    (json.dumps(ctx, ensure_ascii=False), datetime.now().isoformat(), todo_id),
+                )
+                conn.commit()
+                logger.info("Wrote outcome notes to todo %s: %d commits", todo_id[:8], len(commits))
+            finally:
+                conn.close()
+        except Exception as exc:
+            logger.warning("Failed to write outcome notes for todo %s: %s", todo_id[:8], exc)
+
+    @staticmethod
+    def _get_oneline_commits(repo_path: Path, since: datetime, max_commits: int = 10) -> list[str]:
+        """Get oneline git commits since a timestamp."""
+        if not repo_path.is_dir() or not (repo_path / ".git").exists():
+            return []
+        since_str = since.strftime("%Y-%m-%dT%H:%M:%S")
+        try:
+            result = subprocess.run(
+                ["git", "log", f"--since={since_str}", f"--max-count={max_commits}", "--oneline", "--no-decorate"],
+                cwd=str(repo_path), capture_output=True, text=True, timeout=10,
+            )
+            if result.returncode != 0:
+                return []
+            return [l.strip() for l in result.stdout.strip().splitlines() if l.strip()]
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+            return []
 
     async def _handle_implicit_matching(
         self,
