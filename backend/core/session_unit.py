@@ -488,6 +488,12 @@ class SessionUnit:
         """
         old_state = self.state
 
+        # Same-state transitions are no-ops — safe under concurrent access.
+        # Multiple coroutines (kill(), lifecycle reap, crash recovery) may
+        # race to the same target state; the first one wins, the rest skip.
+        if old_state == new_state:
+            return
+
         # Validate transition
         valid = self._VALID_TRANSITIONS.get(old_state, set())
         if new_state not in valid:
@@ -2367,11 +2373,7 @@ class SessionUnit:
         self._transition(SessionState.DEAD)
         await self._force_kill()
         self._cleanup_internal()
-        # After the await, another coroutine (lifecycle manager reap)
-        # may have already transitioned DEAD→COLD.  Only transition if
-        # we're still in DEAD — prevents cold→cold RuntimeError.
-        if self.state == SessionState.DEAD:
-            self._transition(SessionState.COLD)
+        self._transition(SessionState.COLD)
 
     async def _force_kill(self) -> None:
         """Best-effort force-kill of the owned subprocess and its children.
