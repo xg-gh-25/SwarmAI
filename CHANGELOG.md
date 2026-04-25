@@ -5,6 +5,48 @@ All notable changes to SwarmAI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.0] - 2026-04-25
+
+### Added
+
+- **Voice Conversation Mode**: Bidirectional voice chat — speak → auto-transcribe → send → stream response → sentence-by-sentence TTS via Amazon Polly → auto re-open mic. 6-state machine (`off → listening → processing → thinking → speaking → interrupted`), barge-in interrupt support, VAD silence detection (1.5s auto-stop), per-sentence language detection (en/zh), GainNode click-free audio with sequential playback queue
+- **AudioKeepAlive**: Prevents WKWebView from tearing down CoreAudio session on idle/background — loops a 0.001-volume silent WAV at app root (VoiceBox pattern)
+- **Sentence Splitter**: Streaming text-to-sentence parser for TTS — handles abbreviations (23 entries), decimal numbers, URLs, fenced code blocks, CJK punctuation, markdown stripping. Min 10 chars, max 3000 chars (Polly neural limit)
+- **Chinese Trending News Feed**: 11-platform hot-search adapter (Weibo, Zhihu, Toutiao, Baidu, Douyin, Bilibili, WallStreetCN, ThePaper, CLS, iFeng, Tieba) via newsnow public API. Interruptible rate-limiting sleep via `threading.Event` for graceful shutdown
+- **Multi-Channel Notification Skill**: 9 channels (Feishu, DingTalk, WeCom, Telegram, Email/SMTP, ntfy, Bark, Slack, generic Webhook) with JSON injection prevention in webhook templates. Auto Slack notification after signal digest
+- **WelcomeScreen Redesign**: Live session briefing with Suggested Focus (P0/P1/P2), External Signals (48h freshness), Recent Jobs (24h), Radar Todos (priority-sorted), Learning Insight. Interactive — focus items send as chat, signals ask Swarm, jobs open result files, todos send work packets
+- **Radar Todos in Briefing**: Pending/overdue todos surfaced in system prompt and Welcome Screen via direct SQLite read (WAL mode safe). Priority ordering with overdue badges
+- **DailyActivity JSONL Sidecar**: Dual-write (markdown + JSONL) — structured sidecar consumed by distillation hook directly, eliminating regex parsing. Best-effort write doesn't block primary markdown. New fields: `signal_driven_actions`, `process_reflection`
+- **Learn Content Skill**: Structured knowledge card ingestion from URLs/text/files. 3-tier fetch chain (WebFetch → curl with WeChat UA → user paste). Cross-references MEMORY.md keys and existing cards. KNOWLEDGE.md index auto-update
+- **Token Usage Tracking**: Per-session token consumption persisted to SQLite, API endpoint for history, TopBar display
+- **Signal Digest Causal Links**: Signal → session decision causal chain recorded in DailyActivity
+- **Job Result Sidecar**: `.job-results.jsonl` with structured output for Welcome Screen job results section
+- **macOS Entitlements**: `com.apple.security.device.audio-input` for microphone, `NSMicrophoneUsageDescription` for TCC dialog
+
+### Fixed
+
+- **Voice TTS Replay on Turn Change**: `lastProcessedLenRef` now snaps to `latestTextContent.length` (not 0) in all 6 reset sites — prevents re-processing previous response through TTS when next turn starts
+- **Voice Mode Persists on Internal Tab Switch**: Track `sessionId` changes to detect SwarmAI tab switches (browser `visibilitychange` only fires on window focus loss). Exits voice mode, stops audio, releases mic
+- **Signal Digest L4 JSON Empty**: Two-tier eviction — 48h soft (only when new items arrive, prevents empty Welcome Screen) + 7-day hard (always runs, prevents indefinitely stale data). Dedup cache raised 500 → 2000 URLs
+- **Trending API 403**: Added browser-like `User-Agent` + `Referer` headers required by newsnow API
+- **Slack `#N` Channel Mention**: Changed `#N` → `Top N` in trending summary — Slack parses `#` as channel mention
+- **`asyncio.get_event_loop()` Deprecation**: Replaced with `get_running_loop()` in `voice_synthesize.py` (deprecated in Python 3.12+)
+- **Dead Async Block in Briefing**: Removed convoluted async→sync fallback in `build_session_briefing_data` todo fetch — only the direct SQLite path ever executed
+- **Trending `url` Variable Shadowing**: Renamed to `api_url` (API endpoint) and `item_url` (result item) for clarity
+- **Proactive Intelligence Dead Code**: Removed self-referential `_estimate_thread_age.__wrapped__` assignment — single clean delegation to `_raw_estimate_thread_age`
+- **Polly Client Region Mismatch**: Removed `region` parameter from `_get_polly_client()` — `lru_cache(maxsize=1)` is now safe (no parameter variation)
+- **Voice Router Unused Import**: Removed `Request` from FastAPI imports
+- **Rate Limit Docstring Drift**: Updated module and endpoint docstrings from "60" to "120" after rate limit bump
+
+### Changed
+
+- **Voice TTS Rate Limit**: 60 → 120 requests/minute — supports sustained voice conversation (20-sentence response = 20 calls in ~30s)
+- **Voice Input Validation**: Added Pydantic regex patterns — `language: ^[a-z]{2}(-[A-Z]{2})?$`, `voice_id: ^[A-Za-z]{2,20}$`
+- **Hooks Barrel Exports**: Added `useVoiceConversation`, `useAudioPlayer` and their types to `hooks/index.ts` for consistency
+- **PyInstaller Verification**: `voice_synthesize` added to critical module checklist in `verify_build.py`
+- **Autonomous Pipeline**: Added RP18 (integration trace calling convention) and RP19 runtime patterns
+- **Tool-Failure-Exhaustion Rule**: Strengthened in AGENT.md context
+
 ## [1.6.3] - 2026-04-22
 
 ### Added
