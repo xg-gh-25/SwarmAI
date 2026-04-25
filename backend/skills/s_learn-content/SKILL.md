@@ -34,32 +34,82 @@ Detect the input type:
 
 | Input | Action |
 |-------|--------|
-| URL (general) | WebFetch to retrieve content |
-| WeChat article URL (`mp.weixin.qq.com`) | **curl fallback** — see WeChat handling below |
+| URL (general) | **3-tier fetch chain** (see below) |
 | Text block (no URL) | Use directly — store as `source_type: text` |
-| File path | Read tool / appropriate skill (s_pdf, s_docx) |
+| File path (video/audio) | ffmpeg extract audio → whisper-transcribe → text |
+| File path (document) | Read tool / appropriate skill (s_pdf, s_docx) |
 | Multiple URLs | Process each separately, one card per URL |
 
-### WeChat Article Handling (mp.weixin.qq.com)
+### 3-Tier Fetch Chain (BLOCKING — exhaust all tiers before asking user)
 
-WebFetch will fail on WeChat articles (anti-scraping returns "环境异常"). Use this fallback chain:
+Every URL goes through this chain. Stop at the first tier that returns usable content.
 
-1. **curl with WeChat mobile UA** (works reliably):
-   ```bash
-   curl -sL -H "User-Agent: Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 MicroMessenger/8.0.43" "<URL>"
-   ```
-2. **Extract metadata** from og: tags and JS vars (`msg_title`, `ct`, `nickname`)
-3. **Extract body text** from `id="js_content"` div — strip HTML tags, decode entities
-4. Process the extracted text as normal content
+**Tier 1: WebFetch** (fastest, works for ~70% of URLs)
+- Standard fetch. If it returns real content, done.
+- Skip to Tier 2 if: anti-scraping block, "环境异常", empty body, login wall, SPA shell (`<div id="app"></div>`)
 
-If curl also fails → ask user to paste content.
+**Tier 2: curl with platform-specific UA** (works for ~20% more)
+```bash
+# WeChat articles (mp.weixin.qq.com)
+curl -sL -H "User-Agent: Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 MicroMessenger/8.0.43" "<URL>"
 
-### General Fetch Failure Handling
+# General anti-scraping (Douyin pages, news sites)
+curl -sL -A "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Safari/537.36" -H "Accept-Language: zh-CN,zh;q=0.9" "<URL>"
+```
+- WeChat: extract from `og:` tags + `id="js_content"` div
+- General: extract from `<article>`, `<main>`, or largest text block
+- Skip to Tier 3 if: SPA with no server-rendered content, JS-only rendering, video page
 
-If ALL fetch methods fail (paywall, auth-wall, expired link):
-1. Tell the user the fetch failed and what was tried
-2. Ask: "Can you paste the key content? I'll create the card from that."
-3. If user pastes, proceed with `source_type: text` and note original URL as `source_url`
+**Tier 3: browser-agent** (JS-rendered content, video metadata, SPA pages)
+```bash
+node .claude/skills/s_browser-agent/browser-agent.mjs launch     # if not running
+node .claude/skills/s_browser-agent/browser-agent.mjs navigate "<URL>"
+node .claude/skills/s_browser-agent/browser-agent.mjs read        # get rendered DOM
+node .claude/skills/s_browser-agent/browser-agent.mjs screenshot /tmp/page.png  # visual context
+```
+- Gets JS-rendered content that curl/WebFetch can't see
+- Works for: WeChat 视频号, 抖音 share pages, SPA news sites, any JS-heavy page
+- Extracts: title, author, description, metadata, visible text
+- For video pages: gets title + description + comments (NOT the video stream itself)
+- Screenshot provides visual context for understanding page layout
+
+**After all 3 tiers:** If still no usable content (login-gated, expired, region-blocked):
+1. State what was tried and why each tier failed
+2. Ask: "Can you paste the key content or share the video file directly?"
+
+### Video & Audio URL Handling
+
+When the URL points to a video/audio (detected from URL pattern or page metadata):
+
+| Platform | What browser-agent extracts | What needs user help |
+|----------|---------------------------|---------------------|
+| WeChat 视频号 (`weixin.qq.com/sph/`) | Title, author, description, tags, engagement stats | Video file (for full transcript) |
+| 抖音 share page | Title, author, description, hashtags | Video file |
+| B站 / YouTube | Title, author, description, comments (public) | Usually nothing — yt-dlp can download |
+| TikTok | Title, author, hashtags | Video file |
+| Podcast / audio URL | Direct download if public | Nothing |
+
+**For B站 and YouTube:** Try `yt-dlp` to download audio before asking user:
+```bash
+yt-dlp -x --audio-format mp3 -o /tmp/video_audio.mp3 "<URL>" 2>&1
+```
+If download succeeds → whisper-transcribe → full transcript.
+
+**For WeChat/抖音/TikTok:** These block download tools. Create the card from metadata (title, description, tags, engagement) and note in the card that full transcript requires the video file.
+
+### Source Type Detection
+
+| URL Pattern | source_type |
+|-------------|-------------|
+| `mp.weixin.qq.com` | `wechat` |
+| `weixin.qq.com/sph/` or `channels.weixin.qq.com` | `wechat-video` |
+| `douyin.com`, `v.douyin.com` | `douyin-video` |
+| `bilibili.com`, `b23.tv` | `bilibili-video` |
+| `youtube.com`, `youtu.be` | `youtube-video` |
+| `*.tiktok.com` | `tiktok-video` |
+| `twitter.com`, `x.com` | `tweet` |
+| `github.com` | `repo` |
+| Everything else | `article` |
 
 ### Step 2: Extract & Classify
 
@@ -229,8 +279,11 @@ If user sends multiple URLs at once:
 
 | Situation | Handling |
 |-----------|----------|
-| URL returns 404 / paywall | Ask user to paste content, create card with `source_type: text` |
-| Content is a video (YouTube, Bilibili) | Note URL, ask user for key takeaways if no transcript available |
+| URL returns 404 / paywall | 3-tier chain first. Only ask user after all 3 fail. |
+| Video URL (WeChat/抖音/TikTok) | browser-agent extracts metadata. Card created from title+description+tags. Note: "full transcript requires video file." |
+| Video URL (YouTube/B站) | yt-dlp download → whisper-transcribe → full transcript card |
+| Video file (user drops .mp4/.mov) | ffmpeg extract audio → whisper-transcribe → full transcript card |
+| SPA / JS-rendered page | Tier 1+2 fail → browser-agent renders JS → extracts DOM text |
 | Tweet / short post | Inline the full text as a quote — too short for briefing bullets |
 | GitHub repo | Focus on: what it does, architecture, why it matters. Use README as source |
 | PDF / long paper | Extract abstract + conclusions, skip methodology details |
