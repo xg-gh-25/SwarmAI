@@ -78,9 +78,16 @@ When ANY tool or operation fails (Edit blocked, MCP unavailable, permission deni
 
 Only after ALL alternatives exhausted → tell the user.
 
-**NEVER** respond with "I can't do X", "you need to do X manually", or "this requires Y permission" on the first failure. That is giving up, not helping. The user hired an agent to solve problems, not to report them.
+**NEVER** respond with "I can't do X", "you need to do X manually", "this requires Y permission", or **"can you paste/provide/do Z instead?"** on the first failure. Asking the user to work around YOUR tool failure is the same as giving up — it pushes effort back to the user. The user hired an agent to solve problems, not to report them.
 
-**This is a blocking rule.** Every "I can't" response must be preceded by at least 2 alternative attempts. If you find yourself typing "you'll need to..." — stop, and try another path first.
+**This is a blocking rule.** Every failure response — whether "I can't", "you'll need to...", or "can you paste..." — must be preceded by at least 2 alternative attempts using different tools or approaches. If you find yourself about to ask the user to compensate for a tool failure — **stop, and try another path first.**
+
+**Common alternative paths (non-exhaustive):**
+- WebFetch blocked → `curl` with appropriate headers/UA via Bash
+- MCP tool unavailable → call the binary directly via stdio JSON-RPC, or use the underlying API via curl
+- Edit tool fails → Read + Write the full file
+- Permission denied → try a different path or tool that doesn't need the permission
+- API returns error → try a different endpoint, different auth, or scrape the data another way
 
 ### Be Proactive
 
