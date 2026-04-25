@@ -523,6 +523,109 @@ class SessionRouter:
             )
         return unit
 
+    # ── Pre-warm (MeshClaw pattern) ──────────────────────────────
+
+    async def prewarm_channel_session(
+        self, agent_id: str, channel_context: Optional[dict] = None,
+    ) -> Optional[str]:
+        """Pre-warm an IDLE subprocess for the channel owner's first message.
+
+        Spawns a CLI subprocess with the full system prompt so it's ready
+        for instant adoption when the first real message arrives.  Eliminates
+        ~4s cold-start latency after daemon restart.
+
+        Best-effort: returns the temporary session_id on success, None on
+        any failure.  Callers should NOT block on this.
+
+        Parameters
+        ----------
+        agent_id:
+            The agent ID to build config for.
+        channel_context:
+            Optional channel context dict (channel_type, is_owner, etc.)
+            for Slack-specific system prompt sections.  Without this, the
+            pre-warmed subprocess lacks Channel Security rules.
+
+        Returns:
+            Temporary session_id of the pre-warmed unit, or None.
+        """
+        from .agent_defaults import build_agent_config
+
+        temp_session_id = f"prewarm-{uuid4()}"
+        unit = SessionUnit(
+            session_id=temp_session_id,
+            agent_id=agent_id,
+            on_state_change=self._on_unit_state_change,
+        )
+        self._units[temp_session_id] = unit
+
+        try:
+            agent_config = await build_agent_config(agent_id)
+            if not agent_config:
+                self._units.pop(temp_session_id, None)
+                return None
+
+            options = await self._prompt_builder.build_options(
+                agent_config=agent_config,
+                enable_skills=True,
+                enable_mcp=True,
+                channel_context=channel_context,
+            )
+
+            # Spawn subprocess → COLD → IDLE
+            async for event in unit._ensure_spawned(options, self._config):
+                if event.get("_abort"):
+                    self._units.pop(temp_session_id, None)
+                    return None
+
+            if unit.state == SessionState.IDLE:
+                logger.info(
+                    "session_router.prewarm_complete session_id=%s",
+                    temp_session_id,
+                )
+                return temp_session_id
+
+            # Unexpected state — cleanup
+            self._units.pop(temp_session_id, None)
+            return None
+        except Exception as exc:
+            logger.warning("session_router.prewarm_failed: %s", exc)
+            self._units.pop(temp_session_id, None)
+            return None
+
+    def adopt_prewarmed_unit(
+        self, prewarm_session_id: str, real_session_id: str,
+    ) -> bool:
+        """Re-key a pre-warmed unit to serve a real session.
+
+        Atomically moves the unit from the temporary pre-warm key to the
+        real session_id.  The unit must be IDLE (alive subprocess) for
+        adoption to succeed.
+
+        Returns True on success, False if the unit doesn't exist, died,
+        or was evicted.
+        """
+        unit = self._units.pop(prewarm_session_id, None)
+        if unit is None:
+            return False
+
+        if unit.state != SessionState.IDLE:
+            # Unit died or was evicted — put back and fail
+            self._units[prewarm_session_id] = unit
+            logger.info(
+                "session_router.adopt_prewarmed_skip state=%s (expected IDLE)",
+                unit.state.value,
+            )
+            return False
+
+        unit.session_id = real_session_id
+        self._units[real_session_id] = unit
+        logger.info(
+            "session_router.adopt_prewarmed %s → %s",
+            prewarm_session_id, real_session_id,
+        )
+        return True
+
     def list_units(self) -> list[SessionUnit]:
         """Return all registered SessionUnits."""
         return list(self._units.values())
