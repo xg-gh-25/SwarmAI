@@ -86,9 +86,11 @@ export default function ChannelConfigForm({
       </div>
       <a
         href="https://api.slack.com/apps"
-        target="_blank"
-        rel="noopener noreferrer"
-        className="text-xs text-[var(--color-primary)] hover:underline"
+        className="text-xs text-[var(--color-primary)] hover:underline cursor-pointer"
+        onClick={(e) => {
+          e.preventDefault();
+          import('@tauri-apps/plugin-opener').then(({ openUrl }) => openUrl('https://api.slack.com/apps')).catch(() => window.open('https://api.slack.com/apps', '_blank', 'noopener,noreferrer'));
+        }}
       >
         How to create a Slack bot app
       </a>

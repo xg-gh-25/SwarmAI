@@ -160,11 +160,13 @@ function LeftSidebar() {
         />
         <a
           href="https://github.com/xg-gh-25/SwarmAI.git"
-          target="_blank"
-          rel="noopener noreferrer"
           title="GitHub"
-          className="flex items-center justify-center w-8 h-8 rounded-lg transition-colors text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)]"
+          className="flex items-center justify-center w-8 h-8 rounded-lg transition-colors text-[var(--color-text-muted)] hover:bg-[var(--color-hover)] hover:text-[var(--color-text)] cursor-pointer"
           data-testid="github-link"
+          onClick={(e) => {
+            e.preventDefault();
+            import('@tauri-apps/plugin-opener').then(({ openUrl }) => openUrl('https://github.com/xg-gh-25/SwarmAI.git')).catch(() => window.open('https://github.com/xg-gh-25/SwarmAI.git', '_blank', 'noopener,noreferrer'));
+          }}
         >
           <GitHubIcon className="w-4 h-4" />
         </a>

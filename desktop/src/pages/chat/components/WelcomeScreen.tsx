@@ -131,11 +131,13 @@ function SignalItem({ signal, onAsk }: { signal: BriefingSignal; onAsk?: (text: 
         {signal.url && (
           <a
             href={signal.url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="shrink-0 mt-0.5 text-[var(--color-text-secondary)] hover:text-[var(--color-text)] opacity-0 group-hover:opacity-100 transition-opacity"
+            className="shrink-0 mt-0.5 text-[var(--color-text-secondary)] hover:text-[var(--color-text)] opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
             title="Open in browser"
-            onClick={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              import('@tauri-apps/plugin-opener').then(({ openUrl }) => openUrl(signal.url!)).catch(() => window.open(signal.url!, '_blank', 'noopener,noreferrer'));
+            }}
           >
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
