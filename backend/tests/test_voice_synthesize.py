@@ -609,3 +609,195 @@ class TestNotifySecurityFixes:
         parsed = json.loads(body)
         assert parsed["title"] == title
         assert parsed["body"] == message
+
+
+# ---------------------------------------------------------------------------
+# AC1-8: Engine-Aware SSML Optimization (Polly TTS)
+# ---------------------------------------------------------------------------
+
+class TestEngineAwareStrategy:
+    """Engine-aware text preparation: generative=plain, neural=rich SSML."""
+
+    # --- AC1: Generative engine sends plain text, no SSML ---
+
+    def test_prepare_generative_returns_plain_text(self):
+        """Generative engine: text out, TextType='text'."""
+        from core.voice_synthesize import _prepare_generative
+        text, text_type = _prepare_generative("Hello world")
+        assert text_type == "text"
+        assert text == "Hello world"
+        assert "<speak>" not in text
+
+    def test_prepare_generative_strips_whitespace(self):
+        from core.voice_synthesize import _prepare_generative
+        text, text_type = _prepare_generative("  Hello world  \n")
+        assert text == "Hello world"
+        assert text_type == "text"
+
+    # --- AC2: Neural zh-CN gets <break> tags ---
+
+    def test_prepare_neural_injects_breaks_sentence_end(self):
+        """Sentence-end punctuation (。！？) followed by <break>."""
+        from core.voice_synthesize import _prepare_neural
+        ssml, text_type = _prepare_neural("你好。世界！很好？", "zh-CN")
+        assert text_type == "ssml"
+        assert '<break time=' in ssml
+        # Sentence-end punctuation should have breaks after them
+        assert '。<break' in ssml or '。</phoneme><break' in ssml or '好。<break' in ssml
+
+    def test_prepare_neural_injects_breaks_clause(self):
+        """Clause punctuation (，；) gets shorter breaks."""
+        from core.voice_synthesize import _prepare_neural
+        ssml, _ = _prepare_neural("你好，世界；再见", "zh-CN")
+        assert '<break time=' in ssml
+
+    # --- AC3: Neural zh-CN polyphone words get <phoneme> ---
+
+    def test_apply_phonemes_zhongdian(self):
+        """重点 gets pinyin zhong4dian3."""
+        from core.voice_synthesize import _apply_phonemes
+        result = _apply_phonemes("今天的重点是")
+        assert '<phoneme alphabet="x-amazon-pinyin" ph="zhong4dian3">重点</phoneme>' in result
+
+    def test_apply_phonemes_hangye(self):
+        """行业 gets pinyin hang2ye4."""
+        from core.voice_synthesize import _apply_phonemes
+        result = _apply_phonemes("这个行业很好")
+        assert '<phoneme alphabet="x-amazon-pinyin" ph="hang2ye4">行业</phoneme>' in result
+
+    def test_apply_phonemes_changqi(self):
+        """长期 gets pinyin chang2qi1."""
+        from core.voice_synthesize import _apply_phonemes
+        result = _apply_phonemes("长期来看")
+        assert '<phoneme alphabet="x-amazon-pinyin" ph="chang2qi1">长期</phoneme>' in result
+
+    def test_apply_phonemes_no_match_passthrough(self):
+        """Text without polyphones passes through unchanged."""
+        from core.voice_synthesize import _apply_phonemes
+        text = "这是一段普通文字"
+        assert _apply_phonemes(text) == text
+
+    # --- AC4: Neural zh-CN numbers/dates wrapped in <say-as> ---
+
+    def test_format_numbers_date(self):
+        """Date 2026-04-26 gets say-as date."""
+        from core.voice_synthesize import _format_numbers
+        result = _format_numbers("日期是2026-04-26")
+        assert '<say-as interpret-as="date"' in result
+        assert "2026-04-26" in result
+
+    def test_format_numbers_phone(self):
+        """Phone number gets say-as telephone."""
+        from core.voice_synthesize import _format_numbers
+        result = _format_numbers("电话138-1234-5678")
+        assert '<say-as interpret-as="telephone"' in result
+
+    def test_format_numbers_cardinal(self):
+        """Large number with commas gets say-as cardinal."""
+        from core.voice_synthesize import _format_numbers
+        result = _format_numbers("共1,234,567人")
+        assert '<say-as interpret-as="cardinal"' in result
+
+    def test_format_numbers_no_match_passthrough(self):
+        """Text without special numbers passes through."""
+        from core.voice_synthesize import _format_numbers
+        text = "这是普通文字"
+        assert _format_numbers(text) == text
+
+    # --- AC5: Neural zh-CN abbreviations expanded via <sub> ---
+
+    def test_expand_abbreviations_api(self):
+        """API expanded to A P I."""
+        from core.voice_synthesize import _expand_abbreviations
+        result = _expand_abbreviations("调用API接口")
+        assert '<sub alias="A P I">API</sub>' in result
+
+    def test_expand_abbreviations_aws(self):
+        """AWS expanded."""
+        from core.voice_synthesize import _expand_abbreviations
+        result = _expand_abbreviations("使用AWS服务")
+        assert '<sub alias="A W S">AWS</sub>' in result
+
+    def test_expand_abbreviations_no_partial_match(self):
+        """RAPID should NOT match API — only standalone words."""
+        from core.voice_synthesize import _expand_abbreviations
+        result = _expand_abbreviations("RAPID development")
+        assert "<sub" not in result
+
+    # --- AC6: Language switch boundaries get 150ms break ---
+
+    def test_language_switch_break_after_lang_tag(self):
+        """Break inserted between </lang> and following CJK."""
+        from core.voice_synthesize import _add_language_switch_breaks
+        ssml = '</lang>你好'
+        result = _add_language_switch_breaks(ssml)
+        assert '<break time="150ms"/>' in result
+
+    def test_language_switch_break_before_lang_tag(self):
+        """Break inserted between CJK and <lang."""
+        from core.voice_synthesize import _add_language_switch_breaks
+        ssml = '你好<lang xml:lang="en-US">API</lang>'
+        result = _add_language_switch_breaks(ssml)
+        assert '<break time="150ms"/>' in result
+
+    # --- AC7: Full pipeline integration via synthesize_speech ---
+
+    @pytest.mark.asyncio
+    async def test_synthesize_generative_sends_plain_text(self):
+        """Generative engine via synthesize_speech → TextType='text'."""
+        from core.voice_synthesize import synthesize_speech, _get_polly_client
+        _get_polly_client.cache_clear()
+
+        mock_client = MagicMock()
+        mock_stream = MagicMock()
+        mock_stream.read.return_value = b"\xff" * 100
+        mock_client.synthesize_speech.return_value = {"AudioStream": mock_stream}
+
+        with patch("core.voice_synthesize._get_polly_client", return_value=mock_client):
+            await synthesize_speech("Hello world", language="en-US")
+
+        call_kwargs = mock_client.synthesize_speech.call_args[1]
+        assert call_kwargs["TextType"] == "text"
+        assert "<speak>" not in call_kwargs["Text"]
+
+    @pytest.mark.asyncio
+    async def test_synthesize_neural_zh_sends_ssml_with_breaks(self):
+        """Neural zh-CN via synthesize_speech → rich SSML with breaks."""
+        from core.voice_synthesize import synthesize_speech, _get_polly_client
+        _get_polly_client.cache_clear()
+
+        mock_client = MagicMock()
+        mock_stream = MagicMock()
+        mock_stream.read.return_value = b"\xff" * 100
+        mock_client.synthesize_speech.return_value = {"AudioStream": mock_stream}
+
+        with patch("core.voice_synthesize._get_polly_client", return_value=mock_client):
+            await synthesize_speech("你好。再见。", language="zh-CN")
+
+        call_kwargs = mock_client.synthesize_speech.call_args[1]
+        assert call_kwargs["TextType"] == "ssml"
+        assert call_kwargs["Text"].startswith("<speak>")
+        assert '<break time=' in call_kwargs["Text"]
+
+    @pytest.mark.asyncio
+    async def test_synthesize_neural_zh_with_phoneme(self):
+        """Neural zh-CN with polyphone word → <phoneme> in SSML."""
+        from core.voice_synthesize import synthesize_speech, _get_polly_client
+        _get_polly_client.cache_clear()
+
+        mock_client = MagicMock()
+        mock_stream = MagicMock()
+        mock_stream.read.return_value = b"\xff" * 100
+        mock_client.synthesize_speech.return_value = {"AudioStream": mock_stream}
+
+        with patch("core.voice_synthesize._get_polly_client", return_value=mock_client):
+            await synthesize_speech("今天的重点是API接口", language="zh-CN")
+
+        call_kwargs = mock_client.synthesize_speech.call_args[1]
+        assert call_kwargs["TextType"] == "ssml"
+        assert "phoneme" in call_kwargs["Text"]
+        assert "zhong4dian3" in call_kwargs["Text"]
+
+    # --- AC8: No change to s_pollinate or API contract ---
+    # (Verified by s_pollinate code NOT being modified — no test needed.
+    #  Existing endpoint tests above already verify API contract stability.)
