@@ -1820,7 +1820,7 @@ class SessionUnit:
                     try:
                         import database
                         import asyncio
-                        asyncio.get_event_loop().create_task(
+                        asyncio.get_running_loop().create_task(
                             database.db.record_token_usage(
                                 session_id=self.session_id,
                                 source="cli",

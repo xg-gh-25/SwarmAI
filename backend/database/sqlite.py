@@ -2492,17 +2492,23 @@ class SQLiteDatabase(BaseDatabase):
         cost_usd: float | None = None,
         model: str | None = None,
     ) -> None:
-        """Record a token usage event. Fire-and-forget safe — never raises."""
+        """Record a token usage event. Fire-and-forget safe — never raises.
+
+        Uses local time for timestamp so "today" in the TopBar matches
+        the user's actual day boundary (not UTC).
+        """
         try:
+            from datetime import datetime
+            now_local = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
             async with aiosqlite.connect(str(self.db_path)) as conn:
                 await conn.execute(
                     """
                     INSERT INTO token_usage
-                        (session_id, source, input_tokens, output_tokens,
+                        (timestamp, session_id, source, input_tokens, output_tokens,
                          cache_read_tokens, cache_create_tokens, cost_usd, model)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (session_id, source, input_tokens, output_tokens,
+                    (now_local, session_id, source, input_tokens, output_tokens,
                      cache_read_tokens, cache_create_tokens, cost_usd, model),
                 )
                 await conn.commit()
@@ -2512,10 +2518,14 @@ class SQLiteDatabase(BaseDatabase):
     async def get_token_usage_summary(self) -> dict:
         """Return aggregated token usage: today + total (tokens and cost).
 
+        Uses local time for "today" boundary (matches record_token_usage).
+
         Returns dict with keys:
             today_tokens, total_tokens, today_cost_usd, total_cost_usd
         """
         try:
+            from datetime import datetime
+            today_str = datetime.now().strftime("%Y-%m-%d")
             async with aiosqlite.connect(str(self.db_path)) as conn:
                 # Total across all time
                 cursor = await conn.execute("""
@@ -2526,14 +2536,14 @@ class SQLiteDatabase(BaseDatabase):
                 """)
                 total_row = await cursor.fetchone()
 
-                # Today only (UTC date comparison)
+                # Today only (local date comparison)
                 cursor = await conn.execute("""
                     SELECT
                         COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_create_tokens), 0),
                         COALESCE(SUM(cost_usd), 0.0)
                     FROM token_usage
-                    WHERE date(timestamp) = date('now')
-                """)
+                    WHERE date(timestamp) = ?
+                """, (today_str,))
                 today_row = await cursor.fetchone()
 
                 return {
