@@ -4,15 +4,20 @@ Converts text to MP3 audio using Polly Generative voices (female persona).
 Falls back to Neural where Generative is unavailable (zh-CN, ja-JP).
 Reuses existing AWS SSO credentials (same as Transcribe).
 
+For CJK languages with mixed English terms, auto-wraps English words in
+SSML <lang xml:lang="en-US"> tags so Polly uses the English pronunciation
+engine instead of reading them as Chinese/Japanese/Korean phonemes.
+
 Public API:
     synthesize_speech(text, voice_id, language, region) → bytes (MP3)
-    get_voice_for_language(language) → tuple[str, str] (voice_id, engine)
+    get_voice_for_language(language) → tuple[str, str, str]
     VOICE_MAP — language → (voice_id, engine, polly_language_code) mapping
 """
 
 import asyncio
 import logging
 import os
+import re
 from functools import lru_cache
 
 logger = logging.getLogger(__name__)
@@ -78,12 +83,82 @@ def get_voice_for_language(language: str) -> tuple[str, str, str]:
     return DEFAULT_VOICE
 
 
+# Languages where English terms need explicit <lang> wrapping.
+# CJK voices read "API" as individual Chinese/Japanese/Korean characters otherwise.
+_CJK_LANGUAGES = {"zh-CN", "ja-JP", "ko-KR", "cmn-CN"}
+
+# Minimum length for English terms to wrap (skip 1-char like "I", "a")
+_MIN_EN_TERM_LEN = 2
+
+# Regex for English words/acronyms in CJK text (2+ chars, allows hyphens/dots)
+_EN_TERM_RE = re.compile(
+    r'[A-Za-z][A-Za-z0-9\-\.]*[A-Za-z0-9]|[A-Za-z]{2,}',
+    re.ASCII,
+)
+
+
+def _wrap_english_terms(text: str) -> str:
+    """Wrap English terms in SSML <lang> tags for native pronunciation.
+
+    In CJK text, Polly reads "API" as three Chinese characters (ā-pī-ài).
+    Wrapping in <lang xml:lang="en-US"> switches to the English phoneme engine.
+
+    Only applies to terms with 2+ ASCII letters. Single characters and numbers
+    embedded in Chinese (like "第3个") are left alone.
+    """
+    def _wrap(match: re.Match) -> str:
+        term = match.group(0)
+        if len(term) < _MIN_EN_TERM_LEN:
+            return term
+        return f'<lang xml:lang="en-US">{term}</lang>'
+
+    return _EN_TERM_RE.sub(_wrap, text)
+
+
+def _to_ssml(text: str, language: str) -> tuple[str, str]:
+    """Convert text to SSML if the language benefits from it.
+
+    Returns (text_or_ssml, text_type) where text_type is "ssml" or "text".
+    Only CJK languages get SSML wrapping — English/European languages already
+    pronounce English terms correctly.
+    """
+    if language not in _CJK_LANGUAGES:
+        return text, "text"
+
+    # Wrap English terms FIRST on clean text (before any escaping).
+    wrapped = _wrap_english_terms(text)
+
+    # Only emit SSML if we actually inserted <lang> tags
+    if wrapped == text:
+        return text, "text"
+
+    # Escape XML specials in the non-tag portions only.
+    # Split on our <lang ...>...</lang> tags, escape non-tag parts, rejoin.
+    _LANG_TAG = re.compile(r'(<lang xml:lang="en-US">.*?</lang>)')
+    parts = _LANG_TAG.split(wrapped)
+    escaped_parts = []
+    for part in parts:
+        if part.startswith("<lang"):
+            # Our SSML tag — don't escape
+            escaped_parts.append(part)
+        else:
+            # User text — escape XML specials
+            escaped_parts.append(
+                part.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            )
+
+    return f"<speak>{''.join(escaped_parts)}</speak>", "ssml"
+
+
 async def synthesize_speech(
     text: str,
     voice_id: str | None = None,
     language: str = "en-US",
 ) -> bytes:
     """Synthesize text to MP3 audio via Amazon Polly.
+
+    For CJK languages, auto-wraps English terms in SSML <lang> tags so Polly
+    uses native English pronunciation instead of reading them as CJK phonemes.
 
     Args:
         text: Text to speak (max 3000 chars for neural engine)
@@ -120,6 +195,9 @@ async def synthesize_speech(
     else:
         vid, engine, lang_code = get_voice_for_language(language)
 
+    # Convert to SSML for CJK languages (wraps English terms for pronunciation)
+    polly_text, text_type = _to_ssml(clean_text, language)
+
     client = _get_polly_client()
 
     # Run synchronous boto3 call in executor to avoid blocking event loop
@@ -128,7 +206,8 @@ async def synthesize_speech(
         response = await loop.run_in_executor(
             None,
             lambda: client.synthesize_speech(
-                Text=clean_text,
+                Text=polly_text,
+                TextType=text_type,
                 OutputFormat="mp3",
                 VoiceId=vid,
                 Engine=engine,
@@ -141,8 +220,8 @@ async def synthesize_speech(
     audio_stream = response["AudioStream"].read()
 
     logger.info(
-        "Polly TTS: %d chars → %d bytes MP3 (voice=%s, lang=%s, region=%s)",
-        len(clean_text), len(audio_stream), vid, language, DEFAULT_REGION,
+        "Polly TTS: %d chars → %d bytes MP3 (voice=%s, lang=%s, type=%s, region=%s)",
+        len(clean_text), len(audio_stream), vid, language, text_type, DEFAULT_REGION,
     )
 
     return audio_stream
